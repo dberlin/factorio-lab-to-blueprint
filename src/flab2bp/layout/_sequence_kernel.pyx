@@ -13,6 +13,7 @@ def decode_score(
     const double[::1] weights,
     const double[::1] history,
     const long long[::1] targets,
+    const long long[::1] origin_deltas,
     long long[::1] negative_position,
     unsigned char[::1] horizontal,
     unsigned char[::1] vertical,
@@ -37,9 +38,10 @@ def decode_score(
     cdef long long box_area = 0
     cdef long long dx, dy, x0, y0, x1, y1
     cdef long long stride
-    cdef long long producer, consumer, row_gap
-    cdef long long missed = 0
+    cdef long long producer, consumer, row_gap, origin_delta
+    cdef Py_ssize_t delta_start, delta_stop, delta_mid
     cdef long long overflow
+    cdef long long missed = 0
     cdef bint direct
     cdef double weighted_hpwl = 0.0
     cdef double compensation = 0.0
@@ -182,12 +184,21 @@ def decode_score(
             - earliest_y[producer]
             - targets[index * 6 + 2]
         )
-        direct = (
-            row_gap >= 1
-            and row_gap <= sorter_max_reach
-            and earliest_x[producer] <= earliest_x[consumer] + targets[index * 6 + 5] - 1
-            and earliest_x[consumer] <= earliest_x[producer] + targets[index * 6 + 4] - 1
-        )
+        direct = row_gap >= 1 and row_gap <= sorter_max_reach
+        if direct:
+            origin_delta = earliest_x[consumer] - earliest_x[producer]
+            delta_start = targets[index * 6 + 4]
+            delta_stop = targets[index * 6 + 5]
+            while delta_start < delta_stop:
+                delta_mid = delta_start + (delta_stop - delta_start) // 2
+                if origin_deltas[delta_mid] < origin_delta:
+                    delta_start = delta_mid + 1
+                else:
+                    delta_stop = delta_mid
+            direct = (
+                delta_start < targets[index * 6 + 5]
+                and origin_deltas[delta_start] == origin_delta
+            )
         if not direct:
             missed += 1
 

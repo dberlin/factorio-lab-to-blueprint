@@ -1,7 +1,7 @@
 """Where does a routing pass actually go?
 
-    uv run python scripts/route_profile.py universe-matrix --power 1 --budget 4
-    uv run python scripts/route_profile.py quantum-chip --power 1 --cprofile
+    uv run python scripts/route_profile.py universe-matrix --budget 4
+    uv run python scripts/route_profile.py quantum-chip --cprofile
 
 Two instruments, deliberately, because each lies in a way the other does not:
 
@@ -24,10 +24,13 @@ from __future__ import annotations
 import argparse
 import cProfile
 import io
+import json
 import pstats
 import sys
 import time
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
+from typing import Protocol, TypedDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -36,25 +39,57 @@ from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import freeform  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
-from flab2bp.layout.base import NoValidLayout  # noqa: E402
-from flab2bp.rates.candidates import build_candidates  # noqa: E402
+from flab2bp.layout.base import NoValidLayout, Placement  # noqa: E402
+from flab2bp.layout.route_feedback import Cell, DetailedRouteResult  # noqa: E402
+from flab2bp.rates import CandidatePolicy, build_candidates  # noqa: E402
+from flab2bp.spec import BuildSpec  # noqa: E402
 
 
-def _strategy(name: str):
+class _Layout(Protocol):
+    def lay_out(
+        self, spec: BuildSpec, *, time_budget_s: float = 15.0
+    ) -> Placement: ...
+
+
+class _Strategy(Protocol):
+    def __call__(self, *, workers: int) -> _Layout: ...
+
+
+class _HeightRow(TypedDict):
+    height: int
+    width: int
+    failed: str | int | None
+    route_s: float | None
+
+
+def _strategy(name: str) -> _Strategy:
     if name == "freeform":
-        return lambda **kwargs: freeform.FreeformLayout(
+
+        def freeform_layout(*, workers: int) -> freeform.FreeformLayout:
+            return freeform.FreeformLayout(
+                band_policy=BandPolicy("portable"),
+                workers=workers,
+            )
+
+        return freeform_layout
+    from flab2bp.layout.sequence_solver import SequencePairLayout
+
+    def sequence_pair(*, workers: int) -> SequencePairLayout:
+        del workers
+        return SequencePairLayout(
             band_policy=BandPolicy("portable"),
-            **kwargs,
         )
-    from flab2bp.layout.seqpair import SeqPairLayout
 
-    return SeqPairLayout
+    return sequence_pair
 
 
-def _spec(url_id: str, index: int):
+def _spec(url_id: str, candidate_policy: CandidatePolicy) -> BuildSpec:
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
-    cands = build_candidates(load_vendored(), parse_url(entry.url), count=3).candidates
-    return cands[index]
+    return build_candidates(
+        load_vendored(),
+        parse_url(entry.url),
+        candidate_policies=(candidate_policy,),
+    ).candidates[0]
 
 
 class Tally:
@@ -77,7 +112,7 @@ class Tally:
         self.n[key] = self.n.get(key, 0) + 1
 
 
-def install(tally: Tally):
+def install(tally: Tally) -> Callable[[], None]:
     """Patch the module's routing entry points with timing shims."""
     orig_astar = freeform._astar
     orig_route_all = freeform._route_all
@@ -88,67 +123,164 @@ def install(tally: Tally):
     orig_reserve = freeform._reserve_port_access
     orig_merge = freeform._merge_frontier
 
-    def astar(canvas, starts, goals, history, pressure, bounds, budget=None,
-              deadline=None, blame=None, grid=None):
-        before = budget["left"] if budget is not None else 0
+    def astar(
+        canvas: freeform._Canvas,
+        starts: list[Cell],
+        goals: set[Cell],
+        history: dict[Cell, float],
+        pressure: float,
+        bounds: tuple[int, int, int, int],
+        budget: dict[str, int] | None = None,
+        deadline: float | None = None,
+        blame: dict[Cell, float] | None = None,
+        grid: freeform._Grid | None = None,
+        owned_starts: Collection[Cell] = (),
+        released_starts: Collection[Cell] = (),
+        forbidden: Collection[Cell] = (),
+    ) -> freeform._PathSearchResult:
         t0 = time.perf_counter()
-        out = orig_astar(canvas, starts, goals, history, pressure, bounds,
-                         budget, deadline, blame, grid)
+        out = orig_astar(
+            canvas,
+            starts,
+            goals,
+            history,
+            pressure,
+            bounds,
+            budget,
+            deadline,
+            blame,
+            grid,
+            owned_starts,
+            released_starts,
+            forbidden,
+        )
         dt = time.perf_counter() - t0
         tally.add("astar", dt)
-        spent = (before - budget["left"]) if budget is not None else 0
-        tally.expansions += spent
-        if out is None:
+        tally.expansions += out.expansions
+        if out.path is None:
             tally.astar_none += 1
         else:
             tally.astar_hit += 1
-            tally.path_cells += len(out)
-        tally.calls.append((spent, dt, -1 if out is None else len(out)))
+            tally.path_cells += len(out.path)
+        tally.calls.append(
+            (out.expansions, dt, -1 if out.path is None else len(out.path))
+        )
         return out
 
-    def route_all(canvas, nets, belt_id, belt_model, bounds, deadline=None,
-                  budget=None):
+    def route_all(
+        canvas: freeform._Canvas,
+        nets: list[freeform._Net],
+        belt_id: int,
+        belt_model: int,
+        bounds: tuple[int, int, int, int],
+        deadline: float | None = None,
+        budget: dict[str, int] | None = None,
+        planned_power_sites: Sequence[tuple[int, int]] | None = None,
+        junction_frame_bans: Sequence[frozenset[Cell]] = (),
+    ) -> DetailedRouteResult:
         t0 = time.perf_counter()
-        out = orig_route_all(canvas, nets, belt_id, belt_model, bounds,
-                             deadline, budget)
+        out = orig_route_all(
+            canvas,
+            nets,
+            belt_id,
+            belt_model,
+            bounds,
+            deadline,
+            budget,
+            planned_power_sites,
+            junction_frame_bans,
+        )
         tally.add("route_all", time.perf_counter() - t0)
         tally.passes += 1
-        tally.rounds += out[2]
+        tally.rounds += out.iterations
         return out
 
-    def commit(*a, **k):
+    def commit(
+        canvas: freeform._Canvas,
+        nets: list[freeform._Net],
+        paths: Mapping[int, Sequence[Cell]],
+        belt_id: int,
+        belt_model: int,
+        src_group: Mapping[int, tuple[int, ...]] | None = None,
+        dst_group: Mapping[int, tuple[int, ...]] | None = None,
+        *,
+        source_hints: Mapping[int, Cell] | None = None,
+        sink_hints: Mapping[int, Cell] | None = None,
+        failure_details: dict[int, freeform._CommitFailure] | None = None,
+    ) -> tuple[int, ...]:
         t0 = time.perf_counter()
-        out = orig_commit(*a, **k)
+        out = orig_commit(
+            canvas,
+            nets,
+            paths,
+            belt_id,
+            belt_model,
+            src_group,
+            dst_group,
+            source_hints=source_hints,
+            sink_hints=sink_hints,
+            failure_details=failure_details,
+        )
         tally.add("commit_paths", time.perf_counter() - t0)
         return out
 
-    def make_grid(*a, **k):
+    def make_grid(
+        canvas: freeform._Canvas,
+        box: tuple[int, int, int, int],
+        span: tuple[int, int, int, int],
+        history: Mapping[Cell, float],
+    ) -> freeform._Grid:
         t0 = time.perf_counter()
-        out = orig_make_grid(*a, **k)
+        out = orig_make_grid(canvas, box, span, history)
         tally.add("make_grid", time.perf_counter() - t0)
         return out
 
-    def refresh(self, history):
+    def refresh(self: freeform._Grid, history: Mapping[Cell, float]) -> None:
         t0 = time.perf_counter()
-        out = orig_refresh(self, history)
+        orig_refresh(self, history)
         tally.add("refresh_history", time.perf_counter() - t0)
-        return out
 
-    def landmarks(self, count):
+    def landmarks(self: freeform._Grid, count: int) -> None:
         t0 = time.perf_counter()
-        out = orig_landmarks(self, count)
+        orig_landmarks(self, count)
         tally.add("build_landmarks", time.perf_counter() - t0)
-        return out
 
-    def reserve(*a, **k):
+    def reserve(
+        canvas: freeform._Canvas,
+        nets: list[freeform._Net],
+        *,
+        twice: Collection[Cell] = (),
+        failed_ports: set[Cell] | None = None,
+    ) -> int:
         t0 = time.perf_counter()
-        out = orig_reserve(*a, **k)
+        out = orig_reserve(
+            canvas, nets, twice=twice, failed_ports=failed_ports
+        )
         tally.add("reserve_port_access", time.perf_counter() - t0)
         return out
 
-    def merge(*a, **k):
+    def merge(
+        canvas: freeform._Canvas,
+        paths: Mapping[int, Sequence[Cell]],
+        siblings: tuple[int, ...],
+        junctionable: Callable[[int, int, int], bool] | None = None,
+        *,
+        provenance: dict[Cell, Cell] | None = None,
+        belt_prefab: tuple[int, int] | None = None,
+        tentative_ok: bool = False,
+        owned_guard: Mapping[Cell, Cell] | None = None,
+    ) -> set[Cell]:
         t0 = time.perf_counter()
-        out = orig_merge(*a, **k)
+        out = orig_merge(
+            canvas,
+            paths,
+            siblings,
+            junctionable,
+            provenance=provenance,
+            belt_prefab=belt_prefab,
+            tentative_ok=tentative_ok,
+            owned_guard=owned_guard,
+        )
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out
 
@@ -156,8 +288,8 @@ def install(tally: Tally):
     freeform._route_all = route_all
     freeform._commit_paths = commit
     freeform._make_grid = make_grid
-    freeform._Grid.refresh_history = refresh
-    freeform._Grid.build_landmarks = landmarks
+    type.__setattr__(freeform._Grid, "refresh_history", refresh)
+    type.__setattr__(freeform._Grid, "build_landmarks", landmarks)
     freeform._reserve_port_access = reserve
     freeform._merge_frontier = merge
 
@@ -166,16 +298,21 @@ def install(tally: Tally):
         freeform._route_all = orig_route_all
         freeform._commit_paths = orig_commit
         freeform._make_grid = orig_make_grid
-        freeform._Grid.refresh_history = orig_refresh
-        freeform._Grid.build_landmarks = orig_landmarks
+        type.__setattr__(freeform._Grid, "refresh_history", orig_refresh)
+        type.__setattr__(freeform._Grid, "build_landmarks", orig_landmarks)
         freeform._reserve_port_access = orig_reserve
         freeform._merge_frontier = orig_merge
 
     return restore
 
 
-def heights(url_id: str, power: int, spec_index: int, workers: int,
-            ceiling: float, strategy: str = "freeform") -> int:
+def heights(
+    url_id: str,
+    candidate_policy: CandidatePolicy,
+    workers: int,
+    ceiling: float,
+    strategy: str = "freeform",
+) -> int:
     """What would EVERY candidate height do, given a clock it cannot spend?
 
     The sweep tries heights in order and stops at the deadline, so a refusal
@@ -185,26 +322,51 @@ def heights(url_id: str, power: int, spec_index: int, workers: int,
     takes them -- which is the measurement that decides whether routing heights
     IN PARALLEL would convert a refusal or merely reach more failures sooner.
     """
-    spec = _spec(url_id, spec_index)
+    spec = _spec(url_id, candidate_policy)
     orig_build = freeform._build
-    seen: list[dict] = []
+    seen: list[_HeightRow] = []
 
     # INSTRUMENTED AT `_build` AND NOT AT `_pack`, because the two sweeps do not
     # share a packer: `seqpair._sweep` runs its own arrangement search and never
     # calls `_pack` at all.  Every sweep does hand `_build` a `_Pack`, and that
     # carries the height and the width, so one shim covers both strategies.
-    def build(spec_, strips_, pack_, **kw):
+    def build(
+        spec: BuildSpec,
+        strips: list[freeform.Strip],
+        pack: freeform._Pack,
+        *,
+        power: bool,
+        route: bool,
+        policy: BandPolicy,
+        ramped: bool = False,
+        deadline: float | None = None,
+        budget: dict[str, int] | None = None,
+    ) -> freeform._BuildResult:
         t0 = time.perf_counter()
-        row = {"height": pack_.height, "width": pack_.width,
-               "failed": None, "route_s": None}
+        row = _HeightRow(
+            height=pack.height,
+            width=pack.width,
+            failed=None,
+            route_s=None,
+        )
         seen.append(row)
         try:
-            out = orig_build(spec_, strips_, pack_, **kw)
+            out = orig_build(
+                spec,
+                strips,
+                pack,
+                power=power,
+                route=route,
+                policy=policy,
+                ramped=ramped,
+                deadline=deadline,
+                budget=budget,
+            )
         except Exception as exc:  # noqa: BLE001
             row["failed"] = type(exc).__name__
             row["route_s"] = time.perf_counter() - t0
             raise
-        row["failed"] = out[1]
+        row["failed"] = out.routing.failed_count
         row["route_s"] = time.perf_counter() - t0
         return out
 
@@ -212,15 +374,14 @@ def heights(url_id: str, power: int, spec_index: int, workers: int,
     t0 = time.perf_counter()
     verdict = "OK"
     try:
-        _strategy(strategy)(power=power, workers=workers).lay_out(
-            spec, time_budget_s=ceiling
-        )
+        _strategy(strategy)(workers=workers).lay_out(spec, time_budget_s=ceiling)
     except NoValidLayout as exc:
         verdict = f"REFUSED: {exc.reason[:80]}"
     finally:
         freeform._build = orig_build
-    print(f"=== {url_id} power={power} ceiling={ceiling}s  "
-          f"{time.perf_counter() - t0:.1f}s  {verdict}")
+    print(
+        f"=== {url_id} ceiling={ceiling}s  {time.perf_counter() - t0:.1f}s  {verdict}"
+    )
     for i, row in enumerate(seen):
         print(f"  #{i:<2} height {row['height']:>5}  w={str(row['width']):>5}  "
               f"route {-1.0 if row['route_s'] is None else row['route_s']:6.1f}s "
@@ -231,21 +392,31 @@ def heights(url_id: str, power: int, spec_index: int, workers: int,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("url_id")
-    ap.add_argument("--power", type=int, default=1)
     ap.add_argument("--budget", type=float, default=4.0)
-    ap.add_argument("--spec-index", type=int, default=0)
+    ap.add_argument(
+        "--candidate-policy",
+        type=CandidatePolicy,
+        choices=tuple(CandidatePolicy),
+        default=CandidatePolicy.NO_PROLIFERATOR,
+    )
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--cprofile", action="store_true")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--heights", action="store_true")
     ap.add_argument("--strategy", default="freeform")
+    ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     if args.heights:
-        return heights(args.url_id, args.power, args.spec_index,
-                       args.workers, args.budget, args.strategy)
+        return heights(
+            args.url_id,
+            args.candidate_policy,
+            args.workers,
+            args.budget,
+            args.strategy,
+        )
 
-    spec = _spec(args.url_id, args.spec_index)
+    spec = _spec(args.url_id, args.candidate_policy)
     for run in range(args.repeat):
         tally = Tally()
         restore = install(tally)
@@ -255,10 +426,7 @@ def main() -> int:
         try:
             if prof is not None:
                 prof.enable()
-            freeform.FreeformLayout(
-                band_policy=BandPolicy("portable"),
-                power=args.power, workers=args.workers
-            ).lay_out(
+            _strategy(args.strategy)(workers=args.workers).lay_out(
                 spec, time_budget_s=args.budget
             )
         except NoValidLayout as exc:
@@ -268,13 +436,34 @@ def main() -> int:
                 prof.disable()
             restore()
         wall = time.perf_counter() - t0
+        routing = tally.t.get("route_all", 0.0)
+        inner = tally.t.get("astar", 0.0)
+        if args.json:
+            print(json.dumps({
+                "url_id": args.url_id,
+                "strategy": args.strategy,
+                "power": True,
+                "budget_s": args.budget,
+                "run": run + 1,
+                "repeat": args.repeat,
+                "verdict": verdict,
+                "wall_s": wall,
+                "route_all_s": routing,
+                "astar_s": inner,
+                "astar_routing_share": inner / max(routing, 1e-9),
+                "astar_wall_share": inner / max(wall, 1e-9),
+                "expansions": tally.expansions,
+                "hits": tally.astar_hit,
+                "misses": tally.astar_none,
+            }, separators=(",", ":"), sort_keys=True))
+            continue
 
-        print(f"=== {args.url_id} power={args.power} budget={args.budget} "
-              f"run {run + 1}/{args.repeat}")
+        print(
+            f"=== {args.url_id} budget={args.budget} run {run + 1}/{args.repeat}"
+        )
         print(f"    {verdict}")
         print(f"    wall {wall:.2f}s   routing passes {tally.passes}   "
               f"rip-up rounds {tally.rounds}")
-        routing = tally.t.get("route_all", 0.0)
         print(f"    _route_all total {routing:.2f}s ({100 * routing / wall:.0f}% of wall)")
         for key in ("astar", "commit_paths", "make_grid", "refresh_history",
                     "build_landmarks", "reserve_port_access", "merge_frontier"):
@@ -282,7 +471,6 @@ def main() -> int:
                 print(f"      {key:<22} {tally.t[key]:7.2f}s  "
                       f"n={tally.n[key]:<7} "
                       f"{100 * tally.t[key] / max(routing, 1e-9):5.1f}% of routing")
-        inner = tally.t.get("astar", 0.0)
         other = routing - sum(
             tally.t.get(k, 0.0)
             for k in ("astar", "commit_paths", "make_grid", "refresh_history",

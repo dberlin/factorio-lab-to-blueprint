@@ -11,15 +11,24 @@ import pytest
 
 import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
+import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog, rules
 from flab2bp.layout import finalize, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
+from flab2bp.layout.base import (
+    AreaFrame,
+    NoValidLayout,
+    PlacedBuilding,
+    Placement,
+    PlacementCompletion,
+)
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedDiagnostics,
     CompactSeedResult,
     CompactSeedStatus,
+    CompactTopologyCandidate,
+    PairwiseRelationSignature,
     VariantDirectInsertTarget,
 )
 from flab2bp.layout.freeform import (
@@ -56,6 +65,7 @@ from flab2bp.layout.sequence_pair import (
     build_elite_archive,
     decode_sequence_pair,
     decode_state,
+    enable_variant_stage_boundary,
     split_stage_boundary,
 )
 from flab2bp.layout.sequence_solver import (
@@ -67,6 +77,7 @@ from flab2bp.layout.sequence_solver import (
     StageAdapters,
     ValidationVerdict,
     _decoded_pack,
+    _placement_nets,
     _pose_stage_boundary_update,
     _production_run,
     _ProductionCandidate,
@@ -75,23 +86,35 @@ from flab2bp.layout.sequence_solver import (
     _variant_search_inputs,
 )
 from flab2bp.layout.strip_variants import (
+    ProjectionPitchRequirement,
+    StripFamily,
+    StripInstanceId,
+    StripVariant,
     generate_strip_families,
     partition_strip_family,
+    projection_pitch_requirement,
+    variant_with_minimum_pitch,
     variants_for_count,
 )
-from flab2bp.spec import BuildSpec, MachineGroup
+from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 from tests.layout.test_freeform import (
+    band_120_control_spec,
+    plastic_spec,
+    projected_chemical_plant_spec,
     proliferated_spec,
     ray_receiver_spec,
+    spray_domain_spec,
     two_stage_spec,
 )
 
 Prepared = tuple[int, DecodedPlacement]
+_PORTABLE_BAND_POLICY = BandPolicy("portable")
 
 
 class _ProductionRunCapture(TypedDict, total=False):
     compact_seed_attempt: int | None
     compact_seed_config: CompactSeedConfig | None
+    power: bool
 
 
 class _CompactSeedCapture(TypedDict, total=False):
@@ -120,26 +143,58 @@ def _placement(*, area: int, belt_tiles: int, valid: bool = True) -> Placement:
     )
 
 
+def test_sequence_pair_preserves_mixed_spray_domain_logical_nets() -> None:
+    spec = spray_domain_spec(clean=True, sprayed=True)
+    strips = plan_strips(spec, strip_len=6)
+
+    iron_nets = [
+        (endpoints, logical)
+        for endpoints, logical in _placement_nets(strips)
+        if logical.item == "iron-ingot"
+    ]
+
+    assert {logical.cargo_domain.value for _endpoints, logical in iron_nets} == {
+        "requires-spray",
+        "unsprayed",
+    }
+    for (_source, destination), logical in iron_nets:
+        assert strips[destination].cargo_domain is logical.cargo_domain
+
+
 def _routing(
     status: DetailedRouteStatus,
     *,
     expansions: int = 0,
     geometric_failure: bool = False,
+    failure_kind: RouteFailureKind | None = None,
+    source: tuple[int, int, int] | None = None,
+    destination: tuple[int, int, int] | None = None,
 ) -> DetailedRouteResult:
     failures: tuple[NetFailure, ...] = ()
     if status is not DetailedRouteStatus.ROUTED:
         net = NetId(0, 0, "item", NetRole.INTERNAL, 0)
+        kind = failure_kind or (
+            RouteFailureKind.CONGESTION_WALL
+            if geometric_failure
+            else RouteFailureKind.BUDGET
+        )
         failures = (
             NetFailure(
                 net_id=net,
-                kind=(
-                    RouteFailureKind.CONGESTION_WALL
-                    if geometric_failure
-                    else RouteFailureKind.BUDGET
+                kind=kind,
+                wall=(
+                    ((0, 0, 0),)
+                    if kind
+                    not in {
+                        RouteFailureKind.BUDGET,
+                        RouteFailureKind.STATIC_ACCESS,
+                    }
+                    else ()
                 ),
-                wall=((0, 0, 0),) if geometric_failure else (),
                 blocking_nets=(),
                 expansions=expansions,
+                source=source,
+                destination=destination,
             ),
         )
     return DetailedRouteResult(
@@ -183,6 +238,7 @@ class _FakeRouting:
     detailed_allowances: list[int] = field(default_factory=list)
     prepared_candidates: list[Prepared] = field(default_factory=list)
     feedback_seen: list[FeedbackState] = field(default_factory=list)
+    feedback_origins: Callable[[Prepared], tuple[tuple[int, int], ...]] | None = None
     _detailed_index: int = 0
 
     def prepare(self, height: int, decoded: DecodedPlacement) -> Prepared:
@@ -223,8 +279,12 @@ class _FakeRouting:
 
     def validate(self, placement: Placement) -> ValidationVerdict:
         if placement.stats.get("validator_clean") == 1.0:
-            return ValidationVerdict(ok=True, failed_checks=())
-        return ValidationVerdict(ok=False, failed_checks=("fake.invalid",))
+            return ValidationVerdict(ok=True, failed_checks=(), placement=placement)
+        return ValidationVerdict(
+            ok=False,
+            failed_checks=("fake.invalid",),
+            placement=None,
+        )
 
     def adapters(self) -> StageAdapters[Prepared]:
         return StageAdapters(
@@ -232,6 +292,7 @@ class _FakeRouting:
             global_route=self.global_route,
             detailed_route=self.detailed_route,
             validate=self.validate,
+            feedback_origins=self.feedback_origins,
         )
 
 
@@ -244,6 +305,8 @@ def _solver(
     deadline_reached: Callable[[], bool] | None = None,
     initial_states: dict[int, AnnealState] | None = None,
     borrow_first_discovery: bool = False,
+    routing_seed_allowance_cap: int | None = None,
+    stage_admission: sequence_solver_module._MeasuredStageAdmission | None = None,
 ) -> SequenceSolver[Prepared]:
     return SequenceSolver(
         heights=heights,
@@ -265,6 +328,8 @@ def _solver(
         deadline_reached=deadline_reached or (lambda: False),
         initial_states=initial_states,
         borrow_first_discovery=borrow_first_discovery,
+        routing_seed_allowance_cap=routing_seed_allowance_cap,
+        stage_admission=stage_admission,
     )
 
 
@@ -327,6 +392,37 @@ def test_validator_rejected_compact_seed_never_escapes_and_discovery_recovers() 
     assert seed_observation.exact_key is None
     assert seed_observation.validation_failures == ("fake.invalid",)
     assert discovery.exact_key == (20, 4)
+
+
+def test_compact_seed_closure_preserves_expansions_for_followup_candidates() -> None:
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(
+                    DetailedRouteStatus.STRANDED,
+                    geometric_failure=True,
+                    failure_kind=RouteFailureKind.CONGESTION_WALL,
+                ),
+                None,
+            ),
+            DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None),
+        ),
+        spend_allowance=True,
+    )
+    solver = _solver(
+        fake,
+        heights=(40, 60),
+        budget=ExpansionBudget(total=1_000),
+        initial_states={40: AnnealState.initial(1, 17)},
+        routing_seed_allowance_cap=125,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    assert fake.detailed_allowances == [125, 875]
+    assert solver.budget.spent == 1_000
+
 
 
 def test_compact_exact_incumbent_cannot_be_displaced_by_worse_discovery() -> None:
@@ -587,6 +683,160 @@ def test_exact_candidate_caps_preserve_later_closures_and_fallback_discovery() -
     assert budget.spent < budget.total
 
 
+def test_exact_seed_routing_failure_becomes_shared_search_feedback() -> None:
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(
+                    DetailedRouteStatus.STRANDED,
+                    geometric_failure=True,
+                    failure_kind=RouteFailureKind.CONGESTION_WALL,
+                    source=(3, 4, 0),
+                    destination=(6, 7, 0),
+                ),
+                None,
+            ),
+        )
+    )
+    fake.feedback_origins = lambda _prepared: ((2, 3),)
+    solver = _solver(fake, heights=(40,))
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    solver.close_exact_decoded(40, decoded, reason="topology-beam")
+
+    feedback = solver._heights[0].feedback
+    assert feedback.net_weight
+    assert feedback.cell_history
+    assert feedback.endpoint_offsets == {
+        NetId(0, 0, "item", NetRole.INTERNAL, 0): ((1, 1, 0), (4, 4, 0))
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "failure_kind"),
+    (
+        (DetailedRouteStatus.STRANDED, RouteFailureKind.CONGESTION_WALL),
+        (DetailedRouteStatus.STRANDED, RouteFailureKind.STATIC_ACCESS),
+        (DetailedRouteStatus.BUDGET, RouteFailureKind.CONGESTION_WALL),
+    ),
+)
+def test_compact_seed_near_miss_closes_local_repair_without_reannealing(
+    status: DetailedRouteStatus,
+    failure_kind: RouteFailureKind,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(
+                    status,
+                    geometric_failure=failure_kind is not RouteFailureKind.STATIC_ACCESS,
+                    failure_kind=failure_kind,
+                ),
+                None,
+            ),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40, 60),
+        initial_states={40: AnnealState.initial(1, 7)},
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=2)
+
+    assert result.placement is exact
+    assert [stage.height for stage in result.stages] == [40, 40]
+    assert [stage.global_skip_reason for stage in result.stages] == [
+        "compact-seed",
+        "proxy-budget",
+
+    ]
+    assert fake.global_allowances == []
+    assert result.stages[1].anneal_moves == 0
+def test_owned_geometric_failures_remain_local_feedback_above_three_nets() -> None:
+    problem = PlacementProblem(((1, 1),) * 10, (), 10, 10)
+    state = AnnealState.initial(problem.size, 7)
+    decoded = decode_state(problem, state)
+    failures = tuple(
+        NetFailure(
+            net_id=NetId(0, 1, f"item-{ordinal}", NetRole.INTERNAL, ordinal),
+            kind=RouteFailureKind.DYNAMIC_ACCESS,
+            wall=(),
+            blocking_nets=(
+                NetId(1, 0, f"blocker-{ordinal}", NetRole.INTERNAL, ordinal),
+            ),
+            expansions=0,
+        )
+        for ordinal in range(4)
+    )
+    detailed = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=failures,
+        iterations=1,
+        expansions=0,
+    )
+
+    repaired, neighbourhood = (
+        sequence_solver_module._routing_feedback_substitution(
+            detailed,
+            state,
+            problem,
+            decoded,
+            seed=7,
+            stage_index=0,
+        )
+    )
+
+    assert neighbourhood
+    assert len(neighbourhood) < problem.size
+    assert repaired.stage_index == 0
+
+
+
+def test_geometric_near_miss_substitutes_feedback_candidate_before_next_height() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(
+                    DetailedRouteStatus.STRANDED,
+                    geometric_failure=True,
+                    failure_kind=RouteFailureKind.CONGESTION_WALL,
+                ),
+                None,
+            ),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        )
+    )
+    solver = _solver(fake, heights=(40, 60))
+
+    result = solver.search(max_stages=2)
+
+    assert result.placement is exact
+    assert [stage.height for stage in result.stages] == [40, 40]
+    assert result.stages[0].lns_size == 1
+    assert result.stages[1].global_skip_reason == "proxy-budget"
+    assert len(fake.global_allowances) == 1
+
+
 def test_unseeded_solver_has_no_compact_closure() -> None:
     exact = _placement(area=20, belt_tiles=4)
     solver = _solver(
@@ -713,25 +963,17 @@ def test_quality_mode_requires_zero_overflow_and_validator_clean_exact(
     assert global_calls == 2
 
 
-@pytest.mark.parametrize(
-    "quality_failure",
-    (DetailedRouteStatus.STRANDED, DetailedRouteStatus.BUDGET),
-)
-def test_quality_failure_exits_and_following_stage_restores_global_feedback(
-    quality_failure: DetailedRouteStatus,
-) -> None:
+def test_quality_geometric_failure_updates_feedback_and_repeated_signature() -> None:
     exact = _placement(area=20, belt_tiles=4)
+    quality_failure = _routing(
+        DetailedRouteStatus.STRANDED,
+        failure_kind=RouteFailureKind.CONGESTION_WALL,
+    )
     fake = _FakeRouting(
         detailed_results=(
             DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
-            DetailedStageResult(
-                _routing(quality_failure, geometric_failure=True),
-                None,
-            ),
-            DetailedStageResult(
-                _routing(DetailedRouteStatus.STRANDED, geometric_failure=True),
-                None,
-            ),
+            DetailedStageResult(quality_failure, None),
+            DetailedStageResult(quality_failure, None),
         )
     )
     solver = _solver(
@@ -748,11 +990,23 @@ def test_quality_failure_exits_and_following_stage_restores_global_feedback(
     first_result = solver.search(max_stages=2)
 
     failure = first_result.stages[1]
+    restart = solver._heights[0].restarts[0]
+    failed_net = quality_failure.failures[0].net_id
+    expected_signature = (
+        (
+            failed_net.logical,
+            RouteFailureKind.CONGESTION_WALL,
+            (),
+        ),
+    )
     assert failure.global_routes == 0
     assert failure.global_skip_reason == "quality-mode"
     assert failure.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
     assert failure.quality_exited
-    assert not solver._heights[0].feedback.cell_history
+    assert solver._heights[0].feedback.net_weight == {failed_net: 1.0}
+    assert solver._heights[0].feedback.cell_history == {(0, 0, 0): 1.0}
+    assert restart.failure_signature == expected_signature
+    assert restart.feedback_stagnation == 1
     assert len(fake.global_allowances) == 1
 
     final_result = solver.search(max_stages=3)
@@ -761,8 +1015,50 @@ def test_quality_failure_exits_and_following_stage_restores_global_feedback(
     assert restored.global_routes == 1
     assert restored.global_skip_reason is None
     assert restored.objective_mode is sequence_solver_module.ObjectiveMode.EXPLORATION
-    assert solver._heights[0].feedback.cell_history == {(0, 0, 0): 1.0}
+    assert solver._heights[0].feedback.net_weight == {failed_net: 1.85}
+    assert solver._heights[0].feedback.cell_history == {(0, 0, 0): 1.85}
+    assert restart.failure_signature == expected_signature
+    assert restart.feedback_stagnation == 2
     assert len(fake.global_allowances) == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    (
+        (DetailedRouteStatus.STRANDED, RouteFailureKind.STATIC_ACCESS),
+        (DetailedRouteStatus.BUDGET, RouteFailureKind.BUDGET),
+    ),
+)
+def test_quality_static_and_budget_failures_add_no_feedback_or_signature(
+    status: DetailedRouteStatus,
+    kind: RouteFailureKind,
+) -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+            DetailedStageResult(_routing(status, failure_kind=kind), None),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+
+    result = solver.search(max_stages=2)
+
+    restart = solver._heights[0].restarts[0]
+    assert result.stages[1].quality_exited
+    assert not solver._heights[0].feedback.net_weight
+    assert not solver._heights[0].feedback.cell_history
+    assert restart.failure_signature == ()
+    assert restart.feedback_stagnation == 0
 
 
 def test_best_height_scheduling_uses_complete_exact_key_before_stable_order() -> None:
@@ -1015,6 +1311,7 @@ def test_refusal_accumulates_distinct_validation_failures() -> None:
         validate=lambda _placement: ValidationVerdict(
             ok=False,
             failed_checks=next(failed_checks),
+            placement=None,
         ),
     )
 
@@ -1214,6 +1511,90 @@ def test_discovery_reservations_are_equal_and_unused_budget_is_shared_afterward(
     assert fake.global_allowances[3] == 56
 
 
+def test_measured_stage_admits_another_complete_stage_when_its_span_fits() -> None:
+    now = 0.0
+    detailed_calls = 0
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+    )
+
+    def delayed_detailed_route(
+        prepared: Prepared,
+        allowance: int,
+    ) -> DetailedStageResult:
+        nonlocal now, detailed_calls
+        detailed_calls += 1
+        result = fake.detailed_route(prepared, allowance)
+        now += 4.0
+        return result
+
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=3,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        stage_admission=sequence_solver_module._MeasuredStageAdmission(
+            deadline=10.0,
+            monotonic=lambda: now,
+        ),
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        detailed_route=delayed_detailed_route,
+    )
+
+    result = solver.search(max_stages=3)
+
+    assert result.placement is exact
+    assert result.termination == "deadline"
+    assert detailed_calls == 2
+    assert now == 8.0
+
+
+def test_measured_stage_reserves_search_and_completion_spans_once_each() -> None:
+    now = 0.0
+    admission = sequence_solver_module._MeasuredStageAdmission(
+        deadline=10.0,
+        monotonic=lambda: now,
+    )
+
+    first = admission.try_start()
+    assert first == 0.0
+    now = 4.0
+    admission.record_completion(1.0)
+    admission.finish(first)
+
+    assert admission.dearest_speculative_s == 3.0
+    assert admission.dearest_completion_s == 1.0
+    second = admission.try_start()
+    assert second == 4.0
+    now = 8.0
+    admission.record_completion(1.0)
+    admission.finish(second)
+
+    assert admission.try_start() is None
+
+
+def test_measured_stage_reserves_bounded_work_without_an_incumbent() -> None:
+    now = 0.0
+    admission = sequence_solver_module._MeasuredStageAdmission(
+        deadline=10.0,
+        monotonic=lambda: now,
+    )
+    first = admission.try_start()
+    assert first == 0.0
+    now = 4.0
+    admission.record_completion(1.0)
+    admission.finish(first)
+    now = 8.0
+
+    assert admission.try_start() is None
+
 def test_later_cancelled_proxy_closes_the_best_completed_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1260,7 +1641,7 @@ def test_later_cancelled_proxy_closes_the_best_completed_candidate(
             prepare=lambda height, decoded: (height, decoded),
             global_route=global_route,
             detailed_route=detailed_route,
-            validate=lambda _placement: ValidationVerdict(True, ()),
+            validate=lambda placement: ValidationVerdict(True, (), placement),
         ),
         expansion_budget=ExpansionBudget(100),
         config=SequenceSolverConfig(
@@ -1321,6 +1702,64 @@ def test_unseatable_prepared_candidate_remains_searchable_refusal(
     assert candidate.preparation_error == "unseatable"
 
 
+def test_production_detailed_adapter_withholds_budget_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, max(_box(strip)[1] for strip in strips))
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False,
+    )
+    net_id = next(
+        net.net_id
+        for net in prepared.nets
+        if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
+    )
+    evidence = DetailedRouteResult(
+        status=DetailedRouteStatus.BUDGET,
+        routed=(),
+        failures=(
+            NetFailure(
+                net_id,
+                RouteFailureKind.BUDGET,
+                (),
+                (),
+                9,
+            ),
+        ),
+        iterations=1,
+        expansions=9,
+    )
+    built = freeform_module._BuildResult(
+        placement=None,
+        routing=evidence,
+        budget_stage=freeform_module._BuildBudgetStage.ROUTING,
+        towers=(),
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_build_prepared",
+        lambda *_args, **_kwargs: built,
+    )
+
+    result = sequence_solver_module._route_detailed_candidate(
+        spec,
+        strips,
+        prepared,
+        power=False,
+        deadline=None,
+        allowance=20,
+    )
+
+    assert result.routing is evidence
+    assert result.placement is None
+
+
 def test_cancelled_proxy_without_an_exact_candidate_remains_an_honest_refusal() -> None:
     detailed_allowances: list[int] = []
 
@@ -1379,6 +1818,98 @@ def test_parent_deadline_after_proxy_closure_is_not_proxy_cancellation() -> None
         solver.search(max_stages=1)
 
     assert fake.detailed_allowances == [75]
+
+
+def _direct_pack_adapter_scene() -> tuple[
+    BuildSpec,
+    list[freeform_module.Strip],
+    dict[tuple[int, int], freeform_module._DirectCandidate],
+    freeform_module._Pack,
+    PlacementProblem,
+]:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    candidates = freeform_module._direct_net_candidates(strips, spec)
+    height = sum(strip.height + 1 for strip in strips)
+    pack = freeform_module._pack(
+        strips,
+        height=height,
+        width_bound=max(strip.width + 1 for strip in strips) * 2,
+        time_budget_s=0.5,
+        direct_candidates=candidates,
+        workers=1,
+    )
+    assert pack is not None and pack.direct
+    sizes = tuple(_box(strip) for strip in strips)
+    problem = PlacementProblem(
+        sizes=sizes,
+        nets=tuple(_nets_between(strips)),
+        outline_height=height,
+        area_lower_bound=sum(width * box_height for width, box_height in sizes),
+    )
+    return spec, strips, candidates, pack, problem
+
+
+def test_exact_pack_decoded_projects_typed_direct_ids_to_sequence_pairs() -> None:
+    _spec, strips, candidates, pack, problem = _direct_pack_adapter_scene()
+
+    decoded = sequence_solver_module._exact_pack_decoded(
+        pack,
+        strips,
+        problem,
+        direct_candidates=candidates,
+    )
+
+    assert decoded.direct == frozenset(
+        (direct.source_strip, direct.destination_strip) for direct in pack.direct
+    )
+
+
+def test_decoded_pack_reconstructs_typed_direct_ids_for_production_preparation() -> None:
+    spec, strips, candidates, original, problem = _direct_pack_adapter_scene()
+    x = tuple(
+        original.at[index][0] - strips[index].west_channel
+        for index in range(problem.size)
+    )
+    y = tuple(original.at[index][1] for index in range(problem.size))
+    pairs = frozenset(
+        (direct.source_strip, direct.destination_strip) for direct in original.direct
+    )
+    decoded = DecodedPlacement(
+        x=x,
+        y=y,
+        width=original.width,
+        used_height=max(
+            coordinate + box_height
+            for coordinate, (_width, box_height) in zip(
+                y,
+                problem.sizes,
+                strict=True,
+            )
+        ),
+        x_windows=tuple((coordinate, coordinate) for coordinate in x),
+        y_windows=tuple((coordinate, coordinate) for coordinate in y),
+        gap_area=0,
+        direct=pairs,
+        variant_indices=(0,) * problem.size,
+    )
+
+    rebuilt = _decoded_pack(
+        problem.outline_height,
+        decoded,
+        west_channels=tuple(strip.west_channel for strip in strips),
+        direct_candidates=candidates,
+    )
+    prepared = _prepare_routing_problem(
+        spec,
+        strips,
+        rebuilt,
+        power=False,
+        policy=BandPolicy("portable"),
+    )
+
+    assert rebuilt.direct == original.direct
+    assert prepared.promised_direct == original.direct
 
 
 def test_decoded_pack_uses_each_selected_strip_west_channel() -> None:
@@ -1484,6 +2015,115 @@ def test_production_run_uses_requested_budget_with_supplied_absolute_deadline() 
     assert run.ceiling == 2.0
     assert run.solver.budget.total == 2_000_000
 
+def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caches: list[object] = []
+    checks: list[bool] = []
+
+    def cancelled_prepare(
+        *_args: object,
+        staged_static_cache: object,
+        cancelled: Callable[[], bool],
+        **_kwargs: object,
+    ) -> Never:
+        caches.append(staged_static_cache)
+        checks.append(cancelled())
+        raise freeform_module._PreparationDeadline
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_prepare_routing_problem",
+        cancelled_prepare,
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height = run.solver._heights[0]
+    decoded = decode_state(height.problem, height.restarts[0].anneal)
+
+    first = run.solver.adapters.prepare_exact(height.height, decoded)
+    second = run.solver.adapters.prepare_exact(height.height, decoded)
+
+    assert first.prepared is None
+    assert first.preparation_error == "deadline"
+    assert second.prepared is None
+    assert second.preparation_error == "deadline"
+    assert checks == [False, False]
+    assert len(caches) == 2
+    assert caches[0] is caches[1]
+
+def test_production_exact_preparation_reuses_realized_direct_insert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    promised_direct: list[frozenset[freeform_module.DirectInsertId]] = []
+
+    def capture_prepare(
+        _spec: BuildSpec,
+        _strips: list[freeform_module.Strip],
+        pack: freeform_module._Pack,
+        **_kwargs: object,
+    ) -> Never:
+        promised_direct.append(pack.direct)
+        raise freeform_module._PreparationDeadline
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_prepare_routing_problem",
+        capture_prepare,
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height = run.solver._heights[0]
+    decoded = decode_state(height.problem, height.restarts[0].anneal)
+
+    candidate = run.solver.adapters.prepare_exact(height.height, decoded)
+
+    assert candidate.decoded.x == decoded.x
+    assert candidate.decoded.y == decoded.y
+    assert promised_direct and promised_direct[0]
+
+
+def test_production_exact_preparation_replay_is_deterministic() -> None:
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    height = run.solver._heights[0]
+    decoded = decode_state(height.problem, height.restarts[0].anneal)
+
+    first = run.solver.adapters.prepare_exact(height.height, decoded)
+    second = run.solver.adapters.prepare_exact(height.height, decoded)
+
+    assert first == second
+    assert first.prepared is not None
+    assert second.prepared is not None
+    assert first.prepared.new_workspace().canvas.reserved == (
+        second.prepared.new_workspace().canvas.reserved
+    )
+
+
+def test_sequence_pair_layout_rejects_removed_power_option() -> None:
+    constructor: Callable[..., SequencePairLayout] = SequencePairLayout
+
+    with pytest.raises(TypeError, match="unexpected keyword argument 'power'"):
+        constructor(band_policy=BandPolicy("portable"), power=False)
+
 
 def test_serial_layout_uses_a_budgeted_root_compact_seed(
     monkeypatch: pytest.MonkeyPatch,
@@ -1507,13 +2147,13 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
         del (
             band_policy,
             time_budget_s,
-            power,
             strip_len,
             config,
             belt_vertical_construction,
             absolute_deadline,
             compact_seed_base_seed,
         )
+        captured["power"] = power
         captured["compact_seed_attempt"] = compact_seed_attempt
         captured["compact_seed_config"] = compact_seed_config
         raise RuntimeError("captured production arguments")
@@ -1533,6 +2173,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
     compact_config = captured["compact_seed_config"]
     assert isinstance(compact_config, CompactSeedConfig)
     assert compact_config.max_deterministic_time == pytest.approx(2.0 / 15.0)
+    assert captured["power"] is True
 
 
 def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
@@ -1546,6 +2187,163 @@ def test_serial_attempt_policy_selects_only_measured_topology_roles() -> None:
     assert sequence_solver_module._serial_compact_seed_attempt(278, 6, power=True) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(168, 2, power=False) == 0
     assert sequence_solver_module._serial_compact_seed_attempt(58, 23, power=False) == 0
+
+
+@pytest.mark.parametrize(
+    (
+        "requested",
+        "machine_count",
+        "sprayed_lanes",
+        "strip_count",
+        "direct_candidates",
+        "expected",
+    ),
+    (
+        (6, 62, 0, 15, 24, 12),
+        (6, 62, 0, 15, 14, 4),
+        (6, 49, 0, 15, 24, 6),
+        (6, 62, 1, 15, 24, 6),
+        (6, 62, 0, 9, 24, 6),
+    ),
+)
+def test_mid_unsprayed_direct_rich_plan_coarsens_before_topology_admission(
+    requested: int,
+    machine_count: int,
+    sprayed_lanes: int,
+    strip_count: int,
+    direct_candidates: int,
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._mid_unsprayed_initial_strip_len(
+            requested,
+            machine_count=machine_count,
+            sprayed_lanes=sprayed_lanes,
+            strip_count=strip_count,
+            direct_candidates=direct_candidates,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("requested", "sprayed_lanes", "direct_candidates", "expected"),
+    (
+        (4, 27, 0, 16),
+        (16, 27, 0, 16),
+        (4, 9, 0, 4),
+        (4, 47, 7, 4),
+        (4, 2, 0, 4),
+    ),
+)
+def test_dense_spray_without_direct_structure_uses_coarse_initial_strips(
+    requested: int,
+    sprayed_lanes: int,
+    direct_candidates: int,
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._dense_spray_initial_strip_len(
+            requested,
+            sprayed_lanes=sprayed_lanes,
+            direct_candidates=direct_candidates,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("requested", "strip_count", "direct_candidates", "expected"),
+    (
+        (4, 24, 24, 12),
+        (6, 37, 62, 12),
+        (4, 64, 64, 12),
+        (4, 23, 23, 4),
+        (4, 65, 102, 4),
+        (4, 53, 5, 4),
+        (16, 50, 50, 16),
+    ),
+)
+def test_moderate_routed_plan_preserves_partition_granularity(
+    requested: int,
+    strip_count: int,
+    direct_candidates: int,
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._moderate_routed_initial_strip_len(
+            requested,
+            strip_count=strip_count,
+            direct_candidates=direct_candidates,
+        )
+        == expected
+    )
+
+
+def test_topology_budget_signature_only_tracks_incomplete_failure_cardinality() -> None:
+    budget = DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+    stranded = DetailedStageResult(_routing(DetailedRouteStatus.STRANDED), None)
+
+    assert sequence_solver_module._topology_budget_signature(budget) == 1
+    assert sequence_solver_module._topology_budget_signature(stranded) is None
+
+
+def test_broad_topology_budget_requires_half_the_beam_strips_unresolved() -> None:
+    assert not sequence_solver_module._topology_budget_is_broad(
+        4,
+        strip_count=10,
+    )
+    assert sequence_solver_module._topology_budget_is_broad(
+        5,
+        strip_count=10,
+    )
+    assert not sequence_solver_module._topology_budget_is_broad(
+        0,
+        strip_count=1,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "machine_count",
+        "strip_count",
+        "sprayed_lanes",
+        "power",
+        "narrowest_height",
+        "scheduled_heights",
+        "expected",
+    ),
+    (
+        (955, 76, 0, True, 203, (203, 158), 203),
+        (955, 76, 0, True, 203, (19, 158), 126),
+        (250, 76, 0, True, 203, (203,), 126),
+        (955, 40, 0, True, 203, (203,), 126),
+        (955, 76, 1, True, 203, (203,), 126),
+        (955, 76, 0, False, 203, (203,), 126),
+    ),
+)
+def test_large_sparse_compact_seed_prefers_narrowest_width_height(
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+    power: bool,
+    narrowest_height: int,
+    scheduled_heights: tuple[int, ...],
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._large_sparse_compact_seed_height(
+            126,
+            narrowest_height=narrowest_height,
+            scheduled_heights=scheduled_heights,
+            machine_count=machine_count,
+            strip_count=strip_count,
+            sprayed_lanes=sprayed_lanes,
+            power=power,
+        )
+        == expected
+    )
+
 
 def test_small_direct_shared_pack_uses_the_wider_height_rank() -> None:
     assert (
@@ -1691,7 +2489,7 @@ def test_small_direct_seed_role_requires_dense_direct_opportunity(
     ),
     (
         (20, 7, 6, 0, 4, 0),
-        (95, 27, 6, 27, 0, 1),
+        (95, 27, 6, 27, 0, 2),
         (16, 4, 6, 2, 0, 2),
         (9, 3, 6, 2, 0, 0),
     ),
@@ -1741,7 +2539,7 @@ def test_tall_topology_role_is_sprayed_and_saturated(
     )
 
 
-def test_tall_topology_height_uses_highest_bound_rank_not_numeric_height() -> None:
+def test_tall_topology_height_uses_narrowest_greedy_bound_rank() -> None:
     assert (
         sequence_solver_module._topology_beam_height(
             {},
@@ -1751,8 +2549,9 @@ def test_tall_topology_height_uses_highest_bound_rank_not_numeric_height() -> No
             sprayed_lanes=14,
             power=False,
         )
-        == 33
+        == 89
     )
+
 
 
 @pytest.mark.parametrize(
@@ -1797,6 +2596,137 @@ def test_tall_topology_role_protects_every_measured_candidate() -> None:
         )
         == 3
     )
+
+@pytest.mark.parametrize(
+    ("tall_role",),
+    ((False,), (True,)),
+    ids=("ordinary", "tall-direct-refinement"),
+)
+def test_topology_candidate_zero_survives_single_admission_and_tall_refinement(
+    monkeypatch: pytest.MonkeyPatch,
+    tall_role: bool,
+) -> None:
+    closed: list[tuple[int, ...]] = []
+
+    class FirstOnlyAdmission:
+        def __init__(self, **_kwargs: object) -> None:
+            self.starts = 0
+
+        def try_start(self) -> float | None:
+            self.starts += 1
+            return 0.0 if self.starts == 1 else None
+
+        def finish(self, _started: float) -> None:
+            return None
+
+    class CandidateZeroBeam:
+        def __init__(
+            self,
+            problem: PlacementProblem,
+            *,
+            coordinate_hint: DecodedPlacement,
+            config: object,
+            **_kwargs: object,
+        ) -> None:
+            self.problem = problem
+            self.hint = coordinate_hint
+            self.config = config
+
+        def solve_next(self, **_kwargs: object) -> CompactTopologyCandidate:
+            pairs = tuple(
+                ((first, second), (True, False, False, False))
+                for first in range(self.problem.size)
+                for second in range(first + 1, self.problem.size)
+            )
+            return CompactTopologyCandidate(
+                topology_index=0,
+                status=CompactSeedStatus.FEASIBLE,
+                x=self.hint.x,
+                y=self.hint.y,
+                width=self.hint.width,
+                used_height=self.hint.used_height,
+                variant_indices=self.hint.variant_indices,
+                signature=PairwiseRelationSignature(pairs),
+                deterministic_time=0.0,
+            )
+
+        def exclude(self, _signature: PairwiseRelationSignature) -> None:
+            return None
+
+    def close_candidate_zero(
+        _solver: SequenceSolver[object],
+        _height: int,
+        decoded: DecodedPlacement,
+        *,
+        reason: str,
+        allowance_cap: int | None = None,
+    ) -> DetailedStageResult:
+        del allowance_cap
+        if tall_role:
+            class Stage:
+                exact_key: tuple[int, int] | None = None
+
+            _solver._stage_stats.append(Stage())  # type: ignore[arg-type]
+        assert reason == "topology-beam"
+        closed.append(decoded.x)
+        return sequence_solver_module._closed_detailed_result(
+            DetailedRouteStatus.STRANDED
+        )
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_MeasuredStageAdmission",
+        FirstOnlyAdmission,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_topology_beam_height",
+        lambda _seeds, coarse, **_kwargs: coarse[0],
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_topology_beam",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_tall_topology_height",
+        lambda **_kwargs: tall_role,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_direct_alignment_targets",
+        lambda _candidates: (
+            DirectInsertTarget((0, 1), 0, 1, 0, 0, 1, 1, (0,)),
+        ),
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_sparse_compact_topology_diversity",
+        lambda **_kwargs: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "CompactTopologyBeam",
+        CandidateZeroBeam,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module.SequenceSolver,
+        "close_exact_decoded",
+        close_candidate_zero,
+    )
+
+    _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert len(closed) == 1
 
 
 @pytest.mark.parametrize(
@@ -1874,14 +2804,28 @@ def test_tall_topology_closes_only_running_narrowest_widths() -> None:
 
 
 def test_refinement_direct_targets_encode_strip_channel_offsets() -> None:
-    target = DirectInsertTarget((0, 1), 0, 1, 2, 4, 10, 4)
+    target = DirectInsertTarget(
+        (0, 1),
+        0,
+        1,
+        2,
+        4,
+        10,
+        4,
+        tuple(range(-3, 10)),
+    )
     strips = (
         type("StripOffset", (), {"west_channel": 3})(),
         type("StripOffset", (), {"west_channel": 1})(),
     )
 
     assert sequence_solver_module._refinement_direct_targets((target,), strips) == (
-        replace(target, producer_span=12, consumer_span=2),
+        replace(
+            target,
+            producer_span=12,
+            consumer_span=2,
+            origin_deltas=tuple(range(-1, 12)),
+        ),
     )
 
 
@@ -1972,25 +2916,65 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     assert captured["direct_eligibility"] == ()
     assert isinstance(compact_deadline, float)
     assert 0.0 < compact_deadline - called_at <= 2.0 / 3.0
+    assert run.solver._borrow_first_discovery is False
 
 
-def test_validator_started_before_deadline_may_finish_exact_certification(
+def test_production_planning_generates_variant_families_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = sequence_solver_module.generate_strip_families
+    calls = 0
+
+    def counted_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
+        nonlocal calls
+        calls += 1
+        return original(spec)
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "generate_strip_families",
+        counted_families,
+    )
+    monkeypatch.setattr(
+        strip_variants_module,
+        "generate_strip_families",
+        lambda _spec: pytest.fail("strip planning regenerated carried families"),
+    )
+
+    _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert calls == 1
+
+
+def test_validator_finishes_inside_atomic_completion_grace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Report:
         errors: tuple[()] = ()
 
-    def slow_certify(
+    now = [0.0]
+    certify_called = [False]
+
+    def crossing_certify(
         _placement: Placement,
         _spec: BuildSpec,
         *,
         expect_power: bool,
     ) -> Report:
         del expect_power
-        time.sleep(0.1)
+        certify_called[0] = True
+        now[0] = 2.0
         return Report()
 
-    monkeypatch.setattr(validate, "certify", slow_certify)
+    monkeypatch.setattr(sequence_solver_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(validate, "certify", crossing_certify)
     run = _production_run(
         two_stage_spec(),
         band_policy=BandPolicy("portable"),
@@ -1998,12 +2982,55 @@ def test_validator_started_before_deadline_may_finish_exact_certification(
         power=False,
         strip_len=6,
         config=SequenceSolverConfig.test(),
-        absolute_deadline=time.monotonic() + 0.05,
+        absolute_deadline=1.0,
+    )
+
+    candidate = _placement(area=1, belt_tiles=1)
+    verdict = run.solver.adapters.validate(candidate)
+    assert certify_called == [True]
+
+    assert verdict.ok
+    assert verdict.status is DetailedRouteStatus.ROUTED
+    assert verdict.failed_checks == ()
+    assert verdict.placement is not None
+
+
+def test_validator_crossing_atomic_completion_grace_returns_incomplete_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Report:
+        errors: tuple[()] = ()
+
+    now = [0.0]
+
+    def crossing_certify(
+        _placement: Placement,
+        _spec: BuildSpec,
+        *,
+        expect_power: bool,
+    ) -> Report:
+        del expect_power
+        now[0] = 6.2
+        return Report()
+
+    monkeypatch.setattr(sequence_solver_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(validate, "certify", crossing_certify)
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=1.0,
     )
 
     verdict = run.solver.adapters.validate(_placement(area=1, belt_tiles=1))
 
-    assert verdict == ValidationVerdict(True, ())
+    assert not verdict.ok
+    assert verdict.status is DetailedRouteStatus.BUDGET
+    assert verdict.failed_checks == ()
+    assert verdict.placement is None
 
 
 def test_deadline_without_an_exact_incumbent_raises() -> None:
@@ -2043,8 +3070,15 @@ def _two_stage_variant_problem() -> tuple[
 
 def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -> None:
     spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
     default = (0,) * problem.size
-    baseline = _selected_direct_targets(spec, strips, problem, default)
+    baseline = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        default,
+        band_policy=policy,
+    )
     assert len(baseline) == 1
     target = baseline[0]
 
@@ -2056,21 +3090,49 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
                 variant if strip == target.producer else 0 for strip in range(problem.size)
             )
         )
-        and _selected_direct_targets(spec, strips, problem, selection)[0].producer_row
+        and _selected_direct_targets(
+            spec,
+            strips,
+            problem,
+            selection,
+            band_policy=policy,
+        )[0].producer_row
         != target.producer_row
     )
     consumer_selection = tuple(
         4 if strip == target.consumer else 0 for strip in range(problem.size)
     )
 
-    producer_changed = _selected_direct_targets(spec, strips, problem, producer_selection)[0]
-    consumer_plans = _selected_strips(strips, problem, consumer_selection)
-    consumer_changed = _selected_direct_targets(spec, strips, problem, consumer_selection)[0]
+    producer_changed = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        producer_selection,
+        band_policy=policy,
+    )[0]
+    consumer_plans = _selected_strips(
+        strips,
+        problem,
+        consumer_selection,
+        band_policy=policy,
+    )
+    consumer_changed = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        consumer_selection,
+        band_policy=policy,
+    )[0]
     assert producer_changed.producer_row != target.producer_row
     assert producer_changed.consumer_row == target.consumer_row
     assert (
         consumer_plans[target.consumer].lane_plan
-        != _selected_strips(strips, problem, default)[target.consumer].lane_plan
+        != _selected_strips(
+            strips,
+            problem,
+            default,
+            band_policy=policy,
+        )[target.consumer].lane_plan
     )
     assert (
         consumer_changed
@@ -2083,6 +3145,7 @@ def test_direct_targets_derive_geometry_from_both_selected_endpoint_variants() -
 
 def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targets() -> None:
     spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
     enumerate_eligibility = getattr(
         sequence_solver_module,
         "_variant_direct_eligibility",
@@ -2090,13 +3153,19 @@ def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targe
     )
     assert enumerate_eligibility is not None
 
-    actual = enumerate_eligibility(spec, strips, problem)
+    actual = enumerate_eligibility(
+        spec,
+        strips,
+        problem,
+        band_policy=policy,
+    )
     expected: set[VariantDirectInsertTarget] = set()
     for baseline in _selected_direct_targets(
         spec,
         strips,
         problem,
         (0,) * problem.size,
+        band_policy=policy,
     ):
         for producer_variant in range(len(problem.variant_tables[baseline.producer])):
             for consumer_variant in range(len(problem.variant_tables[baseline.consumer])):
@@ -2110,6 +3179,7 @@ def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targe
                         strips,
                         problem,
                         tuple(selection),
+                        band_policy=policy,
                     )
                 }
                 target = selected.get(baseline.key)
@@ -2154,7 +3224,12 @@ def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
     state = AnnealState.initial(problem.size, seed=17)
 
     split = split_stage_boundary(problem, state, family, target)
-    selected = _selected_strips(strips, split.problem, split.state.variant_indices)
+    selected = _selected_strips(
+        strips,
+        split.problem,
+        split.state.variant_indices,
+        band_policy=BandPolicy("portable"),
+    )
 
     assert [strip.machines for strip in selected[target : target + 2]] == [
         split.problem.instance_ids[target].machine_count,
@@ -2165,6 +3240,104 @@ def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
         split.problem.instance_ids[target + 1].machine_start,
     ]
     assert all(strip.family_id is not None for strip in selected)
+
+@pytest.mark.parametrize(
+    ("risky_yaw", "expected_west_channels"),
+    (
+        pytest.param(
+            0.0,
+            (
+                freeform_module._COATER_WEST_CHANNEL + 1,
+                freeform_module._COATER_WEST_CHANNEL,
+            ),
+            id="W4-to-W3",
+        ),
+        pytest.param(
+            90.0,
+            (
+                freeform_module._COATER_WEST_CHANNEL,
+                freeform_module._COATER_WEST_CHANNEL + 1,
+            ),
+            id="W3-to-W4",
+        ),
+    ),
+)
+def test_selected_variant_recomputes_its_own_staged_static_clearance(
+    monkeypatch: pytest.MonkeyPatch,
+    risky_yaw: float,
+    expected_west_channels: tuple[int, int],
+) -> None:
+    spec = proliferated_spec()
+    policy = BandPolicy("120")
+    strips = sequence_solver_module._sequence_reservation_strips(
+        plan_strips(spec, strip_len=6, band_policy=policy)
+    )
+    instance_ids, variant_tables = _variant_search_inputs(
+        spec,
+        strips,
+        strip_len=6,
+    )
+    target = next(
+        index
+        for index, strip in enumerate(strips)
+        if strip.cargo_domain is freeform_module.CargoDomain.REQUIRES_SPRAY
+        and {variant.yaw for variant in variant_tables[index]} >= {0.0, 90.0}
+    )
+    problem = PlacementProblem(
+        sizes=tuple(_box(strip) for strip in strips),
+        nets=tuple(_nets_between(strips)),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=instance_ids,
+        variant_tables=variant_tables,
+    )
+    proof_policies: list[BandPolicy] = []
+
+    def prove_relation(
+        relation: freeform_module.StagedStaticClearanceKey,
+        selected_policy: BandPolicy,
+    ) -> bool:
+        proof_policies.append(selected_policy)
+        return relation.peer_yaw == risky_yaw
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_staged_static_preclearance_proved",
+        prove_relation,
+    )
+    selections = tuple(
+        tuple(
+            next(
+                variant_index
+                for variant_index, variant in enumerate(variant_tables[target])
+                if variant.yaw == yaw
+            )
+            if strip == target
+            else 0
+            for strip in range(problem.size)
+        )
+        for yaw in (0.0, 90.0)
+    )
+    selected = tuple(
+        _selected_strips(
+            strips,
+            problem,
+            selection,
+            band_policy=policy,
+        )[target]
+        for selection in selections
+    )
+
+    assert tuple(strip.west_channel for strip in selected) == expected_west_channels
+    assert tuple(strip.physical_variant for strip in selected) == tuple(
+        problem.variant(target, selection[target]) for selection in selections
+    )
+    assert all(
+        problem.selected_sizes(selection)[target][0] >= _box(strip)[0]
+        for selection, strip in zip(selections, selected, strict=True)
+    )
+    assert proof_policies
+    assert set(proof_policies) == {policy}
 
 
 def test_prepared_physical_nets_keep_stable_logical_family_edges() -> None:
@@ -2259,16 +3432,20 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
         problem,
         state,
         height_state.feedback,
-        result,
+        DetailedStageResult(result, None),
         2,
+        (),
+        True,
     )
     alternate = transform(
         height_state.height,
         problem,
         alternate_state,
         height_state.feedback,
-        result,
+        DetailedStageResult(result, None),
         2,
+        (),
+        False,
     )
 
     assert transformed is not None
@@ -2281,6 +3458,7 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
             initial_strips,
             update.problem,
             update.state.variant_indices,
+            band_policy=BandPolicy("portable"),
         )
         assert update.problem.selected_sizes(update.state.variant_indices) == tuple(
             _box(strip) for strip in selected
@@ -2305,6 +3483,917 @@ def test_production_stage_boundary_rebuilds_preparation_for_children() -> None:
         )
         for instance in alternate.problem.instance_ids
     )
+
+
+def _projection_pitch_stage_fixture() -> tuple[
+    PlacementProblem,
+    AnnealState,
+    Placement,
+    finalize.ProjectionFailure,
+]:
+    (family,) = generate_strip_families(projected_chemical_plant_spec())
+    (instance,) = partition_strip_family(family, max_machine_count=2)
+    variants = variants_for_count(family, 2)
+    ordinary = variants[0]
+    problem = PlacementProblem(
+        sizes=((ordinary.box_width, ordinary.box_height),),
+        nets=(),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(instance.instance_id,),
+        variant_tables=(variants,),
+    )
+    state = AnnealState(
+        pair=SequencePair((0,), (0,)),
+        gaps=GapProfile.zero(1),
+        base_seed=17,
+        variant_indices=(0,),
+    )
+    placement = Placement(
+        buildings=tuple(
+            PlacedBuilding(
+                item_id=2309,
+                model_index=64,
+                x=3 + origin,
+                y=11 + ordinary.lane_plan.machine_row,
+                width=ordinary.footprint_width,
+                height=ordinary.footprint_height,
+                yaw=ordinary.yaw,
+                owner_strip=0,
+            )
+            for origin in ordinary.machine_origins_x
+        )
+    )
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+    return problem, state, placement, failure
+
+def test_stage_projection_pitch_requirement_batches_ordered_failures_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    unrelated = replace(failure, check="game.power_too_close")
+    reversed_pair = replace(failure, buildings=tuple(reversed(failure.buildings)))
+    failures = (unrelated, failure, reversed_pair)
+    calls: list[tuple[finalize.ProjectionFailure, ...]] = []
+    mapper = sequence_solver_module.projection_pitch_requirements
+
+    def record_batch(
+        placement: Placement,
+        *,
+        instance_ids: tuple[StripInstanceId, ...],
+        variants: tuple[StripVariant, ...],
+        failures: tuple[finalize.ProjectionFailure, ...],
+    ) -> tuple[ProjectionPitchRequirement | None, ...]:
+        calls.append(failures)
+        return mapper(
+            placement,
+            instance_ids=instance_ids,
+            variants=variants,
+            failures=failures,
+        )
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "projection_pitch_requirements",
+        record_batch,
+    )
+
+    requirement = sequence_solver_module._stage_projection_pitch_requirement(
+        problem,
+        state,
+        placement,
+        failures,
+    )
+
+    assert calls == [failures]
+    assert requirement is not None
+    assert requirement.failure is failure
+
+
+def test_projection_pitch_feedback_rebuilds_failed_restart_and_rebases_siblings() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    config = SequenceSolverConfig(
+        stages=1,
+        moves_per_stage=1,
+        restarts_per_height=2,
+        global_elites=1,
+    )
+    budget = ExpansionBudget(17)
+    transform_calls: list[
+        tuple[
+            tuple[finalize.ProjectionFailure, ...],
+            bool,
+            tuple[int, ...],
+            int,
+        ]
+    ] = []
+    transform_updates: list[tuple[bool, StageBoundaryUpdate]] = []
+    feedback_variant: tuple[int, StripVariant] | None = None
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        detailed: DetailedStageResult,
+        stagnation: int,
+        projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
+    ) -> StageBoundaryUpdate | None:
+        nonlocal feedback_variant
+        transform_calls.append(
+            (
+                projection_failures,
+                select_feedback_variant,
+                stage_state.variant_indices,
+                stagnation,
+            )
+        )
+        if select_feedback_variant:
+            assert detailed.placement is placement
+            selected_variants = tuple(
+                stage_problem.variant(strip, variant)
+                for strip, variant in enumerate(stage_state.variant_indices)
+            )
+            requirement = projection_pitch_requirement(
+                placement,
+                instance_ids=stage_problem.instance_ids,
+                variants=selected_variants,
+                failure=projection_failures[0],
+            )
+            assert requirement is not None
+            target = stage_problem.instance_ids.index(requirement.instance_id)
+            feedback_variant = (
+                target,
+                variant_with_minimum_pitch(
+                    selected_variants[target],
+                    requirement.required_pitch,
+                ),
+            )
+        if feedback_variant is None:
+            return None
+        target, padded = feedback_variant
+        update = enable_variant_stage_boundary(
+            stage_problem,
+            stage_state,
+            strip=target,
+            variant=padded,
+            select_variant=select_feedback_variant,
+        )
+        transform_updates.append((select_feedback_variant, update))
+        return update
+
+    detailed_results = iter(
+        (
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement),
+            DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None),
+        )
+    )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=lambda _prepared, _feedback, _allowance: _global(),
+            detailed_route=lambda _prepared, _allowance: next(detailed_results),
+            validate=lambda _placement: ValidationVerdict(
+                False,
+                ("geom.collide",),
+                None,
+                (failure,),
+            ),
+        ),
+        expansion_budget=budget,
+        initial_states={40: state},
+        config=config,
+        stage_boundary_transform=transform,
+    )
+    sibling = solver._heights[0].restarts[1]
+    sibling.anneal = replace(sibling.anneal, variant_indices=(1,))
+    ordinary_sibling_id = problem.variant(0, 1).variant_id
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    height_state = solver._heights[0]
+    selected_update = next(update for select, update in transform_updates if select)
+    sibling_update = next(update for select, update in transform_updates if not select)
+    padded = selected_update.problem.variant(
+        0,
+        selected_update.state.variant_indices[0],
+    )
+    assert solver._incumbent is None
+    assert padded.pitch_x == problem.variant(0, 0).pitch_x + 1
+    assert selected_update.problem == sibling_update.problem == height_state.problem
+    assert (
+        sibling_update.problem.variant(0, sibling_update.state.variant_indices[0]).variant_id
+        == ordinary_sibling_id
+    )
+    assert [select for _failures, select, _indices, _stagnation in transform_calls] == [
+        True,
+        False,
+    ]
+    assert height_state.stages == config.stages
+    assert len(solver._stage_stats) == 2
+    assert [stage.anneal_moves for stage in solver._stage_stats] == [
+        0,
+        config.moves_per_stage,
+    ]
+    assert all(stage.expansions == 0 for stage in solver._stage_stats)
+    assert budget.spent == 0
+    assert all(len(restart.archive) <= 3 for restart in height_state.restarts)
+    observation = solver._stage_stats[0]
+    assert observation.projection_failures == (failure,)
+    assert isinstance(observation.pitch_requirement, ProjectionPitchRequirement)
+    assert observation.pitch_requirement.required_pitch == padded.pitch_x
+    assert solver._stage_stats[1].selected_variant_ids[0].placement_geometry[2] == padded.pitch_x
+
+
+def test_different_strip_feedback_changes_only_unchanged_exact_relation() -> None:
+    problem = PlacementProblem(
+        sizes=((2, 2), (2, 2), (2, 2)),
+        nets=(),
+        outline_height=8,
+        area_lower_bound=12,
+    )
+    state = AnnealState(
+        pair=SequencePair((0, 1, 2), (0, 1, 2)),
+        gaps=GapProfile.zero(3),
+        base_seed=11,
+        variant_indices=(0, 0, 0),
+    )
+    channels = (1, 1, 1)
+    baseline = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, state),
+        west_channels=channels,
+    )
+    geometries = (("variant-a",), ("variant-b",), ("variant-c",))
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        (0, 1),
+        "build colliders intersect",
+        160,
+    )
+    no_good = finalize.ProjectionNoGood(
+        left_strip=0,
+        right_strip=1,
+        delta_x=baseline.at[0][0] - baseline.at[1][0],
+        delta_y=baseline.at[0][1] - baseline.at[1][1],
+        pack_width=baseline.width,
+        pack_height=baseline.height,
+        left_origin=baseline.at[0],
+        right_origin=baseline.at[1],
+        left_geometry=geometries[0],
+        right_geometry=geometries[1],
+        failure=failure,
+    )
+
+    repaired = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        no_good,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=float("inf"),
+        try_relation_update=True,
+    )
+    assert repaired is not None
+    changed_pack = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, repaired.state),
+        west_channels=channels,
+    )
+    assert (
+        changed_pack.width,
+        changed_pack.height,
+        changed_pack.at[0],
+        changed_pack.at[1],
+    ) != (
+        no_good.pack_width,
+        no_good.pack_height,
+        no_good.left_origin,
+        no_good.right_origin,
+    )
+
+    already_changed = replace(
+        state,
+        gaps=GapProfile(east=(1, 0, 0), north=(0, 0, 0)),
+    )
+    unchanged = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        already_changed,
+        no_good,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=float("inf"),
+        try_relation_update=True,
+    )
+    assert unchanged == StageBoundaryUpdate(problem, already_changed)
+    changed_geometry = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        no_good,
+        west_channels=channels,
+        geometry_signatures=(("variant-a-changed",), *geometries[1:]),
+        deadline=float("inf"),
+        try_relation_update=True,
+    )
+    assert changed_geometry == StageBoundaryUpdate(problem, state)
+
+
+    exact = freeform_module.ExactPackNoGood(
+        height=baseline.height,
+        outline=problem.sizes,
+        width=baseline.width,
+        origins=tuple(baseline.at[index] for index in range(problem.size)),
+        evidence=(failure,),
+        projection_pair=freeform_module.ExactProjectionPair(
+            left_strip=0,
+            right_strip=1,
+            left_geometry=geometries[0],
+            right_geometry=geometries[1],
+        ),
+    )
+    changed_exact_geometry = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        exact,
+        west_channels=channels,
+        geometry_signatures=(("variant-a-changed",), *geometries[1:]),
+        deadline=float("inf"),
+        try_relation_update=True,
+    )
+    assert changed_exact_geometry == StageBoundaryUpdate(problem, state)
+    exact_repair = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        exact,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=float("inf"),
+        try_relation_update=True,
+    )
+    assert exact_repair is not None
+    exact_pack = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, exact_repair.state),
+        west_channels=channels,
+    )
+    assert (
+        exact_pack.height,
+        exact_pack.width,
+        tuple(exact_pack.at[index] for index in range(problem.size)),
+    ) != (exact.height, exact.width, exact.origins)
+
+
+def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    size = 64
+    problem = PlacementProblem(
+        sizes=((2, 2),) * size,
+        nets=(),
+        outline_height=128,
+        area_lower_bound=4 * size,
+    )
+    state = AnnealState(
+        pair=SequencePair(tuple(range(size)), tuple(range(size))),
+        gaps=GapProfile.zero(size),
+        base_seed=19,
+        variant_indices=(0,) * size,
+    )
+    channels = (1,) * size
+    geometries = tuple((f"variant-{index}",) for index in range(size))
+    baseline = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, state),
+        west_channels=channels,
+    )
+    implicated = (17, 43)
+    failure = finalize.ProjectionFailure(
+        "geom.collide",
+        implicated,
+        "build colliders intersect",
+        160,
+    )
+    exact = freeform_module.ExactPackNoGood(
+        height=baseline.height,
+        outline=problem.sizes,
+        width=baseline.width,
+        origins=tuple(baseline.at[index] for index in range(size)),
+        evidence=(failure,),
+        projection_pair=freeform_module.ExactProjectionPair(
+            left_strip=implicated[0],
+            right_strip=implicated[1],
+            left_geometry=geometries[implicated[0]],
+            right_geometry=geometries[implicated[1]],
+        ),
+    )
+    original_decode = sequence_solver_module.decode_state
+    decoded = 0
+
+    def counted_decode(
+        candidate_problem: PlacementProblem,
+        candidate_state: AnnealState,
+    ) -> DecodedPlacement:
+        nonlocal decoded
+        decoded += 1
+        return original_decode(candidate_problem, candidate_state)
+
+    monkeypatch.setattr(sequence_solver_module, "decode_state", counted_decode)
+    repaired = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        exact,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=float("inf"),
+        try_relation_update=True,
+    )
+
+    assert repaired is not None
+    assert decoded == 2
+    assert repaired.state.pair.positive == state.pair.positive
+    assert {
+        index
+        for index, (before, after) in enumerate(
+            zip(state.pair.negative, repaired.state.pair.negative, strict=True)
+        )
+        if before != after
+    } == set(implicated)
+
+    sibling = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        exact,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=float("inf"),
+        try_relation_update=False,
+    )
+    assert sibling == StageBoundaryUpdate(problem, state)
+    assert decoded == 3
+
+    ownerless = replace(exact, projection_pair=None)
+    expired = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        ownerless,
+        west_channels=channels,
+        geometry_signatures=geometries,
+        deadline=time.monotonic() - 1.0,
+        try_relation_update=True,
+    )
+    assert expired is None
+    assert decoded == 3
+
+
+def test_projection_pitch_feedback_single_restart_routes_padded_variant() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    padded = variant_with_minimum_pitch(
+        problem.variant(0, 0),
+        problem.variant(0, 0).pitch_x + 1,
+    )
+    detailed_results = iter(
+        (
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement),
+            DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None),
+        )
+    )
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        _detailed: DetailedStageResult,
+        _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
+    ) -> StageBoundaryUpdate:
+        return enable_variant_stage_boundary(
+            stage_problem,
+            stage_state,
+            strip=0,
+            variant=padded,
+            select_variant=select_feedback_variant,
+        )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=lambda _prepared, _feedback, _allowance: _global(),
+            detailed_route=lambda _prepared, _allowance: next(detailed_results),
+            validate=lambda _placement: ValidationVerdict(
+                False,
+                ("geom.collide",),
+                None,
+                (failure,),
+            ),
+        ),
+        expansion_budget=ExpansionBudget(17),
+        config=SequenceSolverConfig(
+            stages=1,
+            moves_per_stage=32,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        initial_states={40: state},
+        stage_boundary_transform=transform,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    assert solver._stage_stats[1].selected_variant_ids[0].placement_geometry[2] == 8
+
+
+@pytest.mark.parametrize("borrow_first_discovery", [False, True])
+def test_projection_pitch_feedback_runs_before_the_next_height_discovery(
+    borrow_first_discovery: bool,
+) -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    padded = variant_with_minimum_pitch(
+        problem.variant(0, 0),
+        problem.variant(0, 0).pitch_x + 1,
+    )
+    validations = 0
+    global_allowances: list[int] = []
+
+    def global_route(
+        _prepared: tuple[int, DecodedPlacement],
+        _feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        global_allowances.append(allowance)
+        return _global()
+
+
+    def detailed_route(
+        prepared: tuple[int, DecodedPlacement],
+        _allowance: int,
+    ) -> DetailedStageResult:
+        height, _decoded = prepared
+        if height != 40:
+            return DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+        return DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement)
+
+    def validate_projection(candidate: Placement) -> ValidationVerdict:
+        nonlocal validations
+        validations += 1
+        if validations == 1:
+            return ValidationVerdict(
+                False,
+                ("geom.collide",),
+                None,
+                (failure,),
+            )
+        return ValidationVerdict(
+            True,
+            (),
+            replace(candidate, stats={"area": 1.0, "belt_tiles": 0.0}),
+        )
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        _detailed: DetailedStageResult,
+        _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
+    ) -> StageBoundaryUpdate:
+        return enable_variant_stage_boundary(
+            stage_problem,
+            stage_state,
+            strip=0,
+            variant=padded,
+            select_variant=select_feedback_variant,
+        )
+
+    solver = SequenceSolver(
+        heights=(40, 41),
+        problem_for_height=lambda height: replace(problem, outline_height=height),
+        adapters=StageAdapters(
+            prepare=lambda height, decoded: (height, decoded),
+            global_route=global_route,
+            detailed_route=detailed_route,
+            validate=validate_projection,
+        ),
+        expansion_budget=ExpansionBudget(17),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+        stage_boundary_transform=transform,
+        borrow_first_discovery=borrow_first_discovery,
+    )
+    solver._heights[0].restarts[0].anneal = state
+
+    result = solver.search(max_stages=2)
+
+    assert [stage.height for stage in result.stages] == [40, 40]
+    assert result.stages[1].selected_variant_ids[0].placement_geometry[2] == 8
+    assert bool(global_allowances) is not borrow_first_discovery
+
+
+def test_routing_seed_projection_feedback_closes_only_the_protected_restart() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    padded = variant_with_minimum_pitch(
+        problem.variant(0, 0),
+        problem.variant(0, 0).pitch_x + 1,
+    )
+    validations = 0
+    global_allowances: list[int] = []
+
+    def global_route(
+        _prepared: tuple[int, DecodedPlacement],
+        _feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        global_allowances.append(allowance)
+        return _global()
+
+    def validate_projection(candidate: Placement) -> ValidationVerdict:
+        nonlocal validations
+        validations += 1
+        if validations == 1:
+            return ValidationVerdict(
+                False,
+                ("geom.collide",),
+                None,
+                (failure,),
+            )
+        return ValidationVerdict(
+            True,
+            (),
+            replace(candidate, stats={"area": 1.0, "belt_tiles": 0.0}),
+        )
+
+    def transform(
+        _height: int,
+        stage_problem: PlacementProblem,
+        stage_state: AnnealState,
+        _feedback: FeedbackState,
+        _detailed: DetailedStageResult,
+        _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
+    ) -> StageBoundaryUpdate:
+        return enable_variant_stage_boundary(
+            stage_problem,
+            stage_state,
+            strip=0,
+            variant=padded,
+            select_variant=select_feedback_variant,
+        )
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda height: replace(problem, outline_height=height),
+        adapters=StageAdapters(
+            prepare=lambda height, decoded: (height, decoded),
+            global_route=global_route,
+            detailed_route=lambda _prepared, _allowance: DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED),
+                placement,
+            ),
+            validate=validate_projection,
+        ),
+        expansion_budget=ExpansionBudget(17),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=2,
+            global_elites=1,
+        ),
+        stage_boundary_transform=transform,
+    )
+    height_state = solver._heights[0]
+    height_state.routing_seed = state
+
+    result = solver.search(max_stages=2)
+
+    assert [stage.height for stage in result.stages] == [40, 40]
+    assert result.stages[1].selected_variant_ids[0].placement_geometry[2] == 8
+    assert result.stages[1].anneal_seeds == (height_state.restarts[0].seed,)
+    assert global_allowances == []
+    assert solver.budget.discovery_complete
+
+
+@pytest.mark.parametrize("closure_allowance", [None, 0])
+def test_zero_budget_projection_feedback_preserves_stage_and_marker(
+    closure_allowance: int | None,
+) -> None:
+    problem, state, _placement, _failure = _projection_pitch_stage_fixture()
+    detailed_allowances: list[int] = []
+
+    def detailed_route(
+        _decoded: DecodedPlacement,
+        allowance: int,
+    ) -> DetailedStageResult:
+        detailed_allowances.append(allowance)
+        return DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None)
+
+    solver = SequenceSolver(
+        heights=(40,),
+        problem_for_height=lambda _height: problem,
+        adapters=StageAdapters(
+            prepare=lambda _height, decoded: decoded,
+            global_route=lambda _prepared, _feedback, _allowance: _global(),
+            detailed_route=detailed_route,
+            validate=lambda _placement: pytest.fail("zero-budget feedback validated"),
+        ),
+        expansion_budget=ExpansionBudget(17),
+        config=SequenceSolverConfig(
+            stages=2,
+            moves_per_stage=1,
+            restarts_per_height=1,
+            global_elites=1,
+        ),
+    )
+    height_state = solver._heights[0]
+    restart = height_state.restarts[0]
+    restart.anneal = state
+    restart.stages = 1
+    height_state.feedback_restart = restart.restart
+
+    assert solver._run_pending_projection_feedback(
+        height_state,
+        0,
+        1,
+        prior_cancelled=False,
+        closure_allowance=closure_allowance,
+    ) == (0, False)
+    assert detailed_allowances == []
+    assert restart.stages == 1
+    assert height_state.feedback_restart == restart.restart
+
+
+def test_production_padded_variant_transform_maps_same_strip_projection() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    run = _production_run(
+        projected_chemical_plant_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=2,
+        config=SequenceSolverConfig.test(),
+    )
+    transform = run.solver.stage_boundary_transform
+    assert transform is not None
+    alternate_state = replace(state, variant_indices=(1,))
+    detailed = DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), placement)
+
+    selected = transform(
+        40,
+        problem,
+        state,
+        FeedbackState.empty((40, 40)),
+        detailed,
+        0,
+        (failure,),
+        True,
+    )
+    sibling = transform(
+        40,
+        problem,
+        alternate_state,
+        FeedbackState.empty((40, 40)),
+        detailed,
+        0,
+        (failure,),
+        False,
+    )
+
+    assert selected is not None
+    assert sibling is not None
+    assert selected.problem == sibling.problem
+    assert selected.problem.variant(0, selected.state.variant_indices[0]).pitch_x == 8
+    assert (
+        sibling.problem.variant(0, sibling.state.variant_indices[0]).variant_id
+        == problem.variant(0, alternate_state.variant_indices[0]).variant_id
+    )
+
+
+def test_projection_pitch_unmapped_control_does_not_enable_padded_variant() -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    run = _production_run(
+        projected_chemical_plant_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=2,
+        config=SequenceSolverConfig.test(),
+    )
+    transform = run.solver.stage_boundary_transform
+    assert transform is not None
+    buildings = list(placement.buildings)
+    buildings[1] = replace(buildings[1], owner_strip=None)
+    detailed = DetailedStageResult(
+        _routing(DetailedRouteStatus.ROUTED),
+        replace(placement, buildings=tuple(buildings)),
+    )
+
+    assert (
+        transform(
+            40,
+            problem,
+            state,
+            FeedbackState.empty((40, 40)),
+            detailed,
+            0,
+            (failure,),
+            True,
+        )
+        is None
+    )
+    selected_pitches = {
+        problem.variant(strip, variant).pitch_x
+        for strip, variant in enumerate(state.variant_indices)
+    }
+    assert selected_pitches == {7}
+
+
+@pytest.mark.parametrize("independent", [True, False])
+def test_different_strip_feedback_rebuilds_production_stage(
+    monkeypatch: pytest.MonkeyPatch,
+    independent: bool,
+) -> None:
+    problem, state, placement, failure = _projection_pitch_stage_fixture()
+    run = _production_run(
+        projected_chemical_plant_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=2,
+        config=SequenceSolverConfig.test(),
+    )
+    transform = run.solver.stage_boundary_transform
+    assert transform is not None
+    second_instance = replace(problem.instance_ids[0], machine_start=2)
+    problem = replace(
+        problem,
+        sizes=problem.sizes + problem.sizes,
+        instance_ids=problem.instance_ids + (second_instance,),
+        variant_tables=problem.variant_tables + problem.variant_tables,
+    )
+    state = AnnealState.initial(2, seed=17)
+    buildings = list(placement.buildings)
+    buildings.extend(
+        replace(building, x=building.x + 20, owner_strip=1)
+        for building in placement.buildings
+    )
+    failure = replace(failure, buildings=(0, 2))
+    detailed = DetailedStageResult(
+        _routing(DetailedRouteStatus.ROUTED),
+        replace(placement, buildings=tuple(buildings)),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "independent_projection_pair",
+        lambda pair, _policy, **_kwargs: (
+            tuple(index for index, _building in pair) if independent else None
+        ),
+    )
+
+    selected = transform(
+        40,
+        problem,
+        state,
+        FeedbackState.empty((40, 40)),
+        detailed,
+        0,
+        (failure,),
+        True,
+    )
+
+    assert selected is not None
+    assert selected.problem == problem
+    assert selected.state != state
+    sibling = transform(
+        40,
+        problem,
+        selected.state,
+        FeedbackState.empty((40, 40)),
+        detailed,
+        0,
+        (failure,),
+        False,
+    )
+    assert sibling == StageBoundaryUpdate(problem, selected.state)
 
 
 def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None:
@@ -2343,12 +4432,14 @@ def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None
         stage_problem: PlacementProblem,
         stage_state: AnnealState,
         _feedback: FeedbackState,
-        result: DetailedRouteResult,
+        detailed: DetailedStageResult,
         stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        _select_feedback_variant: bool,
     ) -> StageBoundaryUpdate | None:
         transformed_stagnation.append(stagnation)
         target = select_split_candidate(
-            result,
+            detailed.routing,
             stage_problem.instance_ids,
             stagnation=stagnation,
             split_after=2,
@@ -2369,7 +4460,7 @@ def test_feedback_stagnation_rebuilds_the_next_fixed_cardinality_stage() -> None
                 failure,
                 None,
             ),
-            validate=lambda _placement: ValidationVerdict(False, ("unreachable",)),
+            validate=lambda _placement: ValidationVerdict(False, ("unreachable",), None),
         ),
         expansion_budget=ExpansionBudget(100),
         config=SequenceSolverConfig(
@@ -2489,8 +4580,10 @@ def test_topology_change_clears_stale_quality_archives_before_restart_fallback()
         _problem: PlacementProblem,
         state: AnnealState,
         _feedback: FeedbackState,
-        _result: DetailedRouteResult,
+        _detailed: DetailedStageResult,
         _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        _select_feedback_variant: bool,
     ) -> StageBoundaryUpdate:
         return StageBoundaryUpdate(
             rebuilt,
@@ -2573,8 +4666,10 @@ def test_exact_problem_identity_transform_retains_restart_archive() -> None:
         stage_problem: PlacementProblem,
         state: AnnealState,
         _feedback: FeedbackState,
-        _result: DetailedRouteResult,
+        _detailed: DetailedStageResult,
         _stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        _select_feedback_variant: bool,
     ) -> StageBoundaryUpdate:
         return StageBoundaryUpdate(stage_problem, state)
 
@@ -2630,13 +4725,15 @@ def test_fixed_size_problem_skips_pose_boundary_transforms_without_metadata() ->
         stage_problem: PlacementProblem,
         stage_state: AnnealState,
         _feedback: FeedbackState,
-        result: DetailedRouteResult,
+        detailed: DetailedStageResult,
         stagnation: int,
+        _projection_failures: tuple[finalize.ProjectionFailure, ...],
+        _select_feedback_variant: bool,
     ) -> StageBoundaryUpdate | None:
         update = _pose_stage_boundary_update(
             stage_problem,
             stage_state,
-            result,
+            detailed.routing,
             stagnation=stagnation,
             family_by_id={},
         )
@@ -2665,16 +4762,235 @@ def test_fixed_size_problem_skips_pose_boundary_transforms_without_metadata() ->
     assert solver._heights[0].problem == problem
 
 
-@pytest.mark.parametrize("power", [False, True])
+def test_sequence_backend_returns_authoritative_finalized_placement_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    policy = BandPolicy("portable")
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    production = _production_run(
+        spec,
+        band_policy=policy,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    routed = _placement(area=10, belt_tiles=2)
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), routed),)
+    )
+    def global_route(
+        prepared: _ProductionCandidate,
+        feedback: FeedbackState,
+        allowance: int,
+    ) -> GlobalRouteResult:
+        return fake.global_route((prepared.height, prepared.decoded), feedback, allowance)
+
+    def detailed_route(
+        prepared: _ProductionCandidate,
+        allowance: int,
+    ) -> DetailedStageResult:
+        return fake.detailed_route((prepared.height, prepared.decoded), allowance)
+
+    production.solver.adapters = replace(
+        production.solver.adapters,
+        global_route=global_route,
+        detailed_route=detailed_route,
+    )
+    serial_run = replace(
+        production,
+        max_search_stages=1,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_production_run",
+        lambda *_args, **_kwargs: serial_run,
+    )
+    finalized: list[Placement] = []
+    finalize_placement = finalize.finalize_placement
+
+    def track_finalization(placement: Placement, band_policy: BandPolicy) -> Placement:
+        result = finalize_placement(placement, band_policy)
+        finalized.append(result)
+        return result
+
+    monkeypatch.setattr(finalize, "finalize_placement", track_finalization)
+
+    placement = SequencePairLayout(
+        band_policy=policy,
+        config=SequenceSolverConfig.test(),
+    ).lay_out(spec, time_budget_s=2.0)
+
+    assert len(finalized) == 1
+    assert placement == replace(
+        finalized[0],
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+    assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+
+
+def test_sequence_completion_reuses_clean_compaction_report_after_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    policy = BandPolicy("portable")
+    production = _production_run(
+        spec,
+        band_policy=policy,
+        time_budget_s=20.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    routed = _placement(area=10, belt_tiles=2)
+    compacted = _placement(area=9, belt_tiles=1)
+    projected = replace(
+        _placement(area=8, belt_tiles=1),
+        frame=AreaFrame(
+            width=8,
+            height=1,
+            primary_band=40,
+            certified_bands=(40,),
+            rotated=False,
+        ),
+    )
+    trace: list[tuple[str, Placement]] = []
+
+    def compact(
+        candidate: Placement,
+        *_args: object,
+        **_kwargs: object,
+    ) -> finalize.BoundaryCompactionResult:
+        trace.append(("compact", candidate))
+        return finalize.BoundaryCompactionResult(compacted, validate.Report(findings=()))
+
+    def project(
+        candidate: Placement,
+        *_args: object,
+        **_kwargs: object,
+    ) -> Placement:
+        trace.append(("finalize", candidate))
+        return projected
+
+    def certify(
+        candidate: Placement,
+        *_args: object,
+        **_kwargs: object,
+    ) -> validate.Report:
+        trace.append(("validate", candidate))
+        return validate.Report(findings=())
+
+    monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
+    monkeypatch.setattr(finalize, "finalize_placement", project)
+    monkeypatch.setattr(validate, "certify", certify)
+
+    verdict = production.solver.adapters.validate(routed)
+
+    assert verdict.ok
+    assert verdict.placement == replace(
+        projected,
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+    assert trace == [
+        ("compact", routed),
+        ("finalize", compacted),
+    ]
+
+def test_sequence_completion_cancels_projection_before_atomic_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    production = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=20.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    expired = False
+    validated = False
+
+    def monotonic() -> float:
+        return float("inf") if expired else 0.0
+
+    def compact(
+        *_args: object,
+        cancelled: Callable[[], bool],
+        **_kwargs: object,
+    ) -> Never:
+        nonlocal expired
+        expired = True
+        assert cancelled()
+        raise finalize.ProjectionCancelled
+
+    def certify(*_args: object, **_kwargs: object) -> validate.Report:
+        nonlocal validated
+        validated = True
+        return validate.Report(findings=())
+
+    monkeypatch.setattr(sequence_solver_module.time, "monotonic", monotonic)
+    monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
+    monkeypatch.setattr(validate, "certify", certify)
+
+    verdict = production.solver.adapters.validate(_placement(area=10, belt_tiles=2))
+
+    assert not verdict.ok
+    assert verdict.status is DetailedRouteStatus.BUDGET
+    assert not validated
+
+
+def test_first_topology_candidate_reuses_only_a_width_admissible_hint() -> None:
+    candidate = CompactTopologyCandidate(
+        topology_index=0,
+        status=CompactSeedStatus.FEASIBLE,
+        x=(0,),
+        y=(0,),
+        width=10,
+        used_height=1,
+        variant_indices=(0,),
+        signature=PairwiseRelationSignature(()),
+        deterministic_time=0.1,
+    )
+    hint = DecodedPlacement(
+        x=(10,),
+        y=(0,),
+        width=11,
+        used_height=1,
+        x_windows=((10, 10),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    assert sequence_solver_module._topology_close_decoded(candidate, hint) is hint
+    assert (
+        sequence_solver_module._topology_close_decoded(
+            replace(candidate, width=9),
+            hint,
+        )
+        is not hint
+    )
+    assert (
+        sequence_solver_module._topology_close_decoded(
+            replace(candidate, topology_index=1),
+            hint,
+        )
+        is not hint
+    )
+
+
 @pytest.mark.parametrize("belt_vertical_construction", [False, True])
-def test_sequence_backend_returns_only_certified_placements(
-    power: bool,
+def test_sequence_backend_returns_only_certified_powered_placements(
     belt_vertical_construction: bool,
 ) -> None:
     spec = two_stage_spec()
     placement = SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        power=power,
         belt_vertical_construction=belt_vertical_construction,
         config=SequenceSolverConfig.test(),
     ).lay_out(spec, time_budget_s=2.0)
@@ -2683,7 +4999,7 @@ def test_sequence_backend_returns_only_certified_placements(
         placement,
         spec,
         ids=validate.id_map(spec),
-        expect_power=power,
+        expect_power=True,
         belt_vertical_construction=belt_vertical_construction,
     ).errors
     backend: object = placement.stats["backend"]
@@ -2691,8 +5007,8 @@ def test_sequence_backend_returns_only_certified_placements(
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["direct_candidates"] == 1.0
     assert 0.0 <= placement.stats["direct_inserts"] <= 1.0
-    assert placement.stats["power"] == float(power)
-    assert (placement.stats["towers"] > 0.0) is power
+    assert placement.stats["power"] == 1.0
+    assert placement.stats["towers"] > 0.0
     assert {
         "seeds",
         "seed",
@@ -2903,12 +5219,18 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         + placement.stats["compilation_time_s"]
     )
 
-    assert result.placement.stats == original_stats
-    assert result.placement is not placement
+    final_stats = dict(result.placement.stats)
+    assert all(final_stats[key] == value for key, value in original_stats.items())
+    assert result.placement is placement is python_placement is mixed_placement
     assert result.exact_candidate_key == exact_stage.candidate_key
 
 
-def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity() -> None:
+def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = BandPolicy("120")
+    coarse_replans: list[tuple[int, BandPolicy]] = []
+    real_plan_strips = freeform_module.plan_strips
     unit = Fraction(1)
     spec = BuildSpec(
         groups=(
@@ -2926,12 +5248,29 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
         belt_items_per_second=Fraction(30),
         label="coarse-sequence-partition",
     )
-    fine = plan_strips(spec, strip_len=6)
+    fine = plan_strips(spec, strip_len=6, band_policy=policy)
     assert len(fine) == 40
+
+    def track_coarse_replan(
+        selected_spec: BuildSpec,
+        *,
+        strip_len: int = 6,
+        band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
+        **kwargs: object,
+    ) -> list[freeform_module.Strip]:
+        coarse_replans.append((strip_len, band_policy))
+        return real_plan_strips(
+            selected_spec,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(freeform_module, "plan_strips", track_coarse_replan)
 
     run = _production_run(
         spec,
-        band_policy=BandPolicy("portable"),
+        band_policy=policy,
         time_budget_s=2.0,
         power=False,
         strip_len=6,
@@ -2944,6 +5283,7 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
     assert {instance.family_id for instance in problem.instance_ids} == {
         strip.family_id for strip in fine
     }
+    assert coarse_replans == [(spec.machine_count, policy)]
 
 
 def _single_real_machine_spec(
@@ -2990,7 +5330,7 @@ def test_refinery_closed_loop_routes_the_selected_rotated_pose() -> None:
 
     refinery = next(building for building in placement.buildings if building.item_id == 2308)
     assert refinery.yaw in {90.0, 270.0}
-    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert not validate.certify(placement, spec, expect_power=True).errors
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["pose_count"] == 1.0
     assert (placement.stats["pose_yaw_90"] + placement.stats["pose_yaw_270"]) == 1.0
@@ -3052,6 +5392,40 @@ def test_chemical_closed_loop_emits_exact_inner_anchor_sorters() -> None:
     )
     assert not validate.certify(placement, spec, expect_power=False).errors
     assert placement.stats["pose_count"] == 1.0
+
+
+def test_trivial_proliferated_boundary_splitter_keeps_a_viable_frame() -> None:
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                proliferator_mode=ProliferatorMode.PRODUCTS,
+                inputs_per_machine={"iron-ore": Fraction(4, 5)},
+                outputs_per_machine={"iron-ingot": Fraction(1)},
+            ),
+        ),
+        external_inputs={
+            "iron-ore": Fraction(4, 5),
+            "proliferator-3": Fraction(1, 75),
+        },
+        outputs={"iron-ingot": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+        label="trivial-proliferated-frame",
+        spray_lanes={"iron-ore": True},
+    )
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+    ).lay_out(spec, time_budget_s=2.0)
+
+    assert placement.frame is not None
+    assert any(
+        building.item_id == catalog.SPLITTER_ID
+        for building in placement.buildings
+    )
+    assert validate.certify(placement, spec, expect_power=True).ok
 
 
 def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter() -> None:
@@ -3131,7 +5505,12 @@ def test_selected_port_variant_reaches_shared_prepared_docking_geometry() -> Non
         instance_ids=instance_ids,
         variant_tables=variant_tables,
     )
-    selected = _selected_strips(strips, problem, (0,) * problem.size)
+    selected = _selected_strips(
+        strips,
+        problem,
+        (0,) * problem.size,
+        band_policy=BandPolicy("portable"),
+    )
     receiver_index, receiver = next(
         (index, strip)
         for index, strip in enumerate(selected)
@@ -3161,6 +5540,7 @@ def test_selected_port_variant_reaches_shared_prepared_docking_geometry() -> Non
             strips,
             problem,
             (0,) * problem.size,
+            band_policy=BandPolicy("portable"),
         )
         == ()
     )
@@ -3187,18 +5567,32 @@ def test_sequence_preparation_consumes_elevated_machine_and_tesla_junction_bans(
             AnnealState.initial(problem.size, run.solver.config.seed),
         ),
     )
-
     assert candidate.prepared is not None
     prepared = candidate.prepared
     workspace = prepared.new_workspace()
-    assert prepared.junction_ban
-    assert any(level > 0 for _x, _y, level in prepared.junction_ban)
-    assert workspace.canvas.junction_geometry_prepared
-    assert workspace.canvas.junction_ban == set(prepared.junction_ban)
-    assert prepared.junction_ban == freeform_module._prepared_junction_ban(
-        prepared.building_templates,
-        prepared.power_sites,
+    static_buildings = tuple(
+        building
+        for building in prepared.building_templates
+        if not catalog.is_belt(building.item_id)
+        and not catalog.is_sorter(building.item_id)
     )
+    transport_buildings = tuple(
+        building
+        for building in prepared.building_templates
+        if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id)
+    )
+    machine_ban = freeform_module._prepared_junction_ban(static_buildings, ())
+    tesla_ban = freeform_module._prepared_junction_ban((), prepared.power_sites)
+    expected_ban = machine_ban | tesla_ban
+
+    assert machine_ban
+    assert tesla_ban
+    assert any(level > 0 for _x, _y, level in machine_ban)
+    assert any(level > 0 for _x, _y, level in tesla_ban)
+    assert freeform_module._prepared_junction_ban(transport_buildings, ()) == frozenset()
+    assert prepared.junction_ban == expected_ban
+    assert workspace.canvas.junction_geometry_prepared
+    assert workspace.canvas.junction_ban == set(expected_ban)
 
 
 def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> None:
@@ -3220,7 +5614,39 @@ def test_ray_receiver_sequence_closed_loop_routes_and_validates_exactly() -> Non
     ]
 
     assert len(docks) == 2
-    assert not validate.certify(placement, spec, expect_power=False).errors
+    assert not validate.certify(placement, spec, expect_power=True).errors
+
+
+@pytest.mark.slow
+def test_sequence_pair_plastic_projection_pitch_feedback_finalizes_cleanly() -> None:
+    spec = plastic_spec()
+    policy = BandPolicy("portable")
+
+    placement = SequencePairLayout(
+        band_policy=policy,
+        islands=1,
+    ).lay_out(
+        spec,
+        time_budget_s=4.0,
+    )
+
+    assert validate.certify(placement, spec, expect_power=True).ok
+    finalize.finalize_placement(placement, policy)
+    chemical_by_owner: dict[int, list[PlacedBuilding]] = {}
+    for building in placement.buildings:
+        if building.item_id == 2309 and type(building.owner_strip) is int:
+            chemical_by_owner.setdefault(building.owner_strip, []).append(building)
+    selected_pitches = {
+        right.x - left.x
+        for buildings in chemical_by_owner.values()
+        for left, right in zip(
+            sorted(buildings, key=lambda building: building.x),
+            sorted(buildings, key=lambda building: building.x)[1:],
+            strict=False,
+        )
+    }
+
+    assert selected_pitches == {8}
 
 
 @pytest.mark.slow
@@ -3229,7 +5655,7 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
 ) -> None:
     placement = SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        power=False, islands=1
+        islands=1,
     ).lay_out(
         refined_oil_feedback_spec,
         time_budget_s=15.0,
@@ -3237,5 +5663,529 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
     assert validate.certify(
         placement,
         refined_oil_feedback_spec,
-        expect_power=False,
+        expect_power=True,
     ).ok
+
+
+def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = BandPolicy("120")
+    plan_calls: list[tuple[int, BandPolicy]] = []
+    coarsen_calls: list[BandPolicy] = []
+    real_plan_strips = sequence_solver_module.plan_strips
+    real_coarsen = sequence_solver_module._coarsen_saturated_strip_plan
+
+    def track_plan(
+        spec: BuildSpec,
+        *,
+        strip_len: int = 6,
+        band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
+        **kwargs: object,
+    ) -> list[freeform_module.Strip]:
+        plan_calls.append((strip_len, band_policy))
+        return real_plan_strips(
+            spec,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            **kwargs,
+        )
+
+    def track_coarsen(
+        spec: BuildSpec,
+        strips: list[freeform_module.Strip],
+        *,
+        strip_len: int,
+        band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
+        **kwargs: object,
+    ) -> tuple[list[freeform_module.Strip], int]:
+        coarsen_calls.append(band_policy)
+        return real_coarsen(
+            spec,
+            strips,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "plan_strips", track_plan)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_coarsen_saturated_strip_plan",
+        track_coarsen,
+    )
+    monkeypatch.setattr(sequence_solver_module, "_MID_NO_SPRAY_COMPACT_MIN_MACHINES", 0)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_MID_NO_SPRAY_COMPACT_MAX_MACHINES",
+        10**9,
+    )
+    monkeypatch.setattr(sequence_solver_module, "_MID_NO_SPRAY_COMPACT_MIN_STRIPS", 0)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_MID_NO_SPRAY_COMPACT_MAX_STRIPS",
+        10**9,
+    )
+
+    _production_run(
+        two_stage_spec(),
+        band_policy=policy,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert plan_calls == [(6, policy), (4, policy)]
+    assert coarsen_calls == [policy]
+
+
+def test_production_forwards_fixed_band_through_fallback_replan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    policy = BandPolicy("120")
+    plan_calls: list[tuple[int, BandPolicy]] = []
+    real_plan_strips = sequence_solver_module.plan_strips
+
+    def fail_once_then_plan(
+        selected_spec: BuildSpec,
+        *,
+        strip_len: int = 6,
+        band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
+        **kwargs: object,
+    ) -> list[freeform_module.Strip]:
+        plan_calls.append((strip_len, band_policy))
+        if len(plan_calls) == 1:
+            raise ValueError("force production fallback")
+        return real_plan_strips(
+            selected_spec,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "plan_strips", fail_once_then_plan)
+
+    _production_run(
+        spec,
+        band_policy=policy,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert plan_calls == [(6, policy), (spec.machine_count, policy)]
+
+
+def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot() -> None:
+    portable = _production_run(
+        band_120_control_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    ).heights
+    fixed = _production_run(
+        band_120_control_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    ).heights
+
+    assert portable == (26, 33, 12, 16, 21, 28, 35, 14, 18, 23)
+    assert fixed == (19, 33, 12, 16, 21, 28, 35, 14, 18, 23)
+    assert len(fixed) == len(portable)
+
+
+@pytest.mark.parametrize(
+    ("selection", "height"),
+    (("portable", 26), ("120", 19)),
+)
+def test_sequence_band_120_dropped_height_has_actual_clean_layout_control(
+    selection: str,
+    height: int,
+) -> None:
+    spec = band_120_control_spec()
+    strips = plan_strips(spec, strip_len=6)
+    direct_candidates = freeform_module._direct_net_candidates(strips, spec)
+    seed = _greedy_pack(strips, height)
+    pack = freeform_module._pack(
+        strips,
+        height=height,
+        width_bound=max(8, 2 * seed.width),
+        time_budget_s=1.0,
+        direct_candidates=direct_candidates,
+        workers=1,
+        seed=seed,
+    )
+    assert pack is not None
+    run = _production_run(
+        spec,
+        band_policy=BandPolicy(selection),
+        time_budget_s=5.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    state = next(candidate for candidate in run.solver._heights if candidate.height == height)
+    decoded = sequence_solver_module._exact_pack_decoded(
+        pack,
+        strips,
+        state.problem,
+        direct_candidates=direct_candidates,
+    )
+
+    detailed = run.solver.close_exact_decoded(
+        height,
+        decoded,
+        reason="band-policy-height-control",
+    )
+
+    assert detailed.routing.status is DetailedRouteStatus.ROUTED
+    assert detailed.placement is not None
+    assert validate.certify(detailed.placement, spec, expect_power=False).ok
+    assert finalize.finalize_placement(
+        detailed.placement,
+        BandPolicy(selection),
+    ).frame is not None
+
+
+def test_sequence_band_policy_height_remaps_protected_followup_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_candidate_heights",
+        lambda _strips: [18],
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_minimum_pack_width",
+        lambda _strips, _height: 20,
+    )
+
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert run.heights == (18, 19)
+    assert run.solver._protected_followup_heights == (19,)
+
+
+def test_sequence_band_policy_height_derives_topology_role_after_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: list[int | None] = []
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_topology_beam_height",
+        lambda _seeds, coarse, **_kwargs: coarse[0],
+    )
+
+    def capture_topology_role(
+        *,
+        strip_count: int,
+        height: int | None,
+        machine_count: int,
+        sprayed_lanes: int,
+        power: bool,
+    ) -> bool:
+        del strip_count, machine_count, sprayed_lanes, power
+        selected.append(height)
+        return False
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_topology_beam",
+        capture_topology_role,
+    )
+
+    run = _production_run(
+        band_120_control_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert selected == [19]
+    assert selected[0] in run.heights
+
+
+def test_sequence_band_policy_height_derives_shared_pack_role_after_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected: list[int] = []
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_uses_shared_pack_candidate",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_shared_pack_height_rank",
+        lambda **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_needs_topology_beam",
+        lambda **_kwargs: False,
+    )
+
+    def capture_shared_pack(
+        _strips: list[freeform_module.Strip],
+        *,
+        height: int,
+        **_kwargs: object,
+    ) -> None:
+        selected.append(height)
+        return None
+
+    monkeypatch.setattr(sequence_solver_module, "_pack", capture_shared_pack)
+
+    run = _production_run(
+        band_120_control_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert selected == [19]
+    assert selected[0] in run.heights
+
+
+def test_sequence_portable_schedule_is_unchanged() -> None:
+    strips = plan_strips(two_stage_spec(), strip_len=6)
+    seeds = {
+        height: _greedy_pack(strips, height)
+        for height in freeform_module._candidate_heights(strips)
+    }
+    coarse = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+    neighbors = tuple(height + 2 for height in coarse if height + 2 not in seeds)
+
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert run.heights == coarse + neighbors
+
+
+@pytest.mark.parametrize(
+    ("core_width", "core_height"),
+    ((595, 19), (19, 595)),
+)
+def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
+    core_width: int,
+    core_height: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_candidate_heights",
+        lambda _strips: [19, 595],
+    )
+    monkeypatch.setattr(
+        freeform_module,
+        "_power_plan",
+        lambda *_args, **_kwargs: pytest.fail("infeasible extent reached power planning"),
+    )
+    monkeypatch.setattr(
+        freeform_module,
+        "_core_bounds",
+        lambda _canvas: (0, 0, core_width - 1, core_height - 1),
+    )
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_route_detailed_candidate",
+        lambda *_args, **_kwargs: pytest.fail("infeasible extent reached detailed routing"),
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=True,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    state = next(height for height in run.solver._heights if height.height == core_height)
+    decoded = replace(
+        decode_state(
+            state.problem,
+            AnnealState.initial(state.problem.size, 7),
+        ),
+        width=core_width,
+    )
+
+    candidate = run.solver.adapters.prepare(state.height, decoded)
+    detailed = run.solver.adapters.detailed_route(candidate, 1_000)
+
+    assert candidate.prepared is None
+    assert candidate.preparation_error == "band-extent"
+    assert candidate.projection_failures
+    assert detailed.routing.status is DetailedRouteStatus.INVALID
+    assert detailed.placement is None
+
+    assert detailed.projection_failures == candidate.projection_failures
+
+
+def test_sequence_extent_gate_uses_realized_core_not_nominal_outline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_candidate_heights",
+        lambda _strips: [19, 595],
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("120"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    state = next(height for height in run.solver._heights if height.height == 595)
+    decoded = replace(
+        decode_state(
+            state.problem,
+            AnnealState.initial(state.problem.size, 7),
+        ),
+        width=19,
+    )
+
+    candidate = run.solver.adapters.prepare(state.height, decoded)
+
+    assert candidate.prepared is not None
+    assert candidate.preparation_error is None
+    assert candidate.projection_failures == ()
+
+
+def test_validation_budget_status_cannot_install_exact_incumbent() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
+        )
+    )
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig.test(),
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        validate=lambda _placement: ValidationVerdict(
+            ok=False,
+            failed_checks=(),
+            placement=None,
+            status=DetailedRouteStatus.BUDGET,
+        ),
+    )
+
+    with pytest.raises(NoValidLayout, match="cancelled"):
+        solver.search(max_stages=1)
+
+    assert solver._incumbent is None
+    assert solver._stage_stats
+    assert solver._stage_stats[-1].detailed_status is DetailedRouteStatus.BUDGET
+
+
+def test_production_certify_maps_projection_cancellation_to_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    observed_cancelled: list[Callable[[], bool]] = []
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: SimpleNamespace(errors=()),
+    )
+
+    def cancel_finalization(
+        _placement: Placement,
+        _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Never:
+        assert cancelled is not None
+        observed_cancelled.append(cancelled)
+        raise finalize.ProjectionCancelled
+
+    monkeypatch.setattr(finalize, "finalize_placement", cancel_finalization)
+
+    verdict = run.solver.adapters.validate(_placement(area=20, belt_tiles=4))
+
+    assert observed_cancelled
+    assert not verdict.ok
+    assert verdict.status is DetailedRouteStatus.BUDGET
+    assert verdict.placement is None
+    assert verdict.failed_checks == ()
+    assert verdict.projection_failures == ()
+
+
+def test_legacy_finalizer_crossing_deadline_returns_incomplete_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    deadline = time.monotonic() + 100.0
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=deadline,
+    )
+    monkeypatch.setattr(
+        validate,
+        "certify",
+        lambda *_args, **_kwargs: SimpleNamespace(errors=()),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda placement, _policy: placement,
+    )
+    clock = iter((deadline - 1.0, deadline - 1.0, deadline + 1.0))
+    monkeypatch.setattr(
+        sequence_solver_module.time,
+        "monotonic",
+        lambda: next(clock),
+    )
+
+    verdict = run.solver.adapters.validate(_placement(area=20, belt_tiles=4))
+
+    assert not verdict.ok
+    assert verdict.status is DetailedRouteStatus.BUDGET
+    assert verdict.placement is None
+    assert verdict.failed_checks == ()
+    assert verdict.projection_failures == ()

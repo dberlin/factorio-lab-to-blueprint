@@ -115,7 +115,7 @@ bun run build` in `web/` — and then serves it, so the only prerequisites are `
 `bun` on `PATH`. Pass `--build` to force a rebuild after changing the TypeScript, `--no-build`
 to never shell out to bun, or `--port`/`--host` to move it.
 
-Paste a FactorioLab URL, pick the strategy, candidate count and per-layout budget, and press
+Paste a FactorioLab URL, pick the strategy, named candidate-policy checkbox subset and per-layout budget, and press
 Build. The blueprint string is there to copy when it is done, and the viewer renders it in the
 same page without a second step.
 

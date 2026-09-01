@@ -5,41 +5,39 @@ single ``output_obj``, so a lane feeding two consumers could only ever be linked
 to one of them, so this shared junction primitive provides explicit fan-in and
 fan-out.
 
-The convention below is not invented.  It is read off the 25 splitters in the
-fixture corpus, every one of which agrees:
+The connection convention is read from the game and its blueprints:
 
-* The splitter records **no links of its own** -- ``output_obj`` and
-  ``input_obj`` are both ``-1``.  It is a passive junction; the belts around it
-  do the naming.
-* ``input_to_slot = 14`` and ``output_from_slot = 15`` on all 25, with both
-  offsets ``0``.  These are constants, not geometry --
-  ``rules.SPLITTER_INPUT_TO_SLOT`` and ``rules.SPLITTER_OUTPUT_FROM_SLOT``.
-* Every belt attached to it sits at **exactly the same tile**: ``dx = dy = 0``.
-  A belt that runs *through* a splitter is recorded as two belt buildings on
-  that tile, one ending at the junction and one starting from it.
+* The splitter records **no ordinary links of its own** -- ``output_obj`` and
+  ``input_obj`` are both ``-1``.  The belts around it do the naming.
+* Its four multilevel sentinel fields are ``14, 15, 15, 14``.
 * A belt feeding the junction names it as that belt's ``output_obj``; a belt
   drawing from it names it as that belt's ``input_obj``.
-* Observed fan-in was 1 or 2 belts.  The game's splitter has four ports, so up
-  to four attachments on a tile is legal; ``rules.SPLITTER_MAX_PORTS`` records that and
-  :func:`check_ports` enforces it, because exceeding it would paste as a
-  splitter quietly dropping connections rather than as an error.
+* In the integer layout lattice an attachment shares the splitter tile.  At
+  blueprint emission the belt anchor moves to the exact transformed
+  ``PrefabDesc.portPoses`` entry.  Keeping the emitted anchor at the tile centre
+  makes the paste collider test mark both the belt and splitter broken.
+* The game exposes four physical ports, so at most four belts may attach.
 
-Because attachments share a tile, any occupancy check must treat splitters and
-belts as overlays -- which ``catalog.BELT_INTEGRATED_IDS`` already does.
+Integer occupancy therefore treats splitters and belts as overlays.  Emission
+materializes the distinct physical port anchors.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import replace
 from fractions import Fraction
+from functools import lru_cache
 
 from flab2bp.dsp import catalog
 from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.dsp.rules import (
+    SPLITTER_INPUT_FROM_SLOT,
     SPLITTER_INPUT_TO_SLOT,
     SPLITTER_MAX_PORTS,
     SPLITTER_OUTPUT_FROM_SLOT,
+    SPLITTER_OUTPUT_TO_SLOT,
 )
 from flab2bp.layout.base import PlacedBuilding
 
@@ -54,36 +52,45 @@ class TooManyPorts(ValueError):
     """More belts attached to one junction than a splitter has sides."""
 
 
-def _keepout() -> frozenset[tuple[int, int, int]]:
-    return dsp_colliders.belt_keepout_offsets(
-        catalog.building(catalog.SPLITTER_ID).model_index
-    )
+_MIXED_HEIGHT_SPLITTER_MODEL = 40
+_CARDINAL_YAW: dict[tuple[int, int], float] = {
+    (0, 1): 0.0,
+    (1, 0): 90.0,
+    (0, -1): 180.0,
+    (-1, 0): 270.0,
+}
 
 
-def keepout_cells(x: int, y: int, level: int) -> tuple[tuple[int, int, int], ...]:
-    """Routing cells a junction at ``(x, y, level)`` denies to a FOREIGN belt.
-
-    The lateral half of the game's belt rule, which
-    :func:`flab2bp.dsp.colliders.belt_keepout_offsets` measures rather than
-    asserts: the four orthogonal neighbours and the tile itself, at this level
-    and at the one above it.  Two levels up clears -- the collider stands 2.30
-    world units and a level is 4/3 -- and so does every diagonal.
-
-    A belt on the junction's own run is EXCUSED by the game
-    (``colliders.belt_chain_excuses``), so these cells are denied only to belts
-    that are not part of it.  The caller knows which those are; this function
-    knows only the geometry.
-
-    ``level`` is a ROUTING LEVEL, and it is the same integer as the junction's
-    blueprint ``z`` because a junction always rests on a level.
-    """
+@lru_cache(maxsize=16)
+def _keepout(model_index: int, yaw: float) -> tuple[tuple[int, int, int], ...]:
     return tuple(
-        (x + dx, y + dy, level + dz) for dx, dy, dz in _KEEPOUT
+        sorted(dsp_colliders.belt_keepout_offsets(model_index, yaw))
     )
 
 
-#: The offsets, resolved once. :func:`keepout_cells` is in a routing inner loop.
-_KEEPOUT: tuple[tuple[int, int, int], ...] = tuple(sorted(_keepout()))
+def keepout_cells(
+    x: int,
+    y: int,
+    level: int,
+    *,
+    model_index: int | None = None,
+    yaw: float = 0.0,
+) -> tuple[tuple[int, int, int], ...]:
+    """Routing cells one real stack member denies to a FOREIGN belt.
+
+    ``level`` is the member's blueprint anchor, not necessarily the carry
+    level.  Model 40 carries its straight run on ports one level above that
+    anchor and its orthogonal branch on the anchor plane.
+    """
+    model = (
+        catalog.building(catalog.SPLITTER_ID).model_index
+        if model_index is None
+        else model_index
+    )
+    return tuple(
+        (x + dx, y + dy, level + dz)
+        for dx, dy, dz in _keepout(model, yaw)
+    )
 
 
 def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:
@@ -148,38 +155,113 @@ def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:
 
 
 def make_splitter(
-    x: int, y: int, z: Fraction = Fraction(0), *, carries_item: str | None = None
+    x: int,
+    y: int,
+    z: Fraction = Fraction(0),
+    *,
+    model_index: int | None = None,
+    yaw: float = 0.0,
+    carries_item: str | None = None,
 ) -> PlacedBuilding:
     """A junction at ``(x, y, z)``, ready for belts to attach to it.
 
-    ``width``/``height`` are 1, which the catalog now agrees with: a splitter's
-    arms reach 1.19 world units and a tile is 1.2566, so it covers exactly one
-    tile centre.  This used to disagree with a catalog that derived ``3x1`` by
-    treating a tile as one world unit, and was forced by hand for the reason
-    that reading was wrong -- a splitter is belt-integrated, it shares the tile
-    of the belts it joins and excludes nothing, and a 3-tile footprint made the
-    occupancy check reject layouts the game accepts.  The hand-forcing stays as
-    the statement of intent; it is no longer a correction.
-
-    ``carries_item`` is layout bookkeeping, matching the belts it joins, so the
-    validator can attribute a junction to a lane.
+    The item selects model 38 by default.  ``model_index`` is explicit for the
+    game's mixed-height model 40, whose elevated opposite ports carry the
+    straight run while the two lower ports provide an orthogonal branch.
     """
+    model = (
+        catalog.building(catalog.SPLITTER_ID).model_index
+        if model_index is None
+        else model_index
+    )
+    if model not in catalog.SPLITTER_MODEL_INDICES:
+        raise ValueError(f"model {model} is not a DSP Splitter model")
     return PlacedBuilding(
         item_id=catalog.SPLITTER_ID,
-        model_index=catalog.building(catalog.SPLITTER_ID).model_index,
+        model_index=model,
         x=x,
         y=y,
         z=z,
         width=1,
         height=1,
-        # Deliberately unlinked. The corpus is unanimous: the junction names
-        # nobody, and the belts around it name it.
+        yaw=yaw,
+        # Ordinary links live on the belts.  The four sentinel fields are still
+        # initialized exactly as BlueprintUtils initializes every Splitter.
         input_obj=None,
         output_obj=None,
+        output_to_slot=SPLITTER_OUTPUT_TO_SLOT,
+        input_from_slot=SPLITTER_INPUT_FROM_SLOT,
         input_to_slot=SPLITTER_INPUT_TO_SLOT,
         output_from_slot=SPLITTER_OUTPUT_FROM_SLOT,
         carries_item=carries_item,
     )
+
+
+def splitter_stack_levels(level: int) -> tuple[int, ...]:
+    """Blueprint anchors needed for a junction carrying routing ``level``.
+
+    Even carry levels use model 38 on that plane.  Odd carry levels use model
+    40 anchored one level lower: its N/S pair is elevated and its E/W pair is
+    on the anchor plane.  Every member below the top remains model 38 at the
+    prefab's proven two-level support pitch.
+    """
+    pitch = catalog.stack_pitch_z(catalog.SPLITTER_ID)
+    if pitch is None or pitch.denominator != 1:
+        raise RuntimeError("DSP Splitter prefab defines no integral stack pitch")
+    step = int(pitch)
+    if level < 0:
+        raise ValueError(f"Splitter routing level {level} is below ground")
+    top_anchor = level - (level % step)
+    return tuple(range(0, top_anchor + 1, step))
+
+
+def make_splitter_stack(
+    x: int,
+    y: int,
+    level: int,
+    *,
+    first_index: int,
+    carries_item: str | None = None,
+    carry_direction: tuple[int, int] | None = None,
+) -> tuple[PlacedBuilding, ...]:
+    """Materialize a legal ground-supported junction stack.
+
+    Model 38 serves even carry levels.  Model 40 serves odd carry levels from
+    one level below, with model yaw chosen so physical port 0 faces the actual
+    carry direction.  Higher members name the member immediately below through
+    the Splitter's slot-15 support connection; only the top carries items.
+    """
+    if first_index < 0:
+        raise ValueError("Splitter stack first index must be non-negative")
+    levels = splitter_stack_levels(level)
+    mixed_height = bool(level % 2)
+    if mixed_height:
+        if carry_direction is None:
+            raise ValueError("odd-level Splitter stack requires a carry direction")
+        try:
+            top_yaw = _CARDINAL_YAW[carry_direction]
+        except KeyError as exc:
+            raise ValueError(
+                f"Splitter carry direction {carry_direction!r} is not cardinal"
+            ) from exc
+    else:
+        top_yaw = 0.0
+
+    buildings: list[PlacedBuilding] = []
+    for offset, z in enumerate(levels):
+        top = offset == len(levels) - 1
+        splitter = make_splitter(
+            x,
+            y,
+            Fraction(z),
+            model_index=_MIXED_HEIGHT_SPLITTER_MODEL if top and mixed_height else None,
+            yaw=top_yaw if top else 0.0,
+            carries_item=carries_item if top else None,
+        )
+        if offset:
+            splitter = replace(splitter, input_obj=first_index + offset - 1)
+        buildings.append(splitter)
+    return tuple(buildings)
 
 
 def check_ports(buildings: list[PlacedBuilding] | tuple[PlacedBuilding, ...]) -> None:
@@ -190,13 +272,13 @@ def check_ports(buildings: list[PlacedBuilding] | tuple[PlacedBuilding, ...]) ->
     one of them, which is precisely the class of bug splitters were introduced
     to fix.
     """
-    junctions = {
-        i for i, b in enumerate(buildings) if b.item_id == catalog.SPLITTER_ID
-    }
+    junctions = {i for i, b in enumerate(buildings) if b.item_id == catalog.SPLITTER_ID}
     if not junctions:
         return
     ports: dict[int, int] = dict.fromkeys(junctions, 0)
     for b in buildings:
+        if not catalog.is_belt(b.item_id):
+            continue
         for link in (b.output_obj, b.input_obj):
             if link is not None and link in ports:
                 ports[link] += 1
@@ -223,7 +305,6 @@ def attach_output(belt: PlacedBuilding, junction: int) -> PlacedBuilding:
 def _replace_links(
     belt: PlacedBuilding, *, output_obj: int | None = None, input_obj: int | None = None
 ) -> PlacedBuilding:
-    from dataclasses import replace
 
     changes: dict[str, int] = {}
     if output_obj is not None:

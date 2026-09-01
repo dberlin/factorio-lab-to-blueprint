@@ -12,6 +12,8 @@ from flab2bp.rates.adjust import (
     select_machine,
 )
 from flab2bp.rates.candidates import (
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
     build_candidates,
     lanes_requiring_split,
 )
@@ -27,6 +29,8 @@ from flab2bp.rates.solve import (
 
 __all__ = [
     "AdjustedRecipe",
+    "CandidatePolicy",
+    "DEFAULT_CANDIDATE_POLICIES",
     "InfeasibleError",
     "ProliferatorTier",
     "RateSolution",

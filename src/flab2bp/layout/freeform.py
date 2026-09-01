@@ -63,27 +63,32 @@ from __future__ import annotations
 import heapq
 import math
 import time
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from collections.abc import Callable, Collection, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence, Set
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
-from functools import lru_cache
+from functools import cache, lru_cache
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from ortools.sat.python import cp_model
 
-from flab2bp.dsp import catalog, codec, colliders, params, planet, rules
+from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
 from flab2bp.layout import finalize, junction, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
+    ATOMIC_COMPLETION_GRACE_S,
     DEFAULT_SEARCH_WORKERS,
     Facing,
     NoValidLayout,
     PlacedBuilding,
     Placement,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.finalize import ProjectionNoGood
@@ -91,14 +96,17 @@ from flab2bp.layout.route_feedback import (
     Cell,
     DetailedRouteResult,
     DetailedRouteStatus,
+    FeedbackState,
     LogicalNetId,
     NetFailure,
     NetId,
     NetRole,
     RouteFailureKind,
+    update_feedback,
 )
 from flab2bp.layout.sequence_pair import DirectInsertTarget
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
+from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
 
 if TYPE_CHECKING:
@@ -107,8 +115,20 @@ if TYPE_CHECKING:
         LanePlan,
         LanePortDockPlan,
         LaneSorterAttachment,
+        ProjectionPitchRequirement,
+        StripFamily,
         StripFamilyId,
+        StripInstanceId,
+        StripPoseId,
+        StripVariant,
+        StripVariantId,
     )
+
+_NO_PITCH_REQUIREMENTS: Mapping[StripPoseId, int] = MappingProxyType({})
+_NO_STAGED_STATIC_CLEARANCE: Mapping[StagedStaticClearanceKey, int] = (
+    MappingProxyType({})
+)
+_DEFAULT_BAND_POLICY = BandPolicy("portable")
 
 #: Free tiles reserved on a strip's east and south faces.  One is enough for a
 #: belt to pass; the router uses upper levels when one is not.
@@ -278,9 +298,30 @@ RRR_MAX = 8
 #: pack arrangements than on replaying one greedy routing order.
 _SINGLE_ROUND_NETS = 64
 
-#: Above this size CP-SAT's portfolio variance changes corpus completeness with
-#: audit job allocation; the fixed seed is meaningful only with one worker.
-_DETERMINISTIC_PACK_STRIPS = 24
+#: Exact commit validation can expose a different static collision after a
+#: rejected route takes its next-best path. Keep that local convergence bounded;
+#: unlike a full RRR round, each pass touches only paths with new exact evidence.
+_COMMIT_REPAIR_PASSES = 3
+
+#: At fifteen strips CP-SAT's multi-worker portfolio already changes whether the
+#: fixed-seed packing can be routed: the same fifteen-strip plan repeatedly
+#: wires with one worker and can exhaust every candidate with the default
+#: portfolio.  Pin this structural size and larger so the seed actually names a
+#: reproducible candidate, independent of audit job allocation.
+_DETERMINISTIC_PACK_STRIPS = 15
+#: Fixed CP-SAT work for reproducible large-pack incumbents.  A wall-clock
+#: cutoff still raced at one worker: the authoritative fifteen-strip cell
+#: alternated between a clean width-48 packing and a width-47 packing whose
+#: routing failed exact validation.  0.02 deterministic units reaches the same
+#: routable incumbent well inside its 0.6s wall allowance; 0.005 stopped before
+#: that incumbent existed.  The wall limit remains armed as the hard deadline.
+_DETERMINISTIC_PACK_WORK = 0.02
+
+#: Deterministic work allowed only for choosing among already rank-optimal port
+#: access assignments. The ranked solution remains the safe fallback; this
+#: bounded polish must never turn a preparation step into an unbounded search.
+_ACCESS_TIE_DETERMINISTIC_WORK = 0.05
+
 
 #: Rip-up rounds with no improvement in the failure count before giving up.
 #:
@@ -571,6 +612,12 @@ _DEADLINE_CHECK_EVERY = 4096
 _ROUTE_RING = 2
 _ENTRY_RING = _ROUTE_RING + 1
 
+#: Maximum number of independently tapped roots on the shared proliferator
+#: trunk. Projection-safe Coater terminals are individual leaves, so large
+#: factories need enough spaced roots to keep each Splitter at two branches or
+#: fewer; the per-side trunk height remains the tighter physical bound.
+_PROLIFERATOR_TRUNK_ROOTS = 48
+
 # THERE IS NO FALLBACK PACKING HERE, AND THERE MUST NOT BE ONE.
 #
 # This has now been built and deleted TWICE: once as `fallback_placement`
@@ -623,13 +670,16 @@ _ENTRY_RING = _ROUTE_RING + 1
 def _expired(deadline: float | None) -> bool:
     """Has the caller's wall-clock deadline passed?
 
-    ``lay_out`` takes ONE deadline at the top of the call and threads it through
-    every phase, because every phase used to be bounded on its own and nothing
-    bounded their sum: the height sweep spent ``time_budget_s``, the escalated
-    retry spent ``RETRY_BUDGET_S`` again, the loose sweep had a budget of its
-    own, and the routing inside each of them was bounded by an expansion count
-    rather than a clock.  A nominal 4-second budget measured at 80 seconds on
-    ``quantum-chip`` and over 400 on a refusing ``universe-matrix`` cell.
+    ``lay_out`` takes one search deadline at the top of the call and threads it
+    through every speculative phase, because every phase used to be bounded on
+    its own and nothing bounded their sum: the height sweep spent
+    ``time_budget_s``, the escalated retry spent ``RETRY_BUDGET_S`` again, the
+    loose sweep had a budget of its own, and the routing inside each of them was
+    bounded by an expansion count rather than a clock. A nominal 4-second budget
+    measured at 80 seconds on ``quantum-chip`` and over 400 on a refusing
+    ``universe-matrix`` cell. Once every net is routed, the fixed five-second
+    atomic completion grace covers compaction, projection, and certification;
+    it never admits another speculative candidate.
 
     ``None`` means no deadline, which is what a caller reaching into these
     functions directly -- a test, a probe -- gets by default.
@@ -652,6 +702,10 @@ def lanes_for(rate: Fraction, capacity: Fraction) -> int:
 
 
 # --- adaptation ------------------------------------------------------------
+type CargoKey = tuple[str, CargoDomain]
+type _CargoSink = tuple[str, str, CargoDomain]
+
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -680,24 +734,56 @@ class _Group:
     mode_params: tuple[int, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class _LogicalStripPlan:
-    """One immutable rate/shard allocation before choosing physical geometry."""
 
-    group_key: str
-    shard_index: int
-    recipe_id: str
-    item_id: int
-    model_index: int
-    total_machine_count: int
-    in_above: tuple[tuple[str, ...], ...]
-    out_lanes: tuple[tuple[str, str], ...]
-    in_below: tuple[tuple[str, ...], ...]
-    mode_params: tuple[int, ...] = ()
-    #: The output leaves through per-machine east gap belts rather than a sorter
-    #: on the south face. Such families retain legacy Freeform emission but are
-    #: not exposed as pose variants until east-face attachments are modeled.
-    flank_outputs: bool = False
+
+@dataclass(frozen=True, order=True, slots=True)
+class StagedStaticVariantId:
+    """One strip pose plus the physical west lane reserved for staged statics."""
+
+    strip_variant_id: StripVariantId
+    west_channel: int
+
+    def __post_init__(self) -> None:
+        if self.west_channel <= 0:
+            raise ValueError("staged-static west channel must be positive")
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class StagedStaticClearanceKey:
+    """Translation-free identity of one staged-static/strip collider relation."""
+
+    peer_item_id: int
+    peer_model_index: int
+    peer_width: int
+    peer_height: int
+    peer_yaw: float
+    candidate_item_id: int
+    candidate_model_index: int
+    candidate_width: int
+    candidate_height: int
+    candidate_yaw: float
+    delta_x: int
+    delta_y: int
+    delta_z: Fraction
+
+
+@dataclass(frozen=True, slots=True)
+class StagedStaticClearanceRequirement:
+    """A same-strip staged static needs one physically longer attachment lane."""
+
+    instance_id: StripInstanceId
+    variant_id: StagedStaticVariantId
+    owner_strip: int
+    rejected_west_channel: int
+    required_west_channel: int
+    relation: StagedStaticClearanceKey
+    evidence: tuple[finalize.ProjectionFailure, ...]
+
+    def __post_init__(self) -> None:
+        if self.required_west_channel != self.rejected_west_channel + 1:
+            raise ValueError("staged-static clearance advances exactly one tile")
+        if not self.evidence:
+            raise ValueError("staged-static clearance requires projection evidence")
 
 
 @dataclass(frozen=True, slots=True)
@@ -729,6 +815,7 @@ class Strip:
     recipe_id: str
     item_id: int
     model_index: int
+    cargo_domain: CargoDomain
     machines: int
     mw: int
     mh: int
@@ -753,7 +840,7 @@ class Strip:
     #: machines than the sorter reach needs shards -- see :func:`_merge_lanes`.
     #: Use :func:`_dests` to read it; comparing it to a group key directly is
     #: how the two representations drift apart.
-    out_lanes: tuple[tuple[str, str], ...]
+    out_lanes: tuple[_CargoSink, ...]
     #: Lanes arriving on the south side, below ``out_lanes``.  Non-empty only
     #: when a recipe has more ingredients than one side can reach.
     in_below: tuple[tuple[str, ...], ...]
@@ -763,6 +850,8 @@ class Strip:
     attachment_plan: tuple[LaneAttachmentPlan, ...]
     #: Exact selected variant box height, including collider halos and lanes.
     box_height: int
+    #: Exact count-realized physical pose; absent only for compatibility families.
+    physical_variant: StripVariant | None = None
     #: The authoritative drawing port and relative dock cell for port-backed outputs.
     port_dock_plan: tuple[LanePortDockPlan, ...] = ()
     #: Parameter block for a machine configured by a MODE rather than a recipe
@@ -790,6 +879,16 @@ class Strip:
     family_id: StripFamilyId | None = None
     machine_start: int = 0
     west_channel: int = WEST_CHANNEL
+
+    @property
+    def staged_static_variant_id(self) -> StagedStaticVariantId | None:
+        """Identity of physical strip geometry that seats ownerless statics."""
+        if self.physical_variant is None:
+            return None
+        return StagedStaticVariantId(
+            self.physical_variant.variant_id,
+            self.west_channel,
+        )
 
     @property
     def in_lanes(self) -> tuple[str, ...]:
@@ -875,8 +974,13 @@ class Strip:
         """Row index of the machine band's top edge, relative to the strip."""
         if self.lane_plan is not None:
             return self.lane_plan.machine_row
-        if self.flank_outputs or self.takes_belt_ports:
+        if self.flank_outputs:
             return len(self.in_above)
+        if self.takes_belt_ports:
+            # A splitter on an input lane has a real collider.  Keep one row
+            # between that lane and the machine band rather than relying on the
+            # belt-only overlap excusal that applies to the dock run itself.
+            return len(self.in_above) + bool(self.in_above)
         name = catalog.building(self.item_id).name
         raise NoValidLayout(f"{name} has no legal slot pose for its lanes")
 
@@ -962,6 +1066,7 @@ class Strip:
             kind="input",
             items=lane,
             destination_group_keys=(),
+            cargo_domain=self.cargo_domain,
             side=side,
             side_index=side_index,
         )
@@ -997,6 +1102,11 @@ class Strip:
 
     def row_of_input(self, item: str) -> int:
         """Row index carrying ``item``, relative to the strip's top."""
+        if self.takes_belt_ports:
+            lane = self.lane_of_input(item)
+            if lane in self.in_above:
+                return self.in_above.index(lane)
+            return self.first_row_below_band + len(self.out_lanes) + self.in_below.index(lane)
         return self.machine_row + self._input_attachment_plan(item).lane_y
 
     def row_of_output(self, k: int) -> int:
@@ -1017,6 +1127,20 @@ class Strip:
 
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
         """Belt tiles an input lane needs through its last planned attachment."""
+        if self.takes_belt_ports:
+            lanes = self.in_above + self.in_below
+            lane_index = lanes.index(lane)
+            docks = tuple(
+                dock
+                for _port, dock in sorted(
+                    slots.port_docks(slots.probe_building(self.item_id, self.yaw)).items()
+                )
+                if dock.facing is Facing.EAST
+            )
+            if lane_index >= len(docks):
+                return self.width
+            last_tap = (self.machines - 1) * self.pw + docks[lane_index].cell[0] + 1
+            return min(self.width, last_tap + 1)
         plan = self._input_attachment_plan(lane[0])
         if plan.lane.items != lane:
             raise ValueError("input lane does not match the selected attachment plan")
@@ -1030,6 +1154,415 @@ class Strip:
     @property
     def sid(self) -> str:
         return f"{self.group_key}"
+
+
+def _staged_static_clearance_key(
+    peer: PlacedBuilding,
+    candidate: PlacedBuilding,
+) -> StagedStaticClearanceKey:
+    """Normalize one exact same-strip pair without its packed translation."""
+    return StagedStaticClearanceKey(
+        peer_item_id=peer.item_id,
+        peer_model_index=peer.model_index,
+        peer_width=peer.width,
+        peer_height=peer.height,
+        peer_yaw=peer.yaw,
+        candidate_item_id=candidate.item_id,
+        candidate_model_index=candidate.model_index,
+        candidate_width=candidate.width,
+        candidate_height=candidate.height,
+        candidate_yaw=candidate.yaw,
+        delta_x=peer.x - candidate.x,
+        delta_y=peer.y - candidate.y,
+        delta_z=peer.z - candidate.z,
+    )
+
+
+def _staged_static_clearance_keys(
+    strip: Strip,
+) -> frozenset[StagedStaticClearanceKey]:
+    """Physical W3 machine/Coater relations this strip can materialize."""
+    if (
+        strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY
+        or strip.physical_variant is None
+    ):
+        return frozenset()
+    coater = catalog.building(catalog.SPRAY_COATER_ID)
+    coater_x = 1 - strip.west_channel
+    return frozenset(
+        StagedStaticClearanceKey(
+            peer_item_id=strip.item_id,
+            peer_model_index=strip.model_index,
+            peer_width=strip.mw,
+            peer_height=strip.mh,
+            peer_yaw=strip.yaw,
+            candidate_item_id=catalog.SPRAY_COATER_ID,
+            candidate_model_index=coater.model_index,
+            candidate_width=1,
+            candidate_height=1,
+            candidate_yaw=Facing.EAST.value,
+            delta_x=machine * strip.pw - coater_x,
+            delta_y=strip.machine_row - strip.row_of_input(item),
+            delta_z=Fraction(0),
+        )
+        for item in strip.in_lanes
+        for machine in range(strip.machines)
+    )
+_STAGED_STATIC_PROOF_CANCELLED: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "_STAGED_STATIC_PROOF_CANCELLED",
+    default=None,
+)
+
+
+def _poll_staged_static_proof_deadline() -> None:
+    cancelled = _STAGED_STATIC_PROOF_CANCELLED.get()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
+
+def _staged_static_effective_anchor_ranges(
+    pair_height: int,
+    band: planet.Band,
+) -> tuple[range, ...]:
+    """Exact pair latitudes without enumerating redundant empty frame padding.
+
+    A reachable frame contains the pair plus ``_ENTRY_RING`` rows on each side.
+    For any taller frame, moving the pair through its interior produces exactly
+    the same absolute latitude interval as moving the tight frame itself through
+    the band. ``Band.anchor_ranges`` already represents those contiguous
+    intervals, so translating its tight-frame anchors by the south perimeter is
+    the complete sorted witness set.
+    """
+    tight_height = pair_height + 2 * _ENTRY_RING
+    return tuple(
+        range(
+            anchor_range.start + _ENTRY_RING,
+            anchor_range.stop + _ENTRY_RING,
+        )
+        for anchor_range in band.anchor_ranges(tight_height)
+    )
+
+
+def _staged_static_relation_projection_risks_uncached(
+    relations: Sequence[StagedStaticClearanceKey],
+    policy: BandPolicy,
+) -> tuple[bool, ...]:
+    """Evaluate relations sharing a projected candidate in one exact predicate."""
+    _poll_staged_static_proof_deadline()
+    risks = [False] * len(relations)
+    bands = (
+        tuple(
+            band
+            for band in planet.bands()
+            if band.area_segments == policy.explicit_segments
+        )
+        if policy.explicit_segments is not None
+        else planet.bands()
+    )
+    groups: dict[
+        tuple[planet.Band, PlacedBuilding],
+        list[tuple[int, PlacedBuilding, tuple[range, ...]]],
+    ] = {}
+    for ordinal, relation in enumerate(relations):
+        _poll_staged_static_proof_deadline()
+        candidate = PlacedBuilding(
+            item_id=relation.candidate_item_id,
+            model_index=relation.candidate_model_index,
+            x=0,
+            y=0,
+            z=Fraction(0),
+            width=relation.candidate_width,
+            height=relation.candidate_height,
+            yaw=relation.candidate_yaw,
+        )
+        peer = PlacedBuilding(
+            item_id=relation.peer_item_id,
+            model_index=relation.peer_model_index,
+            x=relation.delta_x,
+            y=relation.delta_y,
+            z=relation.delta_z,
+            width=relation.peer_width,
+            height=relation.peer_height,
+            yaw=relation.peer_yaw,
+        )
+        for rotated in (False, True):
+            _poll_staged_static_proof_deadline()
+            oriented = tuple(
+                (
+                    replace(
+                        building,
+                        x=-(building.y + building.height),
+                        y=building.x,
+                        width=building.height,
+                        height=building.width,
+                        yaw=(building.yaw - 90.0) % 360.0,
+                    )
+                    if rotated
+                    else building
+                )
+                for building in (peer, candidate)
+            )
+            min_x = min(building.x for building in oriented)
+            min_y = min(building.y for building in oriented)
+            normalized_peer, normalized_candidate = tuple(
+                replace(
+                    building,
+                    x=building.x - min_x,
+                    y=building.y - min_y,
+                )
+                for building in oriented
+            )
+            pair_width = max(
+                building.x + building.width
+                for building in (normalized_peer, normalized_candidate)
+            )
+            pair_height = max(
+                building.y + building.height
+                for building in (normalized_peer, normalized_candidate)
+            )
+            collision_pair = (
+                _collision_pose(normalized_peer),
+                _collision_pose(normalized_candidate),
+            )
+            for band in bands:
+                _poll_staged_static_proof_deadline()
+                if (
+                    pair_width + 2 * _ENTRY_RING > band.columns
+                    or pair_height + 2 * _ENTRY_RING > band.rows
+                    or not planet.candidate_pairs(
+                        collision_pair,
+                        band,
+                        colliders.PLANET_SEGMENT,
+                        colliders.PLANET_RADIUS,
+                    )
+                ):
+                    continue
+                candidate_origin = replace(
+                    normalized_candidate,
+                    x=0,
+                    y=0,
+                )
+                peer_relative = replace(
+                    normalized_peer,
+                    x=normalized_peer.x - normalized_candidate.x,
+                    y=normalized_peer.y - normalized_candidate.y,
+                )
+                anchor_ranges = tuple(
+                    range(
+                        anchor_range.start + normalized_candidate.y,
+                        anchor_range.stop + normalized_candidate.y,
+                    )
+                    for anchor_range in _staged_static_effective_anchor_ranges(
+                        pair_height,
+                        band,
+                    )
+                )
+                groups.setdefault(
+                    (band, candidate_origin),
+                    [],
+                ).append((ordinal, peer_relative, anchor_ranges))
+
+    cancelled = _STAGED_STATIC_PROOF_CANCELLED.get()
+    for (band, candidate), members in groups.items():
+        collision_buildings = (
+            _collision_pose(candidate),
+            *(_collision_pose(peer) for _ordinal, peer, _ranges in members),
+        )
+        collider_radii = tuple(
+            planet.collider_radius(building.model_index)
+            for building in collision_buildings
+        )
+        positions_by_anchor: dict[int, list[int]] = {}
+        for position, (_ordinal, _peer, anchor_ranges) in enumerate(
+            members,
+            start=1,
+        ):
+            _poll_staged_static_proof_deadline()
+            for anchor_range in anchor_ranges:
+                _poll_staged_static_proof_deadline()
+                for anchor in anchor_range:
+                    _poll_staged_static_proof_deadline()
+                    positions_by_anchor.setdefault(anchor, []).append(position)
+        for anchor, positions in sorted(positions_by_anchor.items()):
+            _poll_staged_static_proof_deadline()
+            projection = planet.Projection(
+                band=band,
+                anchor_row=anchor,
+                segment=colliders.PLANET_SEGMENT,
+                radius=colliders.PLANET_RADIUS,
+            )
+            candidate_position = projection.pose(
+                candidate.x,
+                candidate.y,
+                float(candidate.z),
+                candidate.yaw,
+            )[0]
+            active: list[tuple[int, int]] = []
+            for position in positions:
+                if risks[members[position - 1][0]]:
+                    continue
+                collision_peer = collision_buildings[position]
+                peer_position = projection.pose(
+                    collision_peer.x,
+                    collision_peer.y,
+                    float(collision_peer.z),
+                    collision_peer.yaw,
+                )[0]
+                radius = collider_radii[0] + collider_radii[position]
+                if sum(
+                    (left - right) ** 2
+                    for left, right in zip(
+                        candidate_position,
+                        peer_position,
+                        strict=True,
+                    )
+                ) <= radius * radius:
+                    active.append((0, position))
+            if not active:
+                continue
+            try:
+                hits = planet.collisions_at(
+                    collision_buildings,
+                    projection,
+                    active,
+                    cancelled=cancelled,
+                )
+            except finalize.ProjectionCancelled:
+                raise _PreparationDeadline from None
+            for _candidate_index, peer_index in hits:
+                risks[members[peer_index - 1][0]] = True
+    return tuple(risks)
+
+
+def _staged_static_relation_projection_risk_uncached(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Whether this exact planar relation collides in a reachable projection."""
+    return _staged_static_relation_projection_risks_uncached(
+        (relation,),
+        policy,
+    )[0]
+
+
+_STAGED_STATIC_RELATION_RISK_CACHE: dict[
+    tuple[StagedStaticClearanceKey, BandPolicy],
+    bool,
+] = {}
+
+
+def _staged_static_relation_projection_risks(
+    relations: Sequence[StagedStaticClearanceKey],
+    policy: BandPolicy,
+) -> tuple[bool, ...]:
+    """Install a completed exact batch transactionally in the relation cache."""
+    missing = tuple(
+        dict.fromkeys(
+            relation
+            for relation in relations
+            if (relation, policy) not in _STAGED_STATIC_RELATION_RISK_CACHE
+        )
+    )
+    if missing:
+        computed = _staged_static_relation_projection_risks_uncached(
+            missing,
+            policy,
+        )
+        _STAGED_STATIC_RELATION_RISK_CACHE.update(
+            ((relation, policy), risk)
+            for relation, risk in zip(missing, computed, strict=True)
+        )
+    return tuple(
+        _STAGED_STATIC_RELATION_RISK_CACHE[(relation, policy)]
+        for relation in relations
+    )
+
+
+def _staged_static_relation_projection_risk(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Cache the finite exact witness search by physical relation and policy."""
+    return _staged_static_relation_projection_risks((relation,), policy)[0]
+
+
+def _staged_static_preclearance_proof_uncached(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Prove W3 can collide and moving its Coater one tile west is always clean."""
+    cleared = replace(relation, delta_x=relation.delta_x + 1)
+    rejected_risk, cleared_risk = _staged_static_relation_projection_risks(
+        (relation, cleared),
+        policy,
+    )
+    return rejected_risk and not cleared_risk
+
+
+@cache
+def _cached_staged_static_preclearance_proved(
+    relation: StagedStaticClearanceKey,
+    policy: BandPolicy,
+) -> bool:
+    """Run the pair-local clearance proof once per exact relation and policy."""
+    return _staged_static_preclearance_proof_uncached(relation, policy)
+
+
+class _StagedStaticPreclearanceProof:
+    """Deadline-aware facade over transactionally installed exact proofs."""
+
+    def __call__(
+        self,
+        relation: StagedStaticClearanceKey,
+        policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> bool:
+        if cancelled is None:
+            return _cached_staged_static_preclearance_proved(relation, policy)
+        if cancelled():
+            raise _PreparationDeadline
+        token = _STAGED_STATIC_PROOF_CANCELLED.set(cancelled)
+        try:
+            return _cached_staged_static_preclearance_proved(relation, policy)
+        finally:
+            _STAGED_STATIC_PROOF_CANCELLED.reset(token)
+
+    def cache_clear(self) -> None:
+        _cached_staged_static_preclearance_proved.cache_clear()
+        _STAGED_STATIC_RELATION_RISK_CACHE.clear()
+
+
+_staged_static_preclearance_proved = _StagedStaticPreclearanceProof()
+
+
+
+
+def _staged_static_projection_peers(
+    buildings: Sequence[PlacedBuilding],
+    candidate: PlacedBuilding,
+    *,
+    owner_strip: int,
+    policy: BandPolicy,
+) -> tuple[tuple[int, PlacedBuilding], ...]:
+    """Retain every unknown pair and omit only proved-clean same-strip pairs."""
+    return tuple(
+        (index, peer)
+        for index, peer in enumerate(buildings)
+        if not catalog.is_belt(peer.item_id)
+        and not catalog.is_sorter(peer.item_id)
+        and (
+            peer.owner_strip != owner_strip
+            or _staged_static_relation_projection_risk(
+                _staged_static_clearance_key(peer, candidate),
+                policy,
+            )
+        )
+    )
+
+
+
+
 
 
 def _box(s: Strip) -> tuple[int, int]:
@@ -1098,11 +1631,11 @@ def _dests(dest: str) -> tuple[str, ...]:
 
 
 def _shard_sinks(
-    sinks: Sequence[tuple[str, str]],
+    sinks: Sequence[_CargoSink],
     *,
     cap: int | None = None,
     max_shards: int | None = None,
-) -> list[list[tuple[str, str]]]:
+) -> list[list[_CargoSink]]:
     """Chunk output sinks so no strip carries more lanes than a sorter can span.
 
     EVERY shard drains EVERY product.  One machine makes all of its recipe's
@@ -1137,39 +1670,39 @@ def _shard_sinks(
     if reach <= 0:
         raise ValueError("no room left on the south side for any output lane")
 
-    by_item: dict[str, list[str]] = {}
-    for item, dest in sinks:
-        by_item.setdefault(item, []).append(dest)
-    if not by_item:
+    by_cargo: dict[CargoKey, list[str]] = {}
+    for item, dest, cargo_domain in sinks:
+        by_cargo.setdefault((item, cargo_domain), []).append(dest)
+    if not by_cargo:
         return []
-    if len(by_item) > reach:
+    if len(by_cargo) > reach:
         raise ValueError(
-            f"a machine yields {len(by_item)} distinct products but only {reach} "
+            f"a machine yields {len(by_cargo)} distinct cargo lanes but only {reach} "
             f"output lane(s) fit inside the {catalog.SORTER_MAX_REACH}-tile sorter "
             "reach, so one of them could never be drained"
         )
 
     n = 1
-    while sum(max(1, math.ceil(len(d) / n)) for d in by_item.values()) > reach:
+    while sum(max(1, math.ceil(len(d) / n)) for d in by_cargo.values()) > reach:
         if max_shards is not None and n >= max_shards:
             break
         n += 1
 
-    out: list[list[tuple[str, str]]] = [[] for _ in range(n)]
-    for item, dests in by_item.items():
+    out: list[list[_CargoSink]] = [[] for _ in range(n)]
+    for (item, cargo_domain), dests in by_cargo.items():
         per = math.ceil(len(dests) / n)
         for s in range(n):
             chunk = dests[s * per : (s + 1) * per] or [dests[s % len(dests)]]
-            out[s].extend((item, d) for d in chunk)
+            out[s].extend((item, d, cargo_domain) for d in chunk)
     return out
 
 
 def _merge_lanes(
-    shard: Sequence[tuple[str, str]],
+    shard: Sequence[_CargoSink],
     reach: int,
-    demand: Mapping[tuple[str, str], Fraction],
+    demand: Mapping[_CargoSink, Fraction],
     capacity: Fraction,
-) -> list[tuple[str, str]]:
+) -> list[_CargoSink]:
     """Fold a shard's destinations onto at most ``reach`` output lanes.
 
     Sharding splits a producer's destinations across STRIPS and needs one
@@ -1195,33 +1728,51 @@ def _merge_lanes(
     if len(shard) <= reach:
         return list(shard)
 
-    by_item: dict[str, list[str]] = {}
-    for item, dest in shard:
-        by_item.setdefault(item, []).append(dest)
-    if len(by_item) > reach:
+    by_cargo: dict[CargoKey, list[str]] = {}
+    for item, dest, cargo_domain in shard:
+        by_cargo.setdefault((item, cargo_domain), []).append(dest)
+    if len(by_cargo) > reach:
         raise ValueError(
-            f"a machine yields {len(by_item)} distinct products but only {reach} "
+            f"a machine yields {len(by_cargo)} distinct cargo lanes but only {reach} "
             f"output lane(s) fit inside the {catalog.SORTER_MAX_REACH}-tile sorter "
             "reach, so one of them could never be drained"
         )
 
-    alloc = dict.fromkeys(by_item, 1)
-    for _ in range(reach - len(by_item)):
-        room = [item for item in by_item if alloc[item] < len(by_item[item])]
+    alloc = dict.fromkeys(by_cargo, 1)
+    for _ in range(reach - len(by_cargo)):
+        room = [cargo for cargo in by_cargo if alloc[cargo] < len(by_cargo[cargo])]
         if not room:
             break
-        alloc[max(room, key=lambda i: (Fraction(len(by_item[i]), alloc[i]), i))] += 1
+        chosen = max(
+            room,
+            key=lambda cargo: (
+                Fraction(len(by_cargo[cargo]), alloc[cargo]),
+                cargo[0],
+                cargo[1].value,
+            ),
+        )
+        alloc[chosen] += 1
 
-    out: list[tuple[str, str]] = []
-    for item in sorted(by_item):
-        k = alloc[item]
+    out: list[_CargoSink] = []
+    for item, cargo_domain in sorted(
+        by_cargo,
+        key=lambda cargo: (cargo[0], cargo[1].value),
+    ):
+        cargo = (item, cargo_domain)
+        k = alloc[cargo]
         bins: list[list[str]] = [[] for _ in range(k)]
         loads = [Fraction(0)] * k
-        order = sorted(by_item[item], key=lambda d: (-demand.get((item, d), Fraction(0)), d))
+        order = sorted(
+            by_cargo[cargo],
+            key=lambda dest: (
+                -demand.get((item, dest, cargo_domain), Fraction(0)),
+                dest,
+            ),
+        )
         for dest in order:
             b = min(range(k), key=lambda i: (loads[i], i))
             bins[b].append(dest)
-            loads[b] += demand.get((item, dest), Fraction(0))
+            loads[b] += demand.get((item, dest, cargo_domain), Fraction(0))
         for b, group in enumerate(bins):
             if not group:
                 continue
@@ -1231,14 +1782,14 @@ def _merge_lanes(
                     f"output lane carrying {loads[b]} items/s, over the "
                     f"{capacity}/s the belt sustains"
                 )
-            out.append((item, DEST_SEP.join(sorted(group))))
+            out.append((item, DEST_SEP.join(sorted(group)), cargo_domain))
     return out
 
 
 def _allocate_machines(
     count: int,
-    shards: Sequence[Sequence[tuple[str, str]]],
-    demand: Mapping[tuple[str, str], Fraction],
+    shards: Sequence[Sequence[_CargoSink]],
+    demand: Mapping[_CargoSink, Fraction],
 ) -> list[int]:
     """Split ``count`` machines across shards in proportion to demand served.
 
@@ -1252,18 +1803,19 @@ def _allocate_machines(
     still matches the spec's machine counts.
     """
     n = len(shards)
-    totals: dict[str, Fraction] = defaultdict(Fraction)
-    for (item, _dest), rate in demand.items():
-        totals[item] += rate
+    totals: dict[CargoKey, Fraction] = defaultdict(Fraction)
+    for (item, _dest, cargo_domain), rate in demand.items():
+        totals[item, cargo_domain] += rate
 
     weights: list[Fraction] = []
     for shard in shards:
-        served: dict[str, Fraction] = defaultdict(Fraction)
-        for item, dest in shard:
-            served[item] += demand.get((item, dest), Fraction(0))
+        served: dict[CargoKey, Fraction] = defaultdict(Fraction)
+        for item, dest, cargo_domain in shard:
+            cargo = (item, cargo_domain)
+            served[cargo] += demand.get((item, dest, cargo_domain), Fraction(0))
         weight = Fraction(0)
-        for item, rate in served.items():
-            total = totals.get(item, Fraction(0))
+        for cargo, rate in served.items():
+            total = totals.get(cargo, Fraction(0))
             weight = max(weight, rate / total if total > 0 else Fraction(1, n))
         weights.append(weight if weight > 0 else Fraction(1, n))
 
@@ -1522,184 +2074,21 @@ def _seat_inputs(
     )
 
 
-def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
-    """Allocate immutable logical lane shards without choosing a machine pose.
-
-    A shard carries one output lane per destination, which is what removes the
-    need for splitters.  Machine ranges are deliberately absent here: a logical
-    shard owns its total count, while physical strip instances partition that
-    count later.
-
-    Inputs are fed from both sides.  Sharding cannot help a machine that needs
-    all ingredients simultaneously, so overflow ingredients share filtered
-    lanes according to :func:`_seat_inputs`.
-    """
-    groups = _adapt(spec)
-
-    producers: dict[str, list[str]] = defaultdict(list)
-    for key, group in groups.items():
-        for item in group.outputs:
-            producers[item].append(key)
-
-    consumers: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for key, group in groups.items():
-        for item in group.inputs:
-            for source in producers.get(item, []):
-                consumers[source, item].append(key)
-
-    plans: list[_LogicalStripPlan] = []
-    for key, group in groups.items():
-        # How many lane rows this machine's poses actually reach, per side.
-        above_cap, below_cap = _side_lane_caps(group.item_id, group.yaw, group.pitch_h)
-        input_items = tuple(sorted(group.inputs))
-        sinks: list[tuple[str, str]] = []
-        for item in sorted(group.outputs):
-            destinations = consumers.get((key, item), [])
-            boundary = item in spec.outputs or item in spec.surplus_outputs
-            shared_boundary: str | None = None
-            if item in spec.surplus_outputs and destinations:
-                surplus = spec.surplus_outputs[item]
-                shareable = [
-                    destination
-                    for destination in destinations
-                    if surplus + _sink_demand(groups, spec, item, destination)
-                    <= spec.belt_items_per_second
-                ]
-                if shareable:
-                    shared_boundary = min(
-                        shareable,
-                        key=lambda destination: (
-                            _sink_demand(groups, spec, item, destination),
-                            destination,
-                        ),
-                    )
-                    boundary = False
-            sinks.extend(
-                (
-                    item,
-                    (
-                        DEST_SEP.join((destination, ""))
-                        if destination == shared_boundary
-                        else destination
-                    ),
-                )
-                for destination in destinations
-            )
-            if boundary or not destinations:
-                sinks.append((item, ""))
-
-        columns = (
-            len(slots.attachable_columns(slots.probe_building(group.item_id, group.yaw), -1)) or 1
-        )
-        # THE EAST FACE IS THE SECOND ATTEMPT, NEVER THE FIRST.  Flanking buys a
-        # seventh connection and costs a belt column per machine, so a recipe that
-        # seats on the north and south faces alone must keep seating exactly as it
-        # did -- otherwise every strip in the corpus pays for a slot only
-        # `universe-matrix` needs.
-        flank = False
-        try:
-            in_above, in_below = _seat_inputs(
-                input_items,
-                len(sinks),
-                above_cap,
-                below_cap,
-                max_per_lane=group.width,
-                columns=columns,
-            )
-        except ValueError as exc:
-            # One sink, because one gap belt beside a machine carries one item.
-            seat = _flank_seat(group.item_id, group.yaw, group.pitch_w) if len(sinks) == 1 else None
-            if seat is None:
-                raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
-            try:
-                in_above, in_below = _seat_inputs(
-                    input_items,
-                    len(sinks),
-                    above_cap,
-                    below_cap,
-                    max_per_lane=group.width,
-                    columns=columns,
-                    flank_outputs=True,
-                )
-            except ValueError as flanked:
-                raise ValueError(f"recipe {group.recipe_id!r}: {flanked}") from None
-            flank = True
-
-        # Output lanes share the south side with overflow inputs. They consume
-        # both row and machine-slot capacity unless the output leaves east.
-        south_columns = len(
-            slots.attachable_columns(slots.probe_building(group.item_id, group.yaw), group.pitch_h)
-        )
-        out_capacity = below_cap - len(in_below)
-        if flank:
-            out_capacity = min(out_capacity, 1)
-        elif south_columns:
-            out_capacity = min(
-                out_capacity,
-                south_columns - sum(len(lane) for lane in in_below),
-            )
-        shards = _shard_sinks(sinks, cap=out_capacity, max_shards=group.count) if sinks else [[]]
-        demand = {
-            (item, destination): _sink_demand(
-                groups,
-                spec,
-                item,
-                destination,
-            )
-            for item, destination in sinks
-        }
-        allocation_demand = {
-            (item, destination): _sink_demand(
-                groups,
-                spec,
-                item,
-                destination,
-                include_boundary=False,
-            )
-            for item, destination in sinks
-        }
-        per_shard = (
-            _allocate_machines(group.count, shards, allocation_demand)
-            if len(shards) > 1
-            else [group.count]
-        )
-        try:
-            lane_shards = [
-                _merge_lanes(
-                    shard,
-                    out_capacity,
-                    demand,
-                    spec.belt_items_per_second,
-                )
-                for shard in shards
-            ]
-        except ValueError as exc:
-            raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
-
-        for shard_index, (lane_shard, machine_count) in enumerate(
-            zip(lane_shards, per_shard, strict=True)
-        ):
-            if machine_count <= 0:
-                continue
-            plans.append(
-                _LogicalStripPlan(
-                    group_key=key,
-                    shard_index=shard_index,
-                    recipe_id=group.recipe_id,
-                    item_id=group.item_id,
-                    model_index=group.model_index,
-                    total_machine_count=machine_count,
-                    in_above=in_above,
-                    out_lanes=tuple(lane_shard),
-                    in_below=in_below,
-                    mode_params=group.mode_params,
-                    flank_outputs=flank,
-                )
-            )
-    return tuple(plans)
 
 
-def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
+def plan_strips(
+    spec: BuildSpec,
+    *,
+    strip_len: int = 6,
+    band_policy: BandPolicy = _DEFAULT_BAND_POLICY,
+    minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
+    families: Sequence[StripFamily] | None = None,
+    minimum_staged_static_clearance: Mapping[
+        StagedStaticClearanceKey,
+        int,
+    ] = _NO_STAGED_STATIC_CLEARANCE,
+    cancelled: Callable[[], bool] | None = None,
+) -> list[Strip]:
     """Select each logical family's deterministic compatibility pose.
 
     The legacy Freeform planner remains strip-based until the later atomic
@@ -1710,12 +2099,29 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
     from flab2bp.layout.strip_variants import (
         default_strip_variant,
         generate_strip_families,
-        partition_strip_family,
+        partition_strip_variant,
+        strip_pose_id,
+        variant_with_minimum_pitch,
     )
 
     groups = _adapt(spec)
+    selected_families = (
+        tuple(generate_strip_families(spec))
+        if families is None
+        else tuple(families)
+    )
+    templates: dict[StripFamilyId, StripVariant] = {}
+    for family in selected_families:
+        if not family.variants:
+            continue
+        template = default_strip_variant(family)
+        required_pitch = minimum_pitch_x.get(strip_pose_id(template))
+        if required_pitch is not None:
+            template = variant_with_minimum_pitch(template, required_pitch)
+        templates[family.family_id] = template
+
     strips: list[Strip] = []
-    for family in generate_strip_families(spec):
+    for family in selected_families:
         inputs_above = tuple(
             lane.items
             for lane in sorted(family.input_lanes, key=lambda lane: lane.side_index)
@@ -1727,40 +2133,39 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
             if lane.side == "north"
         )
         outputs = tuple(
-            (lane.items[0], DEST_SEP.join(lane.destination_group_keys))
+            (
+                lane.items[0],
+                DEST_SEP.join(lane.destination_group_keys),
+                lane.cargo_domain,
+            )
             for lane in sorted(family.output_lanes, key=lambda lane: lane.side_index)
         )
         group = groups[family.group_key]
         needs_coater_keepout = any(
-            item in spec.spray_lanes
-            and not (item in spec.lanes_requiring_split and not group.proliferated)
-            for lane in inputs_above + inputs_below
-            for item in lane
+            lane.cargo_domain is CargoDomain.REQUIRES_SPRAY
+            for lane in family.input_lanes
         )
+        realized: tuple[tuple[int, int, StripVariant | None], ...]
         if family.variants:
-            variant = default_strip_variant(family)
-            instances = partition_strip_family(
+            template = templates[family.family_id]
+            instances = partition_strip_variant(
                 family,
+                template,
                 max_machine_count=max(1, strip_len),
-                variant_id=variant.variant_id,
             )
-            instance_ranges = tuple(
-                (instance.machine_start, instance.machine_count) for instance in instances
+            realized = tuple(
+                (
+                    instance.machine_start,
+                    instance.machine_count,
+                    instance.variant,
+                )
+                for instance in instances
             )
-            footprint_width = variant.footprint_width
-            footprint_height = variant.footprint_height
-            yaw = variant.yaw
-            pitch_width = variant.pitch_x
-            pitch_height = variant.pitch_y
-            lane_plan = variant.lane_plan
-            attachment_plan = variant.attachment_plan
-            port_dock_plan = variant.port_dock_plan
-            box_height = variant.box_height
         else:
             # Compatibility only: a mode-driven building with no sorter poses
             # still reaches emission, which owns the established structured
             # refusal.  It has no physical StripVariant and must not be exposed
-            # to sequence search as though it did.
+            # to projection feedback or sequence search as though it did.
             instance_count = max(
                 1,
                 math.ceil(family.total_machine_count / max(1, strip_len)),
@@ -1770,54 +2175,149 @@ def plan_strips(spec: BuildSpec, *, strip_len: int = 6) -> list[Strip]:
                 base + (1 if index < extra else 0) for index in range(instance_count)
             )
             machine_start = 0
-            instance_ranges_list: list[tuple[int, int]] = []
+            realized_list: list[tuple[int, int, StripVariant | None]] = []
             for machine_count in machine_counts:
-                instance_ranges_list.append((machine_start, machine_count))
+                realized_list.append((machine_start, machine_count, None))
                 machine_start += machine_count
-            instance_ranges = tuple(instance_ranges_list)
-            footprint_width = group.width
-            footprint_height = group.height
-            yaw = group.yaw
-            pitch_width = group.pitch_w + 1 if family.flank_outputs else group.pitch_w
-            pitch_height = group.pitch_h
-            lane_plan = None
-            attachment_plan = ()
-            port_dock_plan = ()
-            box_height = len(inputs_above) + pitch_height + len(outputs) + len(inputs_below)
-        for machine_start, machine_count in instance_ranges:
+            realized = tuple(realized_list)
+        for machine_start, machine_count, physical_variant in realized:
             _check_shared_lane_capacity(
                 group,
                 inputs_above + inputs_below,
                 machine_count,
                 spec,
             )
-            strips.append(
-                Strip(
-                    group_key=family.group_key,
-                    recipe_id=family.recipe_id,
-                    item_id=family.machine_item_id,
-                    model_index=family.model_index,
-                    machines=machine_count,
-                    mw=footprint_width,
-                    mh=footprint_height,
-                    yaw=yaw,
-                    pw=pitch_width,
-                    ph=pitch_height,
-                    in_above=inputs_above,
-                    out_lanes=outputs,
-                    in_below=inputs_below,
-                    lane_plan=lane_plan,
-                    attachment_plan=attachment_plan,
-                    port_dock_plan=port_dock_plan,
-                    box_height=box_height,
-                    mode_params=family.mode_params,
-                    flank_outputs=family.flank_outputs,
-                    family_id=family.family_id,
-                    machine_start=machine_start,
-                    west_channel=(_COATER_WEST_CHANNEL if needs_coater_keepout else WEST_CHANNEL),
+            lane_plan: LanePlan | None
+            attachment_plan: tuple[LaneAttachmentPlan, ...]
+            port_dock_plan: tuple[LanePortDockPlan, ...]
+            if physical_variant is None:
+                footprint_width = group.width
+                footprint_height = group.height
+                yaw = group.yaw
+                building = catalog.building(family.machine_item_id)
+                port_inputs = bool(
+                    (inputs_above or inputs_below)
+                    and building.takes_belt_ports
+                    and not building.slot_poses
                 )
+                # Port-input branches occupy the pitch column immediately east
+                # of each machine.  Keep one more column so adjacent machine
+                # colliders remain disjoint after spherical projection.
+                pitch_width = group.pitch_w + int(family.flank_outputs or port_inputs)
+                pitch_height = group.pitch_h
+                lane_plan = None
+                attachment_plan = ()
+                port_dock_plan = ()
+                box_height = (
+                    len(inputs_above)
+                    + int(bool(inputs_above) and port_inputs)
+                    + pitch_height
+                    + len(outputs)
+                    + len(inputs_below)
+                )
+            else:
+                footprint_width = physical_variant.footprint_width
+                footprint_height = physical_variant.footprint_height
+                yaw = physical_variant.yaw
+                pitch_width = physical_variant.pitch_x
+                pitch_height = physical_variant.pitch_y
+                lane_plan = physical_variant.lane_plan
+                attachment_plan = physical_variant.attachment_plan
+                port_dock_plan = physical_variant.port_dock_plan
+                box_height = physical_variant.box_height
+            west_channel = (
+                _COATER_WEST_CHANNEL
+                if needs_coater_keepout
+                else WEST_CHANNEL
             )
-    return strips
+            selected = Strip(
+                group_key=family.group_key,
+                recipe_id=family.recipe_id,
+                item_id=family.machine_item_id,
+                model_index=family.model_index,
+                cargo_domain=(
+                    CargoDomain.REQUIRES_SPRAY
+                    if group.proliferated
+                    else CargoDomain.UNSPRAYED
+                ),
+                machines=machine_count,
+                mw=footprint_width,
+                mh=footprint_height,
+                yaw=yaw,
+                pw=pitch_width,
+                ph=pitch_height,
+                in_above=inputs_above,
+                out_lanes=outputs,
+                in_below=inputs_below,
+                lane_plan=lane_plan,
+                attachment_plan=attachment_plan,
+                port_dock_plan=port_dock_plan,
+                box_height=box_height,
+                physical_variant=physical_variant,
+                mode_params=family.mode_params,
+                flank_outputs=family.flank_outputs,
+                family_id=family.family_id,
+                machine_start=machine_start,
+                west_channel=west_channel,
+            )
+            strips.append(selected)
+    clearance_keys = tuple(
+        _staged_static_clearance_keys(strip)
+        for strip in strips
+    )
+    unresolved = tuple(
+        dict.fromkeys(
+            relation
+            for relations in clearance_keys
+            for relation in relations
+            if relation not in minimum_staged_static_clearance
+        )
+    )
+    precleared: frozenset[StagedStaticClearanceKey] = frozenset()
+    if unresolved:
+        exact_relations = tuple(
+            candidate
+            for relation in unresolved
+            for candidate in (
+                relation,
+                replace(relation, delta_x=relation.delta_x + 1),
+            )
+        )
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        token = _STAGED_STATIC_PROOF_CANCELLED.set(cancelled)
+        try:
+            exact_risks = _staged_static_relation_projection_risks(
+                exact_relations,
+                band_policy,
+            )
+        finally:
+            _STAGED_STATIC_PROOF_CANCELLED.reset(token)
+        precleared = frozenset(
+            relation
+            for ordinal, relation in enumerate(unresolved)
+            if exact_risks[2 * ordinal]
+            and not exact_risks[2 * ordinal + 1]
+        )
+    return [
+        replace(
+            strip,
+            west_channel=max(
+                (
+                    minimum_staged_static_clearance[relation]
+                    if relation in minimum_staged_static_clearance
+                    else (
+                        _COATER_WEST_CHANNEL + 1
+                        if relation in precleared
+                        else _COATER_WEST_CHANNEL
+                    )
+                    for relation in relations
+                ),
+                default=strip.west_channel,
+            ),
+        )
+        for strip, relations in zip(strips, clearance_keys, strict=True)
+    ]
 
 
 _COARSE_STRIP_THRESHOLD = 40
@@ -1828,12 +2328,31 @@ def _coarsen_saturated_strip_plan(
     strips: list[Strip],
     *,
     strip_len: int,
+    band_policy: BandPolicy = _DEFAULT_BAND_POLICY,
+    minimum_pitch_x: Mapping[StripPoseId, int] = _NO_PITCH_REQUIREMENTS,
+    families: Sequence[StripFamily] | None = None,
+    minimum_staged_static_clearance: Mapping[
+        StagedStaticClearanceKey,
+        int,
+    ] = _NO_STAGED_STATIC_CLEARANCE,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[list[Strip], int]:
     """Repartition redundant stress strips before packing or routing."""
     if len(strips) < _COARSE_STRIP_THRESHOLD or strip_len >= spec.machine_count:
         return strips, strip_len
     coarse_len = max(strip_len, spec.machine_count)
-    return plan_strips(spec, strip_len=coarse_len), coarse_len
+    return (
+        plan_strips(
+            spec,
+            strip_len=coarse_len,
+            band_policy=band_policy,
+            minimum_pitch_x=minimum_pitch_x,
+            families=families,
+            minimum_staged_static_clearance=minimum_staged_static_clearance,
+            cancelled=cancelled,
+        ),
+        coarse_len,
+    )
 
 
 # --- direct insertion ------------------------------------------------------
@@ -1869,26 +2388,179 @@ def _direct_insert_candidates(spec: BuildSpec) -> list[tuple[str, str]]:
     return sorted(set(out))
 
 
+@dataclass(frozen=True, order=True, slots=True)
+class DirectInsertId:
+    """Exact strip net whose belt route the packer promised to replace."""
+
+    source_strip: int
+    destination_strip: int
+    item: str
+    cargo_domain: CargoDomain
+
+    @property
+    def net_id(self) -> NetId:
+        """The corresponding detailed-router identity."""
+        return NetId(
+            source_strip=self.source_strip,
+            destination_strip=self.destination_strip,
+            item=self.item,
+            role=NetRole.INTERNAL,
+            ordinal=0,
+            cargo_domain=self.cargo_domain,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class _DirectCandidate:
-    """A net a single sorter could replace, and the geometry that would allow it.
+    """A net a single sorter could replace, and its proved legal alignments.
 
     ``prod_row`` and ``cons_row`` are offsets from each strip's origin to the
-    lane row the sorter would span, so the alignment condition stays affine in
-    the packer's ``x``/``y`` variables.
+    lane row the sorter would span. ``origin_deltas`` are consumer-minus-
+    producer strip-origin x offsets with at least one occupied column that no
+    sorter already seated on either lane meets.
     """
 
     item: str
+    cargo_domain: CargoDomain
     prod_row: int
     cons_row: int
     #: Belt tiles each lane occupies, counted east from its strip's west edge.
     #: The sorter needs a column both lanes cover, and an input lane is trimmed
     #: to its last sorter, so the consumer's span is usually SHORTER than its
-    #: strip.  Using the strip width for both would let the packer commit a pair
-    #: whose lanes share no tile, which ``_bridge`` would then refuse -- a
-    #: rewarded promise the emission stage cannot keep.
-    prod_span: int = 1
-    cons_span: int = 1
+    #: strip.
+    prod_span: int
+    cons_span: int
+    origin_deltas: tuple[int, ...]
+
+
+def _direct_clear_columns(
+    strip: Strip,
+    plan: LaneAttachmentPlan,
+    span: int,
+) -> frozenset[int]:
+    """Occupied lane columns clear of every sorter already seated on the lane.
+
+    A bridge is vertical and a strip sorter leaves that same lane vertically in
+    the opposite direction. Their seated colliders can intersect only when they
+    share the lane column: sorter bodies are narrower than one tile, while the
+    end extension is along their run. Excluding the exact planned attachment
+    columns therefore proves the collider precondition before CP-SAT can reward
+    the candidate.
+    """
+    occupied = set(range(span))
+    occupied.difference_update(
+        machine * strip.pw + attachment.column
+        for machine in range(strip.machines)
+        for attachment in plan.attachments
+    )
+    return frozenset(occupied)
+
+
+def _packed_nonzero_digits(
+    packed: Sequence[int],
+    coefficient_bytes: int,
+    digit_count: int,
+) -> bytearray:
+    """Mark non-zero fixed-width digits with one linear packed-byte scan."""
+    present = bytearray(digit_count)
+    for byte_offset, value in enumerate(packed):
+        if value:
+            present[byte_offset // coefficient_bytes] = 1
+    return present
+
+
+def _direct_column_deltas(
+    source_columns: Sequence[int],
+    destination_columns: Sequence[int],
+) -> tuple[int, ...]:
+    """Compose two sorted column sets into their exact difference set.
+
+    The naïve run-pair formulation creates one interval for every source and
+    destination run. Alternating occupied/attachment columns make both run
+    counts linear in strip width, so that intermediate becomes quadratic even
+    though every possible delta lies in one linear-size integer range.
+
+    Treat each column set as a polynomial with a one at every occupied column,
+    reverse the destination polynomial, and multiply them. A non-zero
+    coefficient proves at least one exact source/destination pair for that
+    delta. Coefficients are packed in base ``2 ** (8 * coefficient_bytes)``;
+    choosing a base greater than the maximum pair count prevents carries, so
+    Python's exact integer multiplication is also an exact convolution.
+    """
+    if not source_columns or not destination_columns:
+        return ()
+
+    source_min = source_columns[0]
+    source_max = source_columns[-1]
+    destination_min = destination_columns[0]
+    destination_max = destination_columns[-1]
+    source_degree = source_max - source_min
+    destination_degree = destination_max - destination_min
+    max_pair_count = min(len(source_columns), len(destination_columns))
+    coefficient_bytes = max(1, (max_pair_count.bit_length() + 7) // 8)
+    assert max_pair_count < 1 << (8 * coefficient_bytes)
+
+    source_coefficients = bytearray((source_degree + 1) * coefficient_bytes)
+    for column in source_columns:
+        source_coefficients[(column - source_min) * coefficient_bytes] = 1
+
+    destination_coefficients = bytearray(
+        (destination_degree + 1) * coefficient_bytes
+    )
+    for column in destination_columns:
+        destination_coefficients[
+            (destination_max - column) * coefficient_bytes
+        ] = 1
+
+    product_digit_count = source_degree + destination_degree + 1
+    product = int.from_bytes(source_coefficients, "little") * int.from_bytes(
+        destination_coefficients, "little"
+    )
+    product_bytes = product.to_bytes(
+        product_digit_count * coefficient_bytes,
+        "little",
+    )
+    present = _packed_nonzero_digits(
+        product_bytes,
+        coefficient_bytes,
+        product_digit_count,
+    )
+
+    delta_origin = source_min - destination_max
+    return tuple(
+        delta_origin + degree
+        for degree, pair_count in enumerate(present)
+        if pair_count
+    )
+
+
+def _direct_origin_deltas(
+    source: Strip,
+    destination: Strip,
+    source_lane: int,
+    item: str,
+) -> tuple[int, ...]:
+    """Consumer origin offsets with an occupied, sorter-clear shared column."""
+    try:
+        source_plan = source._output_attachment_plan(source_lane)
+        destination_plan = destination._input_attachment_plan(item)
+    except (IndexError, KeyError):
+        return ()
+    source_columns = sorted(
+        _direct_clear_columns(source, source_plan, source.width)
+    )
+    destination_span = destination.input_lane_tiles(destination.lane_of_input(item))
+    destination_columns = sorted(
+        _direct_clear_columns(
+            destination,
+            destination_plan,
+            destination_span,
+        )
+    )
+    if not source_columns or not destination_columns:
+        return ()
+
+    return _direct_column_deltas(source_columns, destination_columns)
 
 
 def _direct_net_candidates(
@@ -1908,16 +2580,14 @@ def _direct_net_candidates(
     out: dict[tuple[int, int], _DirectCandidate] = {}
     for i, j in _nets_between(strips):
         src, dst = strips[i], strips[j]
-        if src.takes_belt_ports:
-            continue  # a prefab belt port cannot become a machine-to-machine sorter
-        if (src.recipe_id, dst.recipe_id) not in eligible:
+        if src.takes_belt_ports or (src.recipe_id, dst.recipe_id) not in eligible:
             continue
-        # The producer's output lane dedicated to this destination.
         lane = next(
             (
                 (k, item)
-                for k, (item, dest) in enumerate(src.out_lanes)
-                if dst.group_key in _dests(dest)
+                for k, (item, dest, cargo_domain) in enumerate(src.out_lanes)
+                if cargo_domain is CargoDomain.UNSPRAYED
+                and dst.group_key in _dests(dest)
             ),
             None,
         )
@@ -1929,14 +2599,73 @@ def _direct_net_candidates(
         # Ask the strip for the rows rather than recomputing the layout here:
         # inputs may sit above or below the machine band, and duplicating that
         # arithmetic is how the two drift apart.
+        origin_deltas = _direct_origin_deltas(src, dst, k, item)
+        if not origin_deltas:
+            # With no occupied lane column clear of both strips' already seated
+            # sorters, emission cannot prove a bridge. Do not create a Boolean:
+            # an absent variable cannot earn the direct-insert reward.
+            continue
         out[i, j] = _DirectCandidate(
             item=item,
             prod_row=src.row_of_output(k),
             cons_row=dst.row_of_input(item),
             prod_span=src.width,
             cons_span=dst.input_lane_tiles(dst.lane_of_input(item)),
+            cargo_domain=CargoDomain.UNSPRAYED,
+            origin_deltas=origin_deltas,
         )
     return out
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _DirectCandidateSnapshot:
+    """Immutable direct-net geometry owned by one exact strip plan."""
+
+    strips: tuple[Strip, ...]
+    candidates: Mapping[tuple[int, int], _DirectCandidate]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.strips, tuple):
+            raise ValueError("direct candidates must retain an immutable strip plan")
+        object.__setattr__(
+            self,
+            "candidates",
+            MappingProxyType(dict(self.candidates)),
+        )
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, _DirectCandidateSnapshot)
+            and self.matches(other.strips)
+            and self.candidates == other.candidates
+        )
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                tuple(id(strip) for strip in self.strips),
+                tuple(sorted(self.candidates.items())),
+            )
+        )
+
+    def matches(self, strips: Sequence[Strip]) -> bool:
+        """Whether ``strips`` contains the exact physical port owners retained."""
+        return len(self.strips) == len(strips) and all(
+            retained is current
+            for retained, current in zip(self.strips, strips, strict=True)
+        )
+
+
+def _direct_candidate_snapshot(
+    strips: list[Strip],
+    spec: BuildSpec,
+    *,
+    enabled: bool,
+) -> _DirectCandidateSnapshot:
+    """Enumerate direct candidates once and bind them to their physical plan."""
+    return _DirectCandidateSnapshot(
+        tuple(strips),
+        _direct_net_candidates(strips, spec) if enabled else {},
+    )
 
 
 def _direct_alignment_targets(
@@ -1952,6 +2681,7 @@ def _direct_alignment_targets(
             consumer_row=candidate.cons_row,
             producer_span=candidate.prod_span,
             consumer_span=candidate.cons_span,
+            origin_deltas=candidate.origin_deltas,
         )
         for key, candidate in sorted(candidates.items())
     )
@@ -1975,6 +2705,152 @@ def tie_break_cap(n_terms: int, *, width_bound: int, height: int, n_direct: int)
 # --- phase 1: packing ------------------------------------------------------
 
 
+type _ExactRetrySource = Literal["power", "seating", "finalizer"]
+type _ExactRetryBuildingSignature = tuple[
+    int,
+    int,
+    Fraction,
+    int,
+    int,
+    float,
+    int | None,
+]
+
+
+@dataclass(frozen=True, slots=True)
+class _ExactRetryEvidence:
+    """Assignment-independent identity of one exact projected relation."""
+
+    source: _ExactRetrySource
+    check: str
+    relation: tuple[tuple[int, _ExactRetryBuildingSignature], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ExactRetryKey:
+    """One proof-scoped retry token for a configured pack candidate."""
+
+    height: int
+    arrangement: int
+    evidence: _ExactRetryEvidence
+
+
+def _exact_retry_evidence(
+    source: _ExactRetrySource,
+    failure: finalize.ProjectionFailure,
+    buildings: Mapping[int, PlacedBuilding],
+) -> _ExactRetryEvidence | None:
+    """Drop assignment coordinates while retaining the implicated exact relation."""
+    relation: list[tuple[int, _ExactRetryBuildingSignature]] = []
+    for index in failure.buildings:
+        building = buildings.get(index)
+        if building is None:
+            return None
+        relation.append(
+            (
+                index,
+                (
+                    building.item_id,
+                    building.model_index,
+                    building.z,
+                    building.width,
+                    building.height,
+                    building.yaw,
+                    building.owner_strip,
+                ),
+            )
+        )
+    if not relation:
+        return None
+    return _ExactRetryEvidence(
+        source=source,
+        check=failure.check,
+        relation=tuple(relation),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ExactProjectionPair:
+    """The two physical strips implicated by one exact projection refusal."""
+
+    left_strip: int
+    right_strip: int
+    left_geometry: finalize.ProjectionGeometrySignature
+    right_geometry: finalize.ProjectionGeometrySignature
+
+    def __post_init__(self) -> None:
+        if self.left_strip < 0 or self.left_strip >= self.right_strip:
+            raise ValueError("exact projection pair requires two ordered strips")
+        if not self.left_geometry or not self.right_geometry:
+            raise ValueError("exact projection pair requires physical signatures")
+
+
+@dataclass(frozen=True, slots=True)
+class ExactPackNoGood:
+    """One immutable full packed assignment rejected by exact evidence."""
+
+    height: int
+    outline: tuple[tuple[int, int], ...]
+    width: int
+    origins: tuple[tuple[int, int], ...]
+    evidence: tuple[finalize.ProjectionFailure, ...]
+    projection_pair: ExactProjectionPair | None = None
+
+    def __post_init__(self) -> None:
+        if self.height <= 0 or self.width <= 0:
+            raise ValueError("exact pack dimensions must be positive")
+        if len(self.outline) != len(self.origins):
+            raise ValueError("exact pack outline and origins must cover every strip")
+        if not self.evidence:
+            raise ValueError("exact pack no-good requires structured evidence")
+
+
+@dataclass(slots=True)
+class _ExactPackNoGoodState:
+    """Deduplicated exact cuts plus the bounded retry tokens they justified."""
+
+    no_goods: list[ExactPackNoGood] = field(default_factory=list)
+    no_good_keys: set[ExactPackNoGood] = field(default_factory=set)
+    retry_keys: set[_ExactRetryKey] = field(default_factory=set)
+    retried_candidates: set[tuple[int, int]] = field(default_factory=set)
+
+    def remember(self, no_good: ExactPackNoGood) -> bool:
+        if no_good in self.no_good_keys:
+            return False
+        self.no_good_keys.add(no_good)
+        self.no_goods.append(no_good)
+        return True
+
+    def admit_retry(
+        self,
+        key: _ExactRetryKey,
+        no_good: ExactPackNoGood,
+        *,
+        affordable: bool,
+    ) -> bool:
+        candidate = (key.height, key.arrangement)
+        if (
+            not affordable
+            or candidate in self.retried_candidates
+            or key in self.retry_keys
+            or no_good in self.no_good_keys
+        ):
+            return False
+        self.retried_candidates.add(candidate)
+        self.retry_keys.add(key)
+        self.no_good_keys.add(no_good)
+        self.no_goods.append(no_good)
+        return True
+
+@dataclass(frozen=True, slots=True)
+class _DirectRelationNoGood:
+    """One proved-impossible direct promise at one endpoint relation."""
+
+    direct_id: DirectInsertId
+    delta_x: int
+    delta_y: int
+
+
 @dataclass
 class _Pack:
     """Strip origins chosen by the packer."""
@@ -1984,15 +2860,48 @@ class _Pack:
     height: int
     status: str
     hit_budget: bool = False
-    #: Nets the packer arranged to bridge with a sorter instead of a belt route.
-    direct: frozenset[tuple[int, int]] = frozenset()
+    #: Exact nets the packer rewarded for replacing with one sorter.
+    direct: frozenset[DirectInsertId] = frozenset()
 
-def _projection_no_good(
+def _strip_geometry_signature(
+    strip: Strip,
+) -> finalize.ProjectionGeometrySignature:
+    """Return every immutable strip field that determines physical emission."""
+    return (
+        strip.item_id,
+        strip.model_index,
+        strip.cargo_domain,
+        strip.machines,
+        strip.mw,
+        strip.mh,
+        strip.yaw,
+        strip.pw,
+        strip.ph,
+        strip.in_above,
+        strip.out_lanes,
+        strip.in_below,
+        strip.lane_plan,
+        strip.attachment_plan,
+        strip.box_height,
+        (
+            strip.physical_variant.variant_id
+            if strip.physical_variant is not None
+            else None
+        ),
+        strip.port_dock_plan,
+        strip.mode_params,
+        strip.flank_outputs,
+        strip.family_id,
+        strip.machine_start,
+        strip.west_channel,
+    )
+
+
+def _projection_strip_pair(
     placement: Placement,
-    pack: _Pack,
     failure: finalize.ProjectionFailure,
-) -> ProjectionNoGood | None:
-    """Map one exact projected static collision back to two packed strips."""
+) -> tuple[int, int] | None:
+    """Map exact static evidence to two distinct physical strip owners."""
     if failure.check != "geom.collide" or len(failure.buildings) != 2:
         return None
     left_building, right_building = failure.buildings
@@ -2007,12 +2916,60 @@ def _projection_no_good(
         type(left_strip) is not int
         or type(right_strip) is not int
         or left_strip == right_strip
-        or left_strip not in pack.at
-        or right_strip not in pack.at
     ):
         return None
-    if left_strip > right_strip:
-        left_strip, right_strip = right_strip, left_strip
+    return (
+        (left_strip, right_strip)
+        if left_strip < right_strip
+        else (right_strip, left_strip)
+    )
+
+
+def _exact_projection_pair(
+    strips: Sequence[Strip],
+    strip_pair: tuple[int, int],
+) -> ExactProjectionPair | None:
+    """Retain an implicated pair only when both physical strips still exist."""
+    left_strip, right_strip = strip_pair
+    if not 0 <= left_strip < right_strip < len(strips):
+        return None
+    return ExactProjectionPair(
+        left_strip=left_strip,
+        right_strip=right_strip,
+        left_geometry=_strip_geometry_signature(strips[left_strip]),
+        right_geometry=_strip_geometry_signature(strips[right_strip]),
+    )
+
+
+def _projection_no_good(
+    placement: Placement,
+    pack: _Pack,
+    strips: Sequence[Strip],
+    failure: finalize.ProjectionFailure,
+    policy: BandPolicy,
+) -> ProjectionNoGood | None:
+    """Map a pair-local universal static collision to two packed strips."""
+    strip_pair = _projection_strip_pair(placement, failure)
+    if strip_pair is None:
+        return None
+    left_strip, right_strip = strip_pair
+    if (
+        left_strip not in pack.at
+        or right_strip not in pack.at
+        or not 0 <= left_strip < len(strips)
+        or not 0 <= right_strip < len(strips)
+    ):
+        return None
+    left_building, right_building = failure.buildings
+    proved = finalize.independent_projection_pair(
+        (
+            (left_building, placement.buildings[left_building]),
+            (right_building, placement.buildings[right_building]),
+        ),
+        policy,
+    )
+    if proved is None:
+        return None
     left_x, left_y = pack.at[left_strip]
     right_x, right_y = pack.at[right_strip]
     return ProjectionNoGood(
@@ -2024,8 +2981,73 @@ def _projection_no_good(
         pack_height=pack.height,
         left_origin=(left_x, left_y),
         right_origin=(right_x, right_y),
-        pack_origins=tuple(pack.at[index] for index in range(len(pack.at))),
+        left_geometry=_strip_geometry_signature(strips[left_strip]),
+        right_geometry=_strip_geometry_signature(strips[right_strip]),
         failure=failure,
+    )
+
+
+def _projection_pitch_requirements(
+    placement: Placement,
+    strips: list[Strip],
+    failures: tuple[finalize.ProjectionFailure, ...],
+) -> tuple[ProjectionPitchRequirement | None, ...]:
+    """Map ordered Freeform failures through one realized-strip placement index."""
+    from flab2bp.layout.strip_variants import (
+        StripInstanceId,
+        projection_pitch_requirements,
+    )
+
+    instance_ids: list[StripInstanceId] = []
+    variants: list[StripVariant] = []
+    for strip in strips:
+        if strip.family_id is None or strip.physical_variant is None:
+            return (None,) * len(failures)
+        instance_ids.append(
+            StripInstanceId(
+                strip.family_id,
+                strip.machine_start,
+                strip.machines,
+            )
+        )
+        variants.append(strip.physical_variant)
+    return projection_pitch_requirements(
+        placement,
+        instance_ids=tuple(instance_ids),
+        variants=tuple(variants),
+        failures=failures,
+    )
+
+
+def _staged_static_clearance_requirement(
+    strip: Strip,
+    owner_strip: int,
+    failure: finalize.ProjectionFailure,
+    relation: StagedStaticClearanceKey,
+) -> StagedStaticClearanceRequirement | None:
+    """Describe the next one-tile west attachment for one physical relation."""
+    from flab2bp.layout.strip_variants import StripInstanceId
+
+    variant_id = strip.staged_static_variant_id
+    if (
+        strip.family_id is None
+        or variant_id is None
+        or owner_strip < 0
+        or failure.check != "geom.collide"
+    ):
+        return None
+    return StagedStaticClearanceRequirement(
+        instance_id=StripInstanceId(
+            strip.family_id,
+            strip.machine_start,
+            strip.machines,
+        ),
+        variant_id=variant_id,
+        owner_strip=owner_strip,
+        rejected_west_channel=strip.west_channel,
+        required_west_channel=strip.west_channel + 1,
+        relation=relation,
+        evidence=(failure,),
     )
 
 
@@ -2036,7 +3058,7 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
         by_group[s.group_key].append(i)
     nets: set[tuple[int, int]] = set()
     for i, strip in enumerate(strips):
-        for _item, destination in strip.out_lanes:
+        for _item, destination, _cargo_domain in strip.out_lanes:
             for group_key in _dests(destination):
                 for j in by_group.get(group_key, []):
                     if i != j:
@@ -2047,9 +3069,10 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
 def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
     """Shelf packing -- always succeeds, and seeds the solver's upper bound.
 
-    A SEED, and only a seed.  It bounds `_pack`'s width from above and hints its
-    variables; it is never returned as a layout.  Returning it was tried twice
-    and deleted twice -- see the note above ``_ENTRY_RING``.
+    A deterministic seed, not a loose fallback.  It bounds `_pack`'s width from
+    above and hints its variables.  `_sweep` may route it in place of the first
+    exact incumbent only after that incumbent proves the seed fits the existing
+    width-slack cap; a failed solve can never return it.
     """
     at: dict[int, tuple[int, int]] = {}
     shelf_x, shelf_y, shelf_h = 0, 0, 0
@@ -2066,20 +3089,20 @@ def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
         width = max(width, shelf_x + w)
     return _Pack(at=at, width=width, height=height, status="greedy")
 
-def _add_projection_no_good(
+def _add_exact_pack_no_good(
     model: cp_model.CpModel,
     width: cp_model.IntVar,
     xs: Sequence[cp_model.IntVar],
     ys: Sequence[cp_model.IntVar],
     strips: Sequence[Strip],
-    no_good: ProjectionNoGood,
+    no_good: ExactPackNoGood,
 ) -> None:
-    """Forbid only the complete packed assignment that projection rejected."""
-    if len(no_good.pack_origins) != len(strips):
-        raise ValueError("projection no-good must retain every packed strip origin")
+    """Forbid the one complete assignment named by ``no_good``."""
+    if len(no_good.origins) != len(strips):
+        raise ValueError("exact pack no-good must retain every strip origin")
     variables = [width]
-    values = [no_good.pack_width]
-    for strip_index, origin in enumerate(no_good.pack_origins):
+    values = [no_good.width]
+    for strip_index, origin in enumerate(no_good.origins):
         variables.extend((xs[strip_index], ys[strip_index]))
         values.extend(
             (
@@ -2090,6 +3113,127 @@ def _add_projection_no_good(
     model.add_forbidden_assignments(variables, [tuple(values)])
 
 
+def _add_projection_no_good(
+    model: cp_model.CpModel,
+    width: cp_model.IntVar,
+    xs: Sequence[cp_model.IntVar],
+    ys: Sequence[cp_model.IntVar],
+    strips: Sequence[Strip],
+    no_good: ProjectionNoGood,
+) -> None:
+    """Forbid one proved pair while preserving unrelated-strip freedom."""
+    left = no_good.left_strip
+    right = no_good.right_strip
+    if (
+        _strip_geometry_signature(strips[left]) != no_good.left_geometry
+        or _strip_geometry_signature(strips[right]) != no_good.right_geometry
+    ):
+        return
+    variables = [width, xs[left], ys[left], xs[right], ys[right]]
+    values = [
+        no_good.pack_width,
+        no_good.left_origin[0] - strips[left].west_channel,
+        no_good.left_origin[1],
+        no_good.right_origin[0] - strips[right].west_channel,
+        no_good.right_origin[1],
+    ]
+    model.add_forbidden_assignments(variables, [values])
+
+
+@dataclass(frozen=True, slots=True)
+class _FeedbackObjectiveEvidence:
+    """One exact physical net and the route evidence that may move its endpoints."""
+
+    net_id: NetId
+    weight: int
+    source_offset: Cell
+    destination_offset: Cell
+    hot_cells: tuple[tuple[Cell, int], ...]
+
+
+def _feedback_objective_evidence(
+    feedback: FeedbackState,
+    *,
+    strip_count: int,
+) -> tuple[_FeedbackObjectiveEvidence, ...]:
+    """Keep exact net identities separate when translating feedback to CP terms."""
+    evidence: list[_FeedbackObjectiveEvidence] = []
+    ordered = sorted(
+        feedback.net_weight.items(),
+        key=lambda pair: (
+            -1 if pair[0].source_strip is None else pair[0].source_strip,
+            -1 if pair[0].destination_strip is None else pair[0].destination_strip,
+            pair[0].item,
+            pair[0].cargo_domain.value,
+            pair[0].role.value,
+            pair[0].ordinal,
+        ),
+    )
+    for net, weight in ordered:
+        if (
+            net.source_strip is None
+            or net.destination_strip is None
+            or not 0 <= net.source_strip < strip_count
+            or not 0 <= net.destination_strip < strip_count
+            or (offsets := feedback.endpoint_offsets.get(net)) is None
+            or weight <= 0.0
+        ):
+            continue
+        source_offset, destination_offset = offsets
+        hot_cells = tuple(
+            (cell, max(1, math.ceil(history)))
+            for cell, history in sorted(
+                feedback.net_cell_history.get(net, {}).items()
+            )
+            if history > 0.0
+        )
+        evidence.append(
+            _FeedbackObjectiveEvidence(
+                net_id=net,
+                weight=max(1, math.ceil(weight)),
+                source_offset=source_offset,
+                destination_offset=destination_offset,
+                hot_cells=hot_cells,
+            )
+        )
+    return tuple(evidence)
+
+
+def _feedback_objective_score(
+    evidence: tuple[_FeedbackObjectiveEvidence, ...],
+    origins: tuple[tuple[int, int], ...],
+    outline: tuple[int, int],
+) -> int:
+    """Evaluate the same exact-net evidence tier for one concrete assignment."""
+    max_distance = outline[0] + outline[1]
+    score = 0
+    for term in evidence:
+        source_strip = term.net_id.source_strip
+        destination_strip = term.net_id.destination_strip
+        if source_strip is None or destination_strip is None:
+            continue
+        source = (
+            origins[source_strip][0] + term.source_offset[0],
+            origins[source_strip][1] + term.source_offset[1],
+        )
+        destination = (
+            origins[destination_strip][0] + term.destination_offset[0],
+            origins[destination_strip][1] + term.destination_offset[1],
+        )
+        score += term.weight * (
+            abs(source[0] - destination[0]) + abs(source[1] - destination[1])
+        )
+        for (wall_x, wall_y, _level), history in term.hot_cells:
+            wall_distance = (
+                abs(source[0] - wall_x)
+                + abs(source[1] - wall_y)
+                + abs(destination[0] - wall_x)
+                + abs(destination[1] - wall_y)
+            )
+            score += term.weight * history * max(0, max_distance - wall_distance)
+    return score
+
+
 
 
 def _pack(
@@ -2098,11 +3242,16 @@ def _pack(
     height: int,
     width_bound: int,
     time_budget_s: float,
-    direct_candidates: dict[tuple[int, int], _DirectCandidate],
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
     workers: int,
+    deterministic: bool = False,
     seed: _Pack | None = None,
     arrangement: int = 0,
     projection_no_goods: tuple[ProjectionNoGood, ...] = (),
+    exact_pack_no_goods: tuple[ExactPackNoGood, ...] = (),
+    direct_relation_no_goods: tuple[_DirectRelationNoGood, ...] = (),
+    feedback: FeedbackState | None = None,
+    stop_when_seed_admissible: bool = False,
 ) -> _Pack | None:
     """Minimise width at a fixed height with CP-SAT.
 
@@ -2160,16 +3309,21 @@ def _pack(
 
     model.add_no_overlap_2d(x_iv, y_iv)
 
-    for no_good in projection_no_goods:
+    for exact_no_good in exact_pack_no_goods:
+        if exact_no_good.height != height or exact_no_good.outline != tuple(sizes):
+            continue
+        _add_exact_pack_no_good(model, w_var, xs, ys, strips, exact_no_good)
+
+    for projection_no_good in projection_no_goods:
         if (
-            no_good.left_strip == no_good.right_strip
-            or not 0 <= no_good.left_strip < n
-            or not 0 <= no_good.right_strip < n
+            projection_no_good.left_strip == projection_no_good.right_strip
+            or not 0 <= projection_no_good.left_strip < n
+            or not 0 <= projection_no_good.right_strip < n
         ):
             raise ValueError("projection no-good must name two distinct packed strips")
-        if no_good.pack_height != height:
+        if projection_no_good.pack_height != height:
             continue
-        _add_projection_no_good(model, w_var, xs, ys, strips, no_good)
+        _add_projection_no_good(model, w_var, xs, ys, strips, projection_no_good)
 
     # CUT 3 -- ROUTING CAPACITY was built here, measured, and taken out.
     #
@@ -2305,16 +3459,54 @@ def _pack(
         gap = (ys[j] + cand.cons_row) - (ys[i] + cand.prod_row)
         model.add(gap >= 1).only_enforce_if(di)
         model.add(gap <= catalog.SORTER_MAX_REACH).only_enforce_if(di)
-        # The lanes must share at least one column for the sorter to run
-        # straight down, and each lane's span is its own -- an input lane stops
-        # at its last sorter, so it is generally narrower than its strip.
-        model.add(
-            xs[i] + strips[i].west_channel <= xs[j] + strips[j].west_channel + cand.cons_span - 1
-        ).only_enforce_if(di)
-        model.add(
-            xs[j] + strips[j].west_channel <= xs[i] + strips[i].west_channel + cand.prod_span - 1
-        ).only_enforce_if(di)
+        # Reward only exact x offsets with a witness column that is occupied by
+        # both lanes and clear of every sorter already seated on either lane.
+        # Encoding the witness set here keeps an unprovable candidate out of the
+        # objective instead of letting emission discover the missing precondition
+        # after the reward has already influenced the pack.
+        origin_delta = (
+            (xs[j] + strips[j].west_channel)
+            - (xs[i] + strips[i].west_channel)
+        )
+        permitted_delta = model.new_int_var_from_domain(
+            cp_model.Domain.from_values(cand.origin_deltas),
+            f"direct_dx{i}_{j}",
+        )
+        model.add(origin_delta == permitted_delta).only_enforce_if(di)
         direct_vars[i, j] = di
+
+    for no_good_index, relation_no_good in enumerate(direct_relation_no_goods):
+        direct = relation_no_good.direct_id
+        pair = (direct.source_strip, direct.destination_strip)
+        candidate = direct_candidates.get(pair)
+        direct_var = direct_vars.get(pair)
+        if (
+            candidate is None
+            or direct_var is None
+            or candidate.item != direct.item
+            or candidate.cargo_domain is not direct.cargo_domain
+        ):
+            continue
+        relation_x = model.new_int_var(
+            -width_bound,
+            width_bound,
+            f"direct_ng_dx{no_good_index}",
+        )
+        relation_y = model.new_int_var(
+            -height,
+            height,
+            f"direct_ng_dy{no_good_index}",
+        )
+        model.add(
+            relation_x
+            == (xs[pair[1]] + strips[pair[1]].west_channel)
+            - (xs[pair[0]] + strips[pair[0]].west_channel)
+        )
+        model.add(relation_y == ys[pair[1]] - ys[pair[0]])
+        model.add_forbidden_assignments(
+            [direct_var, relation_x, relation_y],
+            [(1, relation_no_good.delta_x, relation_no_good.delta_y)],
+        )
 
     # Objective: width first, wirelength only as a tie-break.
     #
@@ -2377,7 +3569,68 @@ def _pack(
         len(terms), width_bound=width_bound, height=height, n_direct=len(direct_vars)
     )
     missed = sum(di.Not() for di in direct_vars.values())
-    model.minimize(w_var * cap + LAMBDA_HPWL * sum(terms) + MU_DIRECT * missed)
+    base_tier = LAMBDA_HPWL * sum(terms) + MU_DIRECT * missed
+    evidence = (
+        ()
+        if feedback is None
+        else _feedback_objective_evidence(feedback, strip_count=n)
+    )
+    evidence_terms: list[cp_model.LinearExpr] = []
+    max_distance = width_bound + height
+    for evidence_index, term in enumerate(evidence):
+        source_strip = term.net_id.source_strip
+        destination_strip = term.net_id.destination_strip
+        if source_strip is None or destination_strip is None:
+            continue
+        source_x = (
+            xs[source_strip]
+            + strips[source_strip].west_channel
+            + term.source_offset[0]
+        )
+        source_y = ys[source_strip] + term.source_offset[1]
+        destination_x = (
+            xs[destination_strip]
+            + strips[destination_strip].west_channel
+            + term.destination_offset[0]
+        )
+        destination_y = ys[destination_strip] + term.destination_offset[1]
+        dx = model.new_int_var(0, width_bound, f"feedback_dx{evidence_index}")
+        dy = model.new_int_var(0, height, f"feedback_dy{evidence_index}")
+        model.add_abs_equality(dx, source_x - destination_x)
+        model.add_abs_equality(dy, source_y - destination_y)
+        evidence_terms.append(term.weight * (dx + dy))
+        for wall_index, ((wall_x, wall_y, _level), history) in enumerate(
+            term.hot_cells
+        ):
+            distances: list[cp_model.IntVar] = []
+            for label, coordinate, wall, upper in (
+                ("sx", source_x, wall_x, width_bound),
+                ("sy", source_y, wall_y, height),
+                ("dx", destination_x, wall_x, width_bound),
+                ("dy", destination_y, wall_y, height),
+            ):
+                distance = model.new_int_var(
+                    0,
+                    upper,
+                    f"feedback_wall_{label}{evidence_index}_{wall_index}",
+                )
+                model.add_abs_equality(distance, coordinate - wall)
+                distances.append(distance)
+            proximity = model.new_int_var(
+                0,
+                max_distance,
+                f"feedback_hot{evidence_index}_{wall_index}",
+            )
+            model.add_max_equality(
+                proximity,
+                [0, max_distance - sum(distances)],
+            )
+            evidence_terms.append(term.weight * history * proximity)
+    if not evidence_terms:
+        model.minimize(w_var * cap + base_tier)
+    else:
+        evidence_cap = (width_bound + 1) * cap
+        model.minimize(sum(evidence_terms) * evidence_cap + w_var * cap + base_tier)
 
     # Warm start.  The seed is feasible at this height by construction, so its
     # width bounds `w_var` from above and its positions give the search an
@@ -2385,7 +3638,8 @@ def _pack(
     # each variable's domain: an out-of-domain hint is not a tighter hint, it is
     # a discarded one.
     if seed is not None:
-        model.add(w_var <= min(seed.width, width_bound))
+        if feedback is None:
+            model.add(w_var <= min(seed.width, width_bound))
         for i, (hx, hy) in seed.at.items():
             if i >= n:
                 continue
@@ -2410,11 +3664,34 @@ def _pack(
     # Determinism is load-bearing for the bake-off: multi-worker CP-SAT would
     # make the A-vs-B comparison noise rather than measurement.
     solver.parameters.num_search_workers = workers
+    if deterministic:
+        # A single CP-SAT worker removes portfolio races, but a wall-clock
+        # cutoff can still return a different incumbent under CPU contention.
+        # Deterministic time counts solver work instead, while the wall limit
+        # above remains the hard deadline if the machine cannot finish it.
+        solver.parameters.max_deterministic_time = min(
+            time_budget_s,
+            _DETERMINISTIC_PACK_WORK,
+        )
     # A FUNCTION of `arrangement`, never a clock or a counter: two runs of the
     # same sweep must ask for the same arrangements in the same order, or the
     # bake-off is comparing samples rather than strategies.
     solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
-    status = solver.Solve(model)
+
+    class SeedAdmission(cp_model.CpSolverSolutionCallback):
+        """End this solve once its exact incumbent admits the routed seed."""
+
+        def on_solution_callback(self) -> None:
+            assert seed is not None
+            if seed.width <= _width_slack_cap(self.Value(w_var)):
+                self.StopSearch()
+
+    admission = (
+        SeedAdmission()
+        if stop_when_seed_admissible and seed is not None
+        else None
+    )
+    status = solver.Solve(model, admission)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None
     return _Pack(
@@ -2425,7 +3702,16 @@ def _pack(
         height=height,
         status=solver.StatusName(status),
         hit_budget=status == cp_model.FEASIBLE,
-        direct=frozenset(k for k, di in direct_vars.items() if solver.Value(di)),
+        direct=frozenset(
+            DirectInsertId(
+                i,
+                j,
+                direct_candidates[i, j].item,
+                direct_candidates[i, j].cargo_domain,
+            )
+            for (i, j), di in direct_vars.items()
+            if solver.Value(di)
+        ),
     )
 
 
@@ -2504,7 +3790,6 @@ def _coater_keepout_hits(
     the one-cell lateral row around the coater's real oriented 3x1 body; do not
     inflate its long axis, where its predecessor and successor must stand.
     """
-    hits = set(_building_collider_hits(buildings, candidate))
     width, height = catalog.oriented_footprint(
         catalog.SPRAY_COATER_ID,
         candidate.yaw,
@@ -2519,24 +3804,139 @@ def _coater_keepout_hits(
     else:
         x0 -= 1
         x1 += 1
+
+    try:
+        candidate_span = max(catalog.collider_span(candidate.item_id, candidate.yaw))
+    except KeyError, ValueError:
+        candidate_span = max(candidate.width, candidate.height) * colliders.GRID_ARC
+    candidate_x = candidate.x + (candidate.width - 1) / 2.0
+    candidate_y = candidate.y + (candidate.height - 1) / 2.0
+    hits: set[int] = set()
+    collider_candidates: list[tuple[int, PlacedBuilding]] = []
     for index, building in enumerate(buildings):
-        if index in hits or building.z != candidate.z:
+        is_belt = catalog.is_belt(building.item_id)
+        is_sorter = catalog.is_sorter(building.item_id)
+        if is_belt or is_sorter:
             continue
         try:
-            occupies = catalog.building(building.item_id).occupies_tiles
+            info = catalog.building(building.item_id)
         except KeyError:
-            continue
+            info = None
         if (
-            occupies
-            and not catalog.is_belt(building.item_id)
-            and not catalog.is_sorter(building.item_id)
+            building.z == candidate.z
+            and info is not None
+            and info.occupies_tiles
             and x0 <= building.x + building.width - 1
             and building.x <= x1
             and y0 <= building.y + building.height - 1
             and building.y <= y1
         ):
             hits.add(index)
+            continue
+        try:
+            obstacle_span = max(
+                catalog.collider_span(building.item_id, building.yaw)
+            )
+        except KeyError, ValueError:
+            obstacle_span = (
+                max(building.width, building.height) * colliders.GRID_ARC
+            )
+        radius = (
+            (candidate_span + obstacle_span) / (2.0 * colliders.GRID_ARC)
+            + 3.0
+        )
+        obstacle_x = building.x + (building.width - 1) / 2.0
+        obstacle_y = building.y + (building.height - 1) / 2.0
+        if (
+            math.hypot(
+                candidate_x - obstacle_x,
+                candidate_y - obstacle_y,
+            )
+            <= radius
+        ):
+            collider_candidates.append((index, building))
+    if collider_candidates:
+        poses = [
+            _collision_pose(candidate),
+            *(
+                _collision_pose(building)
+                for _index, building in collider_candidates
+            ),
+        ]
+        for left, right in colliders.collisions(poses):
+            if left == 0 and right:
+                hits.add(collider_candidates[right - 1][0])
+            elif right == 0 and left:
+                hits.add(collider_candidates[left - 1][0])
     return tuple(sorted(hits))
+
+
+def _splitter_stack_geometry(
+    x: int,
+    y: int,
+    level: int,
+    *,
+    carry_direction: tuple[int, int] | None = None,
+) -> tuple[PlacedBuilding, ...]:
+    """Exact members of the stack serving one routing carry level."""
+    direction = carry_direction
+    if level % 2 and direction is None:
+        # Model 40's collider is a rotationally symmetric cross.  Static
+        # preparation has no path direction yet, so use one cardinal yaw; the
+        # materialized junction replaces it with the actual carry direction.
+        direction = (0, 1)
+    return junction.make_splitter_stack(
+        x,
+        y,
+        level,
+        first_index=0,
+        carry_direction=direction,
+    )
+
+def _power_coverage_discs(
+    buildings: Sequence[PlacedBuilding],
+    tesla_sites: Sequence[tuple[int, int]],
+) -> tuple[tuple[int, int, int], ...]:
+    """Exact doubled-coordinate power discs available during detailed routing."""
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    discs = [
+        (
+            2 * x + tower.width,
+            2 * y + tower.height,
+            math.floor((2 * tower.cover_radius) ** 2),
+        )
+        for x, y in tesla_sites
+    ]
+    for building in buildings:
+        try:
+            info = catalog.building(building.item_id)
+        except KeyError:
+            continue
+        if info.cover_radius <= 0:
+            continue
+        discs.append(
+            (
+                2 * building.x + building.width,
+                2 * building.y + building.height,
+                math.floor((2 * info.cover_radius) ** 2),
+            )
+        )
+    return tuple(discs)
+
+
+def _buildings_are_powered(
+    buildings: Sequence[PlacedBuilding],
+    discs: Sequence[tuple[int, int, int]],
+) -> bool:
+    """Whether every tile of every powered candidate lies inside one supply disc."""
+    return all(
+        any(
+            (2 * tx + 1 - cx) ** 2 + (2 * ty + 1 - cy) ** 2 <= radius2
+            for cx, cy, radius2 in discs
+        )
+        for building in buildings
+        for tx, ty, _tz in building.tiles()
+    )
 
 
 def _junction_site_is_clear(
@@ -2545,9 +3945,11 @@ def _junction_site_is_clear(
     y: int,
     level: int,
 ) -> bool:
-    """Does the exact Splitter collider clear every non-belt static object?"""
-    splitter = junction.make_splitter(x, y, Fraction(level))
-    return not _building_collider_hits(buildings, splitter)
+    """Does every real stack member clear every non-belt static object?"""
+    return all(
+        not _building_collider_hits(buildings, splitter)
+        for splitter in _splitter_stack_geometry(x, y, level)
+    )
 
 
 @lru_cache(maxsize=256)
@@ -2593,42 +3995,140 @@ def _junction_ban_offsets(
     )
 
 
+def _cancellable_junction_ban_offsets(
+    item_id: int,
+    model_index: int,
+    width: int,
+    height: int,
+    yaw: float,
+    z: Fraction,
+    cancelled: Callable[[], bool],
+) -> frozenset[Cell]:
+    """Compute one uncached complete offset set while polling its caller."""
+    obstacle = PlacedBuilding(
+        item_id=item_id,
+        model_index=model_index,
+        x=0,
+        y=0,
+        z=z,
+        width=width,
+        height=height,
+        yaw=yaw,
+    )
+    splitter_span = max(catalog.collider_span(catalog.SPLITTER_ID, 0.0))
+    try:
+        obstacle_span = max(catalog.collider_span(item_id, yaw))
+    except KeyError, ValueError:
+        obstacle_span = max(width, height) * colliders.GRID_ARC
+    radius = math.ceil(
+        (splitter_span + obstacle_span) / (2.0 * colliders.GRID_ARC)
+    ) + 2
+    centre_x = (width - 1) / 2.0
+    centre_y = (height - 1) / 2.0
+    banned: set[Cell] = set()
+    for x in range(
+        math.floor(centre_x - radius),
+        math.ceil(centre_x + radius) + 1,
+    ):
+        if cancelled():
+            raise _PreparationDeadline
+        for y in range(
+            math.floor(centre_y - radius),
+            math.ceil(centre_y + radius) + 1,
+        ):
+            if cancelled():
+                raise _PreparationDeadline
+            for level in range(LEVELS):
+                if cancelled():
+                    raise _PreparationDeadline
+                if not _junction_site_is_clear((obstacle,), x, y, level):
+                    banned.add((x, y, level))
+    if cancelled():
+        raise _PreparationDeadline
+    return frozenset(banned)
+
+
 def _prepared_junction_ban(
     buildings: Sequence[PlacedBuilding],
     power_sites: Sequence[tuple[int, int]],
+    *,
+    projection_frames: Sequence[_JunctionProjectionFrame] = (),
+    junction_bounds: tuple[int, int, int, int] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    cache: _StagedStaticCache | None = None,
 ) -> frozenset[Cell]:
-    """Precompute exact per-level Splitter refusals from immutable geometry."""
-    obstacles = [
-        building
-        for building in buildings
-        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(building.item_id)
-    ]
+    """Precompute exact flat and projected Splitter refusals."""
+    obstacles: list[PlacedBuilding] = []
+    for building in buildings:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(
+            building.item_id
+        ):
+            obstacles.append(building)
     tower = catalog.building(catalog.TESLA_TOWER_ID)
-    obstacles.extend(
-        PlacedBuilding(
-            item_id=catalog.TESLA_TOWER_ID,
-            model_index=tower.model_index,
-            x=x,
-            y=y,
-            width=tower.width,
-            height=tower.height,
-        )
-        for x, y in power_sites
-    )
-
-    banned: set[Cell] = set()
-    for obstacle in obstacles:
-        banned.update(
-            (obstacle.x + dx, obstacle.y + dy, level)
-            for dx, dy, level in _junction_ban_offsets(
-                obstacle.item_id,
-                obstacle.model_index,
-                obstacle.width,
-                obstacle.height,
-                obstacle.yaw,
-                obstacle.z,
+    for x, y in power_sites:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        obstacles.append(
+            PlacedBuilding(
+                item_id=catalog.TESLA_TOWER_ID,
+                model_index=tower.model_index,
+                x=x,
+                y=y,
+                width=tower.width,
+                height=tower.height,
             )
         )
+
+    banned: set[Cell] = set()
+    offset_cache = {} if cache is None else cache.junction_offsets
+    for obstacle in obstacles:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        offset_key = (
+            obstacle.item_id,
+            obstacle.model_index,
+            obstacle.width,
+            obstacle.height,
+            obstacle.yaw,
+            obstacle.z,
+        )
+        offsets = offset_cache.get(offset_key)
+        if offsets is None:
+            offsets = (
+                _junction_ban_offsets(*offset_key)
+                if cancelled is None
+                else _cancellable_junction_ban_offsets(*offset_key, cancelled)
+            )
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            offset_cache[offset_key] = offsets
+        for dx, dy, level in offsets:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            banned.add((obstacle.x + dx, obstacle.y + dy, level))
+
+    coaters: list[tuple[int, PlacedBuilding]] = []
+    for index, building in enumerate(buildings):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        if building.item_id == catalog.SPRAY_COATER_ID:
+            coaters.append((index, building))
+    if coaters and projection_frames:
+        if junction_bounds is None:
+            raise ValueError("projected junction bans require fixed junction bounds")
+        for frame_ban in _projected_coater_junction_bans_by_frame(
+            coaters,
+            projection_frames,
+            junction_bounds,
+            already_banned=banned,
+            splitter_index=len(buildings),
+            cancelled=cancelled,
+        ):
+            banned.update(frame_ban)
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     return frozenset(banned)
 
 
@@ -2801,15 +4301,22 @@ class _Canvas:
         return idx
 
     def junction_is_clear(self, x: int, y: int, level: int) -> bool:
-        """Apply prepared static legality plus exact dynamic Splitter legality."""
+        """Apply exact legality to every real member of a junction stack."""
         if (x, y, level) in self.junction_ban:
             return False
-        if self.junction_geometry_prepared:
-            dynamic = [
-                building for building in self.buildings if building.item_id == catalog.SPLITTER_ID
+        buildings = (
+            [
+                building
+                for building in self.buildings
+                if building.item_id == catalog.SPLITTER_ID
             ]
-            return _junction_site_is_clear(dynamic, x, y, level)
-        return _junction_site_is_clear(self.buildings, x, y, level)
+            if self.junction_geometry_prepared
+            else self.buildings
+        )
+        return all(
+            not _building_collider_hits(buildings, stack_member)
+            for stack_member in _splitter_stack_geometry(x, y, level)
+        )
 
     def free_world(self, x: int, y: int, z: Fraction) -> bool:
         """Is the real cell at this altitude clear of belts?
@@ -2832,6 +4339,26 @@ class _Canvas:
         # (a Spray Coater wants 1.8975), `guard` is a junction's own collider.
         # Either one alone would let the other's case through.
         if z in self.belt_ban.get((x, y), ()) or cell in self.guard:
+            return False
+        if self.limit is not None:
+            min_x, min_y, max_x, max_y = self.limit
+            if not (min_x <= x <= max_x and min_y <= y <= max_y):
+                return False
+        port = self.reserved.get(cell)
+        return port is None or port in self.routing_ports
+
+    def free_owned_guard(self, cell: Cell) -> bool:
+        """Is ``cell`` blocked only by a junction guard this route owns?
+
+        A selected future Splitter reserves its branch docks before sibling
+        nets route.  Those siblings may start on one exact dock; every other
+        guard remains a wall.  Keep this separate from :meth:`free` so ordinary
+        routing can never accidentally weaken junction collision protection.
+        """
+        x, y, z = cell
+        if cell not in self.guard or cell in self.blocked or (x, y) in self.keep_out:
+            return False
+        if z in self.belt_ban.get((x, y), ()):
             return False
         if self.limit is not None:
             min_x, min_y, max_x, max_y = self.limit
@@ -2916,6 +4443,7 @@ class _Port:
     #: an empty start set -- a search that expands zero nodes and so registers no
     #: congestion for any amount of negotiation to price.
     z: int = 0
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
 
     def columns(self) -> range:
         return range(self.x0, self.x1 + 1)
@@ -2938,6 +4466,7 @@ class _Port:
             self.tiles,
             self.machines,
             self.z,
+            self.cargo_domain,
         )
 
 
@@ -2951,14 +4480,16 @@ class _PreparedPort:
     tiles: tuple[int, ...]
     machines: int
     z: int = 0
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
 
 
 @dataclass(frozen=True, slots=True)
 class CoaterSupplyPort:
-    """A coater's host belt and positional elevated proliferator endpoint."""
+    """A coater's host belt and projection-safe proliferator terminal."""
 
     coater: int
     host_belt: int
+    approach_belt: int
     supply_belt: int
     item: str
     yaw: float
@@ -2972,12 +4503,154 @@ class CoaterSupplyPort:
 
 @dataclass(frozen=True, slots=True)
 class _StagedCoater:
-    """One fully checked Coater/drop pair awaiting an atomic commit."""
+    """One fully checked Coater/terminal triple awaiting an atomic commit."""
 
+    approach: PlacedBuilding
     supply: PlacedBuilding
     coater: PlacedBuilding
     projected_pair: tuple[int, colliders.Placed]
     port: CoaterSupplyPort
+
+
+def _projected_coater_supply_failure(
+    candidate: _StagedCoater,
+    host: PlacedBuilding,
+    projections: Sequence[planet.Projection],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> finalize.ProjectionFailure | None:
+    """Check a staged coater's two required belt lines before routing starts."""
+
+    areas = catalog.building(candidate.coater.item_id).addon_areas
+    belts = (
+        (candidate.port.host_belt, host),
+        (candidate.port.approach_belt, candidate.approach),
+        (candidate.port.supply_belt, candidate.supply),
+    )
+    addons = ((candidate.port.coater, candidate.coater, areas),)
+    # The permanent approach-to-drop link fixes the supply belt's projected
+    # line before routing. Evaluate the finalizer's exact predicate across every
+    # candidate frame; the route may add a predecessor to the approach, but it
+    # cannot change the approach-to-drop relation measured for the addon.
+    try:
+        context = finalize._addon_projection_context(
+            belts,
+            addons,
+            cancelled=cancelled,
+        )
+    except finalize.ProjectionCancelled:
+        raise _PreparationDeadline from None
+    for projection in projections:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        try:
+            failure = finalize._projected_addon_failure_from_context(
+                context,
+                projection,
+                cancelled=cancelled,
+            )
+        except finalize.ProjectionCancelled:
+            raise _PreparationDeadline from None
+        if failure is not None:
+            return failure
+    return None
+
+
+def _projected_coater_supply_frame_failure(
+    candidate: _StagedCoater,
+    host: PlacedBuilding,
+    frame: _JunctionProjectionFrame,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> finalize.ProjectionFailure | None:
+    """Check one coater terminal in one complete finalizer frame."""
+
+    def materialize(building: PlacedBuilding) -> PlacedBuilding:
+        return finalize.materialize_frame_building(
+            building,
+            bounds=frame.bounds,
+            candidate=frame.candidate,
+        )
+
+    framed_coater = materialize(candidate.coater)
+    framed = replace(
+        candidate,
+        approach=materialize(candidate.approach),
+        supply=materialize(candidate.supply),
+        coater=framed_coater,
+        projected_pair=(
+            candidate.port.coater,
+            _collision_pose(framed_coater),
+        ),
+    )
+    return _projected_coater_supply_failure(
+        framed,
+        materialize(host),
+        frame.projections,
+        cancelled=cancelled,
+    )
+
+def _projected_coater_supply_context_key(
+    candidate: _StagedCoater,
+    host: PlacedBuilding,
+    frame: _JunctionProjectionFrame,
+) -> tuple[object, ...]:
+    """Exact addon-supply geometry modulo rigid longitude translation."""
+
+    def materialize(building: PlacedBuilding) -> PlacedBuilding:
+        return finalize.materialize_frame_building(
+            building,
+            bounds=frame.bounds,
+            candidate=frame.candidate,
+        )
+
+    sources = (host, candidate.approach, candidate.supply, candidate.coater)
+    framed = tuple(materialize(building) for building in sources)
+    role_by_index = {
+        candidate.port.host_belt: 0,
+        candidate.port.approach_belt: 1,
+        candidate.port.supply_belt: 2,
+        candidate.port.coater: 3,
+    }
+    orientations = tuple(dict.fromkeys(projection.rotated for projection in frame.projections))
+    geometries: list[tuple[object, ...]] = []
+    for rotated in orientations:
+        coater = framed[3]
+        longitude_origin = coater.y if rotated else coater.x
+        buildings: list[tuple[object, ...]] = []
+        for source, building in zip(sources, framed, strict=True):
+            longitude, latitude = (
+                (building.y, building.x)
+                if rotated
+                else (building.x, building.y)
+            )
+            buildings.append(
+                (
+                    building.item_id,
+                    building.model_index,
+                    longitude - longitude_origin,
+                    latitude,
+                    building.z,
+                    building.yaw,
+                    role_by_index.get(source.input_obj),
+                    role_by_index.get(source.output_obj),
+                )
+            )
+        geometries.append((rotated, *buildings))
+    projection_signature = tuple(
+        (
+            projection.band.area_segments,
+            projection.anchor_row,
+            projection.segment,
+            projection.radius,
+            projection.quadrant,
+            projection.rotated,
+        )
+        for projection in frame.projections
+    )
+    return projection_signature, tuple(geometries)
+
+
 
 
 def _prepare_port(port: _Port) -> _PreparedPort:
@@ -2990,6 +4663,7 @@ def _prepare_port(port: _Port) -> _PreparedPort:
         tiles=port.tiles,
         machines=port.machines,
         z=port.z,
+        cargo_domain=port.cargo_domain,
     )
 
 
@@ -3008,6 +4682,7 @@ def _bind_prepared_port(port: _PreparedPort, buildings: list[PlacedBuilding]) ->
         tiles=port.tiles,
         machines=port.machines,
         z=port.z,
+        cargo_domain=port.cargo_domain,
     )
 
 
@@ -3037,9 +4712,8 @@ def _emit_strip(
     rates: dict[str, Fraction],
     in_rates: Mapping[str, Fraction] | None = None,
     out_rates: Mapping[str, Fraction] | None = None,
-    sprayed: Set[str] = frozenset(),
     owner_strip: int | None = None,
-) -> tuple[dict[str, _Port], dict[tuple[str, str], _Port], int]:
+) -> tuple[dict[str, _Port], dict[_CargoSink, _Port], int]:
     """Place one strip's lanes, machines and sorters.
 
     Returns the west end of each input lane and the east end of each output lane
@@ -3066,7 +4740,7 @@ def _emit_strip(
     in_rates = in_rates or {}
     out_rates = out_rates or {}
     in_ports: dict[str, _Port] = {}
-    out_ports: dict[tuple[str, str], _Port] = {}
+    out_ports: dict[_CargoSink, _Port] = {}
     width = s.width
     machine_row = s.machine_row
 
@@ -3124,11 +4798,11 @@ def _emit_strip(
         # `WEST_CHANNEL` and `_pack` offsets every strip by it, so `ox - 1` is
         # this strip's channel column and belongs to nobody else.  The drop
         # cell is unchanged, still `(ox - 1, y)` one LEVEL up.
-        if need and any(it in sprayed for it in lane):
+        if need and s.cargo_domain is CargoDomain.REQUIRES_SPRAY:
             need = min(max(need, 2), width)
             lane_starts_west.add(row)
         lane_tiles_of[row] = need
-    for k, (item, _dest) in enumerate(s.out_lanes):
+    for k, (item, _dest, _cargo_domain) in enumerate(s.out_lanes):
         lane_item_of[s.row_of_output(k)] = item
         lane_tiles_of[s.row_of_output(k)] = width
 
@@ -3202,32 +4876,52 @@ def _emit_strip(
             return got
         return rates.get(item, Fraction(1))
 
-    def feed(plan: LaneAttachmentPlan) -> int:
-        """Emit the preplanned filtered sorter for every (item, machine)."""
-        lane = plan.lane.items
-        row = machine_row + plan.lane_y
+    def feed(lane: tuple[str, ...]) -> int:
+        """Connect every machine to one input lane by its authoritative mechanism."""
+        row = s.row_of_input(lane[0])
         lane_indices = lane_idx[row]
         if not lane_indices:
             name = catalog.building(s.item_id).name
-            raise NoValidLayout(f"{name} has no legal slot pose for input lane {lane!r}")
+            raise NoValidLayout(f"{name} has no legal connection for input lane {lane!r}")
+        head = canvas.buildings[lane_indices[0]]
+        port = _Port(
+            lane_indices[0],
+            head.x,
+            oy + row,
+            head.x,
+            head.x + len(lane_indices) - 1,
+            tuple(lane_indices),
+            s.machines,
+            cargo_domain=s.cargo_domain,
+        )
+        for item in lane:
+            in_ports[item] = port
+        if s.takes_belt_ports:
+            if len(lane) != 1:
+                name = catalog.building(s.item_id).name
+                raise NoValidLayout(
+                    f"{name} cannot filter shared belt-port input lane {lane!r}"
+                )
+            _dock_input_lane(
+                canvas,
+                machines,
+                lane_indices,
+                oy + row,
+                lane[0],
+                belt_id,
+                belt_model,
+                claimed,
+            )
+            return 0
+
+        plan = s._input_attachment_plan(lane[0])
         placed = 0
         shared = len(lane) > 1
         for attachment in plan.attachments:
             item = attachment.item
-            # Read the real lane head: sprayed lanes begin west of the strip.
-            head = canvas.buildings[lane_idx[row][0]]
-            in_ports[item] = _Port(
-                lane_idx[row][0],
-                head.x,
-                oy + row,
-                head.x,
-                head.x + len(lane_idx[row]) - 1,
-                tuple(lane_idx[row]),
-                s.machines,
-            )
             placed += _link_lane(
                 canvas,
-                lane_idx[row],
+                lane_indices,
                 machines,
                 oy + row,
                 attachment,
@@ -3239,11 +4933,11 @@ def _emit_strip(
         return placed
 
     for lane in s.in_above:
-        sorters += feed(s._input_attachment_plan(lane[0]))
+        sorters += feed(lane)
 
-    for j, (item, dest) in enumerate(s.out_lanes):
+    for j, (item, dest, cargo_domain) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
-        out_ports[item, dest] = _Port(
+        out_ports[item, dest, cargo_domain] = _Port(
             lane_idx[row][-1],
             ox + width - 1,
             oy + row,
@@ -3251,9 +4945,10 @@ def _emit_strip(
             ox + width - 1,
             tuple(lane_idx[row]),
             s.machines,
+            cargo_domain=cargo_domain,
         )
         if s.takes_belt_ports:
-            sorters += _dock_lane(
+            _dock_lane(
                 canvas,
                 machines,
                 lane_idx[row],
@@ -3299,7 +4994,7 @@ def _emit_strip(
         )
 
     for lane in s.in_below:
-        sorters += feed(s._input_attachment_plan(lane[0]))
+        sorters += feed(lane)
 
     return in_ports, out_ports, sorters
 
@@ -3402,6 +5097,119 @@ def _flank_lane(
                 owner_strip=m.owner_strip,
             )
         )
+        placed += 1
+    return placed
+
+
+def _dock_input_lane(
+    canvas: _Canvas,
+    machines: list[int],
+    in_lane: list[int],
+    lane_y: int,
+    item: str,
+    belt_id: int,
+    belt_model: int,
+    claimed: dict[int, set[int]],
+) -> int:
+    """Fan one east-running lane into each machine's exact prefab input port.
+
+    A lane tile cannot both continue east and feed a branch.  Every intermediate
+    tap therefore uses :func:`_tap_source`, which materializes the game's
+    splitter representation; only the final tap may point straight at its branch.
+    The branch approaches an east-facing port from its open pitch column, so the
+    dock belt runs west exactly opposite the port's drawing direction.
+    """
+    lane_by_x = {canvas.buildings[index].x: index for index in in_lane}
+    placed = 0
+    for machine_index in machines:
+        machine = canvas.buildings[machine_index]
+        taken = claimed.setdefault(machine_index, set())
+        dock = next(
+            (
+                candidate
+                for _port, candidate in sorted(slots.port_docks(machine).items())
+                if candidate.port not in taken
+                and candidate.facing is Facing.EAST
+                and candidate.cell[0] + 1 in lane_by_x
+            ),
+            None,
+        )
+        if dock is None:
+            name = catalog.building(machine.item_id).name
+            raise NoValidLayout(
+                f"{name} cannot feed {item!r} from its east-running input lane "
+                "through a distinct exact belt port"
+            )
+
+        tap_x = dock.cell[0] + 1
+        step_y = 1 if dock.cell[1] > lane_y else -1
+        branch_cells = (
+            [(dock.cell[0], dock.cell[1])]
+            if dock.cell[1] == lane_y
+            else [
+                (tap_x, y)
+                for y in range(lane_y + step_y, dock.cell[1] + step_y, step_y)
+            ]
+            + [(dock.cell[0], dock.cell[1])]
+        )
+        branch: list[int] = []
+        for cell_index, (x, y) in enumerate(branch_cells):
+            if cell_index + 1 < len(branch_cells):
+                nx, ny = branch_cells[cell_index + 1]
+                delta = (nx - x, ny - y)
+                facing = next(candidate for candidate in Facing if candidate.delta == delta)
+            else:
+                facing = dock.facing.opposite()
+            branch.append(
+                canvas.add(
+                    PlacedBuilding(
+                        item_id=belt_id,
+                        model_index=belt_model,
+                        x=x,
+                        y=y,
+                        width=1,
+                        height=1,
+                        yaw=facing.value,
+                        carries_item=item,
+                        owner_strip=machine.owner_strip,
+                    )
+                )
+            )
+        for before, after in zip(branch, branch[1:], strict=False):
+            canvas.buildings[before] = _relink(canvas.buildings[before], output_obj=after)
+        canvas.buildings[branch[-1]] = replace(
+            canvas.buildings[branch[-1]],
+            output_obj=machine_index,
+            output_to_slot=dock.port,
+            output_from_slot=rules.BELT_PORT_FEED_FROM_SLOT,
+        )
+
+        excused = {
+            (
+                canvas.buildings[index].x,
+                canvas.buildings[index].y,
+                int(canvas.buildings[index].z),
+            )
+            for index in (*in_lane, *branch)
+            if canvas.buildings[index].z.denominator == 1
+        }
+        rejected_reason: list[str] = []
+        if not _tap_source(
+            canvas,
+            lane_by_x[tap_x],
+            branch[0],
+            belt_id,
+            belt_model,
+            excused,
+            rejected_reason=rejected_reason,
+        ):
+            name = catalog.building(machine.item_id).name
+            raise NoValidLayout(
+                f"{name} cannot split {item!r} from its shared input lane at "
+                f"({tap_x}, {lane_y}) without an illegal belt fan-out "
+                f"({', '.join(rejected_reason) or 'unrepresentable tap'})"
+            )
+        taken.add(dock.port)
         placed += 1
     return placed
 
@@ -3904,6 +5712,8 @@ class _Grid:
     size: int
     base: bytes
     occ: bytearray
+    #: Per-search passability scratch, exactly refreshed by :func:`_routing_flags`.
+    routing_flags: bytearray
     #: ``(index, port)`` for every reserved cell inside the box.
     reserved: tuple[tuple[int, tuple[int, int, int]], ...]
     #: Congestion history as a flat array, or ``None`` on a round that has none.
@@ -4147,6 +5957,7 @@ def _make_grid(
         size=size,
         base=bytes(occ),
         occ=occ,
+        routing_flags=bytearray(size),
         reserved=reserved,
         hist=None,
     )
@@ -4161,7 +5972,8 @@ def _routing_flags(
     released_reservations: Collection[int] = (),
 ) -> bytearray:
     """Return hard passability with only this search's reservations opened."""
-    flags = bytearray(grid.occ)
+    flags = grid.routing_flags
+    flags[:] = grid.occ
     released = frozenset(released_reservations)
     for at, port in grid.reserved:
         if at not in released and port not in routing_ports:
@@ -4188,6 +6000,9 @@ def _astar(
     deadline: float | None = None,
     blame: dict[tuple[int, int, int], float] | None = None,
     grid: _Grid | None = None,
+    owned_starts: Collection[Cell] = (),
+    released_starts: Collection[Cell] = (),
+    forbidden: Collection[Cell] = (),
 ) -> _PathSearchResult:
     """Cheapest free-cell path, with congestion history folded into the cost.
 
@@ -4231,15 +6046,33 @@ def _astar(
     that flattening once for a routing pass and building it 589 times.  Omitting
     it is correct and merely costs a build; :func:`_route_all` passes one and
     keeps it current.
+
+    ``owned_starts`` names exact junction-guard cells reserved for this source
+    sibling.  ``released_starts`` names exact tentative path cells a repair's
+    open grid has deliberately made passable. ``forbidden`` names exact cells
+    where this net's earlier path failed real-altitude commit. Only those
+    initial exceptions are admitted; every guard, settled path, and rejected
+    commit cell remains impassable.
     """
+    forbidden_cells = frozenset(forbidden)
     if not goals:
         return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
-    has_live_start = False
-    for start in starts:
-        if canvas.free(start):
-            has_live_start = True
-            break
-    if not has_live_start:
+    owned = frozenset(
+        start
+        for start in starts
+        if start in owned_starts and canvas.free_owned_guard(start)
+    )
+    released = frozenset(
+        start
+        for start in starts
+        if start in released_starts
+        and canvas.blocked.get(start) == _TENTATIVE
+    )
+    if not any(
+        start not in forbidden_cells
+        and (canvas.free(start) or start in owned or start in released)
+        for start in starts
+    ):
         return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
     if (budget is not None and budget["left"] <= 0) or _expired(deadline):
         return _PathSearchResult(None, RouteFailureKind.BUDGET, (), 0)
@@ -4285,6 +6118,16 @@ def _astar(
     # `routing_ports` is rebound per net. Copying is a memcpy; rebuilding it
     # from the canvas obstacle containers is not.
     flags = _routing_flags(flat, routing_ports=canvas.routing_ports)
+    for start in owned:
+        flags[flat.index(start)] = 1
+    sx0, sy0, sx1, sy1 = flat.span
+    for cell in forbidden_cells:
+        if (
+            sx0 <= cell[0] <= sx1
+            and sy0 <= cell[1] <= sy1
+            and 0 <= cell[2] < LEVELS
+        ):
+            flags[flat.index(cell)] = 0
 
     # Round one of rip-up has no history yet, and round one is the round that
     # usually succeeds. Skipping the array and the multiply there costs one
@@ -4503,7 +6346,9 @@ def _astar(
     via: dict[int, int] = {}
     via_get = via.get
     for s in starts:
-        if not canvas.free(s):
+        if s in forbidden_cells or (
+            not canvas.free(s) and s not in owned and s not in released
+        ):
             continue
         si = (s[0] - gx0) * xstep + (s[1] - gy0) * ystep + s[2]
         best[si] = 0.0
@@ -4678,8 +6523,14 @@ class _Net:
     src: _Port | None
     dst: _Port
     item: str
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
     net_id: NetId | None = None
     boundary_goals: tuple[tuple[int, int, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        ports = (self.dst,) if self.src is None else (self.src, self.dst)
+        if any(port.cargo_domain is not self.cargo_domain for port in ports):
+            raise ValueError("net ports must share one cargo domain")
 
     @property
     def source(self) -> _Port:
@@ -4688,30 +6539,38 @@ class _Net:
         return self.src
 
 
+
+
 @dataclass(frozen=True, slots=True)
 class _PreparedNet:
     net_id: NetId
     src: _PreparedPort | None
     dst: _PreparedPort
     item: str
+    cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
     boundary_goals: tuple[tuple[int, int, int], ...] = ()
     src_group: tuple[NetId, ...] = ()
     dst_group: tuple[NetId, ...] = ()
+
+    def __post_init__(self) -> None:
+        ports = (self.dst,) if self.src is None else (self.src, self.dst)
+        if any(port.cargo_domain is not self.cargo_domain for port in ports):
+            raise ValueError("prepared net ports must share one cargo domain")
 
 
 def _with_sibling_groups(
     nets: Sequence[_PreparedNet],
 ) -> tuple[_PreparedNet, ...]:
     """Freeze the detailed router's exact branch/merge groups onto each net."""
-    same_src: dict[tuple[int, int, int], list[NetId]] = defaultdict(list)
-    same_dst: dict[tuple[int, int, int], list[NetId]] = defaultdict(list)
+    same_src: dict[tuple[CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
+    same_dst: dict[tuple[CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
             continue
         if net.src is None:
             raise ValueError("non-external prepared nets require source ports")
-        same_src[net.src.y, net.src.x0, net.src.z].append(net.net_id)
-        same_dst[net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
+        same_src[net.cargo_domain, net.src.y, net.src.x0, net.src.z].append(net.net_id)
+        same_dst[net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
     grouped: list[_PreparedNet] = []
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
@@ -4724,17 +6583,36 @@ def _with_sibling_groups(
                 net,
                 src_group=tuple(
                     sibling
-                    for sibling in same_src[net.src.y, net.src.x0, net.src.z]
+                    for sibling in same_src[
+                        net.cargo_domain, net.src.y, net.src.x0, net.src.z
+                    ]
                     if sibling != net.net_id
                 ),
                 dst_group=tuple(
                     sibling
-                    for sibling in same_dst[net.dst.x, net.dst.y, net.dst.z]
+                    for sibling in same_dst[
+                        net.cargo_domain, net.dst.x, net.dst.y, net.dst.z
+                    ]
                     if sibling != net.net_id
                 ),
             )
         )
     return tuple(grouped)
+
+
+def _junction_geometry_required(
+    nets: Sequence[_PreparedNet],
+    buildings: Sequence[PlacedBuilding],
+) -> bool:
+    """Whether the detailed router can introduce a Splitter for these nets."""
+    return any(
+        net.src_group
+        or (
+            net.src is not None
+            and buildings[net.src.belt_index].output_obj is not None
+        )
+        for net in nets
+    )
 
 
 @dataclass(slots=True)
@@ -4754,6 +6632,7 @@ class _PreparedRoutingProblem:
         ...,
     ]
     keep_out: frozenset[tuple[int, int]]
+    guard: frozenset[Cell]
     nets: tuple[_PreparedNet, ...]
     core: tuple[int, int, int, int]
     route_bounds: tuple[int, int, int, int]
@@ -4762,15 +6641,18 @@ class _PreparedRoutingProblem:
     sorters: int
     coaters: int
     direct_inserts: int
+    promised_direct: frozenset[DirectInsertId] = frozenset()
+    realized_direct: frozenset[DirectInsertId] = frozenset()
     coater_supply_ports: tuple[CoaterSupplyPort, ...] = ()
     ramped: bool = False
     world_taken: frozenset[tuple[int, int, Fraction]] = frozenset()
     belt_ban: tuple[tuple[tuple[int, int], frozenset[int]], ...] = ()
     junction_ban: frozenset[Cell] = frozenset()
+    junction_frame_bans: tuple[frozenset[Cell], ...] = ()
     preparation_failures: tuple[NetFailure, ...] = ()
 
     def new_workspace(self) -> _RoutingWorkspace:
-        buildings = deepcopy(list(self.building_templates))
+        buildings = list(self.building_templates)
         canvas = _Canvas(
             ramped=self.ramped,
             buildings=buildings,
@@ -4782,6 +6664,7 @@ class _PreparedRoutingProblem:
             limit=self.limit,
             keep_out=set(self.keep_out),
             belt_ban={cell: set(levels) for cell, levels in self.belt_ban},
+            guard=set(self.guard),
             junction_ban=set(self.junction_ban),
             junction_geometry_prepared=True,
         )
@@ -4794,9 +6677,37 @@ def _bind_prepared_net(net: _PreparedNet, buildings: list[PlacedBuilding]) -> _N
         src=(_bind_prepared_port(net.src, buildings) if net.src is not None else None),
         dst=_bind_prepared_port(net.dst, buildings),
         item=net.item,
+        cargo_domain=net.cargo_domain,
         net_id=net.net_id,
         boundary_goals=net.boundary_goals,
     )
+
+
+def _cardinal_direction(
+    origin: PlacedBuilding,
+    outward: PlacedBuilding,
+) -> tuple[int, int] | None:
+    direction = (outward.x - origin.x, outward.y - origin.y)
+    return direction if abs(direction[0]) + abs(direction[1]) == 1 else None
+
+
+def _straight_path_direction(
+    path: Sequence[Cell],
+    at: int,
+) -> tuple[int, int] | None:
+    """Flow direction through one straight, cardinal interior path cell."""
+    if not 0 < at < len(path) - 1:
+        return None
+    x, y, _level = path[at]
+    before = (path[at - 1][0] - x, path[at - 1][1] - y)
+    after = (path[at + 1][0] - x, path[at + 1][1] - y)
+    if (
+        abs(before[0]) + abs(before[1]) != 1
+        or abs(after[0]) + abs(after[1]) != 1
+        or before != (-after[0], -after[1])
+    ):
+        return None
+    return after
 
 
 def _merge_frontier(
@@ -4806,6 +6717,9 @@ def _merge_frontier(
     junctionable: Callable[[int, int, int], bool] | None = None,
     *,
     provenance: dict[Cell, Cell] | None = None,
+    belt_prefab: tuple[int, int] | None = None,
+    tentative_ok: bool = False,
+    owned_guard: Mapping[Cell, Cell] | None = None,
 ) -> set[Cell]:
     """Free cells beside a sibling net's path -- somewhere to merge into.
 
@@ -4841,6 +6755,18 @@ def _merge_frontier(
     point that can be built -- and withdrawing it costs the router one of the
     several cells a frontier offers, where refusing at commit time costs the
     whole pack.
+
+    ``belt_prefab`` makes that source-side proof include physical Splitter port
+    identity.  A ramp and a branch may occupy different routing levels in the
+    same compass direction, but they still name one port.  Such a neighbour is
+    withheld here so A* can choose another side instead of discovering the
+    duplicate only after every path has been committed.
+
+    ``owned_guard`` maps an exact reserved branch dock to the sibling tap that
+    owns it.  A selected future Splitter guards that dock from unrelated nets,
+    but its own source siblings must be able to begin there.  Requiring both
+    dock and tap identity prevents the exception from opening any other cell in
+    the Splitter's keep-out.
     """
     out: set[Cell] = set()
     for sibling in siblings:
@@ -4849,18 +6775,113 @@ def _merge_frontier(
         if altitudes is None:
             continue
         for at, ((x, y, lvl), altitude) in enumerate(zip(path, altitudes, strict=True)):
-            # A source-side Splitter rests on a routing level.  A destination
-            # merge builds no junction and keeps the ramp alternatives it had.
+            # A source-side junction requires an integer carry plane.  Model 40
+            # serves odd planes from one level lower and exposes only its
+            # orthogonal lower ports to the new branch.
             if junctionable is not None and altitude.denominator != 1:
                 continue
             actual_level = int(altitude) if altitude.denominator == 1 else lvl
             if junctionable is not None and not junctionable(x, y, actual_level):
                 continue
-            free = [cell for dx, dy in _STEPS if canvas.free(cell := (x + dx, y + dy, lvl))]
+            carry_direction = (
+                _straight_path_direction(path, at)
+                if junctionable is not None and actual_level % 2
+                else None
+            )
+            if junctionable is not None and actual_level % 2 and carry_direction is None:
+                continue
+            branch_level = actual_level - 1 if carry_direction is not None else lvl
+            free = [
+                cell
+                for dx, dy in _STEPS
+                if (
+                    carry_direction is None
+                    or dx * carry_direction[0] + dy * carry_direction[1] == 0
+                )
+                and (
+                    canvas.free(cell := (x + dx, y + dy, branch_level))
+                    or (
+                        owned_guard is not None
+                        and owned_guard.get(cell) == (x, y, lvl)
+                        and canvas.free_owned_guard(cell)
+                    )
+                    or (
+                        tentative_ok
+                        and canvas.blocked.get(cell) == _TENTATIVE
+                    )
+                )
+            ]
             if not free:
                 continue
-            if junctionable is not None and not _junction_belt_clear(
-                canvas, (x, y, actual_level), path, at
+            if junctionable is not None and belt_prefab is not None:
+                belt_item, belt_model = belt_prefab
+                attachment = PlacedBuilding(
+                    item_id=belt_item,
+                    model_index=belt_model,
+                    x=x,
+                    y=y,
+                    z=altitude,
+                    width=1,
+                    height=1,
+                )
+                splitter = _splitter_stack_geometry(
+                    x,
+                    y,
+                    actual_level,
+                    carry_direction=carry_direction,
+                )[-1]
+                used_ports: set[int] = set()
+                path_ports_valid = True
+                for neighbour_index in (at - 1, at + 1):
+                    if not 0 <= neighbour_index < len(path):
+                        continue
+                    neighbour_x, neighbour_y, _neighbour_level = path[
+                        neighbour_index
+                    ]
+                    port = splitter_ports.expected_path_port(
+                        splitter,
+                        attachment,
+                        replace(
+                            attachment,
+                            x=neighbour_x,
+                            y=neighbour_y,
+                        ),
+                    )
+                    if port is None or port in used_ports:
+                        path_ports_valid = False
+                        break
+                    used_ports.add(port)
+                if not path_ports_valid:
+                    continue
+                available: list[Cell] = []
+                for cell in free:
+                    branch_attachment = replace(
+                        attachment,
+                        z=Fraction(cell[2]),
+                    )
+                    port = splitter_ports.expected_path_port(
+                        splitter,
+                        branch_attachment,
+                        replace(
+                            branch_attachment,
+                            x=cell[0],
+                            y=cell[1],
+                        ),
+                    )
+                    if port is not None and port not in used_ports:
+                        available.append(cell)
+                free = available
+            if not free:
+                continue
+            if (
+                junctionable is not None
+                and not _junction_belt_clear(
+                    canvas,
+                    (x, y, actual_level),
+                    path,
+                    at,
+                    tentative_ok=tentative_ok,
+                )
             ):
                 continue
             out.update(free)
@@ -4876,6 +6897,8 @@ def _junction_belt_clear(
     tap: tuple[int, int, int],
     path: Sequence[tuple[int, int, int]],
     at: int,
+    *,
+    tentative_ok: bool = False,
 ) -> bool:
     """Is a junction on ``tap`` clear of belts the game would not excuse?
 
@@ -4891,17 +6914,37 @@ def _junction_belt_clear(
     foreign, and everything else -- machines, sorters, empty ground -- is not
     this rule's business.  ``junction.site_is_clear`` asks the machine half.
     """
+    path_cells = set(path)
     excused = set(path[max(0, at - 2) : at + 3])
-    for cell in junction.keepout_cells(*tap):
-        if cell in excused:
-            continue
-        who = canvas.blocked.get(cell)
-        if who is None:
-            continue
-        if who == _TENTATIVE:
-            return False
-        if 0 <= who < len(canvas.buildings) and catalog.is_belt(canvas.buildings[who].item_id):
-            return False
+    try:
+        stack = _splitter_stack_geometry(tap[0], tap[1], tap[2])
+    except ValueError:
+        return False
+    for offset, stack_member in enumerate(stack):
+        top = offset == len(stack) - 1
+        for cell in junction.keepout_cells(
+            tap[0],
+            tap[1],
+            int(stack_member.z),
+            model_index=stack_member.model_index,
+            yaw=stack_member.yaw,
+        ):
+            if cell in path_cells:
+                if top and cell in excused:
+                    continue
+                return False
+            who = canvas.blocked.get(cell)
+            if who is None:
+                continue
+            if who == _TENTATIVE:
+                if tentative_ok:
+                    continue
+                return False
+            if (
+                0 <= who < len(canvas.buildings)
+                and catalog.is_belt(canvas.buildings[who].item_id)
+            ):
+                return False
     return True
 
 
@@ -4917,6 +6960,27 @@ class _CommitFailure:
     reason: str = ""
 
 
+
+def _junction_guard_victims(
+    owner: Mapping[Cell, int],
+    guarded: Collection[Cell],
+    *,
+    excused: Collection[Cell],
+) -> set[int]:
+    """Return routed paths displaced by a prospective Splitter guard.
+
+    A source sibling is not inherently safe inside the Splitter stack. Only the
+    exact connected run cells explicitly excused for the top stack member may
+    remain. A sibling crossing a lower member's keep-out must move like any
+    other routed path or commit will reject that belt after routing succeeded.
+    """
+    return {
+        blocker
+        for cell in guarded
+        if cell not in excused and (blocker := owner.get(cell)) is not None
+    }
+
+
 def _route_all(
     canvas: _Canvas,
     nets: list[_Net],
@@ -4925,6 +6989,8 @@ def _route_all(
     bounds: tuple[int, int, int, int],
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
+    planned_power_sites: Sequence[tuple[int, int]] | None = None,
+    junction_frame_bans: Sequence[frozenset[Cell]] = (),
 ) -> DetailedRouteResult:
     """Route every net, negotiating congestion across iterations.
 
@@ -4941,13 +7007,18 @@ def _route_all(
     sweeps, which is how ``quantum-chip`` measured at 80 seconds against a
     nominal 4.
 
-    So ``deadline`` is checked between rounds AND between nets, and running out
-    of it abandons the pass with every net counted failed.  That is deliberately
-    the harshest reading: an expired routing pass must not be able to hand back
-    a partially wired canvas that some later stage mistakes for a result.  The
-    caller discards any pack with a failure, so the deadline can cost a
-    placement and can never degrade one.
+    So ``deadline`` is checked between rounds AND between nets. Expiry never
+    commits the live paths, but the result retains the best exact evidence
+    already established: routed identities and geometric failures remain
+    available to the caller's placement-repair stage, while untouched nets are
+    reported as budget-unknown. The caller discards every budget result, so the
+    evidence can guide another placement and can never emit a partial routing.
     """
+    power_discs = (
+        None
+        if planned_power_sites is None
+        else _power_coverage_discs(canvas.buildings, planned_power_sites)
+    )
     history: dict[tuple[int, int, int], float] = defaultdict(float)
     #: The live routing -- net index to path -- and the same cells the other way
     #: round.  ``owner`` is what makes a TARGETED rip-up possible: a repair
@@ -4992,7 +7063,9 @@ def _route_all(
     best_paths: dict[int, tuple[Cell, ...]] = {}
     best_failures: dict[int, NetFailure] = {}
     best_source_hints: dict[int, Cell] = {}
+    best_path_taps: dict[int, Cell] = {}
     best_sink_hints: dict[int, Cell] = {}
+    round_expansions: dict[int, int] = {}
 
     def _net_id(index: int) -> NetId:
         net_id = nets[index].net_id
@@ -5000,33 +7073,101 @@ def _route_all(
             raise ValueError("detailed routing requires stable net IDs")
         return net_id
 
-    def _blocking_nets(wall: Sequence[Cell]) -> tuple[NetId, ...]:
+    def _endpoint_cells(net: _Net) -> tuple[Cell | None, Cell]:
+        source = None if net.src is None else (net.src.x, net.src.y, net.src.z)
+        return source, (net.dst.x, net.dst.y, net.dst.z)
+
+    net_by_id = {_net_id(index): net for index, net in enumerate(nets)}
+
+    def _blocking_endpoint_cells(
+        blocking_nets: tuple[NetId, ...],
+    ) -> tuple[tuple[Cell | None, Cell | None], ...]:
+        return tuple(
+            _endpoint_cells(net_by_id[blocker])
+            if blocker in net_by_id
+            else (None, None)
+            for blocker in blocking_nets
+        )
+
+    def _blocking_nets(
+        wall: Sequence[Cell],
+        source_blockers: Sequence[NetId] = (),
+    ) -> tuple[NetId, ...]:
         # Sort transient integer indices, which have a total order. NetId's
         # optional strip fields deliberately do not compare across None/int.
         blocker_indices = sorted(
             {blocker for cell in wall if (blocker := owner.get(cell)) is not None}
         )
-        return tuple(_net_id(blocker) for blocker in blocker_indices)
+        return tuple(
+            dict.fromkeys(
+                (*(_net_id(blocker) for blocker in blocker_indices), *source_blockers)
+            )
+        )
 
     def _failure(
         index: int,
         search: _PathSearchResult,
         blocking_nets: tuple[NetId, ...],
     ) -> NetFailure:
+        source, destination = _endpoint_cells(nets[index])
         return NetFailure(
             net_id=_net_id(index),
             kind=search.kind or RouteFailureKind.DYNAMIC_ACCESS,
             wall=search.wall,
             blocking_nets=blocking_nets,
             expansions=search.expansions,
+            source=source,
+            destination=destination,
+            blocking_endpoints=_blocking_endpoint_cells(blocking_nets),
         )
 
-    def _budget_result() -> DetailedRouteResult:
+    def _budget_result(
+        current_paths: Mapping[int, tuple[Cell, ...]] | None = None,
+        current_failures: Mapping[int, NetFailure] | None = None,
+    ) -> DetailedRouteResult:
+        # Deadline expiry invalidates future work, not facts already proved.
+        # Retain the most complete incumbent without committing its paths to the
+        # canvas. This is routing evidence for placement repair; the BUDGET
+        # status remains the hard emission gate.
+        candidates = [
+            (best_paths, best_failures),
+            (
+                {} if current_paths is None else current_paths,
+                {} if current_failures is None else current_failures,
+            ),
+        ]
+        selected_paths, selected_failures = max(
+            candidates,
+            key=lambda candidate: (
+                len(set(candidate[0]) | set(candidate[1])),
+                len(candidate[0]),
+                len(candidate[1]),
+            ),
+        )
+        failures = dict(selected_failures)
+        for index in range(len(nets)):
+            if index in selected_paths or index in failures:
+                continue
+            previous = best_failures.get(index)
+            failures[index] = NetFailure(
+                _net_id(index),
+                RouteFailureKind.BUDGET,
+                (),
+                (),
+                round_expansions.get(
+                    index,
+                    previous.expansions if previous is not None else 0,
+                ),
+            )
         return DetailedRouteResult(
             status=DetailedRouteStatus.BUDGET,
-            routed=(),
+            routed=tuple(
+                _net_id(index)
+                for index in range(len(nets))
+                if index in selected_paths and index not in failures
+            ),
             failures=tuple(
-                NetFailure(_net_id(i), RouteFailureKind.BUDGET, (), (), 0) for i in range(len(nets))
+                failures[index] for index in range(len(nets)) if index in failures
             ),
             iterations=iterations,
             expansions=expansions,
@@ -5037,9 +7178,22 @@ def _route_all(
         selected_failures: dict[int, NetFailure],
         selected_source_hints: Mapping[int, Cell],
         selected_sink_hints: Mapping[int, Cell],
+        selected_taps: Mapping[int, Cell],
         *,
         budget_exhausted: bool,
     ) -> DetailedRouteResult:
+        # `selected_paths` may be an incumbent from an earlier RRR round, while
+        # `canvas.guard` describes only the last round. Conditional junction
+        # guards are search state, not physical buildings; committing an older
+        # topology against newer guards creates false lattice collisions.
+        # Permanent pre-existing Splitter guards remain authoritative.
+        canvas.guard.intersection_update(permanent_guard)
+        if junction_frame_bans:
+            selected_tap_cells = frozenset(selected_taps.values())
+            assert any(
+                all(tap not in frame_ban for tap in selected_tap_cells)
+                for frame_ban in junction_frame_bans
+            ), "the selected routing incumbent has no shared projection frame"
         details: dict[int, _CommitFailure] = {}
         unlinked = _commit_paths(
             canvas,
@@ -5067,15 +7221,20 @@ def _route_all(
                     )
         for index in unlinked:
             detail = details.get(index)
+            source, destination = _endpoint_cells(nets[index])
+            blockers = tuple(
+                _net_id(blocker)
+                for blocker in (detail.blocking_indices if detail is not None else ())
+            )
             failures[index] = NetFailure(
                 _net_id(index),
                 RouteFailureKind.COMMIT_LINK,
                 ((detail.cell, *detail.blocking_cells) if detail is not None else ()),
-                tuple(
-                    _net_id(blocker)
-                    for blocker in (detail.blocking_indices if detail is not None else ())
-                ),
+                blockers,
                 0,
+                source=source,
+                destination=destination,
+                blocking_endpoints=_blocking_endpoint_cells(blockers),
             )
         routed = tuple(
             _net_id(index)
@@ -5169,16 +7328,27 @@ def _route_all(
 
     #: Exact legality is keyed by all three routing coordinates.  The prepared
     #: cache includes machines and reserved towers; the canvas adds any dynamic
-    #: Splitters already committed in this attempt.
+    #: Splitters already committed in this attempt. A dynamic stack is also
+    #: admissible only when the power plan covers every physical member: model
+    #: 40 can place a member one tile beyond the logical routing cell.
     junction_ok: dict[Cell, bool] = {}
 
     def _can_junction(x: int, y: int, level: int) -> bool:
         cell = (x, y, level)
         got = junction_ok.get(cell)
         if got is None:
-            got = canvas.junction_is_clear(x, y, level)
+            stack = _splitter_stack_geometry(x, y, level)
+            got = canvas.junction_is_clear(x, y, level) and (
+                power_discs is None or _buildings_are_powered(stack, power_discs)
+            )
             junction_ok[cell] = got
         if not got:
+            return False
+        if junction_frame_bans and not any(
+            cell not in frame_ban
+            and all(tap not in frame_ban for tap in planned_taps)
+            for frame_ban in junction_frame_bans
+        ):
             return False
         planned_here = planned_taps.get(cell, ())
         if len(planned_here) >= 2:
@@ -5189,58 +7359,85 @@ def _route_all(
         if cell in canvas.guard and not planned_here:
             return False
         nearby = [
-            junction.make_splitter(tx, ty, Fraction(tz))
+            stack_member
             for tx, ty, tz in planned_taps
             if (tx, ty, tz) != cell
             and abs(tx - x) <= 3
             and abs(ty - y) <= 3
             and abs(tz - level) <= 3
+            for stack_member in _splitter_stack_geometry(tx, ty, tz)
         ]
-        return not _building_collider_hits(
-            nearby,
-            junction.make_splitter(x, y, Fraction(level)),
+        return all(
+            not _building_collider_hits(nearby, stack_member)
+            for stack_member in _splitter_stack_geometry(x, y, level)
         )
 
-    def _direct_tap_clear(net: _Net) -> bool:
+    building_predecessors: dict[int, list[int]] = defaultdict(list)
+    for building_index, building in enumerate(canvas.buildings):
+        if (
+            catalog.is_belt(building.item_id)
+            and building.output_obj is not None
+        ):
+            building_predecessors[building.output_obj].append(building_index)
+    def _direct_tap_clear(net: _Net, *, tentative_ok: bool = False) -> bool:
         tap = (net.source.x, net.source.y, net.source.z)
-        excused = {
-            cell
-            for belt_index in net.source.tiles
-            if (
-                cell := _lattice_cell(
-                    canvas.buildings[belt_index].x,
-                    canvas.buildings[belt_index].y,
-                    canvas.buildings[belt_index].z,
-                )
-            )
-            is not None
-        }
-        for cell in junction.keepout_cells(*tap):
-            if cell in excused:
-                continue
-            who = canvas.blocked.get(cell)
-            if who == _TENTATIVE:
-                return False
-            if (
-                who is not None
-                and 0 <= who < len(canvas.buildings)
-                and catalog.is_belt(canvas.buildings[who].item_id)
+        # Splitter legality excuses the actual connected run around the tap,
+        # not only the source port's declared horizontal lane. A prebuilt
+        # proliferator trunk is vertical, and treating its predecessor and
+        # successor as foreign belts makes every root falsely unavailable.
+        excused = _run_cells(canvas, building_predecessors, net.source.belt)
+        try:
+            stack = _splitter_stack_geometry(tap[0], tap[1], tap[2])
+        except ValueError:
+            return False
+        for offset, stack_member in enumerate(stack):
+            top = offset == len(stack) - 1
+            for cell in junction.keepout_cells(
+                tap[0],
+                tap[1],
+                int(stack_member.z),
+                model_index=stack_member.model_index,
+                yaw=stack_member.yaw,
             ):
-                return False
+                if top and cell in excused:
+                    continue
+                who = canvas.blocked.get(cell)
+                if who == _TENTATIVE:
+                    if tentative_ok:
+                        continue
+                    return False
+                if (
+                    who is not None
+                    and 0 <= who < len(canvas.buildings)
+                    and catalog.is_belt(canvas.buildings[who].item_id)
+                ):
+                    return False
         return True
+
 
     offered_source: dict[int, dict[Cell, Cell]] = {}
     offered_sink: dict[int, dict[Cell, Cell]] = {}
     offered_guard_tap: dict[int, dict[Cell, Cell]] = {}
+    owned_source_starts: dict[int, frozenset[Cell]] = {}
     source_hint: dict[int, Cell] = {}
     sink_hint: dict[int, Cell] = {}
     rejected_starts: dict[int, set[Cell]] = defaultdict(set)
     rejected_goals: dict[int, set[Cell]] = defaultdict(set)
+    rejected_path_cells: dict[int, set[Cell]] = defaultdict(set)
     rejected_source_hints: dict[int, set[Cell]] = defaultdict(set)
     rejected_sink_hints: dict[int, set[Cell]] = defaultdict(set)
     guard_claims: dict[Cell, set[int]] = defaultdict(set)
     path_guards: dict[int, set[Cell]] = {}
     planned_taps: dict[Cell, set[int]] = defaultdict(set)
+    source_access_walls: dict[int, tuple[Cell, ...]] = {}
+    destination_access_walls: dict[int, tuple[Cell, ...]] = {}
+    source_access_blockers: dict[int, tuple[NetId, ...]] = {}
+    # Splitters emitted before detailed routing already own permanent keep-out
+    # cells.  A speculative tap may overlap one of those cells; withdrawing the
+    # tap must remove only its conditional claim, never the older Splitter's
+    # guard.  Otherwise a later net can route a foreign belt through the cleared
+    # cell and exact certification refuses the finished placement.
+    permanent_guard = frozenset(canvas.guard)
     path_tap: dict[int, Cell] = {}
 
     def _inside_grid(cell: Cell) -> bool:
@@ -5259,14 +7456,23 @@ def _route_all(
             if tap in sibling_path:
                 excused.update(sibling_path)
         claimed: set[Cell] = set()
-        for cell in junction.keepout_cells(*tap):
-            if cell in excused or not _inside_grid(cell):
-                continue
-            guard_claims[cell].add(index)
-            canvas.guard.add(cell)
-            if cell not in owner:
-                grid.block(cell)
-            claimed.add(cell)
+        stack = _splitter_stack_geometry(tap[0], tap[1], tap[2])
+        for offset, stack_member in enumerate(stack):
+            top = offset == len(stack) - 1
+            for cell in junction.keepout_cells(
+                tap[0],
+                tap[1],
+                int(stack_member.z),
+                model_index=stack_member.model_index,
+                yaw=stack_member.yaw,
+            ):
+                if (top and cell in excused) or not _inside_grid(cell):
+                    continue
+                guard_claims[cell].add(index)
+                canvas.guard.add(cell)
+                if cell not in owner:
+                    grid.block(cell)
+                claimed.add(cell)
         if claimed:
             path_guards[index] = claimed
 
@@ -5311,7 +7517,8 @@ def _route_all(
             if claims:
                 continue
             del guard_claims[cell]
-            canvas.guard.discard(cell)
+            if cell not in permanent_guard:
+                canvas.guard.discard(cell)
             if cell not in owner and canvas.free(cell):
                 grid.restore(cell)
         source_hint.pop(index, None)
@@ -5323,7 +7530,11 @@ def _route_all(
             if owner.get(cell) == index:
                 del owner[cell]
 
-    def _ends(index: int) -> tuple[list[tuple[int, int, int]], set[tuple[int, int, int]]]:
+    def _ends(
+        index: int,
+        *,
+        tentative_ok: bool = False,
+    ) -> tuple[list[tuple[int, int, int]], set[tuple[int, int, int]]]:
         """This net's start and goal cells, and its port claim as a side effect.
 
         Factored out because the repair pass has to ask the SAME question the
@@ -5352,21 +7563,156 @@ def _route_all(
         # time, which is the difference between the router picking its second
         # choice and the whole pack being discarded.
         siblings = src_group.get(index, ())
+        sibling_set = set(siblings)
+        owned_guard: dict[Cell, Cell] = {}
+        ambiguous_guard: set[Cell] = set()
+        for sibling in siblings:
+            tap = path_tap.get(sibling)
+            if tap is None:
+                continue
+            for cell in path_guards.get(sibling, ()):
+                claims = guard_claims.get(cell, set())
+                if (
+                    not claims
+                    or not claims <= sibling_set
+                    or cell in permanent_guard
+                ):
+                    continue
+                previous = owned_guard.get(cell)
+                if previous is None or previous == tap:
+                    owned_guard[cell] = tap
+                else:
+                    ambiguous_guard.add(cell)
+        for cell in ambiguous_guard:
+            owned_guard.pop(cell, None)
         needs_junction = any(s in paths for s in siblings) or (
             canvas.buildings[source.belt].output_obj is not None
         )
         source_provenance: dict[Cell, Cell] = {}
-        starts = (
-            []
-            if needs_junction
-            and not (_can_junction(source.x, source.y, source.z) and _direct_tap_clear(net))
-            else [
-                cell
-                for dx, dy in _STEPS
-                if canvas.free(cell := (source.x + dx, source.y + dy, source.z))
-                and cell not in rejected_starts[index]
-            ]
-        )
+        starts: list[Cell] = []
+        direct_ports: set[int] = set()
+        direct_ports_valid = True
+        source_belt = canvas.buildings[source.belt]
+        incoming = building_predecessors[source.belt]
+        mixed_height = needs_junction and bool(source.z % 2)
+        carry_direction: tuple[int, int] | None = None
+        if mixed_height:
+            if len(incoming) != 1 or source_belt.output_obj is None:
+                direct_ports_valid = False
+            else:
+                feed_direction = _cardinal_direction(
+                    source_belt,
+                    canvas.buildings[incoming[0]],
+                )
+                carry_direction = _cardinal_direction(
+                    source_belt,
+                    canvas.buildings[source_belt.output_obj],
+                )
+                if (
+                    feed_direction is None
+                    or carry_direction is None
+                    or feed_direction
+                    != (-carry_direction[0], -carry_direction[1])
+                ):
+                    direct_ports_valid = False
+                    carry_direction = None
+        prospective_splitter = _splitter_stack_geometry(
+            source_belt.x,
+            source_belt.y,
+            source.z,
+            carry_direction=carry_direction,
+        )[-1]
+        if needs_junction:
+            if len(incoming) != 1:
+                direct_ports_valid = False
+            else:
+                feed_port = splitter_ports.expected_path_port(
+                    prospective_splitter,
+                    source_belt,
+                    canvas.buildings[incoming[0]],
+                )
+                if feed_port is None:
+                    direct_ports_valid = False
+                else:
+                    direct_ports.add(feed_port)
+            if source_belt.output_obj is not None:
+                carry_port = splitter_ports.expected_path_port(
+                    prospective_splitter,
+                    source_belt,
+                    canvas.buildings[source_belt.output_obj],
+                )
+                if carry_port is None or carry_port in direct_ports:
+                    direct_ports_valid = False
+                else:
+                    direct_ports.add(carry_port)
+            for sibling in siblings:
+                sibling_path = paths.get(sibling)
+                if not sibling_path:
+                    continue
+                first = sibling_path[0]
+                if abs(first[0] - source.x) + abs(first[1] - source.y) != 1:
+                    continue
+                branch_attachment = replace(
+                    source_belt,
+                    z=Fraction(first[2]),
+                )
+                port = splitter_ports.expected_path_port(
+                    prospective_splitter,
+                    branch_attachment,
+                    replace(branch_attachment, x=first[0], y=first[1]),
+                )
+                if port is None or port in direct_ports:
+                    direct_ports_valid = False
+                    break
+                direct_ports.add(port)
+        occupied_source_access: list[Cell] = []
+        if not (
+            needs_junction
+            and (
+                not direct_ports_valid
+                or not (
+                    _can_junction(source.x, source.y, source.z)
+                    and _direct_tap_clear(net, tentative_ok=tentative_ok)
+                )
+            )
+        ):
+            branch_level = source.z - 1 if mixed_height else source.z
+            for dx, dy in _STEPS:
+                if (
+                    mixed_height
+                    and carry_direction is not None
+                    and dx * carry_direction[0] + dy * carry_direction[1] != 0
+                ):
+                    continue
+                cell = (source.x + dx, source.y + dy, branch_level)
+                if cell in rejected_starts[index]:
+                    continue
+                if needs_junction:
+                    branch_attachment = replace(
+                        source_belt,
+                        z=Fraction(branch_level),
+                    )
+                    port = splitter_ports.expected_path_port(
+                        prospective_splitter,
+                        branch_attachment,
+                        replace(branch_attachment, x=cell[0], y=cell[1]),
+                    )
+                    if port is None or port in direct_ports:
+                        continue
+                if (
+                    canvas.free(cell)
+                    or (
+                        cell in owned_guard
+                        and canvas.free_owned_guard(cell)
+                    )
+                    or (
+                        tentative_ok
+                        and canvas.blocked.get(cell) == _TENTATIVE
+                    )
+                ):
+                    starts.append(cell)
+                elif cell in owner:
+                    occupied_source_access.append(cell)
         guard_provenance = dict(source_provenance)
         if needs_junction:
             direct_tap = (source.x, source.y, source.z)
@@ -5378,6 +7724,9 @@ def _route_all(
             siblings,
             _can_junction,
             provenance=source_provenance,
+            belt_prefab=(belt_id, belt_model),
+            tentative_ok=tentative_ok,
+            owned_guard=owned_guard,
         )
         guard_provenance.update(source_provenance)
         starts.extend(
@@ -5388,15 +7737,31 @@ def _route_all(
                 and source_provenance.get(cell) not in rejected_source_hints[index]
             )
         )
+        source_access_walls[index] = (
+            tuple(occupied_source_access) if not starts else ()
+        )
+        # A shared source can become unusable without an occupied access cell:
+        # an earlier sibling may consume the only legal branch topology. That
+        # sibling is concrete blocking ownership even though the failed A*
+        # search has an empty wall.
+        source_access_blockers[index] = (
+            tuple(_net_id(sibling) for sibling in siblings if sibling in paths)
+            if not starts
+            else ()
+        )
         offered_source[index] = source_provenance
         offered_guard_tap[index] = guard_provenance
+        owned_source_starts[index] = frozenset(set(starts) & owned_guard.keys())
 
+        destination_access = tuple(
+            (net.dst.x + dx, net.dst.y + dy, net.dst.z)
+            for dx, dy in _STEPS
+        )
         sink_provenance: dict[Cell, Cell] = {}
         goals = {
             cell
-            for dx, dy in _STEPS
-            if canvas.free(cell := (net.dst.x + dx, net.dst.y + dy, net.dst.z))
-            and cell not in rejected_goals[index]
+            for cell in destination_access
+            if canvas.free(cell) and cell not in rejected_goals[index]
         }
         frontier = _merge_frontier(
             canvas,
@@ -5409,6 +7774,16 @@ def _route_all(
             for cell in frontier
             if cell not in rejected_goals[index]
             and sink_provenance.get(cell) not in rejected_sink_hints[index]
+        )
+        # A zero-expansion access miss can still be congestion: earlier paths
+        # may occupy every direct dock, leaving A* no start or goal and therefore
+        # no explored wall to attribute. Retain those exact owners so repair can
+        # rip up the paths that closed either endpoint instead of repeating the
+        # same order with an anonymous dynamic-access failure.
+        destination_access_walls[index] = (
+            tuple(cell for cell in destination_access if cell in owner)
+            if not goals
+            else ()
         )
         offered_sink[index] = sink_provenance
         return starts, goals
@@ -5450,7 +7825,12 @@ def _route_all(
         # A grid whose belts are passable but dear.  `base` is the occupancy
         # before any path settled, so restoring it opens exactly the cells this
         # pass has taken -- machines, keep-outs and the routing box stay shut.
-        open_grid = replace(grid, occ=bytearray(grid.base), hist=None)
+        open_grid = replace(
+            grid,
+            occ=bytearray(grid.base),
+            routing_flags=bytearray(grid.size),
+            hist=None,
+        )
         for guarded in guard_claims:
             if _inside_grid(guarded):
                 open_grid.block(guarded)
@@ -5569,12 +7949,19 @@ def _route_all(
             return False
 
         nonlocal expansions
+
         still: list[int] = []
         for index in stranded:
             if _expired(deadline) or budget["left"] <= 0:
                 still.append(index)
                 continue
-            starts, goals = _ends(index)
+            starts, goals = _ends(index, tentative_ok=True)
+            # The repair grid deliberately makes settled paths passable. Let it
+            # leave from or reach an endpoint dock those paths currently occupy
+            # as well; the transaction below will move every owning victim
+            # before this path is staked.
+            starts.extend(source_access_walls.get(index, ()))
+            goals.update(destination_access_walls.get(index, ()))
             through = _astar(
                 canvas,
                 starts,
@@ -5586,9 +7973,15 @@ def _route_all(
                 deadline,
                 None,
                 open_grid,
+                owned_starts=owned_source_starts.get(index, ()),
+                released_starts=source_access_walls.get(index, ()),
+                forbidden=rejected_path_cells.get(index, ()),
             )
             canvas.routing_ports = frozenset()
             expansions += through.expansions
+            round_expansions[index] = (
+                round_expansions.get(index, 0) + through.expansions
+            )
             if through.path is None:
                 if through.kind is RouteFailureKind.BUDGET:
                     # A per-search cap is unknown even while the shared pass
@@ -5602,7 +7995,48 @@ def _route_all(
                 still.append(index)
                 continue
             through_path = through.path
-            victims = _leaning({owner[cell] for cell in through_path if cell in owner})
+            junction_victims: set[int] = set()
+            selected_tap = offered_guard_tap.get(index, {}).get(through_path[0])
+            if selected_tap is not None:
+                tapped_sibling = next(
+                    (
+                        sibling
+                        for sibling in src_group.get(index, ())
+                        if selected_tap in paths.get(sibling, ())
+                    ),
+                    None,
+                )
+                excused: set[Cell] = set()
+                if tapped_sibling is not None:
+                    sibling_path = paths[tapped_sibling]
+                    tap_at = sibling_path.index(selected_tap)
+                    excused.update(
+                        sibling_path[max(0, tap_at - 2) : tap_at + 3]
+                    )
+                stack = _splitter_stack_geometry(*selected_tap)
+                for offset, stack_member in enumerate(stack):
+                    top = offset == len(stack) - 1
+                    junction_victims.update(
+                        _junction_guard_victims(
+                            owner,
+                            junction.keepout_cells(
+                                selected_tap[0],
+                                selected_tap[1],
+                                int(stack_member.z),
+                                model_index=stack_member.model_index,
+                                yaw=stack_member.yaw,
+                            ),
+                            excused=excused if top else (),
+                        )
+                    )
+            victims = _leaning(
+                {
+                    owner[cell]
+                    for cell in through_path
+                    if cell in owner
+                }
+                | junction_victims
+            )
             victims.discard(index)
             if len(victims) > _REPAIR_MAX_VICTIMS:
                 still.append(index)
@@ -5678,9 +8112,14 @@ def _route_all(
                     deadline,
                     blame,
                     grid,
+                    owned_starts=owned_source_starts.get(hurt, ()),
+                    forbidden=rejected_path_cells.get(hurt, ()),
                 )
                 canvas.routing_ports = frozenset()
                 expansions += again.expansions
+                round_expansions[hurt] = (
+                    round_expansions.get(hurt, 0) + again.expansions
+                )
                 if again.path is None:
                     if again.kind is RouteFailureKind.BUDGET:
                         # The transaction rolls back, so `index` remains the
@@ -5714,6 +8153,7 @@ def _route_all(
     round_limit = 1 if len(nets) >= _SINGLE_ROUND_NETS else RRR_MAX
     for it in range(round_limit):
         iterations = it + 1
+        round_expansions.clear()
         for index in list(paths):
             _unstake(index)
         # `history` gained a round's worth of use and blame at the end of the
@@ -5736,13 +8176,24 @@ def _route_all(
             range(len(nets)),
             key=lambda i: (
                 i not in priority,
-                -(abs(nets[i].source.x - nets[i].dst.x) + abs(nets[i].source.y - nets[i].dst.y)),
+                -(
+                    abs(nets[i].source.x - nets[i].dst.x)
+                    + abs(nets[i].source.y - nets[i].dst.y)
+                ),
             ),
         )
         stranded: list[int] = []
         for i in order:
             if _expired(deadline):
-                return _budget_result()
+                current_failures = {
+                    index: _failure(
+                        index,
+                        search_failures[index],
+                        search_blockers[index],
+                    )
+                    for index in stranded
+                }
+                return _budget_result(paths, current_failures)
             starts, goals = _ends(i)
             searched = _astar(
                 canvas,
@@ -5755,12 +8206,158 @@ def _route_all(
                 deadline,
                 blame,
                 grid,
+                owned_starts=owned_source_starts.get(i, ()),
+                forbidden=rejected_path_cells.get(i, ()),
             )
+            search_expansions = searched.expansions
+            # The first route from a shared producer defines every later
+            # branch's source frontier. If its cheapest path contains no legal
+            # Splitter site and the lane-end tap is statically impossible,
+            # routing it unchanged guarantees a later zero-start failure. Price
+            # each rejected candidate path and try a small fixed set of
+            # alternatives, accepting only a path that carries a proved future
+            # tap. This is a bounded focused search, not another RRR round.
+            siblings = src_group.get(i, ())
+            source = nets[i].source
+            if (
+                searched.path is not None
+                and siblings
+                and not any(sibling in paths for sibling in siblings)
+            ):
+                direct_tap = (source.x, source.y, source.z)
+                direct_tap_available = (
+                    _can_junction(*direct_tap)
+                    and _direct_tap_clear(nets[i])
+                )
+                if not direct_tap_available:
+                    future_provenance: dict[Cell, Cell] = {}
+                    _merge_frontier(
+                        canvas,
+                        {i: searched.path},
+                        (i,),
+                        _can_junction,
+                        provenance=future_provenance,
+                        belt_prefab=(belt_id, belt_model),
+                    )
+                    if not future_provenance:
+                        original = searched
+                        candidate = searched
+                        for _ in range(4):
+                            assert candidate.path is not None
+                            for cell in candidate.path:
+                                history[cell] += _BLAME_WEIGHT
+                            grid.refresh_history(history)
+                            alternative = _astar(
+                                canvas,
+                                starts,
+                                goals,
+                                history,
+                                pressure,
+                                bounds,
+                                budget,
+                                deadline,
+                                blame,
+                                grid,
+                                owned_starts=owned_source_starts.get(i, ()),
+                                forbidden=rejected_path_cells.get(i, ()),
+                            )
+                            search_expansions += alternative.expansions
+                            if alternative.path is None:
+                                break
+                            alternative_provenance: dict[Cell, Cell] = {}
+                            _merge_frontier(
+                                canvas,
+                                {i: alternative.path},
+                                (i,),
+                                _can_junction,
+                                provenance=alternative_provenance,
+                                belt_prefab=(belt_id, belt_model),
+                            )
+                            if alternative_provenance:
+                                searched = alternative
+                                offered_guard_tap[i][alternative.path[0]] = next(
+                                    iter(alternative_provenance.values())
+                                )
+                                break
+                            candidate = alternative
+                        else:
+                            searched = original
+            # A selected Splitter owns more than its tap cell. Model 40's
+            # odd-plane branch also emits a synthetic lower attachment on the
+            # tap's x/y cell, and the game's collider exception reaches only
+            # the first two routed belts beyond that attachment. A* sees neither
+            # fact: without this exact post-path check it can revisit the
+            # attachment cell or turn a third belt through the Splitter's
+            # keep-out, producing duplicate/colliding belts at commit.
+            for _ in range(4):
+                if searched.path is None:
+                    break
+                selected_tap = offered_guard_tap.get(i, {}).get(
+                    searched.path[0]
+                )
+                if selected_tap is None:
+                    break
+                attachment_cell = (
+                    selected_tap[0],
+                    selected_tap[1],
+                    selected_tap[2] - 1
+                    if selected_tap[2] % 2
+                    else selected_tap[2],
+                )
+                keepout = {
+                    cell
+                    for stack_member in _splitter_stack_geometry(*selected_tap)
+                    for cell in junction.keepout_cells(
+                        selected_tap[0],
+                        selected_tap[1],
+                        int(stack_member.z),
+                        model_index=stack_member.model_index,
+                        yaw=stack_member.yaw,
+                    )
+                }
+                illegal = set(searched.path[2:]) & keepout
+                if attachment_cell in searched.path:
+                    illegal.add(attachment_cell)
+                if not illegal:
+                    break
+                rejected_path_cells[i].update(illegal)
+                searched = _astar(
+                    canvas,
+                    starts,
+                    goals,
+                    history,
+                    pressure,
+                    bounds,
+                    budget,
+                    deadline,
+                    blame,
+                    grid,
+                    owned_starts=owned_source_starts.get(i, ()),
+                    forbidden=rejected_path_cells[i],
+                )
+                search_expansions += searched.expansions
+            if searched.path is None and not searched.wall:
+                access_wall = (
+                    source_access_walls.get(i, ())
+                    + destination_access_walls.get(i, ())
+                )
+                if access_wall:
+                    searched = replace(
+                        searched,
+                        kind=RouteFailureKind.SEALED_POCKET,
+                        wall=access_wall,
+                    )
             canvas.routing_ports = frozenset()
-            expansions += searched.expansions
+            expansions += search_expansions
+            round_expansions[i] = (
+                round_expansions.get(i, 0) + search_expansions
+            )
             if searched.path is None:
                 search_failures[i] = searched
-                search_blockers[i] = _blocking_nets(searched.wall)
+                search_blockers[i] = _blocking_nets(
+                    searched.wall,
+                    source_access_blockers.get(i, ()),
+                )
                 stranded.append(i)
                 continue
             _stake(i, searched.path)
@@ -5793,10 +8390,15 @@ def _route_all(
             )
             for index in stranded
         }
-        if failed == 0:
-            # Linking is part of routing feasibility, not terminal emission.
-            # Prove the selected topology on a disposable workspace while the
-            # same prepared pack still has negotiation rounds available.
+        if _expired(deadline):
+            return _budget_result(paths, round_failures)
+        # Linking is part of routing feasibility, not terminal emission. Prove
+        # every path already found on a disposable workspace even when another
+        # net remains stranded: a hidden commit failure is independent new
+        # evidence and belongs in the same focused repair transaction.
+        def commit_once() -> tuple[tuple[int, ...], dict[int, _CommitFailure]]:
+            if not paths:
+                return (), {}
             details: dict[int, _CommitFailure] = {}
             unlinked = _commit_paths(
                 deepcopy(canvas),
@@ -5810,17 +8412,13 @@ def _route_all(
                 sink_hints=sink_hint,
                 failure_details=details,
             )
-            if not unlinked:
-                return _finish(
-                    paths,
-                    {},
-                    source_hint,
-                    sink_hint,
-                    budget_exhausted=False,
-                )
-            stranded = list(unlinked)
-            failed = len(stranded)
-            for index in stranded:
+            return unlinked, details
+
+        def retain_commit_failures(
+            unlinked: Collection[int],
+            details: Mapping[int, _CommitFailure],
+        ) -> None:
+            for index in unlinked:
                 detail = details.get(
                     index,
                     _CommitFailure(paths[index][0], "path"),
@@ -5836,17 +8434,144 @@ def _route_all(
                     if (hint := sink_hint.get(index)) is not None:
                         rejected_sink_hints[index].add(hint)
                 else:
-                    rejected_starts[index].add(paths[index][0])
-                    rejected_goals[index].add(paths[index][-1])
+                    rejected_path_cells[index].add(detail.cell)
                 history[detail.cell] += _BLAME_WEIGHT
                 for blocking_cell in detail.blocking_cells:
                     history[blocking_cell] += _BLAME_WEIGHT
+                endpoint_source, endpoint_destination = _endpoint_cells(
+                    nets[index]
+                )
+                blockers = tuple(
+                    _net_id(blocker) for blocker in detail.blocking_indices
+                )
                 round_failures[index] = NetFailure(
                     _net_id(index),
                     RouteFailureKind.COMMIT_LINK,
                     (detail.cell, *detail.blocking_cells),
-                    tuple(_net_id(blocker) for blocker in detail.blocking_indices),
+                    blockers,
                     0,
+                    source=endpoint_source,
+                    destination=endpoint_destination,
+                    blocking_endpoints=_blocking_endpoint_cells(blockers),
+                )
+
+        unlinked, details = commit_once()
+        if not unlinked:
+            if failed == 0:
+                return _finish(
+                    paths,
+                    {},
+                    source_hint,
+                    sink_hint,
+                    path_tap,
+                    budget_exhausted=False,
+                )
+        else:
+            retain_commit_failures(unlinked, details)
+
+            # A commit collision is exact static/world evidence, not proof that
+            # an unrelated settled route must move. Withdraw each rejected path
+            # together with its source/destination siblings: their endpoint
+            # hints name one another's paths and become stale if only one side
+            # moves. Crossing repair is intentionally not used here because it
+            # can trade one static miss for a large unrelated victim set.
+            pending = tuple(unlinked)
+            stalled_commit: list[int] = []
+            for _ in range(_COMMIT_REPAIR_PASSES):
+                rejected_now = set(pending)
+                companions = {
+                    sibling
+                    for index in pending
+                    for sibling in (
+                        *src_group.get(index, ()),
+                        *dst_group.get(index, ()),
+                    )
+                    if sibling in paths
+                }
+                order = [
+                    *pending,
+                    *sorted(
+                        companions - rejected_now,
+                        key=lambda index: -(
+                            abs(nets[index].source.x - nets[index].dst.x)
+                            + abs(nets[index].source.y - nets[index].dst.y)
+                        ),
+                    ),
+                ]
+                for index in order:
+                    _unstake(index)
+                stalled_now: list[int] = []
+                for index in order:
+                    if _expired(deadline) or budget["left"] <= 0:
+                        stalled_now.append(index)
+                        continue
+                    starts, goals = _ends(index)
+                    searched = _astar(
+                        canvas,
+                        starts,
+                        goals,
+                        history,
+                        pressure,
+                        bounds,
+                        budget,
+                        deadline,
+                        blame,
+                        grid,
+                        owned_starts=owned_source_starts.get(index, ()),
+                        forbidden=rejected_path_cells.get(index, ()),
+                    )
+                    canvas.routing_ports = frozenset()
+                    expansions += searched.expansions
+                    round_expansions[index] = (
+                        round_expansions.get(index, 0) + searched.expansions
+                    )
+                    if searched.path is None:
+                        stalled_now.append(index)
+                        if index not in rejected_now:
+                            blockers = _blocking_nets(
+                                searched.wall,
+                                source_access_blockers.get(index, ()),
+                            )
+                            search_failures[index] = searched
+                            search_blockers[index] = blockers
+                            round_failures[index] = _failure(
+                                index,
+                                searched,
+                                blockers,
+                            )
+                        continue
+                    _stake(index, searched.path)
+
+                # A changed branch may select a different legal junction.
+                # Validate the complete selected topology and use each new
+                # exact failure as the next bounded pass's evidence.
+                pending, details = commit_once()
+                if pending:
+                    retain_commit_failures(pending, details)
+                failed_now = set(stalled_now) | set(pending)
+                for resolved in rejected_now - failed_now:
+                    round_failures.pop(resolved, None)
+                stalled_commit.extend(stalled_now)
+                if not pending:
+                    break
+
+            # The last preflight's rejected paths are still staked. Withdraw
+            # them before saving the round incumbent; every retained path has
+            # passed the same exact commit predicate.
+            for index in pending:
+                _unstake(index)
+            stranded = list(
+                dict.fromkeys((*stranded, *stalled_commit, *pending))
+            )
+            failed = len(stranded)
+            if failed == 0:
+                return _finish(
+                    paths,
+                    {},
+                    source_hint,
+                    sink_hint,
+                    path_tap,
+                    budget_exhausted=False,
                 )
         for path in paths.values():
             for cell in path:
@@ -5904,17 +8629,21 @@ def _route_all(
             best_sink_hints = {
                 index: hint for index, hint in sink_hint.items() if index in best_paths
             }
+            best_path_taps = {
+                index: tap for index, tap in path_tap.items() if index in best_paths
+            }
         else:
             stale += 1
         # An exhausted expansion budget ends the search as surely as a stale
         # round does: every further round would re-run every net against a
         # budget of zero and fail all of them, and the counters would read as
         # congestion rather than as work nobody had left to do.
+        if _expired(deadline):
+            return _budget_result()
         if (
             stale >= _RRR_STALE_ROUNDS
             or it == RRR_MAX - 1
             or budget["left"] <= 0
-            or _expired(deadline)
         ):
             break
     return _finish(
@@ -5922,79 +8651,123 @@ def _route_all(
         best_failures,
         best_source_hints,
         best_sink_hints,
-        budget_exhausted=budget["left"] <= 0 or _expired(deadline),
+        best_path_taps,
+        budget_exhausted=budget["left"] <= 0,
     )
 
 
-def _match_access(
-    order: Sequence[tuple[int, int, int]],
-    options: Mapping[tuple[int, int, int], Sequence[tuple[int, int, int]]],
-    wants: Mapping[tuple[int, int, int], int],
-) -> dict[tuple[int, int, int], tuple[int, int, int]]:
-    """Assign access cells to ports so that as many CLAIMS as possible are met.
+def _match_access_corridors(
+    order: Sequence[Cell],
+    corridors: Mapping[Cell, Sequence[tuple[Cell, Cell]]],
+    wants: Mapping[Cell, int],
+) -> dict[Cell, Cell]:
+    """Assign access cells while preserving at least one usable onward cell."""
 
-    A claim is one port's need for one cell: a port that both receives and sends
-    makes two, and :func:`_reserve_port_access` explains why they are not
-    interchangeable.  Returns ``cell -> port``.
+    claims = [
+        (key, rank)
+        for rank in range(max(wants.values(), default=0))
+        for key in order
+        if wants[key] > rank
+    ]
+    model = cp_model.CpModel()
+    choices: dict[tuple[Cell, int, Cell, Cell], cp_model.IntVar] = {}
+    by_claim: dict[tuple[Cell, int], list[cp_model.IntVar]] = defaultdict(list)
+    by_rank: dict[int, list[cp_model.IntVar]] = defaultdict(list)
+    access_by_owner: dict[Cell, dict[Cell, list[cp_model.IntVar]]] = {}
+    for key, rank in claims:
+        for access, exit_cell in corridors[key]:
+            variable = model.new_bool_var(
+                f"access_{key}_{rank}_{access}_{exit_cell}"
+            )
+            choices[key, rank, access, exit_cell] = variable
+            by_claim[key, rank].append(variable)
+            by_rank[rank].append(variable)
+            access_by_owner.setdefault(access, {}).setdefault(key, []).append(
+                variable
+            )
+    corridor_by_access: dict[
+        tuple[Cell, int, Cell],
+        list[cp_model.IntVar],
+    ] = defaultdict(list)
+    for (key, rank, access, _exit_cell), variable in choices.items():
+        corridor_by_access[key, rank, access].append(variable)
+    selected_access: dict[tuple[Cell, int, Cell], cp_model.IntVar] = {}
+    for access_choice, variables in corridor_by_access.items():
+        variable = model.new_bool_var(f"selected_{access_choice}")
+        model.add(variable == sum(variables))
+        selected_access[access_choice] = variable
 
-    This is a maximum bipartite matching between claims and cells, by augmenting
-    paths.  The greedy alternative -- walk the ports and take the first free
-    neighbour -- is not merely less tidy, it is *wrong*, because it never gives a
-    cell back: a port with two ways out can take the one cell some other port
-    has, and no later port can ask it to move.  An augmenting path is exactly the
-    request "move, and take your second choice", chained as far as it needs to
-    go.
+    for claim in claims:
+        model.add(sum(by_claim[claim]) <= 1)
 
-    ``order`` fixes the sequence claims are offered in, and it matters twice.
-    Priority: every port's FIRST claim is offered before any port's second, so a
-    port that wants two can never leave a port that wants one with nothing --
-    matchings only grow, so a rank-0 claim matched in the first pass stays
-    matched through every later augmentation.  And determinism: the same pack
-    must reserve the same cells, or a routing comparison measures the reservation
-    order instead of what it is trying to measure.
-    """
-    owner: dict[tuple[int, int, int], tuple[tuple[int, int, int], int]] = {}
+    for owners in access_by_owner.values():
+        model.add(
+            sum(variable for variables in owners.values() for variable in variables)
+            <= 1
+        )
 
-    def augment(start: tuple[tuple[int, int, int], int]) -> bool:
-        # Iterative, not recursive: an alternating path can run the length of
-        # the port list, and Python's stack limit is not a routing parameter.
-        seen: set[tuple[int, int, int]] = set()
-        #: claim -> (the claim that wants its cell, that cell).  This is the
-        #: path back to ``start``, and it is walked to hand the cells over only
-        #: once a free one has actually been found.
-        came_from: dict[
-            tuple[tuple[int, int, int], int],
-            tuple[
-                tuple[tuple[int, int, int], int],
-                tuple[int, int, int],
-            ],
-        ] = {}
-        stack = [start]
-        while stack:
-            claim = stack.pop()
-            for cell in options[claim[0]]:
-                if cell in seen:
-                    continue
-                seen.add(cell)
-                holder = owner.get(cell)
-                if holder is None:
-                    owner[cell] = claim
-                    cur = claim
-                    while cur in came_from:
-                        parent, parent_cell = came_from[cur]
-                        owner[parent_cell] = parent
-                        cur = parent
-                    return True
-                if holder != start and holder not in came_from:
-                    came_from[holder] = (claim, cell)
-                    stack.append(holder)
-        return False
+    # A corridor may pass through another claim held for the SAME port: the
+    # detailed router sets ``routing_ports`` and can use every reservation that
+    # port owns. A different port's reservation is a wall.
+    for (key, _rank, _access, exit_cell), corridor_var in choices.items():
+        foreign_access = [
+            variable
+            for owner, variables in access_by_owner.get(exit_cell, {}).items()
+            if owner != key
+            for variable in variables
+        ]
+        if foreign_access:
+            model.add(sum(foreign_access) + corridor_var <= 1)
 
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = 0
     for rank in range(max(wants.values(), default=0)):
-        for key in order:
-            if wants[key] > rank:
-                augment((key, rank))
-    return {cell: claim[0] for cell, claim in owner.items()}
+        rank_vars = by_rank[rank]
+        if not rank_vars:
+            continue
+        model.maximize(sum(rank_vars))
+        status = solver.solve(model)
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return {}
+        model.add(sum(rank_vars) == round(solver.objective_value))
+
+    # Rank totals are fixed. Tie-break on ACCESS ownership only; exit witnesses
+    # are proof objects and do not alter the committed reservation. Including
+    # every witness in this objective created a large symmetric
+    # branch-and-bound tail on sprayed factories. Seed and bound this optional
+    # polish; the already rank-optimal assignment remains a complete fallback.
+    ordered_choices = tuple(choices)
+    if not ordered_choices:
+        return {}
+    ranked_values = {
+        choice: solver.boolean_value(variable)
+        for choice, variable in choices.items()
+    }
+    for choice, variable in choices.items():
+        model.add_hint(variable, int(ranked_values[choice]))
+    model.minimize(
+        sum(
+            ordinal * selected_access[access_choice]
+            for ordinal, access_choice in enumerate(selected_access, start=1)
+        )
+    )
+    solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
+    status = solver.solve(model)
+    use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+    access_owner: dict[Cell, Cell] = {}
+    for choice in ordered_choices:
+        selected = (
+            solver.boolean_value(choices[choice])
+            if use_polished
+            else ranked_values[choice]
+        )
+        if not selected:
+            continue
+        key, _rank, access, _exit_cell = choice
+        access_owner[access] = key
+    return access_owner
 
 
 def _reserve_port_access(
@@ -6006,9 +8779,9 @@ def _reserve_port_access(
 ) -> int:
     """Hold a cell next to every port, so no net can be walled in by another.
 
-    Returns the number of ports that had no free neighbour to reserve -- those
-    are genuinely boxed in by the packing and no routing order can save them,
-    which is worth knowing separately from a net that merely lost a race.
+    Returns the number of ports that could not retain a usable access corridor.
+    An adjacent cell with no onward move is inaccessible, just like a port with
+    no free neighbour.
 
     Reservations are per PORT, not per net: several nets can share one lane end
     (a lane feeding two consumers), and they can share its access cell too,
@@ -6080,21 +8853,40 @@ def _reserve_port_access(
     # expands nothing registers no conflict -- so net 89 stranded in all seven
     # rounds of three runs and was the ONLY failure on the pack.
     #
-    # An assignment where every port gets what it wants exists on that pack; the
-    # greedy pass just cannot reach it.  So this is a maximum bipartite
-    # b-matching (`_match_access`), taken in the same round order, which finds
-    # one whenever one exists.  It costs ~200 ports of at most four options
-    # each, once per routing pass, against a CP-SAT solve and hundreds of A*
-    # searches.
+    # The assignment is joint over `(access, exit)` corridors. An access-only
+    # maximum matching can consume another selected access as the first port's
+    # sole exit; that is the zero-onward replay retained beside this code.
+    # Rank-wise CP-SAT objectives preserve the old first-claim-before-second
+    # priority, while a one-worker final solve fixes deterministic tie-breaking.
     options = {
-        key: [
+        key: tuple(
             cell
-            for cell in ((key[0] + dx, key[1] + dy, key[2]) for dx, dy in _STEPS)
+            for cell in (
+                (key[0] + dx, key[1] + dy, key[2])
+                for dx, dy in _STEPS
+            )
             if canvas.free(cell)
-        ]
+        )
         for key in order
     }
-    for cell, key in _match_access(order, options, wants).items():
+    corridors = {
+        key: tuple(
+            (access, exit_cell)
+            for access in options[key]
+            for exit_cell in (
+                (access[0] + dx, access[1] + dy, access[2])
+                for dx, dy in _STEPS
+            )
+            if exit_cell != key and canvas.free(exit_cell)
+        )
+        for key in order
+    }
+    access_owner = _match_access_corridors(
+        order,
+        corridors,
+        wants,
+    )
+    for cell, key in access_owner.items():
         canvas.reserved[cell] = key
         held[key] += 1
 
@@ -6116,15 +8908,23 @@ def _reserve_port_access(
     # Only where there is exactly ONE onward move. Two or more and the cell is
     # not a cul-de-sac, and holding ground a port does not need is how a
     # reservation pass starts costing more than it buys.
-    exits: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = []
-    for cell, key in canvas.reserved.items():
-        cx, cy, lvl = cell
-        onward = [c for c in ((cx + dx, cy + dy, lvl) for dx, dy in _STEPS) if canvas.free(c)]
-        if len(onward) == 1:
+    exits: list[tuple[Cell, Cell]] = []
+    for cell, key in access_owner.items():
+        cx, cy, level = cell
+        onward = [
+            candidate
+            for candidate in (
+                (cx + dx, cy + dy, level)
+                for dx, dy in _STEPS
+            )
+            if candidate != key
+            and (
+                canvas.free(candidate)
+                or canvas.reserved.get(candidate) == key
+            )
+        ]
+        if len(onward) == 1 and canvas.reserved.get(onward[0]) != key:
             exits.append((key, onward[0]))
-    # Applied after the scan, not during it: `free` reads `canvas.reserved`, so
-    # staking inside the loop would let an early exit claim decide whether a
-    # later cell counts as a cul-de-sac.
     for key, cell in exits:
         if canvas.free(cell):
             canvas.reserved[cell] = key
@@ -6238,13 +9038,47 @@ def _commit_paths(
         altitudes = _altitude_profile(path, ramped=canvas.ramped)
         if altitudes is None:
             unlinked.append(i)
-            record(i, path[0], "path")
+            record(i, path[0], "path", reason="altitude-profile")
             continue
         failed_cell: Cell | None = None
-        for (x, y, lvl), z in zip(path, altitudes, strict=True):
-            if not canvas.free((x, y, lvl)) or not canvas.free_world(x, y, z):
+        failed_reason = ""
+
+        def roll_back_prefix() -> None:
+            """Remove belts added before this path's first rejected cell."""
+            while indices:
+                at = len(indices) - 1
+                building_index = indices.pop()
+                if building_index != len(canvas.buildings) - 1:
+                    raise AssertionError("path prefix is no longer the canvas tail")
+                canvas.buildings.pop()
+                x, y, level = path[at]
+                if canvas.blocked.get((x, y, level)) == building_index:
+                    del canvas.blocked[x, y, level]
+                canvas.world_taken.discard((x, y, altitudes[at]))
+        source_tap = (source_hints or {}).get(i)
+        for at, ((x, y, lvl), z) in enumerate(
+            zip(path, altitudes, strict=True)
+        ):
+            owns_guard = (
+                at == 0
+                and source_tap is not None
+                and abs(x - source_tap[0]) + abs(y - source_tap[1]) == 1
+                and lvl
+                == (
+                    source_tap[2] - 1
+                    if source_tap[2] % 2
+                    else source_tap[2]
+                )
+                and canvas.free_owned_guard((x, y, lvl))
+            )
+            lattice_clear = canvas.free((x, y, lvl)) or owns_guard
+            world_clear = canvas.free_world(x, y, z)
+            if not lattice_clear or not world_clear:
                 ok = False
                 failed_cell = (x, y, lvl)
+                failed_reason = (
+                    "lattice-occupied" if not lattice_clear else "world-occupied"
+                )
                 break
             indices.append(
                 canvas.add(
@@ -6263,7 +9097,13 @@ def _commit_paths(
             )
         if not ok or not indices:
             unlinked.append(i)
-            record(i, failed_cell or path[0], "path")
+            roll_back_prefix()
+            record(
+                i,
+                failed_cell or path[0],
+                "path",
+                reason=failed_reason or "empty-path",
+            )
             continue
         for a, b in zip(indices, indices[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
@@ -6306,6 +9146,7 @@ def _commit_paths(
             excused,
             tap_blockers,
             tap_reason,
+            predecessor_choices=into,
         ):
             unlinked.append(i)
             feeder_building = canvas.buildings[feeder]
@@ -6343,6 +9184,18 @@ def _commit_paths(
             continue
         canvas.buildings[indices[-1]] = _relink(canvas.buildings[indices[-1]], output_obj=sink)
     return tuple(unlinked)
+
+
+def _mixed_height_branch_endpoint(
+    tap: Cell,
+    branch: PlacedBuilding,
+) -> bool:
+    """Whether model 40 can join this odd carry tap to its lower branch."""
+    return (
+        bool(tap[2] % 2)
+        and branch.z == tap[2] - 1
+        and abs(branch.x - tap[0]) + abs(branch.y - tap[1]) == 1
+    )
 
 
 def _source_for(
@@ -6412,8 +9265,6 @@ def _source_for(
     head = canvas.buildings[first]
     source = net.source
     src = canvas.buildings[source.belt]
-    if _legal_link(src.x, src.y, src.z, head.x, head.y, head.z, ramped=canvas.ramped):
-        return source.belt
     if hint is not None:
         who = canvas.blocked.get(hint)
         if (
@@ -6427,18 +9278,23 @@ def _source_for(
             if (
                 catalog.is_belt(other.item_id)
                 and other.carries_item == net.item
-                and _legal_link(
-                    other.x,
-                    other.y,
-                    other.z,
-                    head.x,
-                    head.y,
-                    head.z,
-                    ramped=canvas.ramped,
+                and (
+                    _legal_link(
+                        other.x,
+                        other.y,
+                        other.z,
+                        head.x,
+                        head.y,
+                        head.z,
+                        ramped=canvas.ramped,
+                    )
+                    or _mixed_height_branch_endpoint(hint, head)
                 )
             ):
                 return who
         return None
+    if _legal_link(src.x, src.y, src.z, head.x, head.y, head.z, ramped=canvas.ramped):
+        return source.belt
     # `head` rests on a level, so it has a lattice cell; a ramp tile would
     # not, and `_lattice_cell` says so rather than rounding it onto one.
     at = _lattice_cell(head.x, head.y, head.z)
@@ -6729,6 +9585,7 @@ def _tap_source(
     excused: Set[tuple[int, int, int]] = frozenset(),
     rejected_cells: set[Cell] | None = None,
     rejected_reason: list[str] | None = None,
+    predecessor_choices: Mapping[int, Sequence[int]] | None = None,
 ) -> bool:
     """Make ``belt_idx`` hand items to ``branch``, junctioning if it must.
 
@@ -6751,59 +9608,238 @@ def _tap_source(
     """
     b = canvas.buildings[belt_idx]
     onward = b.output_obj
+    if predecessor_choices is None:
+        built_predecessors: dict[int, list[int]] = defaultdict(list)
+        for index, candidate in enumerate(canvas.buildings):
+            if (
+                catalog.is_belt(candidate.item_id)
+                and candidate.output_obj is not None
+            ):
+                built_predecessors[candidate.output_obj].append(index)
+        predecessor_choices = built_predecessors
     if onward is None:
         canvas.buildings[belt_idx] = _relink(b, output_obj=branch)
         return True
 
     if canvas.buildings[onward].item_id == catalog.SPLITTER_ID:
         junction_idx = onward
+        splitter = canvas.buildings[junction_idx]
+        branch_attachment = b
+        if splitter.model_index == 40:
+            if (
+                b.z != splitter.z + 1
+                or canvas.buildings[branch].z != splitter.z
+                or _cardinal_direction(b, canvas.buildings[branch]) is None
+            ):
+                if rejected_reason is not None:
+                    rejected_reason.append("splitter-port")
+                return False
+            branch_attachment = replace(b, z=splitter.z)
+
+        used_ports: set[int] = set()
+        attached = 0
+        for index, candidate in enumerate(canvas.buildings):
+            outward_idx: int | None
+            if candidate.output_obj == junction_idx:
+                attached += 1
+                incoming = predecessor_choices.get(index, ())
+                outward_idx = incoming[0] if len(incoming) == 1 else None
+            elif candidate.input_obj == junction_idx:
+                attached += 1
+                outward_idx = candidate.output_obj
+            else:
+                continue
+            port = (
+                splitter_ports.expected_path_port(
+                    splitter,
+                    candidate,
+                    canvas.buildings[outward_idx],
+                )
+                if outward_idx is not None
+                else None
+            )
+            if port is None or port in used_ports:
+                if rejected_reason is not None:
+                    rejected_reason.append("splitter-port")
+                return False
+            used_ports.add(port)
     else:
         # A junction rests on a real routing level.  A ramp midpoint cannot host
-        # one, and every integer level is checked against the exact prepared
-        # Splitter collider cache -- machines and reserved towers included.
+        # one, and every real stack member is checked against the exact prepared
+        # collider cache plus all dynamic belts.
         if b.z.denominator != 1:
             if rejected_reason is not None:
                 rejected_reason.append("ramp")
             return False
         level = int(b.z)
+        incoming = [
+            index
+            for index, candidate in enumerate(canvas.buildings)
+            if catalog.is_belt(candidate.item_id)
+            and candidate.output_obj == belt_idx
+        ]
+        if len(incoming) != 1:
+            if rejected_reason is not None:
+                rejected_reason.append("splitter-port")
+            return False
+        carry_direction: tuple[int, int] | None = None
+        if level % 2:
+            feed_direction = _cardinal_direction(
+                b,
+                canvas.buildings[incoming[0]],
+            )
+            carry_direction = _cardinal_direction(
+                b,
+                canvas.buildings[onward],
+            )
+            branch_direction = _cardinal_direction(
+                b,
+                canvas.buildings[branch],
+            )
+            if (
+                feed_direction is None
+                or carry_direction is None
+                or feed_direction != (-carry_direction[0], -carry_direction[1])
+                or branch_direction is None
+                or branch_direction[0] * carry_direction[0]
+                + branch_direction[1] * carry_direction[1]
+                != 0
+                or canvas.buildings[branch].z != level - 1
+            ):
+                if rejected_reason is not None:
+                    rejected_reason.append("splitter-port")
+                return False
+        try:
+            splitter_stack = junction.make_splitter_stack(
+                b.x,
+                b.y,
+                level,
+                first_index=len(canvas.buildings),
+                carries_item=b.carries_item,
+                carry_direction=carry_direction,
+            )
+        except ValueError:
+            if rejected_reason is not None:
+                rejected_reason.append("splitter-stack")
+            return False
         if not canvas.junction_is_clear(b.x, b.y, level):
             if rejected_reason is not None:
                 rejected_reason.append("junction-collider")
             return False
-        # The belt half remains dynamic: all paths are laid before taps are
-        # committed, so foreign runs are visible here.
-        belt_blockers = _belt_keepout_blockers(canvas, b.x, b.y, level, excused)
+
+        splitter = splitter_stack[-1]
+        branch_attachment = replace(b, z=splitter.z) if level % 2 else b
+        feed_port = splitter_ports.expected_path_port(
+            splitter,
+            b,
+            canvas.buildings[incoming[0]],
+        )
+        carry_port = splitter_ports.expected_path_port(
+            splitter,
+            b,
+            canvas.buildings[onward],
+        )
+        branch_port = splitter_ports.expected_path_port(
+            splitter,
+            branch_attachment,
+            canvas.buildings[branch],
+        )
+        if (
+            feed_port is None
+            or carry_port is None
+            or branch_port is None
+            or len({feed_port, carry_port, branch_port}) != 3
+        ):
+            if rejected_reason is not None:
+                rejected_reason.append("splitter-port")
+            return False
+
+        def reaches_tap_downstream(index: int) -> bool:
+            """Will this belt reach the new Splitter within DSP's three-hop walk?"""
+            current = index
+            for _hop in range(3):
+                if current == belt_idx:
+                    return True
+                if not (0 <= current < len(canvas.buildings)):
+                    return False
+                candidate = canvas.buildings[current]
+                if not catalog.is_belt(candidate.item_id) or candidate.output_obj is None:
+                    return False
+                current = candidate.output_obj
+            return False
+
+
+        # Only the top member owns this run.  Every lower support has no belt
+        # attachments, so every belt in its exact model/yaw keepout is foreign.
+        belt_blockers: set[Cell] = set()
+        for offset, stack_member in enumerate(splitter_stack):
+            top = offset == len(splitter_stack) - 1
+            for cell in junction.keepout_cells(
+                b.x,
+                b.y,
+                int(stack_member.z),
+                model_index=stack_member.model_index,
+                yaw=stack_member.yaw,
+            ):
+                who = canvas.blocked.get(cell)
+                if (
+                    top
+                    and cell in excused
+                    and (
+                        who is None
+                        or reaches_tap_downstream(who)
+                        or len(predecessor_choices.get(who, ())) <= 1
+                    )
+                ):
+                    continue
+                who = canvas.blocked.get(cell)
+                if (
+                    who is not None
+                    and 0 <= who < len(canvas.buildings)
+                    and catalog.is_belt(canvas.buildings[who].item_id)
+                ):
+                    belt_blockers.add(cell)
         if belt_blockers:
             if rejected_cells is not None:
                 rejected_cells.update(belt_blockers)
             if rejected_reason is not None:
                 rejected_reason.append("belt-keepout")
             return False
-        junction_idx = canvas.add(
-            junction.make_splitter(b.x, b.y, b.z, carries_item=b.carries_item)
-        )
-        # Nothing routed later may take the collider's room either. The passes
-        # after this one -- external input runs, coater spurs, the power lattice
-        # -- all ask `canvas.free`, and until now none of them knew a junction
-        # was there at all: it is belt-integrated and reports no occupied tile.
-        canvas.guard.update(junction.keepout_cells(b.x, b.y, level))
-        canvas.buildings[belt_idx] = _relink(b, output_obj=junction_idx)
-        # Carry the lane onward FROM the junction, so everything downstream of
-        # the tap stays fed. Dropping this would starve the rest of the lane in
-        # order to feed the branch -- trading one silent break for another.
-        # `replace`, not a fresh PlacedBuilding: the carry belt IS the lane belt
-        # continuing past the junction, so every field it does not change should
-        # come across untouched. Listing fields by hand is how `carries_item`
-        # and `parameters` got silently dropped elsewhere in this file.
-        carry = canvas.add(replace(b, input_obj=junction_idx, output_obj=onward))
-        del carry  # linked by construction; the index is not needed again
 
-    attached = sum(
-        1 for c in canvas.buildings if c.output_obj == junction_idx or c.input_obj == junction_idx
-    )
+        used_ports = {feed_port, carry_port}
+        attached = 2
+        junction_idx = -1
+        for stack_member in splitter_stack:
+            junction_idx = canvas.add(stack_member)
+            canvas.guard.update(
+                junction.keepout_cells(
+                    b.x,
+                    b.y,
+                    int(stack_member.z),
+                    model_index=stack_member.model_index,
+                    yaw=stack_member.yaw,
+                )
+            )
+        assert junction_idx >= 0
+        canvas.buildings[belt_idx] = _relink(b, output_obj=junction_idx)
+        # Carry the lane onward on the elevated model-40 pair (or the flat
+        # model-38 plane), preserving every other belt field.
+        carry = canvas.add(replace(b, input_obj=junction_idx, output_obj=onward))
+        del carry
+
     if attached >= rules.SPLITTER_MAX_PORTS:
         if rejected_reason is not None:
             rejected_reason.append("splitter-ports")
+        return False
+
+    branch_port = splitter_ports.expected_path_port(
+        splitter,
+        branch_attachment,
+        canvas.buildings[branch],
+    )
+    if branch_port is None or branch_port in used_ports:
+        if rejected_reason is not None:
+            rejected_reason.append("splitter-port")
         return False
 
     # The branch belt is ADJACENT to the junction, not on it, and every belt
@@ -6814,7 +9850,7 @@ def _tap_source(
     # tile, and the route starts from there.
     stub = canvas.add(
         replace(
-            b,
+            branch_attachment,
             yaw=canvas.buildings[branch].yaw,
             input_obj=junction_idx,
             output_obj=branch,
@@ -6860,9 +9896,6 @@ def _route_external_inputs(
     budget: dict[str, int] | None = None,
 ) -> DetailedRouteResult:
     """Run every outside input from the block edge to the lane that wants it.
-
-    A lane the deadline or budget ran out on is a structured unknown, never a
-    placement missing an entry run.
 
     Without this, an external input was just a lane wearing a marker icon.  On a
     packed build that lane is frequently WALLED IN -- above it another lane,
@@ -6915,11 +9948,19 @@ def _route_external_inputs(
             search.wall,
             (),
             search.expansions,
+            destination=(net.dst.x, net.dst.y, net.dst.z),
         )
 
     if not starts:
         failures.extend(
-            NetFailure(net_id(net), RouteFailureKind.DYNAMIC_ACCESS, (), (), 0)
+            NetFailure(
+                net_id(net),
+                RouteFailureKind.DYNAMIC_ACCESS,
+                (),
+                (),
+                0,
+                destination=(net.dst.x, net.dst.y, net.dst.z),
+            )
             for _belt, net in ordered
         )
     else:
@@ -6961,6 +10002,7 @@ def _route_external_inputs(
                             (),
                             (),
                             0,
+                            destination=(net.dst.x, net.dst.y, net.dst.z),
                         )
                     )
                     continue
@@ -6983,14 +10025,32 @@ def _route_external_inputs(
 
             profile = _altitude_profile(path, ramped=canvas.ramped)
             if profile is None:
-                failures.append(NetFailure(net_id(net), RouteFailureKind.COMMIT_LINK, (), (), 0))
+                failures.append(
+                    NetFailure(
+                        net_id(net),
+                        RouteFailureKind.COMMIT_LINK,
+                        (),
+                        (),
+                        0,
+                        destination=(net.dst.x, net.dst.y, net.dst.z),
+                    )
+                )
                 continue
             route_cells = tuple(zip(path, profile, strict=True))
             if any(
                 not canvas.free((x, y, level)) or not canvas.free_world(x, y, altitude)
                 for (x, y, level), altitude in route_cells
             ):
-                failures.append(NetFailure(net_id(net), RouteFailureKind.COMMIT_LINK, (), (), 0))
+                failures.append(
+                    NetFailure(
+                        net_id(net),
+                        RouteFailureKind.COMMIT_LINK,
+                        (),
+                        (),
+                        0,
+                        destination=(net.dst.x, net.dst.y, net.dst.z),
+                    )
+                )
                 continue
 
             indices = [
@@ -7030,6 +10090,10 @@ def _route_external_inputs(
     )
 
 
+class _PreparationDeadline(Exception):
+    """Exact candidate preparation stopped before producing a reusable result."""
+
+
 class _Unseatable(NoValidLayout):
     """A sprayed lane could not be given a Spray Coater, so this pack is not one.
 
@@ -7055,9 +10119,13 @@ class _Unseatable(NoValidLayout):
         message: str,
         *,
         failure: finalize.ProjectionFailure | None = None,
+        clearance_requirement: StagedStaticClearanceRequirement | None = None,
+        exact_retry_evidence: _ExactRetryEvidence | None = None,
     ) -> None:
         self.failure = failure
         self.failures = () if failure is None else (failure,)
+        self.clearance_requirement = clearance_requirement
+        self.exact_retry_evidence = exact_retry_evidence
         if failure is not None:
             message = (
                 f"{message}: band {failure.band} {failure.check} "
@@ -7081,9 +10149,11 @@ class _Unpowerable(Exception):
         message: str,
         *,
         failure: finalize.ProjectionFailure | None = None,
+        exact_retry_evidence: _ExactRetryEvidence | None = None,
     ) -> None:
         self.failure = failure
         self.failures = () if failure is None else (failure,)
+        self.exact_retry_evidence = exact_retry_evidence
         if failure is not None:
             message = (
                 f"{message}: band {failure.band} {failure.check} "
@@ -7092,12 +10162,1248 @@ class _Unpowerable(Exception):
         super().__init__(message)
 
 
+@dataclass(frozen=True, slots=True)
+class _JunctionProjectionFrame:
+    """One reachable frame materialization and its finalizer projections."""
+
+    bounds: tuple[int, int, int, int]
+    candidate: finalize.FrameCandidate
+    projections: tuple[planet.Projection, ...]
+
+
+type _FrameWitnessRank = tuple[int, int, int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReachableFrameInterval:
+    """One extent/candidate over its contiguous physical latitude offsets."""
+
+    rotated: bool
+    offset_lo: int
+    offset_hi: int
+    width: int
+    height: int
+    min_x_lo: int
+    min_y_lo: int
+    candidate_index: int
+    candidate: finalize.FrameCandidate
+
+    def ordering_key(self) -> _FrameWitnessRank:
+        """Legacy four-edge rank with the common offset term removed."""
+        padding = self.candidate.south_padding
+        if self.rotated:
+            return (
+                padding,
+                self.min_y_lo,
+                padding + self.width - 1,
+                self.min_y_lo + self.height - 1,
+                self.candidate_index,
+            )
+        return (
+            self.min_x_lo,
+            padding,
+            self.min_x_lo + self.width - 1,
+            padding + self.height - 1,
+            self.candidate_index,
+        )
+
+    def witness(
+        self,
+        offset: int,
+    ) -> tuple[tuple[int, int, int, int], _FrameWitnessRank]:
+        min_x = (
+            self.candidate.south_padding - offset
+            if self.rotated
+            else self.min_x_lo
+        )
+        min_y = (
+            self.min_y_lo
+            if self.rotated
+            else self.candidate.south_padding - offset
+        )
+        bounds = (
+            min_x,
+            min_y,
+            min_x + self.width - 1,
+            min_y + self.height - 1,
+        )
+        return bounds, (*bounds, self.candidate_index)
+
+@lru_cache
+def _collider_broad_phase_bounds(
+    model_index: int,
+    yaw: float,
+) -> tuple[float, float, float]:
+    """Grid-axis and vertical radii containing every collider of one pose."""
+    angle = math.radians(yaw)
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    radius_x = 0.0
+    radius_y = 0.0
+    vertical = 0.0
+    for position, extent, _rotation in colliders.build_colliders(model_index):
+        centre_x = cosine * position[0] + sine * position[2]
+        centre_y = -sine * position[0] + cosine * position[2]
+        extent_x = abs(cosine) * extent[0] + abs(sine) * extent[2]
+        extent_y = abs(sine) * extent[0] + abs(cosine) * extent[2]
+        radius_x = max(radius_x, abs(centre_x) + extent_x)
+        radius_y = max(radius_y, abs(centre_y) + extent_y)
+        vertical = max(vertical, abs(position[1]) + extent[1])
+    return radius_x, radius_y, vertical
+
+
+@lru_cache
+def _minimum_projection_grid_scale(
+    bands: tuple[planet.Band, ...],
+) -> float:
+    """Conservative world-unit scale for either grid axis in these bands."""
+    latitude_step = planet.latitude_rad_per_grid(colliders.PLANET_SEGMENT)
+    return min(
+        min(
+            colliders.PLANET_RADIUS
+            * min(
+                math.cos(
+                    min(
+                        abs(grid),
+                        planet.pole_grid_idx(colliders.PLANET_SEGMENT),
+                    )
+                    * latitude_step
+                )
+                for grid in (band.grid_lo, band.grid_hi)
+            )
+            * planet.longitude_rad_per_grid(band.area_segments)
+            * 0.9,
+            colliders.PLANET_RADIUS * latitude_step * 0.9,
+        )
+        for band in bands
+    )
+
+
+def _projected_power_peer_possible(
+    candidate: tuple[int, PlacedBuilding, rules.PowerNode],
+    peer: tuple[int, PlacedBuilding, rules.PowerNode],
+    projection_contexts: Sequence[tuple[int, bool, float]],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> bool:
+    """Whether curvature could bring this node pair inside either paste gate."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    _candidate_index, candidate_building, candidate_node = candidate
+    _peer_index, peer_building, peer_node = peer
+    candidate_centre = codec.tile_to_local_offset(
+        candidate_building.x,
+        candidate_building.y,
+        candidate_building.z,
+        candidate_building.width,
+        candidate_building.height,
+    )
+    peer_centre = codec.tile_to_local_offset(
+        peer_building.x,
+        peer_building.y,
+        peer_building.z,
+        peer_building.width,
+        peer_building.height,
+    )
+    delta_x = abs(candidate_centre[0] - peer_centre[0])
+    delta_y = abs(candidate_centre[1] - peer_centre[1])
+    vertical = (candidate_centre[2] - peer_centre[2]) * 4.0 / 3.0
+    lo, hi = rules.PASTE_POWER_NODE_IDS
+    gates = []
+    if lo <= candidate_building.item_id < hi:
+        gates.append(peer_node.gate_sqr)
+    if lo <= peer_building.item_id < hi:
+        gates.append(candidate_node.gate_sqr)
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    if not gates:
+        return False
+    gate_distance2 = max(gates)
+    for columns, rotated, scale in projection_contexts:
+        longitude_delta, latitude_delta = (
+            (delta_y, delta_x) if rotated else (delta_x, delta_y)
+        )
+        longitude_delta %= columns
+        longitude_delta = min(longitude_delta, columns - longitude_delta)
+        lower_distance2 = (
+            (longitude_delta * scale) ** 2
+            + (latitude_delta * scale) ** 2
+            + vertical * vertical
+        )
+        if lower_distance2 < gate_distance2:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            return True
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    return False
+
+
+
+@dataclass(slots=True)
+class _ProjectedObstacleIndex:
+    """Candidate-independent collider bounds for conservative exact gating."""
+
+    xs: list[float] = field(default_factory=list)
+    obstacles: list[
+        tuple[int, PlacedBuilding, float, float, float]
+    ] = field(default_factory=list)
+    max_horizontal_radius: float = 0.0
+
+    @classmethod
+    def build(
+        cls,
+        buildings: Sequence[tuple[int, PlacedBuilding]],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> _ProjectedObstacleIndex:
+        index = cls()
+        for building_index, building in buildings:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            index.add(building_index, building)
+        return index
+
+    def add(self, building_index: int, building: PlacedBuilding) -> None:
+        if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id):
+            return
+        radius_x, radius_y, vertical_radius = _collider_broad_phase_bounds(
+            building.model_index,
+            building.yaw,
+        )
+        if radius_x <= 0.0 or radius_y <= 0.0 or vertical_radius <= 0.0:
+            return
+        centre_x = codec.tile_to_local_offset(
+            building.x,
+            building.y,
+            building.z,
+            building.width,
+            building.height,
+        )[0]
+        position = bisect_right(self.xs, centre_x)
+        self.xs.insert(position, centre_x)
+        self.obstacles.insert(
+            position,
+            (
+                building_index,
+                building,
+                radius_x,
+                radius_y,
+                vertical_radius,
+            ),
+        )
+        self.max_horizontal_radius = max(
+            self.max_horizontal_radius,
+            radius_x,
+            radius_y,
+        )
+
+    def candidates(
+        self,
+        candidate: PlacedBuilding,
+        frames: Sequence[_JunctionProjectionFrame],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[int, ...]:
+        """Over-include every peer the exact projected broad phase can retain."""
+        bands = tuple(
+            sorted(
+                {
+                    projection.band
+                    for frame in frames
+                    for projection in frame.projections
+                },
+                key=lambda band: band.area_segments,
+            )
+        )
+        return self.candidates_for_bands(
+            candidate,
+            bands,
+            cancelled=cancelled,
+        )
+
+    def candidates_for_bands(
+        self,
+        candidate: PlacedBuilding,
+        bands: tuple[planet.Band, ...],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[int, ...]:
+        """Over-include peers using only the finalizer-reachable band union."""
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        candidate_x, candidate_y, candidate_vertical = (
+            _collider_broad_phase_bounds(
+                candidate.model_index,
+                candidate.yaw,
+            )
+        )
+        candidate_centre = codec.tile_to_local_offset(
+            candidate.x,
+            candidate.y,
+            candidate.z,
+            candidate.width,
+            candidate.height,
+        )
+        if candidate_x <= 0.0 or not self.obstacles or not bands:
+            return ()
+        scale = _minimum_projection_grid_scale(bands)
+        if scale <= 1e-9:
+            lo = 0
+            hi = len(self.obstacles)
+        else:
+            reach = (
+                max(candidate_x, candidate_y) + self.max_horizontal_radius
+            ) / scale
+            lo = bisect_left(self.xs, candidate_centre[0] - reach)
+            hi = bisect_right(self.xs, candidate_centre[0] + reach)
+        candidates: list[int] = []
+        for index, peer, peer_x, peer_y, peer_vertical in self.obstacles[lo:hi]:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            peer_centre = codec.tile_to_local_offset(
+                peer.x,
+                peer.y,
+                peer.z,
+                peer.width,
+                peer.height,
+            )
+            delta_x = abs(candidate_centre[0] - peer_centre[0]) * scale
+            delta_y = abs(candidate_centre[1] - peer_centre[1]) * scale
+            normal = (
+                delta_x <= candidate_x + peer_x
+                and delta_y <= candidate_y + peer_y
+            )
+            rotated = (
+                delta_x <= candidate_y + peer_y
+                and delta_y <= candidate_x + peer_x
+            )
+            vertical_gap = (
+                abs(candidate_centre[2] - peer_centre[2]) * 4.0 / 3.0
+            )
+            if (
+                (normal or rotated)
+                and vertical_gap <= candidate_vertical + peer_vertical
+            ):
+                candidates.append(index)
+        return tuple(sorted(candidates))
+
+
+@dataclass(slots=True)
+class _StagedStaticCache:
+    """Attempt-local memoization of pure finalizer projection inputs."""
+
+    frames: dict[
+        tuple[
+            tuple[int, int, int, int],
+            tuple[int, int, int, int],
+            BandPolicy,
+        ],
+        tuple[_JunctionProjectionFrame, ...],
+    ] = field(default_factory=dict)
+    cleanup_bounds: dict[
+        tuple[PlacedBuilding, ...],
+        tuple[int, int, int, int],
+    ] = field(default_factory=dict)
+    materialized: dict[
+        tuple[
+            PlacedBuilding,
+            tuple[int, int, int, int],
+            finalize.FrameCandidate,
+        ],
+        PlacedBuilding,
+    ] = field(default_factory=dict)
+    materialized_bases: dict[
+        tuple[
+            tuple[tuple[int, PlacedBuilding], ...],
+            tuple[int, int, int, int],
+            finalize.FrameCandidate,
+        ],
+        tuple[tuple[int, PlacedBuilding], ...],
+    ] = field(default_factory=dict)
+    clean_contexts: set[tuple[object, ...]] = field(default_factory=set)
+    coater_supply_failures: dict[
+        tuple[object, ...],
+        finalize.ProjectionFailure | None,
+    ] = field(default_factory=dict)
+    boxes: dict[
+        tuple[colliders.Placed, planet.Projection],
+        tuple[colliders.Box, ...],
+    ] = field(default_factory=dict)
+    placed: dict[PlacedBuilding, colliders.Placed] = field(default_factory=dict)
+    junction_offsets: dict[
+        tuple[int, int, int, int, float, Fraction],
+        frozenset[Cell],
+    ] = field(default_factory=dict)
+    cleanup_operations: finalize._CleanupOperations = field(
+        default_factory=finalize._CleanupOperations
+    )
+    broad_phase_queries: int = 0
+    broad_phase_hits: int = 0
+    exact_static_queries: int = 0
+
+
+def _prospective_static_broad_phase(
+    index: _ProjectedObstacleIndex,
+    candidate: PlacedBuilding,
+    frames: Sequence[_JunctionProjectionFrame],
+    cache: _StagedStaticCache,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[int, ...]:
+    cache.broad_phase_queries += 1
+    candidates = index.candidates(candidate, frames, cancelled=cancelled)
+    if candidates:
+        cache.broad_phase_hits += 1
+    return candidates
+
+
+def _prospective_static_broad_phase_for_bands(
+    index: _ProjectedObstacleIndex,
+    candidate: PlacedBuilding,
+    bands: tuple[planet.Band, ...],
+    cache: _StagedStaticCache,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[int, ...]:
+    """Broad-phase a candidate before constructing its exact frame witnesses."""
+    cache.broad_phase_queries += 1
+    candidates = index.candidates_for_bands(
+        candidate,
+        bands,
+        cancelled=cancelled,
+    )
+    if candidates:
+        cache.broad_phase_hits += 1
+    return candidates
+
+
+def _cached_cleanup_survivor_bounds(
+    cache: _StagedStaticCache,
+    buildings: tuple[PlacedBuilding, ...],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[int, int, int, int]:
+    """Cache only a complete candidate geometry, never a bounds-only proxy."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    bounds = cache.cleanup_bounds.get(buildings)
+    if bounds is None:
+        bounds = (
+            finalize._cleanup_survivor_bounds(
+                Placement(buildings=buildings),
+            )
+            if cancelled is None
+            else finalize._cleanup_survivor_bounds(
+                Placement(buildings=buildings),
+                cancelled=cancelled,
+            )
+        )
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        cache.cleanup_bounds[buildings] = bounds
+    return bounds
+
+
+def _cleanup_snapshot_with_linkless_static(
+    prefix: finalize._CleanupSurvivorGraph,
+    bounds: tuple[int, int, int, int],
+    candidate: PlacedBuilding,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[finalize._CleanupSurvivorGraph, tuple[int, int, int, int]]:
+    """Reuse certified bounds only while a linkless static stays inside them."""
+    if (
+        bounds[0] <= candidate.x
+        and bounds[1] <= candidate.y
+        and candidate.x + candidate.width - 1 <= bounds[2]
+        and candidate.y + candidate.height - 1 <= bounds[3]
+    ):
+        return prefix, bounds
+    return prefix.extended_snapshot(
+        (candidate,),
+        bounds,
+        cancelled=cancelled,
+    )
+
+
+def _cached_junction_projection_frames(
+    cache: _StagedStaticCache,
+    occupied: tuple[int, int, int, int],
+    limit: tuple[int, int, int, int],
+    policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[_JunctionProjectionFrame, ...]:
+    """Return exact reachable frames once per attempt-local geometry signature."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    key = (occupied, limit, policy)
+    frames = cache.frames.get(key)
+    if frames is None:
+        frames = _junction_projection_frames(
+            occupied,
+            limit,
+            policy,
+            cancelled=cancelled,
+        )
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        cache.frames[key] = frames
+    return frames
+
+
+def _junction_projection_frames(
+    occupied: tuple[int, int, int, int],
+    limit: tuple[int, int, int, int],
+    policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[_JunctionProjectionFrame, ...]:
+    """Distinct physical frames in exact legacy first-encounter order.
+
+    A finalizer transform depends on orientation and latitude offset only:
+    longitude translation is a rigid rotation of the planet.  For each
+    orientation and latitude extent, primary-band thresholds partition the
+    longitude extents into a handful of equivalent ranges.  Only the legacy
+    first witness in each range can contribute a frame or projection, avoiding
+    the Cartesian width/height grid while preserving exact ordering.
+    """
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
+    limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
+    if not (
+        limit_min_x <= occupied_min_x <= occupied_max_x <= limit_max_x
+        and limit_min_y <= occupied_min_y <= occupied_max_y <= limit_max_y
+    ):
+        raise ValueError("occupied junction bounds must lie inside canvas.limit")
+
+    occupied_width = occupied_max_x - occupied_min_x + 1
+    occupied_height = occupied_max_y - occupied_min_y + 1
+    limit_width = limit_max_x - limit_min_x + 1
+    limit_height = limit_max_y - limit_min_y + 1
+    by_segments = {band.area_segments: band for band in planet.bands()}
+    ordered_bands = tuple(
+        sorted(by_segments.values(), key=lambda band: band.area_segments)
+    )
+
+    def primary_cross_ranges(
+        rows: int,
+        cross_min: int,
+        cross_max: int,
+    ) -> Iterator[tuple[planet.Band, int, int]]:
+        """Primary band and inclusive cross-extent ranges for fixed rows."""
+        explicit = policy.explicit_segments
+        if explicit is not None:
+            yield by_segments[explicit], cross_min, cross_max
+            return
+
+        previous_fit_hi = 0
+        for band in ordered_bands:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            fit_hi = 0
+            if rows <= band.rows:
+                fit_hi = band.columns
+            if rows <= band.columns:
+                fit_hi = max(fit_hi, band.rows)
+            range_lo = max(cross_min, previous_fit_hi + 1)
+            range_hi = min(cross_max, fit_hi)
+            previous_fit_hi = max(previous_fit_hi, fit_hi)
+            if range_lo <= range_hi:
+                yield band, range_lo, range_hi
+
+    intervals: list[_ReachableFrameInterval] = []
+    projection_intervals: dict[
+        tuple[bool, int, int, int, tuple[int, ...]],
+        _ReachableFrameInterval,
+    ] = {}
+
+    for rotated in (False, True):
+        if rotated:
+            row_min, row_max = occupied_width, limit_width
+            cross_min, cross_max = occupied_height, limit_height
+            occupied_cross_max = occupied_max_y
+            limit_cross_min = limit_min_y
+        else:
+            row_min, row_max = occupied_height, limit_height
+            cross_min, cross_max = occupied_width, limit_width
+            occupied_cross_max = occupied_max_x
+            limit_cross_min = limit_min_x
+        leftmost_cross_extent = occupied_cross_max - limit_cross_min + 1
+
+        for rows in range(row_min, row_max + 1):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            for primary, range_lo, range_hi in primary_cross_ranges(
+                rows,
+                cross_min,
+                cross_max,
+            ):
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                range_hi = min(range_hi, primary.columns)
+                if rows > primary.rows or range_lo > range_hi:
+                    continue
+                cross = min(
+                    max(leftmost_cross_extent, range_lo),
+                    range_hi,
+                )
+                width, height = (
+                    (rows, cross) if rotated else (cross, rows)
+                )
+                min_x_lo = max(limit_min_x, occupied_max_x - width + 1)
+                min_x_hi = min(occupied_min_x, limit_max_x - width + 1)
+                min_y_lo = max(limit_min_y, occupied_max_y - height + 1)
+                min_y_hi = min(occupied_min_y, limit_max_y - height + 1)
+                candidates = finalize._frame_candidates_for_extent(
+                    width,
+                    height,
+                    policy,
+                )
+                for candidate_index, candidate in enumerate(candidates):
+                    if candidate.frame.rotated is not rotated:
+                        continue
+                    if candidate.frame.primary_band != primary.area_segments:
+                        continue
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
+                    coordinate_lo, coordinate_hi = (
+                        (min_x_lo, min_x_hi)
+                        if rotated
+                        else (min_y_lo, min_y_hi)
+                    )
+                    interval = _ReachableFrameInterval(
+                        rotated=rotated,
+                        offset_lo=candidate.south_padding - coordinate_hi,
+                        offset_hi=candidate.south_padding - coordinate_lo,
+                        width=width,
+                        height=height,
+                        min_x_lo=min_x_lo,
+                        min_y_lo=min_y_lo,
+                        candidate_index=candidate_index,
+                        candidate=candidate,
+                    )
+                    intervals.append(interval)
+                    interval_projection_key = (
+                        rotated,
+                        interval.offset_lo,
+                        interval.offset_hi,
+                        candidate.frame.height,
+                        candidate.frame.certified_bands,
+                    )
+                    prior = projection_intervals.get(interval_projection_key)
+                    if (
+                        prior is None
+                        or interval.ordering_key() < prior.ordering_key()
+                    ):
+                        projection_intervals[interval_projection_key] = interval
+
+    offset_ranges = {
+        rotated: (
+            min(interval.offset_lo for interval in intervals if interval.rotated is rotated),
+            max(interval.offset_hi for interval in intervals if interval.rotated is rotated),
+        )
+        for rotated in (False, True)
+        if any(interval.rotated is rotated for interval in intervals)
+    }
+
+    def first_unassigned(following: list[int], position: int) -> int:
+        root = position
+        while following[root] != root:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            root = following[root]
+        while following[position] != position:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            parent = following[position]
+            following[position] = root
+            position = parent
+        return root
+
+    # Sorting by the offset-independent form of `(min_x, min_y, max_x,
+    # max_y, candidate_index)` makes the first interval covering each offset
+    # exactly the witness the old four nested edge loops encountered first.
+    frame_specs: dict[
+        tuple[bool, int],
+        tuple[tuple[int, int, int, int], finalize.FrameCandidate],
+    ] = {}
+    frame_ranks: dict[tuple[bool, int], _FrameWitnessRank] = {}
+    next_frame_offset = {
+        rotated: list(range(upper - lower + 2))
+        for rotated, (lower, upper) in offset_ranges.items()
+    }
+    for interval in sorted(intervals, key=_ReachableFrameInterval.ordering_key):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        base, _upper = offset_ranges[interval.rotated]
+        following = next_frame_offset[interval.rotated]
+        position = first_unassigned(following, interval.offset_lo - base)
+        stop = interval.offset_hi - base
+        while position <= stop:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            offset = base + position
+            bounds, rank = interval.witness(offset)
+            key = (interval.rotated, offset)
+            frame_specs[key] = (bounds, interval.candidate)
+            frame_ranks[key] = rank
+            following[position] = first_unassigned(following, position + 1)
+            position = following[position]
+
+    # A projection has its own first witness because different extent
+    # signatures can contribute the same band/anchor.  Each projection-offset
+    # pair is assigned once, so this work is proportional to the exact emitted
+    # projection union rather than interval span times candidate count.
+    projection_ranks: dict[
+        tuple[bool, int],
+        dict[tuple[int, int], tuple[int, ...]],
+    ] = {key: {} for key in frame_specs}
+    next_projection_offset: dict[
+        tuple[bool, tuple[int, int]],
+        list[int],
+    ] = {}
+    ordered_projection_intervals = sorted(
+        projection_intervals.values(),
+        key=_ReachableFrameInterval.ordering_key,
+    )
+    for interval in ordered_projection_intervals:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        base, upper = offset_ranges[interval.rotated]
+        for band_index, segments in enumerate(
+            interval.candidate.frame.certified_bands
+        ):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            band = by_segments[segments]
+            for anchor_index, anchor in enumerate(
+                band.anchors(interval.candidate.frame.height)
+            ):
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                band_anchor = (segments, anchor)
+                state_key = (interval.rotated, band_anchor)
+                projection_following = next_projection_offset.get(state_key)
+                if projection_following is None:
+                    projection_following = list(range(upper - base + 2))
+                    next_projection_offset[state_key] = projection_following
+                position = first_unassigned(
+                    projection_following,
+                    interval.offset_lo - base,
+                )
+                stop = interval.offset_hi - base
+                while position <= stop:
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
+                    offset = base + position
+                    _bounds, rank = interval.witness(offset)
+                    projection_ranks[(interval.rotated, offset)][
+                        band_anchor
+                    ] = (*rank, band_index, anchor_index)
+                    projection_following[position] = first_unassigned(
+                        projection_following,
+                        position + 1,
+                    )
+                    position = projection_following[position]
+
+    frames: list[_JunctionProjectionFrame] = []
+    for key in sorted(frame_specs, key=frame_ranks.__getitem__):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        bounds, candidate = frame_specs[key]
+        ordered_projections = sorted(
+            projection_ranks[key],
+            key=projection_ranks[key].__getitem__,
+        )
+        projections: list[planet.Projection] = []
+        for segments, anchor in ordered_projections:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            projections.append(
+                planet.Projection(
+                    band=by_segments[segments],
+                    anchor_row=anchor,
+                    segment=colliders.PLANET_SEGMENT,
+                    radius=colliders.PLANET_RADIUS,
+                )
+            )
+        frames.append(
+            _JunctionProjectionFrame(
+                bounds=bounds,
+                candidate=candidate,
+                projections=tuple(projections),
+            )
+        )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    return tuple(frames)
+
+
+def _prospective_static_failure(
+    buildings: Sequence[tuple[int, PlacedBuilding]],
+    frames: Sequence[_JunctionProjectionFrame],
+    *,
+    candidate_index: int,
+    cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> finalize.ProjectionFailure | None:
+    """First exact candidate collision over finalizer-reachable materializations."""
+    if cache is None:
+        cache = _StagedStaticCache()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    cache.exact_static_queries += 1
+    retained = tuple(
+        (index, building)
+        for index, building in buildings
+        if not catalog.is_belt(building.item_id)
+        and not catalog.is_sorter(building.item_id)
+    )
+    try:
+        candidate_position = next(
+            position
+            for position, (index, _building) in enumerate(retained)
+            if index == candidate_index
+        )
+    except StopIteration:
+        raise ValueError(
+            "prospective static candidate is not collision-tested"
+        ) from None
+    candidate = retained[candidate_position]
+    base = retained[:candidate_position] + retained[candidate_position + 1 :]
+    for frame in frames:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        pending_materialized: dict[
+            tuple[PlacedBuilding, tuple[int, int, int, int], finalize.FrameCandidate],
+            PlacedBuilding,
+        ] = {}
+        base_key = (base, frame.bounds, frame.candidate)
+        materialized_base = cache.materialized_bases.get(base_key)
+        if materialized_base is None:
+            pending_base: list[tuple[int, PlacedBuilding]] = []
+            for index, building in base:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                materialized_key = (building, frame.bounds, frame.candidate)
+                materialized = cache.materialized.get(
+                    materialized_key,
+                    pending_materialized.get(materialized_key),
+                )
+                if materialized is None:
+                    materialized = finalize.materialize_frame_building(
+                        building,
+                        bounds=frame.bounds,
+                        candidate=frame.candidate,
+                    )
+                    pending_materialized[materialized_key] = materialized
+                pending_base.append((index, materialized))
+            materialized_base = tuple(pending_base)
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        candidate_key = (candidate[1], frame.bounds, frame.candidate)
+        materialized_candidate = cache.materialized.get(
+            candidate_key,
+            pending_materialized.get(candidate_key),
+        )
+        if materialized_candidate is None:
+            materialized_candidate = finalize.materialize_frame_building(
+                candidate[1],
+                bounds=frame.bounds,
+                candidate=frame.candidate,
+            )
+            pending_materialized[candidate_key] = materialized_candidate
+        materialized_buildings = (
+            materialized_base[:candidate_position]
+            + ((candidate[0], materialized_candidate),)
+            + materialized_base[candidate_position:]
+        )
+        failure = (
+            finalize.first_projected_static_failure(
+                materialized_buildings,
+                frame.projections,
+                _clean_contexts=cache.clean_contexts,
+                _box_cache=cache.boxes,
+                _placed_cache=cache.placed,
+                candidate_index=candidate_index,
+            )
+            if cancelled is None
+            else finalize.first_projected_static_failure(
+                materialized_buildings,
+                frame.projections,
+                _clean_contexts=cache.clean_contexts,
+                _box_cache=cache.boxes,
+                _placed_cache=cache.placed,
+                candidate_index=candidate_index,
+                cancelled=cancelled,
+            )
+        )
+        cache.materialized.update(pending_materialized)
+        cache.materialized_bases.setdefault(base_key, materialized_base)
+        if failure is not None:
+            return failure
+    return None
+
+
+
+def _projected_coater_junction_bans_by_frame(
+    coaters: Sequence[tuple[int, PlacedBuilding]],
+    frames: Sequence[_JunctionProjectionFrame],
+    junction_bounds: tuple[int, int, int, int],
+    *,
+    already_banned: Set[Cell],
+    splitter_index: int,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[frozenset[Cell], ...]:
+    """Exact Splitter bans retained separately for each finalizer frame."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    min_x, min_y, max_x, max_y = junction_bounds
+    splitter_span = catalog.collider_span(catalog.SPLITTER_ID, 0.0)
+    banned_by_frame: list[set[Cell]] = [set() for _frame in frames]
+    materialized_splitters: dict[
+        tuple[Cell, tuple[int, int, int, int], finalize.FrameCandidate],
+        tuple[colliders.Placed, ...],
+    ] = {}
+    projected_splitter_boxes: dict[
+        tuple[colliders.Placed, planet.Projection],
+        list[colliders.Box],
+    ] = {}
+    projected_relation_overlaps: dict[tuple[object, ...], bool] = {}
+    projected_context_states: dict[
+        tuple[object, ...],
+        tuple[
+            planet.Projection,
+            colliders.Placed,
+            tuple[colliders.Box, ...],
+        ],
+    ] = {}
+
+    for coater_index, coater_building in coaters:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        prepared_frames: list[
+            tuple[
+                int,
+                _JunctionProjectionFrame,
+                tuple[int, colliders.Placed],
+                float,
+                float,
+                tuple[
+                    tuple[
+                        planet.Projection,
+                        float,
+                        float,
+                        tuple[colliders.Box, ...],
+                        colliders.Placed,
+                        tuple[object, ...],
+                    ],
+                    ...,
+                ],
+            ]
+        ] = []
+        scan_reach_x = 0
+        scan_reach_y = 0
+        for frame_index, frame in enumerate(frames):
+            seen_projection_contexts: set[tuple[object, ...]] = set()
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            materialized_building = finalize.materialize_frame_building(
+                coater_building,
+                bounds=frame.bounds,
+                candidate=frame.candidate,
+            )
+            materialized_coater = (
+                coater_index,
+                _collision_pose(materialized_building),
+            )
+            coater_span_x, coater_span_y = catalog.collider_span(
+                catalog.SPRAY_COATER_ID,
+                materialized_building.yaw,
+            )
+            lateral_x = round(materialized_building.yaw) % 180 == 0
+            tangent_reach_x = (
+                (coater_span_x + splitter_span[0]) / 2.0
+                + (1.0 if lateral_x else 0.0)
+            ) * colliders.GRID_ARC
+            tangent_reach_y = (
+                (coater_span_y + splitter_span[1]) / 2.0
+                + (0.0 if lateral_x else 1.0)
+            ) * colliders.GRID_ARC
+            projection_states: list[
+                tuple[
+                    planet.Projection,
+                    float,
+                    float,
+                    tuple[colliders.Box, ...],
+                    colliders.Placed,
+                    tuple[object, ...],
+                ]
+            ] = []
+            materialized_reach_x = 0
+            materialized_reach_y = 0
+            for projection in frame.projections:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                latitude = (
+                    materialized_coater[1].x
+                    if projection.rotated
+                    else materialized_coater[1].y
+                )
+                projection_context = (
+                    projection.band,
+                    projection.segment,
+                    projection.radius,
+                    projection.quadrant,
+                    projection.anchor_row + latitude,
+                    materialized_coater[1].z,
+                    materialized_coater[1].yaw,
+                )
+                if projection_context in seen_projection_contexts:
+                    continue
+                seen_projection_contexts.add(projection_context)
+                latitude_step = (
+                    projection.radius
+                    * planet.latitude_rad_per_grid(projection.segment)
+                    * 0.9
+                )
+                longitude_step = (
+                    projection.radius
+                    * min(
+                        math.cos(
+                            min(
+                                abs(grid),
+                                planet.pole_grid_idx(projection.segment),
+                            )
+                            * planet.latitude_rad_per_grid(
+                                projection.segment
+                            )
+                        )
+                        for grid in (
+                            projection.band.grid_lo,
+                            projection.band.grid_hi,
+                        )
+                    )
+                    * planet.longitude_rad_per_grid(
+                        projection.band.area_segments
+                    )
+                    * 0.9
+                )
+                materialized_reach_x = max(
+                    materialized_reach_x,
+                    math.ceil(tangent_reach_x / longitude_step),
+                )
+                materialized_reach_y = max(
+                    materialized_reach_y,
+                    math.ceil(tangent_reach_y / latitude_step),
+                )
+                context_state = projected_context_states.get(projection_context)
+                if context_state is None:
+                    context_state = (
+                        projection,
+                        materialized_coater[1],
+                        finalize.projected_coater_keepout_boxes(
+                            materialized_coater[1],
+                            projection,
+                        ),
+                    )
+                    projected_context_states[projection_context] = context_state
+                (
+                    canonical_projection,
+                    canonical_coater,
+                    coater_boxes,
+                ) = context_state
+                projection_states.append(
+                    (
+                        canonical_projection,
+                        longitude_step,
+                        latitude_step,
+                        coater_boxes,
+                        canonical_coater,
+                        projection_context,
+                    )
+                )
+            if frame.candidate.frame.rotated:
+                scan_reach_x = max(scan_reach_x, materialized_reach_y)
+                scan_reach_y = max(scan_reach_y, materialized_reach_x)
+            else:
+                scan_reach_x = max(scan_reach_x, materialized_reach_x)
+                scan_reach_y = max(scan_reach_y, materialized_reach_y)
+            prepared_frames.append(
+                (
+                    frame_index,
+                    frame,
+                    materialized_coater,
+                    tangent_reach_x,
+                    tangent_reach_y,
+                    tuple(projection_states),
+                )
+            )
+
+        for x in range(
+            max(min_x, coater_building.x - scan_reach_x),
+            min(max_x, coater_building.x + scan_reach_x) + 1,
+        ):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            for y in range(
+                max(min_y, coater_building.y - scan_reach_y),
+                min(max_y, coater_building.y + scan_reach_y) + 1,
+            ):
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                for level in range(LEVELS):
+                    cell = (x, y, level)
+                    if cell in already_banned:
+                        continue
+                    splitter_stack = _splitter_stack_geometry(x, y, level)
+                    for (
+                        frame_index,
+                        frame,
+                        materialized_coater,
+                        tangent_reach_x,
+                        tangent_reach_y,
+                        frame_projection_states,
+                    ) in prepared_frames:
+                        if cell in banned_by_frame[frame_index]:
+                            continue
+                        rejected = False
+                        materialized_key = (
+                            cell,
+                            frame.bounds,
+                            frame.candidate,
+                        )
+                        materialized_stack = materialized_splitters.get(
+                            materialized_key
+                        )
+                        if materialized_stack is None:
+                            materialized_stack = tuple(
+                                _collision_pose(
+                                    finalize.materialize_frame_building(
+                                        stack_member,
+                                        bounds=frame.bounds,
+                                        candidate=frame.candidate,
+                                    )
+                                )
+                                for stack_member in splitter_stack
+                            )
+                            materialized_splitters[materialized_key] = (
+                                materialized_stack
+                            )
+                        for materialized_splitter in materialized_stack:
+                            cell_dx = abs(
+                                materialized_splitter.x
+                                - materialized_coater[1].x
+                            )
+                            cell_dy = abs(
+                                materialized_splitter.y
+                                - materialized_coater[1].y
+                            )
+                            for (
+                                candidate_projection,
+                                x_step,
+                                y_step,
+                                coater_boxes,
+                                canonical_coater,
+                                candidate_projection_context,
+                            ) in frame_projection_states:
+                                if (
+                                    cell_dx * x_step > tangent_reach_x
+                                    or cell_dy * y_step > tangent_reach_y
+                                ):
+                                    continue
+                                delta_x = (
+                                    materialized_splitter.x
+                                    - materialized_coater[1].x
+                                )
+                                delta_y = (
+                                    materialized_splitter.y
+                                    - materialized_coater[1].y
+                                )
+                                delta_z = (
+                                    materialized_splitter.z
+                                    - materialized_coater[1].z
+                                )
+                                relation_key = (
+                                    candidate_projection_context,
+                                    materialized_splitter.model_index,
+                                    delta_x,
+                                    delta_y,
+                                    delta_z,
+                                    materialized_splitter.yaw,
+                                )
+                                overlap = projected_relation_overlaps.get(
+                                    relation_key
+                                )
+                                if overlap is None:
+                                    canonical_splitter = replace(
+                                        materialized_splitter,
+                                        x=canonical_coater.x + delta_x,
+                                        y=canonical_coater.y + delta_y,
+                                        z=canonical_coater.z + delta_z,
+                                    )
+                                    boxes_key = (
+                                        canonical_splitter,
+                                        candidate_projection,
+                                    )
+                                    splitter_boxes = projected_splitter_boxes.get(
+                                        boxes_key
+                                    )
+                                    if splitter_boxes is None:
+                                        splitter_boxes = colliders.target_boxes(
+                                            canonical_splitter,
+                                            *candidate_projection.pose(
+                                                canonical_splitter.x,
+                                                canonical_splitter.y,
+                                                canonical_splitter.z,
+                                                canonical_splitter.yaw,
+                                            ),
+                                        )
+                                        projected_splitter_boxes[boxes_key] = (
+                                            splitter_boxes
+                                        )
+                                    overlap = False
+                                    for coater_box in coater_boxes:
+                                        if cancelled is not None and cancelled():
+                                            raise _PreparationDeadline
+                                        for splitter_box in splitter_boxes:
+                                            if cancelled is not None and cancelled():
+                                                raise _PreparationDeadline
+                                            if colliders.obb_overlap(
+                                                coater_box,
+                                                splitter_box,
+                                            ):
+                                                overlap = True
+                                                break
+                                        if overlap:
+                                            break
+                                    projected_relation_overlaps[
+                                        relation_key
+                                    ] = overlap
+                                if overlap:
+                                    banned_by_frame[frame_index].add(cell)
+                                    rejected = True
+                                    break
+                            if rejected:
+                                break
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    return tuple(frozenset(banned) for banned in banned_by_frame)
+
+
 def _projection_envelope(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
     policy: BandPolicy,
+    *,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[planet.Projection, ...]:
     """Every finalizer projection reachable inside one fixed capacity box."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     occupied_min_x, occupied_min_y, occupied_max_x, occupied_max_y = occupied
     limit_min_x, limit_min_y, limit_max_x, limit_max_y = limit
     if not (
@@ -7125,52 +11431,116 @@ def _projection_envelope(
         tuple[finalize.FrameCandidate, ...],
     ] = {}
     projection_keys: dict[tuple[int, int, int], None] = {}
-    expanded: set[tuple[int, int, int, bool]] = set()
-    for min_x in range(limit_min_x, occupied_min_x + 1):
-        for min_y in range(limit_min_y, occupied_min_y + 1):
-            for max_x in range(occupied_max_x, limit_max_x + 1):
-                for max_y in range(occupied_max_y, limit_max_y + 1):
-                    width = max_x - min_x + 1
-                    height = max_y - min_y + 1
-                    extent = (width, height)
-                    candidates = candidates_by_extent.get(extent)
-                    if candidates is None:
-                        candidates = finalize._frame_candidates_for_extent(
-                            width,
-                            height,
-                            policy,
+    first_expansions: dict[tuple[int, int, int, int], int] = {}
+    next_anchor: dict[tuple[int, int], dict[int, int]] = {}
+
+    def first_unassigned(following: dict[int, int], anchor: int) -> int:
+        path: list[int] = []
+        while anchor in following:
+            path.append(anchor)
+            anchor = following[anchor]
+        for prior in path:
+            following[prior] = anchor
+        return anchor
+    occupied_width = occupied_max_x - occupied_min_x + 1
+    occupied_height = occupied_max_y - occupied_min_y + 1
+    limit_width = limit_max_x - limit_min_x + 1
+    limit_height = limit_max_y - limit_min_y + 1
+    for width in range(occupied_width, limit_width + 1):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        min_x_lo = max(limit_min_x, occupied_max_x - width + 1)
+        min_x_hi = min(occupied_min_x, limit_max_x - width + 1)
+        for height in range(occupied_height, limit_height + 1):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            min_y_lo = max(limit_min_y, occupied_max_y - height + 1)
+            min_y_hi = min(occupied_min_y, limit_max_y - height + 1)
+            for min_y in range(min_y_lo, min_y_hi + 1):
+                key = (
+                    min_x_lo,
+                    min_y,
+                    min_x_lo + width - 1,
+                    min_y + height - 1,
+                )
+                first_expansions[key] = first_expansions.get(key, 0) | 1
+            for min_x in range(min_x_lo, min_x_hi + 1):
+                key = (
+                    min_x,
+                    min_y_lo,
+                    min_x + width - 1,
+                    min_y_lo + height - 1,
+                )
+                first_expansions[key] = first_expansions.get(key, 0) | 2
+
+    # Sorting the first-witness rectangles is the exact legacy
+    # min-x/min-y/max-x/max-y encounter order. At a witness shared by both
+    for witness_index, (
+        (min_x, min_y, max_x, max_y),
+        witnessed,
+    ) in enumerate(sorted(first_expansions.items())):
+        if (
+            cancelled is not None
+            and witness_index % 64 == 0
+            and cancelled()
+        ):
+            raise _PreparationDeadline
+        width = max_x - min_x + 1
+        height = max_y - min_y + 1
+        extent = (width, height)
+        candidates = candidates_by_extent.get(extent)
+        if candidates is None:
+            candidates = finalize._frame_candidates_for_extent(
+                width,
+                height,
+                policy,
+            )
+            candidates_by_extent[extent] = candidates
+        for candidate in candidates:
+            rotated = candidate.frame.rotated
+            if not witnessed & (2 if rotated else 1):
+                continue
+            origin = min_x if rotated else min_y
+            row_origin = origin - candidate.south_padding
+            quadrant = int(rotated)
+            for segments in candidate.frame.certified_bands:
+                band = by_segments[segments]
+                following = next_anchor.setdefault((segments, quadrant), {})
+                for anchor_range in band.anchor_ranges(candidate.frame.height):
+                    anchor = first_unassigned(
+                        following,
+                        anchor_range.start - row_origin,
+                    )
+                    stop = anchor_range.stop - row_origin
+                    while anchor < stop:
+                        projection_keys[(segments, anchor, quadrant)] = None
+                        following[anchor] = first_unassigned(
+                            following,
+                            anchor + 1,
                         )
-                        candidates_by_extent[extent] = candidates
-                    for candidate in candidates:
-                        rotated = candidate.frame.rotated
-                        origin = min_x if rotated else min_y
-                        expansion = (width, height, origin, rotated)
-                        if expansion in expanded:
-                            continue
-                        row_origin = origin - candidate.south_padding
-                        for segments in candidate.frame.certified_bands:
-                            band = by_segments[segments]
-                            for anchor in band.anchors(candidate.frame.height):
-                                projection_keys.setdefault(
-                                    (
-                                        segments,
-                                        anchor - row_origin,
-                                        int(rotated),
-                                    ),
-                                    None,
-                                )
-                    expanded.add((width, height, min_y, False))
-                    expanded.add((width, height, min_x, True))
-    return tuple(
-        planet.Projection(
-            band=by_segments[segments],
-            anchor_row=anchor_row,
-            segment=colliders.PLANET_SEGMENT,
-            radius=colliders.PLANET_RADIUS,
-            quadrant=quadrant,
+                        anchor = following[anchor]
+    projections: list[planet.Projection] = []
+    for projection_index, (segments, anchor_row, quadrant) in enumerate(
+        projection_keys
+    ):
+        if (
+            cancelled is not None
+            and projection_index % 64 == 0
+            and cancelled()
+        ):
+            raise _PreparationDeadline
+        projections.append(
+            planet.Projection(
+                band=by_segments[segments],
+                anchor_row=anchor_row,
+                segment=colliders.PLANET_SEGMENT,
+                radius=colliders.PLANET_RADIUS,
+                quadrant=quadrant,
+            )
         )
-        for segments, anchor_row, quadrant in projection_keys
-    )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    return tuple(projections)
 
 
 def _power_projection_envelope(
@@ -7178,24 +11548,38 @@ def _power_projection_envelope(
     policy: BandPolicy,
     *,
     capacity: tuple[int, int, int, int] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[planet.Projection, ...]:
     """Projection union down to geometry no cleanup eligibility can remove."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     occupied = _core_bounds(canvas)
-    cleanup_inner = finalize._cleanup_survivor_bounds(
-        Placement(buildings=tuple(canvas.buildings))
+    cleanup_inner = (
+        finalize._cleanup_survivor_bounds(
+            Placement(buildings=tuple(canvas.buildings)),
+        )
+        if cancelled is None
+        else finalize._cleanup_survivor_bounds(
+            Placement(buildings=tuple(canvas.buildings)),
+            cancelled=cancelled,
+        )
     )
     return _projection_envelope(
         cleanup_inner,
         capacity if capacity is not None else canvas.limit or occupied,
         policy,
+        cancelled=cancelled,
     )
 
 
 def _power_plan(
     canvas: _Canvas,
-    core: tuple[int, int, int, int],
+    demand: tuple[int, int, int, int],
     *,
     policy: BandPolicy,
+    additional_demand: Collection[tuple[int, int]] = (),
+    staged_static_cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[tuple[int, int]]:
     """Where every tower goes, decided BEFORE anything routes.
 
@@ -7203,6 +11587,11 @@ def _power_plan(
     is a property of the PACK and makes it infeasible.  Otherwise it returns a
     placement that covers every powered tile and is connected, and the cells are
     held in ``canvas.keep_out`` so the router paths around them.
+
+    ``demand`` is the complete route-capable envelope. ``additional_demand``
+    names known powered junctions outside that envelope without pessimistically
+    powering the entire belt-only entry ring. ``canvas.limit`` is the boundary
+    where towers may stand.
 
     WHY THIS IS A PLAN AND NOT A LATTICE WITH A REPAIR BEHIND IT
     ------------------------------------------------------------
@@ -7250,28 +11639,33 @@ def _power_plan(
     It used to point the other way, which is measured at three corpus cells --
     see the tie-break itself, where the numbers are.
     """
+    if staged_static_cache is None:
+        staged_static_cache = _StagedStaticCache()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
     link2 = math.floor((2 * tower.connect_distance) ** 2)
-    core_x0, core_y0, core_x1, core_y1 = core
-    # A TOWER MAY STAND OUTSIDE THE CORE. WHAT IT COVERS MAY NOT.
+    demand_x0, demand_y0, demand_x1, demand_y1 = demand
+    # A TOWER MAY STAND OUTSIDE THE POWER DEMAND. WHAT IT COVERS MAY NOT.
     #
-    # Standing ground is the whole canvas, the entry ring included, because on a
-    # small dense build the core is packed SOLID -- every cell a machine or a
-    # lane -- and a tower restricted to it would have nowhere at all to go. The
-    # old lattice was restricted to the core and its repair pass was not
-    # (`try_place` never checked), so towers in the ring are what that build was
-    # relying on all along, without anybody saying so.
+    # Standing ground is the whole canvas, the outer entry ring included,
+    # because on a small dense build the powered demand is packed SOLID -- every
+    # cell a machine or a lane -- and a tower restricted to it would have
+    # nowhere at all to go. The old lattice was restricted to the core and its
+    # repair pass was not (`try_place` never checked), so towers in the ring are
+    # what that build was relying on all along, without anybody saying so.
     #
-    # It is a second choice, not a free one: the ring is where the external
-    # input runs come in, and a tower in one breaks the straight run out to it.
-    # So the core is searched first and the ring is reached into only for tiles
-    # the core cannot cover -- see `in_core` at the placement loop.
-    min_x, min_y, max_x, max_y = canvas.limit or core
-    min_x, min_y = min(min_x, core_x0), min(min_y, core_y0)
-    max_x, max_y = max(max_x, core_x1), max(max_y, core_y1)
+    # It is a second choice, not a free one: the outer ring is where the
+    # external input runs come in, and a tower in one breaks the straight run
+    # out to it. So the demand envelope is searched first and the outer ring is
+    # reached into only for tiles the demand envelope cannot cover -- see
+    # `in_demand` at the placement loop.
+    min_x, min_y, max_x, max_y = canvas.limit or demand
+    min_x, min_y = min(min_x, demand_x0), min(min_y, demand_y0)
+    max_x, max_y = max(max_x, demand_x1), max(max_y, demand_y1)
     width, height = max_x - min_x + 1, max_y - min_y + 1
-    if core_x1 < core_x0 or core_y1 < core_y0:
+    if demand_x1 < demand_x0 or demand_y1 < demand_y0:
         return []
 
     # Padded so a disc or link stamp near an edge needs no clipping. The stamps
@@ -7283,36 +11677,51 @@ def _power_plan(
 
     free = np.zeros(shape, dtype=bool)
     for x in range(min_x, max_x + 1):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         for y in range(min_y, max_y + 1):
+            if canvas.limit is not None and not (
+                canvas.limit[0] <= x <= canvas.limit[2]
+                and canvas.limit[1] <= y <= canvas.limit[3]
+            ):
+                continue
             if not canvas.free((x, y, 0)) or (x, y) in canvas.solid:
                 continue
             if any((x, y, lvl) in canvas.blocked for lvl in range(LEVELS)):
                 continue
             free[x - min_x + pad, y - min_y + pad] = True
 
-    in_core = np.zeros(shape, dtype=bool)
-    in_core[
-        core_x0 - min_x + pad : core_x1 - min_x + pad + 1,
-        core_y0 - min_y + pad : core_y1 - min_y + pad + 1,
+    in_demand = np.zeros(shape, dtype=bool)
+    in_demand[
+        demand_x0 - min_x + pad : demand_x1 - min_x + pad + 1,
+        demand_y0 - min_y + pad : demand_y1 - min_y + pad + 1,
     ] = True
 
-    # WHAT HAS TO BE COVERED IS THE CORE, NOT THE BUILDINGS STANDING IN IT.
+    # WHAT HAS TO BE COVERED IS THE ROUTE-CAPABLE POWER DEMAND, NOT ONLY THE
+    # BUILDINGS STANDING IN IT.
     #
-    # This runs BEFORE routing, and routing is what places the sorters and the
-    # spray coaters -- both of which draw power. Covering the buildings that
-    # exist right now leaves every one of those dark, and the placement then
-    # fails `power.coverage` at certify having looked perfectly correct here.
-    # Measured, and it is not a corner case: covering only the machines refused
-    # `universe-matrix` at free-proliferation and max-proliferation on every
-    # height, in three audits out of four.
+    # This runs BEFORE routing, and routing is what places the sorters, spray
+    # coaters and Splitters -- all of which draw power. Covering the buildings
+    # that exist right now leaves those future receivers dark, and the placement
+    # then fails `power.coverage` at certify having looked perfectly correct
+    # here. Measured, and it is not a corner case: covering only the machines
+    # refused `universe-matrix` at free-proliferation and max-proliferation on
+    # every height, in three audits out of four.
     #
-    # The core is the region powered buildings are allowed to occupy -- the
-    # entry ring outside it holds belts, which are unpowered -- so covering all
-    # of it is the condition that does not depend on what has been placed yet.
-    # It is still need-based rather than a grid: a tower covers a 346-tile disc
-    # and the core is covered by discs, not by a point every nine tiles.
-    dark = in_core.copy()
+    # The demand envelope is the region routing may occupy with powered
+    # buildings. The outer entry ring beyond it remains belt-only, so covering
+    # the explicit demand is the condition that does not depend on what has been
+    # placed yet. It is still need-based rather than a grid: a tower covers a
+    # 346-tile disc and the demand is covered by discs, not by a point every nine
+    # tiles.
+    dark = in_demand.copy()
+    for x, y in additional_demand:
+        gx, gy = x - min_x + pad, y - min_y + pad
+        if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
+            dark[gx, gy] = True
     for b in canvas.buildings:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
             continue
         for tx, ty, _ in b.tiles():
@@ -7374,6 +11783,8 @@ def _power_plan(
     # keyed on their own flags, so a node on a wider tier keeps its own distance.
     power_nodes: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
     for index, b in enumerate(canvas.buildings):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         try:
             peer = catalog.building(b.item_id).power_node
         except KeyError:
@@ -7384,15 +11795,66 @@ def _power_plan(
         cx = b.x + b.width // 2 - min_x + pad
         cy = b.y + b.height // 2 - min_y + pad
         for dx, dy, dz in rules.power_node_keepout_offsets(peer, tower.power_node):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
             if dz:
                 continue
             gx, gy = cx + dx, cy + dy
             if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
                 free[gx, gy] = False
 
-    projections = _power_projection_envelope(canvas, policy)
+    projections = _power_projection_envelope(
+        canvas,
+        policy,
+        cancelled=cancelled,
+    )
+    projection_bands = tuple(
+        sorted(
+            {projection.band for projection in projections},
+            key=lambda band: band.area_segments,
+        )
+    )
+    power_projection_contexts = tuple(
+        dict.fromkeys(
+            (
+                projection.band.columns,
+                projection.rotated,
+                _minimum_projection_grid_scale((projection.band,)),
+            )
+            for projection in projections
+        )
+    )
+    static_buildings = list(enumerate(canvas.buildings))
+    static_by_index = dict(static_buildings)
+    obstacle_index = _ProjectedObstacleIndex.build(
+        static_buildings,
+        cancelled=cancelled,
+    )
+    cleanup_prefix = finalize._CleanupSurvivorGraph(
+        Placement(buildings=tuple(building for _, building in static_buildings)),
+        cancelled=cancelled,
+        _operations=staged_static_cache.cleanup_operations,
+    )
+    cleanup_bounds = cleanup_prefix.snapshot_bounds()
+    static_frames_by_bounds: dict[
+        tuple[int, int, int, int],
+        tuple[_JunctionProjectionFrame, ...],
+    ] = {}
     for projection in projections:
-        existing_failure = finalize.projected_power_failure(power_nodes, projection)
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        existing_failure = (
+            finalize.projected_power_failure(
+                power_nodes,
+                projection,
+            )
+            if cancelled is None
+            else finalize.projected_power_failure(
+                power_nodes,
+                projection,
+                cancelled=cancelled,
+            )
+        )
         if existing_failure is not None:
             raise _Unpowerable(
                 "existing power nodes are illegal in a required projection",
@@ -7436,9 +11898,12 @@ def _power_plan(
     linked = np.zeros(shape, dtype=bool)
     sites: list[tuple[int, int]] = []
     projected_refusal: finalize.ProjectionFailure | None = None
+    projected_retry_evidence: _ExactRetryEvidence | None = None
     # A cap, not a schedule: every round either consumes or rejects one free
     # cell, so a placement that has not finished by then is not converging.
     for _ in range(int(np.count_nonzero(free)) + 1):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         if not remaining.any():
             break
         # WHERE a tower stands costs the router, because a tower cell is held in
@@ -7484,7 +11949,6 @@ def _power_plan(
         #   `openness`                 n=17  mean 71.0
         #     70,70,70,70,70,71,71,71,71,71,71,71,72,72,72,72,72
         #
-        # `INVALID 0` in every one of those runs, on every variant, and no
         # `power.coverage` refusal anywhere: the tie-break moves which cells the
         # router has to path around, never whether the block ends up powered.
         #
@@ -7510,11 +11974,12 @@ def _power_plan(
         # an enclosed cell covers fewer tiles and so more of them are needed.
         key = score * 5 + openness
         reachable_now = free if not sites else (free & linked)
-        # The core first, and the ring only for what the core cannot reach.
-        # Widening is per ROUND rather than once and for all, so a build that
-        # needs one ring cell takes one, not a placement's worth.
+        # The demand envelope first, and the outer entry ring only for what the
+        # demand cannot reach. Widening is per ROUND rather than once and for
+        # all, so a build that needs one outer-ring cell takes one, not a
+        # placement's worth.
         gx = gy = -1
-        for allowed in (reachable_now & in_core, reachable_now):
+        for allowed in (reachable_now & in_demand, reachable_now):
             flat = int(np.where(allowed, key, -1).argmax())
             cx, cy = divmod(flat, shape[1])
             if allowed[cx, cy] and score[cx, cy] > 0:
@@ -7528,47 +11993,116 @@ def _power_plan(
                 raise _Unpowerable(
                     "the tower network cannot reach the rest of the block",
                     failure=projected_refusal,
+                    exact_retry_evidence=projected_retry_evidence,
                 )
             target = np.argwhere(remaining)[0]
             gx, gy = cand[np.argmin(((cand - target) ** 2).sum(axis=1))].tolist()
         site = (gx - pad + min_x, gy - pad + min_y)
-        candidate: tuple[int, PlacedBuilding, rules.PowerNode] | None = None
+        candidate = (
+            len(canvas.buildings) + len(sites),
+            PlacedBuilding(
+                item_id=catalog.TESLA_TOWER_ID,
+                model_index=tower.model_index,
+                x=site[0],
+                y=site[1],
+                width=tower.width,
+                height=tower.height,
+            ),
+            tower.power_node,
+        )
+        projected_power_peers = tuple(
+            peer
+            for peer in power_nodes
+            if _projected_power_peer_possible(
+                candidate,
+                peer,
+                power_projection_contexts,
+                cancelled=cancelled,
+            )
+        )
         candidate_failure: finalize.ProjectionFailure | None = None
-        if projections:
-            candidate = (
-                len(canvas.buildings) + len(sites),
-                PlacedBuilding(
-                    item_id=catalog.TESLA_TOWER_ID,
-                    model_index=tower.model_index,
-                    x=site[0],
-                    y=site[1],
-                    width=tower.width,
-                    height=tower.height,
-                ),
-                tower.power_node,
-            )
-            candidate_failure = next(
-                (
-                    candidate_failure
-                    for projection in projections
-                    for peer in power_nodes
-                    if (
-                        candidate_failure := finalize.projected_power_failure(
-                            (peer, candidate),
-                            projection,
-                        )
+        for projection in projections:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            for projected_peer in projected_power_peers:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                candidate_failure = (
+                    finalize.projected_power_failure(
+                        (projected_peer, candidate),
+                        projection,
                     )
-                    is not None
-                ),
-                None,
+                    if cancelled is None
+                    else finalize.projected_power_failure(
+                        (projected_peer, candidate),
+                        projection,
+                        cancelled=cancelled,
+                    )
+                )
+                if candidate_failure is not None:
+                    break
+            if candidate_failure is not None:
+                break
+        if candidate_failure is None:
+            potential_peers = _prospective_static_broad_phase_for_bands(
+                obstacle_index,
+                candidate[1],
+                projection_bands,
+                staged_static_cache,
+                cancelled=cancelled,
             )
+            # A linkless tower already inside the certified rectangle cannot
+            # change cleanup survivors. Extending any side can revive a linked
+            # belt that the old boundary pruned, including one that expands the
+            # orthogonal axis, so that case must advance the exact prefix.
+            candidate_cleanup, candidate_bounds = (
+                _cleanup_snapshot_with_linkless_static(
+                    cleanup_prefix,
+                    cleanup_bounds,
+                    candidate[1],
+                    cancelled=cancelled,
+                )
+            )
+            if potential_peers:
+                static_frames = static_frames_by_bounds.get(candidate_bounds)
+                if static_frames is None:
+                    static_frames = _cached_junction_projection_frames(
+                        staged_static_cache,
+                        candidate_bounds,
+                        canvas.limit or candidate_bounds,
+                        policy,
+                        cancelled=cancelled,
+                    )
+                    static_frames_by_bounds[candidate_bounds] = static_frames
+                candidate_failure = _prospective_static_failure(
+                    (
+                        *(
+                            (index, static_by_index[index])
+                            for index in potential_peers
+                        ),
+                        (candidate[0], candidate[1]),
+                    ),
+                    static_frames,
+                    candidate_index=candidate[0],
+                    cache=staged_static_cache,
+                    cancelled=cancelled,
+                )
         if candidate_failure is not None:
-            projected_refusal = projected_refusal or candidate_failure
+            if projected_refusal is None:
+                projected_refusal = candidate_failure
+                if candidate_failure.check == "geom.collide":
+                    projected_retry_evidence = _exact_retry_evidence(
+                        "power",
+                        candidate_failure,
+                        dict((*static_buildings, (candidate[0], candidate[1]))),
+                    )
             free[gx, gy] = False
             continue
         sites.append(site)
-        if candidate is not None:
-            power_nodes.append(candidate)
+        power_nodes.append(candidate)
+        cleanup_bounds = candidate_bounds
+        cleanup_prefix = candidate_cleanup
+
         # The cell itself AND every cell inside the paste's power-node spacing
         # rule.  Marking only the cell is what shipped a blueprint the game
         # refused; the halo is what makes this greedy incapable of producing one.
@@ -7591,6 +12125,7 @@ def _power_plan(
         raise _Unpowerable(
             "tower placement did not converge",
             failure=projected_refusal,
+            exact_retry_evidence=projected_retry_evidence,
         )
 
     for site in sites:
@@ -7684,6 +12219,9 @@ def _pair_lanes(
     island that balances from one that starves.  Omitting them keeps the pairing
     exactly cyclic, which is what the unit tests of the pairing itself want.
     """
+    domains = {port.cargo_domain for port in (*srcs, *sinks)}
+    if len(domains) != 1:
+        raise ValueError("lane pairing requires exactly one cargo domain")
     pairs = [(k % len(srcs), k % len(sinks)) for k in range(max(len(srcs), len(sinks)))]
     for i, j in _connect_short_cuts(srcs, sinks, pairs, out_rate, in_rate):
         pairs.append((i, j))
@@ -7921,16 +12459,25 @@ def _prepare_routing_problem(
     policy: BandPolicy,
     ramped: bool = False,
     _reserve_ports: bool = True,
+    staged_static_cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     canvas = _Canvas(ramped=ramped)
+    if staged_static_cache is None:
+        staged_static_cache = _StagedStaticCache()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
+    groups = _adapt(spec)
     rates: dict[str, Fraction] = {}
-    for g in _adapt(spec).values():
+    for g in groups.values():
         for item, r in list(g.inputs.items()) + list(g.outputs.items()):
             rates[item] = max(rates.get(item, Fraction(0)), r * g.count)
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
     # PER-ITEM per-machine rates, keyed by group. One sorter serves one machine
     # and moves one item, so that item's per-machine rate is exactly what the
@@ -7943,7 +12490,7 @@ def _prepare_routing_problem(
     # iron starved the machine. The overloaded sorter hid behind the underloaded
     # one, and the validator averaged the same way so it never caught it.
     per_item: dict[str, tuple[Mapping[str, Fraction], Mapping[str, Fraction]]] = {
-        key: (dict(g.inputs), dict(g.outputs)) for key, g in _adapt(spec).items()
+        key: (dict(g.inputs), dict(g.outputs)) for key, g in groups.items()
     }
 
     # EVERY strip of a group keeps its port, not just the last one emitted.
@@ -7957,12 +12504,11 @@ def _prepare_routing_problem(
     #
     # It reported `route_failures == 0` throughout, because the nets that existed
     # did route; the missing ones were never created to fail.
-    in_ports: dict[tuple[str, str], list[_Port]] = defaultdict(list)
+    in_ports: dict[tuple[str, str, CargoDomain], list[_Port]] = defaultdict(list)
     # The producer side collides the same way: sharding a producer gives several
-    # strips the SAME destination set, so keying on (group, item, dest) alone
-    # kept only the last strip's output lane. The others were emitted, drained by
-    # nobody, and left as dead belts.
-    out_ports: dict[tuple[str, str, str], list[_Port]] = defaultdict(list)
+    # strips the SAME destination set, so the key includes group, item, domain,
+    # and destination.
+    out_ports: dict[tuple[str, str, str, CargoDomain], list[_Port]] = defaultdict(list)
     strip_in_ports: list[dict[str, _Port]] = []
     # Flow-graph bookkeeping for `_join_shard_islands`, keyed by BELT index.
     #
@@ -7974,12 +12520,14 @@ def _prepare_routing_problem(
     # shard's production twice. That mistake makes a starving shard read as
     # healthy, which is the exact failure this bookkeeping exists to find.
     lane_of: dict[int, _Port] = {}
-    lane_supply: dict[str, dict[int, Fraction]] = defaultdict(dict)
-    lane_demand: dict[str, dict[int, Fraction]] = defaultdict(dict)
-    sibling_lanes: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    lane_supply: dict[CargoKey, dict[int, Fraction]] = defaultdict(dict)
+    lane_demand: dict[CargoKey, dict[int, Fraction]] = defaultdict(dict)
+    sibling_lanes: dict[CargoKey, list[tuple[int, int]]] = defaultdict(list)
     strip_of_belt: dict[int, int] = {}
     sorters = 0
     for i, s in enumerate(strips):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         ox, oy = pack.at[i]
         ins, outs, placed = _emit_strip(
             canvas,
@@ -7990,7 +12538,6 @@ def _prepare_routing_problem(
             belt_model,
             rates,
             *per_item.get(s.group_key, ({}, {})),
-            sprayed=frozenset(spec.spray_lanes),
             owner_strip=i,
         )
         sorters += placed
@@ -7999,74 +12546,146 @@ def _prepare_routing_problem(
             for belt in port.tiles:
                 strip_of_belt[belt] = i
         for item, port in ins.items():
-            in_ports[s.group_key, item].append(port)
+            in_ports[s.group_key, item, port.cargo_domain].append(port)
         made = per_item.get(s.group_key, ({}, {}))[1]
-        by_item: dict[str, list[int]] = defaultdict(list)
-        for (item, dest), port in outs.items():
-            out_ports[s.group_key, item, dest].append(port)
+        by_cargo: dict[CargoKey, list[int]] = defaultdict(list)
+        cargo_weight: dict[CargoKey, Fraction] = defaultdict(Fraction)
+        for (item, dest, cargo_domain), port in outs.items():
+            cargo = (item, cargo_domain)
+            out_ports[s.group_key, item, dest, cargo_domain].append(port)
             lane_of[port.belt] = port
-            by_item[item].append(port.belt)
-        for item, belts in by_item.items():
-            belts.sort()
-            lane_supply[item][belts[0]] = s.machines * made.get(item, Fraction(0))
-            for b in belts[1:]:
-                lane_supply[item][b] = Fraction(0)
-                sibling_lanes[item].append((belts[0], b))
+            by_cargo[cargo].append(port.belt)
+            cargo_weight[cargo] += _sink_demand(groups, spec, item, dest)
+        by_item: dict[str, list[CargoKey]] = defaultdict(list)
+        for cargo in by_cargo:
+            by_item[cargo[0]].append(cargo)
+        for item, item_cargo_keys in by_item.items():
+            total_weight = sum(
+                (cargo_weight[cargo] for cargo in item_cargo_keys),
+                Fraction(0),
+            )
+            for cargo in item_cargo_keys:
+                belts = sorted(by_cargo[cargo])
+                share = (
+                    cargo_weight[cargo] / total_weight
+                    if total_weight > 0
+                    else Fraction(1, len(item_cargo_keys))
+                )
+                lane_supply[cargo][belts[0]] = (
+                    s.machines * made.get(item, Fraction(0)) * share
+                )
+                for belt in belts[1:]:
+                    lane_supply[cargo][belt] = Fraction(0)
+                    sibling_lanes[cargo].append((belts[0], belt))
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
-    # Nets the packer arranged to bridge directly become a single sorter and no
-    # belt route at all -- that saving IS the feature, so it happens before the
-    # net list is built rather than as a post-pass over routed belts.
-    direct_keys = {(strips[i].group_key, strips[j].group_key) for i, j in pack.direct}
-    direct_placed = 0
+    # Nets rewarded as direct inserts never silently fall back to an ordinary
+    # route. The exact strip/item/domain promise is either emitted and recorded,
+    # or retained below as STATIC_ACCESS evidence.
+    promised_direct = pack.direct
+    realized_direct: set[DirectInsertId] = set()
 
     nets: list[_Net] = []
     # Everything already joined for an item, so `_join_shard_islands` can see
     # the flow graph the whole build makes rather than one edge of it. Keyed by
     # BELT index, which is what makes a lane serving several destinations one
     # node instead of several.
-    joined: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    joined: dict[CargoKey, list[tuple[int, int]]] = defaultdict(list)
     # Every sorter already standing, as the PASTE will test it.  Built once and
     # extended by each bridge that lands: `_bridge` is asked once per lane pair
     # and rebuilding this inside it is quadratic in the sorter count, which on a
     # stress spec is thousands.
     standing = slots.sorter_seat_boxes(canvas.buildings)
-    for (src_key, item, dest_group), srcs in out_ports.items():
+    for (src_key, item, dest_group, cargo_domain), srcs in out_ports.items():
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         # One output lane may serve SEVERAL destination groups -- see
         # `_merge_lanes` -- and each of them is its own set of consumer strips to
-        # pair against. They all tap the same lane end, where `_tap_source`
-        # builds the junction, exactly as it already does when ONE destination is
-        # sharded across several consumer strips.
+        # pair against. Domain is part of the key, so a clean and a sprayed lane
+        # can never become siblings merely because they carry the same item.
+        cargo = (item, cargo_domain)
         out_rate = per_item.get(src_key, ({}, {}))[1].get(item, Fraction(0))
         for dest in _dests(dest_group):
-            sinks = in_ports.get((dest, item), [])
+            sinks = in_ports.get((dest, item, cargo_domain), [])
             if not srcs or not sinks:
                 continue
             in_rate = per_item.get(dest, ({}, {}))[0].get(item, Fraction(0))
-            # The per-machine rates on both sides, so the pairing can tell an
-            # island that feeds itself from one that starves.
             for port, sink in _pair_lanes(srcs, sinks, out_rate=out_rate, in_rate=in_rate):
-                joined[item].append((port.belt, sink.belt))
+                joined[cargo].append((port.belt, sink.belt))
                 lane_of[sink.belt] = sink
-                lane_demand[item][sink.belt] = sink.machines * in_rate
-                if (src_key, dest) in direct_keys and _bridge(
-                    canvas, port, sink, rates, item, standing
-                ):
-                    direct_placed += 1
+                lane_demand[cargo][sink.belt] = sink.machines * in_rate
+                direct_id = DirectInsertId(
+                    source_strip=strip_of_belt[port.belt],
+                    destination_strip=strip_of_belt[sink.belt],
+                    item=item,
+                    cargo_domain=cargo_domain,
+                )
+                if direct_id in promised_direct:
+                    realized = _bridge(
+                        canvas,
+                        port,
+                        sink,
+                        rates,
+                        item,
+                        standing,
+                        direct_id,
+                    )
+                    if realized is not None:
+                        realized_direct.add(realized)
+                    # A failed rewarded bridge is a failed attempt, not a licence
+                    # to restore the net the objective was paid to delete.
                     continue
-                nets.append(_Net(src=port, dst=sink, item=item))
+                nets.append(
+                    _Net(
+                        src=port,
+                        dst=sink,
+                        item=item,
+                        cargo_domain=cargo_domain,
+                    )
+                )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
-    # A shard of a producer that cannot feed its own destinations is joined to
-    # one that can. Nothing inside the pairing above can see this, because two
-    # shards of one group are never handed to it together -- see
-    # `_join_shard_islands` for the arithmetic that forces it.
-    for item in sorted(set(joined) | set(sibling_lanes)):
+    active_cargo = set(joined) | set(sibling_lanes)
+    demand_by_item = {
+        item: sum(
+            (
+                sum(lane_demand[cargo].values(), Fraction(0))
+                for cargo in active_cargo
+                if cargo[0] == item
+            ),
+            Fraction(0),
+        )
+        for item, _cargo_domain in active_cargo
+    }
+    for cargo in sorted(active_cargo, key=lambda key: (key[0], key[1].value)):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        item, cargo_domain = cargo
+        total_demand = demand_by_item[item]
+        domain_demand = sum(lane_demand[cargo].values(), Fraction(0))
+        external = spec.external_inputs.get(item, Fraction(0))
+        domain_external = (
+            external * domain_demand / total_demand if total_demand > 0 else Fraction(0)
+        )
         for a, b in _join_shard_islands(
-            joined[item] + sibling_lanes[item],
-            lane_supply[item],
-            lane_demand[item],
-            spec.external_inputs.get(item, Fraction(0)),
+            joined[cargo] + sibling_lanes[cargo],
+            lane_supply[cargo],
+            lane_demand[cargo],
+            domain_external,
         ):
-            nets.append(_Net(src=lane_of[a], dst=lane_of[b], item=item))
+            nets.append(
+                _Net(
+                    src=lane_of[a],
+                    dst=lane_of[b],
+                    item=item,
+                    cargo_domain=cargo_domain,
+                )
+            )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
 
     # Hold one cell beside every port BEFORE anything else can take it.
     #
@@ -8104,26 +12723,52 @@ def _prepare_routing_problem(
 
     if _reserve_ports:
         hold_ports()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
     # Coaters go in BEFORE routing, because each one needs a proliferator net
     # routed to its drop belt. Placing them afterwards -- as this used to --
     # leaves them mounted on belts with nothing feeding them, so every
     # proliferated recipe silently runs unproliferated.
+    assert staged_static_cache is not None
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     coater_list: list[CoaterSupplyPort] = []
     prolif_item = _proliferator_item(spec)
-    if spec.spray_lanes:
-        coater_list = _place_coaters(
-            canvas,
-            spec,
-            strips,
-            strip_in_ports,
-            belt_id,
-            belt_model,
-            policy=policy,
-        )
+    if spec.spray_lanes or any(
+        port.cargo_domain is CargoDomain.REQUIRES_SPRAY
+        for ports in strip_in_ports
+        for port in ports.values()
+    ):
+        if cancelled is None:
+            coater_list = _place_coaters(
+                canvas,
+                spec,
+                strips,
+                strip_in_ports,
+                belt_id,
+                belt_model,
+                policy=policy,
+            )
+        else:
+            coater_list = _place_coaters(
+                canvas,
+                spec,
+                strips,
+                strip_in_ports,
+                belt_id,
+                belt_model,
+                policy=policy,
+                staged_static_cache=staged_static_cache,
+                cancelled=cancelled,
+            )
     coaters = len(coater_list)
     for coater in coater_list:
-        strip_of_belt[coater.supply_belt] = strip_of_belt[coater.host_belt]
+        host_strip = strip_of_belt[coater.host_belt]
+        strip_of_belt[coater.approach_belt] = host_strip
+        strip_of_belt[coater.supply_belt] = host_strip
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
     # THE EXTENT IS DECIDED HERE, and nothing after this point may move it.
     #
@@ -8141,27 +12786,244 @@ def _prepare_routing_problem(
     # empty by construction, which is what makes an entry belt reachable from
     # outside no matter what else the router does.
     core = _core_bounds(canvas)
-    canvas.limit = _grow(core, _ENTRY_RING)
+    core_width = core[2] - core[0] + 1
+    core_height = core[3] - core[1] + 1
+    envelope = finalize.band_policy_search_envelope(
+        policy,
+        perimeter=_ENTRY_RING,
+    )
+    if not envelope.frame_candidates(core_width, core_height):
+        raise finalize.ProjectionRefusal(
+            (envelope.extent_failure(core_width, core_height),)
+        )
+    capacity = _grow(core, _ENTRY_RING)
+    canvas.limit = capacity
     route_bounds = _grow(core, _ROUTE_RING)
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
-    # The proliferator entry is staked BEFORE the ports are held, not after the
-    # external runs have settled. It can be: its cell is reserved ground that no
-    # other pass can reach, so it no longer matters who runs first. Having its
-    # nets exist at reservation time is what the previous ordering gave up --
-    # the coater drops those nets sink into then went unheld, and the external
-    # runs walled them in instead.
+    # The proliferator entry and its shared trunk are staked BEFORE the ports
+    # are held. Every coater drop is a sink-only leaf; the trunk is the one
+    # externally reachable source from which the detailed router branches.
     internal_net_count = len(nets)
     if coater_list and prolif_item is not None:
         entry = _place_proliferator_entry(canvas, prolif_item, belt_id, belt_model, core)
         if entry is not None:
-            nets.extend(_proliferator_nets(canvas, entry, coater_list, prolif_item))
+            nets.extend(
+                _proliferator_supply_tree(
+                    canvas,
+                    entry,
+                    coater_list,
+                    prolif_item,
+                    belt_id=belt_id,
+                    belt_model=belt_model,
+                    core=core,
+                )
+            )
 
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     # Again, now that every port exists -- strip lanes, coater drops and the
     # proliferator entry alike. A drop is a one-tile lane and the sink of a
     # proliferator net, so it is a port like any other, and it did not exist
     # when the first claim was staked.
     if _reserve_ports:
         hold_ports()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
+    # External-input nets retain the existing lane-deduplication and item
+    # precedence, while exposing their shared boundary cells immutably.
+    wanted: dict[int, tuple[_Port, int]] = {}
+    carried: dict[int, str] = {}
+    for strip_index, ports in enumerate(strip_in_ports):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        for item, port in sorted(ports.items()):
+            if item in spec.external_inputs:
+                wanted.setdefault(port.belt, (port, strip_index))
+        for item, port in sorted(ports.items(), reverse=True):
+            if item in spec.external_inputs:
+                carried[port.belt] = item
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
+    min_x, min_y, max_x, max_y = _grow(core, _ENTRY_RING - 1)
+    boundary = tuple(
+        cell
+        for cell in (
+            [(x, y, 0) for x in range(min_x - 1, max_x + 2) for y in (min_y - 1, max_y + 1)]
+            + [(x, y, 0) for y in range(min_y, max_y + 1) for x in (min_x - 1, max_x + 1)]
+        )
+        if canvas.free(cell)
+    )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
+    tagged_nets = [
+        (
+            net,
+            NetRole.INTERNAL if i < internal_net_count else NetRole.PROLIFERATOR,
+        )
+        for i, net in enumerate(nets)
+    ]
+    tagged_nets.extend(
+        (
+            _Net(
+                src=None,
+                dst=port,
+                item=carried[belt],
+                cargo_domain=port.cargo_domain,
+            ),
+            NetRole.EXTERNAL,
+        )
+        for belt, (port, _strip_index) in wanted.items()
+    )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
+    ordinals: dict[
+        tuple[int | None, int | None, str, CargoDomain, NetRole],
+        int,
+    ] = defaultdict(int)
+    prepared_nets: list[_PreparedNet] = []
+    for net, role in tagged_nets:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        source_strip = strip_of_belt.get(net.src.belt) if net.src is not None else None
+        destination_strip = strip_of_belt.get(net.dst.belt)
+        identity = (
+            source_strip,
+            destination_strip,
+            net.item,
+            net.cargo_domain,
+            role,
+        )
+        logical_id = LogicalNetId(
+            source_family=(
+                strips[source_strip].family_id if source_strip is not None else None
+            ),
+            destination_family=(
+                strips[destination_strip].family_id
+                if destination_strip is not None
+                else None
+            ),
+            item=net.item,
+            role=role,
+            cargo_domain=net.cargo_domain,
+        )
+        net_id = NetId(
+            source_strip=source_strip,
+            destination_strip=destination_strip,
+            item=net.item,
+            role=role,
+            ordinal=ordinals[identity],
+            cargo_domain=net.cargo_domain,
+            logical_id=logical_id,
+        )
+        ordinals[identity] += 1
+        prepared_nets.append(
+            _PreparedNet(
+                net_id=net_id,
+                src=_prepare_port(net.src) if net.src is not None else None,
+                dst=_prepare_port(net.dst),
+                item=net.item,
+                cargo_domain=net.cargo_domain,
+                boundary_goals=boundary if role is NetRole.EXTERNAL else (),
+            )
+        )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    def prepared_endpoints(
+        prepared: _PreparedNet,
+    ) -> tuple[Cell | None, Cell]:
+        source = (
+            None
+            if prepared.src is None
+            else (prepared.src.x, prepared.src.y, prepared.src.z)
+        )
+        return source, (prepared.dst.x, prepared.dst.y, prepared.dst.z)
+
+    net_by_id = {prepared.net_id: prepared for prepared in prepared_nets}
+
+    def static_access_failure(
+        prepared: _PreparedNet,
+        failed: Cell,
+    ) -> NetFailure:
+        nearby = {
+            candidate
+            for dx, dy in _STEPS
+            for candidate in ((failed[0] + dx, failed[1] + dy, failed[2]),)
+        }
+        nearby.update(
+            candidate
+            for access in tuple(nearby)
+            for dx, dy in _STEPS
+            for candidate in ((access[0] + dx, access[1] + dy, access[2]),)
+        )
+        blocking_cells = tuple(
+            sorted(cell for cell in nearby if cell in canvas.reserved)
+        )
+        blocking_ports = {
+            canvas.reserved[cell]
+            for cell in blocking_cells
+            if canvas.reserved[cell] != failed
+        }
+        blocking_nets = tuple(
+            net_id
+            for candidate in prepared_nets
+            if candidate.net_id != prepared.net_id
+            and any(
+                endpoint in blocking_ports
+                for endpoint in prepared_endpoints(candidate)
+                if endpoint is not None
+            )
+            for net_id in (candidate.net_id,)
+        )
+        return NetFailure(
+            prepared.net_id,
+            RouteFailureKind.STATIC_ACCESS,
+            (failed, *blocking_cells),
+            blocking_nets,
+            0,
+            source=prepared_endpoints(prepared)[0],
+            destination=prepared_endpoints(prepared)[1],
+            blocking_endpoints=tuple(
+                prepared_endpoints(net_by_id[blocker])
+                for blocker in blocking_nets
+            ),
+        )
+
+
+    preparation_failures = tuple(
+        static_access_failure(net, failed)
+        for net in prepared_nets
+        for failed in (
+            next(
+                (
+                    cell
+                    for cell in (
+                        ((net.src.x, net.src.y, net.src.z) if net.src is not None else None),
+                        (net.dst.x, net.dst.y, net.dst.z),
+                    )
+                    if cell is not None and cell in unreachable_ports
+                ),
+                None,
+            ),
+        )
+        if failed is not None
+    )
+    preparation_failures += tuple(
+        NetFailure(
+            direct.net_id,
+            RouteFailureKind.STATIC_ACCESS,
+            (),
+            (),
+            0,
+        )
+        for direct in sorted(promised_direct - realized_direct)
+    )
+
 
     # Power is decided AFTER the ports have claimed their ground, and before
     # anything routes.
@@ -8185,97 +13047,105 @@ def _prepare_routing_problem(
     # of the change: an unpowerable pack is infeasible, so it is refused here --
     # before a single belt is routed -- rather than emerging as a coverage
     # failure once the pack and the routing have both spent the ground.
-    power_sites = _power_plan(canvas, core, policy=policy) if power else []
-
-    # External-input nets retain the existing lane-deduplication and item
-    # precedence, while exposing their shared boundary cells immutably.
-    wanted: dict[int, tuple[_Port, int]] = {}
-    carried: dict[int, str] = {}
-    for strip_index, ports in enumerate(strip_in_ports):
-        for item, port in sorted(ports.items()):
-            if item in spec.external_inputs:
-                wanted.setdefault(port.belt, (port, strip_index))
-        for item, port in sorted(ports.items(), reverse=True):
-            if item in spec.external_inputs:
-                carried[port.belt] = item
-
-    min_x, min_y, max_x, max_y = _grow(core, _ENTRY_RING - 1)
-    boundary = tuple(
-        cell
-        for cell in (
-            [(x, y, 0) for x in range(min_x - 1, max_x + 2) for y in (min_y - 1, max_y + 1)]
-            + [(x, y, 0) for y in range(min_y, max_y + 1) for x in (min_x - 1, max_x + 1)]
+    # Every source is an already materialized belt tile.  Leaving it may require
+    # a Splitter even when only one logical net uses that exact tile: a
+    # proliferator trunk, for example, already continues past each branch.
+    # Count-based fan-out therefore misses the boundary taps that actually need
+    # power.  Cover only source tiles outside the route envelope; sources inside
+    # it are already covered by ``demand``.
+    additional_power_demand = tuple(
+        sorted(
+            {
+                (source.x, source.y)
+                for net in nets
+                if net.src is not None
+                for source in (net.source,)
+                if not (
+                    route_bounds[0] <= source.x <= route_bounds[2]
+                    and route_bounds[1] <= source.y <= route_bounds[3]
+                )
+            }
         )
-        if canvas.free(cell)
     )
-
-    tagged_nets = [
-        (
-            net,
-            NetRole.INTERNAL if i < internal_net_count else NetRole.PROLIFERATOR,
+    if preparation_failures or not power:
+        power_sites = []
+    elif cancelled is None:
+        power_sites = _power_plan(
+            canvas,
+            route_bounds,
+            policy=policy,
+            additional_demand=additional_power_demand,
         )
-        for i, net in enumerate(nets)
-    ]
-    tagged_nets.extend(
-        (
-            _Net(src=None, dst=port, item=carried[belt]),
-            NetRole.EXTERNAL,
+    else:
+        power_sites = _power_plan(
+            canvas,
+            route_bounds,
+            policy=policy,
+            additional_demand=additional_power_demand,
+            staged_static_cache=staged_static_cache,
+            cancelled=cancelled,
         )
-        for belt, (port, _strip_index) in wanted.items()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    grouped_nets = _with_sibling_groups(prepared_nets)
+    # Projected coater legality is expensive and only matters when the detailed
+    # router can introduce a Splitter. Reserved Tesla towers are different:
+    # their elevated static geometry must be frozen with the prepared problem,
+    # so power reservations retain exact machine-and-tower bans even when this
+    # candidate's current net grouping cannot branch.
+    junction_possible = not preparation_failures and _junction_geometry_required(
+        grouped_nets,
+        canvas.buildings,
     )
-
-    ordinals: dict[tuple[int | None, int | None, str, NetRole], int] = defaultdict(int)
-    prepared_nets: list[_PreparedNet] = []
-    for net, role in tagged_nets:
-        source_strip = strip_of_belt.get(net.src.belt) if net.src is not None else None
-        destination_strip = strip_of_belt.get(net.dst.belt)
-        identity = (source_strip, destination_strip, net.item, role)
-        logical_id = LogicalNetId(
-            strips[source_strip].family_id if source_strip is not None else None,
-            (strips[destination_strip].family_id if destination_strip is not None else None),
-            net.item,
-            role,
-        )
-        net_id = NetId(
-            *identity,
-            ordinal=ordinals[identity],
-            logical_id=logical_id,
-        )
-        ordinals[identity] += 1
-        prepared_nets.append(
-            _PreparedNet(
-                net_id=net_id,
-                src=_prepare_port(net.src) if net.src is not None else None,
-                dst=_prepare_port(net.dst),
-                item=net.item,
-                boundary_goals=boundary if role is NetRole.EXTERNAL else (),
-            )
-        )
-
-    preparation_failures = tuple(
-        NetFailure(
-            net.net_id,
-            RouteFailureKind.STATIC_ACCESS,
-            (failed,),
-            (),
-            0,
-        )
-        for net in prepared_nets
-        for failed in (
-            next(
-                (
-                    cell
-                    for cell in (
-                        ((net.src.x, net.src.y, net.src.z) if net.src is not None else None),
-                        (net.dst.x, net.dst.y, net.dst.z),
-                    )
-                    if cell is not None and cell in unreachable_ports
-                ),
-                None,
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    junction_frames = (
+        _junction_projection_frames(
+            finalize._cleanup_survivor_bounds(
+                Placement(buildings=tuple(canvas.buildings)),
+                cancelled=cancelled,
             ),
+            capacity,
+            policy,
+            cancelled=cancelled,
         )
-        if failed is not None
+        if coater_list and junction_possible
+        else ()
     )
+    junction_ban = (
+        _prepared_junction_ban(
+            canvas.buildings,
+            power_sites,
+            cancelled=cancelled,
+            cache=staged_static_cache,
+        )
+        if junction_possible or power_sites
+        else frozenset()
+    )
+    projection_coaters = tuple(
+        (index, building)
+        for index, building in enumerate(canvas.buildings)
+        if building.item_id == catalog.SPRAY_COATER_ID
+    )
+    junction_frame_bans = (
+        _projected_coater_junction_bans_by_frame(
+            projection_coaters,
+            junction_frames,
+            capacity,
+            already_banned=set(junction_ban),
+            splitter_index=len(canvas.buildings),
+            cancelled=cancelled,
+        )
+        if projection_coaters and junction_frames
+        else ()
+    )
+    if junction_frame_bans:
+        universally_projected_ban = set(junction_frame_bans[0])
+        for frame_ban in junction_frame_bans[1:]:
+            universally_projected_ban.intersection_update(frame_ban)
+        junction_ban = junction_ban | universally_projected_ban
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
     return _PreparedRoutingProblem(
         building_templates=tuple(deepcopy(canvas.buildings)),
@@ -8283,7 +13153,8 @@ def _prepare_routing_problem(
         solid=frozenset(canvas.solid),
         reserved=tuple(sorted(canvas.reserved.items())),
         keep_out=frozenset(canvas.keep_out),
-        nets=_with_sibling_groups(prepared_nets),
+        guard=frozenset(canvas.guard),
+        nets=grouped_nets,
         core=core,
         route_bounds=route_bounds,
         limit=canvas.limit,
@@ -8291,22 +13162,227 @@ def _prepare_routing_problem(
         sorters=sorters,
         coaters=coaters,
         coater_supply_ports=tuple(coater_list),
-        direct_inserts=direct_placed,
+        direct_inserts=len(realized_direct),
+        promised_direct=promised_direct,
+        realized_direct=frozenset(realized_direct),
         ramped=canvas.ramped,
         world_taken=frozenset(canvas.world_taken),
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())
         ),
-        junction_ban=_prepared_junction_ban(canvas.buildings, power_sites),
+        junction_ban=junction_ban,
+        junction_frame_bans=junction_frame_bans,
         preparation_failures=preparation_failures,
+    )
+
+
+class _BuildBudgetStage(Enum):
+    """The phase whose shared deadline prevented a build attempt from finishing."""
+
+    PREPARATION = "preparation"
+    ROUTING = "routing"
+    CERTIFICATION = "certification"
+    FINALIZATION = "finalization"
+
+
+@dataclass(frozen=True, slots=True)
+class PackAttempt:
+    """Complete immutable evidence from one packed-and-routed assignment."""
+
+    origins: tuple[tuple[int, int], ...]
+    compact_width: int
+    height: int
+    outline: tuple[tuple[int, int], ...]
+    routing: DetailedRouteResult
+    budget_stage: _BuildBudgetStage | None
+    static_access: tuple[NetFailure, ...]
+    promised_direct: frozenset[DirectInsertId]
+    realized_direct: frozenset[DirectInsertId]
+    direct_candidates: _DirectCandidateSnapshot
+
+    def __post_init__(self) -> None:
+        if any(
+            failure.kind is not RouteFailureKind.STATIC_ACCESS
+            for failure in self.static_access
+        ):
+            raise ValueError("PackAttempt.static_access accepts only STATIC_ACCESS failures")
+        if self.routing.status is DetailedRouteStatus.BUDGET:
+            if self.budget_stage not in (
+                _BuildBudgetStage.PREPARATION,
+                _BuildBudgetStage.ROUTING,
+            ):
+                raise ValueError("a routing-budget attempt must name its routing stage")
+        elif self.budget_stage in (
+            _BuildBudgetStage.PREPARATION,
+            _BuildBudgetStage.ROUTING,
+        ):
+            raise ValueError("only a routing-budget attempt may name a routing stage")
+        if self.budget_stage in (
+            _BuildBudgetStage.CERTIFICATION,
+            _BuildBudgetStage.FINALIZATION,
+        ) and self.routing.status is not DetailedRouteStatus.ROUTED:
+            raise ValueError("completion-stage evidence requires a fully routed attempt")
+        if self.budget_stage is _BuildBudgetStage.PREPARATION and (
+            self.routing.routed or self.routing.failures
+        ):
+            raise ValueError("preparation stopped before routing evidence existed")
+        if not self.realized_direct <= self.promised_direct:
+            raise ValueError("a realized direct insert must name a rewarded promise")
+
+def _width_slack_cap(compact_width: int) -> int:
+    """Return ``ceil(1.10 * compact_width)`` without floating-point drift."""
+    if type(compact_width) is not int or compact_width <= 0:
+        raise ValueError("compact width must be a positive integer")
+    return (11 * compact_width + 9) // 10
+
+def _seed_admission_preserves_best_band(
+    seed: _Pack,
+    minimum_width: int,
+    envelope: finalize.BandPolicySearchEnvelope,
+) -> bool:
+    """Whether stopping at the warm seed cannot forfeit a narrower latitude band."""
+
+    def primary_band(width: int) -> int | None:
+        return min(
+            (
+                candidate.frame.primary_band
+                for candidate in envelope.frame_candidates(width, seed.height)
+            ),
+            default=None,
+        )
+
+    seed_band = primary_band(seed.width)
+    best_band = primary_band(minimum_width)
+    return seed_band is not None and seed_band == best_band
+
+
+def _proof_scoped_no_goods(
+    attempt: PackAttempt,
+    strips: list[Strip],
+) -> tuple[tuple[_DirectRelationNoGood, ...], ExactPackNoGood | None]:
+    """Derive only relation or assignment exclusions proved by this attempt."""
+    if not attempt.direct_candidates.matches(strips):
+        raise ValueError("direct candidate evidence belongs to a different strip plan")
+    direct_candidates = attempt.direct_candidates.candidates
+    local: list[_DirectRelationNoGood] = []
+    for direct in sorted(attempt.promised_direct - attempt.realized_direct):
+        source = direct.source_strip
+        destination = direct.destination_strip
+        if (
+            not 0 <= source < len(attempt.origins)
+            or not 0 <= destination < len(attempt.origins)
+        ):
+            continue
+        candidate = direct_candidates.get((source, destination))
+        source_origin = attempt.origins[source]
+        destination_origin = attempt.origins[destination]
+        delta_x = destination_origin[0] - source_origin[0]
+        delta_y = destination_origin[1] - source_origin[1]
+        structurally_impossible = (
+            candidate is None
+            or candidate.item != direct.item
+            or candidate.cargo_domain is not direct.cargo_domain
+            or delta_x not in candidate.origin_deltas
+            or not (
+                1
+                <= delta_y + candidate.cons_row - candidate.prod_row
+                <= catalog.SORTER_MAX_REACH
+            )
+        )
+        if structurally_impossible:
+            local.append(
+                _DirectRelationNoGood(
+                    direct_id=direct,
+                    delta_x=delta_x,
+                    delta_y=delta_y,
+                )
+            )
+
+    if local:
+        return tuple(local), None
+
+    routing = attempt.routing
+    if (
+        not routing.exhaustive
+        or routing.status is not DetailedRouteStatus.STRANDED
+        or not routing.failures
+        or any(
+            failure.kind is RouteFailureKind.BUDGET
+            for failure in routing.failures
+        )
+    ):
+        return (), None
+
+    evidence = tuple(
+        finalize.ProjectionFailure(
+            check="route.exhaustive",
+            buildings=(),
+            detail=(
+                f"{failure.kind.value}: net={failure.net_id!r}; "
+                f"wall={failure.wall!r}; blockers={failure.blocking_nets!r}; "
+                f"expansions={failure.expansions}"
+            ),
+            band=0,
+        )
+        for failure in routing.failures
+    )
+    return (
+        (),
+        ExactPackNoGood(
+            height=attempt.height,
+            outline=attempt.outline,
+            width=attempt.compact_width,
+            origins=attempt.origins,
+            evidence=evidence,
+        ),
+    )
+
+
+def _attempt_feedback_state(
+    attempt: PackAttempt,
+    previous: FeedbackState | None,
+) -> FeedbackState:
+    """Accumulate immutable failed-net, blocker, and hot-wall evidence."""
+    outline = (attempt.compact_width, attempt.height)
+    state = (
+        FeedbackState.empty(outline)
+        if previous is None
+        else previous.for_outline(outline)
+    )
+    return update_feedback(
+        state,
+        attempt.routing,
+        origins=attempt.origins,
+    )
+
+
+def _feedback_retry_eligible(
+    attempt: PackAttempt,
+    feedback: FeedbackState,
+) -> bool:
+    """Whether this exact attempt earned one bounded evidence-driven retry."""
+    routing = attempt.routing
+    if (
+        routing.exhaustive
+        or routing.status is not DetailedRouteStatus.STRANDED
+        or len(routing.failures) != 1
+    ):
+        return False
+    failure = routing.failures[0]
+    return (
+        failure.net_id in feedback.net_weight
+        and failure.net_id in feedback.endpoint_offsets
     )
 
 
 @dataclass(slots=True)
 class _BuildResult:
-    placement: Placement
+    placement: Placement | None
     routing: DetailedRouteResult
+    budget_stage: _BuildBudgetStage | None
     towers: tuple[PlacedBuilding, ...]
+    promised_direct: frozenset[DirectInsertId] = frozenset()
+    realized_direct: frozenset[DirectInsertId] = frozenset()
 
 
 def _build(
@@ -8320,17 +13396,48 @@ def _build(
     ramped: bool = False,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
+    staged_static_cache: _StagedStaticCache | None = None,
 ) -> _BuildResult:
     """Prepare one pack, then emit it through the reusable detailed entry point."""
-    prepared = _prepare_routing_problem(
-        spec,
-        strips,
-        pack,
-        power=power,
-        policy=policy,
-        _reserve_ports=route,
-        ramped=ramped,
-    )
+    cancelled = None if deadline is None else lambda: time.monotonic() >= deadline
+    try:
+        prepared = _prepare_routing_problem(
+            spec,
+            strips,
+            pack,
+            power=power,
+            policy=policy,
+            _reserve_ports=route,
+            ramped=ramped,
+            staged_static_cache=staged_static_cache,
+            cancelled=cancelled,
+        )
+    except (_PreparationDeadline, finalize.ProjectionCancelled):
+        return _BuildResult(
+            placement=None,
+            routing=DetailedRouteResult(
+                DetailedRouteStatus.BUDGET,
+                (),
+                (),
+                0,
+                0,
+            ),
+            towers=(),
+            budget_stage=_BuildBudgetStage.PREPARATION,
+        )
+    if cancelled is not None and cancelled():
+        return _BuildResult(
+            placement=None,
+            routing=DetailedRouteResult(
+                DetailedRouteStatus.BUDGET,
+                (),
+                (),
+                0,
+                0,
+            ),
+            towers=(),
+            budget_stage=_BuildBudgetStage.PREPARATION,
+        )
     return _build_prepared(
         spec,
         strips,
@@ -8368,7 +13475,14 @@ def _build_prepared(
         if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
     ]
 
-    empty_routing = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 0, 0)
+    empty_routing = DetailedRouteResult(
+        DetailedRouteStatus.ROUTED,
+        (),
+        (),
+        0,
+        0,
+        exhaustive=True,
+    )
     external_routing = empty_routing
     internal_routing = empty_routing
 
@@ -8402,6 +13516,8 @@ def _build_prepared(
             prepared.route_bounds,
             deadline,
             budget,
+            prepared.power_sites if power else None,
+            prepared.junction_frame_bans,
         )
 
     failures = external_routing.failures + internal_routing.failures
@@ -8419,7 +13535,21 @@ def _build_prepared(
         failures=failures,
         iterations=internal_routing.iterations,
         expansions=external_routing.expansions + internal_routing.expansions,
+        exhaustive=(
+            not prepared.preparation_failures
+            and external_routing.exhaustive
+            and internal_routing.exhaustive
+        ),
     )
+    if routing.status is DetailedRouteStatus.BUDGET:
+        return _BuildResult(
+            placement=None,
+            routing=routing,
+            towers=(),
+            budget_stage=_BuildBudgetStage.ROUTING,
+            promised_direct=prepared.promised_direct,
+            realized_direct=prepared.realized_direct,
+        )
 
     # Reservations and tentative markers are attempt-local and are spent before
     # the held power sites become buildings.
@@ -8466,7 +13596,14 @@ def _build_prepared(
             "direct_inserts": float(prepared.direct_inserts),
         },
     )
-    return _BuildResult(placement, routing, towers)
+    return _BuildResult(
+        placement=placement,
+        routing=routing,
+        towers=towers,
+        budget_stage=None,
+        promised_direct=prepared.promised_direct,
+        realized_direct=prepared.realized_direct,
+    )
 
 
 def _bridge(
@@ -8476,14 +13613,13 @@ def _bridge(
     rates: dict[str, Fraction],
     item: str,
     standing: list[colliders.Box],
-) -> bool:
+    direct_id: DirectInsertId,
+) -> DirectInsertId | None:
     """Span two lane ends with one sorter, replacing a whole belt route.
 
-    Returns ``False`` rather than placing an illegal sorter if the packed
-    geometry did not actually come out within reach.  The packer's reification
-    should guarantee it does, but a sorter that cannot exist would produce a
-    blueprint that pastes and then does not run -- the worst failure mode -- so
-    this is checked rather than assumed.
+    Returns the exact promise only after emitting its sorter. ``None`` retains
+    the unrealized promise as typed static-access evidence at the caller; it
+    never restores the rewarded net as an ordinary belt route.
 
     **NOT ANY SHARED COLUMN WILL DO**, and this used to take the westmost one.
     A bridge is a BELT-TO-BELT sorter, so the game grows its collider by
@@ -8500,14 +13636,17 @@ def _bridge(
     ``standing`` is that answer prepared: the seated box of every sorter already
     placed, which the caller builds once and this extends.  Every shared column
     is tried, west to east, and the first one whose seated box clears them all
-    is the one taken.  When none
-    does, ``False`` -- and the caller routes a belt instead, which is the same
-    thing it does when the lanes are out of reach.  That is not a fallback: a
-    belt route is the general case and a bridge is the optimisation.
+    is the one taken. When none does, the promise remains unrealized and the
+    containing pack attempt fails with typed evidence.
     """
+    if (
+        src.cargo_domain is not CargoDomain.UNSPRAYED
+        or dst.cargo_domain is not CargoDomain.UNSPRAYED
+    ):
+        return None
     span = dst.y - src.y
     if span < 1 or span > catalog.SORTER_MAX_REACH:
-        return False
+        return None
 
     tier, _ = _pick_sorter(rates.get(item, Fraction(1)), span, 1)
     for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
@@ -8540,9 +13679,30 @@ def _bridge(
         seat = slots.seated_sorter(bridge, canvas.buildings)
         if seat is not None:
             standing.append(colliders.sorter_box(seat))
-        return True
-    return False
+        return direct_id
+    return None
 
+
+def _coater_seats(
+    canvas: _Canvas,
+    port: _Port,
+    *,
+    west_channel: int,
+) -> tuple[tuple[int, int], ...]:
+    """Straight seats before the first possible machine pickup, in flow order.
+
+    Sprayed input lanes start ``west_channel`` cells west of the strip.  The
+    machine-facing lane begins at index ``west_channel``, so that tile and every
+    later one may already feed a machine.  Seating there would let that consumer
+    take unsprayed cargo before it reaches the Coater.  Index zero is the routing
+    turn and the last tile has no successor; only the bounded interior channel
+    offsets between them are candidates.
+    """
+    stop = min(len(port.tiles) - 1, west_channel)
+    return tuple(
+        (canvas.buildings[index].x, canvas.buildings[index].y)
+        for index in port.tiles[1:stop]
+    )
 
 def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
     """The lane tile a Spray Coater rides: its SECOND, one east of the head.
@@ -8596,10 +13756,12 @@ def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
     west into the channel -- so the drop cell is the same tile it always was,
     one level above the new head.
     """
-    if len(port.tiles) < 2:
-        return None
-    b = canvas.buildings[port.tiles[1]]
-    return b.x, b.y
+    seats = _coater_seats(
+        canvas,
+        port,
+        west_channel=max(0, len(port.tiles) - 1),
+    )
+    return seats[0] if seats else None
 
 
 def _reserve_staged_coater_belt_ban(
@@ -8643,6 +13805,8 @@ def _reserve_staged_coater_belt_ban(
                     canvas.belt_ban.setdefault(tile, set()).add(level)
 
 
+
+
 def _place_coaters(
     canvas: _Canvas,
     spec: BuildSpec,
@@ -8652,6 +13816,8 @@ def _place_coaters(
     belt_model: int,
     *,
     policy: BandPolicy,
+    staged_static_cache: _StagedStaticCache | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[CoaterSupplyPort]:
     """Place one Spray Coater per sprayed input lane and its supply belt.
 
@@ -8671,10 +13837,9 @@ def _place_coaters(
       belt one tile behind it, which a proliferator net is routed to.
     * **It must sit at the lane's HEAD, where the items arrive.**  See
       :func:`_coater_seat`.
-    * **A split item is coated only on proliferated consumers' lanes.**
-      ``BuildSpec.lanes_requiring_split`` is the rate solver's authoritative
-      statement that another consumer needs the same item unsprayed; coating
-      both strips would silently over-produce that consumer.
+    * **Only ``REQUIRES_SPRAY`` lanes are coated.**  The destination-derived
+      cargo domain is authoritative even for uniform sprayed demand; the
+      item-level split set merely records coexistence.
 
     **A LANE THE SPEC WANTS SPRAYED EITHER GETS A COATER OR THIS RAISES.**  Each
     of the four ways a seat can fail used to be a ``continue``: no port for the
@@ -8689,25 +13854,39 @@ def _place_coaters(
     ``prolif.sprayed_cargo_reaches_machines`` -- so neither this nor a future
     strategy can put the miss back.
     """
+    if staged_static_cache is None:
+        staged_static_cache = _StagedStaticCache()
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     wanted = set(spec.spray_lanes)
-    groups = _adapt(spec)
     proliferator_item = _proliferator_item(spec)
     seen: set[str] = set()
     staged: list[_StagedCoater] = []
     staged_hosts: set[int] = set()
-    staged_drop_cells: set[Cell] = set()
+    staged_supply_cells: set[Cell] = set()
     prospective = list(canvas.buildings)
-    splitters = tuple(
-        (index, _collision_pose(building))
+    obstacle_index = _ProjectedObstacleIndex.build(
+        tuple(enumerate(prospective)),
+        cancelled=cancelled,
+    )
+    splitter_buildings = tuple(
+        (index, building)
         for index, building in enumerate(canvas.buildings)
         if building.item_id == catalog.SPLITTER_ID
     )
     projected_capacity = (
         canvas.limit or _grow(_core_bounds(canvas), _ENTRY_RING)
-        if splitters
+        if splitter_buildings
         else None
     )
+    static_capacity = canvas.limit or _grow(_core_bounds(canvas), _ENTRY_RING)
+    cleanup_prefix = finalize._CleanupSurvivorGraph(
+        Placement(buildings=tuple(prospective)),
+        cancelled=cancelled,
+        _operations=staged_static_cache.cleanup_operations,
+    )
+    cleanup_bounds = cleanup_prefix.snapshot_bounds()
 
     belt_at: dict[tuple[int, int, int], int] = {
         (building.x, building.y, int(building.z)): index
@@ -8715,14 +13894,15 @@ def _place_coaters(
         if catalog.is_belt(building.item_id) and building.z.denominator == 1
     }
 
-    for strip, in_ports in zip(strips, ports, strict=True):
+    for strip_index, (strip, in_ports) in enumerate(
+        zip(strips, ports, strict=True)
+    ):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
         for item in strip.in_lanes:
-            if item not in wanted:
-                continue
-            if (
-                item in spec.lanes_requiring_split
-                and not groups[strip.group_key].proliferated
-            ):
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
                 continue
             port = in_ports.get(item)
             if port is None:
@@ -8730,106 +13910,261 @@ def _place_coaters(
                     f"the strip feeding {item} has no input port for it, so its "
                     f"Spray Coater has no lane to ride"
                 )
-            seat = _coater_seat(canvas, port)
-            if seat is None:
+            if port.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
+                raise _Unseatable(
+                    f"the {item} lane is marked {port.cargo_domain.value}, so "
+                    "a Spray Coater cannot be placed on it"
+                )
+            seats = _coater_seats(
+                canvas,
+                port,
+                west_channel=strip.west_channel,
+            )
+            if not seats:
                 raise _Unseatable(
                     f"the {item} lane at ({port.x}, {port.y}) is "
                     f"{len(port.tiles)} tile(s) long, and a coater needs a tile "
                     f"with a lane tile on both sides of it to ride straight"
                 )
-            cx, cy = seat
-            host_z = port.z
-            host = belt_at.get((cx, cy, host_z))
-            yaw = Facing.EAST.value
-            drop_cell = slots.addon_supply_cell(
-                catalog.SPRAY_COATER_ID,
-                x=cx,
-                y=cy,
-                z=Fraction(host_z),
-                yaw=yaw,
-                area=1,
-            )
-            if host is None:
-                raise _Unseatable(
-                    f"the {item} lane's seat ({cx}, {cy}) carries no belt at "
-                    f"level {host_z}, so there is nothing for a coater to ride"
+            failure_reasons: list[str] = []
+            projected_failures: list[
+                tuple[
+                    finalize.ProjectionFailure,
+                    int | None,
+                    StagedStaticClearanceKey | None,
+                    _ExactRetryEvidence | None,
+                ]
+            ] = []
+            same_strip_static_seats = 0
+            seated = False
+            for cx, cy in seats:
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                host_z = port.z
+                host = belt_at.get((cx, cy, host_z))
+                yaw = Facing.EAST.value
+                drop_cell = slots.addon_supply_cell(
+                    catalog.SPRAY_COATER_ID,
+                    x=cx,
+                    y=cy,
+                    z=Fraction(host_z),
+                    yaw=yaw,
+                    area=1,
                 )
-            if host in staged_hosts:
-                seen.add(item)
-                continue
+                approach_dx = drop_cell[0] - cx
+                approach_dy = drop_cell[1] - cy
+                if abs(approach_dx) + abs(approach_dy) != 1:
+                    raise AssertionError("a Coater supply drop must be cardinally adjacent")
+                approach_cell = (
+                    drop_cell[0] + approach_dx,
+                    drop_cell[1] + approach_dy,
+                    drop_cell[2],
+                )
+                if host is None:
+                    failure_reasons.append(
+                        f"the {item} lane's seat ({cx}, {cy}) carries no belt at "
+                        f"level {host_z}, so there is nothing for a coater to ride"
+                    )
+                    continue
+                if host in staged_hosts:
+                    seated = True
+                    break
 
-            proposed_coater = PlacedBuilding(
-                item_id=catalog.SPRAY_COATER_ID,
-                model_index=coater.model_index,
-                x=cx,
-                y=cy,
-                z=Fraction(host_z),
-                width=1,
-                height=1,
-                yaw=yaw,
-            )
-            collider_hits = _coater_keepout_hits(
-                prospective,
-                proposed_coater,
-            )
-            if collider_hits:
-                obstacles = ", ".join(
-                    f"{catalog.building(prospective[index].item_id).name} "
-                    f"at ({prospective[index].x}, "
-                    f"{prospective[index].y}, z={prospective[index].z})"
-                    for index in collider_hits
+                proposed_coater = PlacedBuilding(
+                    item_id=catalog.SPRAY_COATER_ID,
+                    model_index=coater.model_index,
+                    x=cx,
+                    y=cy,
+                    z=Fraction(host_z),
+                    width=1,
+                    height=1,
+                    yaw=yaw,
+                    owner_strip=strip_index,
                 )
-                raise _Unseatable(
-                    f"the {item} coater at ({cx}, {cy}, z={host_z}) has a "
-                    f"full-body keepout intersecting {obstacles}"
+                collider_hits = _coater_keepout_hits(
+                    prospective,
+                    proposed_coater,
                 )
-            within_capacity = (
-                projected_capacity is None
-                or (
-                    projected_capacity[0] <= drop_cell[0] <= projected_capacity[2]
-                    and projected_capacity[1]
-                    <= drop_cell[1]
-                    <= projected_capacity[3]
+                if collider_hits:
+                    if all(
+                        prospective[index].owner_strip == strip_index
+                        for index in collider_hits
+                    ):
+                        same_strip_static_seats += 1
+                    obstacles = ", ".join(
+                        f"{catalog.building(prospective[index].item_id).name} "
+                        f"at ({prospective[index].x}, "
+                        f"{prospective[index].y}, z={prospective[index].z})"
+                        for index in collider_hits
+                    )
+                    failure_reasons.append(
+                        f"the {item} coater at ({cx}, {cy}, z={host_z}) has a "
+                        f"full-body keepout intersecting {obstacles}"
+                    )
+                    continue
+                within_capacity = all(
+                    static_capacity[0] <= cell[0] <= static_capacity[2]
+                    and static_capacity[1] <= cell[1] <= static_capacity[3]
+                    for cell in (drop_cell, approach_cell)
                 )
-            )
-            if (
-                not within_capacity
-                or drop_cell in staged_drop_cells
-                or not canvas.free(drop_cell)
-            ):
-                raise _Unseatable(
-                    f"the {item} coater at ({cx}, {cy}) cannot have its "
-                    f"proliferator drop at {drop_cell}: that cell is taken, and "
-                    f"the game supplies an addon from its area and nowhere else"
-                )
+                if (
+                    not within_capacity
+                    or drop_cell in staged_supply_cells
+                    or approach_cell in staged_supply_cells
+                    or not canvas.free(drop_cell)
+                    or not canvas.free(approach_cell)
+                ):
+                    failure_reasons.append(
+                        f"the {item} coater at ({cx}, {cy}) cannot have its "
+                        f"straight proliferator drop at {drop_cell} through "
+                        f"approach {approach_cell}: one of those cells is taken"
+                    )
+                    continue
 
-            supply = PlacedBuilding(
-                item_id=belt_id,
-                model_index=belt_model,
-                x=drop_cell[0],
-                y=drop_cell[1],
-                z=Fraction(drop_cell[2]),
-                width=1,
-                height=1,
-                carries_item=proliferator_item,
-            )
-            supply_index = len(prospective)
-            coater_index = supply_index + 1
-            prepared_port = CoaterSupplyPort(
-                coater=coater_index,
-                host_belt=host,
-                supply_belt=supply_index,
-                item=item,
-                yaw=yaw,
-                host_x=cx,
-                host_y=cy,
-                host_z=host_z,
-                x=drop_cell[0],
-                y=drop_cell[1],
-                z=drop_cell[2],
-            )
-            staged.append(
-                _StagedCoater(
+
+
+                approach_index = len(prospective)
+                supply_index = approach_index + 1
+                coater_index = supply_index + 1
+                approach = PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=approach_cell[0],
+                    y=approach_cell[1],
+                    z=Fraction(approach_cell[2]),
+                    width=1,
+                    height=1,
+                    output_obj=supply_index,
+                    carries_item=proliferator_item,
+                    owner_strip=strip_index,
+                )
+                supply = PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=drop_cell[0],
+                    y=drop_cell[1],
+                    z=Fraction(drop_cell[2]),
+                    width=1,
+                    height=1,
+                    carries_item=proliferator_item,
+                    owner_strip=strip_index,
+                )
+                # The approach/drop link is permanent geometry: it fixes the
+                # line the projected addon validator measures after routing.
+                # Advance the exact survivor prefix with the same connected
+                # terminal the finalizer will receive.
+                candidate_cleanup, candidate_bounds = cleanup_prefix.extended_snapshot(
+                    (approach, supply, proposed_coater),
+                    cleanup_bounds,
+                    cancelled=cancelled,
+                )
+                static_frames = _cached_junction_projection_frames(
+                    staged_static_cache,
+                    candidate_bounds,
+                    static_capacity,
+                    policy,
+                    cancelled=cancelled,
+                )
+                projected_failure = None
+                potential_peers = _prospective_static_broad_phase(
+                    obstacle_index,
+                    proposed_coater,
+                    static_frames,
+                    staged_static_cache,
+                    cancelled=cancelled,
+                )
+                if potential_peers:
+                    broad_phase_peers = frozenset(potential_peers)
+                    potential_peers = tuple(
+                        index
+                        for index, _peer in _staged_static_projection_peers(
+                            prospective,
+                            proposed_coater,
+                            owner_strip=strip_index,
+                            policy=policy,
+                        )
+                        if index in broad_phase_peers
+                    )
+                if potential_peers:
+                    projected_failure = _prospective_static_failure(
+                        (
+                            *(
+                                (index, prospective[index])
+                                for index in potential_peers
+                            ),
+                            (coater_index, proposed_coater),
+                        ),
+                        static_frames,
+                        candidate_index=coater_index,
+                        cache=staged_static_cache,
+                        cancelled=cancelled,
+                    )
+                if projected_failure is not None:
+                    peer_index = next(
+                        (
+                            index
+                            for index in projected_failure.buildings
+                            if index != coater_index
+                        ),
+                        None,
+                    )
+                    peer = (
+                        prospective[peer_index]
+                        if peer_index is not None
+                        and 0 <= peer_index < len(prospective)
+                        else None
+                    )
+                    peer_owner = peer.owner_strip if peer is not None else None
+                    relation = (
+                        _staged_static_clearance_key(peer, proposed_coater)
+                        if peer is not None and peer_owner == strip_index
+                        else None
+                    )
+                    projected_failures.append(
+                        (
+                            projected_failure,
+                            peer_owner,
+                            relation,
+                            _exact_retry_evidence(
+                                "seating",
+                                projected_failure,
+                                dict(
+                                    enumerate(
+                                        (
+                                            *prospective,
+                                            approach,
+                                            supply,
+                                            proposed_coater,
+                                        )
+                                    )
+                                ),
+                            ),
+                        )
+                    )
+                    if peer_owner == strip_index:
+                        same_strip_static_seats += 1
+                    failure_reasons.append(
+                        f"the {item} coater at ({cx}, {cy}, z={host_z}) enters "
+                        "a projected static collider"
+                    )
+                    continue
+
+                prepared_port = CoaterSupplyPort(
+                    coater=coater_index,
+                    host_belt=host,
+                    approach_belt=approach_index,
+                    supply_belt=supply_index,
+                    item=item,
+                    yaw=yaw,
+                    host_x=cx,
+                    host_y=cy,
+                    host_z=host_z,
+                    x=drop_cell[0],
+                    y=drop_cell[1],
+                    z=drop_cell[2],
+                )
+                staged_candidate = _StagedCoater(
+                    approach=approach,
                     supply=supply,
                     coater=proposed_coater,
                     projected_pair=(
@@ -8838,10 +14173,110 @@ def _place_coaters(
                     ),
                     port=prepared_port,
                 )
-            )
-            prospective.extend((supply, proposed_coater))
-            staged_hosts.add(host)
-            staged_drop_cells.add(drop_cell)
+                if not static_frames:
+                    raise _Unseatable("the coater candidate has no viable DSP frame")
+                addon_failure: finalize.ProjectionFailure | None = None
+                for frame in static_frames:
+                    context_key = _projected_coater_supply_context_key(
+                        staged_candidate,
+                        prospective[host],
+                        frame,
+                    )
+                    if context_key in staged_static_cache.coater_supply_failures:
+                        frame_failure = (
+                            staged_static_cache.coater_supply_failures[context_key]
+                        )
+                    else:
+                        frame_failure = _projected_coater_supply_frame_failure(
+                            staged_candidate,
+                            prospective[host],
+                            frame,
+                            cancelled=cancelled,
+                        )
+                        staged_static_cache.coater_supply_failures[context_key] = (
+                            frame_failure
+                        )
+                    if frame_failure is None:
+                        addon_failure = None
+                        break
+                    if addon_failure is None:
+                        addon_failure = frame_failure
+                if addon_failure is not None:
+                    projected_failures.append(
+                        (
+                            addon_failure,
+                            None,
+                            None,
+                            _exact_retry_evidence(
+                                "seating",
+                                addon_failure,
+                                dict(
+                                    enumerate(
+                                        (
+                                            *prospective,
+                                            approach,
+                                            supply,
+                                            proposed_coater,
+                                        )
+                                    )
+                                ),
+                            ),
+                        )
+                    )
+                    failure_reasons.append(
+                        f"the {item} coater at ({cx}, {cy}, z={host_z}) loses "
+                        "a projected supply belt"
+                    )
+                    continue
+                staged.append(staged_candidate)
+                prospective.extend((approach, supply, proposed_coater))
+                obstacle_index.add(coater_index, proposed_coater)
+                cleanup_bounds = candidate_bounds
+                cleanup_prefix = candidate_cleanup
+                staged_hosts.add(host)
+                staged_supply_cells.update((approach_cell, drop_cell))
+                seated = True
+                break
+
+            if not seated:
+                first_failure = (
+                    projected_failures[0][0] if projected_failures else None
+                )
+                first_relation = (
+                    projected_failures[0][2] if projected_failures else None
+                )
+                first_exact_retry_evidence = (
+                    projected_failures[0][3] if projected_failures else None
+                )
+                all_projected = len(projected_failures) == len(seats)
+                same_strip = (
+                    first_failure is not None
+                    and same_strip_static_seats == len(seats)
+                )
+                clearance_requirement = (
+                    _staged_static_clearance_requirement(
+                        strip,
+                        strip_index,
+                        first_failure,
+                        first_relation,
+                    )
+                    if (
+                        same_strip
+                        and first_failure is not None
+                        and first_relation is not None
+                    )
+                    else None
+                )
+                raise _Unseatable(
+                    failure_reasons[0],
+                    failure=first_failure,
+                    clearance_requirement=clearance_requirement,
+                    exact_retry_evidence=(
+                        first_exact_retry_evidence
+                        if all_projected and not same_strip
+                        else None
+                    ),
+                )
             seen.add(item)
 
     # The loop walks only lanes that exist. Refuse a requested sprayed item that
@@ -8854,33 +14289,158 @@ def _place_coaters(
             f"Spray Coater was placed for {'any' if len(missing) > 1 else 'it'}"
         )
 
-    if projected_capacity is not None:
-        projections = _power_projection_envelope(
-            canvas,
-            policy,
-            capacity=projected_capacity,
-        )
+    # Every provisional seat was checked against the frame extent that existed
+    # when it was chosen. Later coaters can enlarge the cleanup-survivor bounds,
+    # changing the finalizer's latitude anchors and invalidating an earlier
+    # addon's host or supply relation. Recheck the complete staged set against
+    # the one final extent before any candidate is committed to the canvas.
+    final_frames = _cached_junction_projection_frames(
+        staged_static_cache,
+        cleanup_bounds,
+        static_capacity,
+        policy,
+        cancelled=cancelled,
+    )
+    addon_failure: finalize.ProjectionFailure | None = None
+    failed_candidate: _StagedCoater | None = None
+    viable_addon_frames: list[_JunctionProjectionFrame] = []
+    for frame in final_frames:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        frame_failure: finalize.ProjectionFailure | None = None
+        frame_failed_candidate: _StagedCoater | None = None
         for candidate in staged:
-            projected_failure: finalize.ProjectionFailure | None = None
-            for projection in projections:
-                for splitter in splitters:
-                    projected_failure = finalize.projected_coater_splitter_failure(
-                        candidate.projected_pair,
-                        splitter,
-                        projection,
-                    )
-                    if projected_failure is not None:
-                        break
-                if projected_failure is not None:
-                    break
-            if projected_failure is not None:
-                raise _Unseatable(
-                    f"the {candidate.port.item} coater at "
-                    f"({candidate.port.host_x}, {candidate.port.host_y}, "
-                    f"z={candidate.port.host_z}) enters a Splitter projected "
-                    "lateral keepout",
-                    failure=projected_failure,
+            host = prospective[candidate.port.host_belt]
+            context_key = _projected_coater_supply_context_key(
+                candidate,
+                host,
+                frame,
+            )
+            if context_key in staged_static_cache.coater_supply_failures:
+                frame_failure = staged_static_cache.coater_supply_failures[context_key]
+            else:
+                frame_failure = _projected_coater_supply_frame_failure(
+                    candidate,
+                    host,
+                    frame,
+                    cancelled=cancelled,
                 )
+                staged_static_cache.coater_supply_failures[context_key] = frame_failure
+            if frame_failure is not None:
+                frame_failed_candidate = candidate
+                break
+        if frame_failure is None:
+            viable_addon_frames.append(frame)
+            addon_failure = None
+            failed_candidate = None
+            if projected_capacity is None:
+                break
+        elif addon_failure is None:
+            addon_failure = frame_failure
+            failed_candidate = frame_failed_candidate
+    if not viable_addon_frames and addon_failure is not None:
+        candidate = failed_candidate or staged[0]
+        raise _Unseatable(
+            f"the {candidate.port.item} coater at "
+            f"({candidate.port.host_x}, {candidate.port.host_y}, "
+            f"z={candidate.port.host_z}) loses a projected supply belt after "
+            "the complete coater set fixes the final frame",
+            failure=addon_failure,
+            exact_retry_evidence=_exact_retry_evidence(
+                "seating",
+                addon_failure,
+                dict(enumerate(prospective)),
+            ),
+        )
+
+    if projected_capacity is not None:
+        splitter_failure: finalize.ProjectionFailure | None = None
+        failed_splitter_candidate: _StagedCoater | None = None
+        viable_splitter_frame = False
+        for frame in viable_addon_frames:
+            if cancelled is not None and cancelled():
+                raise _PreparationDeadline
+            framed_staged_pairs = tuple(
+                (
+                    candidate.port.coater,
+                    _collision_pose(
+                        finalize.materialize_frame_building(
+                            candidate.coater,
+                            bounds=frame.bounds,
+                            candidate=frame.candidate,
+                        )
+                    ),
+                )
+                for candidate in staged
+            )
+            framed_splitters = tuple(
+                (
+                    index,
+                    _collision_pose(
+                        finalize.materialize_frame_building(
+                            building,
+                            bounds=frame.bounds,
+                            candidate=frame.candidate,
+                        )
+                    ),
+                )
+                for index, building in splitter_buildings
+            )
+            try:
+                splitter_candidates_by_projection = tuple(
+                    finalize._projected_coater_splitter_candidates(
+                        framed_staged_pairs,
+                        framed_splitters,
+                        projection,
+                        cancelled=cancelled,
+                    )
+                    for projection in frame.projections
+                )
+            except finalize.ProjectionCancelled:
+                raise _PreparationDeadline from None
+            frame_failure: finalize.ProjectionFailure | None = None
+            for candidate_position, candidate in enumerate(staged):
+                if cancelled is not None and cancelled():
+                    raise _PreparationDeadline
+                for projection, candidates in zip(
+                    frame.projections,
+                    splitter_candidates_by_projection,
+                    strict=True,
+                ):
+                    if cancelled is not None and cancelled():
+                        raise _PreparationDeadline
+                    for splitter in candidates[candidate_position]:
+                        if cancelled is not None and cancelled():
+                            raise _PreparationDeadline
+                        frame_failure = (
+                            finalize.projected_coater_splitter_failure(
+                                framed_staged_pairs[candidate_position],
+                                splitter,
+                                projection,
+                                cancelled=cancelled,
+                            )
+                        )
+                        if frame_failure is not None:
+                            break
+                    if frame_failure is not None:
+                        break
+                if frame_failure is not None:
+                    if splitter_failure is None:
+                        splitter_failure = frame_failure
+                        failed_splitter_candidate = candidate
+                    break
+            if frame_failure is None:
+                viable_splitter_frame = True
+                break
+        if not viable_splitter_frame and splitter_failure is not None:
+            candidate = failed_splitter_candidate or staged[0]
+            raise _Unseatable(
+                f"the {candidate.port.item} coater at "
+                f"({candidate.port.host_x}, {candidate.port.host_y}, "
+                f"z={candidate.port.host_z}) enters a Splitter projected "
+                "lateral keepout in every viable frame",
+                failure=splitter_failure,
+            )
 
         # This is the same fixed capacity `_prepare_routing_problem` establishes
         # after Coater placement. Keep it local until every staged pair passes so
@@ -8890,6 +14450,11 @@ def _place_coaters(
 
     out: list[CoaterSupplyPort] = []
     for candidate in staged:
+        approach_index = canvas.add(
+            candidate.approach,
+            level=candidate.port.z,
+        )
+        assert approach_index == candidate.port.approach_belt
         supply_index = canvas.add(
             candidate.supply,
             level=candidate.port.z,
@@ -8920,65 +14485,270 @@ def _proliferator_item(spec: BuildSpec) -> str | None:
     return None
 
 
-def _proliferator_nets(
-    canvas: _Canvas, entry: _Port, coaters: list[CoaterSupplyPort], item: str
+def _proliferator_supply_tree(
+    canvas: _Canvas,
+    entry: _Port,
+    coaters: list[CoaterSupplyPort],
+    item: str,
+    *,
+    belt_id: int,
+    belt_model: int,
+    core: tuple[int, int, int, int],
 ) -> list[_Net]:
-    """Thread ONE belt from the entry through every coater drop in turn.
+    """Feed every coater from one externally reachable belt tree.
 
-    Every coater needs the same item at a trivial rate (well under one item per
-    second in total, against a belt that carries twelve), so one lane serves all
-    of them and capacity never binds.
+    A coater supply drop is one-ended in several legal projected frames. The
+    drop therefore has one permanent outward approach belt whose link fixes the
+    line used by projected addon certification. Detailed routing terminates on
+    that approach belt; it never chooses the drop's predecessor direction and
+    never turns the drop into a pass-through node.
 
-    Chained rather than fanned out, for two independent reasons.
-
-    Routing each drop separately from the entry costs far more: eleven paths all
-    radiating from one corner roughly doubled the bounding box.
-
-    And a fan-out cannot be built without splitters, which is worse than
-    expensive.  A branch drawn off a splitter is a belt run of its own, fed by
-    the junction rather than by a belt, and nothing inside the blueprint fills
-    it -- so every branch reads as a separate lane the player must belt
-    proliferator into, buried in the middle of the block where no belt can
-    reach.  Measured: fanning out turned one entry lane into twenty unreachable
-    ones across the corpus.  A chain has no junctions at all; it is a single
-    linear run that starts at the entry belt, out on the reserved ring where the
-    player can get to it.
-
-    Nearest-neighbour order keeps each hop short, and a hop of length one is
-    LINKED RATHER THAN ROUTED.  Two coaters on neighbouring lanes of one strip
-    put their drops in the same margin column, one directly above the other, and
-    the lower one then has a single free neighbour in the world -- the margin is
-    one tile wide, the lane is west of it and a machine south.  A chain needs two
-    ways into such a drop, one for the hop arriving and one for the hop leaving,
-    and there is only ever one: whichever hop routed first took it and the other
-    was handed an empty goal set.  Linking the pair directly costs no cell at
-    all and leaves each of them needing exactly one.
+    Two ground-level trunks descend the west and east entry rings from one
+    north-west input. Balanced groups share spaced trunk roots. Detailed routing
+    grows leaf branches from those roots and emits Splitters at selected taps.
+    Long cross-block supply paths are avoided without asking A* to rediscover or
+    independently route the trunk.
     """
-    remaining = list(coaters)
-    src = entry
-    nets: list[_Net] = []
-    while remaining:
-        nxt = min(
-            remaining,
-            key=lambda c: abs(c.x - src.x) + abs(c.y - src.y) + abs(c.z - src.z),
+    if not coaters:
+        return []
+
+    west_x = core[0] - _ENTRY_RING
+    east_x = core[2] + _ENTRY_RING
+    trunk_top = core[1] - _ENTRY_RING
+    trunk_bottom = core[3] + _ENTRY_RING
+    junction_y = trunk_top + 1
+    first_root = junction_y + 4
+    last_root = trunk_bottom - 1
+    root_capacity = max(1, (last_root - first_root) // 4 + 1)
+
+    def supply_side(coater: CoaterSupplyPort) -> str:
+        if coater.x < coater.host_x:
+            return "west"
+        if coater.x > coater.host_x:
+            return "east"
+        return "west" if coater.x - core[0] <= core[2] - coater.x else "east"
+
+    terminal_roots = list(coaters)
+    west = [
+        coater for coater in terminal_roots if supply_side(coater) == "west"
+    ]
+    east = [
+        coater for coater in terminal_roots if supply_side(coater) == "east"
+    ]
+    # Side choice is a distance preference, not a hard ownership boundary.
+    # Spend spare roots on the opposite trunk before making two leaves share a
+    # source: shared roots require commit-time Splitter dependencies, while a
+    # cross-block leaf is longer but remains an ordinary independent route.
+    while len(west) > root_capacity and len(east) < root_capacity:
+        moved = max(west, key=lambda coater: (coater.x, -coater.y))
+        west.remove(moved)
+        east.append(moved)
+    while len(east) > root_capacity and len(west) < root_capacity:
+        moved = min(east, key=lambda coater: (coater.x, coater.y))
+        east.remove(moved)
+        west.append(moved)
+    side_coaters = {
+        side: members
+        for side, members in (("west", west), ("east", east))
+        if members
+    }
+    root_target = min(
+        _PROLIFERATOR_TRUNK_ROOTS,
+        sum(min(len(members), root_capacity) for members in side_coaters.values()),
+        len(terminal_roots),
+    )
+    root_counts = {side: 1 for side in side_coaters}
+    while sum(root_counts.values()) < root_target:
+        choices = [
+            side
+            for side, members in side_coaters.items()
+            if root_counts[side] < min(len(members), root_capacity)
+        ]
+        if not choices:
+            break
+        selected = max(
+            choices,
+            key=lambda side: (
+                len(side_coaters[side]) / root_counts[side],
+                side == "west",
+            ),
         )
-        remaining.remove(nxt)
-        dst = _Port(nxt.supply_belt, nxt.x, nxt.y, nxt.x, nxt.x, z=nxt.z)
-        source_building = canvas.buildings[src.belt]
-        destination_building = canvas.buildings[dst.belt]
-        if _legal_link(
-            source_building.x,
-            source_building.y,
-            source_building.z,
-            destination_building.x,
-            destination_building.y,
-            destination_building.z,
-            ramped=canvas.ramped,
+        root_counts[selected] += 1
+
+    groups_by_side: dict[str, list[list[CoaterSupplyPort]]] = {}
+    rows_by_side: dict[str, list[int]] = {}
+    for side, members in side_coaters.items():
+        ordered = sorted(
+            members,
+            key=lambda coater: (
+                coater.y,
+                coater.x,
+                coater.z,
+                coater.supply_belt,
+            ),
+        )
+        count = root_counts[side]
+        quotient, remainder = divmod(len(ordered), count)
+        groups: list[list[CoaterSupplyPort]] = []
+        start = 0
+        for ordinal in range(count):
+            size = quotient + (ordinal < remainder)
+            groups.append(ordered[start : start + size])
+            start += size
+        rows: list[int] = []
+        for ordinal, group in enumerate(groups):
+            desired = group[len(group) // 2].y
+            lower = first_root + 4 * ordinal
+            upper = last_root - 4 * (count - ordinal - 1)
+            row = min(max(desired, lower), upper)
+            if rows:
+                row = max(row, rows[-1] + 4)
+            rows.append(row)
+        groups_by_side[side] = groups
+        rows_by_side[side] = rows
+
+    west_end = (
+        rows_by_side["west"][-1] + 1
+        if "west" in rows_by_side
+        else junction_y + 1
+    )
+    west_cells = tuple(
+        (west_x, y, 0)
+        for y in range(trunk_top + 1, west_end + 1)
+    )
+    east_cells: tuple[Cell, ...] = ()
+    if "east" in rows_by_side:
+        east_end = rows_by_side["east"][-1] + 1
+        east_cells = (
+            *((x, junction_y, 0) for x in range(west_x + 1, east_x + 1)),
+            *((east_x, y, 0) for y in range(junction_y + 1, east_end + 1)),
+        )
+    all_cells = (*west_cells, *east_cells)
+    if any(not canvas.free(cell) for cell in all_cells):
+        raise _Unseatable("the reserved proliferator perimeter trunk is occupied")
+
+    trunk_indices: dict[tuple[str, int], int] = {}
+    previous = entry.belt
+    west_indices: dict[int, int] = {}
+    for x, y, level in west_cells:
+        index = canvas.add(
+            PlacedBuilding(
+                item_id=belt_id,
+                model_index=belt_model,
+                x=x,
+                y=y,
+                width=1,
+                height=1,
+                carries_item=item,
+            ),
+            level=level,
+        )
+        canvas.buildings[previous] = _relink(
+            canvas.buildings[previous],
+            output_obj=index,
+        )
+        previous = index
+        west_indices[y] = index
+        trunk_indices["west", y] = index
+
+    if east_cells:
+        east_indices: list[int] = []
+        for x, y, level in east_cells:
+            index = canvas.add(
+                PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=x,
+                    y=y,
+                    width=1,
+                    height=1,
+                    carries_item=item,
+                ),
+                level=level,
+            )
+            if east_indices:
+                prior = east_indices[-1]
+                canvas.buildings[prior] = _relink(
+                    canvas.buildings[prior],
+                    output_obj=index,
+                )
+            east_indices.append(index)
+            if x == east_x:
+                trunk_indices["east", y] = index
+        trunk_run = {
+            (entry.x, entry.y, entry.z),
+            *west_cells,
+            *east_cells,
+        }
+        if not _tap_source(
+            canvas,
+            west_indices[junction_y],
+            east_indices[0],
+            belt_id,
+            belt_model,
+            trunk_run,
         ):
-            canvas.buildings[src.belt] = _relink(source_building, output_obj=dst.belt)
-        else:
-            nets.append(_Net(src=src, dst=dst, item=item))
-        src = dst
+            raise _Unseatable("the proliferator perimeter trunk cannot branch")
+
+    # External inputs route before these leaf nets. Reserve each future
+    # Splitter's exact keep-out now or an unrelated entry path can occupy a
+    # neighbouring cell and make the root lose every start at routing time.
+    trunk_run = {(entry.x, entry.y, entry.z), *all_cells}
+    assert canvas.limit is not None
+    limit_x0, limit_y0, limit_x1, limit_y1 = canvas.limit
+    for side, rows in rows_by_side.items():
+        trunk_x = west_x if side == "west" else east_x
+        branch_dx = 1 if side == "west" else -1
+        for row in rows:
+            excused = trunk_run | {(trunk_x + branch_dx, row, 0)}
+            for stack_member in _splitter_stack_geometry(trunk_x, row, 0):
+                for cell in junction.keepout_cells(
+                    trunk_x,
+                    row,
+                    int(stack_member.z),
+                    model_index=stack_member.model_index,
+                    yaw=stack_member.yaw,
+                ):
+                    if cell in excused:
+                        continue
+                    if (
+                        limit_x0 <= cell[0] <= limit_x1
+                        and limit_y0 <= cell[1] <= limit_y1
+                    ):
+                        canvas.guard.add(cell)
+
+    nets: list[_Net] = []
+    for side, groups in groups_by_side.items():
+        trunk_x = west_x if side == "west" else east_x
+        for row, group in zip(rows_by_side[side], groups, strict=True):
+            source = _Port(
+                trunk_indices[side, row],
+                trunk_x,
+                row,
+                trunk_x,
+                trunk_x,
+                cargo_domain=CargoDomain.UNSPRAYED,
+            )
+            for coater in group:
+                approach = canvas.buildings[coater.approach_belt]
+                if approach.z.denominator != 1:
+                    raise AssertionError("a Coater approach belt must use an integer level")
+                nets.append(
+                    _Net(
+                        src=source,
+                        dst=_Port(
+                            coater.approach_belt,
+                            approach.x,
+                            approach.y,
+                            approach.x,
+                            approach.x,
+                            z=int(approach.z),
+                            cargo_domain=CargoDomain.UNSPRAYED,
+                        ),
+                        item=item,
+                        cargo_domain=CargoDomain.UNSPRAYED,
+                    )
+                )
     return nets
 
 
@@ -8989,24 +14759,12 @@ def _place_proliferator_entry(
     belt_model: int,
     core: tuple[int, int, int, int],
 ) -> _Port | None:
-    """The block's proliferator input belt, on the reserved entry ring.
+    """Place the externally reachable root of the proliferator supply tree.
 
-    A single entry tile: the router fans out from here to each coater's drop,
-    and DSP belts merge natively, so no splitter is needed.
-
-    It goes on the NORTH-WEST CORNER of the entry ring, and the corner is the
-    point.  Nothing else can ever be placed further out -- the router and the
-    power lattice are held inside ``_ROUTE_RING`` and the external input runs
-    stop on the entry ring itself -- so this tile is on the finished block's
-    bounding box in two directions at once and has open ground beside it by
-    construction.  It used to be placed one tile west of wherever the buildings
-    happened to reach at that moment, which was the boundary right up until the
-    next pass moved it; the tile then sat interior, walled in on four sides,
-    with an icon on it telling the player to belt proliferator into somewhere
-    they cannot reach.
-
-    A corner also keeps it clear of the straight input runs, which leave along
-    strip rows and columns and so never use one.
+    It sits on the north-west corner of the reserved entry ring. Nothing else
+    can be placed farther out, and its connected trunk continues south on that
+    same ring, so the one zero-predecessor belt remains reachable from outside
+    the finished block.
     """
     x, y = core[0] - _ENTRY_RING, core[1] - _ENTRY_RING
     if not canvas.free((x, y, 0)):
@@ -9022,7 +14780,14 @@ def _place_proliferator_entry(
             carries_item=item,
         )
     )
-    return _Port(idx, x, y, x, x)
+    return _Port(
+        idx,
+        x,
+        y,
+        x,
+        x,
+        cargo_domain=CargoDomain.UNSPRAYED,
+    )
 
 
 def _fanout_shortfall(strips: list[Strip]) -> list[str]:
@@ -9043,27 +14808,35 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
 
     Returns one description per offending edge, empty when the plan is servable.
     """
-    src_lanes: dict[tuple[str, str, str], int] = defaultdict(int)
-    src_tiles: dict[tuple[str, str, str], int] = {}
-    sink_lanes: dict[tuple[str, str], int] = defaultdict(int)
+    src_lanes: dict[tuple[str, str, str, CargoDomain], int] = defaultdict(int)
+    src_tiles: dict[tuple[str, str, str, CargoDomain], int] = {}
+    sink_lanes: dict[tuple[str, str, CargoDomain], int] = defaultdict(int)
     for s in strips:
-        for item, dest in s.out_lanes:
+        for item, dest, cargo_domain in s.out_lanes:
             for d in _dests(dest):
-                key = (s.group_key, item, d)
+                key = (s.group_key, item, d, cargo_domain)
                 src_lanes[key] += 1
                 src_tiles[key] = min(src_tiles.get(key, s.width), s.width)
         for item in s.in_lanes:
-            sink_lanes[s.group_key, item] += 1
+            sink_lanes[s.group_key, item, s.cargo_domain] += 1
 
     out: list[str] = []
-    for (src_key, item, dest), n_src in sorted(src_lanes.items()):
-        n_sink = sink_lanes.get((dest, item), 0)
+    for (src_key, item, dest, cargo_domain), n_src in sorted(
+        src_lanes.items(),
+        key=lambda entry: (
+            entry[0][0],
+            entry[0][1],
+            entry[0][2],
+            entry[0][3].value,
+        ),
+    ):
+        n_sink = sink_lanes.get((dest, item, cargo_domain), 0)
         if n_sink <= n_src:
             continue
         # Taps land on the narrowest lane of the group, so that is the one that
         # can run out. Ceiling division: the reuse is spread round-robin.
         per_lane = -(-n_sink // n_src)
-        tiles = src_tiles[src_key, item, dest]
+        tiles = src_tiles[src_key, item, dest, cargo_domain]
         if per_lane > tiles:
             out.append(
                 f"{item}: {src_key} lane is {tiles} tile(s) wide but must tap "
@@ -9077,6 +14850,22 @@ def _drainable_by_port(strip: Strip) -> bool:
     probe = slots.probe_building(strip.item_id, strip.yaw)
     capacity = sum(dock.facing.delta[1] > 0 for dock in slots.port_docks(probe).values())
     return bool(strip.out_lanes) and len(strip.out_lanes) <= capacity
+
+
+def _feedable_by_port(strip: Strip) -> bool:
+    """Can each input lane branch through a distinct east-facing prefab port?"""
+    probe = slots.probe_building(strip.item_id, strip.yaw)
+    docks = slots.port_docks(probe).values()
+    capacity = sum(
+        dock.facing is Facing.EAST and dock.cell[0] + 1 < strip.pw for dock in docks
+    )
+    lanes = strip.in_above + strip.in_below
+    return (
+        bool(lanes)
+        and all(len(lane) == 1 for lane in lanes)
+        and len(lanes) <= capacity
+        and (not strip.out_lanes or _drainable_by_port(strip))
+    )
 
 
 def _machines_without_poses(strips: list[Strip]) -> list[str]:
@@ -9122,11 +14911,10 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
     ``_side_lane_caps`` now keeps seating inside what the poses reach, so this
     is a guard against a future seating bug rather than a routine outcome.
 
-    A sorterless pure source is not a refusal when an authoritative belt port
-    faces its output lane: :func:`_dock_lane` emits that connection.  Inputs on
-    the same kind of host remain a refusal because one logical lane would have
-    to split into one dock run per machine, geometry this strip model does not
-    represent.
+    A sorterless belt-port host is not a refusal when every lane can claim an
+    authoritative dock.  Output docks merge into their lane; input docks branch
+    from their shared lane through explicit splitters, because a belt tile has
+    only one output link.
 
     Returns one description per distinct offending building and combined lane
     role, empty when every lane in the plan can be joined to its machine.
@@ -9141,7 +14929,14 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
             if s.flank_outputs:
                 continue
             building = catalog.building(s.item_id)
-            if s.takes_belt_ports and not s.in_lanes and s.out_lanes and _drainable_by_port(s):
+            if (
+                s.takes_belt_ports
+                and not s.in_lanes
+                and s.out_lanes
+                and _drainable_by_port(s)
+            ):
+                continue
+            if s.takes_belt_ports and s.in_lanes and _feedable_by_port(s):
                 continue
             kinds = tuple(
                 kind
@@ -9160,11 +14955,10 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
             seen.add(key)
             if s.takes_belt_ports and s.in_lanes:
                 out.append(
-                    f"{building.name} ({s.recipe_id}): the game's prefab gives "
-                    "it no insert pose on any face, so its ingredient lane can "
-                    f"only use one of its {len(building.port_poses)} belt "
-                    "port(s); preparation supports a drawing OUTPUT dock, not "
-                    "splitting one input lane into a dock per machine"
+                    f"{building.name} ({s.recipe_id}): its ingredient lanes cannot "
+                    f"claim distinct east-facing input docks from its "
+                    f"{len(building.port_poses)} belt port(s) while preserving one "
+                    "legal splitter-backed fan-out per machine"
                 )
             elif s.takes_belt_ports:
                 out.append(
@@ -9231,7 +15025,11 @@ def fallback_placement(
     the construction for its bounding value, use :func:`_greedy_pack`, which is
     what :func:`_pack` warm-starts from.
     """
-    strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
+    strips = plan_strips(
+        spec,
+        strip_len=max(1, spec.machine_count),
+        band_policy=band_policy,
+    )
     at: dict[int, tuple[int, int]] = {}
     y = 0
     for i, s in enumerate(strips):
@@ -9248,7 +15046,9 @@ def fallback_placement(
         policy=band_policy,
         ramped=ramped,
     )
+    assert result.routing.status is DetailedRouteStatus.ROUTED
     placement = result.placement
+    assert placement is not None
     placement.stats["fallback_used"] = 1.0
     placement.stats["solver_status"] = 0.0
     # The fallback stacks strips vertically without ever asking whether two of
@@ -9305,7 +15105,6 @@ class FreeformLayout:
         self,
         *,
         band_policy: BandPolicy,
-        power: bool = True,
         strip_len: int = 6,
         workers: int | None = None,
         direct_insert: bool = True,
@@ -9313,7 +15112,6 @@ class FreeformLayout:
         belt_vertical_construction: bool = True,
     ) -> None:
         self.band_policy = band_policy
-        self.power = power
         #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
         #: ``!history.beltVerticalConstruction && num25 > 0.8f`` -- so a save
         #: WITH the tech has no slope limit and a belt may gain a whole level in
@@ -9356,8 +15154,10 @@ class FreeformLayout:
         On the calibration spec it returned 3162 tiles against the solver's 2208
         while carrying the same unsourced lanes, so it traded area away for
         nothing.  What replaces it is the shelf packing it was built on, handed
-        to :func:`_pack` as a warm start: same construction, bounding the search
-        instead of substituting for it.
+        to :func:`_pack` as a warm start.  It normally bounds the search; the
+        first candidate may substitute it only after an exact incumbent proves
+        that it fits the same evidence-bound width slack.  It is never used when
+        the solve fails.
 
         ``time_budget_s`` is the wall-clock search deadline for the whole call.
         Every phase takes what is left of exactly the budget the caller asked
@@ -9388,15 +15188,41 @@ class FreeformLayout:
         # becoming the thing that ends the sweep. See
         # `_ROUTING_EXPANSIONS_PER_SECOND`.
         budget = {"left": max(_ROUTING_BUDGET, int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling))}
+        def planning_cancelled() -> bool:
+            return _expired(deadline)
 
         try:
-            strips = plan_strips(spec, strip_len=self.strip_len)
+            strips = plan_strips(
+                spec,
+                strip_len=self.strip_len,
+                band_policy=self.band_policy,
+                cancelled=planning_cancelled,
+            )
+        except _PreparationDeadline as exc:
+            raise NoValidLayout(
+                "the requested deadline passed while proving strip projection "
+                "clearance",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            ) from exc
         except (ValueError, KeyError) as exc:
             # One retry with every machine of a group on a single strip. That is
             # the coarsest legal strip plan, so if it also fails the spec cannot
             # be turned into strips at all and no budget will change that.
             try:
-                strips = plan_strips(spec, strip_len=max(1, spec.machine_count))
+                strips = plan_strips(
+                    spec,
+                    strip_len=max(1, spec.machine_count),
+                    band_policy=self.band_policy,
+                    cancelled=planning_cancelled,
+                )
+            except _PreparationDeadline as deadline_exc:
+                raise NoValidLayout(
+                    "the requested deadline passed while proving fallback strip "
+                    "projection clearance",
+                    spec_label=spec.label,
+                    budget_s=time_budget_s,
+                ) from deadline_exc
             except ValueError, KeyError:
                 raise NoValidLayout(
                     f"the spec cannot be split into strips: {exc}",
@@ -9409,11 +15235,21 @@ class FreeformLayout:
         # one-net/zero-expansion misses; the same authoritative families
         # partitioned coarsely are 27-46 strips and route in one round.
         # Choose that representation before packing, not as a rescue afterward.
-        strips, _effective_strip_len = _coarsen_saturated_strip_plan(
-            spec,
-            strips,
-            strip_len=self.strip_len,
-        )
+        try:
+            strips, _effective_strip_len = _coarsen_saturated_strip_plan(
+                spec,
+                strips,
+                strip_len=self.strip_len,
+                band_policy=self.band_policy,
+                cancelled=planning_cancelled,
+            )
+        except _PreparationDeadline as exc:
+            raise NoValidLayout(
+                "the requested deadline passed while proving coarsened strip "
+                "projection clearance",
+                spec_label=spec.label,
+                budget_s=time_budget_s,
+            ) from exc
         if not strips:
             raise NoValidLayout(
                 "the spec contains no machine groups",
@@ -9458,33 +15294,57 @@ class FreeformLayout:
 
         #: Ordered authoritative findings from candidates rejected after packing.
         rejected: list[_RefusalFinding] = []
-        #: The unrouted-net count of every pack the sweep actually ROUTED.
-        #: Empty means no pack got that far.  It is what turns "the deadline
-        #: passed" from an assertion into a measurement -- see the refusal
-        #: below.
-        attempts: list[int] = []
+        #: Complete immutable evidence from every pack the sweep routed. Empty
+        #: means no pack got that far. Refusal reporting reads counts from the
+        #: detailed results without destroying identities Task 10 consumes.
+        attempts: list[PackAttempt] = []
         for sweep_s in budgets:
             if _expired(deadline):
                 break
-            best = self._sweep(spec, strips, sweep_s, deadline, budget, rejected, attempts)
+            try:
+                best = self._sweep(
+                    spec,
+                    strips,
+                    sweep_s,
+                    deadline,
+                    budget,
+                    rejected,
+                    attempts,
+                )
+            except _PreparationDeadline as exc:
+                raise NoValidLayout(
+                    "candidate PREPARATION deadline passed while applying learned "
+                    "projection geometry",
+                    spec_label=spec.label,
+                    budget_s=time_budget_s,
+                ) from exc
             if best is not None:
                 return best
 
+        deadline_expired = _expired(deadline)
+        completion_expired = deadline_expired and any(
+            attempt.budget_stage
+            in (
+                _BuildBudgetStage.CERTIFICATION,
+                _BuildBudgetStage.FINALIZATION,
+            )
+            for attempt in attempts
+        )
+        projection_failures = tuple(
+            ProjectionFailureRecord(
+                finding.band,
+                finding.check,
+                finding.buildings,
+                finding.detail,
+            )
+            for finding in rejected
+            if isinstance(finding, finalize.ProjectionFailure)
+        )
         # A build that WIRED and then failed our own validator is a different
         # defect from one that could not be wired, and saying so is the whole
         # value of checking: "the packer produced packs its own router cannot
         # wire" would be false here and would send the next reader to the packer.
-        if rejected:
-            projection_failures = tuple(
-                ProjectionFailureRecord(
-                    finding.band,
-                    finding.check,
-                    finding.buildings,
-                    finding.detail,
-                )
-                for finding in rejected
-                if isinstance(finding, finalize.ProjectionFailure)
-            )
+        if rejected and not completion_expired:
             raise NoValidLayout(
                 "every packing that wired was rejected by our own validator ("
                 + _refusal_summary(rejected)
@@ -9495,7 +15355,7 @@ class FreeformLayout:
                 budget_s=budgets[-1],
                 projection_failures=projection_failures,
             )
-        if _expired(deadline):
+        if deadline_expired:
             # AND IT HAS TO SAY HOW CLOSE THE PACKS CAME, because the clock
             # expiring is not evidence that the clock is what was missing.
             #
@@ -9519,27 +15379,75 @@ class FreeformLayout:
             # sweep never got to the candidate that works" from "every candidate
             # it tried was nowhere near", and aim at the right half of the
             # program.
-            tried = "1 pack was" if len(attempts) == 1 else f"{len(attempts)} packs were"
+            routing_attempts = [
+                attempt
+                for attempt in attempts
+                if attempt.budget_stage is not _BuildBudgetStage.PREPARATION
+            ]
+            preparation_cancellations = len(attempts) - len(routing_attempts)
+            completion_stages = tuple(
+                dict.fromkeys(
+                    attempt.budget_stage.value.upper()
+                    for attempt in routing_attempts
+                    if attempt.budget_stage
+                    in (
+                        _BuildBudgetStage.CERTIFICATION,
+                        _BuildBudgetStage.FINALIZATION,
+                    )
+                )
+            )
+            failed_counts = [
+                attempt.routing.failed_count for attempt in routing_attempts
+            ]
+            tried = (
+                "1 pack was"
+                if len(routing_attempts) == 1
+                else f"{len(routing_attempts)} packs were"
+            )
             if not attempts:
-                note = "no pack finished routing inside it"
-            elif min(attempts) == 0:
+                note = "no pack finished exact preparation inside it"
+            elif not routing_attempts:
+                noun = "pack" if preparation_cancellations == 1 else "packs"
+                note = (
+                    f"{preparation_cancellations} {noun} exhausted the deadline "
+                    "during exact preparation, before a net set existed to route"
+                )
+            elif min(failed_counts) == 0:
+                completed = " and ".join(completion_stages)
                 note = (
                     f"{tried} routed in that time and at least one wired every "
-                    "net, so the clock is what was missing"
+                    "net"
+                    + (
+                        f", but the deadline passed during {completed}"
+                        if completed
+                        else ", so the clock is what was missing"
+                    )
                 )
             else:
                 note = (
                     f"{tried} routed in that time and the best of them still "
-                    f"left {min(attempts)} nets unrouted (worst "
-                    f"{max(attempts)}), so a longer clock alone would not have "
+                    f"left {min(failed_counts)} nets unrouted (worst "
+                    f"{max(failed_counts)}), so a longer clock alone would not have "
                     "wired this spec"
                 )
+            if preparation_cancellations and routing_attempts:
+                noun = "pack" if preparation_cancellations == 1 else "packs"
+                note += (
+                    f"; {preparation_cancellations} other {noun} stopped during "
+                    "exact preparation"
+                )
+            if rejected:
+                note += (
+                    "; earlier completed packs were also rejected by our own "
+                    f"validator ({_refusal_summary(rejected)})"
+                )
             raise NoValidLayout(
-                f"the {ceiling:g}s deadline passed with no wired packing of "
+                f"the {ceiling:g}s deadline passed with no completed packing of "
                 f"{len(strips)} strips; {note}. This is a REFUSAL and not a "
                 "verdict on the spec",
                 spec_label=spec.label,
                 budget_s=ceiling,
+                projection_failures=projection_failures,
             )
         raise NoValidLayout(
             f"no packing of {len(strips)} strips could be wired at any candidate "
@@ -9558,14 +15466,14 @@ class FreeformLayout:
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
         rejected: list[_RefusalFinding] | None = None,
-        attempts: list[int] | None = None,
+        attempts: list[PackAttempt] | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
 
-        ``attempts`` collects the unrouted-net count of every pack this ROUTES,
-        so a caller that has to refuse can say how close the candidates came
-        rather than only that its clock expired.  See :meth:`lay_out`'s deadline
-        refusal, which used to assert the difference and now reports it.
+        ``attempts`` collects immutable :class:`PackAttempt` records with the
+        exact assignment, full detailed routing, static-access failures, and
+        promised-versus-realized direct identities. Refusal reporting derives
+        counts from those records rather than reducing evidence to an integer.
 
         ``None`` means no height produced one -- which is a refusal, not a
         degraded answer.  Packs with unrouted nets are discarded here rather than
@@ -9583,16 +15491,22 @@ class FreeformLayout:
         minute has not been given a budget, and the bake-off cannot sweep a
         parameter the code ignores.
 
-        The deadline is checked between heights rather than inside them: a
-        half-routed pack is not a result, so interrupting one wastes the work
-        without producing anything.  Whatever has already been found is
-        returned, which is why the heights most likely to pay off are tried
-        first.
+        The deadline is polled between search phases and inside preparation,
+        routing, compaction, and final projection. An interrupted candidate is
+        discarded because a half-routed or half-certified pack is not a result.
+        Certification is checked again after it returns, so a completed phase
+        that crossed the wall can never install a late placement.
         """
+        cancelled = None if deadline is None else lambda: _expired(deadline)
         candidates = _direct_insert_candidates(spec)
         greedy = _greedy_pack(strips, _height_seed(strips))
         bound = max(greedy.width, max((w for w, _h in map(_box, strips)), default=1))
-        net_candidates = _direct_net_candidates(strips, spec) if self.direct_insert else {}
+        direct_candidate_snapshot = _direct_candidate_snapshot(
+            strips,
+            spec,
+            enabled=self.direct_insert,
+        )
+        net_candidates = direct_candidate_snapshot.candidates
 
         # SHORTEST FIRST, and TALLEST-first was tried against it and reverted.
         #
@@ -9640,11 +15554,11 @@ class FreeformLayout:
         # message rather than bought back.
         # SO HERE IS THAT ORDER, AND IT DEPENDS ON THE STRIPS.
         #
-        # Not "shortest", not "tallest": NARROWEST-PACK FIRST, measured on the
-        # greedy shelf pack each height gets as its warm start.  Routing cost is
-        # a function of how far a net has to travel and a pack's width is what
-        # sets that, so the cheapest height to WIRE is the one whose pack comes
-        # out narrowest -- whichever direction that happens to lie in.
+        # Not "shortest", not "tallest", and not width alone: try the
+        # warm-start with the smallest LONGEST AXIS first.  The detailed router,
+        # boundary projection, and exact validator all traverse a two-dimensional
+        # build; bounding the longer realized axis is the deterministic
+        # model-derived proxy shared by all three.
         #
         # Measured on `universe-matrix/no-proliferator` power=0, one routing
         # pass per height on a fixed pack, no routing clock:
@@ -9659,10 +15573,21 @@ class FreeformLayout:
         # second half is right and the first is backwards, which is how that
         # experiment came out even.
         #
-        # The greedy pack is already built per height as `_pack`'s seed, so
-        # building them all up front costs nothing and only moves the work.
-        seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
-        heights = sorted(seeds, key=lambda height: (seeds[height].width, height))
+        # The greedy pack is already built per height as `_pack`'s seed, so the
+        # order adds no model, solve, candidate, or work.
+        heights = list(_band_policy_candidate_heights(strips, self.band_policy))
+        seeds = {height: _greedy_pack(strips, height) for height in heights}
+        original_height_ordinal = {
+            height: ordinal for ordinal, height in enumerate(heights)
+        }
+        heights.sort(
+            key=lambda height: (
+                max(seeds[height].width, seeds[height].height),
+                seeds[height].width,
+                seeds[height].height,
+                original_height_ordinal[height],
+            )
+        )
         # AND A CANDIDATE IS A (HEIGHT, ARRANGEMENT) PAIR, NOT A HEIGHT.
         #
         # The note above ends "the lever is the packer's arrangement, not the
@@ -9685,8 +15610,24 @@ class FreeformLayout:
             for arrangement in range(max(1, self.arrangements))
             for height in heights
         ]
+        routed_assignments: set[
+            tuple[
+                int,
+                int,
+                tuple[tuple[int, int], ...],
+                tuple[tuple[int, int], ...],
+            ]
+        ] = set()
         projection_no_goods: list[ProjectionNoGood] = []
-        projection_no_good_keys: set[tuple[int, ...]] = set()
+        projection_no_good_keys: set[ProjectionNoGood] = set()
+        minimum_pitch_x: dict[StripPoseId, int] = {}
+        minimum_staged_static_clearance: dict[StagedStaticClearanceKey, int] = {}
+        exact_no_good_state = _ExactPackNoGoodState()
+        staged_static_exact_retries: set[tuple[int, int]] = set()
+        direct_relation_no_goods: list[_DirectRelationNoGood] = []
+        direct_relation_no_good_keys: set[_DirectRelationNoGood] = set()
+        feedback_by_height: dict[int, FeedbackState] = {}
+        compact_width_by_height: dict[int, int] = {}
         # This sweep's own share, never more than the CALL has left. A sweep
         # asked for 15s when 3 remain must not spend 15.
         left = time_budget_s if deadline is None else deadline - time.monotonic()
@@ -9722,6 +15663,77 @@ class FreeformLayout:
         dearest_candidate_s = 0.0
         started_at: float | None = None
         candidate_index = 0
+        staged_static_cache = _StagedStaticCache()
+        projection_envelope = finalize.band_policy_search_envelope(
+            self.band_policy,
+            perimeter=_ENTRY_RING,
+        )
+
+        def strip_outline(pack: _Pack) -> tuple[int, int]:
+            left = min(origin[0] for origin in pack.at.values())
+            bottom = min(origin[1] for origin in pack.at.values())
+            right = max(
+                pack.at[index][0] + _box(strip)[0]
+                for index, strip in enumerate(strips)
+            )
+            top = max(
+                pack.at[index][1] + _box(strip)[1]
+                for index, strip in enumerate(strips)
+            )
+            return right - left, top - bottom
+
+        compaction_reserve_s = 0.0
+        finalize_reserve_s = 0.0
+        validation_reserve_s = 0.0
+
+        def projection_retry_affordable() -> bool:
+            current_candidate_s = (
+                0.0 if started_at is None else time.monotonic() - started_at
+            )
+            return _room_for_another(
+                deadline,
+                soft,
+                max(dearest_candidate_s, current_candidate_s),
+            )
+
+        def replan_strips_for_learned_geometry() -> None:
+            nonlocal strips, greedy, bound, direct_candidate_snapshot, net_candidates, seeds
+
+            replan_strip_len = max(strip.machines for strip in strips)
+            strips = plan_strips(
+                spec,
+                strip_len=replan_strip_len,
+                band_policy=self.band_policy,
+                minimum_pitch_x=minimum_pitch_x,
+                minimum_staged_static_clearance=(
+                    minimum_staged_static_clearance
+                ),
+                cancelled=cancelled,
+            )
+            greedy = _greedy_pack(strips, _height_seed(strips))
+            bound = max(
+                greedy.width,
+                max((w for w, _h in map(_box, strips)), default=1),
+            )
+            direct_candidate_snapshot = _direct_candidate_snapshot(
+                strips,
+                spec,
+                enabled=self.direct_insert,
+            )
+            net_candidates = direct_candidate_snapshot.candidates
+            seeds = {
+                candidate_height: _greedy_pack(strips, candidate_height)
+                for candidate_height in heights
+            }
+            # These proofs carry offsets, widths, or relation rows from the old
+            # strip geometry. Exact and projection cuts self-filter by outline or
+            # geometry signature; these do not, so retaining them can forbid a
+            # relation the widened strip just made feasible.
+            feedback_by_height.clear()
+            compact_width_by_height.clear()
+            direct_relation_no_goods.clear()
+            direct_relation_no_good_keys.clear()
+
         while candidate_index < len(candidate_packs):
             height, arrangement, projection_retry = candidate_packs[candidate_index]
             candidate_index += 1
@@ -9732,8 +15744,17 @@ class FreeformLayout:
             # UNDER-estimate, since the expensive exits are the failures that run
             # a full routing pass into the wall.
             if started_at is not None:
-                dearest_candidate_s = max(dearest_candidate_s, time.monotonic() - started_at)
-            # A SECOND ARRANGEMENT IMPROVES; IT NEVER SEARCHES FOR THE FIRST.
+                dearest_candidate_s = max(
+                    dearest_candidate_s,
+                    time.monotonic() - started_at,
+                )
+            if best is not None and not _room_for_another(
+                deadline,
+                soft,
+                dearest_candidate_s,
+            ):
+                break
+            # A SECOND ARRANGEMENT NORMALLY IMPROVES; ONE STRONG NEAR MISS MAY RESCUE.
             #
             # This is the whole shape of the feature and it was measured into
             # existence rather than designed. Extra arrangements were tried
@@ -9751,7 +15772,7 @@ class FreeformLayout:
             # cells on the corpus (paired, six rounds, t = +3.80). Re-measured
             # after it: -0.33 (t = -0.79). The rewrite lifted the baseline from
             # 70.0 to 71.8 of 72 and took the headroom with it, so what was a
-            # routability lever is now purely a density one.
+            # routability lever is now primarily a density one.
             #
             # Where they DO pay is on a spec that has already wired and has clock
             # left, because the sweep keeps the best `(area, belt_tiles)` it has
@@ -9765,8 +15786,8 @@ class FreeformLayout:
             # and density is the objective it is spent on.
             #
             # So the first pass over the heights is exactly what shipped before,
-            # and arrangements past it are gated TWICE: on having something to
-            # improve, and on being able to afford the improvement.
+            # and arrangements past it are normally gated TWICE: on having
+            # something to improve, and on being able to afford the improvement.
             #
             # `best is None` alone was not enough, and the number that says so
             # was measured at the DEFAULT budget rather than at the budget the
@@ -9815,6 +15836,22 @@ class FreeformLayout:
             # So the default is the one both ends support, which is the thing the
             # unconditional version got wrong: it was measured at budget 60 and
             # shipped to budget 4.
+            # One bounded exception lets a strong near miss look at the next
+            # arrangement for that exact height. The candidate already exists in
+            # `candidate_packs`; promotion marks it only after the ordinary
+            # affordability check passes. The marker preserves that admission
+            # through this gate and the hard deadline still applies. A failed
+            # admitted retry cannot unlock the height's later arrangements.
+            # Once a valid candidate exists, every later base height is an
+            # improvement attempt too. Starting one without enough measured
+            # clock for a complete candidate can only discard the valid result
+            # at the hard deadline; it cannot improve it.
+            if (
+                not projection_retry
+                and best is not None
+                and not _room_for_another(deadline, soft, dearest_candidate_s)
+            ):
+                break
             if not projection_retry and arrangement and best is None:
                 break
             if (
@@ -9836,11 +15873,36 @@ class FreeformLayout:
             # that is what makes `time_budget_s` a wall rather than a suggestion.
             # `lay_out` turns it into a refusal that names the deadline, so the
             # distinction between "cannot" and "ran out" survives into the error.
-            if _expired(deadline):
+            completion_reserve_s = (
+                compaction_reserve_s
+                + finalize_reserve_s
+                + validation_reserve_s
+            )
+            if (
+                deadline is not None
+                and deadline - time.monotonic() < completion_reserve_s
+            ):
                 break
+            seed = seeds[height]
+            seed_width, seed_height = strip_outline(seed)
+            if not projection_envelope.frame_candidates(
+                seed_width,
+                seed_height,
+            ):
+                if rejected is not None:
+                    _retain_refusal(
+                        rejected,
+                        projection_envelope.extent_failure(
+                            seed_width,
+                            seed_height,
+                        ),
+                    )
+                continue
             started_at = time.monotonic()
             remaining = (
-                per_solve if deadline is None else min(per_solve, deadline - time.monotonic())
+                per_solve
+                if deadline is None
+                else min(per_solve, deadline - time.monotonic())
             )
             if remaining <= 0:
                 break
@@ -9848,18 +15910,116 @@ class FreeformLayout:
             # arrangement with audit job allocation.  Those 24+ strip cells
             # route in one round from the deterministic seed; pin only their
             # packing solve so jobs=2 and a standalone call ask the same model.
+            feedback = feedback_by_height.get(height)
+            width_bound = max(bound * 2, 8)
+            if feedback is not None and height in compact_width_by_height:
+                width_bound = min(
+                    width_bound,
+                    _width_slack_cap(compact_width_by_height[height]),
+                )
             pack = _pack(
                 strips,
                 height=height,
-                width_bound=max(bound * 2, 8),
+                width_bound=width_bound,
                 time_budget_s=remaining,
                 direct_candidates=net_candidates,
-                workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
-                seed=seeds[height],
+                workers=(
+                    1
+                    if len(strips) >= _DETERMINISTIC_PACK_STRIPS
+                    else self.workers
+                ),
+                deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS,
+                seed=seed,
                 arrangement=arrangement,
                 projection_no_goods=tuple(projection_no_goods),
+                exact_pack_no_goods=tuple(exact_no_good_state.no_goods),
+                direct_relation_no_goods=tuple(direct_relation_no_goods),
+                feedback=feedback,
+                stop_when_seed_admissible=(
+                    candidate_index == 1
+                    and arrangement == 0
+                    and not projection_retry
+                    and feedback is None
+                    and _seed_admission_preserves_best_band(
+                        seed,
+                        _minimum_pack_width(strips, height),
+                        projection_envelope,
+                    )
+                ),
             )
             if pack is None:
+                continue
+            assignment = (
+                pack.height,
+                pack.width,
+                tuple(_box(strip) for strip in strips),
+                tuple(pack.at[index] for index in range(len(strips))),
+            )
+            # A retry is useful only when CP-SAT actually moved something.
+            # Deterministic short solves can return the same incumbent for two
+            # arrangement seeds; routing it again is the same deterministic
+            # multi-second search and can consume the candidate that would wire.
+            if assignment in routed_assignments:
+                continue
+            routed_assignments.add(assignment)
+            if (
+                deadline is not None
+                and deadline - time.monotonic()
+                < compaction_reserve_s
+                + finalize_reserve_s
+                + validation_reserve_s
+            ):
+                break
+            if feedback is None:
+                compact_width_by_height.setdefault(height, pack.width)
+            # Route the deterministic warm-start once this exact solve has
+            # produced a compact incumbent that admits it under the existing
+            # evidence-bound width contract.  The width-36 warm-start routes on
+            # the fourteen-strip calibration chain, while continuing to tighten
+            # it can replace it with a width-35 arrangement that strands one net.
+            #
+            # The admission callback stops only this first optimisation once the
+            # same exact width proof exists.  It does not add a solve, route,
+            # arrangement, worker, or deadline, and the seed REPLACES the
+            # candidate rather than acting as the deleted loose fallback.  If
+            # the exact incumbent is too narrow to admit the seed, CP-SAT keeps
+            # its normal bounded search and the final incumbent is routed.
+            if (
+                candidate_index == 1
+                and arrangement == 0
+                and not projection_retry
+                and feedback is None
+                and seed.width <= _width_slack_cap(pack.width)
+                and (
+                    seed.at != pack.at
+                    or seed.width != pack.width
+                    or seed.height != pack.height
+                )
+            ):
+                pack = replace(
+                    seed,
+                    status="WARM_START",
+                    hit_budget=pack.hit_budget,
+                )
+            # Reject a provably oversized strip outline before emitting coaters,
+            # reserving power, and preparing exact routing geometry.  The
+            # emitted core contains every packed strip, so an outline that fits
+            # no legal frame cannot become feasible when later passes only add
+            # buildings.  This is the same projection envelope `_prepare` asks,
+            # moved to the first point where the exact solved origins exist.
+            outline_width, outline_height = strip_outline(pack)
+            if not projection_envelope.frame_candidates(
+                outline_width,
+                outline_height,
+            ):
+                if rejected is not None:
+                    _retain_refusal(
+                        rejected,
+                        projection_envelope.extent_failure(
+                            outline_width,
+                            outline_height,
+                        ),
+                    )
                 continue
             # RATIONING THE CLOCK BETWEEN HEIGHTS WAS TRIED AND IS WORSE.
             #
@@ -9909,16 +16069,43 @@ class FreeformLayout:
                     spec,
                     strips,
                     pack,
-                    power=self.power,
+                    power=True,
                     route=True,
                     policy=self.band_policy,
                     ramped=self.ramped,
                     deadline=deadline,
                     budget=budget,
+                    staged_static_cache=staged_static_cache,
                 )
+            except finalize.ProjectionRefusal as exc:
+                if rejected is not None:
+                    for failure in exc.failures:
+                        _retain_refusal(rejected, failure)
+                continue
             except _Unpowerable as exc:
                 if rejected is not None:
                     _retain_refusal(rejected, exc.failure or "power.coverage")
+                evidence = exc.exact_retry_evidence
+                if evidence is not None and exc.failure is not None:
+                    no_good = ExactPackNoGood(
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        width=pack.width,
+                        origins=tuple(
+                            pack.at[index] for index in range(len(strips))
+                        ),
+                        evidence=exc.failures,
+                    )
+                    retry_key = _ExactRetryKey(height, arrangement, evidence)
+                    if exact_no_good_state.admit_retry(
+                        retry_key,
+                        no_good,
+                        affordable=projection_retry_affordable(),
+                    ):
+                        candidate_packs.insert(
+                            candidate_index,
+                            (height, arrangement, True),
+                        )
                 continue
             except _Unseatable as exc:
                 # A pack that cannot seat one of its Spray Coaters is not a
@@ -9932,13 +16119,217 @@ class FreeformLayout:
                         rejected,
                         exc.failure or "prolif.sprayed_cargo_reaches_machines",
                     )
+
+                retry_promoted = False
+                evidence = exc.exact_retry_evidence
+                if evidence is not None and exc.failure is not None:
+                    no_good = ExactPackNoGood(
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        width=pack.width,
+                        origins=tuple(
+                            pack.at[index] for index in range(len(strips))
+                        ),
+                        evidence=exc.failures,
+                    )
+                    retry_key = _ExactRetryKey(height, arrangement, evidence)
+                    retry_promoted = exact_no_good_state.admit_retry(
+                        retry_key,
+                        no_good,
+                        affordable=projection_retry_affordable(),
+                    )
+
+                pending_clearance: tuple[StagedStaticClearanceKey, int] | None = None
+
+                clearance_exhausted = False
+                requirement = exc.clearance_requirement
+                if requirement is not None:
+                    selected_strip = next(
+                        (
+                            strip
+                            for strip in strips
+                            if strip.family_id
+                            == requirement.instance_id.family_id
+                            and strip.machine_start
+                            == requirement.instance_id.machine_start
+                            and strip.machines
+                            == requirement.instance_id.machine_count
+                        ),
+                        None,
+                    )
+                    if (
+                        selected_strip is not None
+                        and selected_strip.physical_variant is not None
+                        and selected_strip.staged_static_variant_id
+                        == requirement.variant_id
+                    ):
+                        if (
+                            requirement.required_west_channel
+                            > _COATER_WEST_CHANNEL + 1
+                        ):
+                            clearance_exhausted = True
+                        else:
+                            retained_clearance = (
+                                minimum_staged_static_clearance.get(
+                                    requirement.relation,
+                                    selected_strip.west_channel,
+                                )
+                            )
+                            if (
+                                requirement.required_west_channel
+                                > retained_clearance
+                            ):
+                                pending_clearance = (
+                                    requirement.relation,
+                                    requirement.required_west_channel,
+                                )
+
+                # The physical variant gets one bounded upstream seat first.
+                # If an extended pack still projects into its own machine, the
+                # absolute frame latitude remains pack-dependent: forbid this
+                # complete assignment once and let CP-SAT move it.  The bound
+                # belongs to the height/arrangement retry boundary, not to the
+                # assignment identity: every successful no-good necessarily
+                # produces a distinct assignment, so identity alone can never
+                # make a second W4 exhaustion terminal.
+                staged_retry_key = (height, arrangement)
+                if (
+                    clearance_exhausted
+                    and exc.failure is not None
+                    and staged_retry_key not in staged_static_exact_retries
+                    and projection_retry_affordable()
+                ):
+                    no_good = ExactPackNoGood(
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        width=pack.width,
+                        origins=tuple(
+                            pack.at[index] for index in range(len(strips))
+                        ),
+                        evidence=exc.failures,
+                    )
+                    if exact_no_good_state.remember(no_good):
+                        staged_static_exact_retries.add(staged_retry_key)
+                        retry_promoted = True
+
+                if pending_clearance is not None:
+                    relation, required_west_channel = pending_clearance
+                    minimum_staged_static_clearance[relation] = required_west_channel
+                    replan_strips_for_learned_geometry()
+                if retry_promoted:
+                    candidate_packs.insert(
+                        candidate_index,
+                        (height, arrangement, True),
+                    )
                 continue
             failed = result.routing.failed_count
-            if attempts is not None:
-                attempts.append(failed)
+            attempt = PackAttempt(
+                origins=tuple(pack.at[index] for index in range(len(pack.at))),
+                compact_width=pack.width,
+                height=pack.height,
+                outline=tuple(_box(strip) for strip in strips),
+                routing=result.routing,
+                budget_stage=result.budget_stage,
+                static_access=tuple(
+                    failure
+                    for failure in result.routing.failures
+                    if failure.kind is RouteFailureKind.STATIC_ACCESS
+                ),
+                promised_direct=result.promised_direct,
+                realized_direct=result.realized_direct,
+                direct_candidates=direct_candidate_snapshot,
+            )
+
+            def retain_attempt(
+                stage: _BuildBudgetStage | None = None,
+                *,
+                current: PackAttempt = attempt,
+            ) -> None:
+                if attempts is not None:
+                    attempts.append(
+                        current
+                        if stage is None
+                        else replace(current, budget_stage=stage)
+                    )
+
             if failed:
+                retain_attempt()
+            if failed:
+                local_no_goods, exact_no_good = _proof_scoped_no_goods(
+                    attempt,
+                    strips,
+                )
+                learned = False
+                for relation_no_good in local_no_goods:
+                    if relation_no_good in direct_relation_no_good_keys:
+                        continue
+                    direct_relation_no_good_keys.add(relation_no_good)
+                    direct_relation_no_goods.append(relation_no_good)
+                    learned = True
+                if (
+                    exact_no_good is not None
+                    and exact_no_good_state.remember(exact_no_good)
+                ):
+                    learned = True
+
+                budget_failure = (
+                    result.routing.status is DetailedRouteStatus.BUDGET
+                    or any(
+                        failure.kind is RouteFailureKind.BUDGET
+                        for failure in result.routing.failures
+                    )
+                )
+                feedback_state: FeedbackState | None = None
+                if not budget_failure:
+                    feedback_state = _attempt_feedback_state(
+                        attempt,
+                        feedback_by_height.get(height),
+                    )
+                    feedback_by_height[height] = feedback_state
+
+                feedback_retry = (
+                    feedback_state is not None
+                    and _feedback_retry_eligible(attempt, feedback_state)
+                )
+                promote_retry = arrangement == 0 and (learned or feedback_retry)
+                if promote_retry:
+                    next_candidate = (height, arrangement + 1, False)
+                    try:
+                        next_index = candidate_packs.index(
+                            next_candidate,
+                            candidate_index,
+                        )
+                    except ValueError:
+                        pass
+                    else:
+                        current_candidate_s = (
+                            0.0
+                            if started_at is None
+                            else time.monotonic() - started_at
+                        )
+                        retry_cost = max(
+                            dearest_candidate_s,
+                            current_candidate_s,
+                        )
+                        if _room_for_another(
+                            deadline,
+                            soft,
+                            retry_cost,
+                        ):
+                            candidate_packs.pop(next_index)
+                            candidate_packs.insert(
+                                candidate_index,
+                                (height, arrangement + 1, True),
+                            )
                 continue
+            if result.routing.status is not DetailedRouteStatus.ROUTED:
+                retain_attempt()
+                continue
+            assert result.promised_direct == result.realized_direct, (
+                "a routed pack may not retain an unrealized rewarded direct insert"
+            )
             placement = result.placement
+            assert placement is not None
             # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
             #
             # `lay_out` promises a valid `Placement` or `NoValidLayout`, and
@@ -9958,52 +16349,200 @@ class FreeformLayout:
             # is a search, and refusing outright is honest, while an invalid
             # blueprint is the worst outcome this program has.
             #
-            # It costs a validation per ROUTED candidate, which is a handful per
-            # sweep -- most heights never get here because their pack does not
-            # wire -- against a CP-SAT solve and a full routing pass each.
-            report = validate.certify(placement, spec, expect_power=self.power)
-            if report.errors:
-                if rejected is not None:
-                    for finding in report.errors:
-                        _retain_refusal(rejected, finding)
-                continue
+            # A fully routed incumbent still has to finish three exact completion
+            # transforms. Search stops at the caller's wall, but a wired candidate
+            # gets the fixed loaded-machine atomic grace: discarding a valid route
+            # halfway through projection makes load, rather than geometry, decide
+            # whether the same deterministic blueprint exists.
+            completion_deadline = (
+                None
+                if deadline is None
+                else deadline + ATOMIC_COMPLETION_GRACE_S
+            )
+            completion_cancelled = (
+                None
+                if completion_deadline is None
+                else lambda: _expired(completion_deadline)
+            )
+            compaction_started = time.monotonic()
+            try:
+                compacted = finalize.compact_open_boundary_belts_certified(
+                    placement,
+                    spec,
+                    expect_power=True,
+                    cancelled=completion_cancelled,
+                )
+            except finalize.ProjectionCancelled:
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
+            if _expired(completion_deadline):
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
+            placement = compacted.placement
+            compaction_reserve_s = max(
+                compaction_reserve_s,
+                time.monotonic() - compaction_started,
+            )
+            finalize_started = time.monotonic()
             try:
                 placement = finalize.finalize_placement(
                     placement,
                     self.band_policy,
+                    cancelled=completion_cancelled,
                 )
+            except finalize.ProjectionCancelled:
+                retain_attempt(_BuildBudgetStage.FINALIZATION)
+                break
             except finalize.ProjectionRefusal as exc:
+                retain_attempt()
                 learned = False
-                for failure in exc.failures:
+                exact_projection_pair: ExactProjectionPair | None = None
+                geometry_learned = False
+                exact_retry_evidence: _ExactRetryEvidence | None = None
+                pitch_requirements = _projection_pitch_requirements(
+                    placement,
+                    strips,
+                    exc.failures,
+                )
+                from flab2bp.layout.strip_variants import (
+                    StripInstanceId,
+                    strip_pose_id,
+                )
+
+                strips_by_instance: dict[StripInstanceId, Strip] = {}
+                for strip in strips:
+                    if strip.family_id is None:
+                        continue
+                    strips_by_instance.setdefault(
+                        StripInstanceId(
+                            strip.family_id,
+                            strip.machine_start,
+                            strip.machines,
+                        ),
+                        strip,
+                    )
+                for failure, pitch_requirement in zip(
+                    exc.failures,
+                    pitch_requirements,
+                    strict=True,
+                ):
                     if rejected is not None:
                         _retain_refusal(rejected, failure)
-                    no_good = _projection_no_good(placement, pack, failure)
-                    if no_good is None:
-                        continue
-                    no_good_key = (
-                        no_good.left_strip,
-                        no_good.right_strip,
-                        no_good.delta_x,
-                        no_good.delta_y,
-                        no_good.pack_width,
-                        no_good.pack_height,
-                        *(
-                            coordinate
-                            for origin in no_good.pack_origins
-                            for coordinate in origin
-                        ),
+
+                    strip_pair = _projection_strip_pair(placement, failure)
+                    projection_no_good = _projection_no_good(
+                        placement,
+                        pack,
+                        strips,
+                        failure,
+                        self.band_policy,
                     )
-                    if no_good_key in projection_no_good_keys:
+                    if strip_pair is not None and projection_no_good is None:
+                        if exact_projection_pair is None:
+                            exact_projection_pair = _exact_projection_pair(
+                                strips,
+                                strip_pair,
+                            )
+                        if exact_retry_evidence is None:
+                            exact_retry_evidence = _exact_retry_evidence(
+                                "finalizer",
+                                failure,
+                                dict(enumerate(placement.buildings)),
+                            )
+                    if projection_no_good is not None:
+                        projection_no_good_key = projection_no_good
+                        if projection_no_good_key not in projection_no_good_keys:
+                            projection_no_good_keys.add(projection_no_good_key)
+                            projection_no_goods.append(projection_no_good)
+                            learned = True
+
+                    if pitch_requirement is None:
                         continue
-                    projection_no_good_keys.add(no_good_key)
-                    projection_no_goods.append(no_good)
+                    selected_strip = strips_by_instance.get(pitch_requirement.instance_id)
+                    if (
+                        selected_strip is None
+                        or selected_strip.physical_variant is None
+                        or selected_strip.physical_variant.variant_id
+                        != pitch_requirement.variant_id
+                    ):
+                        continue
+
+
+                    pose_id = strip_pose_id(selected_strip.physical_variant)
+                    retained_pitch = minimum_pitch_x.get(
+                        pose_id,
+                        selected_strip.physical_variant.pitch_x,
+                    )
+                    if pitch_requirement.required_pitch <= retained_pitch:
+                        continue
+                    minimum_pitch_x[pose_id] = pitch_requirement.required_pitch
                     learned = True
-                if learned:
+                    geometry_learned = True
+                retry_promoted = False
+                if exact_retry_evidence is not None:
+                    exact_no_good = ExactPackNoGood(
+                        height=pack.height,
+                        outline=tuple(_box(strip) for strip in strips),
+                        width=pack.width,
+                        origins=tuple(
+                            pack.at[index] for index in range(len(strips))
+                        ),
+                        evidence=exc.failures,
+                        projection_pair=exact_projection_pair,
+                    )
+                    retry_key = _ExactRetryKey(
+                        height,
+                        arrangement,
+                        exact_retry_evidence,
+                    )
+                    retry_promoted = exact_no_good_state.admit_retry(
+                        retry_key,
+                        exact_no_good,
+                        affordable=projection_retry_affordable(),
+                    )
+                learned_retry_affordable = (
+                    learned
+                    and not retry_promoted
+                    and projection_retry_affordable()
+                )
+                if geometry_learned:
+                    replan_strips_for_learned_geometry()
+                if learned_retry_affordable:
+                    retry_promoted = True
+                if retry_promoted:
                     candidate_packs.insert(
                         candidate_index,
                         (height, arrangement, True),
                     )
                 continue
+            if _expired(completion_deadline):
+                retain_attempt(_BuildBudgetStage.FINALIZATION)
+                break
+            finalize_reserve_s = max(
+                finalize_reserve_s,
+                time.monotonic() - finalize_started,
+            )
+            certify_started = time.monotonic()
+            report = validate.certify(placement, spec, expect_power=True)
+            validation_reserve_s = max(
+                validation_reserve_s,
+                time.monotonic() - certify_started,
+            )
+            if report.errors and rejected is not None:
+                for finding in report.errors:
+                    _retain_refusal(rejected, finding)
+            if _expired(completion_deadline):
+                retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                break
+            if report.errors:
+                retain_attempt()
+                continue
+            if placement.frame is not None:
+                placement = replace(
+                    placement,
+                    completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+                )
+            retain_attempt()
             # Area, then belt count. Two packs of equal area are not equally
             # good: the one with fewer belt tiles is fewer buildings to paste,
             # and a direct insert shows up here as exactly that. Without the
@@ -10018,6 +16557,8 @@ class FreeformLayout:
                 placement.stats["area"] = float(placement.area)
                 best, best_key = placement, key
         return best
+
+
 
 
 def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -> bool:
@@ -10050,9 +16591,50 @@ def _height_seed(strips: list[Strip]) -> int:
     return max(tall, int(math.isqrt(max(1, area))))
 
 
+def _candidate_height_box(strip: Strip) -> tuple[int, int]:
+    """Exclude lateral staged-static feedback from the fixed height schedule."""
+    width, height = _box(strip)
+    if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY:
+        width -= max(0, strip.west_channel - _COATER_WEST_CHANNEL)
+    return width, height
+
+
 def _candidate_heights(strips: list[Strip]) -> list[int]:
     """Heights to sweep, since ``W * H`` is too weak a form to minimise directly."""
-    h0 = _height_seed(strips)
-    tall = max((h for _w, h in map(_box, strips)), default=1)
+    boxes = tuple(_candidate_height_box(strip) for strip in strips)
+    area = sum(width * height for width, height in boxes)
+    tall = max((height for _width, height in boxes), default=1)
+    h0 = max(tall, int(math.isqrt(max(1, area))))
     out = {max(tall, int(h0 * f)) for f in (0.6, 0.8, 1.0, 1.25, 1.6)}
     return sorted(out)
+
+
+def _minimum_pack_width(strips: list[Strip], height: int) -> int:
+    """Return a proof-valid width floor for any packing at one height."""
+    boxes = tuple(map(_box, strips))
+    area = sum(width * box_height for width, box_height in boxes)
+    widest = max((width for width, _box_height in boxes), default=1)
+    return max(widest, (area + height - 1) // height)
+
+
+def _band_policy_candidate_heights(
+    strips: list[Strip],
+    policy: BandPolicy,
+) -> tuple[int, ...]:
+    """Keep the measured order while reserving one proved fixed-band boundary."""
+    seeds = {
+        height: _greedy_pack(strips, height)
+        for height in _candidate_heights(strips)
+    }
+    ordered = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+    envelope = finalize.band_policy_search_envelope(
+        policy,
+        perimeter=_ENTRY_RING,
+    )
+    return envelope.reserve_boundary_height(
+        ordered,
+        minimum_width_for_height={
+            height: _minimum_pack_width(strips, height)
+            for height in ordered
+        },
+    )

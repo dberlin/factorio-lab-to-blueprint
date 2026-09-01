@@ -151,9 +151,8 @@ class Graph:
     #: Only recorded for import-time nodes, and the distinction is the whole
     #: reason :func:`frozen_captures` gives a usable answer.
     #: ``pipeline.PRODUCTION_STRATEGIES`` names backends at import; it does not
-    #: run them, so it freezes nothing.
-    #: ``junction._KEEPOUT = tuple(sorted(_keepout()))`` calls, so everything
-    #: ``_keepout`` reaches really is resolved once and kept.
+    #: run them, so it freezes nothing.  ``rules.SLOT_ALIGN_COS`` evaluates
+    #: ``cos(SKEW_AXIS_DEG)`` at import, so that derived value is frozen.
     calls: Mapping[str, frozenset[str]] = types.MappingProxyType({})
 
     def closure(self, roots: Iterable[str], *, block: Iterable[str] = ()) -> frozenset[str]:
@@ -485,7 +484,6 @@ def frozen_captures(graph: Graph | None = None) -> dict[str, tuple[str, ...]]:
     which is a defect on its own:
 
     * a module-level constant computed from the rule --
-      ``junction._KEEPOUT = tuple(sorted(_keepout()))`` and
       ``rules.SLOT_ALIGN_COS = cos(SKEW_AXIS_DEG)``.  This is Phase 2's
       "compile, don't call" pattern, working as designed.
     * a rule used as a DEFAULT ARGUMENT --

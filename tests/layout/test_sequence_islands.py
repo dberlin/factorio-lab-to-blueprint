@@ -243,6 +243,7 @@ def test_compact_portfolio_uses_root_seed_once_while_search_seeds_stay_distinct(
 
     requests = _ImmediateExecutor.instances[-1].requests
     assert [request.seed for request in requests] == list(_sequence_island_seeds(root, 8))
+    assert {request.power for request in requests} == {True}
     assert len({request.seed for request in requests}) == 8
     seeded = requests
     assert [request.compact_seed_attempt for request in seeded] == list(range(8))
@@ -459,6 +460,64 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     assert placement.stats["winner_island_seed"] == SequenceSolverConfig().seed
     assert placement.stats["island_result_reserve_s"] == 90.0
     assert executor.shutdown_calls[-1] == (True, False)
+
+
+def test_island_reuses_authoritative_search_validation_after_soft_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = _placement(area=20, belt_tiles=4)
+
+    class Solver:
+        def search(self) -> object:
+            return object()
+
+    class Run:
+        solver = Solver()
+
+    monkeypatch.setattr(
+        islands_module,
+        "_production_run",
+        lambda *_args, **_kwargs: Run(),
+    )
+    monkeypatch.setattr(
+        islands_module,
+        "_with_observational_stats",
+        lambda *_args, **_kwargs: placement,
+    )
+    monkeypatch.setattr(islands_module.time, "monotonic", lambda: 101.0)
+
+    def reject_revalidation(*_args: object, **_kwargs: object) -> Never:
+        raise AssertionError("island must reuse the solver's authoritative validation")
+
+    class RejectingValidator:
+        certify = staticmethod(reject_revalidation)
+
+    monkeypatch.setattr(
+        islands_module,
+        "validate",
+        RejectingValidator,
+        raising=False,
+    )
+    request = _SequenceIslandRequest(
+        spec=two_stage_spec(),
+        time_budget_s=1.0,
+        soft_deadline=100.0,
+        power=False,
+        band_policy=BandPolicy("portable"),
+        belt_vertical_construction=True,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        island_id=0,
+        seed=SequenceSolverConfig.test().seed,
+        compact_seed_attempt=None,
+        compact_seed_base_seed=SequenceSolverConfig.test().seed,
+        compact_seed_config=CompactSeedConfig(max_deterministic_time=0.01),
+    )
+
+    outcome = _run_sequence_island(request)
+
+    assert outcome.status == "completed"
+    assert outcome.placement is placement
 
 
 @pytest.mark.parametrize(

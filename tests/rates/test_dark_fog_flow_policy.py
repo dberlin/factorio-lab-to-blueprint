@@ -19,7 +19,7 @@ from flab2bp.lab.flow import (
 )
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
-from flab2bp.rates.candidates import build_candidates
+from flab2bp.rates.candidates import CandidatePolicy, build_candidates
 
 DARK_FOG_URL = (
     "https://factoriolab.github.io/dsp/list?z=eJxNyr0KwkAQBOC3uWJAuIuJqbbZYLQQMaKRa"
@@ -68,7 +68,11 @@ def data() -> Dataset:
 
 
 def test_alias_only_url_uses_catalog_recipe_ids(data: Dataset) -> None:
-    (spec,) = build_candidates(data, parse_url(DARK_FOG_URL), count=1).candidates
+    (spec,) = build_candidates(
+        data,
+        parse_url(DARK_FOG_URL),
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    ).candidates
 
     assert "combustible-unit" in {group.recipe_id for group in spec.groups}
     assert "supersonic-missile-set" in spec.outputs
@@ -81,7 +85,11 @@ def test_canonical_and_alias_objectives_merge_into_one_demand(data: Dataset) -> 
         "https://factoriolab.github.io/dsp/list?"
         "o=df-combustible-unit*30&o=combustible-unit*30&v=11"
     )
-    (spec,) = build_candidates(data, parse_url(url), count=1).candidates
+    (spec,) = build_candidates(
+        data,
+        parse_url(url),
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    ).candidates
 
     assert spec.outputs == {"combustible-unit": Fraction(1)}
     assert [g.recipe_id for g in spec.groups] == ["combustible-unit"]
@@ -251,7 +259,12 @@ def test_df_only_non_demand_row_does_not_authorize_an_input(data: Dataset) -> No
     request = pin_request(parse_url(LOGISTICS_URL), custom, flow)
 
     with pytest.raises(FlowError, match="df-only-resource.*external input"):
-        _ = build_candidates(custom, request, count=1, flow=flow)
+        _ = build_candidates(
+            custom,
+            request,
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            flow=flow,
+        )
 
 def test_df_only_internal_product_is_refused(data: Dataset) -> None:
     logistics = replace(
@@ -296,14 +309,24 @@ def test_df_only_internal_product_is_refused(data: Dataset) -> None:
     request = pin_request(parse_url(LOGISTICS_URL), custom, flow)
 
     with pytest.raises(FlowError, match="df-only-resource.*internal product"):
-        _ = build_candidates(custom, request, count=1, flow=flow)
+        _ = build_candidates(
+            custom,
+            request,
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            flow=flow,
+        )
 
 
 def test_df_only_explicit_input_is_an_external_source(data: Dataset) -> None:
     custom = _with_df_only_logistics_input(data)
     flow = flow_from_text(_df_only_flow(include_source=True), url=LOGISTICS_URL)
     request = pin_request(parse_url(LOGISTICS_URL), custom, flow)
-    (spec,) = build_candidates(custom, request, count=1, flow=flow).candidates
+    (spec,) = build_candidates(
+        custom,
+        request,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        flow=flow,
+    ).candidates
 
     assert [group.recipe_id for group in spec.groups] == ["logistics-bot"]
     assert "df-only-resource" in spec.external_inputs
@@ -313,7 +336,11 @@ def test_df_only_derived_objective_is_refused(data: Dataset) -> None:
     url = "https://factoriolab.github.io/dsp/list?o=df-only-resource*1&v=11"
 
     with pytest.raises(KeyError, match="df-only-resource.*Dark Fog"):
-        _ = build_candidates(data, parse_url(url), count=1)
+        _ = build_candidates(
+            data,
+            parse_url(url),
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        )
 
 
 def test_df_only_implicit_input_is_refused(data: Dataset) -> None:
@@ -322,12 +349,21 @@ def test_df_only_implicit_input_is_refused(data: Dataset) -> None:
     request = pin_request(parse_url(LOGISTICS_URL), custom, flow)
 
     with pytest.raises(FlowError, match="df-only-resource.*positive demand"):
-        _ = build_candidates(custom, request, count=1, flow=flow)
+        _ = build_candidates(
+            custom,
+            request,
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            flow=flow,
+        )
 
 
 def test_unrelated_item_identity_is_unchanged(data: Dataset) -> None:
     url = "https://factoriolab.github.io/dsp/list?o=graphene*60&v=11"
-    (spec,) = build_candidates(data, parse_url(url), count=1).candidates
+    (spec,) = build_candidates(
+        data,
+        parse_url(url),
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    ).candidates
 
     assert spec.outputs == {"graphene": Fraction(1)}
     assert "graphene" in {group.recipe_id for group in spec.groups}

@@ -106,6 +106,7 @@ from flab2bp.dsp import colliders
 
 __all__ = [
     "ADDON_AREA_RADIUS",
+    "ADDON_LINE_MAX_DISTANCE",
     "ADDON_AXIS_DEG",
     "ADDON_FROM_SLOT",
     "ADDON_NEIGHBOUR_RADIAL_GAP",
@@ -136,14 +137,17 @@ __all__ = [
     "SLOT_ALIGN_COS",
     "SLOT_REACH",
     "SORTER_LENGTH",
+    "SPLITTER_INPUT_FROM_SLOT",
     "SPLITTER_INPUT_TO_SLOT",
     "SPLITTER_MAX_PORTS",
     "SPLITTER_OUTPUT_FROM_SLOT",
+    "SPLITTER_OUTPUT_TO_SLOT",
     "WIND_TOO_CLOSE_SQR",
     "WORLD_UNITS_PER_LEVEL",
     "PowerNode",
     "PowerSpacing",
     "addon_axis_aligned",
+    "addon_line_distance",
     "addon_axis_offset_deg",
     "addon_ride_is_straight",
     "belt_link_too_far",
@@ -210,12 +214,12 @@ BELT_SLOT = -1
 ADDON_FROM_SLOT = 15
 ADDON_TO_SLOT = 14
 
-#: Slot indices every splitter in the corpus uses, without exception: 25 of 25,
-#: with both offsets ``0``.  These are constants, not geometry.
-#:
-#: They were named ``INPUT_TO_SLOT``/``OUTPUT_FROM_SLOT`` in ``layout.junction``
-#: -- the same two names this module uses for a SORTER's own ends, holding
-#: different values.  Prefixed here so the two can never be confused again.
+#: The four sentinel fields every game-written Splitter carries.  BlueprintUtils
+#: initializes a multilevel building's downward link pair to ``14``/``15`` even
+#: when no lower Splitter is attached; the ordinary connection fields remain on
+#: the belts around it.  These values are independent of the physical port index.
+SPLITTER_OUTPUT_TO_SLOT = 14
+SPLITTER_INPUT_FROM_SLOT = 15
 SPLITTER_INPUT_TO_SLOT = 14
 SPLITTER_OUTPUT_FROM_SLOT = 15
 
@@ -239,7 +243,6 @@ SPLITTER_OUTPUT_FROM_SLOT = 15
 #: the dataclass default of 0, which is not a value the game writes and which
 #: collides with the receiving belt's own output link.
 BELT_INPUT_SLOTS = (1, 4)
-
 
 
 #: Where the game puts a connection whose peer slot is left to it, i.e. one
@@ -327,7 +330,6 @@ SPLITTER_MAX_PORTS = 4
 #: This is the installed 0.10.34 implementation, lines 528-632 of the retained
 #: ``Assembly-CSharp`` decompile.
 CHEMICAL_OUTPUT_BUFFER_CRAFTS = 20
-
 
 
 # --- BuildTool_BlueprintCopy.CheckInserterDataLegal -------------------------
@@ -573,11 +575,32 @@ SLOT_ALIGN_COS = math.cos(math.radians(SKEW_AXIS_DEG))
 #: wrong there cost a retraction, which is why there is exactly one conversion
 #: and every caller uses it.
 #:
-#: The companion clause, ``Maths.DistancePointLine(...) < 0.3f`` -- how near the
-#: area's centre must be to the belt's own LINE -- has never been given a
-#: constant or a port; only the radius above is checked.  Recorded here as an
-#: unported half of the rule rather than left implicit.
+#: How near the area's centre must be to the selected belt's own line.
+#: ``Maths.DistancePointLine(...) < 0.3f`` in the same addon-connection clause;
+#: strict, like the radius comparison.  A one-quarter-tile perpendicular miss
+#: is ``GRID_ARC / 4 == 0.314159...`` world units and therefore fails.
+ADDON_LINE_MAX_DISTANCE = 0.3
 ADDON_AREA_RADIUS = 1.0
+
+def addon_line_distance(
+    point: tuple[float, float, float],
+    line_a: tuple[float, float, float],
+    line_b: tuple[float, float, float],
+) -> float:
+    """``Maths.DistancePointLine`` for one addon's selected belt."""
+    axis = tuple(b - a for a, b in zip(line_a, line_b, strict=True))
+    length2 = sum(component * component for component in axis)
+    if length2 == 0.0:
+        return math.dist(point, line_a)
+    scale = sum(
+        (coordinate - origin) * component
+        for coordinate, origin, component in zip(point, line_a, axis, strict=True)
+    ) / length2
+    closest = tuple(
+        origin + scale * component
+        for origin, component in zip(line_a, axis, strict=True)
+    )
+    return math.dist(point, closest)
 
 #: How far off an addon's own axis the belt it rides may travel, in DEGREES.
 #: ``BuildTool_Addon.CheckBuildConditions``, the hand tool, over every belt its
@@ -914,9 +937,7 @@ def power_node_gate_sqr(*, wind_forced_power: bool = False, geothermal: bool = F
     return POWER_TOO_CLOSE_SQR
 
 
-def power_node_condition(
-    a: PowerNode, b: PowerNode, sqr_world_gap: float
-) -> PowerSpacing | None:
+def power_node_condition(a: PowerNode, b: PowerNode, sqr_world_gap: float) -> PowerSpacing | None:
     """The paste's verdict on placing ``a`` this far from an existing ``b``.
 
     ``sqr_world_gap`` is ``num35``: the SQUARED distance between the two

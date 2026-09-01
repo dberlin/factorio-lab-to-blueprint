@@ -16,8 +16,9 @@ from pathlib import Path
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
-from flab2bp.layout.band_policy import BAND_SELECTIONS
+from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy
 from flab2bp.layout.base import NoValidLayout
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 
 
 def _report(build: pipeline.Build, *, verbose: bool) -> None:
@@ -137,6 +138,53 @@ def _available_cpu_count() -> int:
         return max(1, os.process_cpu_count() or 1)
 
 
+def _band_selection(value: str) -> str:
+    try:
+        return BandPolicy.parse(value).selection
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def add_candidate_policy_argument(ap: argparse.ArgumentParser) -> None:
+    """Add the shared named-policy selection surface to a CLI parser."""
+    labels = ", ".join(policy.value for policy in DEFAULT_CANDIDATE_POLICIES)
+    ap.add_argument(
+        "--candidate-policy",
+        action="append",
+        default=None,
+        metavar="POLICY[,POLICY...]",
+        help=f"candidate policies to run; repeat or comma-delimit from: {labels} "
+        "(default: all three)",
+    )
+
+
+def candidate_policies_from_args(
+    ap: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> tuple[CandidatePolicy, ...]:
+    """Validate repeated/comma-delimited labels and restore canonical order."""
+    selections: list[str] | None = args.candidate_policy
+    if selections is None:
+        return DEFAULT_CANDIDATE_POLICIES
+
+    selected: set[CandidatePolicy] = set()
+    for selection in selections:
+        for raw_label in selection.split(","):
+            label = raw_label.strip()
+            if not label:
+                ap.error("candidate policy must not be empty")
+            try:
+                policy = CandidatePolicy(label)
+            except ValueError:
+                ap.error(f"unknown candidate policy: {label!r}")
+            if policy in selected:
+                ap.error(f"duplicate candidate policy: {policy.value}")
+            selected.add(policy)
+    return tuple(
+        policy for policy in DEFAULT_CANDIDATE_POLICIES if policy in selected
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="flab2bp",
@@ -153,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--band",
+        type=_band_selection,
         choices=BAND_SELECTIONS,
         default="portable",
         help="latitude-band policy (default: portable, the smallest fitting "
@@ -165,15 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         help="whole-solve process islands for explicit sequence-pair (default: "
         "CPU affinity capped at 8; explicit range 1..16)",
     )
-    ap.add_argument("--no-power", dest="power", action="store_false", help="omit Tesla Towers")
-    ap.add_argument(
-        "--candidates",
-        type=int,
-        choices=range(1, 4),
-        default=3,
-        help="fixed mode policies to emit: none, all-products, output-products "
-        "(1..3; default 3)",
-    )
+    add_candidate_policy_argument(ap)
     ap.add_argument(
         "--flow",
         type=Path,
@@ -220,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         "an invalid blueprint pastes cleanly and then does not run)",
     )
     args = ap.parse_args(argv)
+    candidate_policies = candidate_policies_from_args(ap, args)
     if args.sequence_islands is not None and args.strategy != "sequence-pair":
         ap.error("--sequence-islands requires --strategy sequence-pair")
     if args.sequence_islands is not None and not 1 <= args.sequence_islands <= 16:
@@ -235,8 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             args.url,
             strategy=args.strategy,
             band=args.band,
-            power=args.power,
-            candidates=args.candidates,
+            candidate_policies=candidate_policies,
             time_budget_s=args.budget,
             sequence_islands=sequence_islands,
             name=args.name,

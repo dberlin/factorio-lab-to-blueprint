@@ -323,7 +323,6 @@ class CompactTopologyBeam:
                     f"beam_y_interval_{strip}",
                 )
             )
-            model.add(strip_x + width <= outline_width)
             if coordinate_hint is not None:
                 model.add_hint(
                     strip_x,
@@ -336,6 +335,13 @@ class CompactTopologyBeam:
                         self.problem.outline_height - height,
                     ),
                 )
+        model.add_max_equality(
+            outline_width,
+            tuple(
+                coordinate + width
+                for coordinate, (width, _height) in zip(x, self.sizes, strict=True)
+            ),
+        )
         model.add_no_overlap_2d(x_intervals, y_intervals)
 
         relations: list[tuple[cp_model.IntVar, ...]] = []
@@ -391,11 +397,17 @@ class CompactTopologyBeam:
                 )
                 model.add(row_gap >= 1).only_enforce_if(direct)
                 model.add(row_gap <= catalog.SORTER_MAX_REACH).only_enforce_if(direct)
+                origin_delta = model.new_int_var(
+                    -(target.consumer_span - 1),
+                    target.producer_span - 1,
+                    f"direct_origin_delta{target.producer}_{target.consumer}",
+                )
                 model.add(
-                    x[target.producer] <= x[target.consumer] + target.consumer_span - 1
+                    origin_delta == x[target.consumer] - x[target.producer]
                 ).only_enforce_if(direct)
-                model.add(
-                    x[target.consumer] <= x[target.producer] + target.producer_span - 1
+                model.add_allowed_assignments(
+                    [origin_delta],
+                    [(delta,) for delta in target.origin_deltas],
                 ).only_enforce_if(direct)
                 direct_successes.append(direct)
             width_weight = (
@@ -422,6 +434,7 @@ class CompactTopologyBeam:
         *,
         absolute_deadline: float | None = None,
         cancelled: Callable[[], bool] | None = None,
+        stop_when_width_admits: Callable[[int], bool] | None = None,
     ) -> CompactTopologyCandidate | None:
         """Solve the next not-yet-excluded topology within fixed deterministic work."""
         if self._solved >= self.config.max_candidates:
@@ -432,6 +445,8 @@ class CompactTopologyBeam:
             raise ValueError("topology deadline must be a finite monotonic-clock float")
         if cancelled is not None and not callable(cancelled):
             raise ValueError("topology cancellation check must be callable")
+        if stop_when_width_admits is not None and not callable(stop_when_width_admits):
+            raise ValueError("topology width-admission check must be callable")
         if (cancelled is not None and cancelled()) or _deadline_reached(absolute_deadline):
             return None
 
@@ -445,7 +460,17 @@ class CompactTopologyBeam:
             if remaining <= _DEADLINE_SAFETY_SECONDS:
                 return None
             solver.parameters.max_time_in_seconds = remaining - _DEADLINE_SAFETY_SECONDS
-        status_code = solver.solve(self._model)
+        class WidthAdmission(cp_model.CpSolverSolutionCallback):
+            """Stop once the exact incumbent admits already-routed evidence."""
+
+            def on_solution_callback(self) -> None:
+                assert stop_when_width_admits is not None
+                if stop_when_width_admits(self.Value(self_outline_width)):
+                    self.StopSearch()
+
+        self_outline_width = self._variables.outline_width
+        admission = WidthAdmission() if stop_when_width_admits is not None else None
+        status_code = solver.solve(self._model, admission)
         if (cancelled is not None and cancelled()) or _deadline_reached(absolute_deadline):
             return None
         status = _status_from_solver(status_code)
@@ -889,11 +914,17 @@ def _build_model(
             )
             model.add(row_gap >= 1).only_enforce_if(success)
             model.add(row_gap <= catalog.SORTER_MAX_REACH).only_enforce_if(success)
+            origin_delta = model.new_int_var(
+                -(target.consumer_span - 1),
+                target.producer_span - 1,
+                f"direct_origin_delta_{direct_index}_{combo_index}",
+            )
             model.add(
-                x[target.producer] <= x[target.consumer] + target.consumer_span - 1
+                origin_delta == x[target.consumer] - x[target.producer]
             ).only_enforce_if(success)
-            model.add(
-                x[target.consumer] <= x[target.producer] + target.producer_span - 1
+            model.add_allowed_assignments(
+                [origin_delta],
+                [(delta,) for delta in target.origin_deltas],
             ).only_enforce_if(success)
             successes.append(success)
             direct_successes.append((key, success))
@@ -1267,8 +1298,8 @@ def _target_is_direct(decoded: DecodedPlacement, target: DirectInsertTarget) -> 
     )
     return (
         1 <= row_gap <= catalog.SORTER_MAX_REACH
-        and decoded.x[target.producer] <= decoded.x[target.consumer] + target.consumer_span - 1
-        and decoded.x[target.consumer] <= decoded.x[target.producer] + target.producer_span - 1
+        and decoded.x[target.consumer] - decoded.x[target.producer]
+        in target.origin_deltas
     )
 
 

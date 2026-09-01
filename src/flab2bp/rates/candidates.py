@@ -2,15 +2,16 @@
 
 Spray is applied by belt-mounted coaters and does not survive crafting, so a
 proliferated recipe needs its own inputs belted and gives up direct insertion.
-The rate stage cannot price that geometry. It therefore emits three explicit
-policies -- none, products everywhere legal, and products only on final-output
-recipes -- then ranks their physical factories by rounded machine footprint.
-The layout stage still lays out each candidate and keeps the smallest layout.
+The rate stage emits the requested subset of three explicit policies -- none,
+products everywhere legal, and products only on final-output recipes -- in one
+canonical order. The layout stage still lays out each candidate and keeps the
+smallest layout.
 """
 
 from __future__ import annotations
 
 import warnings
+from enum import StrEnum
 from fractions import Fraction
 from math import gcd, lcm
 
@@ -33,9 +34,39 @@ from flab2bp.spec import (
     ProliferatorMode,
 )
 
-#: The deterministic mode frontier: none, all legal products, and products only
-#: on recipes that directly produce a requested final output.
-DEFAULT_CANDIDATES = 3
+
+class CandidatePolicy(StrEnum):
+    """One deterministic proliferation policy exposed to callers."""
+
+    NO_PROLIFERATOR = "no-proliferator"
+    ALL_PRODUCTS = "all-products"
+    OUTPUT_PRODUCTS = "output-products"
+
+
+#: Public default and authoritative solver order. Request order is presentation;
+#: candidate construction always normalizes a selected subset to this tuple.
+DEFAULT_CANDIDATE_POLICIES: tuple[CandidatePolicy, ...] = (
+    CandidatePolicy.NO_PROLIFERATOR,
+    CandidatePolicy.ALL_PRODUCTS,
+    CandidatePolicy.OUTPUT_PRODUCTS,
+)
+
+
+def _normalize_candidate_policies(
+    candidate_policies: tuple[CandidatePolicy, ...],
+) -> tuple[CandidatePolicy, ...]:
+    """Validate a non-empty immutable subset and restore solver order."""
+    if not isinstance(candidate_policies, tuple):
+        raise ValueError("candidate_policies must be an immutable tuple")
+    if not candidate_policies:
+        raise ValueError("candidate_policies must select at least one policy")
+    for policy in candidate_policies:
+        if not isinstance(policy, CandidatePolicy):
+            raise ValueError(f"unknown candidate policy: {policy!r}")
+    if len(set(candidate_policies)) != len(candidate_policies):
+        raise ValueError("candidate_policies must not contain duplicate policies")
+    selected = frozenset(candidate_policies)
+    return tuple(policy for policy in DEFAULT_CANDIDATE_POLICIES if policy in selected)
 
 
 def _producer_of(solution: RateSolution, item_id: str) -> str | None:
@@ -382,16 +413,18 @@ def build_candidates(
     request: LabRequest,
     *,
     tier: ProliferatorTier | None = None,
-    count: int = DEFAULT_CANDIDATES,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
 ) -> BuildSpecSet:
-    """Canonicalize direct public inputs once, then build the candidate frontier."""
+    """Canonicalize direct public inputs once, then build the selected policies."""
     return _build_candidates_canonical(
         canonicalize_dataset(data),
         canonicalize_request(request),
         tier=tier,
-        count=count,
+        candidate_policies=candidate_policies,
         time_limit_s=time_limit_s,
         flow=flow,
     )
@@ -402,31 +435,30 @@ def _build_candidates_canonical(
     request: LabRequest,
     *,
     tier: ProliferatorTier | None = None,
-    count: int = DEFAULT_CANDIDATES,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
 ) -> BuildSpecSet:
-    """Emit an ordered frontier of complete, valid builds.
+    """Emit the selected policies in canonical order as complete, valid builds.
 
-    The deterministic frontier contains ``no-proliferator``, ``all-products``,
-    then ``output-products``. Each policy fixes one mode per recipe before the
-    continuous solve; products-illegal recipes fall back to ``NONE``. Returned
-    candidates are ranked by their actual rounded machine footprint, and the
-    layout stage may lay them out in parallel.
+    The deterministic policies are ``no-proliferator``, ``all-products``, then
+    ``output-products``. Each policy fixes one mode per recipe before the
+    continuous solve; products-illegal recipes fall back to ``NONE``.
 
     A candidate whose machine count runs away is dropped rather than returned.
     Proliferation exists to CUT machines, so a proliferated plan can never
     legitimately need more of them than the unproliferated baseline; when it
-    does, the solve found a degenerate cycle rather than a factory.  Recipes
+    does, the solve found a degenerate cycle rather than a factory. Recipes
     that consume an item and produce more of it -- ``reforming-refine`` turns
     two refined oil into three, and ``plasma-refining`` also yields refined oil
-    -- form exactly such a loop, and the productivity bonus can tip it.  One
+    -- form exactly such a loop, and the productivity bonus can tip it. One
     real URL produced 515,396,248 machines this way, and the layout stage then
     sat trying to place them.
     """
     # ``data`` and ``request`` are canonical objects owned by the caller.
-    if count < 1 or count > DEFAULT_CANDIDATES:
-        raise ValueError(f"count must be between 1 and {DEFAULT_CANDIDATES}")
+    selected_policies = _normalize_candidate_policies(candidate_policies)
 
     if flow is None:
         df_only_objectives = sorted(
@@ -452,6 +484,8 @@ def _build_candidates_canonical(
     # they may not have -- the plan would be valid and unbuildable.
     chosen: ProliferatorTier = tier or proliferator_from_request(request) or ProliferatorTier.MK3
 
+    # The baseline is also the reference that identifies runaway proliferated
+    # solves, so it is solved even when callers do not select it for output.
     baseline = solve(
         data,
         request,
@@ -460,45 +494,47 @@ def _build_candidates_canonical(
     )
     baseline_spec = _to_build_spec(data, request, baseline, "no-proliferator")
     _refuse_derived_dark_fog(baseline_spec)
-    specs = [baseline_spec]
-    rounded_areas = {"no-proliferator": baseline.total_area}
     baseline_machines = baseline_spec.machine_count
+    specs: list[BuildSpec] = []
     dropped: list[str] = []
 
-    if chosen is not ProliferatorTier.NONE and count > 1:
-        plans: list[tuple[str, RateSolution]] = [
-            (
-                "all-products",
-                solve(
+    # With no usable proliferator tier the named policies collapse to the same
+    # physical plan. Preserve the selected policy identities without repeating
+    # an expensive identical solve.
+    if chosen is ProliferatorTier.NONE:
+        specs.extend(
+            baseline_spec
+            if policy is CandidatePolicy.NO_PROLIFERATOR
+            else baseline_spec.model_copy(update={"label": policy.value})
+            for policy in selected_policies
+        )
+    else:
+        for policy in selected_policies:
+            if policy is CandidatePolicy.NO_PROLIFERATOR:
+                specs.append(baseline_spec)
+                continue
+            if policy is CandidatePolicy.ALL_PRODUCTS:
+                plan = solve(
                     data,
                     request,
                     tier=chosen,
                     mode_policy=ProliferatorMode.PRODUCTS,
                     time_limit_s=time_limit_s,
-                ),
-            )
-        ]
-        if count > 2:
-            plans.append(
-                (
-                    "output-products",
-                    solve(
-                        data,
-                        request,
-                        tier=chosen,
-                        proliferable=target_producer_ids(data, request),
-                        mode_policy=ProliferatorMode.PRODUCTS,
-                        time_limit_s=time_limit_s,
-                    ),
                 )
-            )
-        for label, plan in plans[: count - 1]:
-            spec = _to_build_spec(data, request, plan, label)
+            else:
+                plan = solve(
+                    data,
+                    request,
+                    tier=chosen,
+                    proliferable=target_producer_ids(data, request),
+                    mode_policy=ProliferatorMode.PRODUCTS,
+                    time_limit_s=time_limit_s,
+                )
+            spec = _to_build_spec(data, request, plan, policy.value)
             if _is_runaway(spec, baseline_machines):
-                dropped.append(f"{label} ({spec.machine_count:,} machines)")
+                dropped.append(f"{policy.value} ({spec.machine_count:,} machines)")
                 continue
             specs.append(spec)
-            rounded_areas[label] = plan.total_area
 
     if dropped:
         # Surfaced, not swallowed: a silently missing candidate reads as "the
@@ -512,10 +548,8 @@ def _build_candidates_canonical(
             stacklevel=2,
         )
 
-    # The continuous objective prices fractional machines. Candidate ranking is
-    # deliberately based on the physical factory after every exact requirement
-    # has been ceiled, so fractional LP cost never masquerades as rounded area.
-    specs.sort(key=lambda spec: rounded_areas[spec.label])
+    # ``selected_policies`` was normalized before any policy-specific solve, so
+    # construction order is already the public canonical order.
 
     _assert_same_objective(data, request, specs)
     return BuildSpecSet(candidates=tuple(specs))

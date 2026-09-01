@@ -441,21 +441,129 @@ def test_a_belt_is_excused_three_hops_from_what_its_run_reaches_and_no_further()
     assert C.belt_collisions(stripped) == [(1, 0), (3, 0), (5, 0)]
 
 
+def _model40_perpendicular_merge(*, branch_first: bool) -> list[C.Preview]:
+    """A direct Splitter branch feeding the centre of a perpendicular run."""
+    splitter = C.Preview(40, 0.0, 0.0, 0.0, yaw=90.0, is_splitter=True)
+    branch = C.Preview(
+        _BELT_MK3,
+        0.0,
+        0.0,
+        1.0,
+        is_belt=True,
+        input=0,
+        output=3,
+    )
+    opposing = C.Preview(_BELT_MK3, -1.0, 1.0, 1.0, is_belt=True, output=3)
+    centre = C.Preview(_BELT_MK3, 0.0, 1.0, 1.0, is_belt=True, output=4)
+    onward = C.Preview(_BELT_MK3, 1.0, 1.0, 1.0, is_belt=True)
+    feeders = (branch, opposing) if branch_first else (opposing, branch)
+    return [splitter, *feeders, centre, onward]
+
+
+def test_exact_paste_order_reproduces_the_last_merge_feeder_winning() -> None:
+    """The source-faithful primitive keeps DSP's order-sensitive verdict inspectable."""
+    assert C.belt_collisions(_model40_perpendicular_merge(branch_first=True)) == [(3, 0)]
+    assert C.belt_collisions(_model40_perpendicular_merge(branch_first=False)) == []
+
+
+@pytest.mark.parametrize("branch_first", [True, False])
+def test_order_stable_collision_rejects_every_serialization(branch_first: bool) -> None:
+    """Any feeder may become the reverse link after blueprint canonicalization."""
+    hits = C.stable_belt_collisions(
+        _model40_perpendicular_merge(branch_first=branch_first)
+    )
+    assert [
+        (hit.belt, hit.collider, hit.unstable_merges)
+        for hit in hits
+    ] == [(3, 0, (3,))]
+
+
+def test_order_stable_rescue_accepts_an_ordinary_single_feeder() -> None:
+    """One reconstructed input has no serialization choice to destabilize."""
+    previews = [
+        C.Preview(40, 0.0, 0.0, 0.0, yaw=90.0, is_splitter=True),
+        C.Preview(
+            _BELT_MK3,
+            0.0,
+            0.0,
+            1.0,
+            is_belt=True,
+            input=0,
+            output=2,
+        ),
+        C.Preview(_BELT_MK3, 0.0, 1.0, 1.0, is_belt=True, output=3),
+        C.Preview(_BELT_MK3, 1.0, 1.0, 1.0, is_belt=True),
+    ]
+    assert C.stable_belt_collisions(previews) == []
+
+
+def test_stable_downstream_rescue_does_not_depend_on_merge_input() -> None:
+    """A forward walk that reaches the collider makes reverse feeder order irrelevant."""
+    previews = _model40_perpendicular_merge(branch_first=True)
+    previews[4] = C.Preview(
+        _BELT_MK3,
+        1.0,
+        1.0,
+        1.0,
+        is_belt=True,
+        output=0,
+    )
+    assert C.stable_belt_collisions(previews) == []
+
+
 def test_a_belt_beside_a_machine_it_has_nothing_to_do_with_still_collides() -> None:
     """The rule must not have been widened into a licence."""
-    assert C.belt_collisions(
-        [
-            C.Preview(_ASSEMBLER_2, 0.0, 0.0, 0.0),
-            C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True),
-        ]
-    ) == [(1, 0)]
-    # ... and one hop away it is excused, which is the clause at 147492.
-    assert not C.belt_collisions(
-        [
-            C.Preview(_ASSEMBLER_2, 0.0, 0.0, 0.0),
-            C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True, output=0),
-        ]
+    unlinked = [
+        C.Preview(_ASSEMBLER_2, 0.0, 0.0, 0.0),
+        C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True),
+    ]
+    assert C.belt_collisions(unlinked) == [(1, 0)]
+    assert C.stable_belt_collisions(unlinked) == [C.StableBeltCollision(1, 0)]
+    # ... and one hop away the direct-good-building override excuses it in both
+    # the exact game order and serialization-stable certification.
+    linked = [
+        C.Preview(_ASSEMBLER_2, 0.0, 0.0, 0.0),
+        C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True, output=0),
+    ]
+    assert not C.belt_collisions(linked)
+    assert not C.stable_belt_collisions(linked)
+
+
+def test_belt_overlap_broadphase_visits_only_geometrically_near_colliders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = 100
+    previews = [
+        C.Preview(_ASSEMBLER_2, float(index * 5), 0.0, 0.0)
+        for index in range(count)
+    ] + [
+        C.Preview(
+            _BELT_MK3,
+            float(index * 5 + 1),
+            0.0,
+            0.0,
+            is_belt=True,
+        )
+        for index in range(count)
+    ]
+    original = C.sphere_box_overlap
+    calls = 0
+
+    def counted_overlap(
+        centre: C.Vec3,
+        radius: float,
+        box: C.Box,
+    ) -> bool:
+        nonlocal calls
+        calls += 1
+        return original(centre, radius, box)
+
+    monkeypatch.setattr(C, "sphere_box_overlap", counted_overlap)
+
+    assert C._belt_overlap_candidates(previews) == tuple(
+        (count + index, (index,)) for index in range(count)
     )
+    assert calls <= 9 * count // 4
 
 
 def test_a_raw_sorter_box_test_convicts_blueprints_the_game_wrote() -> None:

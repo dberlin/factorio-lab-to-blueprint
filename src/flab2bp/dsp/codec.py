@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import time
 from fractions import Fraction
 
-from flab2bp.dsp import planet
+from flab2bp.dsp import catalog, planet, splitter_ports
 from flab2bp.dsp.envelope import (
     BlueprintFormatError,
     build_envelope,
@@ -22,6 +23,14 @@ from flab2bp.dsp.records import (
     read_building,
     write_area,
     write_building,
+)
+from flab2bp.dsp.rules import (
+    INPUT_TO_SLOT,
+    OUTPUT_FROM_SLOT,
+    SPLITTER_INPUT_FROM_SLOT,
+    SPLITTER_INPUT_TO_SLOT,
+    SPLITTER_OUTPUT_FROM_SLOT,
+    SPLITTER_OUTPUT_TO_SLOT,
 )
 from flab2bp.dsp.writer import BinaryWriter
 from flab2bp.layout.base import Placement
@@ -199,8 +208,7 @@ def _area_for(placement: Placement) -> BlueprintArea:
     frame = placement.frame
     if frame is None:
         raise ValueError(
-            "placement has no area frame; call layout.finalize.finalize_placement "
-            "before encoding"
+            "placement has no area frame; call layout.finalize.finalize_placement before encoding"
         )
 
     for index, building in enumerate(placement.buildings):
@@ -213,8 +221,7 @@ def _area_for(placement: Placement) -> BlueprintArea:
             or building.y + building.height > frame.height
         ):
             raise ValueError(
-                f"building {index} footprint is outside area frame "
-                f"{frame.width}x{frame.height}"
+                f"building {index} footprint is outside area frame {frame.width}x{frame.height}"
             )
         if building.x2 is not None:
             second_y = building.y2 if building.y2 is not None else 0
@@ -238,9 +245,7 @@ def _area_for(placement: Placement) -> BlueprintArea:
         None,
     )
     if band is None:
-        raise ValueError(
-            f"area frame primary band {frame.primary_band} names no DSP latitude band"
-        )
+        raise ValueError(f"area frame primary band {frame.primary_band} names no DSP latitude band")
     if frame.width > band.columns or frame.height > band.rows:
         raise ValueError(
             f"area frame {frame.width}x{frame.height} does not fit primary band "
@@ -271,15 +276,56 @@ def placement_to_blueprint(
     List position becomes the DSP building ``index``, and ``None`` connections
     become ``-1``.
     """
+    area = _area_for(placement)
+    frame = placement.frame
+    assert frame is not None
+    local_offsets = [
+        tile_to_local_offset(b.x, b.y, b.z, b.width, b.height) for b in placement.buildings
+    ]
+    for index, building in enumerate(placement.buildings):
+        if not catalog.is_belt(building.item_id):
+            continue
+        anchors: list[tuple[float, float, float]] = []
+        for peer_index, port in (
+            (building.output_obj, building.output_to_slot),
+            (building.input_obj, building.input_from_slot),
+        ):
+            if (
+                peer_index is None
+                or not 0 <= peer_index < len(placement.buildings)
+                or placement.buildings[peer_index].item_id != catalog.SPLITTER_ID
+            ):
+                continue
+            splitter = placement.buildings[peer_index]
+            splitter_x, splitter_y, splitter_z = local_offsets[peer_index]
+            anchors.append(
+                splitter_ports.blueprint_port_anchor(
+                    splitter.model_index,
+                    port,
+                    splitter.yaw,
+                    x=splitter_x,
+                    y=splitter_y,
+                    z=splitter_z,
+                    frame=frame,
+                )
+            )
+        if anchors:
+            anchor = anchors[0]
+            if any(math.dist(anchor, other) > 1e-9 for other in anchors[1:]):
+                raise ValueError(f"belt {index} names Splitter ports at different physical anchors")
+            local_offsets[index] = anchor
+
     buildings: list[BlueprintBuilding] = []
     for i, b in enumerate(placement.buildings):
-        x, y, z = tile_to_local_offset(b.x, b.y, b.z, b.width, b.height)
+        x, y, z = local_offsets[i]
         if b.x2 is None:
             x2, y2, z2 = x, y, z
         else:
             x2, y2, z2 = tile_to_local_offset(
                 b.x2, b.y2 or 0, b.z2 if b.z2 is not None else Fraction(0), 1, 1
             )
+        is_splitter = b.item_id == catalog.SPLITTER_ID
+        is_belt = catalog.is_belt(b.item_id)
         buildings.append(
             BlueprintBuilding(
                 # Path == index selects the simplest record shape, which every
@@ -299,10 +345,22 @@ def placement_to_blueprint(
                 yaw2=b.yaw2 if b.yaw2 is not None else b.yaw,
                 output_obj_idx=-1 if b.output_obj is None else b.output_obj,
                 input_obj_idx=-1 if b.input_obj is None else b.input_obj,
-                output_to_slot=b.output_to_slot,
-                input_from_slot=b.input_from_slot,
-                output_from_slot=b.output_from_slot,
-                input_to_slot=b.input_to_slot,
+                output_to_slot=(SPLITTER_OUTPUT_TO_SLOT if is_splitter else b.output_to_slot),
+                input_from_slot=(SPLITTER_INPUT_FROM_SLOT if is_splitter else b.input_from_slot),
+                output_from_slot=(
+                    SPLITTER_OUTPUT_FROM_SLOT
+                    if is_splitter
+                    else OUTPUT_FROM_SLOT
+                    if is_belt
+                    else b.output_from_slot
+                ),
+                input_to_slot=(
+                    SPLITTER_INPUT_TO_SLOT
+                    if is_splitter
+                    else INPUT_TO_SLOT
+                    if is_belt
+                    else b.input_to_slot
+                ),
                 output_offset=b.output_offset,
                 input_offset=b.input_offset,
                 recipe_id=b.recipe_id,
@@ -323,7 +381,6 @@ def placement_to_blueprint(
         attributes=(),
         description=placement.description,
     )
-    area = _area_for(placement)
 
     return Blueprint(
         header=header,

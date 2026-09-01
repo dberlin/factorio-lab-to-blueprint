@@ -8,26 +8,123 @@ because by the time there is a return value the answer is "none of them".
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.dsp import codec
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import finalize
+from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, Placement
+from flab2bp.layout.base import (
+    AreaFrame,
+    NoValidLayout,
+    Placement,
+    PlacementCompletion,
+)
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.rates.candidates import _build_candidates_canonical
-from flab2bp.spec import BuildSpecSet
+from flab2bp.rates.candidates import (
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
+    _build_candidates_canonical,
+)
+from flab2bp.spec import BuildSpec, BuildSpecSet
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
 #: costs a second of CP-SAT rather than a minute -- the sequence is the subject,
 #: not the packing.
 SMALL_URL = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11"
+DEADLINE_REGRESSION_URL = (
+    "https://factoriolab.github.io/dsp/flow?"
+    "z=eJzLt63SMjQwUMu3dQrWMgPTzlrGILpEywgi7qRlaGZgoKVlqJZvaw4ShLLDQBr"
+    "B7MykVFsntdzcItvIOqc617pAtdyCYls3tTJbQ0MAjnsZAA__&v=11"
+)
+
+
+def _title_spec(
+    outputs: dict[str, Fraction],
+    *,
+    label: str = "all-products",
+) -> BuildSpec:
+    return BuildSpec(groups=(), outputs=outputs, label=label)
+
+
+def test_generated_title_under_the_game_limit_is_unchanged() -> None:
+    spec = _title_spec({"space-warper": Fraction(1, 6)})
+
+    assert pipeline._title(spec) == "space-warper 10/min (all products)"
+    assert pipeline._generated_title(spec) == pipeline._title(spec)
+
+
+def test_exact_81_character_generated_title_abbreviates_the_second_product_first() -> None:
+    spec = _title_spec(
+        {
+            "quantum-chemical-plant": Fraction(20),
+            "proliferator-mk3-component": Fraction(1),
+        }
+    )
+    unbounded = (
+        "quantum-chemical-plant 1200/min, "
+        "proliferator-mk3-component 60/min (all products)"
+    )
+
+    assert len(unbounded) == 81
+    assert pipeline._title(spec) == unbounded
+    assert (
+        pipeline._generated_title(spec)
+        == "quantum-chemical-plant 1200/min, PMC 60/min (all products)"
+    )
+
+
+def test_first_product_is_abbreviated_only_after_the_second_is_not_enough() -> None:
+    spec = _title_spec(
+        {
+            "very-long-first-product-identifier": Fraction(2),
+            "very-long-second-product-identifier": Fraction(1),
+            "third-product": Fraction(1, 2),
+        },
+        label="output-products",
+    )
+
+    assert (
+        pipeline._generated_title(spec)
+        == "VLFPI 120/min, VLSPI 60/min +1 more (output products)"
+    )
+
+
+def test_product_initials_are_uppercase_and_retain_numeric_hyphen_tokens() -> None:
+    assert pipeline._product_initials("proliferator-3-component") == "P3C"
+
+
+def test_generated_title_uses_one_ellipsis_when_initials_still_exceed_the_limit() -> None:
+    spec = _title_spec(
+        {
+            "very-long-first-product-identifier": Fraction(int("9" * 40), 60),
+            "very-long-second-product-identifier": Fraction(int("8" * 40), 60),
+        }
+    )
+
+    title = pipeline._generated_title(spec)
+
+    assert title == f"VLFPI {'9' * 40}/min, VLSPI 8…"
+    assert pipeline._utf16_units(title) == pipeline.BLUEPRINT_SHORT_DESC_UTF16_LIMIT
+    assert title.count("…") == 1
+
+
+def test_utf16_ellipsis_truncation_never_splits_an_astral_character() -> None:
+    title = pipeline._ellipsize_utf16("x" * 58 + "😀" + "tail")
+
+    assert title == "x" * 58 + "…"
+    assert pipeline._utf16_units(title) == 59
+    title.encode("utf-16-le")
+
 
 @pytest.mark.parametrize("pinned", [False, True])
 def test_pipeline_canonicalizes_once_before_internal_consumers(
@@ -69,6 +166,7 @@ def test_pipeline_canonicalizes_once_before_internal_consumers(
         assert data is canonical_data
         assert request is pinned_request
         seen.append(("candidates", data, request))
+        assert _kwargs["candidate_policies"] == DEFAULT_CANDIDATE_POLICIES
         raise ReachedCandidates
 
     monkeypatch.setattr(pipeline, "canonicalize_dataset", canonical_data_spy)
@@ -96,15 +194,15 @@ def test_pipeline_canonicalizes_once_before_internal_consumers(
 def test_build_defaults_to_one_portable_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Changing the default or reparsing at either finalizer breaks this."""
+    """Changing the default or reparsing during backend finalization breaks this."""
     seen: list[BandPolicy] = []
+    expected_power: list[tuple[str, bool]] = []
     original_new_layout = pipeline._new_layout
     original_finalize = finalize.finalize_placement
 
     def new_layout_spy(
         strategy: pipeline.ExplicitStrategyName,
         *,
-        power: bool,
         belt_vertical_construction: bool,
         sequence_islands: int = 1,
         band_policy: BandPolicy,
@@ -112,32 +210,112 @@ def test_build_defaults_to_one_portable_policy(
         seen.append(band_policy)
         return original_new_layout(
             strategy,
-            power=power,
             belt_vertical_construction=belt_vertical_construction,
             sequence_islands=sequence_islands,
             band_policy=band_policy,
         )
 
+    def validate_spy(
+        _placement: Placement,
+        _spec: object,
+        **kwargs: object,
+    ) -> validate.Report:
+        expected_power.append(("validate", kwargs["expect_power"] is True))
+        return validate.Report(findings=())
+
     def finalize_spy(
         placement: Placement,
         policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         seen.append(policy)
-        return original_finalize(placement, policy)
+        return original_finalize(placement, policy, cancelled=cancelled)
 
     monkeypatch.setattr(pipeline, "_new_layout", new_layout_spy)
     monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
+    monkeypatch.setattr(validate, "validate", validate_spy)
 
     pipeline.build(
         SMALL_URL,
         strategy="freeform",
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         time_budget_s=3.0,
     )
 
-    assert len(seen) >= 3  # construction, internal finalization, pipeline defense
+    assert len(seen) >= 3  # construction and backend finalization attempts
     assert seen[0] == BandPolicy("portable")
     assert all(policy is seen[0] for policy in seen)
+    assert expected_power[-1] == ("validate", True)
+    assert all(expect_power for _, expect_power in expected_power)
+
+
+@pytest.fixture
+def completed_layout(monkeypatch: pytest.MonkeyPatch) -> Placement:
+    completed = Placement(
+        buildings=(),
+        frame=AreaFrame(1, 1, 4, (4,), False),
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+
+    class CompletedLayout:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            return completed
+
+    monkeypatch.setattr(
+        pipeline,
+        "_new_layout",
+        lambda *_args, **_kwargs: CompletedLayout(),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "compact_open_boundary_belts",
+        lambda *_args, **_kwargs: pytest.fail("pipeline repeated backend compaction"),
+    )
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda *_args, **_kwargs: pytest.fail("pipeline repeated backend finalization"),
+    )
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+    return completed
+
+
+def test_completed_backend_output_skips_duplicate_completion(
+    completed_layout: Placement,
+) -> None:
+    result = pipeline.build(
+        SMALL_URL,
+        strategy="sequence-pair",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=0.5,
+    )
+
+    assert result.placement.completion is completed_layout.completion
+
+
+def test_explicit_over_cap_pipeline_name_is_unchanged(
+    completed_layout: Placement,
+) -> None:
+    explicit_name = "explicit-" + "x" * 53
+    assert len(explicit_name) == 62
+
+    result = pipeline.build(
+        SMALL_URL,
+        strategy="sequence-pair",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=0.5,
+        name=explicit_name,
+    )
+
+    assert result.placement.completion is completed_layout.completion
+    assert result.placement.short_desc == explicit_name
+    assert codec.decode(result.blueprint).header.short_desc == explicit_name
 
 
 @pytest.mark.slow
@@ -147,7 +325,10 @@ def test_every_pair_reports_started_and_then_how_it_ended() -> None:
         SMALL_URL,
         strategy="freeform",
         band="160",
-        candidates=2,
+        candidate_policies=(
+            CandidatePolicy.ALL_PRODUCTS,
+            CandidatePolicy.NO_PROLIFERATOR,
+        ),
         time_budget_s=3.0,
         on_progress=steps.append,
     )
@@ -184,7 +365,7 @@ def test_best_reports_freeform_and_sequence_pairs() -> None:
     build = pipeline.build(
         SMALL_URL,
         strategy="best",
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         time_budget_s=3.0,
         on_progress=steps.append,
     )
@@ -214,7 +395,11 @@ def test_a_sink_that_raises_is_not_swallowed() -> None:
 
     with pytest.raises(Boom):
         pipeline.build(
-            SMALL_URL, strategy="freeform", candidates=1, time_budget_s=0.5, on_progress=explode
+            SMALL_URL,
+            strategy="freeform",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=0.5,
+            on_progress=explode,
         )
 
 
@@ -257,7 +442,7 @@ def test_projection_refusal_preserves_structured_exception_text(
         pipeline.build(
             SMALL_URL,
             strategy="freeform",
-            candidates=1,
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
             time_budget_s=0.5,
             on_progress=steps.append,
         )
@@ -299,7 +484,6 @@ def test_no_proliferator_keeps_only_unsprayed_candidates() -> None:
     build = pipeline.build(
         SMALL_URL,
         strategy="freeform",
-        candidates=3,
         time_budget_s=3.0,
         no_proliferator=True,
     )
@@ -336,7 +520,6 @@ def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
             pipeline.build(
                 SMALL_URL,
                 strategy="freeform",
-                candidates=3,
                 time_budget_s=3.0,
                 no_proliferator=True,
             )
@@ -366,7 +549,7 @@ class TestFlowText:
             GRAPHENE_URL,
             strategy="freeform",
             band="160",
-            candidates=1,
+            candidate_policies=(CandidatePolicy.OUTPUT_PRODUCTS,),
             time_budget_s=2.0,
             flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
         )
@@ -382,7 +565,7 @@ class TestFlowText:
             pipeline.build(
                 SMALL_URL,
                 strategy="freeform",
-                candidates=1,
+                candidate_policies=(CandidatePolicy.OUTPUT_PRODUCTS,),
                 time_budget_s=0.5,
                 flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
             )
@@ -396,3 +579,17 @@ class TestFlowText:
                 flow=GRAPHENE_FLOW,
                 flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
             )
+
+@pytest.mark.slow
+def test_all_products_sequence_pair_honours_the_exact_layout_deadline() -> None:
+    started = time.monotonic()
+
+    with pytest.raises(NoValidLayout, match="deadline exhausted"):
+        pipeline.build(
+            DEADLINE_REGRESSION_URL,
+            strategy="sequence-pair",
+            candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
+            time_budget_s=10.0,
+        )
+
+    assert time.monotonic() - started < 12.5

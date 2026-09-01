@@ -24,7 +24,7 @@ namespace FlabOracle
     {
         public const string PluginGuid = "org.dberlin.flab2bp.oracle";
         public const string PluginName = "flab2bp build-condition oracle";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.1.3";
 
         private Harmony _harmony;
 
@@ -54,7 +54,7 @@ namespace FlabOracle
                 "Capture",
                 "PatchPhysicsOverlap",
                 true,
-                "Hook Physics.OverlapSphereNonAlloc so dumps can report how many snap candidates PhysX handed MatchInserter. The hook is process-wide but returns immediately unless MatchInserter is on the stack. Turn it off if you suspect it of anything.");
+                "Hook the exact Physics.OverlapSphereNonAlloc and OverlapCapsuleNonAlloc overloads used by belt collision checks. Hooks are process-wide but return immediately outside an active semantic target capture.");
 
             Oracle.OutputDir = Config.Bind(
                 "Output",
@@ -68,7 +68,7 @@ namespace FlabOracle
             try
             {
                 _harmony.PatchAll(typeof(OraclePlugin).Assembly);
-                Logger.LogInfo("Patched BuildTool_BlueprintPaste (CheckBuildConditions, MatchInserter, CreatePrebuilds).");
+                Logger.LogInfo("Patched BuildTool_BlueprintPaste timeline (DeterminePreviewsPrestage, CheckBuildConditionsPrestage, ArrangeOverlapBP, ActiveColliders, CheckBuildConditions, AddErrorMessage, MatchInserter, CreatePrebuilds).");
             }
             catch (Exception e)
             {
@@ -76,6 +76,7 @@ namespace FlabOracle
             }
 
             TryPatchOverlapSphere();
+            TryPatchOverlapCapsule();
 
             Logger.LogMessage(
                 "flab2bp oracle ready. Dump key = " + Oracle.DumpKey.Value +
@@ -141,6 +142,48 @@ namespace FlabOracle
             }
         }
 
+        private void TryPatchOverlapCapsule()
+        {
+            if (!Oracle.PatchPhysicsOverlap.Value)
+            {
+                return;
+            }
+
+            try
+            {
+                MethodInfo target = AccessTools.Method(
+                    typeof(Physics),
+                    "OverlapCapsuleNonAlloc",
+                    new[]
+                    {
+                        typeof(Vector3),
+                        typeof(Vector3),
+                        typeof(float),
+                        typeof(Collider[]),
+                        typeof(int),
+                        typeof(QueryTriggerInteraction)
+                    });
+                if (target == null)
+                {
+                    Logger.LogWarning(
+                        "Physics.OverlapCapsuleNonAlloc(Vector3,Vector3,float,Collider[],int,QueryTriggerInteraction) not found; " +
+                        "automatic target captures will contain sphere queries only.");
+                    return;
+                }
+
+                MethodInfo postfix = AccessTools.Method(typeof(PhysicsPatch), nameof(PhysicsPatch.OverlapCapsuleNonAllocPostfix));
+                _harmony.Patch(target, postfix: new HarmonyMethod(postfix));
+                Oracle.CapsulePatchApplied = true;
+                Logger.LogInfo("Patched Physics.OverlapCapsuleNonAlloc.");
+            }
+            catch (Exception e)
+            {
+                Logger.LogWarning(
+                    "Could not patch Physics.OverlapCapsuleNonAlloc (" + e.Message + "); " +
+                    "automatic target captures will contain sphere queries only.");
+            }
+        }
+
         private void Update()
         {
             try
@@ -150,6 +193,7 @@ namespace FlabOracle
                     Oracle.ArmHotkey();
                 }
 
+                TargetCaptureRuntime.MonitorUpdate(Time.frameCount);
                 Oracle.TickArmTimeout();
             }
             catch (Exception e)
@@ -181,6 +225,7 @@ namespace FlabOracle
         internal static bool CaptureDetail;
 
         internal static bool OverlapPatchApplied;
+        internal static bool CapsulePatchApplied;
         internal static bool OverlapHookEverFired;
 
         internal static readonly Dictionary<BuildPreview, MatchRecord> Records =
@@ -318,6 +363,12 @@ namespace FlabOracle
         {
             DumpCounter++;
             return Path.Combine(OutputDirectory, "dump-" + DumpCounter.ToString("D5", CultureInfo.InvariantCulture) + ".json");
+        }
+
+        internal static string NextTargetCapturePath()
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture);
+            return Path.Combine(OutputDirectory, "model40-belt-capture-" + stamp + ".json");
         }
     }
 }

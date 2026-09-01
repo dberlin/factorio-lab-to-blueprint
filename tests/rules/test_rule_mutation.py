@@ -71,8 +71,14 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "strategy",
         "strategy seating moves; no validator witness straddles this extension",
     ),
-    "colliders.BELT_PROBE_RADIUS": ("validator", "belt crossing clearance boundary"),
-    "colliders.BELT_PROBE_LIFT": ("validator", "belt crossing probe lift boundary"),
+    "colliders.BELT_PROBE_RADIUS": (
+        "both",
+        "belt crossing boundary and the dynamically measured junction keepout",
+    ),
+    "colliders.BELT_PROBE_LIFT": (
+        "both",
+        "belt crossing lift boundary and the dynamically measured junction keepout",
+    ),
     "colliders.belt_crossing_height": ("validator", "belt crossing clearance verdict"),
     "rules.WORLD_UNITS_PER_LEVEL": ("both", "altitude in world units"),
     "rules.SLOT_REACH": ("both", "the plan's own first example"),
@@ -124,6 +130,16 @@ VERDICTS: dict[str, tuple[str, str]] = {
         "frozen_captures.  Plan step 1.5 splits this constant anyway.",
     ),
     "rules.ADDON_AREA_RADIUS": ("validator", "addon supply geometry, checked only"),
+    "rules.ADDON_LINE_MAX_DISTANCE": (
+        "validator",
+        "validation straddles the addon line-supply threshold; final placement "
+        "reads it but no strategy probe straddles that gate",
+    ),
+    "rules.addon_line_distance": (
+        "validator",
+        "validation exercises the shared addon line geometry; final placement "
+        "reads it but the strategy probes contain no addon-line witness",
+    ),
     # The two upper spacing tiers.  Neither strategy places a Wind Turbine or a
     # Geothermal Power Station, so no probe can move -- and both are checked, on
     # buildings the validator constructs, precisely so a tier we do not emit
@@ -151,6 +167,16 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "colliders.SORTER_HALF_LENGTH_MIN": ("strategy", "sorter seat box floor"),
     "rules.SPLITTER_INPUT_TO_SLOT": ("strategy", "written by `junction.make_splitter`"),
     "rules.SPLITTER_OUTPUT_FROM_SLOT": ("strategy", "written by `junction.make_splitter`"),
+    "rules.SPLITTER_OUTPUT_TO_SLOT": (
+        "inert",
+        "LEDGER: junction placement and encoding write this sentinel, but no R4 "
+        "validator or strategy probe asserts the Splitter's own output-side field",
+    ),
+    "rules.SPLITTER_INPUT_FROM_SLOT": (
+        "inert",
+        "LEDGER: junction placement and encoding write this sentinel, but no R4 "
+        "validator or strategy probe asserts the Splitter's own input-side field",
+    ),
     # --- centralized paste boundary witnesses ------------------------------
     # Downstream readers are gaps; the independent controls still prove the
     # centralized predicate and threshold react at the cited boundary.
@@ -199,7 +225,10 @@ VERDICTS: dict[str, tuple[str, str]] = {
     ),
     "colliders.PLANET_RADIUS": ("inert", "frozen into collider default arguments"),
     "colliders.PLANET_SEGMENT": ("inert", "frozen into collider default arguments"),
-    "colliders.belt_keepout_offsets": ("inert", "frozen into `junction._KEEPOUT` at import"),
+    "colliders.belt_keepout_offsets": (
+        "strategy",
+        "`junction.keepout_cells` resolves the model/yaw projection dynamically",
+    ),
     "rules.ADDON_FROM_SLOT": (
         "strategy",
         "`slots.assign_sorter_slots` writes the game-authored addon field quartet",
@@ -392,7 +421,7 @@ def test_every_inert_rule_is_explained() -> None:
 
 
 def test_a_frozen_rule_is_not_mistaken_for_an_ignored_one() -> None:
-    """The distinction R4 would otherwise get wrong, asserted on known cases.
+    """Known import-time captures remain distinguishable from ignored rules.
 
     ``ADDON_AXIS_DEG`` sits in two default arguments and ``SKEW_AXIS_DEG`` is
     folded into ``SLOT_ALIGN_COS``.  Both are plainly consulted and neither can
@@ -402,19 +431,14 @@ def test_a_frozen_rule_is_not_mistaken_for_an_ignored_one() -> None:
     frozen = provenance.frozen_captures()
     assert "flab2bp.dsp.rules.addon_axis_aligned.<defaults>" in frozen["rules.ADDON_AXIS_DEG"]
     assert "flab2bp.dsp.rules.SLOT_ALIGN_COS" in frozen["rules.SKEW_AXIS_DEG"]
-    assert "flab2bp.layout.junction._KEEPOUT" in frozen["colliders.belt_keepout_offsets"]
 
 
-def test_perturbation_does_not_rewrite_frozen_projections() -> None:
+def test_perturbation_does_not_rewrite_a_frozen_projection() -> None:
     from flab2bp.dsp import rules
-    from flab2bp.layout import junction
 
     alignment = rules.SLOT_ALIGN_COS
-    keepout = junction._KEEPOUT
     with mutation.perturbed(registry.by_symbol("rules.SKEW_AXIS_DEG"), 12.0):
         assert alignment == rules.SLOT_ALIGN_COS
-    with mutation.perturbed(registry.by_symbol("colliders.belt_keepout_offsets")):
-        assert keepout == junction._KEEPOUT
 
 
 def test_the_mutation_coverage_number(capsys: pytest.CaptureFixture[str]) -> None:

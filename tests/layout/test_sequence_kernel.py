@@ -5,22 +5,25 @@ import pickle
 import random
 import struct
 from array import array
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import replace
-from typing import cast
+from typing import ClassVar, cast
 
 import pytest
 
+import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_kernel as sequence_kernel_module
 from flab2bp.bench.corpus import entry
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
 from flab2bp.layout._sequence_kernel import decode_score
 from flab2bp.layout.freeform import (
+    Strip,
     _box,
     _candidate_heights,
     _direct_alignment_targets,
     _direct_net_candidates,
+    _direct_origin_deltas,
     _greedy_pack,
     plan_strips,
 )
@@ -49,7 +52,11 @@ from flab2bp.layout.sequence_solver import (
     _placement_nets,
     _variant_search_inputs,
 )
-from flab2bp.rates.candidates import build_candidates
+from flab2bp.rates.candidates import (
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
+    build_candidates,
+)
 
 _REFINERY_URL = (
     "https://factoriolab.github.io/dsp/list?z="
@@ -80,10 +87,18 @@ def _stage_digest(stage: object) -> bytes:
 
 def _real_case(name: str) -> tuple[PlacementProblem, AnnealState, PlacementCostContext]:
     if name == "refinery14":
-        spec = build_candidates(load_vendored(), parse_url(_REFINERY_URL), count=3).candidates[2]
+        spec = build_candidates(
+            load_vendored(),
+            parse_url(_REFINERY_URL),
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+        ).candidates[2]
     elif name == "quantum40":
         quantum = entry("quantum-chip")
-        spec = build_candidates(load_vendored(), parse_url(quantum.url), count=1).candidates[0]
+        spec = build_candidates(
+            load_vendored(),
+            parse_url(quantum.url),
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        ).candidates[0]
     else:
         raise AssertionError(name)
 
@@ -164,6 +179,8 @@ def _generated_cases(
                 consumer += 1
             producer_width, producer_height = sizes[producer]
             consumer_width, consumer_height = sizes[consumer]
+            producer_span = rng.randint(1, producer_width)
+            consumer_span = rng.randint(1, consumer_width)
             targets.append(
                 DirectInsertTarget(
                     key=(producer, ordinal),
@@ -171,8 +188,9 @@ def _generated_cases(
                     consumer=consumer,
                     producer_row=rng.randrange(producer_height),
                     consumer_row=rng.randrange(consumer_height),
-                    producer_span=rng.randint(1, producer_width),
-                    consumer_span=rng.randint(1, consumer_width),
+                    producer_span=producer_span,
+                    consumer_span=consumer_span,
+                    origin_deltas=tuple(range(-(consumer_span - 1), producer_span)),
                 )
             )
         problem = PlacementProblem(
@@ -212,6 +230,7 @@ def test_compiled_decode_score_returns_coordinate_workspace_arrays() -> None:
         array("q"),
         array("d"),
         array("d", [0.0, 0.0]),
+        array("q"),
         array("q"),
         array("q", [0]),
         bytearray(1),
@@ -378,6 +397,223 @@ def test_backend_selection_falls_back_for_non_float_score_inputs() -> None:
 
     assert isinstance(build_sequence_kernel(problem, integer_weight), PythonSequenceKernel)
     assert isinstance(build_sequence_kernel(problem, integer_history), PythonSequenceKernel)
+
+
+def test_direct_origin_deltas_use_compiled_kernel_with_exact_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    problem = PlacementProblem(
+        sizes=((2, 1), (2, 1)),
+        nets=((0, 1),),
+        outline_height=2,
+        area_lower_bound=4,
+    )
+    rejected_target = DirectInsertTarget((1, 0), 1, 0, 0, 0, 2, 2, (1,))
+    accepted_target = replace(rejected_target, origin_deltas=(0,))
+    direct_context = PlacementCostContext(
+        net_weights=(1.0,),
+        net_pairs=problem.nets,
+        history_outline=(0, 2),
+        history_summed_area=(0.0, 0.0, 0.0),
+        direct_targets=(rejected_target,),
+    )
+    state = AnnealState(
+        pair=SequencePair((0, 1), (1, 0)),
+        gaps=GapProfile.zero(2),
+        base_seed=7,
+        variant_indices=(0, 0),
+    )
+    rejected_reference = PythonSequenceKernel(problem, direct_context).score_state(state)
+    accepted_reference = PythonSequenceKernel(problem, direct_context).score_state(
+        state,
+        direct_targets=(accepted_target,),
+    )
+    compiled_decode_score = sequence_kernel_module._compiled_decode_score
+    assert compiled_decode_score is not None
+    compiled_calls = 0
+
+    def observed_decode_score(*args: object) -> object:
+        nonlocal compiled_calls
+        compiled_calls += 1
+        return compiled_decode_score(*args)
+
+    monkeypatch.setattr(
+        sequence_kernel_module,
+        "_compiled_decode_score",
+        observed_decode_score,
+    )
+    kernel = build_sequence_kernel(problem, direct_context)
+    rejected = kernel.score_state(state)
+    accepted = kernel.score_state(state, direct_targets=(accepted_target,))
+
+    assert isinstance(kernel, CompiledSequenceKernel)
+    assert rejected_reference.breakdown.missed_direct_inserts == 1
+    assert accepted_reference.breakdown.missed_direct_inserts == 0
+    _assert_exact(rejected, rejected_reference)
+    _assert_exact(accepted, accepted_reference)
+    assert compiled_calls == 2
+
+
+class _DirectOriginStripStub:
+    def __init__(self, width: int) -> None:
+        self.width = width
+
+    def _output_attachment_plan(self, _lane: int) -> object:
+        return object()
+
+    def _input_attachment_plan(self, _item: str) -> object:
+        return object()
+
+    def lane_of_input(self, _item: str) -> int:
+        return 0
+
+    def input_lane_tiles(self, _lane: int) -> int:
+        return self.width
+
+
+def _direct_origin_delta_result(
+    monkeypatch: pytest.MonkeyPatch,
+    source_columns: Iterable[int],
+    destination_columns: Iterable[int],
+) -> tuple[int, ...]:
+    source_values = tuple(source_columns)
+    destination_values = tuple(destination_columns)
+    source = _DirectOriginStripStub(len(source_values))
+    destination = _DirectOriginStripStub(len(destination_values))
+
+    def clear_columns(
+        strip: _DirectOriginStripStub,
+        _plan: object,
+        _span: int,
+    ) -> tuple[int, ...]:
+        return source_values if strip is source else destination_values
+
+    monkeypatch.setattr(freeform_module, "_direct_clear_columns", clear_columns)
+    return _direct_origin_deltas(
+        cast(Strip, cast(object, source)),
+        cast(Strip, cast(object, destination)),
+        0,
+        "item",
+    )
+
+
+def _cartesian_origin_delta_oracle(
+    source_columns: Iterable[int],
+    destination_columns: Iterable[int],
+) -> tuple[int, ...]:
+    return tuple(
+        sorted(
+            {
+                source_column - destination_column
+                for source_column in source_columns
+                for destination_column in destination_columns
+            }
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_columns", "destination_columns"),
+    [
+        ((0, 1, 2, 3), (0, 1, 2)),
+        ((0, 1, 4, 5), (0, 1, 3, 4)),
+        ((-7, -6, -1, 0, 8), (-4, -3, 2, 3, 4)),
+        ((-9, -2, 5, 12), (-8, 0, 11)),
+        ((), (-2, -1, 0)),
+        ((-2, -1, 0), ()),
+    ],
+)
+def test_direct_origin_delta_interval_union_matches_cartesian_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+    source_columns: tuple[int, ...],
+    destination_columns: tuple[int, ...],
+) -> None:
+    actual = _direct_origin_delta_result(
+        monkeypatch,
+        source_columns,
+        destination_columns,
+    )
+
+    assert actual == _cartesian_origin_delta_oracle(
+        source_columns,
+        destination_columns,
+    )
+
+
+def test_direct_origin_delta_overlapping_intervals_include_negative_offsets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actual = _direct_origin_delta_result(
+        monkeypatch,
+        (0, 1, 4, 5),
+        (0, 1, 3, 4),
+    )
+
+    assert actual == tuple(range(-4, 6))
+
+
+def test_direct_origin_delta_interval_union_matches_randomized_cartesian_oracle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rng = random.Random(0xD1FF)
+    domain = range(-9, 10)
+
+    for _ in range(256):
+        source_columns = frozenset(column for column in domain if rng.getrandbits(1))
+        destination_columns = frozenset(
+            column for column in domain if rng.getrandbits(1)
+        )
+
+        assert _direct_origin_delta_result(
+            monkeypatch,
+            source_columns,
+            destination_columns,
+        ) == _cartesian_origin_delta_oracle(source_columns, destination_columns)
+
+
+class _CountedOriginColumn(int):
+    operations: ClassVar[int] = 0
+
+    def __add__(self, other: int) -> _CountedOriginColumn:
+        type(self).operations += 1
+        return type(self)(int(self) + int(other))
+
+    def __sub__(self, other: int) -> _CountedOriginColumn:
+        type(self).operations += 1
+        return type(self)(int(self) - int(other))
+
+    def __eq__(self, other: object) -> bool:
+        type(self).operations += 1
+        return int(self) == other
+
+    def __lt__(self, other: int) -> bool:
+        type(self).operations += 1
+        return int(self) < int(other)
+
+    __hash__ = int.__hash__
+
+
+def _contiguous_origin_delta_operations(
+    monkeypatch: pytest.MonkeyPatch,
+    span: int,
+) -> int:
+    columns = tuple(_CountedOriginColumn(column) for column in range(span))
+    _CountedOriginColumn.operations = 0
+
+    actual = _direct_origin_delta_result(monkeypatch, columns, columns)
+
+    assert actual == tuple(range(-(span - 1), span))
+    return _CountedOriginColumn.operations
+
+
+def test_direct_origin_delta_interval_work_scales_with_spans_and_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    small_operations = _contiguous_origin_delta_operations(monkeypatch, 64)
+    large_operations = _contiguous_origin_delta_operations(monkeypatch, 128)
+
+    assert large_operations <= small_operations * 5 // 2
+    assert large_operations <= 128 * 12
 
 
 def test_compiled_kernel_reuses_size_dependent_workspace() -> None:

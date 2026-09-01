@@ -1,11 +1,11 @@
-"""Label the blueprint's external input belts with item icons.
+"""Label belts that cross the factory boundary with item icons.
 
-A generated block is useless if you cannot tell which belt wants iron ore and
-which wants coal.  DSP lets a belt carry an icon, so the entry point of every
-externally-fed lane gets one.
+A generated block is useless if you cannot tell which belt wants iron ore or
+which output carries gears.  DSP lets a belt carry an icon, so every external
+input head and output tail gets one.
 
 Strategy-independent by construction: it reads only the ``Placement`` graph plus
-the ``BuildSpec``'s external inputs, so it works for any layout backend and is
+the ``BuildSpec`` boundary items, so it works for any layout backend and is
 applied once in the pipeline rather than in each strategy's emitter.
 
 The icon encoding is measured, not guessed -- all 109 belt parameter blocks in
@@ -41,43 +41,88 @@ def input_belt_heads(placement: Placement) -> list[int]:
     ]
 
 
-def mark_external_inputs(placement: Placement, spec: BuildSpec) -> Placement:
-    """Return ``placement`` with an item icon on each external input belt head.
+def output_belt_tails(placement: Placement) -> list[int]:
+    """Terminal belts of lanes fed directly by a producer sorter.
 
-    Only lanes carrying something in ``spec.external_inputs`` are marked: those
-    are the belts you must actually connect to something. Internal lanes are
-    left bare, since labelling every belt would bury the signal.
-
-    A belt whose ``carries_item`` is unknown, or whose item has no DSP id, is
-    left untouched rather than given a guessed icon -- a plausible but wrong
-    marker is worse than none, because it tells you to feed the wrong thing.
+    A target item can also feed internal consumers. Those branch lanes carry the
+    same item, so ``carries_item`` alone cannot distinguish them from the output
+    port. The producer-fed trunk is the boundary lane; consumer branches begin
+    at splitters and have no producer sorter of their own.
     """
-    external = set(spec.external_inputs)
-    if not external:
-        return placement
+    buildings = placement.buildings
+    starts = {
+        b.output_obj
+        for b in buildings
+        if catalog.is_sorter(b.item_id)
+        and b.output_obj is not None
+        and 0 <= b.output_obj < len(buildings)
+        and catalog.is_belt(buildings[b.output_obj].item_id)
+    }
+    tails: set[int] = set()
+    for start in starts:
+        cursor = start
+        seen: set[int] = set()
+        while cursor not in seen:
+            seen.add(cursor)
+            following = buildings[cursor].output_obj
+            if following is None:
+                tails.add(cursor)
+                break
+            if not 0 <= following < len(buildings):
+                break
+            if not catalog.is_belt(buildings[following].item_id):
+                break
+            cursor = following
+    return sorted(tails)
 
-    heads = set(input_belt_heads(placement))
-    if not heads:
+
+def mark_external_belts(placement: Placement, spec: BuildSpec) -> Placement:
+    """Return ``placement`` with item icons on its external belt endpoints.
+
+    Input lanes are marked at their heads and target or surplus output lanes at
+    their tails. Internal lanes are left bare, since labelling every belt would
+    bury the boundary signal.
+
+    A belt whose ``carries_item`` is unknown, whose item has no DSP id, or which
+    already has parameters is left untouched rather than given a guessed or
+    destructive marker.
+    """
+    inputs = set(spec.external_inputs)
+    outputs = set(spec.outputs) | set(spec.surplus_outputs)
+    if not inputs and not outputs:
         return placement
 
     buildings = list(placement.buildings)
-    marked = 0
-    for i in heads:
-        b = buildings[i]
-        item = b.carries_item
-        if item is None or item not in external or b.parameters:
-            continue
-        dsp_id = catalog.get_item_id(item)
-        if dsp_id is None:
-            continue
-        buildings[i] = replace(b, parameters=catalog.belt_marker(dsp_id))
-        marked += 1
+    input_markers = 0
+    if inputs:
+        for i in input_belt_heads(placement):
+            b = buildings[i]
+            item = b.carries_item
+            if item is None or item not in inputs or b.parameters:
+                continue
+            dsp_id = catalog.get_item_id(item)
+            if dsp_id is None:
+                continue
+            buildings[i] = replace(b, parameters=catalog.belt_marker(dsp_id))
+            input_markers += 1
 
-    if not marked:
+    if outputs:
+        for i in output_belt_tails(placement):
+            b = buildings[i]
+            item = b.carries_item
+            if item is None or item not in outputs or b.parameters:
+                continue
+            dsp_id = catalog.get_item_id(item)
+            if dsp_id is None:
+                continue
+            buildings[i] = replace(b, parameters=catalog.belt_marker(dsp_id))
+
+    if tuple(buildings) == placement.buildings:
         return placement
 
     stats = placement.stats.copy()
-    stats["input_markers"] = marked
+    if input_markers:
+        stats["input_markers"] = input_markers
     return replace(placement, buildings=tuple(buildings), stats=stats)
 
 

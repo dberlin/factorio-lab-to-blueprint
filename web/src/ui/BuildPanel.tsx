@@ -8,6 +8,7 @@
  */
 import { useEffect, useId, useRef, useState } from 'react';
 import {
+  BAND_OPTIONS,
   BandSelection,
   type BuildOptions,
   BuildRequestError,
@@ -33,7 +34,6 @@ export function BuildPanel() {
   const nameId = useId();
   const strategyId = useId();
   const bandId = useId();
-  const candidatesId = useId();
   const budgetId = useId();
   const proliferatorTierId = useId();
   const flowId = useId();
@@ -95,6 +95,9 @@ export function BuildPanel() {
   };
 
   const blueprint = job?.result?.blueprint ?? null;
+  const effectiveCandidateCount =
+    options.flow.trim() || options.fetch_flow ? 1 : options.candidate_policies.length;
+  const strategyCount = options.strategy === 'best' ? 2 : 1;
 
   /**
    * The clipboard is a permission, not a guarantee: an insecure origin, a
@@ -134,7 +137,11 @@ export function BuildPanel() {
           placeholder="https://factoriolab.github.io/dsp/flow?o=…"
           onChange={(e) => set('url', e.target.value)}
         />
-        <button type="button" onClick={() => void start()} disabled={!options.url.trim() || busy}>
+        <button
+          type="button"
+          onClick={() => void start()}
+          disabled={!options.url.trim() || options.candidate_policies.length === 0 || busy}
+        >
           {busy ? 'Building…' : 'Build'}
         </button>
         {busy && (
@@ -169,13 +176,11 @@ export function BuildPanel() {
           }}
         >
           <option value="portable">Portable (smallest + up to two wider)</option>
-          {BandSelection.options
-            .filter((band) => band !== 'portable')
-            .map((band) => (
-              <option key={band} value={band}>
-                {band}
-              </option>
-            ))}
+          {BAND_OPTIONS.map(({ value, label }) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
         </select>
 
         <label htmlFor={proliferatorTierId}>Proliferator tier</label>
@@ -194,15 +199,35 @@ export function BuildPanel() {
           <option value="3">Mk.III</option>
         </select>
 
-        <label htmlFor={candidatesId}>Candidates</label>
-        <input
-          id={candidatesId}
-          type="number"
-          min={1}
-          max={8}
-          value={options.candidates}
-          onChange={(e) => set('candidates', Number(e.target.value))}
-        />
+        <fieldset className="candidate-policies checkbox">
+          <legend>Candidate policies</legend>
+          {DEFAULT_OPTIONS.candidate_policies.map((policy) => (
+            <label className="checkbox" key={policy}>
+              <input
+                type="checkbox"
+                checked={options.candidate_policies.includes(policy)}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setOptions((previous) => ({
+                    ...previous,
+                    candidate_policies: checked
+                      ? DEFAULT_OPTIONS.candidate_policies.filter(
+                          (candidate) =>
+                            candidate === policy || previous.candidate_policies.includes(candidate),
+                        )
+                      : previous.candidate_policies.filter((candidate) => candidate !== policy),
+                  }));
+                }}
+              />
+              {policy}
+            </label>
+          ))}
+          {options.candidate_policies.length === 0 && (
+            <span className="error" aria-live="polite">
+              Select at least one candidate policy.
+            </span>
+          )}
+        </fieldset>
 
         <label htmlFor={budgetId}>Budget (s/layout)</label>
         <input
@@ -214,19 +239,11 @@ export function BuildPanel() {
           onChange={(e) => set('budget_s', Number(e.target.value))}
         />
 
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={options.power}
-            onChange={(e) => set('power', e.target.checked)}
-          />
-          Tesla Towers (off is the CLI's --no-power)
-        </label>
-
         <label htmlFor={nameId}>Name</label>
         <input
           id={nameId}
           value={options.name}
+          maxLength={60}
           placeholder="(defaults to what it makes)"
           onChange={(e) => set('name', e.target.value)}
         />
@@ -291,11 +308,11 @@ export function BuildPanel() {
       </div>
 
       <p className="note">
-        Budget is per layout. <code>best</code> runs two layouts per candidate, so{' '}
-        {options.candidates} candidates × {options.strategy === 'best' ? 2 : 1} strategies ×{' '}
-        {options.budget_s}s is up to{' '}
-        {options.candidates * (options.strategy === 'best' ? 2 : 1) * options.budget_s}s of solving,
-        plus rates, validation and encoding on top.
+        Budget is per layout. <code>{options.strategy}</code> runs {strategyCount}{' '}
+        {strategyCount === 1 ? 'layout' : 'layouts'} per candidate, so {effectiveCandidateCount}{' '}
+        candidate{effectiveCandidateCount === 1 ? '' : 's'} × {strategyCount} strategies ×{' '}
+        {options.budget_s}s is up to {effectiveCandidateCount * strategyCount * options.budget_s}s
+        of solving, plus rates, validation and encoding on top.
       </p>
 
       {busy && job && <Progress job={job} />}

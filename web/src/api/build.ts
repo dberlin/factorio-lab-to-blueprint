@@ -13,23 +13,23 @@
  * Deliberately free of React and three.js, so it can be tested without either.
  */
 import { z } from 'zod';
+import latitudeBands from '../../../src/flab2bp/dsp/data/latitude_bands.json';
+
+const BandDimension = z.object({
+  height: z.number().int().positive(),
+  width: z.number().int().positive(),
+});
+
+/** Canonical request values and labels, derived from the backend's band table. */
+export const BAND_OPTIONS = BandDimension.array()
+  .parse(latitudeBands)
+  .map(({ height, width }) => ({
+    value: `${height}x${width}`,
+    label: `${height} × ${width} (height × width)`,
+  }));
 
 /** Latitude-band policy accepted consistently by Python, CLI, and web. */
-export const BandSelection = z.enum([
-  'portable',
-  '4',
-  '8',
-  '16',
-  '20',
-  '32',
-  '40',
-  '60',
-  '80',
-  '100',
-  '120',
-  '160',
-  '200',
-]);
+export const BandSelection = z.enum(['portable', ...BAND_OPTIONS.map(({ value }) => value)]);
 
 /** Strategies accepted on every build request. */
 export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
@@ -38,6 +38,16 @@ export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
 export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair']);
 
 export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
+
+/** Named candidate policies accepted by the rate solver, in backend canonical order. */
+export const CandidatePolicy = z.enum(['no-proliferator', 'all-products', 'output-products']);
+
+const CandidatePolicySelection = z
+  .array(CandidatePolicy)
+  .nonempty('Select at least one candidate policy.')
+  .refine((policies) => new Set(policies).size === policies.length, {
+    message: 'Candidate policies must not contain duplicates.',
+  });
 
 /** Both forms of a rate: the exact one, and the one a player reads. */
 const Rate = z.object({ exact: z.string(), per_minute: z.number() });
@@ -151,23 +161,25 @@ export type Attempt = z.infer<typeof Attempt>;
 export type ProjectionFailure = z.infer<typeof ProjectionFailure>;
 export type AttemptFailure = z.infer<typeof AttemptFailure>;
 
-export const BuildOptions = z.object({
-  url: z.string(),
-  strategy: RequestStrategy,
-  candidates: z.number(),
-  budget_s: z.number(),
-  proliferator_tier: ProliferatorTier,
-  band: BandSelection,
-  power: z.boolean(),
-  name: z.string(),
-  allow_invalid: z.boolean(),
-  fetch_flow: z.boolean(),
-  /** A FactorioLab flow export's CSV text. Empty means the recipe selection is
+export const BuildOptions = z
+  .object({
+    url: z.string(),
+    strategy: RequestStrategy,
+    candidate_policies: CandidatePolicySelection,
+    budget_s: z.number(),
+    proliferator_tier: ProliferatorTier,
+    band: BandSelection,
+    name: z.string(),
+    allow_invalid: z.boolean(),
+    fetch_flow: z.boolean(),
+    /** A FactorioLab flow export's CSV text. Empty means the recipe selection is
       derived rather than pinned, which the report says out loud. */
-  flow: z.string(),
-});
+    flow: z.string(),
+  })
+  .strict();
 
 export type BandSelection = z.infer<typeof BandSelection>;
+export type CandidatePolicy = z.infer<typeof CandidatePolicy>;
 export type BuildOptions = z.infer<typeof BuildOptions>;
 export type RequestStrategy = z.infer<typeof RequestStrategy>;
 export type ExplicitStrategy = z.infer<typeof ExplicitStrategy>;
@@ -176,10 +188,9 @@ export type ProliferatorTier = z.infer<typeof ProliferatorTier>;
 export const DEFAULT_OPTIONS: BuildOptions = {
   url: '',
   strategy: 'best',
-  candidates: 3,
+  candidate_policies: ['all-products', 'output-products', 'no-proliferator'],
   budget_s: 15,
   proliferator_tier: 'auto',
-  power: true,
   name: '',
   band: 'portable',
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly

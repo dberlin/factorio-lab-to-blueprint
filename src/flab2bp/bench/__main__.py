@@ -14,6 +14,7 @@ from flab2bp.bench.corpus import URL_CORPUS, Tier
 from flab2bp.bench.regression import check_against_baseline, write_baseline
 from flab2bp.bench.report import matrix_report, render_markdown, write_results
 from flab2bp.bench.runner import BENCH_SEED, run_corpus
+from flab2bp.cli import add_candidate_policy_argument, candidate_policies_from_args
 
 _RESULTS = Path("bench/results")
 _DEFAULT_TIERS = (Tier.TRIVIAL, Tier.SMALL, Tier.MID)
@@ -26,13 +27,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="include the large and stress tiers (slow; excluded from CI)",
     )
-    parser.add_argument(
-        "--candidates",
-        type=int,
-        choices=range(1, 4),
-        default=3,
-        help="fixed rate policies to emit (1..3)",
-    )
+    add_candidate_policy_argument(parser)
     parser.add_argument(
         "--time-budget", type=float, default=None, help="override the per-tier budget"
     )
@@ -44,12 +39,15 @@ def main(argv: list[str] | None = None) -> int:
         "--bless", action="store_true", help="record the current run as the baseline"
     )
     args = parser.parse_args(argv)
+    candidate_policies = candidate_policies_from_args(parser, args)
 
     tiers = set(Tier) if args.all else set(_DEFAULT_TIERS)
     entries = [e for e in URL_CORPUS if e.tier in tiers]
 
     results = run_corpus(
-        entries, time_budget_s=args.time_budget, candidates=args.candidates
+        entries,
+        time_budget_s=args.time_budget,
+        candidate_policies=candidate_policies,
     )
 
     matrix = matrix_report(results, "sequence-pair", "freeform")

@@ -50,7 +50,7 @@ import json
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -76,14 +76,27 @@ from flab2bp.bench.ab import (  # noqa: E402
     trials_from,
 )
 from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry, Tier  # noqa: E402
+from flab2bp.cli import (  # noqa: E402
+    add_candidate_policy_argument,
+    candidate_policies_from_args,
+)
 from flab2bp.dsp import codec  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.layout import finalize, markers, validate  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
-from flab2bp.layout.base import LayoutStrategy, Placement  # noqa: E402
+from flab2bp.layout.base import (  # noqa: E402
+    LayoutStrategy,
+    Placement,
+    PlacementCompletion,
+)
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.pipeline import _id_map  # noqa: E402
+from flab2bp.rates import (  # noqa: E402
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
+    build_candidates,
+)
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
@@ -97,14 +110,14 @@ B_NAME = "freeform"
 #: The second argument is the save's slope rule, taken from the entry's URL.
 #: Both arms must get the same one or the comparison is measuring the
 #: technology set rather than the strategies.
-STRATEGIES: dict[str, Callable[[bool, bool], LayoutStrategy]] = {
-    A_NAME: lambda power, vertical: SequencePairLayout(
+STRATEGIES: dict[str, Callable[[bool], LayoutStrategy]] = {
+    A_NAME: lambda vertical: SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        power=power, belt_vertical_construction=vertical
+        belt_vertical_construction=vertical,
     ),
-    B_NAME: lambda power, vertical: FreeformLayout(
+    B_NAME: lambda vertical: FreeformLayout(
         band_policy=BandPolicy("portable"),
-        power=power, belt_vertical_construction=vertical
+        belt_vertical_construction=vertical,
     ),
 }
 
@@ -116,24 +129,34 @@ class _LayoutCall:
     """Picklable solve request executed inside one fresh measurement process."""
 
     strategy: str
-    power: bool
     vertical: bool
     spec: BuildSpec
     budget_s: float
 
     def __call__(self) -> Placement:
-        placement = STRATEGIES[self.strategy](self.power, self.vertical).lay_out(
+        placement = STRATEGIES[self.strategy](self.vertical).lay_out(
             self.spec, time_budget_s=self.budget_s
         )
+        if placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED:
+            return placement
         compacted = finalize.compact_open_boundary_belts(
             placement,
             self.spec,
-            expect_power=self.power,
+            expect_power=True,
         )
-        return finalize.finalize_placement(compacted, BandPolicy("portable"))
+        finalized = finalize.finalize_placement(compacted, BandPolicy("portable"))
+        return replace(
+            finalized,
+            completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+        )
 
 
-def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
+def specs_for(
+    entry: CorpusEntry,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
+) -> tuple[BuildSpec, ...]:
     """Resolve a URL to its candidate frontier, once, shared by both strategies.
 
     Every candidate is laid out by both strategies and the smallest VALID result
@@ -144,34 +167,32 @@ def specs_for(entry: CorpusEntry, candidates: int) -> tuple[BuildSpec, ...]:
     """
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
-    from flab2bp.rates.candidates import build_candidates
 
     request = parse_url(entry.url)
-    return build_candidates(load_vendored(), request, count=candidates).candidates
+    return build_candidates(
+        load_vendored(),
+        request,
+        candidate_policies=candidate_policies,
+    ).candidates
 
 
 def judge_with(
-    spec: BuildSpec, ids: validate.IdMap, power: bool, placement: Placement
+    spec: BuildSpec, ids: validate.IdMap, placement: Placement
 ) -> tuple[bool, tuple[str, ...]]:
-    """Is this placement shippable?
+    """Return whether the powered placement is fully checked and shippable.
 
     The ``spec`` and its id map are passed to the validator deliberately.
     Without them nine spec-conformance and flow checks silently skip, and a
     build that never ran its throughput checks reads as clean -- a quieter
     version of the same artifact this harness exists to prevent.
-    (``bench/runner.py`` calls ``validate(placement)`` bare and has exactly that
-    hole; see the report for the diff that would fix it.)
 
-    A skipped check is therefore not a passed check.  The one exception is the
-    power family under ``--no-power``, which is a *caller declaration* -- we told
-    the validator there would be no towers, so those skips are expected and are
-    the only ones tolerated.
+    A skipped check is not a passed check. Current runs are always powered, so
+    skipped power checks are validation holes rather than a declared off mode.
     """
-    report = validate.validate(placement, spec, ids=ids, expect_power=power)
+    report = validate.validate(placement, spec, ids=ids, expect_power=True)
     checks = tuple(sorted({f.check for f in report.errors}))
-    unexpected = tuple(c for c in report.skipped if power or not c.startswith("power."))
-    if unexpected:
-        return False, checks + tuple(f"unchecked:{c}" for c in unexpected)
+    if report.skipped:
+        return False, checks + tuple(f"unchecked:{c}" for c in report.skipped)
     return report.ok, checks
 
 
@@ -189,8 +210,9 @@ def collect(
     *,
     budgets: list[float],
     repeat: int,
-    candidates: int,
-    power: bool,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
     a_name: str = A_NAME,
     b_name: str = B_NAME,
 ) -> list[Sample]:
@@ -206,7 +228,7 @@ def collect(
     spec_errors: dict[str, str] = {}
     for entry in entries:
         try:
-            specs[entry.url_id] = specs_for(entry, candidates)
+            specs[entry.url_id] = specs_for(entry, candidate_policies)
         except Exception as exc:  # noqa: BLE001 - a bad URL must not kill the sweep
             spec_errors[entry.url_id] = f"spec: {type(exc).__name__}: {exc}"
             print(f"  spec error {entry.url_id}: {exc}", file=sys.stderr)
@@ -229,13 +251,13 @@ def collect(
                             Outcome.ERROR,
                             0.0,
                             detail=spec_errors[entry.url_id],
-                            power=power,
+                            power=True,
                         )
                         for name in strategy_names
                     )
                     continue
                 for spec in specs[entry.url_id]:
-                    judge: Judge = partial(judge_with, spec, _id_map(spec), power)
+                    judge: Judge = partial(judge_with, spec, _id_map(spec))
                     encode = partial(encode_with, spec)
                     vertical = belt_rules_for_url(entry.url).vertical_construction
                     for name in strategy_names:
@@ -247,11 +269,11 @@ def collect(
                                 budget_s=budget,
                                 trial=trial,
                                 attempt=isolated_attempt(
-                                    _LayoutCall(name, power, vertical, spec, budget)
+                                    _LayoutCall(name, vertical, spec, budget)
                                 ),
                                 judge=judge,
                                 encode=encode,
-                                power=power,
+                                power=True,
                             )
                         )
                 print(
@@ -280,8 +302,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="trials per cell. CP-SAT is multi-worker and nondeterministic by "
         "design, so one sample is noise and nothing can be declared separated",
     )
-    ap.add_argument("--candidates", type=int, default=3)
-    ap.add_argument("--power", action="store_true", help="lay out with power (default off)")
+    add_candidate_policy_argument(ap)
     ap.add_argument("--only", default="", help="comma-separated url_ids to restrict to")
     ap.add_argument("--json", type=Path, default=None, help="write raw samples here")
     ap.add_argument("--markdown", type=Path, default=None, help="write the report here")
@@ -290,7 +311,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="skip the independent TypeScript decoder (reported as SKIPPED, never as a pass)",
     )
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    args.candidate_policies = candidate_policies_from_args(ap, args)
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -316,8 +339,7 @@ def main(argv: list[str] | None = None) -> int:
         entries,
         budgets=budgets,
         repeat=args.repeat,
-        candidates=args.candidates,
-        power=bool(args.power),
+        candidate_policies=args.candidate_policies,
         a_name=args.a,
         b_name=args.b,
     )
@@ -331,8 +353,8 @@ def main(argv: list[str] | None = None) -> int:
         tiers=tuple(t.value for t in _TIER_ORDER[: cutoff + 1]),
         budgets=tuple(budgets),
         repeat=args.repeat,
-        candidates=args.candidates,
-        power=bool(args.power),
+        candidates=len(args.candidate_policies),
+        power=True,
         urls=len(entries),
         started=started,
         seconds=round(time.perf_counter() - t0, 1),

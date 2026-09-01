@@ -1,6 +1,6 @@
 """Can both strategies lay out everything, cleanly, right now?
 
-    uv run python scripts/audit.py                    # every tier, both power settings
+    uv run python scripts/audit.py                    # every tier, powered
     uv run python scripts/audit.py --tier mid         # up to mid
     uv run python scripts/audit.py --budget 1,4,15    # sweep the solver budget
     uv run python scripts/audit.py --strategy sequence-pair
@@ -68,7 +68,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -76,30 +76,42 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
 from flab2bp.bench.corpus import URL_CORPUS, Tier  # noqa: E402
+from flab2bp.cli import (  # noqa: E402
+    add_candidate_policy_argument,
+    candidate_policies_from_args,
+)
 from flab2bp.dsp import catalog  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import finalize, validate  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
-from flab2bp.layout.base import LayoutStrategy, NoValidLayout  # noqa: E402
+from flab2bp.layout.base import (  # noqa: E402
+    LayoutAttemptFailure,
+    LayoutStrategy,
+    NoValidLayout,
+    PlacementCompletion,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
-from flab2bp.rates.candidates import build_candidates  # noqa: E402
+from flab2bp.rates import (  # noqa: E402
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
+    build_candidates,
+)
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
-_StrategyFactory = Callable[[bool, int, bool], LayoutStrategy]
+_StrategyFactory = Callable[[int, bool], LayoutStrategy]
 _STRATEGIES: dict[str, _StrategyFactory] = {
-    "freeform": lambda power, workers, vertical: FreeformLayout(
+    "freeform": lambda workers, vertical: FreeformLayout(
         band_policy=BandPolicy("portable"),
-        power=power,
         workers=workers,
         belt_vertical_construction=vertical,
     ),
-    "sequence-pair": lambda power, _workers, vertical: SequencePairLayout(
+    "sequence-pair": lambda _workers, vertical: SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        power=power,
         belt_vertical_construction=vertical,
     ),
 }
@@ -130,10 +142,11 @@ class Job:
     url: str
     tier: str
     spec_index: int
-    candidates: int
+    candidate_policies: tuple[CandidatePolicy, ...]
     budget: float
-    power: bool
     workers: int
+    #: Constant historical-schema metadata. Current audit cells are always powered.
+    power: bool = field(init=False, default=True)
     #: Arrangements per height for freeform, or ``None`` for its own default.
     #: Only freeform has the notion, so it is passed only to freeform.
     arrangements: int | None = None
@@ -165,6 +178,8 @@ class Result:
     projection_collider_pairs: int = 0
     projection_power_pairs: int = 0
     projection_sorters: int = 0
+    attempt_failures: tuple[LayoutAttemptFailure, ...] = ()
+    projection_failures: tuple[ProjectionFailureRecord, ...] = ()
 
     @property
     def label(self) -> str:
@@ -177,13 +192,25 @@ class Result:
 # Per-process spec cache. Rebuilding candidates for every cell would re-run the
 # rate solver six times per URL; a worker handles several cells of the same URL,
 # so caching here pays for itself and cannot skew the layout timings.
-_SPECS: dict[tuple[str, int], tuple[BuildSpec, ...]] = {}
+_SPECS: dict[
+    tuple[str, tuple[CandidatePolicy, ...]],
+    tuple[BuildSpec, ...],
+] = {}
 
 
-def _specs_for(url: str, count: int) -> tuple[BuildSpec, ...]:
-    key = (url, count)
+def _specs_for(
+    url: str,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
+) -> tuple[BuildSpec, ...]:
+    key = (url, candidate_policies)
     if key not in _SPECS:
-        _SPECS[key] = build_candidates(load_vendored(), parse_url(url), count=count).candidates
+        _SPECS[key] = build_candidates(
+            load_vendored(),
+            parse_url(url),
+            candidate_policies=candidate_policies,
+        ).candidates
     return _SPECS[key]
 
 
@@ -207,7 +234,7 @@ def run_cell(job: Job) -> Result:
     """Lay one cell out and judge it. Runs in a worker process."""
     t0 = time.monotonic()
     try:
-        specs = _specs_for(job.url, job.candidates)
+        specs = _specs_for(job.url, job.candidate_policies)
     except Exception as exc:  # noqa: BLE001
         return Result(job, "SPEC", "?", f"{type(exc).__name__}: {exc}", (), time.monotonic() - t0)
     if job.spec_index >= len(specs):
@@ -222,19 +249,27 @@ def run_cell(job: Job) -> Result:
         if job.arrangements is not None and job.strategy == "freeform":
             strategy = FreeformLayout(
                 band_policy=BandPolicy("portable"),
-                power=job.power,
                 workers=job.workers,
                 arrangements=job.arrangements,
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
         else:
-            strategy = make_strategy(job.power, job.workers, belt_rules.vertical_construction)
+            strategy = make_strategy(job.workers, belt_rules.vertical_construction)
         placement = strategy.lay_out(
             spec,
             time_budget_s=job.budget,
         )
     except NoValidLayout as exc:
-        return Result(job, "REFUSED", label, exc.reason[:70], ("<refused>",), time.monotonic() - t0)
+        return Result(
+            job,
+            "REFUSED",
+            label,
+            exc.reason,
+            ("<refused>",),
+            time.monotonic() - t0,
+            attempt_failures=exc.attempt_failures,
+            projection_failures=exc.projection_failures,
+        )
     except Exception as exc:  # noqa: BLE001
         return Result(
             job,
@@ -244,22 +279,37 @@ def run_cell(job: Job) -> Result:
             ("<crash>",),
             time.monotonic() - t0,
         )
-    placement = finalize.compact_open_boundary_belts(
-        placement,
-        spec,
-        expect_power=job.power,
-    )
-    try:
-        placement = finalize.finalize_placement(placement, BandPolicy("portable"))
-    except finalize.ProjectionRefusal as exc:
-        reason = "final spherical projection rejected " + ", ".join(exc.checks)
-        return Result(
-            job,
-            "REFUSED",
-            label,
-            reason[:70],
-            exc.checks,
-            time.monotonic() - t0,
+    if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
+        placement = finalize.compact_open_boundary_belts(
+            placement,
+            spec,
+            expect_power=True,
+        )
+        try:
+            placement = finalize.finalize_placement(placement, BandPolicy("portable"))
+        except finalize.ProjectionRefusal as exc:
+            reason = "final spherical projection rejected " + ", ".join(exc.checks)
+            projection_failures = tuple(
+                ProjectionFailureRecord(
+                    band=failure.band,
+                    check=failure.check,
+                    buildings=failure.buildings,
+                    detail=failure.detail,
+                )
+                for failure in exc.failures
+            )
+            return Result(
+                job,
+                "REFUSED",
+                label,
+                reason[:70],
+                exc.checks,
+                time.monotonic() - t0,
+                projection_failures=projection_failures,
+            )
+        placement = replace(
+            placement,
+            completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
         )
     projection_frame_candidates = int(placement.stats.get("projection_frame_candidates", 0))
     projection_count = int(placement.stats.get("projection_count", 0))
@@ -271,12 +321,13 @@ def run_cell(job: Job) -> Result:
         placement,
         spec,
         ids=validate.id_map(spec),
-        expect_power=job.power,
+        expect_power=True,
         max_belt_z=belt_rules.max_z,
         belt_vertical_construction=belt_rules.vertical_construction,
     )
     elapsed = time.monotonic() - t0
-    if report.ok:
+    skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
+    if report.ok and not skipped_power:
         return Result(
             job,
             "CLEAN",
@@ -291,7 +342,9 @@ def run_cell(job: Job) -> Result:
             projection_power_pairs,
             projection_sorters,
         )
-    checks = tuple(sorted({f.check for f in report.errors}))
+    checks = tuple(sorted({f.check for f in report.errors})) + tuple(
+        f"unchecked:{check}" for check in skipped_power
+    )
     return Result(
         job,
         "INVALID",
@@ -364,8 +417,10 @@ def build_jobs(
     strategies: list[str],
     tiers: set[Tier],
     budgets: list[float],
-    candidates: int,
     workers: int,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
     only: set[str] | None = None,
     skip: set[str] | None = None,
     arrangements: int | None = None,
@@ -380,23 +435,21 @@ def build_jobs(
     jobs = []
     for e in entries:
         for name in strategies:
-            for i in range(candidates):
+            for i, _policy in enumerate(candidate_policies):
                 for budget in budgets:
-                    for power in (False, True):
-                        jobs.append(
-                            Job(
-                                strategy=name,
-                                url_id=e.url_id,
-                                url=e.url,
-                                tier=e.tier.value,
-                                spec_index=i,
-                                candidates=candidates,
-                                budget=budget,
-                                power=power,
-                                workers=workers,
-                                arrangements=arrangements,
-                            )
+                    jobs.append(
+                        Job(
+                            strategy=name,
+                            url_id=e.url_id,
+                            url=e.url,
+                            tier=e.tier.value,
+                            spec_index=i,
+                            candidate_policies=candidate_policies,
+                            budget=budget,
+                            workers=workers,
+                            arrangements=arrangements,
                         )
+                    )
     return jobs
 
 
@@ -435,6 +488,12 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
             "projection_collider_pairs": r.projection_collider_pairs,
             "projection_power_pairs": r.projection_power_pairs,
             "projection_sorters": r.projection_sorters,
+            "attempt_failures": tuple(
+                asdict(failure) for failure in r.attempt_failures
+            ),
+            "projection_failures": tuple(
+                asdict(failure) for failure in r.projection_failures
+            ),
             "detail": r.detail,
         }
     )
@@ -464,7 +523,7 @@ def main() -> int:
         default="15",
         help="comma-separated solver budgets in seconds; sweeping is the point",
     )
-    ap.add_argument("--candidates", type=int, default=3)
+    add_candidate_policy_argument(ap)
     ap.add_argument(
         "--strategy",
         default="both",
@@ -513,6 +572,7 @@ def main() -> int:
         "which cells moved and what they cost",
     )
     args = ap.parse_args()
+    candidate_policies = candidate_policies_from_args(ap, args)
 
     cutoff = _TIER_ORDER.index(Tier(args.tier))
     tiers = set(_TIER_ORDER[: cutoff + 1])
@@ -528,11 +588,11 @@ def main() -> int:
         names,
         tiers,
         budgets,
-        args.candidates,
         per_cell_workers,
-        only,
-        skip,
-        args.arrangements,
+        candidate_policies=candidate_policies,
+        only=only,
+        skip=skip,
+        arrangements=args.arrangements,
     )
     if not jobs:
         raise SystemExit(

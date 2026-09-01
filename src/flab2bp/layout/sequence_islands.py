@@ -9,7 +9,6 @@ from concurrent.futures import Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from flab2bp.layout import validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement, ProjectionFailureRecord
 from flab2bp.layout.compact_seed import CompactSeedConfig
@@ -149,8 +148,6 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             projection_failures=exc.projection_failures,
         )
 
-    if validate.certify(placement, request.spec, expect_power=request.power).errors:
-        return _SequenceIslandOutcome.invalid(request.island_id, request.seed, placement)
     return _SequenceIslandOutcome.completed(request.island_id, request.seed, placement)
 
 
@@ -258,7 +255,6 @@ def run_sequence_islands(
     spec: BuildSpec,
     *,
     time_budget_s: float,
-    power: bool,
     band_policy: BandPolicy,
     belt_vertical_construction: bool,
     strip_len: int,
@@ -275,7 +271,7 @@ def run_sequence_islands(
     serial_attempt = _serial_compact_seed_attempt(
         spec.machine_count,
         len(spec.spray_lanes),
-        power=power,
+        power=True,
     )
     compact_attempts = (serial_attempt,) + tuple(
         attempt for attempt in range(islands) if attempt != serial_attempt
@@ -285,7 +281,7 @@ def run_sequence_islands(
             spec=spec,
             time_budget_s=time_budget_s,
             soft_deadline=soft_deadline,
-            power=power,
+            power=True,
             band_policy=band_policy,
             belt_vertical_construction=belt_vertical_construction,
             strip_len=strip_len,

@@ -22,7 +22,6 @@ from flab2bp.bench.types import CellResult
 @dataclass(frozen=True, slots=True)
 class MatrixCell:
     proliferated: bool
-    power: bool
     urls: int
     median_ratio: float
     worst_ratio: float
@@ -34,8 +33,8 @@ class MatrixCell:
 class MatrixReport:
     baseline: str
     challenger: str
-    #: Keyed ``(proliferated, power)``.
-    cells: dict[tuple[bool, bool], MatrixCell]
+    #: Keyed by whether the candidate is proliferated.
+    cells: dict[bool, MatrixCell]
 
 
 def _is_proliferated(cell: CellResult) -> bool:
@@ -56,28 +55,26 @@ def _best(cells: Sequence[CellResult], strategy: str) -> dict[str, CellResult]:
 def matrix_report(
     cells: Sequence[CellResult], baseline: str, challenger: str
 ) -> MatrixReport:
-    out: dict[tuple[bool, bool], MatrixCell] = {}
+    out: dict[bool, MatrixCell] = {}
     for proliferated in (True, False):
-        for power in (True, False):
-            subset = [
-                c
-                for c in cells
-                if c.power is power and _is_proliferated(c) is proliferated
-            ]
-            a = _best(subset, baseline)
-            b = _best(subset, challenger)
-            shared = sorted(set(a) & set(b))
-            ratios = [b[u].area / a[u].area for u in shared if a[u].area]
+        subset = [
+            c
+            for c in cells
+            if c.power is True and _is_proliferated(c) is proliferated
+        ]
+        a = _best(subset, baseline)
+        b = _best(subset, challenger)
+        shared = sorted(set(a) & set(b))
+        ratios = [b[u].area / a[u].area for u in shared if a[u].area]
 
-            out[(proliferated, power)] = MatrixCell(
-                proliferated=proliferated,
-                power=power,
-                urls=len(shared),
-                median_ratio=statistics.median(ratios) if ratios else float("nan"),
-                worst_ratio=max(ratios) if ratios else float("nan"),
-                baseline_fallback_rate=_fallback_rate(subset, baseline),
-                challenger_fallback_rate=_fallback_rate(subset, challenger),
-            )
+        out[proliferated] = MatrixCell(
+            proliferated=proliferated,
+            urls=len(shared),
+            median_ratio=statistics.median(ratios) if ratios else float("nan"),
+            worst_ratio=max(ratios) if ratios else float("nan"),
+            baseline_fallback_rate=_fallback_rate(subset, baseline),
+            challenger_fallback_rate=_fallback_rate(subset, challenger),
+        )
     return MatrixReport(baseline, challenger, out)
 
 
@@ -95,21 +92,21 @@ def _fmt(value: float) -> str:
 def render_markdown(
     cells: Sequence[CellResult], *, matrix: MatrixReport | None = None
 ) -> str:
+    cells = tuple(c for c in cells if c.power is True)
     lines: list[str] = ["# Bake-off", ""]
 
     lines += ["## Per-cell results", ""]
     lines += [
-        "| url | strategy | candidate | power | area | fill | machines | belts "
+        "| url | strategy | candidate | area | fill | machines | belts "
         "| sorters | DI | towers | time | status | valid | skipped |",
-        "|---|---|---|:--:|---:|---:|---:|---:|---:|---:|---:|---:|---|:--:|---:|",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|:--:|---:|",
     ]
     for c in cells:
         verdict = "ok" if c.valid else f"FAIL({c.errors})"
         if c.valid and c.skipped_checks:
             verdict = "ok*"
         lines.append(
-            f"| {c.url_id} | {c.strategy} | {c.candidate} | "
-            f"{'Y' if c.power else 'N'} | {c.area} | "
+            f"| {c.url_id} | {c.strategy} | {c.candidate} | {c.area} | "
             f"{c.packing_efficiency:.2f} | {c.machines} | {c.belt_tiles} | "
             f"{c.sorters} | {c.direct_inserts} | {c.towers} | "
             f"{c.solve_seconds:.2f}s | {c.solver_status} | {verdict} | "
@@ -183,14 +180,14 @@ def _render_matrix(matrix: MatrixReport) -> list[str]:
         "denser. Worst case and fallback rate are shown because a bimodal "
         "strategy and a smoothly-degrading one can share a median.",
         "",
-        "| proliferated | power | urls | median | worst | "
+        "| proliferated | urls | median | worst | "
         f"{matrix.baseline} fallback | {matrix.challenger} fallback |",
-        "|:--:|:--:|---:|---:|---:|---:|---:|",
+        "|:--:|---:|---:|---:|---:|---:|",
     ]
-    for (proliferated, power), cell in sorted(matrix.cells.items(), reverse=True):
+    for proliferated, cell in sorted(matrix.cells.items(), reverse=True):
         lines.append(
-            f"| {'Y' if proliferated else 'N'} | {'Y' if power else 'N'} | "
-            f"{cell.urls} | {_fmt(cell.median_ratio)} | "
+            f"| {'Y' if proliferated else 'N'} | {cell.urls} | "
+            f"{_fmt(cell.median_ratio)} | "
             f"{_fmt(cell.worst_ratio)} | "
             f"{_fmt(cell.baseline_fallback_rate)} | "
             f"{_fmt(cell.challenger_fallback_rate)} |"

@@ -1,8 +1,10 @@
+from collections.abc import Mapping
 from typing import cast
 
 import pytest
 
 from flab2bp.layout.route_feedback import (
+    Cell,
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
@@ -55,6 +57,45 @@ def test_detailed_result_counts_real_failures() -> None:
     assert result.failed_count == 1
     assert result.stranded == (net,)
 
+def test_exhaustive_route_proof_must_be_explicit_and_non_budget() -> None:
+    net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
+    failure = NetFailure(
+        net_id=net,
+        kind=RouteFailureKind.SEALED_POCKET,
+        wall=((4, 5, 0),),
+        blocking_nets=(),
+        expansions=41,
+    )
+
+    exhaustive = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(failure,),
+        iterations=2,
+        expansions=41,
+        exhaustive=True,
+    )
+
+    assert exhaustive.exhaustive
+    with pytest.raises(ValueError, match="budget"):
+        DetailedRouteResult(
+            status=DetailedRouteStatus.BUDGET,
+            routed=(),
+            failures=(
+                NetFailure(
+                    net,
+                    RouteFailureKind.BUDGET,
+                    (),
+                    (),
+                    41,
+                ),
+            ),
+            iterations=2,
+            expansions=41,
+            exhaustive=True,
+        )
+
+
 
 def _detailed_failure(
     kind: RouteFailureKind,
@@ -95,9 +136,77 @@ def test_genuine_geometric_failure_bumps_net_and_wall(
 
     assert updated.net_weight[failed.failures[0].net_id] == 1.0
     assert updated.cell_history[(4, 5, 0)] == 1.0
+    assert updated.net_cell_history[failed.failures[0].net_id] == {
+        (4, 5, 0): 1.0
+    }
     assert state.net_weight == {}
     assert state.cell_history == {}
 
+def test_route_feedback_weights_exact_blocking_net_identities() -> None:
+    failed_net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
+    blocker = NetId(5, 3, "copper-ingot", NetRole.INTERNAL, 0)
+    result = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                failed_net,
+                RouteFailureKind.CONGESTION_WALL,
+                ((4, 5, 0),),
+                (blocker,),
+                41,
+            ),
+        ),
+        iterations=2,
+        expansions=41,
+        exhaustive=True,
+    )
+
+    updated = update_feedback(FeedbackState.empty((80, 120)), result)
+
+    assert updated.net_weight == {failed_net: 1.0, blocker: 1.0}
+    assert updated.logical_net_weight == {
+        failed_net.logical: 1.0,
+        blocker.logical: 1.0,
+    }
+    assert updated.net_cell_history == {
+        failed_net: {(4, 5, 0): 1.0},
+    }
+
+
+
+def test_route_feedback_retains_exact_local_endpoint_offsets() -> None:
+    failed_net = NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0)
+    blocker = NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 1)
+    result = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                failed_net,
+                RouteFailureKind.CONGESTION_WALL,
+                ((14, 7, 0),),
+                (blocker,),
+                41,
+                source=(14, 7, 0),
+                destination=(31, 9, 0),
+                blocking_endpoints=(((16, 8, 0), (33, 6, 0)),),
+            ),
+        ),
+        iterations=2,
+        expansions=41,
+    )
+
+    updated = update_feedback(
+        FeedbackState.empty((80, 120)),
+        result,
+        origins=((10, 5), (30, 4)),
+    )
+
+    assert updated.endpoint_offsets == {
+        failed_net: ((4, 2, 0), (1, 5, 0)),
+        blocker: ((6, 3, 0), (3, 2, 0)),
+    }
 
 @pytest.mark.parametrize("kind", (RouteFailureKind.BUDGET, RouteFailureKind.STATIC_ACCESS))
 def test_non_geometric_failure_is_an_exact_feedback_no_op(
@@ -116,17 +225,45 @@ def test_feedback_state_copies_and_freezes_input_mappings() -> None:
     net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
     weights = {net: 2.0}
     cells = {(4, 5, 0): 3.0}
-    state = FeedbackState((80, 120), weights, cells)
+    net_cells = {net: {(4, 5, 0): 3.0}}
+    state = FeedbackState(
+        (80, 120),
+        weights,
+        cells,
+        net_cell_history=net_cells,
+    )
 
     weights[net] = 7.0
     cells[(4, 5, 0)] = 9.0
+    net_cells[net][(4, 5, 0)] = 9.0
 
     assert state.net_weight[net] == 2.0
     assert state.cell_history[(4, 5, 0)] == 3.0
+    assert state.net_cell_history[net][(4, 5, 0)] == 3.0
     with pytest.raises(TypeError):
         cast(dict[NetId, float], state.net_weight)[net] = 4.0
     with pytest.raises(TypeError):
         cast(dict[tuple[int, int, int], float], state.cell_history)[(4, 5, 0)] = 4.0
+    with pytest.raises(TypeError):
+        cast(dict[NetId, Mapping[Cell, float]], state.net_cell_history)[net] = {}
+    with pytest.raises(TypeError):
+        cast(dict[Cell, float], state.net_cell_history[net])[(4, 5, 0)] = 4.0
+
+def test_shared_and_exact_history_both_retain_routing_levels() -> None:
+    net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
+    exact = {
+        (4, 5, 0): 1.0,
+        (4, 5, 2): 2.0,
+    }
+
+    state = FeedbackState(
+        outline=(80, 120),
+        net_weight={net: 1.0},
+        cell_history=exact,
+        net_cell_history={net: exact},
+    )
+
+    assert state.cell_history == exact
 
 
 def test_feedback_is_bounded_decayed_and_pruned_at_stage_boundary() -> None:
@@ -138,16 +275,19 @@ def test_feedback_is_bounded_decayed_and_pruned_at_stage_boundary() -> None:
 
     assert state.net_weight[net] == 8.0
     assert state.cell_history[(4, 5, 0)] == 10.0
+    assert state.net_cell_history[net][(4, 5, 0)] == 10.0
 
     decayed = decay_feedback(
         FeedbackState(
             outline=state.outline,
             net_weight={**state.net_weight, NetId(0, 1, "copper", NetRole.INTERNAL, 0): 1e-7},
             cell_history={**state.cell_history, (1, 1, 0): 1e-7},
+            net_cell_history=state.net_cell_history,
         )
     )
     assert decayed.net_weight == {net: 6.8}
     assert decayed.cell_history == {(4, 5, 0): 8.5}
+    assert decayed.net_cell_history == {net: {(4, 5, 0): 8.5}}
 
 
 def test_cell_history_resets_and_net_weights_survive_outline_change() -> None:
@@ -156,12 +296,14 @@ def test_cell_history_resets_and_net_weights_survive_outline_change() -> None:
         outline=(80, 120),
         net_weight={net: 2.0},
         cell_history={(4, 5, 0): 3.0},
+        net_cell_history={net: {(4, 5, 0): 3.0}},
     )
 
     changed = state.for_outline((80, 121))
 
     assert changed.net_weight == {net: 2.0}
     assert changed.cell_history == {}
+    assert changed.net_cell_history == {}
     assert state.for_outline(state.outline) is state
 
 
@@ -293,6 +435,7 @@ def test_logical_feedback_survives_physical_child_reindexing() -> None:
     assert remapped.logical_net_weight[logical] == 1.0
     assert {remapped.net_weight[net] for net in child_nets} == {1.0}
     assert not remapped.cell_history
+    assert not remapped.net_cell_history
 
 
 def test_split_candidate_requires_repeated_geometric_feedback_and_machine_capacity() -> None:

@@ -7,21 +7,25 @@ to the current freeform geometry, routers, power planner, and validator.
 
 from __future__ import annotations
 
+import inspect
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fractions import Fraction
+from itertools import islice
 from types import MappingProxyType
 from typing import Protocol
 
 from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
+    ATOMIC_COMPLETION_GRACE_S,
     DETERMINISTIC_WORKERS,
     NoValidLayout,
     Placement,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.compact_seed import (
@@ -36,9 +40,13 @@ from flab2bp.layout.compact_seed import (
     solve_compact_seed,
 )
 from flab2bp.layout.freeform import (
+    _COATER_WEST_CHANNEL,
+    _ENTRY_RING,
     _ROUTING_BUDGET,
     _ROUTING_EXPANSIONS_PER_SECOND,
     WEST_CHANNEL,
+    DirectInsertId,
+    ExactPackNoGood,
     Strip,
     _box,
     _build_prepared,
@@ -47,14 +55,25 @@ from flab2bp.layout.freeform import (
     _dests,
     _direct_alignment_targets,
     _direct_net_candidates,
+    _DirectCandidate,
+    _exact_projection_pair,
     _fanout_shortfall,
     _greedy_pack,
+    _minimum_pack_width,
     _Pack,
     _pack,
+    _PreparationDeadline,
     _prepare_routing_problem,
     _PreparedRoutingProblem,
+    _projection_no_good,
+    _projection_strip_pair,
+    _staged_static_clearance_keys,
+    _staged_static_preclearance_proved,
+    _StagedStaticCache,
+    _strip_geometry_signature,
     _Unpowerable,
     _Unseatable,
+    _width_slack_cap,
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult, route_global
@@ -87,6 +106,7 @@ from flab2bp.layout.sequence_pair import (
     GapProfile,
     PlacementKey,
     PlacementProblem,
+    QualityArchiveKey,
     SearchEnergy,
     StageBoundaryUpdate,
     TaggedAnnealIncumbent,
@@ -95,6 +115,7 @@ from flab2bp.layout.sequence_pair import (
     build_elite_archive,
     decode_state,
     derive_stage_seed,
+    enable_variant_stage_boundary,
     merge_stage_boundary,
     quality_archive_key,
     repair_neighbourhood,
@@ -102,6 +123,8 @@ from flab2bp.layout.sequence_pair import (
     split_stage_boundary,
 )
 from flab2bp.layout.strip_variants import (
+    CargoDomain,
+    ProjectionPitchRequirement,
     StripFamily,
     StripFamilyId,
     StripInstanceId,
@@ -110,6 +133,9 @@ from flab2bp.layout.strip_variants import (
     default_strip_variant,
     generate_strip_families,
     partition_strip_family,
+    projection_pitch_requirements,
+    strip_pose_id,
+    variant_with_minimum_pitch,
     variants_for_count,
 )
 from flab2bp.spec import BuildSpec
@@ -122,7 +148,6 @@ class ObjectiveMode(StrEnum):
     QUALITY = "quality"
 
 
-type QualityArchiveKey = tuple[int, int, int, int, float, PlacementKey]
 type RefinementHint = tuple[int, tuple[int, int], DecodedPlacement]
 
 _QUALITY_REVISIT_AFTER = 2
@@ -136,7 +161,11 @@ _DENSE_SPRAY_COMPACT_SEED_ATTEMPT = 4
 _DENSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 120
 _COARSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 250
 _COMPACT_LARGE_VARIANT_SIZE = 40
-_COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.5
+_COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.1
+_LARGE_SPARSE_COMPACT_MIN_MACHINES = 251
+_LARGE_SPARSE_COMPACT_MIN_STRIPS = 41
+_DENSE_SPRAY_ZERO_DIRECT_STRIP_LEN = 16
+_MODERATE_ROUTED_STRIP_LEN = 12
 _TOPOLOGY_BEAM_MIN_STRIPS = 7
 _TOPOLOGY_BEAM_MAX_STRIPS = 24
 _TOPOLOGY_BEAM_DETERMINISTIC_SECONDS = 0.2
@@ -232,6 +261,86 @@ def _serial_compact_seed_attempt(
         and sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
         else 0
     )
+
+
+def _dense_spray_initial_strip_len(
+    requested: int,
+    *,
+    sprayed_lanes: int,
+    direct_candidates: int,
+) -> int:
+    """Coarsen only a dense-spray plan with no direct-insert structure."""
+    if (
+        sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
+        and direct_candidates == 0
+    ):
+        return max(requested, _DENSE_SPRAY_ZERO_DIRECT_STRIP_LEN)
+    return requested
+
+
+def _moderate_routed_initial_strip_len(
+    requested: int,
+    *,
+    strip_count: int,
+    direct_candidates: int,
+) -> int:
+    """Preserve routing granularity for a medium direct-rich strip plan.
+
+    The lower bound is the topology beam's exact-admission limit. The upper
+    bound adds one large-family cohort; beyond it, saturated-family coarsening
+    is the bounded representation rather than another initial partition.
+    """
+    if (
+        direct_candidates >= strip_count
+        and _TOPOLOGY_BEAM_MAX_STRIPS
+        <= strip_count
+        <= _COMPACT_LARGE_VARIANT_SIZE + _TOPOLOGY_BEAM_MAX_STRIPS
+    ):
+        return max(requested, _MODERATE_ROUTED_STRIP_LEN)
+    return requested
+
+
+def _mid_unsprayed_initial_strip_len(
+    requested: int,
+    *,
+    machine_count: int,
+    sprayed_lanes: int,
+    strip_count: int,
+    direct_candidates: int,
+) -> int:
+    """Keep a direct-rich mid plan below the expensive fine-topology cohort."""
+    if not (
+        requested == 6
+        and sprayed_lanes == 0
+        and _MID_NO_SPRAY_COMPACT_MIN_MACHINES
+        <= machine_count
+        <= _MID_NO_SPRAY_COMPACT_MAX_MACHINES
+        and _MID_NO_SPRAY_COMPACT_MIN_STRIPS
+        <= strip_count
+        <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
+    ):
+        return requested
+    if direct_candidates >= strip_count:
+        return _MODERATE_ROUTED_STRIP_LEN
+    return 4
+
+
+def _topology_budget_signature(
+    detailed: DetailedStageResult,
+) -> int | None:
+    """Identify repeated incomplete beam closures without treating them as proof."""
+    if detailed.routing.status is not DetailedRouteStatus.BUDGET:
+        return None
+    return detailed.routing.failed_count
+
+
+def _topology_budget_is_broad(
+    failed_count: int,
+    *,
+    strip_count: int,
+) -> bool:
+    """Return whether an incomplete closure left at least half the strips unresolved."""
+    return failed_count > 0 and 2 * failed_count >= strip_count
 
 
 @dataclass(slots=True)
@@ -394,6 +503,7 @@ class DetailedStageResult:
 
     routing: DetailedRouteResult
     placement: Placement | None
+    projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,11 +512,27 @@ class ValidationVerdict:
 
     ok: bool
     failed_checks: tuple[str, ...]
+    placement: Placement | None
     projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
+    status: DetailedRouteStatus | None = None
 
     def __post_init__(self) -> None:
         if type(self.ok) is not bool:
             raise ValueError("validation verdict ok flag must be a bool")
+        if self.status is None:
+            object.__setattr__(
+                self,
+                "status",
+                DetailedRouteStatus.ROUTED if self.ok else DetailedRouteStatus.INVALID,
+            )
+        elif not isinstance(self.status, DetailedRouteStatus):
+            raise ValueError("validation verdict status must be a detailed route status")
+        if self.placement is not None and not isinstance(self.placement, Placement):
+            raise ValueError("validation placement must be a Placement or None")
+        if self.ok and self.placement is None:
+            raise ValueError("a clean validation verdict must contain its placement")
+        if not self.ok and self.placement is not None:
+            raise ValueError("a failed validation verdict cannot contain a placement")
         if not isinstance(self.failed_checks, tuple) or any(
             not isinstance(check, str) or not check for check in self.failed_checks
         ):
@@ -418,6 +544,14 @@ class ValidationVerdict:
             raise ValueError("projection failures must be ProjectionFailure records in a tuple")
         if self.ok and (self.failed_checks or self.projection_failures):
             raise ValueError("a clean validation verdict cannot contain failures")
+        if self.ok and self.status is not DetailedRouteStatus.ROUTED:
+            raise ValueError("a clean validation verdict must have ROUTED status")
+        if self.status is DetailedRouteStatus.BUDGET and (
+            self.ok or self.failed_checks or self.projection_failures
+        ):
+            raise ValueError(
+                "an incomplete validation verdict cannot contain acceptance or failures"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,6 +564,57 @@ class StageAdapters[PreparedT]:
     validate: Callable[[Placement], ValidationVerdict]
 
     prepare_exact: Callable[[int, DecodedPlacement], PreparedT] | None = None
+    feedback_origins: Callable[[PreparedT], tuple[tuple[int, int], ...]] | None = None
+
+
+@dataclass(slots=True)
+class _MeasuredStageAdmission:
+    """Reserve the measured search and completion spans of one more stage."""
+
+    deadline: float
+    monotonic: Callable[[], float] = time.monotonic
+    dearest_speculative_s: float = 0.0
+    dearest_completion_s: float = 0.0
+    _active_started: float | None = None
+    _active_completion_s: float = 0.0
+
+    def try_start(self) -> float | None:
+        now = self.monotonic()
+        remaining = self.deadline - now
+        required = self.dearest_speculative_s + self.dearest_completion_s
+        if remaining <= 0.0 or (required > 0.0 and remaining <= required):
+            return None
+        self._active_started = now
+        self._active_completion_s = 0.0
+        return now
+
+    def record_completion(self, elapsed: float) -> None:
+        if self._active_started is not None:
+            self._active_completion_s += max(0.0, elapsed)
+
+    def can_continue(self, started: float) -> bool:
+        now = self.monotonic()
+        elapsed = max(0.0, now - started)
+        completion = min(elapsed, self._active_completion_s)
+        required = max(
+            self.dearest_speculative_s,
+            elapsed - completion,
+        ) + max(self.dearest_completion_s, completion)
+        return self.deadline - now > required
+
+    def finish(self, started: float) -> None:
+        elapsed = max(0.0, self.monotonic() - started)
+        completion = min(elapsed, self._active_completion_s)
+        self.dearest_speculative_s = max(
+            self.dearest_speculative_s,
+            elapsed - completion,
+        )
+        self.dearest_completion_s = max(
+            self.dearest_completion_s,
+            completion,
+        )
+        self._active_started = None
+        self._active_completion_s = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -454,6 +639,7 @@ class StageObservation:
     exact_key: tuple[int, int] | None
     validation_failures: tuple[str, ...]
     projection_failures: tuple[finalize.ProjectionFailure, ...]
+    pitch_requirement: ProjectionPitchRequirement | None
     variant_moves: int
     selected_instance_ids: tuple[StripInstanceId, ...]
     selected_variant_ids: tuple[StripVariantId, ...]
@@ -529,6 +715,7 @@ class _HeightState:
     quality_stagnation: int = 0
     quality_restart: int | None = None
     pending_quality_exit: bool = False
+    feedback_restart: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +732,7 @@ class _AnnealedRestart:
     restart: _RestartState
     stage_start: AnnealState
     result: AnnealStageResult
+    move_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,8 +769,10 @@ StageBoundaryTransform = Callable[
         PlacementProblem,
         AnnealState,
         FeedbackState,
-        DetailedRouteResult,
+        DetailedStageResult,
         int,
+        tuple[finalize.ProjectionFailure, ...],
+        bool,
     ],
     StageBoundaryUpdate | None,
 ]
@@ -613,6 +803,8 @@ class SequenceSolver[PreparedT]:
         stage_boundary_commit: StageBoundaryCommit | None = None,
         borrow_first_discovery: bool = False,
         stop_on_stable_exact: bool = False,
+        stage_admission: _MeasuredStageAdmission | None = None,
+        routing_seed_allowance_cap: int | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -636,11 +828,18 @@ class SequenceSolver[PreparedT]:
             raise ValueError("borrow-first-discovery mode must be a bool")
         if type(stop_on_stable_exact) is not bool:
             raise ValueError("stable exact stopping mode must be a bool")
+        if routing_seed_allowance_cap is not None and (
+            type(routing_seed_allowance_cap) is not int
+            or routing_seed_allowance_cap <= 0
+        ):
+            raise ValueError("routing-seed allowance cap must be a positive integer")
         self.config = config or SequenceSolverConfig()
         self.adapters = adapters
         self.budget = expansion_budget
         self.deadline_reached = deadline_reached or (lambda: False)
         self.stop_on_stable_exact = stop_on_stable_exact
+        self.stage_admission = stage_admission
+        self.routing_seed_allowance_cap = routing_seed_allowance_cap
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
@@ -673,6 +872,26 @@ class SequenceSolver[PreparedT]:
         self._stage_stats: list[StageObservation] = []
         self._incumbent: _ExactIncumbent | None = None
         self._last_height: int | None = None
+
+
+    def _start_measured_stage(self) -> tuple[bool, float]:
+        admission = self.stage_admission
+        if admission is None:
+            return True, 0.0
+        started = admission.try_start()
+        return started is not None, 0.0 if started is None else started
+
+
+
+    def _finish_measured_stage(self, started: float) -> None:
+        if self.stage_admission is not None:
+            self.stage_admission.finish(started)
+
+    def _measured_stage_can_continue(self, started: float) -> bool:
+        admission = self.stage_admission
+        if admission is None:
+            return True
+        return admission.can_continue(started)
 
     @property
     def exact_incumbent_reason(self) -> str | None:
@@ -736,6 +955,10 @@ class SequenceSolver[PreparedT]:
             if self.stop_on_stable_exact and self._has_stable_exact_incumbent():
                 termination = "exact-stable"
                 break
+            admitted, measured_stage_started = self._start_measured_stage()
+            if not admitted:
+                termination = "deadline"
+                break
             seed_height = next(
                 (
                     height
@@ -746,9 +969,38 @@ class SequenceSolver[PreparedT]:
             )
             if seed_height is not None:
                 seed_height.routing_seed_closed = True
-                allowance = self.budget.detailed_discovery_allowance(seed_height.height)
-                spent, cancelled = self._route_seed_closure(seed_height, allowance)
-                self.budget.charge_detailed_discovery(seed_height.height, spent)
+                closure_allowance = self.budget.detailed_discovery_allowance(
+                    seed_height.height
+                )
+                seed_allowance = closure_allowance
+                if self.routing_seed_allowance_cap is not None:
+                    seed_allowance = min(
+                        seed_allowance,
+                        self.routing_seed_allowance_cap,
+                    )
+                spent, cancelled = self._route_seed_closure(
+                    seed_height,
+                    seed_allowance,
+                )
+                seed_stages = seed_height.stages
+                followup_spent, followup_cancelled = (
+                    self._run_pending_projection_feedback(
+                        seed_height,
+                        0,
+                        stage_limit,
+                        prior_cancelled=cancelled,
+                        closure_allowance=closure_allowance - spent,
+                    )
+                    if self._measured_stage_can_continue(measured_stage_started)
+                    else (0, False)
+                )
+                spent += followup_spent
+                cancelled = cancelled or followup_cancelled
+                self._finish_measured_stage(measured_stage_started)
+                if seed_height.stages > seed_stages:
+                    self.budget.settle_detailed_discovery(seed_height.height, spent)
+                else:
+                    self.budget.charge_detailed_discovery(seed_height.height, spent)
                 self._last_height = seed_height.height
                 if cancelled:
                     termination = "cancelled"
@@ -771,6 +1023,19 @@ class SequenceSolver[PreparedT]:
                         allowance,
                         closure_allowance=closure_allowance,
                     )
+                    followup_spent, followup_cancelled = (
+                        self._run_pending_projection_feedback(
+                            height_state,
+                            0,
+                            stage_limit,
+                            prior_cancelled=cancelled,
+                            closure_allowance=closure_allowance - spent,
+                        )
+                        if self._measured_stage_can_continue(measured_stage_started)
+                        else (0, False)
+                    )
+                    spent += followup_spent
+                    cancelled = cancelled or followup_cancelled
                     self.budget.settle_detailed_discovery(
                         height_state.height,
                         spent,
@@ -778,6 +1043,18 @@ class SequenceSolver[PreparedT]:
                     self._borrow_first_discovery = False
                 else:
                     spent, cancelled = self._run_discovery(height_state, allowance)
+                    followup_spent, followup_cancelled = (
+                        self._run_pending_projection_feedback(
+                            height_state,
+                            allowance - spent,
+                            stage_limit,
+                            prior_cancelled=cancelled,
+                        )
+                        if self._measured_stage_can_continue(measured_stage_started)
+                        else (0, False)
+                    )
+                    spent += followup_spent
+                    cancelled = cancelled or followup_cancelled
                     self.budget.settle_discovery(height_state.height, spent)
             else:
                 if self.budget.shared_left == 0:
@@ -804,6 +1081,7 @@ class SequenceSolver[PreparedT]:
                 restart = self._select_restart(height_state)
                 spent, cancelled = self._run_stage(height_state, restart, allowance)
                 self.budget.settle_shared(spent)
+            self._finish_measured_stage(measured_stage_started)
             self._last_height = height_state.height
             if cancelled:
                 termination = "cancelled"
@@ -871,6 +1149,18 @@ class SequenceSolver[PreparedT]:
         return best
 
     def _select_restart(self, height_state: _HeightState) -> _RestartState:
+        if height_state.feedback_restart is not None:
+            feedback_restart = next(
+                (
+                    restart
+                    for restart in height_state.restarts
+                    if restart.restart == height_state.feedback_restart
+                    and restart.stages < self.config.stages
+                ),
+                None,
+            )
+            if feedback_restart is not None:
+                return feedback_restart
         if height_state.objective_mode is ObjectiveMode.QUALITY:
             quality_restart = self._select_quality_restart(height_state)
             if quality_restart is not None:
@@ -961,7 +1251,7 @@ class SequenceSolver[PreparedT]:
         detailed_route_time_s = time.perf_counter() - detailed_started
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
-        return self._complete_routing_stage(
+        outcome = self._complete_routing_stage(
             height_state,
             selected,
             detailed,
@@ -979,6 +1269,19 @@ class SequenceSolver[PreparedT]:
             global_route_time_s=0.0,
             detailed_route_time_s=detailed_route_time_s,
         )
+        restart = height_state.restarts[0]
+        substitution, neighbourhood = _routing_feedback_substitution(
+            detailed.routing,
+            incumbent.state,
+            problem,
+            incumbent.decoded,
+            seed=restart.seed,
+            stage_index=restart.anneal.stage_index,
+        )
+        if neighbourhood and restart.stages < self.config.stages:
+            restart.anneal = substitution
+            height_state.feedback_restart = restart.restart
+        return outcome
 
     def _run_discovery(
         self,
@@ -1103,15 +1406,112 @@ class SequenceSolver[PreparedT]:
         )
         return detailed
 
+    def _run_pending_projection_feedback(
+        self,
+        height_state: _HeightState,
+        allowance: int,
+        stage_limit: int,
+        *,
+        prior_cancelled: bool,
+        closure_allowance: int | None = None,
+    ) -> tuple[int, bool]:
+        effective_detailed_allowance = (
+            allowance if closure_allowance is None else closure_allowance
+        )
+        feedback_restart = next(
+            (
+                restart
+                for restart in height_state.restarts
+                if restart.restart == height_state.feedback_restart
+                and restart.stages < self.config.stages
+            ),
+            None,
+        )
+        scheduled_stages = sum(
+            stage.global_skip_reason not in ("shared-pack", "topology-beam")
+            for stage in self._stage_stats
+        )
+        if (
+            prior_cancelled
+            or effective_detailed_allowance == 0
+            or feedback_restart is None
+            or scheduled_stages >= stage_limit
+            or self.deadline_reached()
+        ):
+            return 0, False
+        return self._run_feedback_closure(
+            height_state,
+            feedback_restart,
+            allowance,
+            closure_allowance=closure_allowance,
+        )
+
+    def _run_feedback_closure(
+        self,
+        height_state: _HeightState,
+        restart: _RestartState,
+        allowance: int,
+        *,
+        closure_allowance: int | None,
+    ) -> tuple[int, bool]:
+        """Close one evidence-scoped repair exactly before further annealing."""
+        problem = height_state.problem
+        state = restart.anneal
+        context = feedback_cost_context(
+            height_state.feedback,
+            problem,
+            self.direct_targets,
+        )
+        direct_targets = (
+            self.direct_targets
+            if self.direct_targets_for_state is None
+            else self.direct_targets_for_state(problem, state)
+        )
+        kernel = build_sequence_kernel(problem, context)
+        incumbent = kernel.score_state(state, direct_targets=direct_targets)
+        source = _AnnealedRestart(
+            restart=restart,
+            stage_start=state,
+            result=AnnealStageResult(
+                final_state=replace(
+                    incumbent.state,
+                    base_seed=state.base_seed,
+                    stage_index=state.stage_index + 1,
+                ),
+                incumbent=incumbent,
+                accepted_moves=0,
+                elites=(incumbent,),
+                archive=build_elite_archive((incumbent,), 1),
+                backend=kernel.backend,
+            ),
+            move_count=0,
+        )
+        annealed = (source,)
+        self._persist_annealed_restarts(annealed)
+        return self._route_annealed(
+            height_state,
+            annealed,
+            allowance,
+            closure_allowance=allowance if closure_allowance is None else closure_allowance,
+        )
+
+
     def _run_stage(
         self,
         height_state: _HeightState,
         restart: _RestartState,
         allowance: int,
+        *,
+        closure_allowance: int | None = None,
     ) -> tuple[int, bool]:
         annealed = self._anneal_restarts(height_state, (restart,))
         self._persist_annealed_restarts(annealed)
-        return self._route_annealed(height_state, annealed, allowance)
+        return self._route_annealed(
+            height_state,
+            annealed,
+            allowance,
+            closure_allowance=closure_allowance,
+        )
 
     def _anneal_restarts(
         self,
@@ -1128,17 +1528,16 @@ class SequenceSolver[PreparedT]:
             moves_per_stage=self.config.moves_per_stage,
             elite_count=max(self.config.global_elites, 1),
         )
-        topology_stage_config = (
-            replace(stage_config, move_kinds=TOPOLOGY_MOVE_KINDS)
-            if self.config.restarts_per_height >= 2
-            else stage_config
-        )
+        topology_stage_config = replace(stage_config, move_kinds=TOPOLOGY_MOVE_KINDS)
         results: list[_AnnealedRestart] = []
         for restart in restarts:
             topology_lane = self.config.restarts_per_height >= 2 and restart.restart == 0
-            restart_config = topology_stage_config if topology_lane else stage_config
+            feedback_lane = restart.restart == height_state.feedback_restart
+            restart_config = (
+                topology_stage_config if topology_lane or feedback_lane else stage_config
+            )
             stage_start = restart.anneal
-            if topology_lane:
+            if topology_lane and not feedback_lane:
                 stage_start = replace(
                     stage_start,
                     gaps=GapProfile.zero(problem.size),
@@ -1164,6 +1563,7 @@ class SequenceSolver[PreparedT]:
                     restart=restart,
                     stage_start=stage_start,
                     result=result,
+                    move_count=self.config.moves_per_stage,
                 )
             )
         return tuple(results)
@@ -1184,13 +1584,30 @@ class SequenceSolver[PreparedT]:
         *,
         closure_allowance: int | None = None,
     ) -> tuple[int, bool]:
+        candidate_sources = tuple(annealed)
+        if height_state.feedback_restart is not None:
+            feedback_source = next(
+                (
+                    source
+                    for source in candidate_sources
+                    if source.restart.restart == height_state.feedback_restart
+                ),
+                None,
+            )
+            if feedback_source is not None:
+                candidate_sources = (feedback_source,)
+                height_state.feedback_restart = None
         source_by_incumbent: dict[int, _AnnealedRestart] = {}
-        for source in annealed:
+        for source in candidate_sources:
             for tagged in source.result.archive:
                 # Archive union retains an input object, so identity carries its restart.
                 source_by_incumbent.setdefault(id(tagged.incumbent), source)
         merged = build_elite_archive(
-            (tagged.incumbent for source in annealed for tagged in source.result.archive),
+            (
+                tagged.incumbent
+                for source in candidate_sources
+                for tagged in source.result.archive
+            ),
             self.config.global_elites,
         )
         narrowest = next(
@@ -1240,8 +1657,8 @@ class SequenceSolver[PreparedT]:
             key=elite.key,
             breakdown=elite.breakdown,
             archive_categories=tagged.categories,
-            anneal_stages=len(annealed),
-            anneal_moves=len(annealed) * self.config.moves_per_stage,
+            anneal_stages=sum(item.move_count > 0 for item in annealed),
+            anneal_moves=sum(item.move_count for item in annealed),
             accepted_moves=sum(item.result.accepted_moves for item in annealed),
             anneal_seeds=tuple(item.restart.seed for item in annealed),
         )
@@ -1282,8 +1699,8 @@ class SequenceSolver[PreparedT]:
         spent = 0
         preparation_time_s = 0.0
         global_route_time_s = 0.0
-        anneal_stages = len(annealed)
-        anneal_moves = anneal_stages * self.config.moves_per_stage
+        anneal_stages = sum(item.move_count > 0 for item in annealed)
+        anneal_moves = sum(item.move_count for item in annealed)
         accepted_moves = sum(item.result.accepted_moves for item in annealed)
         anneal_seeds = tuple(item.restart.seed for item in annealed)
         detailed_reserve = (
@@ -1431,27 +1848,157 @@ class SequenceSolver[PreparedT]:
         if observation.continue_search:
             height_state.pending_quality_exit = False
         validation_failures: tuple[str, ...] = ()
-        projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
+        projection_failures = detailed.projection_failures
         validation_time_s = 0.0
+        validation_budget = False
         if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
             validation_started = time.perf_counter()
             verdict = self.adapters.validate(detailed.placement)
             validation_time_s = time.perf_counter() - validation_started
+            if self.stage_admission is not None:
+                self.stage_admission.record_completion(validation_time_s)
             validation_failures = verdict.failed_checks
             projection_failures = verdict.projection_failures
+            if verdict.status is DetailedRouteStatus.BUDGET:
+                detailed = replace(
+                    detailed,
+                    routing=replace(
+                        detailed.routing,
+                        status=DetailedRouteStatus.BUDGET,
+                        routed=(),
+                        failures=(),
+                        exhaustive=False,
+                    ),
+                    placement=None,
+                    projection_failures=(),
+                )
+                validation_failures = ()
+                projection_failures = ()
+                validation_budget = True
             if verdict.ok:
-                exact_key = _exact_key(detailed.placement)
+                finalized = verdict.placement
+                assert finalized is not None
+                exact_key = _exact_key(finalized)
                 if self._incumbent is None or exact_key < self._incumbent.exact_key:
                     self._incumbent = _ExactIncumbent(
                         exact_key=exact_key,
-                        placement=detailed.placement,
+                        placement=finalized,
                         candidate_key=selected.key,
                         breakdown=selected.breakdown,
                         archive_categories=selected.archive_categories,
                     )
                 if height_state.exact_key is None or exact_key < height_state.exact_key:
                     height_state.exact_key = exact_key
+        if validation_budget:
+            self._record_routing_observation(
+                height_state,
+                selected,
+                detailed,
+                spent,
+                problem=problem,
+                observation=observation,
+                global_routes=global_routes,
+                global_overflow=global_overflow,
+                global_skip_reason=global_skip_reason,
+                exact_key=None,
+                validation_failures=(),
+                projection_failures=(),
+                pitch_requirement=None,
+                preparation_time_s=preparation_time_s,
+                global_route_time_s=global_route_time_s,
+                detailed_route_time_s=detailed_route_time_s,
+                validation_time_s=validation_time_s,
+                lns_size=0,
+                variant_moves=0,
+                split_count=0,
+                merge_count=0,
+                quality_entered=False,
+                quality_exited=False,
+            )
+            return spent, True
+        pitch_requirement = _stage_projection_pitch_requirement(
+            problem,
+            selected.state,
+            detailed.placement,
+            projection_failures,
+        )
+        if (
+            not observation.continue_search
+            and projection_failures
+            and self.stage_boundary_transform is not None
+        ):
+            primary_restart = observation.restart
+            primary_state = replace(
+                selected.state,
+                base_seed=primary_restart.seed,
+                stage_index=primary_restart.anneal.stage_index,
+            )
+            transformed = self.stage_boundary_transform(
+                height_state.height,
+                problem,
+                primary_state,
+                height_state.feedback,
+                detailed,
+                primary_restart.feedback_stagnation,
+                projection_failures,
+                True,
+            )
+            if transformed is not None:
+                seed_sibling_updates: list[
+                    tuple[_RestartState, StageBoundaryUpdate]
+                ] = []
+                for other in height_state.restarts:
+                    if other is primary_restart:
+                        continue
+                    sibling = self.stage_boundary_transform(
+                        height_state.height,
+                        problem,
+                        other.anneal,
+                        height_state.feedback,
+                        detailed,
+                        primary_restart.feedback_stagnation,
+                        projection_failures,
+                        False,
+                    )
+                    if sibling is None or sibling.problem != transformed.problem:
+                        raise ValueError(
+                            "stage-boundary transform must rebuild every restart identically"
+                        )
+                    seed_sibling_updates.append((other, sibling))
+                if self.stage_boundary_commit is not None:
+                    self.stage_boundary_commit(
+                        height_state.height,
+                        transformed.problem,
+                    )
+                for other, sibling in seed_sibling_updates:
+                    other.anneal = sibling.state
+                    other.failure_signature = ()
+                    other.feedback_stagnation = 0
+                primary_restart.anneal = transformed.state
+                primary_restart.failure_signature = ()
+                primary_restart.feedback_stagnation = 0
+                height_state.problem = transformed.problem
+                height_state.feedback_restart = primary_restart.restart
+                if transformed.problem != problem:
+                    for candidate_restart in height_state.restarts:
+                        candidate_restart.archive = ()
+                    height_state.objective_mode = ObjectiveMode.EXPLORATION
+                    height_state.quality_restart = None
+                    height_state.pending_quality_exit = False
+                    height_state.quality_stagnation = 0
+                    height_state.narrowest_key = None
         if not observation.continue_search:
+            if detailed.routing.failures:
+                origins = (
+                    None
+                    if self.adapters.feedback_origins is None
+                    else self.adapters.feedback_origins(selected.prepared)
+                )
+                height_state.feedback = update_feedback(
+                    decay_feedback(height_state.feedback),
+                    detailed.routing,
+                    origins=origins,
+                )
             self._record_routing_observation(
                 height_state,
                 selected,
@@ -1465,6 +2012,7 @@ class SequenceSolver[PreparedT]:
                 exact_key=exact_key,
                 validation_failures=validation_failures,
                 projection_failures=projection_failures,
+                pitch_requirement=pitch_requirement,
                 preparation_time_s=preparation_time_s,
                 global_route_time_s=global_route_time_s,
                 detailed_route_time_s=detailed_route_time_s,
@@ -1528,22 +2076,24 @@ class SequenceSolver[PreparedT]:
                 RouteFailureKind.BUDGET,
             }
         )
-        if starting_mode is ObjectiveMode.EXPLORATION:
-            height_state.feedback = update_feedback(
-                decay_feedback(height_state.feedback), detailed.routing
+        origins = (
+            None
+            if self.adapters.feedback_origins is None
+            else self.adapters.feedback_origins(selected.prepared)
+        )
+        height_state.feedback = update_feedback(
+            decay_feedback(height_state.feedback),
+            detailed.routing,
+            origins=origins,
+        )
+        if signature:
+            restart.feedback_stagnation = (
+                restart.feedback_stagnation + 1 if signature == restart.failure_signature else 1
             )
-            if signature:
-                restart.feedback_stagnation = (
-                    restart.feedback_stagnation + 1 if signature == restart.failure_signature else 1
-                )
-            else:
-                restart.feedback_stagnation = 0
-            restart.failure_signature = signature
         else:
-            restart.failure_signature = ()
             restart.feedback_stagnation = 0
+        restart.failure_signature = signature
 
-        neighbourhood = frozenset[int]()
         next_anneal = AnnealState(
             pair=selected.state.pair,
             gaps=selected.state.gaps,
@@ -1551,40 +2101,37 @@ class SequenceSolver[PreparedT]:
             stage_index=annealed.final_state.stage_index,
             variant_indices=selected.state.variant_indices,
         )
-        if starting_mode is ObjectiveMode.EXPLORATION and 0 < detailed.routing.failed_count <= 3:
-            neighbourhood = _lns_neighbourhood(
-                detailed.routing, selected.state, problem, selected.decoded
+        neighbourhood = frozenset[int]()
+        if starting_mode is ObjectiveMode.EXPLORATION:
+            next_anneal, neighbourhood = _routing_feedback_substitution(
+                detailed.routing,
+                selected.state,
+                problem,
+                selected.decoded,
+                seed=restart.seed,
+                stage_index=annealed.final_state.stage_index,
             )
-            if neighbourhood:
-                repaired = repair_neighbourhood(
-                    selected.state.pair,
-                    selected.state.gaps,
-                    neighbourhood,
-                    seed=derive_stage_seed(restart.seed, annealed.final_state.stage_index),
-                    variant_indices=selected.state.variant_indices,
-                )
-                next_anneal = AnnealState(
-                    pair=repaired.pair,
-                    gaps=repaired.gaps,
-                    base_seed=restart.seed,
-                    stage_index=annealed.final_state.stage_index,
-                    variant_indices=repaired.variant_indices,
-                )
+            if neighbourhood and restart.stages < self.config.stages:
+                # This is an already-scheduled search candidate with exact local
+                # failure evidence, not another speculative retry. Close its LNS
+                # substitution before discovery advances to an unrelated height.
+                height_state.feedback_restart = restart.restart
         split_count = 0
         merge_count = 0
         topology_changed = False
-        if (
-            starting_mode is ObjectiveMode.EXPLORATION
-            and self.stage_boundary_transform is not None
-            and signature
+        if self.stage_boundary_transform is not None and (
+            projection_failures
+            or (starting_mode is ObjectiveMode.EXPLORATION and signature)
         ):
             transformed = self.stage_boundary_transform(
                 height_state.height,
                 problem,
                 next_anneal,
                 height_state.feedback,
-                detailed.routing,
+                detailed,
                 restart.feedback_stagnation,
+                projection_failures,
+                True,
             )
             if transformed is not None:
                 sibling_updates: list[tuple[_RestartState, StageBoundaryUpdate]] = []
@@ -1596,8 +2143,10 @@ class SequenceSolver[PreparedT]:
                         problem,
                         other.anneal,
                         height_state.feedback,
-                        detailed.routing,
+                        detailed,
                         restart.feedback_stagnation,
+                        projection_failures,
+                        False,
                     )
                     if sibling is None or sibling.problem != transformed.problem:
                         if transformed.problem.size < problem.size:
@@ -1623,12 +2172,18 @@ class SequenceSolver[PreparedT]:
                     cardinality_delta = transformed.problem.size - problem.size
                     split_count = max(0, cardinality_delta)
                     merge_count = max(0, -cardinality_delta)
-                    height_state.feedback = remap_feedback_nets(
-                        height_state.feedback,
-                        (),
-                    )
+                    if (
+                        transformed.problem.instance_ids != problem.instance_ids
+                        or transformed.problem.nets != problem.nets
+                    ):
+                        height_state.feedback = remap_feedback_nets(
+                            height_state.feedback,
+                            (),
+                        )
                     restart.failure_signature = ()
                     restart.feedback_stagnation = 0
+                    if pitch_requirement is not None:
+                        height_state.feedback_restart = restart.restart
                     if topology_changed:
                         for candidate_restart in height_state.restarts:
                             candidate_restart.archive = ()
@@ -1673,6 +2228,7 @@ class SequenceSolver[PreparedT]:
             exact_key=exact_key,
             validation_failures=validation_failures,
             projection_failures=projection_failures,
+            pitch_requirement=pitch_requirement,
             preparation_time_s=preparation_time_s,
             global_route_time_s=global_route_time_s,
             detailed_route_time_s=detailed_route_time_s,
@@ -1701,6 +2257,7 @@ class SequenceSolver[PreparedT]:
         exact_key: tuple[int, int] | None,
         validation_failures: tuple[str, ...],
         projection_failures: tuple[finalize.ProjectionFailure, ...],
+        pitch_requirement: ProjectionPitchRequirement | None,
         preparation_time_s: float,
         global_route_time_s: float,
         detailed_route_time_s: float,
@@ -1742,6 +2299,7 @@ class SequenceSolver[PreparedT]:
                 exact_key=exact_key,
                 validation_failures=validation_failures,
                 projection_failures=projection_failures,
+                pitch_requirement=pitch_requirement,
                 variant_moves=variant_moves,
                 selected_instance_ids=problem.instance_ids,
                 selected_variant_ids=selected_variant_ids,
@@ -1764,6 +2322,64 @@ class SequenceSolver[PreparedT]:
         )
 
 
+def _routing_feedback_substitution(
+    detailed: DetailedRouteResult,
+    selected_state: AnnealState,
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    *,
+    seed: int,
+    stage_index: int,
+) -> tuple[AnnealState, frozenset[int]]:
+    """Replace a failed candidate with one evidence-scoped local repair."""
+    unchanged = AnnealState(
+        pair=selected_state.pair,
+        gaps=selected_state.gaps,
+        base_seed=seed,
+        stage_index=stage_index,
+        variant_indices=selected_state.variant_indices,
+    )
+    if not any(
+        failure.kind
+        in {
+            RouteFailureKind.STATIC_ACCESS,
+            RouteFailureKind.DYNAMIC_ACCESS,
+            RouteFailureKind.SEALED_POCKET,
+            RouteFailureKind.CONGESTION_WALL,
+            RouteFailureKind.COMMIT_LINK,
+        }
+        for failure in detailed.failures
+    ):
+        return unchanged, frozenset()
+    neighbourhood = _lns_neighbourhood(
+        detailed,
+        selected_state,
+        problem,
+        decoded,
+    )
+    if not neighbourhood or (
+        problem.size > 1 and len(neighbourhood) == problem.size
+    ):
+        return unchanged, frozenset()
+    repaired = repair_neighbourhood(
+        selected_state.pair,
+        selected_state.gaps,
+        neighbourhood,
+        seed=derive_stage_seed(seed, stage_index + 1),
+        variant_indices=selected_state.variant_indices,
+    )
+    return (
+        AnnealState(
+            pair=repaired.pair,
+            gaps=repaired.gaps,
+            base_seed=seed,
+            stage_index=stage_index,
+            variant_indices=repaired.variant_indices,
+        ),
+        neighbourhood,
+    )
+
+
 def _lns_neighbourhood(
     detailed: DetailedRouteResult,
     selected_state: AnnealState,
@@ -1776,6 +2392,170 @@ def _lns_neighbourhood(
         selected_state.gaps,
         problem,
         decoded,
+    )
+
+
+type _ProjectionPackNoGood = finalize.ProjectionNoGood | ExactPackNoGood
+
+
+def _projection_feedback_matches(
+    problem: PlacementProblem,
+    state: AnnealState,
+    pack: _Pack,
+    no_good: _ProjectionPackNoGood,
+    geometry_signatures: tuple[finalize.ProjectionGeometrySignature, ...],
+) -> bool:
+    """Return whether one decoded state repeats the retained exact evidence."""
+    if isinstance(no_good, finalize.ProjectionNoGood):
+        return (
+            pack.width == no_good.pack_width
+            and pack.height == no_good.pack_height
+            and pack.at[no_good.left_strip] == no_good.left_origin
+            and geometry_signatures[no_good.left_strip] == no_good.left_geometry
+            and geometry_signatures[no_good.right_strip] == no_good.right_geometry
+            and pack.at[no_good.right_strip] == no_good.right_origin
+        )
+    pair = no_good.projection_pair
+    return (
+        pack.height == no_good.height
+        and problem.selected_sizes(state.variant_indices) == no_good.outline
+        and pack.width == no_good.width
+        and tuple(pack.at[index] for index in range(problem.size))
+        == no_good.origins
+        and (
+            pair is None
+            or (
+                pair.right_strip < len(geometry_signatures)
+                and geometry_signatures[pair.left_strip] == pair.left_geometry
+                and geometry_signatures[pair.right_strip] == pair.right_geometry
+            )
+        )
+    )
+
+
+_EXACT_PROJECTION_FALLBACK_PAIR_TRIALS = 8
+
+
+def _projection_feedback_stage_update(
+    problem: PlacementProblem,
+    state: AnnealState,
+    no_good: _ProjectionPackNoGood,
+    *,
+    west_channels: tuple[int, ...],
+    geometry_signatures: tuple[finalize.ProjectionGeometrySignature, ...],
+    deadline: float | None,
+    try_relation_update: bool,
+) -> StageBoundaryUpdate | None:
+    """Move an unchanged exact refusal to the nearest changed pair relation."""
+    if len(geometry_signatures) != problem.size:
+        raise ValueError("projection feedback requires one geometry signature per strip")
+    if deadline is not None and time.monotonic() >= deadline:
+        return None
+    decoded = decode_state(problem, state)
+    pack = _decoded_pack(
+        problem.outline_height,
+        decoded,
+        west_channels=west_channels,
+    )
+    if not _projection_feedback_matches(
+        problem,
+        state,
+        pack,
+        no_good,
+        geometry_signatures,
+    ):
+        return StageBoundaryUpdate(problem, state)
+    if not try_relation_update:
+        return StageBoundaryUpdate(problem, state)
+
+    if isinstance(no_good, finalize.ProjectionNoGood):
+        pairs = iter(((no_good.left_strip, no_good.right_strip),))
+    elif no_good.projection_pair is not None:
+        pair = no_good.projection_pair
+        pairs = iter(((pair.left_strip, pair.right_strip),))
+    else:
+        pairs = islice(
+            (
+                (left, right)
+                for left in range(problem.size)
+                for right in range(left + 1, problem.size)
+            ),
+            _EXACT_PROJECTION_FALLBACK_PAIR_TRIALS,
+        )
+
+    def swapped(
+        permutation: tuple[int, ...],
+        left: int,
+        right: int,
+    ) -> tuple[int, ...]:
+        values = list(permutation)
+        left_position = values.index(left)
+        right_position = values.index(right)
+        values[left_position], values[right_position] = (
+            values[right_position],
+            values[left_position],
+        )
+        return tuple(values)
+
+    if deadline is not None and time.monotonic() >= deadline:
+        return None
+    for left, right in pairs:
+        for axis in ("negative", "positive"):
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            sequence_pair = (
+                replace(
+                    state.pair,
+                    negative=swapped(state.pair.negative, left, right),
+                )
+                if axis == "negative"
+                else replace(
+                    state.pair,
+                    positive=swapped(state.pair.positive, left, right),
+                )
+            )
+            candidate = replace(state, pair=sequence_pair)
+            candidate_pack = _decoded_pack(
+                problem.outline_height,
+                decode_state(problem, candidate),
+                west_channels=west_channels,
+            )
+            if not _projection_feedback_matches(
+                problem,
+                candidate,
+                candidate_pack,
+                no_good,
+                geometry_signatures,
+            ):
+                return StageBoundaryUpdate(problem, candidate)
+    return None
+
+
+def _stage_projection_pitch_requirement(
+    problem: PlacementProblem,
+    state: AnnealState,
+    placement: Placement | None,
+    projection_failures: tuple[finalize.ProjectionFailure, ...],
+) -> ProjectionPitchRequirement | None:
+    """Return the first ordered exact pitch requirement mapped by this state."""
+    if placement is None or not problem.variant_tables:
+        return None
+    selected_variants = tuple(
+        problem.variant(strip, variant)
+        for strip, variant in enumerate(state.variant_indices)
+    )
+    return next(
+        (
+            requirement
+            for requirement in projection_pitch_requirements(
+                placement,
+                instance_ids=problem.instance_ids,
+                variants=selected_variants,
+                failures=projection_failures,
+            )
+            if requirement is not None
+        ),
+        None,
     )
 
 
@@ -1915,6 +2695,7 @@ def _variant_search_inputs(
     spec: BuildSpec,
     strips: list[Strip],
     *,
+    families: Sequence[StripFamily] | None = None,
     strip_len: int,
 ) -> tuple[
     tuple[StripInstanceId, ...],
@@ -1924,7 +2705,12 @@ def _variant_search_inputs(
     instance_ids: list[StripInstanceId] = []
     variant_tables: list[tuple[StripVariant, ...]] = []
     strip_index = 0
-    for family in generate_strip_families(spec):
+    selected_families = (
+        tuple(generate_strip_families(spec))
+        if families is None
+        else tuple(families)
+    )
+    for family in selected_families:
         if not family.variants:
             return (), ()
         default = default_strip_variant(family)
@@ -1954,11 +2740,25 @@ def _variant_search_inputs(
         raise ValueError("physical strip plan contains unmatched compatibility strips")
     return tuple(instance_ids), tuple(variant_tables)
 
+def _sequence_reservation_strips(strips: Sequence[Strip]) -> list[Strip]:
+    """Reserve W4 so a later exact pose swap cannot outgrow its proxy box."""
+    return [
+        (
+            replace(strip, west_channel=_COATER_WEST_CHANNEL + 1)
+            if strip.physical_variant is not None
+            and strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
+            else strip
+        )
+        for strip in strips
+    ]
+
 
 def _selected_strips(
     strips: list[Strip],
     problem: PlacementProblem,
     variant_indices: tuple[int, ...],
+    *,
+    band_policy: BandPolicy,
 ) -> list[Strip]:
     """Project current instance ranges into exact Freeform physical plans."""
     problem.selected_sizes(variant_indices)
@@ -1984,23 +2784,41 @@ def _selected_strips(
                 raise ValueError("physical strip templates do not cover the placement instances")
             strip = strips[index]
         variant = problem.variant(index, variant_indices[index])
-        selected.append(
-            replace(
-                strip,
-                machines=instance_id.machine_count,
-                mw=variant.footprint_width,
-                mh=variant.footprint_height,
-                yaw=variant.yaw,
-                pw=variant.pitch_x,
-                ph=variant.pitch_y,
-                lane_plan=variant.lane_plan,
-                attachment_plan=variant.attachment_plan,
-                port_dock_plan=variant.port_dock_plan,
-                box_height=variant.box_height,
-                family_id=instance_id.family_id,
-                machine_start=instance_id.machine_start,
-            )
+        selected_strip = replace(
+            strip,
+            machines=instance_id.machine_count,
+            mw=variant.footprint_width,
+            mh=variant.footprint_height,
+            yaw=variant.yaw,
+            pw=variant.pitch_x,
+            ph=variant.pitch_y,
+            lane_plan=variant.lane_plan,
+            attachment_plan=variant.attachment_plan,
+            port_dock_plan=variant.port_dock_plan,
+            box_height=variant.box_height,
+            physical_variant=variant,
+            family_id=instance_id.family_id,
+            machine_start=instance_id.machine_start,
+            west_channel=(
+                _COATER_WEST_CHANNEL
+                if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
+                else WEST_CHANNEL
+            ),
         )
+        if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY:
+            selected_strip = replace(
+                selected_strip,
+                west_channel=max(
+                    (
+                        _COATER_WEST_CHANNEL + 1
+                        if _staged_static_preclearance_proved(relation, band_policy)
+                        else _COATER_WEST_CHANNEL
+                        for relation in _staged_static_clearance_keys(selected_strip)
+                    ),
+                    default=_COATER_WEST_CHANNEL,
+                ),
+            )
+        selected.append(selected_strip)
     return selected
 
 
@@ -2009,10 +2827,20 @@ def _selected_direct_targets(
     strips: list[Strip],
     problem: PlacementProblem,
     variant_indices: tuple[int, ...],
+    *,
+    band_policy: BandPolicy,
 ) -> tuple[DirectInsertTarget, ...]:
     """Derive pair geometry only after both complete endpoint variants are selected."""
-    selected = _selected_strips(strips, problem, variant_indices)
-    return _direct_alignment_targets(_direct_net_candidates(selected, spec))
+    selected = _selected_strips(
+        strips,
+        problem,
+        variant_indices,
+        band_policy=band_policy,
+    )
+    return _refinement_direct_targets(
+        _direct_alignment_targets(_direct_net_candidates(selected, spec)),
+        selected,
+    )
 
 
 def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
@@ -2043,6 +2871,28 @@ def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
         default=1,
     )
     return max(minimum_height, balanced_height)
+
+
+def _large_sparse_compact_seed_height(
+    balanced_height: int,
+    *,
+    narrowest_height: int,
+    scheduled_heights: tuple[int, ...],
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+    power: bool,
+) -> int:
+    """Start routing-saturated sparse plans from the narrowest greedy height."""
+    if (
+        narrowest_height in scheduled_heights
+        and power
+        and sprayed_lanes == 0
+        and machine_count >= _LARGE_SPARSE_COMPACT_MIN_MACHINES
+        and strip_count >= _LARGE_SPARSE_COMPACT_MIN_STRIPS
+    ):
+        return narrowest_height
+    return balanced_height
 
 
 def _uses_tall_topology_height(
@@ -2091,7 +2941,7 @@ def _topology_beam_height(
         strip_count=strip_count,
         sprayed_lanes=sprayed_lanes,
     ):
-        return coarse_heights[-1]
+        return coarse_heights[0]
     if _uses_mid_topology_height(
         machine_count=machine_count,
         strip_count=strip_count,
@@ -2203,6 +3053,7 @@ def _protected_topology_candidates(
     return 3 if sprayed_lanes > 0 else 2
 
 
+
 def _topology_closure_allowance(
     allowance: int,
     *,
@@ -2228,12 +3079,16 @@ def _refinement_direct_targets(
         consumer_offset = strips[target.consumer].west_channel
         producer_span = target.producer_span + producer_offset - consumer_offset
         consumer_span = target.consumer_span + consumer_offset - producer_offset
+        origin_shift = producer_offset - consumer_offset
         if producer_span > 0 and consumer_span > 0:
             adjusted.append(
                 replace(
                     target,
                     producer_span=producer_span,
                     consumer_span=consumer_span,
+                    origin_deltas=tuple(
+                        delta + origin_shift for delta in target.origin_deltas
+                    ),
                 )
             )
     return tuple(adjusted)
@@ -2309,7 +3164,7 @@ def _shared_pack_height_rank(
         and _SHARED_PACK_MACHINE_MIN <= machine_count <= _SHARED_PACK_MACHINE_MAX
         and strip_count <= _COMPACT_LARGE_VARIANT_SIZE
     ):
-        return 1
+        return 2
     if (
         direct_candidates == 0
         and strip_count < _TOPOLOGY_BEAM_MIN_STRIPS
@@ -2347,10 +3202,42 @@ def _uses_shared_pack_candidate(
     )
 
 
+def _validated_direct_pair(
+    direct: DirectInsertId,
+    candidates: Mapping[tuple[int, int], _DirectCandidate],
+) -> tuple[int, int]:
+    key = (direct.source_strip, direct.destination_strip)
+    candidate = candidates.get(key)
+    if (
+        candidate is None
+        or candidate.item != direct.item
+        or candidate.cargo_domain is not direct.cargo_domain
+    ):
+        raise ValueError(f"pack direct ID does not match selected candidate metadata for {key}")
+    return key
+
+
+def _direct_id_from_pair(
+    pair: tuple[int, int],
+    candidates: Mapping[tuple[int, int], _DirectCandidate] | None,
+) -> DirectInsertId:
+    candidate = candidates.get(pair) if candidates is not None else None
+    if candidate is None:
+        raise ValueError(f"selected candidate metadata is required for direct key {pair}")
+    return DirectInsertId(
+        source_strip=pair[0],
+        destination_strip=pair[1],
+        item=candidate.item,
+        cargo_domain=candidate.cargo_domain,
+    )
+
+
 def _exact_pack_decoded(
     pack: _Pack,
     strips: Sequence[Strip],
     problem: PlacementProblem,
+    *,
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
 ) -> DecodedPlacement:
     """Project one exact shared packing into fixed routing windows."""
     if len(strips) != problem.size or len(pack.at) != problem.size:
@@ -2373,7 +3260,9 @@ def _exact_pack_decoded(
         x_windows=tuple((coordinate, coordinate) for coordinate in x),
         y_windows=tuple((coordinate, coordinate) for coordinate in y),
         gap_area=0,
-        direct=pack.direct,
+        direct=frozenset(
+            _validated_direct_pair(direct, direct_candidates) for direct in pack.direct
+        ),
         variant_indices=variant_indices,
     )
 
@@ -2394,14 +3283,37 @@ def _topology_candidate_decoded(
     )
 
 
+def _topology_close_decoded(
+    candidate: CompactTopologyCandidate,
+    routing_hint: DecodedPlacement | None,
+) -> DecodedPlacement:
+    """Reuse the first width-admissible hint in its existing candidate slot."""
+    decoded = _topology_candidate_decoded(candidate)
+    if (
+        candidate.topology_index != 0
+        or routing_hint is None
+        or routing_hint.width > _width_slack_cap(candidate.width)
+    ):
+        return decoded
+    return routing_hint
+
+
 def _variant_direct_eligibility(
     spec: BuildSpec,
     strips: list[Strip],
     problem: PlacementProblem,
+    *,
+    band_policy: BandPolicy,
 ) -> tuple[VariantDirectInsertTarget, ...]:
     """Enumerate only endpoint-variant pairs production can directly attach."""
     defaults = (0,) * problem.size
-    baseline = _selected_direct_targets(spec, strips, problem, defaults)
+    baseline = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        defaults,
+        band_policy=band_policy,
+    )
     if not baseline:
         return ()
 
@@ -2424,6 +3336,7 @@ def _variant_direct_eligibility(
                         strips,
                         problem,
                         tuple(selection),
+                        band_policy=band_policy,
                     )
                 }
                 target = selected.get(candidate.key)
@@ -2449,14 +3362,15 @@ def _placement_nets(
         (
             (source, destination),
             LogicalNetId(
-                strip.family_id,
-                strips[destination].family_id,
-                item,
-                NetRole.INTERNAL,
+                source_family=strip.family_id,
+                destination_family=strips[destination].family_id,
+                item=item,
+                role=NetRole.INTERNAL,
+                cargo_domain=cargo_domain,
             ),
         )
         for source, strip in enumerate(strips)
-        for item, destination_groups in strip.out_lanes
+        for item, destination_groups, cargo_domain in strip.out_lanes
         for destination_group in _dests(destination_groups)
         for destination in by_group.get(destination_group, ())
     }
@@ -2466,6 +3380,7 @@ def _placement_nets(
             key=lambda entry: (
                 entry[0],
                 entry[1].item,
+                entry[1].cargo_domain.value,
                 entry[1].role.value,
             ),
         )
@@ -2483,6 +3398,7 @@ def _rebuild_stage_problem_nets(
             key=lambda entry: (
                 entry[0],
                 entry[1].item,
+                entry[1].cargo_domain.value,
                 entry[1].role.value,
             ),
         )
@@ -2558,6 +3474,7 @@ class _ProductionCandidate:
     prepared: _PreparedRoutingProblem | None
     preparation_error: str | None = None
     selected_strips: tuple[Strip, ...] = ()
+    projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
 
 
 @dataclass(slots=True)
@@ -2611,10 +3528,11 @@ def _empty_global_result(*, exhausted: bool, cancelled: bool = False) -> GlobalR
         hot_regions=(),
         cancelled=cancelled,
     )
-
-
 def _closed_detailed_result(
-    status: DetailedRouteStatus, *, expansions: int = 0
+    status: DetailedRouteStatus,
+    *,
+    expansions: int = 0,
+    projection_failures: tuple[finalize.ProjectionFailure, ...] = (),
 ) -> DetailedStageResult:
     return DetailedStageResult(
         routing=DetailedRouteResult(
@@ -2625,6 +3543,7 @@ def _closed_detailed_result(
             expansions=expansions,
         ),
         placement=None,
+        projection_failures=projection_failures,
     )
 
 
@@ -2656,9 +3575,13 @@ def _route_detailed_candidate(
             DetailedRouteStatus.UNPOWERABLE,
             expansions=expansions,
         )
+    placement: Placement | None = None
+    if built.routing.status is DetailedRouteStatus.ROUTED:
+        placement = built.placement
+        assert placement is not None
     return DetailedStageResult(
         routing=built.routing,
-        placement=(built.placement if built.routing.status is DetailedRouteStatus.ROUTED else None),
+        placement=placement,
     )
 
 
@@ -2679,6 +3602,10 @@ def _production_run(
     started = time.monotonic()
     ceiling = time_budget_s
     deadline = started + ceiling if absolute_deadline is None else absolute_deadline
+    stage_admission = _MeasuredStageAdmission(
+        deadline=deadline,
+        monotonic=time.monotonic,
+    )
 
     def deadline_reached() -> bool:
         return time.monotonic() >= deadline
@@ -2712,33 +3639,79 @@ def _production_run(
     planning_started = time.monotonic()
     try:
         planned_strip_len = strip_len
+        families = tuple(generate_strip_families(spec))
         try:
-            strips = plan_strips(spec, strip_len=planned_strip_len)
+            strips = plan_strips(
+                spec,
+                strip_len=planned_strip_len,
+                band_policy=band_policy,
+                families=families,
+            )
         except (KeyError, ValueError) as exc:
             try:
                 planned_strip_len = max(1, spec.machine_count)
-                strips = plan_strips(spec, strip_len=planned_strip_len)
+                strips = plan_strips(
+                    spec,
+                    strip_len=planned_strip_len,
+                    band_policy=band_policy,
+                    families=families,
+                )
             except KeyError, ValueError:
                 raise NoValidLayout(
                     f"the spec cannot be split into strips: {exc}",
                     spec_label=spec.label,
                     budget_s=time_budget_s,
                 ) from exc
-        if (
-            planned_strip_len == 6
-            and len(spec.spray_lanes) == 0
-            and _MID_NO_SPRAY_COMPACT_MIN_MACHINES
-            <= spec.machine_count
-            <= _MID_NO_SPRAY_COMPACT_MAX_MACHINES
-            and _MID_NO_SPRAY_COMPACT_MIN_STRIPS <= len(strips) <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
-        ):
-            planned_strip_len = 4
-            strips = plan_strips(spec, strip_len=planned_strip_len)
+        mid_strip_len = _mid_unsprayed_initial_strip_len(
+            planned_strip_len,
+            machine_count=spec.machine_count,
+            sprayed_lanes=len(spec.spray_lanes),
+            strip_count=len(strips),
+            direct_candidates=len(_direct_net_candidates(strips, spec)),
+        )
+        if mid_strip_len != planned_strip_len:
+            planned_strip_len = mid_strip_len
+            strips = plan_strips(
+                spec,
+                strip_len=planned_strip_len,
+                band_policy=band_policy,
+                families=families,
+            )
+        needs_initial_direct_count = (
+            len(spec.spray_lanes) >= _DENSE_SPRAY_LANE_THRESHOLD
+            or len(strips) >= _TOPOLOGY_BEAM_MAX_STRIPS
+        )
+        initial_direct_candidates = (
+            len(_direct_net_candidates(strips, spec))
+            if needs_initial_direct_count
+            else 1
+        )
+        initial_strip_len = _dense_spray_initial_strip_len(
+            planned_strip_len,
+            sprayed_lanes=len(spec.spray_lanes),
+            direct_candidates=initial_direct_candidates,
+        )
+        initial_strip_len = _moderate_routed_initial_strip_len(
+            initial_strip_len,
+            strip_count=len(strips),
+            direct_candidates=initial_direct_candidates,
+        )
+        if initial_strip_len != planned_strip_len:
+            planned_strip_len = initial_strip_len
+            strips = plan_strips(
+                spec,
+                strip_len=planned_strip_len,
+                band_policy=band_policy,
+                families=families,
+            )
         strips, planned_strip_len = _coarsen_saturated_strip_plan(
             spec,
             strips,
             strip_len=planned_strip_len,
+            band_policy=band_policy,
+            families=families,
         )
+        strips = _sequence_reservation_strips(strips)
         if not strips:
             raise NoValidLayout(
                 "the spec contains no machine groups",
@@ -2758,9 +3731,13 @@ def _production_run(
             spec,
             strips,
             strip_len=planned_strip_len,
+            families=families,
         )
         direct_candidates = _direct_net_candidates(strips, spec)
-        direct_targets = _direct_alignment_targets(direct_candidates)
+        direct_targets = _refinement_direct_targets(
+            _direct_alignment_targets(direct_candidates),
+            strips,
+        )
         sizes = tuple(_box(strip) for strip in strips)
         placement_nets = _placement_nets(strips)
         nets = tuple(endpoints for endpoints, _logical in placement_nets)
@@ -2778,6 +3755,36 @@ def _production_run(
         )
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
         coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+        narrowest_greedy_height = coarse_heights[0]
+        coarse_height_count = len(coarse_heights)
+        neighbor_heights: list[int] = []
+        for height in coarse_heights:
+            neighbor = height + 2
+            if neighbor in seeds:
+                continue
+            seeds[neighbor] = _greedy_pack(strips, neighbor)
+            neighbor_heights.append(neighbor)
+        protected_followup_heights = tuple(neighbor_heights)
+        legacy_heights = coarse_heights + protected_followup_heights
+        envelope = finalize.band_policy_search_envelope(
+            band_policy,
+            perimeter=_ENTRY_RING,
+        )
+        heights = envelope.reserve_boundary_height(
+            legacy_heights,
+            minimum_width_for_height={
+                height: _minimum_pack_width(strips, height)
+                for height in legacy_heights
+            },
+        )
+        boundary_height = envelope.boundary_core_height
+        if boundary_height is not None and boundary_height in heights:
+            seeds.setdefault(
+                boundary_height,
+                _greedy_pack(strips, boundary_height),
+            )
+        coarse_heights = heights[:coarse_height_count]
+        protected_followup_heights = heights[coarse_height_count:]
         topology_beam_height = _topology_beam_height(
             seeds,
             coarse_heights,
@@ -2799,20 +3806,11 @@ def _production_run(
             sprayed_lanes=len(spec.spray_lanes),
             strip_count=len(strips),
             direct_candidates=len(direct_candidates),
-            strip_len=strip_len,
+            strip_len=planned_strip_len,
         )
         if (use_topology_beam or use_shared_pack) and topology_beam_height is not None:
             median_height = sorted(coarse_heights)[len(coarse_heights) // 2]
             topology_beam_width_bound = max(8, 2 * seeds[median_height].width)
-        neighbor_heights: list[int] = []
-        for height in coarse_heights:
-            neighbor = height + 2
-            if neighbor in seeds:
-                continue
-            seeds[neighbor] = _greedy_pack(strips, neighbor)
-            neighbor_heights.append(neighbor)
-        protected_followup_heights = tuple(neighbor_heights)
-        heights = coarse_heights + protected_followup_heights
         problems = {
             height: PlacementProblem(
                 sizes=sizes,
@@ -2827,7 +3825,15 @@ def _production_run(
         }
         if compact_seed_attempt is not None and not (use_topology_beam or use_shared_pack):
             template_problem = problems[heights[0]]
-            compact_height = _balanced_compact_seed_height(template_problem)
+            compact_height = _large_sparse_compact_seed_height(
+                _balanced_compact_seed_height(template_problem),
+                narrowest_height=narrowest_greedy_height,
+                scheduled_heights=coarse_heights,
+                machine_count=spec.machine_count,
+                strip_count=len(strips),
+                sprayed_lanes=len(spec.spray_lanes),
+                power=power,
+            )
             telemetry.compact_seed_base_seed = chosen_compact_base_seed
             telemetry.compact_seed_height = compact_height
             if compact_height not in seeds:
@@ -2863,6 +3869,7 @@ def _production_run(
                         spec,
                         strips,
                         problems[compact_height],
+                        band_policy=band_policy,
                     )
                     if ceiling >= _COMPACT_SEED_DIRECT_MIN_BUDGET_S and not deadline_reached()
                     else ()
@@ -2930,6 +3937,11 @@ def _production_run(
         tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
         tuple[DirectInsertTarget, ...],
     ] = {}
+    direct_candidate_cache: dict[
+        tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
+        dict[tuple[int, int], _DirectCandidate],
+    ] = {}
+    staged_static_cache = _StagedStaticCache()
 
     def selected_strips(
         problem: PlacementProblem,
@@ -2938,9 +3950,30 @@ def _production_run(
         key = (problem.instance_ids, variant_indices)
         selected = selected_cache.get(key)
         if selected is None:
-            selected = tuple(_selected_strips(strips, problem, variant_indices))
+            selected = tuple(
+                _selected_strips(
+                    strips,
+                    problem,
+                    variant_indices,
+                    band_policy=band_policy,
+                )
+            )
             selected_cache[key] = selected
         return selected
+
+    def selected_direct_candidates(
+        problem: PlacementProblem,
+        variant_indices: tuple[int, ...],
+    ) -> dict[tuple[int, int], _DirectCandidate]:
+        key = (problem.instance_ids, variant_indices)
+        candidates = direct_candidate_cache.get(key)
+        if candidates is None:
+            candidates = _direct_net_candidates(
+                list(selected_strips(problem, variant_indices)),
+                spec,
+            )
+            direct_candidate_cache[key] = candidates
+        return candidates
 
     def selected_direct_targets(
         problem: PlacementProblem,
@@ -2950,7 +3983,12 @@ def _production_run(
         targets = direct_cache.get(key)
         if targets is None:
             selected = selected_strips(problem, variant_indices)
-            targets = _direct_alignment_targets(_direct_net_candidates(list(selected), spec))
+            targets = _refinement_direct_targets(
+                _direct_alignment_targets(
+                    selected_direct_candidates(problem, variant_indices)
+                ),
+                selected,
+            )
             direct_cache[key] = targets
         return targets
 
@@ -2981,6 +4019,10 @@ def _production_run(
             height,
             routed,
             west_channels=tuple(strip.west_channel for strip in selected),
+            direct_candidates=selected_direct_candidates(
+                problem,
+                decoded.variant_indices,
+            ),
         )
         if deadline_reached():
             return _ProductionCandidate(
@@ -2993,13 +4035,81 @@ def _production_run(
                 selected_strips=selected,
             )
         try:
-            prepared = _prepare_routing_problem(
-                spec,
-                list(selected),
-                pack,
-                power=power,
-                policy=band_policy,
-                ramped=not belt_vertical_construction,
+            preparation_parameters = inspect.signature(
+                _prepare_routing_problem
+            ).parameters
+            accepts_preparation_keywords = any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in preparation_parameters.values()
+            )
+            accepts_static_cache = (
+                "staged_static_cache" in preparation_parameters
+                or accepts_preparation_keywords
+            )
+            accepts_cancelled = (
+                "cancelled" in preparation_parameters
+                or accepts_preparation_keywords
+            )
+            if accepts_static_cache and accepts_cancelled:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    list(selected),
+                    pack,
+                    power=power,
+                    policy=band_policy,
+                    ramped=not belt_vertical_construction,
+                    staged_static_cache=staged_static_cache,
+                    cancelled=deadline_reached,
+                )
+            elif accepts_static_cache:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    list(selected),
+                    pack,
+                    power=power,
+                    policy=band_policy,
+                    ramped=not belt_vertical_construction,
+                    staged_static_cache=staged_static_cache,
+                )
+            elif accepts_cancelled:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    list(selected),
+                    pack,
+                    power=power,
+                    policy=band_policy,
+                    ramped=not belt_vertical_construction,
+                    cancelled=deadline_reached,
+                )
+            else:
+                prepared = _prepare_routing_problem(
+                    spec,
+                    list(selected),
+                    pack,
+                    power=power,
+                    policy=band_policy,
+                    ramped=not belt_vertical_construction,
+                )
+        except (_PreparationDeadline, finalize.ProjectionCancelled):
+            return _ProductionCandidate(
+                height=height,
+                problem=problem,
+                decoded=routed,
+                pack=pack,
+                prepared=None,
+                preparation_error="deadline",
+                selected_strips=selected,
+            )
+        except finalize.ProjectionRefusal as exc:
+            return _ProductionCandidate(
+                height=height,
+                problem=problem,
+                decoded=routed,
+                pack=pack,
+                prepared=None,
+                preparation_error="band-extent",
+                selected_strips=selected,
+                projection_failures=exc.failures,
             )
         except (_Unpowerable, _Unseatable) as exc:
             return _ProductionCandidate(
@@ -3023,8 +4133,11 @@ def _production_run(
     def prepare(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
         return prepare_candidate(height, decoded, align=True)
 
+    # Exact seeds freeze both coordinate windows to one point. Alignment therefore
+    # cannot move a strip or change a pair relation; it only records direct inserts
+    # already realized by the exact coordinates so preparation can reuse that proof.
     def prepare_exact(height: int, decoded: DecodedPlacement) -> _ProductionCandidate:
-        return prepare_candidate(height, decoded, align=False)
+        return prepare_candidate(height, decoded, align=True)
 
     def global_route(
         candidate: _ProductionCandidate,
@@ -3080,7 +4193,14 @@ def _production_run(
         if candidate.preparation_error == "deadline" or deadline_reached():
             return _closed_detailed_result(DetailedRouteStatus.BUDGET)
         if candidate.prepared is None:
-            return _closed_detailed_result(DetailedRouteStatus.UNPOWERABLE)
+            return _closed_detailed_result(
+                (
+                    DetailedRouteStatus.INVALID
+                    if candidate.preparation_error == "band-extent"
+                    else DetailedRouteStatus.UNPOWERABLE
+                ),
+                projection_failures=candidate.projection_failures,
+            )
         result = _route_detailed_candidate(
             spec,
             list(candidate.selected_strips) if candidate.selected_strips else strips,
@@ -3103,33 +4223,221 @@ def _production_run(
         return result
 
     def certify(placement: Placement) -> ValidationVerdict:
-        report = validate.certify(placement, spec, expect_power=power)
+        def budget_verdict() -> ValidationVerdict:
+            return ValidationVerdict(
+                False,
+                (),
+                None,
+                status=DetailedRouteStatus.BUDGET,
+            )
+
+        completion_deadline = deadline + ATOMIC_COMPLETION_GRACE_S
+
+        def completion_deadline_reached() -> bool:
+            return time.monotonic() >= completion_deadline
+
+        def project(candidate: Placement) -> Placement:
+            finalizer_parameters = inspect.signature(
+                finalize.finalize_placement
+            ).parameters
+            if "cancelled" in finalizer_parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in finalizer_parameters.values()
+            ):
+                return finalize.finalize_placement(
+                    candidate,
+                    band_policy,
+                    cancelled=completion_deadline_reached,
+                )
+            return finalize.finalize_placement(candidate, band_policy)
+
+        if completion_deadline_reached():
+            return budget_verdict()
+        try:
+            compacted = finalize.compact_open_boundary_belts_certified(
+                placement,
+                spec,
+                expect_power=power,
+                cancelled=completion_deadline_reached,
+            )
+            if completion_deadline_reached():
+                return budget_verdict()
+            finalized = project(compacted.placement)
+        except finalize.ProjectionRefusal as exc:
+            return ValidationVerdict(False, exc.checks, None, exc.failures)
+        except finalize.ProjectionCancelled:
+            return budget_verdict()
+        if completion_deadline_reached():
+            return budget_verdict()
+        report = compacted.report
+        if report is None:
+            report = validate.certify(finalized, spec, expect_power=power)
+        if completion_deadline_reached():
+            return budget_verdict()
         failures = tuple(sorted({finding.check for finding in report.errors}))
         if failures:
-            return ValidationVerdict(False, failures)
-        try:
-            finalize.finalize_placement(placement, band_policy)
-        except finalize.ProjectionRefusal as exc:
-            return ValidationVerdict(False, exc.checks, exc.failures)
-        return ValidationVerdict(True, ())
+            return ValidationVerdict(False, failures, None)
+        return ValidationVerdict(
+            True,
+            (),
+            replace(
+                finalized,
+                completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+            ),
+        )
 
-    family_by_id = {family.family_id: family for family in generate_strip_families(spec)}
+    family_by_id = {family.family_id: family for family in families}
     telemetry.pose_feasibility_rejects = sum(
         4 - len({variant.yaw for variant in family.variants}) for family in family_by_id.values()
     )
+
+    projection_feedback: (
+        tuple[
+            PlacementProblem,
+            tuple[finalize.ProjectionFailure, ...],
+            int,
+            StripVariant,
+        ]
+        | None
+    ) = None
+    projection_relation_feedback: (
+        tuple[
+            PlacementProblem,
+            tuple[finalize.ProjectionFailure, ...],
+            _ProjectionPackNoGood,
+        ]
+        | None
+    ) = None
 
     def transform_stage(
         height: int,
         problem: PlacementProblem,
         state: AnnealState,
         _feedback: FeedbackState,
-        result: DetailedRouteResult,
+        detailed: DetailedStageResult,
         stagnation: int,
+        projection_failures: tuple[finalize.ProjectionFailure, ...],
+        select_feedback_variant: bool,
     ) -> StageBoundaryUpdate | None:
+        nonlocal projection_feedback, projection_relation_feedback
+        if select_feedback_variant:
+            projection_feedback = None
+            projection_relation_feedback = None
+            requirement = _stage_projection_pitch_requirement(
+                problem,
+                state,
+                detailed.placement,
+                projection_failures,
+            )
+            if requirement is not None:
+                strip = problem.instance_ids.index(requirement.instance_id)
+                selected_variant = problem.variant(strip, state.variant_indices[strip])
+                pose_id = strip_pose_id(selected_variant)
+                enabled = tuple(
+                    variant
+                    for variant in problem.variant_tables[strip]
+                    if strip_pose_id(variant) == pose_id
+                    and variant.pitch_x >= requirement.required_pitch
+                )
+                padded = (
+                    max(enabled, key=lambda variant: variant.pitch_x)
+                    if enabled
+                    else variant_with_minimum_pitch(
+                        selected_variant,
+                        requirement.required_pitch,
+                    )
+                )
+                projection_feedback = (
+                    problem,
+                    projection_failures,
+                    strip,
+                    padded,
+                )
+            elif detailed.placement is not None:
+                selected = _selected_strips(
+                    strips,
+                    problem,
+                    state.variant_indices,
+                    band_policy=band_policy,
+                )
+                decoded = decode_state(problem, state)
+                pack = _decoded_pack(
+                    height,
+                    decoded,
+                    west_channels=tuple(strip.west_channel for strip in selected),
+                )
+                for failure in projection_failures:
+                    strip_pair = _projection_strip_pair(detailed.placement, failure)
+                    if strip_pair is None:
+                        continue
+                    projection_no_good = _projection_no_good(
+                        detailed.placement,
+                        pack,
+                        selected,
+                        failure,
+                        band_policy,
+                    )
+                    relation_no_good: _ProjectionPackNoGood = (
+                        projection_no_good
+                        if projection_no_good is not None
+                        else ExactPackNoGood(
+                            height=pack.height,
+                            outline=problem.selected_sizes(state.variant_indices),
+                            width=pack.width,
+                            origins=tuple(
+                                pack.at[index] for index in range(len(selected))
+                            ),
+                            evidence=projection_failures,
+                            projection_pair=_exact_projection_pair(
+                                selected,
+                                strip_pair,
+                            ),
+                        )
+                    )
+                    projection_relation_feedback = (
+                        problem,
+                        projection_failures,
+                        relation_no_good,
+                    )
+                    break
+        if projection_feedback is not None:
+            feedback_problem, feedback_failures, strip, padded = projection_feedback
+            if feedback_problem == problem and feedback_failures == projection_failures:
+                return enable_variant_stage_boundary(
+                    problem,
+                    state,
+                    strip=strip,
+                    variant=padded,
+                    select_variant=select_feedback_variant,
+                )
+
+        if projection_relation_feedback is not None:
+            feedback_problem, feedback_failures, feedback_no_good = (
+                projection_relation_feedback
+            )
+            if feedback_problem == problem and feedback_failures == projection_failures:
+                selected = _selected_strips(
+                    strips,
+                    problem,
+                    state.variant_indices,
+                    band_policy=band_policy,
+                )
+                return _projection_feedback_stage_update(
+                    problem,
+                    state,
+                    feedback_no_good,
+                    west_channels=tuple(strip.west_channel for strip in selected),
+                    geometry_signatures=tuple(
+                        _strip_geometry_signature(strip) for strip in selected
+                    ),
+                    deadline=deadline,
+                    try_relation_update=select_feedback_variant,
+                )
+
         transformed = _pose_stage_boundary_update(
             problem,
             state,
-            result,
+            detailed.routing,
             stagnation=stagnation,
             family_by_id=family_by_id,
         )
@@ -3139,6 +4447,7 @@ def _production_run(
             strips,
             transformed.problem,
             transformed.state.variant_indices,
+            band_policy=band_policy,
         )
         rebuilt = _rebuild_stage_problem_nets(
             transformed.problem,
@@ -3160,6 +4469,8 @@ def _production_run(
         speculative_candidates=(1 + _TOPOLOGY_BEAM_CANDIDATES + _TOPOLOGY_REFINEMENT_CANDIDATES),
     )
     solver = SequenceSolver(
+        stage_admission=stage_admission,
+        routing_seed_allowance_cap=max(1, expansion_total // 12),
         heights=heights,
         problem_for_height=problems.__getitem__,
         adapters=StageAdapters(
@@ -3168,10 +4479,14 @@ def _production_run(
             detailed_route=detailed_route,
             validate=certify,
             prepare_exact=prepare_exact,
+            feedback_origins=lambda candidate: tuple(
+                candidate.pack.at[index]
+                for index in range(len(candidate.selected_strips))
+            ),
         ),
         expansion_budget=ExpansionBudget(expansion_total),
         borrow_first_discovery=(
-            compact_seed_attempt is not None or use_topology_beam or use_shared_pack
+            bool(initial_states) or use_topology_beam or use_shared_pack
         ),
         protected_followup_heights=protected_followup_heights,
         config=config,
@@ -3195,16 +4510,23 @@ def _production_run(
     )
     if use_shared_pack and not deadline_reached():
         shared_started = time.monotonic()
+        shared_stage_started = stage_admission.try_start()
+        if shared_stage_started is None:
+            use_shared_pack = False
         shared_height_rank = _shared_pack_height_rank(
             machine_count=spec.machine_count,
             strip_count=len(strips),
-            strip_len=strip_len,
+            strip_len=planned_strip_len,
             sprayed_lanes=len(spec.spray_lanes),
             direct_candidates=len(direct_candidates),
         )
         shared_height = coarse_heights[min(shared_height_rank, len(coarse_heights) - 1)]
         shared_seed = seeds[shared_height]
-        shared_left = seed_deadline - time.monotonic()
+        shared_left = (
+            0.0
+            if shared_stage_started is None
+            else seed_deadline - time.monotonic()
+        )
         shared_pack = (
             _pack(
                 strips,
@@ -3221,11 +4543,18 @@ def _production_run(
         if shared_pack is not None:
             solver.close_exact_decoded(
                 shared_height,
-                _exact_pack_decoded(shared_pack, strips, problems[shared_height]),
+                _exact_pack_decoded(
+                    shared_pack,
+                    strips,
+                    problems[shared_height],
+                    direct_candidates=direct_candidates,
+                ),
                 reason="shared-pack",
                 allowance_cap=exact_candidate_allowance,
             )
             telemetry.shared_pack_candidates = 1
+        if shared_stage_started is not None:
+            stage_admission.finish(shared_stage_started)
         telemetry.shared_pack_wall_time_s = time.monotonic() - shared_started
     run_topology_beam = _needs_topology_beam(
         topology_role=use_topology_beam,
@@ -3237,9 +4566,7 @@ def _production_run(
         strip_count=len(strips),
         sprayed_lanes=len(spec.spray_lanes),
     )
-    refinement_direct_targets = (
-        _refinement_direct_targets(direct_targets, strips) if tall_topology_role else ()
-    )
+    refinement_direct_targets = direct_targets if tall_topology_role else ()
     if (
         run_topology_beam
         and topology_beam_height is not None
@@ -3320,14 +4647,24 @@ def _production_run(
         )
         narrowest_width_seen: int | None = None
         refinement_attempted = False
+        prior_budget_signature: int | None = None
         for topology_index in range(beam.config.max_candidates):
+            topology_stage_started = stage_admission.try_start()
+            if topology_stage_started is None:
+                break
             candidate = beam.solve_next(
                 absolute_deadline=(
                     deadline if topology_index < protected_candidates else seed_deadline
                 ),
                 cancelled=deadline_reached,
+                stop_when_width_admits=(
+                    (lambda compact_width: hint.width <= _width_slack_cap(compact_width))
+                    if topology_index == 0
+                    else None
+                ),
             )
             if candidate is None:
+                stage_admission.finish(topology_stage_started)
                 break
             close_normal = not tall_topology_role or _is_running_narrowest(
                 candidate.width,
@@ -3342,13 +4679,27 @@ def _production_run(
             if not close_normal:
                 if topology_index + 1 < beam.config.max_candidates:
                     beam.exclude(candidate.signature)
+                stage_admission.finish(topology_stage_started)
                 continue
-            decoded = _topology_candidate_decoded(candidate)
-            solver.close_exact_decoded(
+            decoded = _topology_close_decoded(candidate, hint)
+            closed = solver.close_exact_decoded(
                 topology_beam_height,
                 decoded,
                 reason="topology-beam",
                 allowance_cap=topology_allowance,
+            )
+            budget_signature = _topology_budget_signature(closed)
+            repeated_budget = (
+                budget_signature is not None
+                and budget_signature == prior_budget_signature
+            )
+            prior_budget_signature = budget_signature
+            broad_budget = (
+                budget_signature is not None
+                and _topology_budget_is_broad(
+                    budget_signature,
+                    strip_count=beam_problem.size,
+                )
             )
             if tall_topology_role:
                 refinement_hint = _retain_refinement_hint(
@@ -3357,6 +4708,7 @@ def _production_run(
                     exact_key=solver._stage_stats[-1].exact_key,
                     decoded=decoded,
                 )
+            stop_topology = False
             if (
                 tall_topology_role
                 and refinement_direct_targets
@@ -3400,7 +4752,10 @@ def _production_run(
                     )
                     telemetry.topology_beam_candidates += 1
                     if solver._stage_stats[-1].exact_key is not None:
-                        break
+                        stop_topology = True
+            stage_admission.finish(topology_stage_started)
+            if stop_topology or repeated_budget or broad_budget:
+                break
             if topology_index + 1 < beam.config.max_candidates:
                 beam.exclude(candidate.signature)
         telemetry.topology_beam_wall_time_s = time.monotonic() - beam_started
@@ -3410,12 +4765,12 @@ def _production_run(
                 _topology_seed_is_terminal(
                     machine_count=spec.machine_count,
                     strip_count=len(strips),
-                    strip_len=strip_len,
+                    strip_len=planned_strip_len,
                 )
                 or _small_direct_seed_role(
                     direct_candidates=len(direct_candidates),
                     strip_count=len(strips),
-                    strip_len=strip_len,
+                    strip_len=planned_strip_len,
                 )
             )
             and solver.exact_incumbent_reason
@@ -3441,6 +4796,7 @@ def _decoded_pack(
     decoded: DecodedPlacement,
     *,
     west_channels: tuple[int, ...] | None = None,
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate] | None = None,
 ) -> _Pack:
     """Convert decoded box origins to their selected-strip content origins."""
     channels = (WEST_CHANNEL,) * len(decoded.x) if west_channels is None else west_channels
@@ -3454,7 +4810,9 @@ def _decoded_pack(
         width=decoded.width,
         height=height,
         status="sequence-pair",
-        direct=decoded.direct,
+        direct=frozenset(
+            _direct_id_from_pair(pair, direct_candidates) for pair in decoded.direct
+        ),
     )
 
 
@@ -3483,7 +4841,6 @@ class SequencePairLayout:
         self,
         *,
         band_policy: BandPolicy,
-        power: bool = False,
         belt_vertical_construction: bool = True,
         strip_len: int = 6,
         config: SequenceSolverConfig | None = None,
@@ -3491,8 +4848,6 @@ class SequencePairLayout:
         compact_seed_config: CompactSeedConfig | None = None,
         islands: int = 1,
     ) -> None:
-        if type(power) is not bool:
-            raise ValueError("power mode must be a bool")
         if type(strip_len) is not int or strip_len <= 0:
             raise ValueError("strip length must be a positive integer")
         if type(islands) is not int or not 1 <= islands <= _MAX_SEQUENCE_ISLANDS:
@@ -3501,9 +4856,8 @@ class SequencePairLayout:
             raise ValueError("solver factory requires exactly one island")
         if compact_seed_config is not None and type(compact_seed_config) is not CompactSeedConfig:
             raise ValueError("compact seed config must be exactly CompactSeedConfig")
-        self._solver_factory = solver_factory
+        self._solver_factory: _SolverFactory | None = solver_factory
         self.band_policy = band_policy
-        self.power = power
         self.ramped = not belt_vertical_construction
         self.strip_len = strip_len
         self.config = config or SequenceSolverConfig()
@@ -3522,18 +4876,36 @@ class SequencePairLayout:
             solver = self._solver_factory(
                 spec,
                 time_budget_s=time_budget_s,
-                power=self.power,
+                power=True,
                 strip_len=self.strip_len,
                 config=self.config,
             )
-            placement = solver.search().placement
+            try:
+                placement = finalize.finalize_placement(
+                    solver.search().placement,
+                    self.band_policy,
+                )
+            except finalize.ProjectionRefusal as exc:
+                raise NoValidLayout(
+                    "final spherical projection rejected: " + str(exc),
+                    spec_label=spec.label,
+                    budget_s=time_budget_s,
+                    projection_failures=tuple(
+                        ProjectionFailureRecord(
+                            failure.band,
+                            failure.check,
+                            failure.buildings,
+                            failure.detail,
+                        )
+                        for failure in exc.failures
+                    ),
+                ) from exc
         elif self.islands > 1:
             from flab2bp.layout.sequence_islands import run_sequence_islands
 
             placement = run_sequence_islands(
                 spec,
                 time_budget_s=time_budget_s,
-                power=self.power,
                 band_policy=self.band_policy,
                 belt_vertical_construction=not self.ramped,
                 strip_len=self.strip_len,
@@ -3545,7 +4917,7 @@ class SequencePairLayout:
             run = _production_run(
                 spec,
                 time_budget_s=time_budget_s,
-                power=self.power,
+                power=True,
                 band_policy=self.band_policy,
                 belt_vertical_construction=not self.ramped,
                 strip_len=self.strip_len,
@@ -3553,7 +4925,7 @@ class SequencePairLayout:
                 compact_seed_attempt=_serial_compact_seed_attempt(
                     spec.machine_count,
                     len(spec.spray_lanes),
-                    power=self.power,
+                    power=True,
                 ),
                 compact_seed_base_seed=self.config.seed,
                 compact_seed_config=_budgeted_compact_seed_config(
@@ -3571,24 +4943,8 @@ class SequencePairLayout:
                     attempt_reasons=exc.attempt_reasons,
                     projection_failures=exc.projection_failures,
                 ) from exc
-            placement = _with_observational_stats(result, run, self.power, self.config)
-        try:
-            return finalize.finalize_placement(placement, self.band_policy)
-        except finalize.ProjectionRefusal as exc:
-            raise NoValidLayout(
-                "final spherical projection rejected: " + str(exc),
-                spec_label=spec.label,
-                budget_s=time_budget_s,
-                projection_failures=tuple(
-                    ProjectionFailureRecord(
-                        failure.band,
-                        failure.check,
-                        failure.buildings,
-                        failure.detail,
-                    )
-                    for failure in exc.failures
-                ),
-            ) from exc
+            placement = _with_observational_stats(result, run, True, self.config)
+        return placement
 
 
 def _with_observational_stats(
@@ -3782,4 +5138,5 @@ def _with_observational_stats(
                 ),
             }
         )
-    return replace(placement, stats=stats)
+    placement.stats.update(stats)
+    return placement

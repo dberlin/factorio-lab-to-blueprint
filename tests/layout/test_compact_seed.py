@@ -10,9 +10,11 @@ from typing import cast
 import pytest
 from ortools.sat.python import cp_model
 
+import flab2bp.layout.compact_seed as compact_seed_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedStatus,
@@ -25,6 +27,7 @@ from flab2bp.layout.compact_seed import (
 from flab2bp.layout.freeform import _box, plan_strips
 from flab2bp.layout.sequence_kernel import build_sequence_kernel
 from flab2bp.layout.sequence_pair import (
+    DecodedPlacement,
     DirectInsertTarget,
     GapProfile,
     PlacementCostContext,
@@ -35,7 +38,7 @@ from flab2bp.layout.sequence_pair import (
 )
 from flab2bp.layout.sequence_solver import _placement_nets, _variant_search_inputs
 from flab2bp.layout.strip_variants import StripVariant
-from flab2bp.rates.candidates import build_candidates
+from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
 from tests.layout.test_freeform import two_stage_spec
 
 
@@ -434,10 +437,70 @@ def test_topology_beam_enumerates_distinct_deterministic_relation_signatures() -
     assert first_run == second_run
     assert first_run[0][2] != first_run[1][2]
 
+def test_topology_beam_can_stop_at_the_first_width_admitted_incumbent() -> None:
+    problem = _fixed_problem(
+        sizes=((3, 2), (2, 2), (1, 2), (2, 1)),
+        height=4,
+        nets=(),
+    )
+    hint = decode_sequence_pair(
+        SequencePair((0, 1, 2, 3), (0, 1, 2, 3)),
+        GapProfile.zero(problem.size),
+        problem.sizes,
+        outline_height=problem.outline_height,
+    )
+    beam = CompactTopologyBeam(
+        problem,
+        variant_indices=(0,) * problem.size,
+        width_bound=8,
+        base_seed=17,
+        coordinate_hint=hint,
+        config=CompactTopologyBeamConfig(
+            max_candidates=1,
+            max_deterministic_time=0.2,
+        ),
+    )
+    observed_widths: list[int] = []
+
+    candidate = beam.solve_next(
+        stop_when_width_admits=lambda width: not observed_widths.append(width)
+    )
+
+    assert candidate is not None
+    assert observed_widths == [candidate.width]
+    assert candidate.status is CompactSeedStatus.FEASIBLE
+
+
+def test_topology_beam_outline_width_cannot_exceed_its_coordinate_extent() -> None:
+    problem = _fixed_problem(
+        sizes=((3, 2), (2, 2), (1, 2), (2, 1)),
+        height=4,
+        nets=(),
+    )
+    beam = CompactTopologyBeam(
+        problem,
+        variant_indices=(0,) * problem.size,
+        width_bound=8,
+        base_seed=17,
+        coordinate_hint=None,
+        config=CompactTopologyBeamConfig(
+            max_candidates=1,
+            max_deterministic_time=0.2,
+        ),
+    )
+    beam._model.add(beam._variables.outline_width == 8)
+    for coordinate, (width, _height) in zip(
+        beam._variables.x,
+        beam.sizes,
+        strict=True,
+    ):
+        beam._model.add(coordinate + width <= 7)
+
+    assert beam.solve_next(stop_when_width_admits=lambda _width: True) is None
 
 def test_topology_refinement_validates_config_and_direct_target_types() -> None:
     problem = _fixed_problem(sizes=((2, 2), (2, 2)), nets=((0, 1),))
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
 
     config = CompactTopologyBeamConfig(refine_width_first=True)
     assert config.refine_width_first
@@ -460,7 +523,9 @@ def test_topology_refinement_validates_config_and_direct_target_types() -> None:
             width_bound=4,
             base_seed=3,
             coordinate_hint=None,
-            direct_targets=(DirectInsertTarget((0, 2), 0, 2, 0, 0, 2, 2),),
+            direct_targets=(
+                DirectInsertTarget((0, 2), 0, 2, 0, 0, 2, 2, (-1, 0, 1)),
+            ),
             config=config,
         )
 
@@ -473,7 +538,7 @@ def test_topology_refinement_is_width_first_direct_and_deterministic() -> None:
         problem.sizes,
         outline_height=problem.outline_height,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
     config = CompactTopologyBeamConfig(
         max_candidates=1,
         max_deterministic_time=0.2,
@@ -501,6 +566,43 @@ def test_topology_refinement_is_width_first_direct_and_deterministic() -> None:
     assert y[0] < y[1]
     assert x[0] <= x[1] + target.consumer_span - 1
     assert x[1] <= x[0] + target.producer_span - 1
+
+
+def test_topology_refinement_rewards_only_allowed_direct_origin_delta() -> None:
+    problem = _fixed_problem(
+        sizes=((2, 1), (2, 1), (3, 1)),
+        height=3,
+        nets=((0, 1),),
+    )
+    hint = DecodedPlacement(
+        x=(0, 0, 0),
+        y=(0, 1, 2),
+        width=3,
+        used_height=3,
+        x_windows=((0, 1), (0, 1), (0, 0)),
+        y_windows=((0, 2), (0, 2), (0, 2)),
+        gap_area=0,
+    )
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (1,))
+    beam = CompactTopologyBeam(
+        problem,
+        variant_indices=(0, 0, 0),
+        width_bound=3,
+        base_seed=23,
+        coordinate_hint=hint,
+        direct_targets=(target,),
+        config=CompactTopologyBeamConfig(
+            max_candidates=1,
+            max_deterministic_time=0.2,
+            refine_width_first=True,
+        ),
+    )
+
+    candidate = beam.solve_next()
+
+    assert candidate is not None
+    assert candidate.width == 3
+    assert candidate.x[target.consumer] - candidate.x[target.producer] == 1
 
 
 def test_topology_beam_rejects_foreign_or_duplicate_no_goods() -> None:
@@ -576,9 +678,54 @@ def test_infeasible_cancelled_deadline_and_no_incumbent_return_no_seed(
     assert unknown.state is None
 
 
+@pytest.mark.parametrize(
+    ("origin_delta", "expected"),
+    ((0, frozenset()), (1, frozenset({(0, 1)}))),
+)
+def test_normal_compact_seed_requires_allowed_direct_origin_delta(
+    origin_delta: int,
+    expected: frozenset[tuple[int, int]],
+) -> None:
+    problem = _fixed_problem(
+        sizes=((2, 1), (2, 1)),
+        height=2,
+        nets=((0, 1),),
+    )
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (1,))
+    eligibility = (VariantDirectInsertTarget(0, 0, target),)
+    plan = compact_seed_module._prepare_model_plan(problem, eligibility, 17)
+    model, variables = compact_seed_module._build_model(problem, plan)
+    model.add(variables.x[0] == 0)
+    model.add(variables.x[1] == origin_delta)
+    model.add(variables.y[0] == 0)
+    model.add(variables.y[1] == 1)
+    solver = cp_model.CpSolver()
+    solver.parameters.num_workers = 1
+
+    assert solver.solve(model) == cp_model.OPTIMAL
+    cp_direct = frozenset(
+        key for key, success in variables.direct_successes if solver.value(success)
+    )
+    decoded = DecodedPlacement(
+        x=(0, origin_delta),
+        y=(0, 1),
+        width=origin_delta + 2,
+        used_height=2,
+        x_windows=((0, 0), (origin_delta, origin_delta)),
+        y_windows=((0, 0), (1, 1)),
+        gap_area=0,
+    )
+
+    assert cp_direct == expected
+    assert (
+        compact_seed_module._decoded_direct_keys(decoded, (0, 0), eligibility)
+        == expected
+    )
+
+
 def test_cp_coordinate_direct_success_is_not_accepted_as_zero_gap_decoded_truth() -> None:
     problem = _fixed_problem(sizes=((2, 1), (2, 1), (2, 1)), height=2, nets=((0, 1),))
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
     eligibility = (VariantDirectInsertTarget(0, 0, target),)
     result = solve_compact_seed(
         problem,
@@ -609,8 +756,15 @@ _REFINERY_URL = "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAQRdG.meJVM0
 
 @pytest.mark.slow
 def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hint() -> None:
-    spec = build_candidates(load_vendored(), parse_url(_REFINERY_URL), count=3).candidates[2]
-    strips = plan_strips(spec, strip_len=4)
+    policy = BandPolicy("portable")
+    spec = build_candidates(
+        load_vendored(),
+        parse_url(_REFINERY_URL),
+        candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+    ).candidates[2]
+    strips = sequence_solver_module._sequence_reservation_strips(
+        plan_strips(spec, strip_len=4, band_policy=policy)
+    )
     instance_ids, variant_tables = _variant_search_inputs(spec, strips, strip_len=4)
     sizes = tuple(_box(strip) for strip in strips)
     placement_nets = _placement_nets(strips)
@@ -643,7 +797,12 @@ def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hi
     )
     assert enumerate_eligibility is not None
     assert selected_direct_targets is not None
-    eligibility = enumerate_eligibility(spec, strips, problem)
+    eligibility = enumerate_eligibility(
+        spec,
+        strips,
+        problem,
+        band_policy=policy,
+    )
     identities = {
         (
             entry.target.key,
@@ -660,6 +819,7 @@ def test_real_refinery_fixed_outline_seed_is_cython_decodable_without_witness_hi
         strips,
         problem,
         (0,) * problem.size,
+        band_policy=policy,
     )
     default_keys = {target.key for target in default_targets}
     assert default_keys

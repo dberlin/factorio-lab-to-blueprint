@@ -44,7 +44,6 @@ EXPECTED_UNCONSULTED = {
     # Paste-applicable rules centralized here but not yet migrated into
     # strategy/validation.  The report prints each registry reason.
     "catalog.blueprint_limit_for_technologies",
-    "catalog.stack_pitch_z",
     "catalog.vertical_construction_allowed",
     "planet.SORTER_PARAM_BIAS",
     "planet.sorter_parameter",

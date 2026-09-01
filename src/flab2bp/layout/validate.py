@@ -30,7 +30,7 @@ from enum import Enum, StrEnum
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import codec, colliders, params, rules
+from flab2bp.dsp import codec, colliders, params, rules, splitter_ports
 from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
@@ -268,6 +268,9 @@ class _Cache:
     sorter_peers: _SorterPeers | None = None
     coater_rides: dict[int, int] | None = None
     port_docks: tuple[_Dock, ...] | None = None
+    belts_by_tile: dict[tuple[int, int], tuple[int, ...]] | None = None
+    addon_area_belts: dict[tuple[PlacedBuilding, int], int | None] = field(default_factory=dict)
+    addon_crossing_reach: dict[tuple[int, int, int], int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -446,9 +449,7 @@ class Context:
         """
         got = self.cache.unresolved_machines
         if got is None:
-            got = tuple(
-                i for i, _ in self.of_kind(Kind.MACHINE) if self.group_for(i) is None
-            )
+            got = tuple(i for i, _ in self.of_kind(Kind.MACHINE) if self.group_for(i) is None)
             self.cache.unresolved_machines = got
         return got
 
@@ -925,9 +926,9 @@ def _collide(ctx: Context) -> Iterable[Finding]:
     # conversion rather than a second copy of it means the check can never be
     # testing a different building from the one that gets written out.
     placed = [
-        dsp_colliders.Placed(b.model_index, *codec.tile_to_local_offset(
-            b.x, b.y, b.z, b.width, b.height
-        ), b.yaw)
+        dsp_colliders.Placed(
+            b.model_index, *codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height), b.yaw
+        )
         for _i, b in tested
     ]
     for a, c in dsp_colliders.collisions(placed):
@@ -1008,26 +1009,30 @@ def _sorter_collide(ctx: Context) -> Iterable[Finding]:
 
 @check("geom.belt_single_occupancy")
 def _belt_single(ctx: Context) -> Iterable[Finding]:
-    """One belt per tile -- unless the tile is a junction, where several is how
-    the game itself records it.
+    """One belt per tile -- except belts attached to one Splitter port plane.
 
-    A belt running THROUGH a splitter is two belt buildings on the splitter's
-    tile, one ending at the junction and one starting from it, and a branch adds
-    a third.  Splitter 140 in ``factory-quick-start-step-3-red-cube`` has exactly
-    that: three belts co-located with it, one drawing and two feeding.  Reporting
-    it would flag a blueprint the game produced.
+    A belt running THROUGH a Splitter is represented by two belt buildings on
+    the same horizontal tile, one ending at the junction and one starting from
+    it, and a branch adds a third.  Models 39 and 40 also put two physical ports
+    one level above the Splitter's anchor, so the junction need only share the
+    belts' ``(x, y)``.  ``junction.port_pose`` separately proves that their
+    recorded ports exist at the belts' exact height.
 
-    The exemption is narrow on purpose.  Every belt on the tile must be ATTACHED
-    to the splitter standing there -- naming it as ``input_obj`` or
-    ``output_obj``.  A belt that merely happens to share a junction's tile
-    without naming it is not part of the junction; it is the ordinary collision
-    this check exists to catch, wearing a splitter as cover.
+    The exemption is narrow on purpose.  Every belt in the shared cell must be
+    ATTACHED to the Splitter on that horizontal tile -- naming it as
+    ``input_obj`` or ``output_obj``.  A belt that merely crosses a junction's
+    port plane without naming it is the ordinary collision this check exists to
+    catch, wearing a Splitter as cover.
     """
     for cell, occupants in sorted(ctx.occupancy.items()):
         belts = [i for i in occupants if ctx.kinds[i] is Kind.BELT]
         if len(belts) < 2:
             continue
-        junctions = [i for i in occupants if ctx.kinds[i] is Kind.SPLITTER]
+        junctions = [
+            i
+            for i, splitter in ctx.of_kind(Kind.SPLITTER)
+            if (splitter.x, splitter.y) == cell[:2]
+        ]
         attached = {b for j in junctions for b in ctx.junction_attachments(j)}
         loose = [i for i in belts if i not in attached]
         if junctions and not loose:
@@ -1036,11 +1041,7 @@ def _belt_single(ctx: Context) -> Iterable[Finding]:
             "geom.belt_single_occupancy",
             Severity.ERROR,
             f"{len(belts)} belts share cell {cell}; one belt per tile"
-            + (
-                f", and {len(loose)} of them name no splitter on that tile"
-                if junctions
-                else ""
-            ),
+            + (f", and {len(loose)} of them name no splitter on that tile" if junctions else ""),
             tuple(loose or belts),
             {"cell": str(cell), "belts": len(belts), "unattached": len(loose)},
         )
@@ -1650,9 +1651,7 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
             if got is None:
                 continue
             slot_pos, slot_fwd = got
-            gap = rules.world_gap(
-                slot_pos[0] - end[0], slot_pos[1] - end[1], slot_pos[2] - end[2]
-            )
+            gap = rules.world_gap(slot_pos[0] - end[0], slot_pos[1] - end[1], slot_pos[2] - end[2])
             if gap > rules.SLOT_REACH:
                 yield Finding(
                     "game.inserter_data",
@@ -1679,8 +1678,6 @@ def _inserter_data(ctx: Context) -> Iterable[Finding]:
                 )
 
 
-
-
 @check("game.slot_occupancy")
 def _slot_occupancy(ctx: Context) -> Iterable[Finding]:
     """One connection per slot -- ``PlanetFactory``'s ``entityConnPool``.
@@ -1692,68 +1689,77 @@ def _slot_occupancy(ctx: Context) -> Iterable[Finding]:
     quoted.  A second connection written to an occupied slot does not fail: it
     calls ``ClearObjectConn`` on the sitting tenant first and evicts it.
 
-    So a blueprint that names one machine slot from two sorters is not a
-    blueprint the game rejects on the pool; it is a blueprint that pastes with
-    one of the two sorters silently unwired.  What the player sees is the
-    geometry that goes with it -- the paste snaps BOTH ends onto the same slot
-    pose, so the sorters land on top of one another and go ``Collide``, and
-    every sorter attached to a building in error is reddened after them with
-    ``ConnWithErrorBuilding``, "Connection target cannot be laid".  That is the
-    pair of messages the paste which produced this check reported.
+    Every directed record occupies one cell on BOTH endpoints:
 
-    Scope is every connection record carrying an EXPLICIT slot, on any peer,
-    because the pool does not distinguish: belt-to-belt links occupy a belt's
-    input slots 1..3 by the same arithmetic.  Ends recorded as
-    :data:`~flab2bp.dsp.rules.BELT_SLOT` are exempt and must be -- ``-1`` means
-    "the game picks", and ``WriteObjectConn`` then takes the first free cell in
-    :data:`~flab2bp.dsp.rules.BELT_SLOT_AUTO_RANGE`, so such an end names no
-    fixed cell to share.
+    * ``output_obj`` uses this object's ``output_from_slot`` and the peer's
+      ``output_to_slot``;
+    * ``input_obj`` uses this object's ``input_to_slot`` and the peer's
+      ``input_from_slot``.
 
-    The negative control is the corpus: over the 10 real game blueprints in
-    ``tests/fixtures``, ~10,000 connection records, this check finds nothing on
-    either reading of its scope.  Our own ``freeform`` output, by contrast, put
-    three sorters on slot 8 of one Assembling Machine and the whole suite
-    reported ``ok=True``, because nothing here had ever looked.
+    Counting only the peer fields misses a dock or Splitter draw spending the
+    receiving belt's own slot 1 while an upstream feeder names that same belt
+    and slot.  Conversely, the two fields of one self-link may name the same
+    cell; that is one connection and is counted once, not mistaken for two
+    different records.
+
+    Ends recorded as :data:`~flab2bp.dsp.rules.BELT_SLOT` are exempt.
+    ``-1`` means "the game picks", and ``WriteObjectConn`` then takes the first
+    free cell in :data:`~flab2bp.dsp.rules.BELT_SLOT_AUTO_RANGE`, so such an end
+    names no fixed cell to share.
     """
     bs = ctx.placement.buildings
     claims: dict[tuple[int, int], list[tuple[int, str]]] = defaultdict(list)
     for i, b in enumerate(bs):
-        for label, link, slot in (
-            ("output", b.output_obj, b.output_to_slot),
-            ("input", b.input_obj, b.input_from_slot),
+        for record, link, own_slot, peer_slot in (
+            (
+                "output",
+                b.output_obj,
+                b.output_from_slot,
+                b.output_to_slot,
+            ),
+            (
+                "input",
+                b.input_obj,
+                b.input_to_slot,
+                b.input_from_slot,
+            ),
         ):
             if link is None or not 0 <= link < len(bs):
                 continue
-            if slot < 0:
-                continue
-            claims[(link, slot)].append((i, label))
+            record_cells: dict[tuple[int, int], str] = {}
+            if own_slot >= 0:
+                record_cells[(i, own_slot)] = "own"
+            if peer_slot >= 0:
+                record_cells.setdefault((link, peer_slot), "peer")
+            for cell, side in record_cells.items():
+                claims[cell].append((i, f"{record} {side}"))
 
-    for (link, slot), occupants in sorted(claims.items()):
+    for (object_index, slot), occupants in sorted(claims.items()):
         if len(occupants) < 2:
             continue
-        peer = bs[link]
+        claimed = bs[object_index]
         try:
-            name = cat.building(peer.item_id).name
+            name = cat.building(claimed.item_id).name
         except KeyError:
-            name = f"item {peer.item_id}"
+            name = f"item {claimed.item_id}"
         who = ", ".join(f"{i} ({label})" for i, label in occupants)
+        buildings = tuple(dict.fromkeys((object_index, *(i for i, _label in occupants))))
         yield Finding(
             "game.slot_occupancy",
             Severity.ERROR,
-            f"slot {slot} of building {link} ({name}) at ({peer.x}, {peer.y}) is "
-            f"named by {len(occupants)} connections: {who}. The game stores one "
-            f"connection per slot, so pasting this leaves only the last of them "
-            f"attached and drops the rest",
-            (link, *(i for i, _ in occupants)),
+            f"slot {slot} of building {object_index} ({name}) at "
+            f"({claimed.x}, {claimed.y}) is named by {len(occupants)} "
+            f"connections: {who}. The game stores one connection per slot, so "
+            "pasting this leaves only the last of them attached and drops the rest",
+            buildings,
             {
-                "peer": link,
+                "object": object_index,
                 "slot": slot,
-                "peer_item_id": peer.item_id,
+                "object_item_id": claimed.item_id,
+                "claim_count": len(occupants),
                 "claims": who,
             },
         )
-
-
 
 
 @check("game.inserter_paste")
@@ -1837,8 +1843,6 @@ def _inserter_paste(ctx: Context) -> Iterable[Finding]:
                     (i, link),
                     {"end": label, "slot": slot},
                 )
-
-
 
 
 @check("game.inserter_skew")
@@ -1939,6 +1943,16 @@ def _inserter_skew(ctx: Context) -> Iterable[Finding]:
                 )
 
 
+def _belts_by_tile(ctx: Context) -> Mapping[tuple[int, int], tuple[int, ...]]:
+    """Belt indices by plan tile, preserving placement order within each tile."""
+    got = ctx.cache.belts_by_tile
+    if got is None:
+        mutable: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for i, belt in ctx.of_kind(Kind.BELT):
+            mutable[(belt.x, belt.y)].append(i)
+        got = {tile: tuple(indices) for tile, indices in mutable.items()}
+        ctx.cache.belts_by_tile = got
+    return got
 
 
 def _belt_in_addon_area(
@@ -1948,6 +1962,10 @@ def _belt_in_addon_area(
     area: int,
 ) -> int | None:
     """Nearest belt the game selects, breaking exact distance ties by index."""
+    key = (addon, area)
+    if key in ctx.cache.addon_area_belts:
+        return ctx.cache.addon_area_belts[key]
+
     want = slots.addon_supply_position(
         addon.item_id,
         x=addon.x,
@@ -1956,18 +1974,82 @@ def _belt_in_addon_area(
         yaw=addon.yaw,
         area=area,
     )
+    # ``world_gap`` remains the authority.  This square is only its conservative
+    # horizontal broadphase: outside it, one axis alone already exceeds the
+    # spherical addon radius.
+    reach = math.ceil(rules.ADDON_AREA_RADIUS / colliders.GRID_ARC)
+    anchor_x = math.floor(float(want[0]))
+    anchor_y = math.floor(float(want[1]))
+    by_tile = _belts_by_tile(ctx)
     candidates = []
-    for i, belt in enumerate(ctx.placement.buildings):
-        if ctx.kinds[i] is not Kind.BELT:
-            continue
-        distance = slots.world_gap(
-            float(want[0] - belt.x),
-            float(want[1] - belt.y),
-            float(want[2] - belt.z),
+    for x in range(anchor_x - reach, anchor_x + reach + 1):
+        for y in range(anchor_y - reach, anchor_y + reach + 1):
+            for i in by_tile.get((x, y), ()):
+                belt = ctx.placement.buildings[i]
+                distance = slots.world_gap(
+                    float(want[0] - belt.x),
+                    float(want[1] - belt.y),
+                    float(want[2] - belt.z),
+                )
+                if distance < rules.ADDON_AREA_RADIUS:
+                    candidates.append((distance, i))
+    selected = min(candidates)[1] if candidates else None
+    ctx.cache.addon_area_belts[key] = selected
+    return selected
+
+def _addon_belt_line_distance(
+    ctx: Context,
+    addon: PlacedBuilding,
+    *,
+    area: int,
+    belt_index: int,
+) -> float | None:
+    """Perpendicular world distance from one addon area to its selected belt."""
+    buildings = ctx.placement.buildings
+    belt = buildings[belt_index]
+    neighbour_index = (
+        belt.output_obj
+        if belt.output_obj is not None
+        and 0 <= belt.output_obj < len(buildings)
+        and ctx.kinds[belt.output_obj] is Kind.BELT
+        else next(
+            (
+                index
+                for index, candidate in ctx.of_kind(Kind.BELT)
+                if candidate.output_obj == belt_index
+            ),
+            None,
         )
-        if distance < rules.ADDON_AREA_RADIUS:
-            candidates.append((distance, i))
-    return min(candidates)[1] if candidates else None
+    )
+    if neighbour_index is None:
+        return None
+
+    want = slots.addon_supply_position(
+        addon.item_id,
+        x=addon.x,
+        y=addon.y,
+        z=addon.z,
+        yaw=addon.yaw,
+        area=area,
+    )
+
+    def world_position(
+        x: Fraction | int,
+        y: Fraction | int,
+        z: Fraction | int,
+    ) -> tuple[float, float, float]:
+        return (
+            float(x) * dsp_colliders.GRID_ARC,
+            float(y) * dsp_colliders.GRID_ARC,
+            float(z) * rules.WORLD_UNITS_PER_LEVEL,
+        )
+
+    neighbour = buildings[neighbour_index]
+    return rules.addon_line_distance(
+        world_position(*want),
+        world_position(belt.x, belt.y, belt.z),
+        world_position(neighbour.x, neighbour.y, neighbour.z),
+    )
 
 
 def _expected_addon_items(
@@ -1983,9 +2065,7 @@ def _expected_addon_items(
         return frozenset(ctx.spec.spray_lanes)
     if area == 1:
         return frozenset(
-            item
-            for item in ctx.spec.external_inputs
-            if item.startswith("proliferator")
+            item for item in ctx.spec.external_inputs if item.startswith("proliferator")
         )
     return None
 
@@ -2015,15 +2095,11 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
     """
     bs = ctx.placement.buildings
     addon_indices = {
-        i
-        for i, building in enumerate(bs)
-        if cat.building(building.item_id).is_belt_addon
+        i for i, building in enumerate(bs) if cat.building(building.item_id).is_belt_addon
     }
     for sorter_index, sorter in ctx.of_kind(Kind.SORTER):
         targeted = tuple(
-            link
-            for link in (sorter.input_obj, sorter.output_obj)
-            if link in addon_indices
+            link for link in (sorter.input_obj, sorter.output_obj) if link in addon_indices
         )
         if targeted:
             yield Finding(
@@ -2065,6 +2141,32 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
                     },
                 )
                 continue
+            line_distance = _addon_belt_line_distance(
+                ctx,
+                b,
+                area=pose.area,
+                belt_index=selected,
+            )
+            if (
+                line_distance is not None
+                and line_distance >= rules.ADDON_LINE_MAX_DISTANCE
+            ):
+                yield Finding(
+                    "game.addon_supply",
+                    Severity.ERROR,
+                    f"{cat.building(b.item_id).name} {i}'s addon area {pose.area} "
+                    f"misses selected belt {selected}'s own line by "
+                    f"{line_distance:.4f} world units; the game requires strictly "
+                    f"less than {rules.ADDON_LINE_MAX_DISTANCE}",
+                    (i, selected),
+                    {
+                        "area": pose.area,
+                        "belt": selected,
+                        "line_distance": f"{line_distance:.4f}",
+                        "max": rules.ADDON_LINE_MAX_DISTANCE,
+                    },
+                )
+                continue
             expected = _expected_addon_items(ctx, b, area=pose.area)
             selected_item = bs[selected].carries_item
             if expected is not None and selected_item not in expected:
@@ -2086,9 +2188,7 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
 
 def _addon_rides(
     ctx: Context,
-) -> Iterable[
-    tuple[int, int | None, tuple[int, int, float] | None, tuple[int, int, float] | None]
-]:
+) -> Iterable[tuple[int, int | None, tuple[int, int, float] | None, tuple[int, int, float] | None]]:
     """Every belt addon, the belt on its tile, and that belt's own two neighbours.
 
     Yields ``(addon_index, ride_index, incoming, outgoing)``.  ``incoming`` is
@@ -2137,14 +2237,10 @@ def _addon_rides(
         prv = backward.get(ride)
         r = bs[ride]
         outgoing = (
-            None
-            if nxt is None
-            else (bs[nxt].x - r.x, bs[nxt].y - r.y, float(bs[nxt].z - r.z))
+            None if nxt is None else (bs[nxt].x - r.x, bs[nxt].y - r.y, float(bs[nxt].z - r.z))
         )
         incoming = (
-            None
-            if prv is None
-            else (r.x - bs[prv].x, r.y - bs[prv].y, float(r.z - bs[prv].z))
+            None if prv is None else (r.x - bs[prv].x, r.y - bs[prv].y, float(r.z - bs[prv].z))
         )
         yield i, ride, incoming, outgoing
 
@@ -2411,6 +2507,37 @@ def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     yield from _addon_crossings(ctx)
 
 
+def _addon_crossing_tile_reach(ctx: Context, addon: PlacedBuilding) -> int:
+    """Conservative plan-tile radius containing every exact collider hit."""
+    key = (addon.model_index, addon.width, addon.height)
+    got = ctx.cache.addon_crossing_reach.get(key)
+    if got is not None:
+        return got
+
+    # The plan anchor is the footprint's minimum corner while the collider is
+    # placed about its centre.  A sphere enclosing every oriented collider box
+    # is yaw-independent, so this bound cannot discard an exact crossing for
+    # any model or orientation.  The final belt_crossings call remains the
+    # verdict.
+    anchor_to_centre = max((addon.width - 1) / 2.0, (addon.height - 1) / 2.0)
+    collider_radius = max(
+        (
+            math.dist((0.0, 0.0, 0.0), position)
+            + math.dist((0.0, 0.0, 0.0), half_extents)
+            for position, half_extents, _rotation in dsp_colliders.build_colliders(
+                addon.model_index
+            )
+        ),
+        default=0.0,
+    )
+    got = math.ceil(
+        anchor_to_centre
+        + (collider_radius + dsp_colliders.BELT_PROBE_RADIUS) / colliders.GRID_ARC
+    )
+    ctx.cache.addon_crossing_reach[key] = got
+    return got
+
+
 def _addon_crossings(ctx: Context) -> Iterable[Finding]:
     """A belt passing OVER a belt addon owes it the same clearance as anything else.
 
@@ -2452,8 +2579,8 @@ def _addon_crossings(ctx: Context) -> Iterable[Finding]:
     addons = [i for i, b in enumerate(bs) if ctx.kinds[i] is Kind.ADDON]
     if not addons:
         return
-    belts = [i for i, b in enumerate(bs) if cat.is_belt(b.item_id)]
-    if not belts:
+    belts_by_tile = _belts_by_tile(ctx)
+    if not belts_by_tile:
         return
     for ai in addons:
         ab = bs[ai]
@@ -2486,23 +2613,25 @@ def _addon_crossings(ctx: Context) -> Iterable[Finding]:
             *codec.tile_to_local_offset(ab.x, ab.y, ab.z, ab.width, ab.height),
             ab.yaw,
         )
-        for bi in belts:
+        reach = _addon_crossing_tile_reach(ctx, ab)
+        candidate_belts = {
+            bi
+            for x in range(ab.x - reach, ab.x + reach + 1)
+            for y in range(ab.y - reach, ab.y + reach + 1)
+            for bi in belts_by_tile.get((x, y), ())
+        }
+        for bi in sorted(candidate_belts):
             b = bs[bi]
             if b.z <= ab.z:
                 continue
-            if any(
-                (b.x, b.y) == (ax, ay) and abs(float(b.z) - az) < 0.5
-                for ax, ay, az in areas
-            ):
+            if any((b.x, b.y) == (ax, ay) and abs(float(b.z) - az) < 0.5 for ax, ay, az in areas):
                 continue
             probe = dsp_colliders.Placed(
                 b.model_index,
                 *codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height),
                 b.yaw,
             )
-            if not dsp_colliders.belt_crossings(
-                [probe], [pose], directly_over_only=True
-            ):
+            if not dsp_colliders.belt_crossings([probe], [pose], directly_over_only=True):
                 continue
             yield Finding(
                 "game.belt_crossing",
@@ -2529,35 +2658,33 @@ def _belt_collide(ctx: Context) -> Iterable[Finding]:
     been found.  It has, and it is the pass at 147257 --
     :func:`flab2bp.dsp.colliders.belt_collisions` holds it with the C#.
 
-    WHY THIS IS IN :data:`OPT_IN` AND ``game.belt_crossing`` IS NOT, with the
-    measurement OPT_IN asks for.  On the fixture corpus it is clean: zero
-    findings on every single-area fixture, against 1189 for the same geometry
-    with nothing excused.  On OUR OWN output it is not, and the reason is the
-    defect the backlog entry this came from exists to fix.  A Splitter's
-    ``catalog.footprint`` is 1x1; its build collider is a 2.38-unit cross, which
-    needs two tiles.  So both strategies route belts one tile from a Splitter --
-    at ground level and, on ramps, one level up, where the probe still catches
-    the 1.19-unit arm by 0.16 of its 0.23 radius.  Turning this on turns 15
-    ``spine`` tests red -- ``magnetic-ring``, ``quantum-chip/no-proliferator``
-    and ``free-proliferation`` -- because the strategy's own self-check then
-    refuses every plan it emits.  That is a ROUTER bug, not a rule bug: the belt
-    needs
-    ``z > 1.7475`` or one more tile of clearance, and neither is this check's to
-    arrange.  Fix the footprints (steps 1 and 2 of the entry) and this comes on
-    by name first, then by default.
+    Blueprint canonicalization can reorder previews without changing their
+    forward links.  DSP reconstructs a merge's reverse link with a
+    last-preview-wins assignment, so certification uses
+    :func:`flab2bp.dsp.colliders.stable_belt_collisions`: every reverse feeder
+    choice must preserve the bounded chain rescue.  The exact order-sensitive
+    game primitive remains available as
+    :func:`flab2bp.dsp.colliders.belt_collisions` for source fidelity.
     """
     yield from _belt_collide_findings(ctx, "game.belt_collide", crossings_only=False)
 
 
-def _belt_collide_findings(
-    ctx: Context, cid: str, *, crossings_only: bool
-) -> Iterable[Finding]:
+def _belt_collide_findings(ctx: Context, cid: str, *, crossings_only: bool) -> Iterable[Finding]:
     """The paste's belt verdict, optionally narrowed to the crossing question."""
     bs = ctx.placement.buildings
     previews = _paste_previews(ctx)
     if not any(p.is_belt for p in previews):
         return
-    for ia, ic in dsp_colliders.belt_collisions(previews):
+    if crossings_only:
+        collisions = [
+            dsp_colliders.StableBeltCollision(belt, collider)
+            for belt, collider in dsp_colliders.belt_collisions(previews)
+        ]
+    else:
+        collisions = dsp_colliders.stable_belt_collisions(previews)
+    for collision in collisions:
+        ia = collision.belt
+        ic = collision.collider
         if bs[ic].item_id in cat.LOW_CONFIDENCE_FOOTPRINTS:
             continue
         over = _probe_inside(previews[ia], previews[ic]) and bs[ia].z > bs[ic].z
@@ -2565,17 +2692,30 @@ def _belt_collide_findings(
             continue
         need = dsp_colliders.belt_crossing_height(bs[ic].model_index) + float(bs[ic].z)
         how = "passes over" if over else "grazes"
+        unstable = ""
+        if collision.unstable_merges:
+            unstable = (
+                "; preview ordering can select a non-rescuing feeder at merge belt(s) "
+                f"{collision.unstable_merges}"
+            )
         yield Finding(
             cid,
             Severity.ERROR,
             f"belt at ({bs[ia].x}, {bs[ia].y}) z={bs[ia].z} {how} "
             f"{cat.building(bs[ic].item_id).name} at ({bs[ic].x}, {bs[ic].y}) "
-            f"without clearing its build collider; the game needs z > {need:.4f}",
+            f"without clearing its build collider; the game needs z > {need:.4f}"
+            f"{unstable}",
             (ia, ic),
             {
                 "belt_z": str(bs[ia].z),
                 "needs_z_above": f"{need:.4f}",
                 "under": str((bs[ic].x, bs[ic].y, str(bs[ic].z))),
+                "collider_index": ic,
+                "unstable_merge_indices": collision.unstable_merges,
+                "unstable_merge_cells": tuple(
+                    (bs[index].x, bs[index].y, str(bs[index].z))
+                    for index in collision.unstable_merges
+                ),
             },
         )
 
@@ -2748,9 +2888,16 @@ def _continuity(ctx: Context) -> Iterable[Finding]:
                 (i,),
                 {"output_obj": o},
             )
+    supports = {
+        support
+        for junction_index, splitter in ctx.of_kind(Kind.SPLITTER)
+        if (support := _splitter_support_index(ctx, junction_index, splitter)) is not None
+    }
     for j, s in ctx.of_kind(Kind.SPLITTER):
         feeding = ctx.junction_in.get(j, ())
         drawing = ctx.junction_out.get(j, ())
+        if not feeding and not drawing and j in supports:
+            continue
         if feeding:
             continue  # the far side is `belt.termination`'s question
         if not drawing:
@@ -2774,6 +2921,56 @@ def _continuity(ctx: Context) -> Iterable[Finding]:
 
 
 # --- junctions -------------------------------------------------------------
+
+
+def _splitter_support_index(
+    ctx: Context,
+    junction_index: int,
+    splitter: PlacedBuilding,
+) -> int | None:
+    """Return the exact lower Splitter named by a valid stack connection."""
+    pitch = cat.stack_pitch_z(cat.SPLITTER_ID)
+    if pitch is None or splitter.z <= 0 or splitter.z % pitch:
+        return None
+    support_index = splitter.input_obj
+    if support_index is None or not 0 <= support_index < len(ctx.placement.buildings):
+        return None
+    support = ctx.placement.buildings[support_index]
+    if (
+        ctx.kinds[support_index] is not Kind.SPLITTER
+        or support.x != splitter.x
+        or support.y != splitter.y
+        or support.z != splitter.z - pitch
+        or splitter.input_from_slot != rules.SPLITTER_INPUT_FROM_SLOT
+    ):
+        return None
+    return support_index
+
+
+@check("junction.stack_support")
+def _junction_stack_support(ctx: Context) -> Iterable[Finding]:
+    """Every elevated Splitter rests on the prefab's linked two-level stack."""
+    pitch = cat.stack_pitch_z(cat.SPLITTER_ID)
+    if pitch is None:
+        return
+    for junction_index, splitter in ctx.of_kind(Kind.SPLITTER):
+        if splitter.z <= 0 or _splitter_support_index(ctx, junction_index, splitter) is not None:
+            continue
+        expected_z = splitter.z - pitch
+        yield Finding(
+            "junction.stack_support",
+            Severity.ERROR,
+            f"splitter {junction_index} at ({splitter.x},{splitter.y},{splitter.z}) has no "
+            f"linked splitter support at ({splitter.x},{splitter.y},{expected_z}); "
+            f"the game requires stack pitch {pitch} and otherwise reports Foundation required",
+            (junction_index,),
+            {
+                "junction": junction_index,
+                "expected_z": str(expected_z),
+                "stack_pitch": str(pitch),
+                "input_obj": splitter.input_obj,
+            },
+        )
 
 
 @check("junction.ports")
@@ -2804,58 +3001,77 @@ def _junction_ports(ctx: Context) -> Iterable[Finding]:
 
 @check("junction.colocated")
 def _junction_colocated(ctx: Context) -> Iterable[Finding]:
-    """Every belt attached to a junction sits on the junction's own tile.
+    """Every belt attached to a junction shares the junction's x/y tile.
 
-    Measured on all 25 splitters in the fixture corpus and round-tripped through
-    the viewer: ``dx = dy = 0``, without exception.  A belt that names a splitter
-    from an adjacent tile is not an error the game reports -- it pastes as a
-    junction with that side unconnected -- so nothing downstream of the missing
-    side ever receives items while every building involved exists and every link
-    resolves.  Reported per attachment rather than per junction so the finding
-    names the belt to move.
+    The Splitter's alternate models have elevated ports, so altitude is not a
+    co-location constant.  ``junction.port_pose`` checks the recorded port's
+    exact model-specific height; this check owns only the shared tile invariant.
+    A belt naming a Splitter from an adjacent tile pastes with that side
+    unconnected.
     """
     bs = ctx.placement.buildings
     for j, s in ctx.of_kind(Kind.SPLITTER):
         for belt_idx in ctx.junction_attachments(j):
             b = bs[belt_idx]
-            dx, dy, dz = b.x - s.x, b.y - s.y, b.z - s.z
-            if dx == 0 and dy == 0 and dz == 0:
+            dx, dy = b.x - s.x, b.y - s.y
+            if dx == 0 and dy == 0:
                 continue
             yield Finding(
                 "junction.colocated",
                 Severity.ERROR,
                 f"belt {belt_idx} at ({b.x},{b.y},{b.z}) attaches to splitter {j} at "
-                f"({s.x},{s.y},{s.z}), offset ({dx},{dy},{dz}); every attachment must "
-                f"share the junction's tile or that side pastes unconnected",
+                f"({s.x},{s.y},{s.z}), x/y offset ({dx},{dy}); every attachment must "
+                "share the junction tile or that side pastes unconnected",
                 (belt_idx, j),
-                {"junction": j, "belt": belt_idx, "dx": dx, "dy": dy, "dz": dz},
+                {"junction": j, "belt": belt_idx, "dx": dx, "dy": dy},
             )
+
+
+@check("junction.port_pose")
+def _junction_port_pose(ctx: Context) -> Iterable[Finding]:
+    """A Splitter model and every recorded physical port must be authoritative.
+
+    Only models 38, 39 and 40 belong to item 2020.  For one of those models,
+    ``BuildTool_Path`` selects an entry of ``PrefabDesc.portPoses`` from the
+    path direction and port height.  Blueprint paste preserves that index, and
+    ``PlanetFactory`` hands the same numbered slot to
+    ``CargoTraffic.ConnectToSplitter``.  A foreign model or a free-but-wrong
+    index therefore cannot encode a usable Splitter connection.
+    """
+    for issue in splitter_ports.placement_issues(ctx.placement.buildings):
+        buildings = (issue.splitter,) if issue.belt is None else (issue.belt, issue.splitter)
+        yield Finding(
+            "junction.port_pose",
+            Severity.ERROR,
+            issue.message,
+            buildings,
+            issue.detail(),
+        )
 
 
 @check("junction.records_no_links")
 def _junction_records_no_links(ctx: Context) -> Iterable[Finding]:
-    """A splitter names nobody; the belts around it do the naming.
+    """A splitter names only its immediate lower multilevel support.
 
-    Unanimous across the corpus: ``output_obj`` and ``input_obj`` are both unset
-    on all 25 splitters.  A splitter that names a neighbour encodes a link the
-    game does not expect on that building, and -- because ``_context`` reads the
-    junction's attachments off the BELTS -- such a link is invisible to every
-    other check here, so the connection it claims is never verified by anything.
+    Ordinary belt links live on the belts around the junction.  An elevated
+    Splitter is the exception: its ``input_obj`` names the same-position
+    Splitter one prefab stack pitch below through slot 15.
     """
     for j, b in ctx.of_kind(Kind.SPLITTER):
+        support = _splitter_support_index(ctx, j, b)
         named = {
             label: link
             for label, link in (("output_obj", b.output_obj), ("input_obj", b.input_obj))
-            if link is not None
+            if link is not None and not (label == "input_obj" and link == support)
         }
         if not named:
             continue
         yield Finding(
             "junction.records_no_links",
             Severity.ERROR,
-            f"splitter {j} at ({b.x},{b.y}) records {named}; a junction records no "
-            f"links of its own and the belts around it name it instead, so this "
-            f"connection is verified by nothing",
+            f"splitter {j} at ({b.x},{b.y}) records unsupported links {named}; "
+            f"only an elevated splitter's slot-15 input link to its immediate lower "
+            f"support is legal, while surrounding belts own every cargo connection",
             (j,),
             {"junction": j, **{k: str(v) for k, v in named.items()}},
         )
@@ -2964,9 +3180,9 @@ def _port_dock(ctx: Context) -> Iterable[Finding]:
     ends, so a belt drawing from a port has spent its own slot 1 -- the first
     index ``slots.assign_belt_slots`` hands to a belt-to-belt feeder.  Two
     connections in that cell means ``WriteObjectConn`` evicts one, and the lane
-    pastes cleanly and carries nothing.  ``game.slot_occupancy`` cannot see it:
-    it keys on the PEER side, which is where every other clash lives.  So the
-    last clause below is the own-side half, scoped to the cells a dock spends.
+    pastes cleanly and carries nothing.  ``game.slot_occupancy`` detects that
+    pool collision globally; the last clause below retains the port-specific
+    finding that names which dock already spends the slot.
 
     A belt naming a building with NO port is the same defect one step earlier.
     Nothing in the game will attach it -- ``BuildTool_Path`` drops a cast target
@@ -3026,9 +3242,7 @@ def _port_dock(ctx: Context) -> Iterable[Finding]:
                 {"belt": d.belt, "peer": d.peer, "port": d.port, "gap": f"{gap:.3f}"},
             )
             continue
-        want = (
-            rules.BELT_PORT_DRAW_TO_SLOT if d.draws else rules.BELT_PORT_FEED_FROM_SLOT
-        )
+        want = rules.BELT_PORT_DRAW_TO_SLOT if d.draws else rules.BELT_PORT_FEED_FROM_SLOT
         got = b.input_to_slot if d.draws else b.output_from_slot
         field_name = "input_to_slot" if d.draws else "output_from_slot"
         if got != want:
@@ -3233,8 +3447,7 @@ def _termination(ctx: Context) -> Iterable[Finding]:
                 f"tiles serve nothing"
             ),
             (tail,),
-            {"run": r, "tail": tail, "length": len(run.indices), "dead": dead,
-             "taps": len(taps)},
+            {"run": r, "tail": tail, "length": len(run.indices), "dead": dead, "taps": len(taps)},
         )
 
 
@@ -3288,8 +3501,7 @@ def _coverage(ctx: Context) -> Iterable[Finding]:
             if here is None:
                 dx, dy = 2 * tx + 1, 2 * ty + 1
                 here = any(
-                    (dx - ox) * (dx - ox) + (dy - oy) * (dy - oy) <= lim
-                    for ox, oy, lim in discs
+                    (dx - ox) * (dx - ox) + (dy - oy) * (dy - oy) <= lim for ox, oy, lim in discs
                 )
                 covered[(tx, ty)] = here
             if not here:
@@ -3377,9 +3589,7 @@ def _power_too_close(ctx: Context) -> Iterable[Finding]:
         return
     lo, hi = rules.PASTE_POWER_NODE_IDS
     poses = [
-        colliders.flat_pose(*codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height), b.yaw)[
-            0
-        ]
+        colliders.flat_pose(*codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height), b.yaw)[0]
         for _i, b, _n in nodes
     ]
     for a in range(len(nodes)):
@@ -3535,31 +3745,49 @@ def _group_resolved(ctx: Context) -> Iterable[Finding]:
 
 @check("machine.inputs_supplied", needs_spec=True, needs_groups=True)
 def _inputs_supplied(ctx: Context) -> Iterable[Finding]:
-    """Every ingredient has a sorter delivering it.
+    """Every ingredient has a sorter or authoritative feeding belt-port dock.
 
-    A sorter carries one item type, so a machine needing *k* distinct
-    ingredients needs at least *k* sorters feeding it.  That is checkable
-    without per-lane item labelling, and it catches the failure that matters:
-    a strategy that wired up some inputs and quietly forgot the rest.
+    A sorter carries one item type, so a sorter-served machine needing *k*
+    distinct ingredients needs at least *k* sorters.  Sorterless prefab hosts
+    use the game's other connection mechanism: a belt whose output names the
+    machine and an exact ``portPoses`` index.  ``belt.port_dock`` owns the
+    physical validity of that record; this check counts the feed connection.
     """
     assert ctx.spec is not None
-    feeds: dict[int, int] = defaultdict(int)
-    for _i, s in ctx.of_kind(Kind.SORTER):
-        if s.output_obj is not None:
-            feeds[s.output_obj] += 1
-    for i, _b in ctx.of_kind(Kind.MACHINE):
+    sorter_feeds: dict[int, int] = defaultdict(int)
+    port_feed_items: dict[int, set[str]] = defaultdict(set)
+    for _i, sorter in ctx.of_kind(Kind.SORTER):
+        if sorter.output_obj is not None:
+            sorter_feeds[sorter.output_obj] += 1
+    for _i, belt in ctx.of_kind(Kind.BELT):
+        target = belt.output_obj
+        if target is None or not 0 <= target < len(ctx.placement.buildings):
+            continue
+        peer = ctx.placement.buildings[target]
+        if (
+            ctx.kinds[target] is Kind.MACHINE
+            and cat.building(peer.item_id).takes_belt_ports
+            and belt.carries_item is not None
+        ):
+            port_feed_items[target].add(belt.carries_item)
+    for i, machine in ctx.of_kind(Kind.MACHINE):
         g = ctx.group_for(i)
         if g is None:
             continue
-        need = len(g.inputs_per_machine)
-        if need and feeds[i] < need:
+        required = set(g.inputs_per_machine)
+        if cat.building(machine.item_id).takes_belt_ports:
+            feeds = len(required & port_feed_items[i])
+        else:
+            feeds = sorter_feeds[i]
+        need = len(required)
+        if feeds < need:
             yield Finding(
                 "machine.inputs_supplied",
                 Severity.ERROR,
                 f"machine {i} runs {g.recipe_id}, which needs {need} distinct "
-                f"ingredients, but only {feeds[i]} sorters feed it",
+                f"ingredients, but only {feeds} feed connection(s) reach it",
                 (i,),
-                {"recipe": g.recipe_id, "needed": need, "sorters": feeds[i]},
+                {"recipe": g.recipe_id, "needed": need, "feeds": feeds},
             )
 
 
@@ -3744,11 +3972,7 @@ def _lane_sourced(ctx: Context) -> Iterable[Finding]:
     bs = ctx.placement.buildings
 
     drains, seeds = _internal_seeds(ctx)
-    seeds |= {
-        r
-        for r, run in enumerate(ctx.runs)
-        if _external_item(ctx, run, external) is not None
-    }
+    seeds |= {r for r, run in enumerate(ctx.runs) if _external_item(ctx, run, external) is not None}
     sourced = _close_over_junctions(ctx, seeds)
     items = _sorter_items(ctx)
 
@@ -3982,8 +4206,7 @@ def _external_entry_reachable(ctx: Context) -> Iterable[Finding]:
                     plane = _reachable_from_outside(ctx, b.z)
                     free[b.z] = plane
                 if any(
-                    (b.x + dx, b.y + dy) in plane
-                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                    (b.x + dx, b.y + dy) in plane for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
                 ):
                     break
                 walled.append(i)
@@ -4077,6 +4300,7 @@ def _output_removed(ctx: Context) -> Iterable[Finding]:
                 {"recipe": g.recipe_id, "products": need, "drains": drains[i]},
             )
 
+
 def _fraction_gcd(one: Fraction, two: Fraction) -> Fraction:
     denominator = math.lcm(one.denominator, two.denominator)
     return Fraction(
@@ -4088,9 +4312,7 @@ def _fraction_gcd(one: Fraction, two: Fraction) -> Fraction:
     )
 
 
-def _belt_reaches_any(
-    ctx: Context, start: int, targets: set[int], item: str
-) -> bool:
+def _belt_reaches_any(ctx: Context, start: int, targets: set[int], item: str) -> bool:
     pending = [start]
     seen: set[int] = set()
     while pending:
@@ -4208,7 +4430,6 @@ def _coproduct_buffer(ctx: Context) -> Iterable[Finding]:
             )
 
 
-
 # --- spec conformance ------------------------------------------------------
 
 
@@ -4252,8 +4473,7 @@ def _machine_counts(ctx: Context) -> Iterable[Finding]:
             yield Finding(
                 "spec.machine_counts",
                 Severity.ERROR,
-                f"recipe {key[0]!r} on machine {key[1]}: spec demands {w}, "
-                f"placement has {g_}",
+                f"recipe {key[0]!r} on machine {key[1]}: spec demands {w}, placement has {g_}",
                 (),
                 {"recipe_id": key[0], "machine_id": key[1], "wanted": w, "got": g_},
             )
@@ -4346,16 +4566,12 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
     """
     assert ctx.spec is not None
     coaters = [
-        (i, b)
-        for i, b in enumerate(ctx.placement.buildings)
-        if b.item_id == cat.SPRAY_COATER_ID
+        (i, b) for i, b in enumerate(ctx.placement.buildings) if b.item_id == cat.SPRAY_COATER_ID
     ]
     if not coaters:
         return
 
-    prolif_items = {
-        item for item in ctx.spec.external_inputs if item.startswith("proliferator")
-    }
+    prolif_items = {item for item in ctx.spec.external_inputs if item.startswith("proliferator")}
 
     def selected_item(coater: PlacedBuilding, area: int) -> str | None:
         selected = _belt_in_addon_area(ctx, coater, area=area)
@@ -4363,15 +4579,9 @@ def _coaters_supplied(ctx: Context) -> Iterable[Finding]:
             return None
         return ctx.placement.buildings[selected].carries_item
 
-    starved = [
-        i
-        for i, coater in coaters
-        if selected_item(coater, 1) not in prolif_items
-    ]
+    starved = [i for i, coater in coaters if selected_item(coater, 1) not in prolif_items]
     wrong_hosts = [
-        i
-        for i, coater in coaters
-        if selected_item(coater, 0) not in ctx.spec.spray_lanes
+        i for i, coater in coaters if selected_item(coater, 0) not in ctx.spec.spray_lanes
     ]
     if starved or wrong_hosts:
         affected = tuple(sorted(set(starved) | set(wrong_hosts)))
@@ -4559,9 +4769,7 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
             continue
         for item in g.inputs_per_machine:
             requires_spray = g.is_proliferated and item in spec.spray_lanes
-            forbids_spray = (
-                not g.is_proliferated and item in spec.lanes_requiring_split
-            )
+            forbids_spray = not g.is_proliferated and item in spec.lanes_requiring_split
             if not requires_spray and not forbids_spray:
                 continue
             # An unresolvable sorter is INCLUDED, not skipped.  "I could not
@@ -4569,9 +4777,7 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
             # give silently, and a machine whose only feed of a sprayed
             # ingredient is unattributable is exactly the case where the
             # geometry needs looking at.
-            candidates = [
-                (i, src) for i, src, got in feeds.get(m, ()) if got in (item, None)
-            ]
+            candidates = [(i, src) for i, src, got in feeds.get(m, ()) if got in (item, None)]
             if not candidates:
                 continue  # `machine.inputs_supplied` owns the missing-feed case
             dirty = unsprayed.get(item)
@@ -4873,9 +5079,10 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
         required = sum(per_item.values(), Fraction(0))
         if capacity is None or required <= capacity:
             continue
-        breakdown = {(k or "unattributed"): str(v) for k, v in sorted(
-            per_item.items(), key=lambda kv: (kv[0] is None, kv[0] or "")
-        )}
+        breakdown = {
+            (k or "unattributed"): str(v)
+            for k, v in sorted(per_item.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))
+        }
         shared = " across " + ", ".join(breakdown) if len(per_item) > 1 else ""
         yield Finding(
             "flow.belt_capacity",
@@ -5216,9 +5423,7 @@ def _lane_attribution(ctx: Context) -> Iterable[Finding]:
             for i, s in ctx.of_kind(Kind.SORTER)
             if items.get(i) is None
             and any(
-                link is not None
-                and link in ctx.run_of
-                and network.get(ctx.run_of[link]) == here
+                link is not None and link in ctx.run_of and network.get(ctx.run_of[link]) == here
                 for link in (s.input_obj, s.output_obj)
             )
         )
@@ -5372,12 +5577,13 @@ def _headroom(ctx: Context) -> Iterable[Finding]:
         if not capacity:
             continue
         required = sum(per_item.values(), Fraction(0))
-        breakdown = {(k or "unattributed"): str(v) for k, v in sorted(
-            per_item.items(), key=lambda kv: (kv[0] is None, kv[0] or "")
-        )}
-        shared = f" ({', '.join(f'{k} {v}' for k, v in breakdown.items())})" if len(
-            per_item
-        ) > 1 else ""
+        breakdown = {
+            (k or "unattributed"): str(v)
+            for k, v in sorted(per_item.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))
+        }
+        shared = (
+            f" ({', '.join(f'{k} {v}' for k, v in breakdown.items())})" if len(per_item) > 1 else ""
+        )
         yield Finding(
             "flow.headroom",
             Severity.INFO,
@@ -5466,12 +5672,11 @@ def validate(
     they are listed in ``Report.skipped`` so an unvalidated build never reads as
     a clean one.
 
-    ``expect_power=False`` declares that this placement was built with power
-    disabled, so the power checks are *skipped* rather than reporting every
-    machine as unpowered.  It is a caller declaration on purpose: the
-    validator inferring it from "there are no towers" would make a dropped
-    tower -- a real bug -- indistinguishable from a deliberate ``--no-power``
-    build, and silently stop detecting it.
+    ``expect_power=False`` is a private fixture seam for placements deliberately
+    built without towers to isolate unrelated validation rules.  Production
+    callers always pass ``True``: inferring the mode from "there are no towers"
+    would make a dropped tower -- a real bug -- indistinguishable from a fixture
+    and silently stop detecting it.
 
     ``max_belt_z`` and ``belt_vertical_construction`` are how high a belt may go
     in the SAVE this blueprint is for, and whether that save is under the
@@ -5488,9 +5693,7 @@ def validate(
     game accepts.
     """
     wanted = set(only) if only is not None else None
-    ctx = _context(
-        placement, spec, ids, soft_width, max_belt_z, belt_vertical_construction
-    )
+    ctx = _context(placement, spec, ids, soft_width, max_belt_z, belt_vertical_construction)
     have_spec = spec is not None and ids is not None
     # A check that could not resolve every machine did not examine everything it
     # claims to cover, so it may not be reported as having run.  It still runs:
@@ -5504,7 +5707,7 @@ def validate(
     for cid, fn in CHECKS.items():
         if wanted is not None and cid not in wanted:
             continue
-        if not expect_power and cid.startswith('power.'):
+        if not expect_power and cid.startswith("power."):
             skipped.append(cid)
             continue
         if cid in NEEDS_SPEC and not have_spec:

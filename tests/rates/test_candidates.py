@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fractions import Fraction
+from typing import cast
 
 import pytest
 
@@ -13,6 +14,8 @@ from flab2bp.lab.url import parse_url
 from flab2bp.rates import candidates as candidates_module
 from flab2bp.rates.adjust import ProliferatorTier, available_modes, machine_footprint
 from flab2bp.rates.candidates import (
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
     build_candidates,
     lanes_requiring_split,
     proliferator_from_request,
@@ -121,22 +124,68 @@ def test_direct_candidate_adapter_canonicalizes_exactly_once(
 # --- the frontier ----------------------------------------------------------
 
 
-def test_default_emits_three_deterministic_candidates_ranked_by_rounded_area(
+def test_default_emits_all_candidate_policies_in_canonical_order(
     candidates: BuildSpecSet,
 ) -> None:
-    assert {candidate.label for candidate in candidates.candidates} == {
-        "no-proliferator",
-        "all-products",
-        "output-products",
-    }
-    rounded_areas = [
-        sum(
-            machine_footprint(group.machine_item_id) * group.count
-            for group in candidate.groups
-        )
-        for candidate in candidates.candidates
-    ]
-    assert rounded_areas == sorted(rounded_areas)
+    assert tuple(candidate.label for candidate in candidates.candidates) == tuple(
+        policy.value for policy in DEFAULT_CANDIDATE_POLICIES
+    )
+
+
+@pytest.mark.parametrize(
+    ("candidate_policies", "expected"),
+    [
+        pytest.param(
+            (CandidatePolicy.NO_PROLIFERATOR,),
+            ("no-proliferator",),
+            id="no-proliferator",
+        ),
+        pytest.param(
+            (CandidatePolicy.ALL_PRODUCTS,),
+            ("all-products",),
+            id="all-products",
+        ),
+        pytest.param(
+            (CandidatePolicy.OUTPUT_PRODUCTS,),
+            ("output-products",),
+            id="output-products",
+        ),
+        pytest.param(
+            (CandidatePolicy.ALL_PRODUCTS, CandidatePolicy.NO_PROLIFERATOR),
+            ("no-proliferator", "all-products"),
+            id="no-proliferator-and-all-products",
+        ),
+        pytest.param(
+            (CandidatePolicy.OUTPUT_PRODUCTS, CandidatePolicy.NO_PROLIFERATOR),
+            ("no-proliferator", "output-products"),
+            id="no-proliferator-and-output-products",
+        ),
+    ],
+)
+def test_candidate_policy_subsets_emit_exactly_the_selected_policies(
+    data: Dataset,
+    candidate_policies: tuple[CandidatePolicy, ...],
+    expected: tuple[str, ...],
+) -> None:
+    specs = build_candidates(
+        data,
+        parse_url(EXAMPLE_URL),
+        tier=ProliferatorTier.MK3,
+        candidate_policies=candidate_policies,
+    )
+    assert tuple(candidate.label for candidate in specs.candidates) == expected
+
+
+def test_candidate_policy_request_order_is_normalized(data: Dataset) -> None:
+    specs = build_candidates(
+        data,
+        parse_url(EXAMPLE_URL),
+        tier=ProliferatorTier.MK3,
+        candidate_policies=tuple(reversed(DEFAULT_CANDIDATE_POLICIES)),
+    )
+    assert tuple(candidate.label for candidate in specs.candidates) == tuple(
+        policy.value for policy in DEFAULT_CANDIDATE_POLICIES
+    )
 
 
 def test_all_products_uses_products_everywhere_it_is_legal(
@@ -318,7 +367,7 @@ def test_split_lanes_are_always_a_subset_of_sprayed_lanes(data: Dataset) -> None
     """Only a sprayed lane can need splitting; an unsprayed one has nothing to cut."""
     for target in ("electromagnetic-matrix", "conveyor-belt-3", "processor"):
         url = f"https://factoriolab.github.io/dsp/flow?o={target}*60&v=11"
-        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=3)
+        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3)
         for spec in specs.candidates:
             assert spec.lanes_requiring_split <= frozenset(spec.spray_lanes)
 
@@ -327,7 +376,7 @@ def test_unproliferated_candidate_never_needs_a_split(data: Dataset) -> None:
     """With nothing sprayed there is no boundary for a lane to straddle."""
     for target in ("electromagnetic-matrix", "conveyor-belt-3"):
         url = f"https://factoriolab.github.io/dsp/flow?o={target}*60&v=11"
-        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3, count=3)
+        specs = build_candidates(data, parse_url(url), tier=ProliferatorTier.MK3)
         baseline = next(c for c in specs.candidates if c.label == "no-proliferator")
         assert baseline.lanes_requiring_split == frozenset()
 
@@ -335,20 +384,40 @@ def test_unproliferated_candidate_never_needs_a_split(data: Dataset) -> None:
 # --- knobs -----------------------------------------------------------------
 
 
-def test_candidate_count_rejects_removed_speed_policy(data: Dataset) -> None:
-    with pytest.raises(ValueError, match="between 1 and 3"):
-        _ = build_candidates(
+@pytest.mark.parametrize(
+    ("candidate_policies", "message"),
+    [
+        pytest.param((), "at least one", id="empty"),
+        pytest.param(
+            (CandidatePolicy.NO_PROLIFERATOR, CandidatePolicy.NO_PROLIFERATOR),
+            "duplicate",
+            id="duplicate",
+        ),
+        pytest.param(("speed-products",), "unknown", id="unknown"),
+        pytest.param((3,), "unknown", id="numeric"),
+    ],
+)
+def test_invalid_candidate_policy_selections_are_rejected(
+    data: Dataset,
+    candidate_policies: tuple[object, ...],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        build_candidates(
             data,
             parse_url(EXAMPLE_URL),
-            tier=ProliferatorTier.MK3,
-            count=4,
+            candidate_policies=cast(tuple[CandidatePolicy, ...], candidate_policies),
         )
 
 
-def test_tier_none_yields_a_single_unproliferated_candidate(data: Dataset) -> None:
+def test_tier_none_keeps_selected_policy_identities_unproliferated(
+    data: Dataset,
+) -> None:
     specs = build_candidates(data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.NONE)
-    assert len(specs.candidates) == 1
-    assert not specs.candidates[0].is_proliferated
+    assert tuple(spec.label for spec in specs.candidates) == tuple(
+        policy.value for policy in DEFAULT_CANDIDATE_POLICIES
+    )
+    assert all(not spec.is_proliferated for spec in specs.candidates)
 
 
 # --- the URL's proliferator tier is a constraint, not a suggestion ----------
@@ -393,7 +462,7 @@ def test_a_url_asking_for_mk2_does_not_get_handed_mk3(data: Dataset) -> None:
     input belt calls for an item they may not have.  That is a worse failure
     than refusing, since nothing about the output says it happened.
     """
-    specs = build_candidates(data, parse_url(BARE_MK2), count=3).candidates
+    specs = build_candidates(data, parse_url(BARE_MK2)).candidates
     sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
     assert sprayed == {"proliferator-2"}, sprayed
 
@@ -405,7 +474,7 @@ def test_a_url_naming_no_proliferator_keeps_the_whole_frontier(data: Dataset) ->
     would collapse the frontier to a single candidate and discard the density
     this tool exists to find.
     """
-    specs = build_candidates(data, parse_url(NO_PROLIFERATOR_NAMED), count=3).candidates
+    specs = build_candidates(data, parse_url(NO_PROLIFERATOR_NAMED)).candidates
     labels = {spec.label for spec in specs}
     assert labels == {"no-proliferator", "all-products", "output-products"}
     sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
@@ -415,7 +484,7 @@ def test_a_url_naming_no_proliferator_keeps_the_whole_frontier(data: Dataset) ->
 def test_an_explicit_tier_still_overrides_the_url(data: Dataset) -> None:
     """The argument wins, so callers that know better are not second-guessed."""
     specs = build_candidates(
-        data, parse_url(BARE_MK2), tier=ProliferatorTier.MK3, count=3
+        data, parse_url(BARE_MK2), tier=ProliferatorTier.MK3
     ).candidates
     sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
     assert sprayed == {"proliferator-3"}, sprayed

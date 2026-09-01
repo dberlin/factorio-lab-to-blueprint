@@ -75,7 +75,7 @@ def test_the_two_band_index_spellings_agree() -> None:
 #: ``(area_segments, latitude_index_lo, latitude_index_hi, grid_lo, grid_hi, rows)``
 #: for a terrestrial planet, read off the game's own functions.
 TERRESTRIAL = (
-    (200, 0, 15, 1, 80, 161),
+    (200, 0, 15, 1, 80, 160),
     (160, 16, 25, 81, 130, 50),
     (120, 26, 30, 131, 155, 25),
     (100, 31, 35, 156, 180, 25),
@@ -101,41 +101,54 @@ def test_the_band_table_is_the_game_for_a_terrestrial_planet() -> None:
     ]
 
 
-def test_the_equatorial_band_is_161_rows_and_area_count_agrees() -> None:
-    """The equatorial band spans BOTH hemispheres, and it is 161 rows, not 155.
+def test_the_equatorial_band_has_160_square_capacity() -> None:
+    """The equatorial band has 160 lateral squares, as the planet grid publishes.
 
-    This is the number that is easiest to get wrong, and two wrong values are
-    already in circulation.  ``GetLongitudeSegmentCount``'s decrement puts grid
-    rows ``1..5`` in band index 0 along with row 0, so the equatorial band runs
-    ``-80..80`` inclusive.  Reading the decrement as absent gives 159; reading
-    row 0's band as five rows wide rather than eleven gives 155.
-
-    ``area_count`` is the independent oracle: it is the game's own
-    ``GetAreaCount``, and it is the function that decides
-    ``BlueprintAreaCrossTropic``.  A 161-row window centred on the equator must
-    report one area and a 162-row window must report two, whichever way it is
-    grown.
+    The snapped grid indices still run from ``-80..80`` inclusive, which gives a
+    full-height blueprint two legal anchor rows.  Capacity counts squares, not
+    the 161 boundary indices that surround them.
     """
     band = planet.bands(SEGMENT)[0]
-    assert band.rows == 161
+    assert (band.rows, band.columns) == (160, 1000)
+    assert band.anchors(160) == (-80, -79)
     assert planet.area_count(-80, 80, SEGMENT) == 1
     assert planet.area_count(-81, 80, SEGMENT) == 2
     assert planet.area_count(-80, 81, SEGMENT) == 2
 
 
+def test_terrestrial_band_dimensions_are_exact_and_ordered_pole_to_equator() -> None:
+    assert tuple(
+        (band.rows, band.columns)
+        for band in sorted(planet.bands(SEGMENT), key=lambda candidate: candidate.area_segments)
+    ) == (
+        (5, 20),
+        (5, 40),
+        (5, 80),
+        (5, 100),
+        (10, 160),
+        (10, 200),
+        (15, 300),
+        (15, 400),
+        (25, 500),
+        (25, 600),
+        (50, 800),
+        (160, 1000),
+    )
+
+
 @pytest.mark.parametrize("band", planet.bands(SEGMENT), ids=lambda b: str(b.area_segments))
 def test_every_bands_rows_are_exactly_what_area_count_permits(band: planet.Band) -> None:
-    """``Band.rows`` is a claim about ``GetAreaCount``, so ask ``GetAreaCount``.
+    """Every advertised capacity window stays inside one game area.
 
-    Every window of ``rows`` consecutive grid indices this band offers must be
-    one area, and -- unless the band is clipped by the pole -- one more row must
-    be two.
+    Non-equatorial bands are bounded by grid rows.  The equatorial published
+    capacity is 160 squares although its two legal full-height placements use
+    the 161 snapped indices surrounding those squares.
     """
     for anchor in band.anchors(band.rows):
         assert planet.area_count(anchor, anchor + band.rows - 1, SEGMENT) == 1
     assert band.anchors(band.rows + 1) == ()
     top = band.grid_hi
-    if top < planet.pole_grid_idx(SEGMENT):
+    if top < planet.pole_grid_idx(SEGMENT) and not band.is_equatorial:
         assert planet.area_count(top - band.rows, top, SEGMENT) == 2
 
 
@@ -188,18 +201,12 @@ def test_band_for_extent_considers_both_orientations() -> None:
 
 
 def test_band_for_extent_refuses_when_nothing_fits() -> None:
-    """A blueprint too big for every band pastes NOWHERE.
-
-    No fallback to 200: such an area crosses a tropic at every anchor on the
-    planet, and the game refuses it with ``BlueprintAreaCrossTropic``.
-    """
+    """A blueprint beyond the authoritative height or width pastes nowhere."""
     with pytest.raises(planet.BandRefusal, match="fits no band"):
-        planet.band_for_extent(162, 162, SEGMENT)
+        planet.band_for_extent(161, 161, SEGMENT)
     with pytest.raises(planet.BandRefusal, match="fits no band"):
         planet.band_for_extent(1001, 1001, SEGMENT)
-    # ... but 161x161 does fit, so the refusal above is about the extent and not
-    # about the function refusing everything.
-    assert planet.band_for_extent(161, 161, SEGMENT).band.area_segments == 200
+    assert planet.band_for_extent(160, 160, SEGMENT).band.area_segments == 200
 
 
 def test_the_width_bound_is_the_bands_own_column_count() -> None:
@@ -214,8 +221,13 @@ def test_anchors_are_every_window_in_the_band_and_no_others() -> None:
     assert band.anchors(49) == (-130, -129, 81, 82)
     assert band.anchors(51) == ()
     equator = planet.bands(SEGMENT)[0]
-    assert equator.anchors(161) == (-80,)
+    assert equator.anchors(161) == ()
     assert equator.anchors(160) == (-80, -79)
+    assert tuple(equator.anchor_ranges(160)) == (range(-80, -78),)
+    assert tuple(band.anchor_ranges(49)) == (
+        range(-130, -128),
+        range(81, 83),
+    )
     for anchor in band.anchors(50):
         assert planet.area_count(anchor, anchor + 49, SEGMENT) == 1
 
@@ -478,6 +490,7 @@ def test_collisions_at_the_equator_reproduce_the_flat_model() -> None:
         assert planet.collisions_at(pair, projection) == expected, pitch
 
 
+
 def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band() -> None:
     """The gap the flat model leaves, made concrete.
 
@@ -509,3 +522,177 @@ def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band() -
         colliders.Placed(lab, 6.0, 0.0, 0.0, 0.0),
     ]
     assert planet.collisions_at(six, poleward) == []
+
+
+
+
+def test_collider_radius_is_the_exact_farthest_collider_corner() -> None:
+    model = cat.building(2303).model_index
+    expected = max(
+        math.sqrt(
+            sum(
+                (abs(coordinate) + half_extent) ** 2
+                for coordinate, half_extent in zip(position, extent, strict=True)
+            )
+        )
+        for position, extent, _rotation in colliders.build_colliders(model)
+    )
+
+    assert planet.collider_radius(model) == pytest.approx(expected)
+
+
+def test_candidate_focused_broad_phase_matches_all_pairs_without_peer_pair_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = cat.building(2303).model_index
+    buildings = tuple(
+        colliders.Placed(model, 0.0, 0.0, 0.0, 0.0)
+        for _ in range(32)
+    )
+    band = planet.bands(SEGMENT)[0]
+    _ = planet.collider_radius(model)
+    square_roots = 0
+    sqrt = planet.math.sqrt
+
+    def counted_sqrt(value: float) -> float:
+        nonlocal square_roots
+        square_roots += 1
+        return sqrt(value)
+
+    monkeypatch.setattr(planet.math, "sqrt", counted_sqrt)
+    all_pairs = planet.candidate_pairs(
+        buildings,
+        band,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    all_pair_roots = square_roots
+    square_roots = 0
+    candidate_position = 11
+    focused = planet.candidate_pairs(
+        buildings,
+        band,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+        candidate_position=candidate_position,
+    )
+
+    assert focused == [
+        pair for pair in all_pairs
+        if candidate_position in pair
+    ]
+    assert all_pair_roots == len(buildings) * (len(buildings) - 1) // 2
+    assert square_roots == len(buildings) - 1
+
+
+@pytest.mark.parametrize(("dx", "dy"), ((3.04, 0.0), (0.0, 3.04)))
+@pytest.mark.parametrize("quadrant", (0, 1))
+def test_candidate_focused_pairs_preserve_near_edge_exact_verdict(
+    dx: float,
+    dy: float,
+    quadrant: int,
+) -> None:
+    model = cat.building(2303).model_index
+    buildings = (
+        colliders.Placed(model, 0.0, 0.0, 0.0, 0.0),
+        colliders.Placed(model, dx, dy, 0.0, 0.0),
+        colliders.Placed(model, 20.0, 20.0, 0.0, 0.0),
+    )
+    band = planet.bands(SEGMENT)[0]
+    projection = planet.Projection(
+        band,
+        0,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+        quadrant=quadrant,
+    )
+    all_pairs = planet.candidate_pairs(
+        buildings,
+        band,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    candidate_position = 1
+    focused = planet.candidate_pairs(
+        buildings,
+        band,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+        candidate_position=candidate_position,
+    )
+
+    assert focused == [
+        pair for pair in all_pairs
+        if candidate_position in pair
+    ]
+    assert planet.collisions_at(buildings, projection, focused) == [
+        pair
+        for pair in planet.collisions_at(buildings, projection, all_pairs)
+        if candidate_position in pair
+    ]
+
+
+def test_candidate_pairs_cancels_inside_focused_peer_scan() -> None:
+    model = cat.building(2303).model_index
+    buildings = tuple(
+        colliders.Placed(model, float(index), 0.0, 0.0, 0.0)
+        for index in range(32)
+    )
+    checks = 0
+
+    def cancelled() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 6
+
+    with pytest.raises(planet.ProjectionCancelled):
+        planet.candidate_pairs(
+            buildings,
+            planet.bands(SEGMENT)[0],
+            SEGMENT,
+            colliders.PLANET_RADIUS,
+            candidate_position=11,
+            cancelled=cancelled,
+        )
+
+    assert checks == 6
+
+
+def test_collisions_at_cancels_inside_obb_products_without_box_cache_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = cat.building(2303).model_index
+    buildings = tuple(
+        colliders.Placed(model, 0.0, 0.0, 0.0, 0.0)
+        for _ in range(3)
+    )
+    projection = planet.Projection(
+        planet.bands(SEGMENT)[0],
+        0,
+        SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+    overlaps = 0
+    box_cache: dict[
+        tuple[colliders.Placed, planet.Projection],
+        tuple[colliders.Box, ...],
+    ] = {}
+
+    def overlap_once(_left: colliders.Box, _right: colliders.Box) -> bool:
+        nonlocal overlaps
+        overlaps += 1
+        return False
+
+    monkeypatch.setattr(colliders, "obb_overlap", overlap_once)
+
+    with pytest.raises(planet.ProjectionCancelled):
+        planet.collisions_at(
+            buildings,
+            projection,
+            ((0, 1), (0, 2)),
+            _box_cache=box_cache,
+            cancelled=lambda: overlaps >= 1,
+        )
+
+    assert overlaps == 1
+    assert box_cache == {}

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 import random
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -210,6 +211,7 @@ class DirectInsertTarget:
     consumer_row: int
     producer_span: int
     consumer_span: int
+    origin_deltas: tuple[int, ...]
 
     def __post_init__(self) -> None:
         if (
@@ -232,6 +234,20 @@ class DirectInsertTarget:
             raise ValueError("direct insert must connect distinct strips")
         _validate_positive_integer(self.producer_span, "producer span")
         _validate_positive_integer(self.consumer_span, "consumer span")
+        if (
+            not isinstance(self.origin_deltas, tuple)
+            or not self.origin_deltas
+            or any(type(delta) is not int for delta in self.origin_deltas)
+            or self.origin_deltas != tuple(sorted(set(self.origin_deltas)))
+            or any(
+                not -(self.consumer_span - 1) <= delta <= self.producer_span - 1
+                for delta in self.origin_deltas
+            )
+        ):
+            raise ValueError(
+                "direct-insert origin deltas must be a non-empty sorted unique tuple "
+                "inside the lane-overlap range"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,6 +545,118 @@ class StageBoundaryUpdate:
         self.problem._validate_variant_indices(self.state.variant_indices)
 
 
+def enable_variant_stage_boundary(
+    problem: PlacementProblem,
+    state: AnnealState,
+    *,
+    strip: int,
+    variant: StripVariant,
+    select_variant: bool,
+) -> StageBoundaryUpdate:
+    """Enable one padded pose variant without mutating sibling restart selections."""
+    from flab2bp.layout.strip_variants import strip_pose_id
+
+    problem._validate_variant_indices(state.variant_indices)
+    if not problem.variant_tables:
+        raise ValueError("stage-boundary variant update requires a variant-aware problem")
+    if type(strip) is not int or not 0 <= strip < problem.size:
+        raise ValueError("variant target must identify a placement strip")
+    if type(select_variant) is not bool:
+        raise ValueError("variant selection flag must be a bool")
+
+    instance_id = problem.instance_ids[strip]
+    table = problem.variant_tables[strip]
+    pose_id = strip_pose_id(variant)
+    if (
+        variant.variant_id.family_id != instance_id.family_id
+        or len(variant.machine_origins_x) != instance_id.machine_count
+    ):
+        raise ValueError("enabled variant must realize the exact owning instance")
+    matching_indices = tuple(
+        index for index, candidate in enumerate(table) if strip_pose_id(candidate) == pose_id
+    )
+    if not matching_indices:
+        raise ValueError("enabled variant pose is outside the target variant table")
+
+    minimum_pitch = min(table[index].pitch_x for index in matching_indices)
+    maximum_pitch = max(table[index].pitch_x for index in matching_indices)
+    if variant.pitch_x <= minimum_pitch:
+        raise ValueError("enabled variant must increase the ordinary pose pitch")
+    exact_index = next(
+        (
+            index
+            for index in matching_indices
+            if table[index].variant_id == variant.variant_id
+        ),
+        None,
+    )
+    selected_index = state.variant_indices[strip]
+    if exact_index is not None:
+        if not select_variant or selected_index == exact_index:
+            return StageBoundaryUpdate(problem=problem, state=state)
+        return StageBoundaryUpdate(
+            problem=problem,
+            state=replace(
+                state,
+                variant_indices=state.variant_indices[:strip]
+                + (exact_index,)
+                + state.variant_indices[strip + 1 :],
+            ),
+        )
+    if variant.pitch_x <= maximum_pitch:
+        raise ValueError("enabled variant cannot contract a previously padded pose")
+
+    superseded = frozenset(
+        index for index in matching_indices if table[index].pitch_x > minimum_pitch
+    )
+    rebuilt_table = tuple(
+        candidate for index, candidate in enumerate(table) if index not in superseded
+    ) + (variant,)
+    rebuilt_tables = (
+        problem.variant_tables[:strip]
+        + (rebuilt_table,)
+        + problem.variant_tables[strip + 1 :]
+    )
+    width_padding = problem.sizes[strip][0] - table[0].box_width
+    height_padding = problem.sizes[strip][1] - table[0].box_height
+    rebuilt_sizes = (
+        problem.sizes[:strip]
+        + (
+            (
+                rebuilt_table[0].box_width + width_padding,
+                rebuilt_table[0].box_height + height_padding,
+            ),
+        )
+        + problem.sizes[strip + 1 :]
+    )
+    rebuilt_problem = PlacementProblem(
+        sizes=rebuilt_sizes,
+        nets=problem.nets,
+        outline_height=problem.outline_height,
+        area_lower_bound=problem.area_lower_bound,
+        instance_ids=problem.instance_ids,
+        logical_net_ids=problem.logical_net_ids,
+        variant_tables=rebuilt_tables,
+    )
+    replacement_index = len(rebuilt_table) - 1
+    if select_variant or selected_index in superseded:
+        rebuilt_selected_index = replacement_index
+    else:
+        selected_id = table[selected_index].variant_id
+        rebuilt_selected_index = next(
+            index
+            for index, candidate in enumerate(rebuilt_table)
+            if candidate.variant_id == selected_id
+        )
+    rebuilt_state = replace(
+        state,
+        variant_indices=state.variant_indices[:strip]
+        + (rebuilt_selected_index,)
+        + state.variant_indices[strip + 1 :],
+    )
+    return StageBoundaryUpdate(problem=rebuilt_problem, state=rebuilt_state)
+
+
 @dataclass(frozen=True, order=True, slots=True)
 class PlacementKey:
     """Exact instance, variant, and geometry identity retained by search."""
@@ -577,6 +705,9 @@ class PlacementKey:
                 self.variant_ids,
             ),
         )
+
+
+type QualityArchiveKey = tuple[int, int, int, float, float, PlacementKey]
 
 
 @dataclass(frozen=True, slots=True)
@@ -825,6 +956,7 @@ def align_direct_inserts(
             target.consumer_row,
             target.producer_span,
             target.consumer_span,
+            target.origin_deltas,
         ),
     )
     realized_targets = carried_targets.copy()
@@ -889,18 +1021,29 @@ def _align_direct_target(
     producer_y_bounds = _relation_bounds(decoded, sizes, producer, consumer, axis=1)
     consumer_y_bounds = _relation_bounds(decoded, sizes, consumer, producer, axis=1)
 
-    x_difference = [-(target.consumer_span - 1), target.producer_span - 1]
+    x_pairs: list[tuple[int, int]] = []
+    for origin_delta in target.origin_deltas:
+        x_difference = [origin_delta, origin_delta]
+        _preserve_pair_relation(
+            decoded.x[producer],
+            producer_width,
+            decoded.x[consumer],
+            consumer_width,
+            x_difference,
+        )
+        x_pair = _closest_coordinate_pair(
+            decoded.x[producer],
+            producer_x_bounds,
+            decoded.x[consumer],
+            consumer_x_bounds,
+            x_difference,
+        )
+        if x_pair is not None:
+            x_pairs.append(x_pair)
     y_difference = [
         1 + target.producer_row - target.consumer_row,
         catalog.SORTER_MAX_REACH + target.producer_row - target.consumer_row,
     ]
-    _preserve_pair_relation(
-        decoded.x[producer],
-        producer_width,
-        decoded.x[consumer],
-        consumer_width,
-        x_difference,
-    )
     _preserve_pair_relation(
         decoded.y[producer],
         producer_height,
@@ -908,12 +1051,13 @@ def _align_direct_target(
         consumer_height,
         y_difference,
     )
-    x_pair = _closest_coordinate_pair(
-        decoded.x[producer],
-        producer_x_bounds,
-        decoded.x[consumer],
-        consumer_x_bounds,
-        x_difference,
+    x_pair = min(
+        x_pairs,
+        key=lambda pair: (
+            abs(pair[0] - decoded.x[producer]) + abs(pair[1] - decoded.x[consumer]),
+            pair,
+        ),
+        default=None,
     )
     y_pair = _closest_coordinate_pair(
         decoded.y[producer],
@@ -1085,11 +1229,14 @@ def _target_is_direct(decoded: DecodedPlacement, target: DirectInsertTarget) -> 
         - decoded.y[target.producer]
         - target.producer_row
     )
-    return (
-        1 <= row_gap <= catalog.SORTER_MAX_REACH
-        and decoded.x[target.producer] <= decoded.x[target.consumer] + target.consumer_span - 1
-        and decoded.x[target.consumer] <= decoded.x[target.producer] + target.producer_span - 1
-    )
+    if not 1 <= row_gap <= catalog.SORTER_MAX_REACH:
+        return False
+    origin_delta = decoded.x[target.consumer] - decoded.x[target.producer]
+    origin_deltas = target.origin_deltas
+    # One check runs per target for every annealing score. Construction validates
+    # this tuple as sorted, so binary search keeps each check logarithmic.
+    origin_index = bisect_left(origin_deltas, origin_delta)
+    return origin_index < len(origin_deltas) and origin_deltas[origin_index] == origin_delta
 
 
 def derive_stage_seed(base_seed: int, stage_index: int) -> int:
@@ -1769,6 +1916,35 @@ def build_elite_archive(
         order.append(candidate.key)
         categories_by_key[candidate.key] = [EliteCategory.BLENDED]
 
+    selected_signatures: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+    redundant_index: int | None = None
+    for index, key in enumerate(order):
+        signature = _archive_relation_signature(distinct[key])
+        if (
+            signature in selected_signatures
+            and categories_by_key[key] == [EliteCategory.BLENDED]
+        ):
+            redundant_index = index
+        else:
+            selected_signatures.add(signature)
+
+    if redundant_index is not None:
+        replacement = min(
+            (
+                candidate
+                for candidate in values
+                if candidate.key not in categories_by_key
+                and _archive_relation_signature(candidate) not in selected_signatures
+            ),
+            key=_blended_archive_key,
+            default=None,
+        )
+        if replacement is not None:
+            redundant_key = order[redundant_index]
+            del categories_by_key[redundant_key]
+            order[redundant_index] = replacement.key
+            categories_by_key[replacement.key] = [EliteCategory.BLENDED]
+
     return tuple(
         TaggedAnnealIncumbent(
             incumbent=distinct[key],
@@ -1798,14 +1974,14 @@ def _blended_archive_key(candidate: AnnealIncumbent) -> tuple[SearchEnergy, Plac
 
 def quality_archive_key(
     candidate: AnnealIncumbent,
-) -> tuple[int, int, int, int, float, PlacementKey]:
+) -> QualityArchiveKey:
     breakdown = candidate.breakdown
     return (
         breakdown.hard_outline_overflow,
-        breakdown.width,
-        breakdown.used_height,
-        breakdown.gap_area,
+        breakdown.width * breakdown.used_height,
+        breakdown.missed_direct_inserts,
         breakdown.weighted_hpwl,
+        breakdown.history_cost,
         candidate.key,
     )
 
@@ -1834,6 +2010,13 @@ def _lowest_history_archive_key(
         breakdown.weighted_hpwl,
         candidate.key,
     )
+
+
+def _archive_relation_signature(
+    candidate: AnnealIncumbent,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    dedupe_key = _archive_dedupe_key(candidate)
+    return dedupe_key[0], dedupe_key[1]
 
 
 def _archive_dedupe_key(

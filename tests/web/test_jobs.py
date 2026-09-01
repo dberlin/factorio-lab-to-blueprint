@@ -5,7 +5,9 @@ from __future__ import annotations
 import dataclasses
 import threading
 import time
+from pathlib import Path
 
+import httpx
 import pytest
 
 from flab2bp import pipeline
@@ -15,10 +17,34 @@ from flab2bp.layout.base import (
     NoValidLayout,
     ProjectionFailureRecord,
 )
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
+from flab2bp.web.server import serve
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
+
+
+@pytest.mark.parametrize("legacy_power", [False, True])
+def test_server_rejects_legacy_power_payload(
+    legacy_power: bool,
+    small_build: pipeline.Build,
+    tmp_path: Path,
+) -> None:
+    httpd, builder = serve(port=0, dist=tmp_path, solve=lambda _options, _progress: small_build)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = httpx.post(
+            f"http://127.0.0.1:{httpd.server_address[1]}/api/build",
+            json={"url": URL, "power": legacy_power},
+        )
+        assert response.status_code == 400
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        builder.shutdown()
+        thread.join(timeout=5)
 
 
 def _settled(builder: Builder, job_id: str, *, timeout_s: float = 20.0) -> Json:
@@ -55,7 +81,11 @@ def test_unframed_success_finishes_as_controlled_error(
 ) -> None:
     unframed = dataclasses.replace(
         small_build,
-        placement=dataclasses.replace(small_build.placement, frame=None),
+        placement=dataclasses.replace(
+            small_build.placement,
+            frame=None,
+            completion=None,
+        ),
     )
     builder = Builder(solve=lambda _o, _p: unframed)
     try:
@@ -279,13 +309,94 @@ def test_the_snapshot_carries_the_ceiling_and_the_elapsed_time(
 ) -> None:
     builder = Builder(solve=lambda _o, _p: small_build)
     try:
-        options = Options(url=URL, strategy="best", candidates=2, budget_s=4.0)
+        options = Options(
+            url=URL,
+            strategy="best",
+            candidate_policies=(
+                CandidatePolicy.NO_PROLIFERATOR,
+                CandidatePolicy.ALL_PRODUCTS,
+            ),
+            budget_s=4.0,
+        )
         snap = _settled(builder, builder.submit(options).id)
         assert snap["solver_ceiling_s"] == 2 * pipeline.PRODUCTION_STRATEGY_COUNT * 4.0
         assert isinstance(snap["elapsed_s"], float)
         reported = snap["options"]
         assert isinstance(reported, dict)
         assert reported["strategy"] == "best"
+        assert reported["candidate_policies"] == [
+            CandidatePolicy.NO_PROLIFERATOR.value,
+            CandidatePolicy.ALL_PRODUCTS.value,
+        ]
+        assert "candidates" not in reported
+    finally:
+        builder.shutdown()
+
+
+def test_progress_total_comes_from_the_pipeline(
+    small_build: pipeline.Build,
+) -> None:
+    def solve(_options: Options, note: pipeline.ProgressSink) -> pipeline.Build:
+        note(
+            pipeline.AttemptProgress(
+                1,
+                99,
+                "observed-candidate",
+                "freeform",
+                "started",
+            )
+        )
+        return small_build
+
+    builder = Builder(solve=solve)
+    try:
+        job = builder.submit(
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=(
+                    CandidatePolicy.NO_PROLIFERATOR,
+                    CandidatePolicy.OUTPUT_PRODUCTS,
+                ),
+            )
+        )
+        snap = _settled(builder, job.id)
+        progress = _object(snap["progress"])
+        assert progress["total"] == 99
+    finally:
+        builder.shutdown()
+
+
+def test_filtered_pipeline_total_is_not_replaced_by_the_request_ceiling(
+    small_build: pipeline.Build,
+) -> None:
+    def solve(_options: Options, note: pipeline.ProgressSink) -> pipeline.Build:
+        note(
+            pipeline.AttemptProgress(
+                1,
+                1,
+                "surviving-candidate",
+                "freeform",
+                "started",
+            )
+        )
+        return small_build
+
+    builder = Builder(solve=solve)
+    try:
+        job = builder.submit(
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=(
+                    CandidatePolicy.NO_PROLIFERATOR,
+                    CandidatePolicy.OUTPUT_PRODUCTS,
+                ),
+            )
+        )
+        snap = _settled(builder, job.id)
+        progress = _object(snap["progress"])
+        assert progress["total"] == 1
     finally:
         builder.shutdown()
 
@@ -326,7 +437,16 @@ def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) 
 
     builder = Builder(solve=solve)
     try:
-        job = builder.submit(Options(url=URL, candidates=2))
+        job = builder.submit(
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=(
+                    CandidatePolicy.NO_PROLIFERATOR,
+                    CandidatePolicy.ALL_PRODUCTS,
+                ),
+            )
+        )
         assert reached_second.wait(timeout=20.0)
         snap = builder.snapshot(job)
         progress = snap["progress"]
@@ -369,12 +489,14 @@ def test_a_job_that_has_not_started_laying_out_claims_no_progress(
         builder.shutdown()
 
 
-def test_band_defaults_to_portable_and_accepts_only_exact_strings() -> None:
+def test_band_defaults_to_portable_and_accepts_exact_dimensions() -> None:
     assert parse_options({"url": URL}).band == "portable"
     assert tuple(
         parse_options({"url": URL, "band": selection}).band
         for selection in BAND_SELECTIONS
     ) == BAND_SELECTIONS
+    assert parse_options({"url": URL, "band": "160"}).band == "50x800"
+    assert parse_options({"url": URL, "band": "200"}).band == "160x1000"
 
     for value in (160, None, "240", "Portable"):
         with pytest.raises(InvalidOptions, match="'band'"):
@@ -392,9 +514,65 @@ def test_run_build_passes_band_to_pipeline(
 
     monkeypatch.setattr(pipeline, "build", spy)
     with pytest.raises(ValueError, match="stop after observing"):
-        run_build(Options(url=URL, band="160"), lambda _step: None)
+        run_build(Options(url=URL, band="160x1000"), lambda _step: None)
 
-    assert seen["band"] == "160"
+    assert seen["band"] == "160x1000"
+
+
+def test_run_build_passes_the_exact_candidate_policy_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise ValueError("stop after observing options")
+
+    monkeypatch.setattr(pipeline, "build", spy)
+    selected = (
+        CandidatePolicy.NO_PROLIFERATOR,
+        CandidatePolicy.OUTPUT_PRODUCTS,
+    )
+    with pytest.raises(ValueError, match="stop after observing"):
+        run_build(
+            Options(url=URL, candidate_policies=selected),
+            lambda _step: None,
+        )
+
+    assert seen["candidate_policies"] == selected
+
+
+def test_pinned_flow_snapshot_advertises_one_effective_candidate(
+    small_build: pipeline.Build,
+) -> None:
+    builder = Builder(solve=lambda _o, _p: small_build)
+    try:
+        options = Options(
+            url=URL,
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+            flow="Recipes\nid,name\ngraphene,Graphene\n",
+            budget_s=4.0,
+        )
+        snap = _settled(builder, builder.submit(options).id)
+        assert snap["solver_ceiling_s"] == pipeline.PRODUCTION_STRATEGY_COUNT * 4.0
+    finally:
+        builder.shutdown()
+
+
+def test_run_build_does_not_forward_the_retired_power_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def spy(*_args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        raise ValueError("stop after observing options")
+
+    monkeypatch.setattr(pipeline, "build", spy)
+    with pytest.raises(ValueError, match="stop after observing"):
+        run_build(Options(url=URL), lambda _step: None)
+
+    assert "power" not in seen
 
 
 def test_run_build_passes_fetch_flow_and_web_url_validator(

@@ -1259,7 +1259,7 @@ Expected: all pass.
 Run:
 
 ```bash
-uv run python scripts/ab_compare.py --a freeform --b sequence-pair --only magnetic-coil --budget 10 --repeat 2 --candidates 1 --json out/sequence-pair-smoke.json
+uv run python scripts/ab_compare.py --a freeform --b sequence-pair --only magnetic-coil --budget 10 --repeat 2 --candidate-policy no-proliferator --json out/sequence-pair-smoke.json
 ```
 
 Expected: both strategies produce recorded outcomes in `out/sequence-pair-smoke.json`; the command does not claim promotion from one cell.
@@ -1429,7 +1429,6 @@ uv run python scripts/ab_compare.py \
   --tier stress \
   --budget 10,60,120,300 \
   --repeat 5 \
-  --candidates 3 \
   --json out/sequence-pair-gate-no-power.json
 
 uv run python scripts/ab_compare.py \
@@ -1438,7 +1437,6 @@ uv run python scripts/ab_compare.py \
   --tier stress \
   --budget 10,60,120,300 \
   --repeat 5 \
-  --candidates 3 \
   --power \
   --json out/sequence-pair-gate-power.json
 ```
@@ -1566,7 +1564,7 @@ uv run flab2bp \
   --strategy freeform \
   --no-power \
   --budget 10 \
-  --candidates 1 \
+  --candidate-policy no-proliferator \
   --verbose \
   --out out/sequence-pair-production-smoke.txt
 ```

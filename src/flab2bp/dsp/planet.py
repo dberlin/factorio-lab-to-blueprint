@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import math
 import struct
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
 
@@ -63,6 +63,10 @@ from flab2bp.dsp import colliders, rules
 
 Vec3 = tuple[float, float, float]
 Quat = tuple[float, float, float, float]
+
+
+class ProjectionCancelled(Exception):
+    """Projected geometry stopped before producing a complete verdict."""
 
 
 def _f32(x: float) -> float:
@@ -249,11 +253,9 @@ class Band:
     #: Inclusive span of ``|latitude grid index|`` -- one hemisphere's rows.
     grid_lo: int
     grid_hi: int
-    #: Longest run of CONSECUTIVE latitude grid indices sharing this band.  For
-    #: every band but the equatorial one this is one hemisphere's worth, because
-    #: the two hemispheres' copies of the band are separated by every band
-    #: between them.  The equatorial band is the one that spans the equator, so
-    #: its run is both hemispheres plus row zero.
+    #: Published latitude-square capacity.  For non-equatorial bands this is
+    #: the count of grid indices in one hemisphere's run.  The equatorial band
+    #: has 160 squares bounded by the 161 snapped indices ``-80..80``.
     rows: int
     #: Longitude grid cells around the planet: ``area_segments * 5``.
     columns: int
@@ -261,6 +263,17 @@ class Band:
     @property
     def is_equatorial(self) -> bool:
         return self.latitude_index_lo == 0
+
+    def anchor_ranges(self, rows: int) -> tuple[range, ...]:
+        """Contiguous southmost-row ranges for an extent of ``rows`` rows."""
+        if rows > self.rows:
+            return ()
+        if self.is_equatorial:
+            return (range(-self.grid_hi, self.grid_hi - rows + 2),)
+        return (
+            range(-self.grid_hi, -self.grid_lo - rows + 2),
+            range(self.grid_lo, self.grid_hi - rows + 2),
+        )
 
     def anchors(self, rows: int) -> tuple[int, ...]:
         """Every southmost grid row an extent of ``rows`` rows may occupy here.
@@ -283,13 +296,11 @@ class Band:
         (``BlueprintUtils.cs:2034``, ``num3``).  Enumerating both is what makes
         the flip unnecessary to model separately.
         """
-        if rows > self.rows:
-            return ()
-        if self.is_equatorial:
-            return tuple(range(-self.grid_hi, self.grid_hi - rows + 2))
-        north = range(self.grid_lo, self.grid_hi - rows + 2)
-        south = range(-self.grid_hi, -self.grid_lo - rows + 2)
-        return tuple(south) + tuple(north)
+        return tuple(
+            anchor
+            for anchor_range in self.anchor_ranges(rows)
+            for anchor in anchor_range
+        )
 
 
 @lru_cache(maxsize=8)
@@ -312,7 +323,7 @@ def bands(segment: int = colliders.PLANET_SEGMENT) -> tuple[Band, ...]:
             continue
         grid_lo = 5 * index_lo + 1
         grid_hi = min(5 * (k - 1) + 5, pole)
-        rows = (2 * grid_hi + 1) if index_lo == 0 else (grid_hi - grid_lo + 1)
+        rows = (2 * grid_hi) if index_lo == 0 else (grid_hi - grid_lo + 1)
         out.append(
             Band(
                 area_segments=previous,
@@ -623,7 +634,7 @@ class Projection:
             spherical_rotation(d, yaw + self.yaw_offset),
         )
 
-    def _shell(self, z: float) -> float:
+    def shell_radius(self, z: float) -> float:
         """The radius a building at level ``z`` actually sits on.
 
         ``localOffset_z * 1.3333333f + 0.2f + realRadius``
@@ -643,11 +654,11 @@ class Projection:
         ``(radius + 0.2) / radius``; everywhere else it is smaller or larger, and
         how much is the whole reason this module exists.
         """
-        return self._shell(z) * math.cos(self.latitude(x, y)) * self.longitude_step
+        return self.shell_radius(z) * math.cos(self.latitude(x, y)) * self.longitude_step
 
     def row_arc(self, z: float = 0.0) -> float:
         """World units between adjacent ROWS.  Constant over the planet."""
-        return self._shell(z) * self.latitude_step
+        return self.shell_radius(z) * self.latitude_step
 
 
 def projections_for(
@@ -852,8 +863,20 @@ def sorter_condition(sorter: Sorter, projection: Projection) -> str | None:
     """
     belts = sorter.belt_ends
     min_len, max_len = rules.SORTER_LENGTH[belts]
-    lpos = projection.position(sorter.x, sorter.y, sorter.z)
-    lpos2 = projection.position(sorter.x2, sorter.y2, sorter.z2)
+    direction = projection.direction(sorter.x, sorter.y)
+    direction2 = projection.direction(sorter.x2, sorter.y2)
+    scale = projection.shell_radius(sorter.z)
+    scale2 = projection.shell_radius(sorter.z2)
+    lpos = (
+        direction[0] * scale,
+        direction[1] * scale,
+        direction[2] * scale,
+    )
+    lpos2 = (
+        direction2[0] * scale2,
+        direction2[1] * scale2,
+        direction2[2] * scale2,
+    )
     reference = projection.position(sorter.ref_x, sorter.ref_y, sorter.ref_z)
 
     magnitude = math.dist(lpos, lpos2)
@@ -870,8 +893,8 @@ def sorter_condition(sorter: Sorter, projection: Projection) -> str | None:
         return "TooClose"
 
     offset = projection.yaw_offset
-    lrot = spherical_rotation(projection.direction(sorter.x, sorter.y), sorter.yaw + offset)
-    lrot2 = spherical_rotation(projection.direction(sorter.x2, sorter.y2), sorter.yaw2 + offset)
+    lrot = spherical_rotation(direction, sorter.yaw + offset)
+    lrot2 = spherical_rotation(direction2, sorter.yaw2 + offset)
     if quaternion_angle_deg(lrot, lrot2) > rules.SKEW_PAIR_DEG:
         return "TooSkew"
     axis = _norm((lpos2[0] - lpos[0], lpos2[1] - lpos[1], lpos2[2] - lpos[2]))
@@ -912,21 +935,38 @@ def _magnitude(v: Vec3) -> float:
 
 @cache
 def collider_radius(model_index: int) -> float:
-    """Cached sphere containing every collider for one immutable model.
+    """Cached exact sphere containing every collider for one immutable model.
 
     Used only to rule pairs OUT before the exact test -- see
-    :func:`candidate_pairs`.  Over-estimating it costs time; under-estimating it
-    would lose a collision, so it is the sum of the offset's magnitude and the
-    half-extent's, which is the corner-to-corner bound and cannot be too small.
+    :func:`candidate_pairs`.  Shipped build-collider quaternions are identity
+    (a separately tested data invariant), so the farthest box corner along an
+    axis is ``abs(position) + extent``.  Measuring that corner is tighter than
+    adding the position and extent magnitudes; that triangle bound retained
+    pairs whose boxes could never meet.
     """
-    worst = 0.0
-    for pos, ext, _q in colliders.build_colliders(model_index):
-        worst = max(worst, _magnitude(pos) + _magnitude(ext))
-    return worst
+    worst2 = 0.0
+    identity = (0.0, 0.0, 0.0, 1.0)
+    for position, extent, rotation in colliders.build_colliders(model_index):
+        if rotation != identity:
+            raise AssertionError("build collider quaternion must be identity")
+        worst2 = max(
+            worst2,
+            sum(
+                (abs(coordinate) + half_extent) ** 2
+                for coordinate, half_extent in zip(position, extent, strict=True)
+            ),
+        )
+    return math.sqrt(worst2)
 
 
 def candidate_pairs(
-    buildings: Sequence[colliders.Placed], band: Band, segment: int, radius: float
+    buildings: Sequence[colliders.Placed],
+    band: Band,
+    segment: int,
+    radius: float,
+    *,
+    candidate_position: int | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[tuple[int, int]]:
     """Pairs that could possibly collide SOMEWHERE in this band.
 
@@ -934,7 +974,8 @@ def candidate_pairs(
     :func:`colliders.obb_overlap` and it still runs on everything this returns;
     all this does is stop the anchor loop rebuilding boxes for the overwhelming
     majority of pairs that are tens of tiles apart and could not touch at any
-    latitude.
+    latitude.  ``candidate_position`` restricts the conservative broad phase to
+    pairs containing one newly staged object; peer pairs were already certified.
 
     The bound is a LOWER bound on the world separation, so it can only ever
     over-include.  Rows are a fixed arc apart everywhere; columns are narrowest
@@ -943,6 +984,8 @@ def candidate_pairs(
     not a tolerance on the verdict -- make it 0.5 and the answers do not change,
     only the running time.
     """
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     if not buildings:
         return []
     step = longitude_rad_per_grid(band.area_segments)
@@ -955,19 +998,57 @@ def candidate_pairs(
     # case even in the 4-segment band and far less anywhere a collision lives.
     col = radius * poleward * step * 0.9
     row = radius * lat_step * 0.9
-    radii = [collider_radius(b.model_index) for b in buildings]
+    radii: list[float] = []
+    for building in buildings:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        radii.append(collider_radius(building.model_index))
+    if candidate_position is not None:
+        if type(candidate_position) is not int or not (
+            0 <= candidate_position < len(buildings)
+        ):
+            raise ValueError("candidate position must index the collision buildings")
+        candidate = buildings[candidate_position]
+        candidate_radius = radii[candidate_position]
+        focused: list[tuple[int, int]] = []
+        for peer_position, peer in enumerate(buildings):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            if peer_position == candidate_position:
+                continue
+            gap = math.sqrt(
+                ((candidate.x - peer.x) * col) ** 2
+                + ((candidate.y - peer.y) * row) ** 2
+                + ((candidate.z - peer.z) * 4.0 / 3.0) ** 2
+            )
+            if gap <= candidate_radius + radii[peer_position]:
+                focused.append(
+                    (
+                        min(candidate_position, peer_position),
+                        max(candidate_position, peer_position),
+                    )
+                )
+        return sorted(focused)
     reach = max(radii, default=0.0) * 2.0
     # Bucket by column so the scan is linear in the number of NEAR pairs rather
     # than quadratic in the number of buildings.
     span = max(1.0, reach / max(col, 1e-9))
     grid: dict[int, list[int]] = {}
     for i, b in enumerate(buildings):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         grid.setdefault(int(math.floor(b.x / span)), []).append(i)
     out: set[tuple[int, int]] = set()
     for key, members in grid.items():
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         others = members + [j for k in (key + 1,) for j in grid.get(k, ())]
         for a_pos, i in enumerate(members):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
             for j in others[a_pos + 1 :]:
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
                 if i == j:
                     continue
                 bi, bj = buildings[i], buildings[j]
@@ -985,6 +1066,13 @@ def collisions_at(
     buildings: Sequence[colliders.Placed],
     projection: Projection,
     pairs: Sequence[tuple[int, int]] | None = None,
+    *,
+    _box_cache: dict[
+        tuple[colliders.Placed, Projection],
+        tuple[colliders.Box, ...],
+    ]
+    | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> list[tuple[int, int]]:
     """``EBuildCondition.Collide`` pairs among machines projected into a band.
 
@@ -1017,20 +1105,69 @@ def collisions_at(
     the sum of its two collider radii.  Passing ``None`` tests everything, at the
     cost of projecting every building whether or not it has a neighbour.
     """
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
     if pairs is None:
-        pairs = [(i, j) for i in range(len(buildings)) for j in range(i + 1, len(buildings))]
+        all_pairs: list[tuple[int, int]] = []
+        for left in range(len(buildings)):
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            for right in range(left + 1, len(buildings)):
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
+                all_pairs.append((left, right))
+        pairs = all_pairs
     if not pairs:
         return []
-    wanted = {i for pair in pairs for i in pair}
-    boxes = {
-        i: colliders.target_boxes(buildings[i], *projection.pose(*_placed_at(buildings[i])))
-        for i in wanted
-    }
-    hits = [
-        pair
-        for pair in pairs
-        if any(colliders.obb_overlap(q, t) for q in boxes[pair[0]] for t in boxes[pair[1]])
-    ]
+    wanted: set[int] = set()
+    for pair in pairs:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        wanted.update(pair)
+    boxes: dict[int, tuple[colliders.Box, ...]] = {}
+    pending_boxes: dict[
+        tuple[colliders.Placed, Projection],
+        tuple[colliders.Box, ...],
+    ] = {}
+    for i in wanted:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        cache_key = (buildings[i], projection)
+        built = None if _box_cache is None else _box_cache.get(cache_key)
+        if built is None:
+            built = tuple(
+                colliders.target_boxes(
+                    buildings[i],
+                    *projection.pose(*_placed_at(buildings[i])),
+                )
+            )
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            if _box_cache is not None:
+                pending_boxes[cache_key] = built
+        boxes[i] = built
+    hits: list[tuple[int, int]] = []
+    for pair in pairs:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        collided = False
+        for query in boxes[pair[0]]:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            for target in boxes[pair[1]]:
+                if cancelled is not None and cancelled():
+                    raise ProjectionCancelled
+                if colliders.obb_overlap(query, target):
+                    collided = True
+                    break
+            if collided:
+                break
+        if collided:
+            hits.append(pair)
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    if _box_cache is not None:
+        _box_cache.update(pending_boxes)
     return sorted(hits)
 
 

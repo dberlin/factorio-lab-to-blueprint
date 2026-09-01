@@ -53,6 +53,7 @@ from flab2bp.layout.sequence_pair import (
     decode_sequence_pair,
     decode_state,
     derive_stage_seed,
+    enable_variant_stage_boundary,
     merge_stage_boundary,
     repair_neighbourhood,
     split_stage_boundary,
@@ -63,6 +64,7 @@ from flab2bp.layout.strip_variants import (
     StripVariant,
     _variant_id,
     partition_strip_family,
+    variant_with_minimum_pitch,
     variants_for_count,
 )
 from tests.layout.test_freeform import two_stage_spec
@@ -243,6 +245,7 @@ def _direct_alignment_scene(
         consumer_row=0,
         producer_span=2,
         consumer_span=2,
+        origin_deltas=(-1, 0, 1),
     )
     return problem, decoded, target
 
@@ -301,8 +304,8 @@ def _conflicting_alignment_scene() -> tuple[
         y_windows=((4, 4), (6, 6), (6, 6)),
         gap_area=0,
     )
-    first = DirectInsertTarget((0, 1), 0, 1, 1, 0, 1, 1)
-    second = DirectInsertTarget((0, 2), 0, 2, 1, 0, 1, 1)
+    first = DirectInsertTarget((0, 1), 0, 1, 1, 0, 1, 1, (0,))
+    second = DirectInsertTarget((0, 2), 0, 2, 1, 0, 1, 1, (0,))
     return problem, decoded, first, second
 
 
@@ -367,6 +370,46 @@ def test_alignment_rejects_a_carried_key_whose_geometry_is_already_broken() -> N
         align_direct_inserts(problem, broken, (first, second))
 
 
+def test_sorter_occupied_overlap_is_not_a_direct_insert() -> None:
+    problem = PlacementProblem(
+        sizes=((3, 1), (3, 1)),
+        nets=((0, 1),),
+        outline_height=2,
+        area_lower_bound=6,
+    )
+    decoded = DecodedPlacement(
+        x=(0, 0),
+        y=(0, 1),
+        width=4,
+        used_height=2,
+        x_windows=((0, 0), (0, 1)),
+        y_windows=((0, 0), (1, 1)),
+        gap_area=0,
+    )
+    target = DirectInsertTarget(
+        key=(0, 1),
+        producer=0,
+        consumer=1,
+        producer_row=0,
+        consumer_row=0,
+        producer_span=3,
+        consumer_span=3,
+        origin_deltas=(1,),
+    )
+
+    aligned = align_direct_inserts(problem, decoded, (target,))
+
+    assert aligned.direct == frozenset({target.key})
+    assert aligned.x[target.consumer] - aligned.x[target.producer] == 1
+
+    carried_at_sorter_column = replace(
+        decoded,
+        direct=frozenset({target.key}),
+    )
+    with pytest.raises(ValueError, match="not realized"):
+        align_direct_inserts(problem, carried_at_sorter_column, (target,))
+
+
 def test_two_stage_alignment_retains_cp_sat_direct_opportunity() -> None:
     spec = two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
@@ -404,8 +447,11 @@ def test_two_stage_alignment_retains_cp_sat_direct_opportunity() -> None:
     )
 
     aligned = align_direct_inserts(problem, decoded, targets)
-    retained = len(oracle.direct & aligned.direct)
-    missed = len(oracle.direct - aligned.direct)
+    promised_pairs = frozenset(
+        (direct.source_strip, direct.destination_strip) for direct in oracle.direct
+    )
+    retained = len(promised_pairs & aligned.direct)
+    missed = len(promised_pairs - aligned.direct)
 
     assert (len(oracle.direct), retained, missed) == (1, 1, 0)
 
@@ -440,8 +486,70 @@ def test_generated_cases_are_deterministic_legal_and_integer_only() -> None:
             _assert_no_overlap(first, sizes)
 
 
+class _ComparisonCountingOriginDeltas:
+    values: tuple[int, ...]
+    comparisons: int
+
+    def __init__(self, values: tuple[int, ...]) -> None:
+        self.values = values
+        self.comparisons = 0
+
+    def __contains__(self, value: object) -> bool:
+        for candidate in self.values:
+            self.comparisons += 1
+            if candidate == value:
+                return True
+        return False
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __getitem__(self, index: int) -> int:
+        self.comparisons += 1
+        return self.values[index]
+
+
+def test_direct_origin_lookup_scales_sublinearly_and_preserves_holes() -> None:
+    for size in (8, 128, 2_048):
+        origin_deltas = tuple(range(0, size * 2, 2))
+        target = DirectInsertTarget(
+            (0, 1),
+            0,
+            1,
+            0,
+            0,
+            size * 2,
+            1,
+            origin_deltas,
+        )
+
+        allowed_deltas = _ComparisonCountingOriginDeltas(origin_deltas)
+        object.__setattr__(target, "origin_deltas", allowed_deltas)
+        allowed = DecodedPlacement(
+            x=(0, origin_deltas[-1]),
+            y=(0, 1),
+            width=size * 2,
+            used_height=2,
+            x_windows=((0, 0), (origin_deltas[-1], origin_deltas[-1])),
+            y_windows=((0, 0), (1, 1)),
+            gap_area=0,
+        )
+        assert sequence_pair_module._target_is_direct(allowed, target)
+        assert allowed_deltas.comparisons <= size.bit_length() + 1
+
+        hole_deltas = _ComparisonCountingOriginDeltas(origin_deltas)
+        object.__setattr__(target, "origin_deltas", hole_deltas)
+        hole = replace(
+            allowed,
+            x=(0, origin_deltas[-1] - 1),
+            x_windows=((0, 0), (origin_deltas[-1] - 1, origin_deltas[-1] - 1)),
+        )
+        assert not sequence_pair_module._target_is_direct(hole, target)
+        assert hole_deltas.comparisons <= size.bit_length() + 1
+
+
 def test_direct_insert_target_is_immutable() -> None:
-    target = DirectInsertTarget((0, 1), 0, 1, 1, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 1, 0, 2, 2, (-1, 0, 1))
 
     with pytest.raises(FrozenInstanceError):
         target.producer_span = 3  # type: ignore[misc]
@@ -737,6 +845,9 @@ def _alignment_variant_problem(
         consumer_row=0,
         producer_span=selected_sizes[0][0],
         consumer_span=selected_sizes[1][0],
+        origin_deltas=tuple(
+            range(-(selected_sizes[1][0] - 1), selected_sizes[0][0])
+        ),
     )
     return problem, decoded, target
 
@@ -766,6 +877,133 @@ def test_alignment_accepts_smaller_selected_variant_without_default_overlap() ->
     assert target.key in aligned.direct
     assert aligned.x == decoded.x
     assert aligned.width == 13
+
+
+def _stage_boundary_variant_problem() -> tuple[PlacementProblem, AnnealState, StripVariant]:
+    family = _family(_single_machine_spec("chemical-plant", count=4))
+    variants = variants_for_count(family, 2)
+    problem = PlacementProblem(
+        sizes=tuple(
+            (variants[0].box_width + padding, variants[0].box_height + 1)
+            for padding in (2, 3)
+        ),
+        nets=((0, 1),),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=(
+            StripInstanceId(family.family_id, 0, 2),
+            StripInstanceId(family.family_id, 2, 2),
+        ),
+        variant_tables=(variants, variants),
+    )
+    state = AnnealState(
+        pair=SequencePair((1, 0), (0, 1)),
+        gaps=GapProfile((2, 3), (4, 1)),
+        base_seed=71,
+        stage_index=5,
+        variant_indices=(0, 1),
+    )
+    padded = variant_with_minimum_pitch(variants[0], variants[0].pitch_x + 1)
+    return problem, state, padded
+
+
+def test_enable_variant_stage_boundary_rebuilds_only_target_table_and_selection() -> None:
+    problem, state, padded = _stage_boundary_variant_problem()
+
+    update = enable_variant_stage_boundary(
+        problem,
+        state,
+        strip=0,
+        variant=padded,
+        select_variant=True,
+    )
+
+    assert update.problem.variant_tables[0] == problem.variant_tables[0] + (padded,)
+    assert update.problem.variant_tables[1] == problem.variant_tables[1]
+    assert update.problem.sizes == problem.sizes
+    assert update.problem.instance_ids == problem.instance_ids
+    assert update.problem.nets == problem.nets
+    assert update.problem.logical_net_ids == problem.logical_net_ids
+    assert update.state.variant_indices[0] == len(problem.variant_tables[0])
+    assert update.state.variant_indices[1] == state.variant_indices[1]
+    assert update.state.pair == state.pair
+    assert update.state.gaps == state.gaps
+    assert update.state.base_seed == state.base_seed
+    assert update.state.stage_index == state.stage_index
+
+
+def test_enable_variant_stage_boundary_is_idempotent_for_selected_variant() -> None:
+    problem, state, padded = _stage_boundary_variant_problem()
+    enabled = enable_variant_stage_boundary(
+        problem,
+        state,
+        strip=0,
+        variant=padded,
+        select_variant=True,
+    )
+
+    repeated = enable_variant_stage_boundary(
+        enabled.problem,
+        enabled.state,
+        strip=0,
+        variant=padded,
+        select_variant=True,
+    )
+
+    assert repeated.problem is enabled.problem
+    assert repeated.state is enabled.state
+
+
+def test_enable_variant_stage_boundary_supersedes_padded_variant_and_rebases_siblings() -> (
+    None
+):
+    problem, state, padded = _stage_boundary_variant_problem()
+    enabled = enable_variant_stage_boundary(
+        problem,
+        state,
+        strip=0,
+        variant=padded,
+        select_variant=True,
+    )
+    replacement = variant_with_minimum_pitch(padded, padded.pitch_x + 1)
+    ordinary_sibling = replace(enabled.state, variant_indices=(1, 1))
+    padded_sibling = replace(
+        enabled.state,
+        variant_indices=(len(enabled.problem.variant_tables[0]) - 1, 1),
+    )
+
+    selected = enable_variant_stage_boundary(
+        enabled.problem,
+        enabled.state,
+        strip=0,
+        variant=replacement,
+        select_variant=True,
+    )
+    retained = enable_variant_stage_boundary(
+        enabled.problem,
+        ordinary_sibling,
+        strip=0,
+        variant=replacement,
+        select_variant=False,
+    )
+    migrated = enable_variant_stage_boundary(
+        enabled.problem,
+        padded_sibling,
+        strip=0,
+        variant=replacement,
+        select_variant=False,
+    )
+
+    replacement_index = len(problem.variant_tables[0])
+    expected_table = problem.variant_tables[0] + (replacement,)
+    assert selected.problem.variant_tables[0] == expected_table
+    assert padded not in selected.problem.variant_tables[0]
+    assert retained.problem == selected.problem == migrated.problem
+    assert selected.state.variant_indices[0] == replacement_index
+    assert retained.state.variant_indices[0] == ordinary_sibling.variant_indices[0]
+    assert migrated.state.variant_indices[0] == replacement_index
+    assert retained.state.pair == ordinary_sibling.pair
+    assert migrated.state.pair == padded_sibling.pair
 
 
 def test_stage_boundary_split_rebuilds_every_cardinality_owned_array() -> None:
@@ -984,7 +1222,7 @@ def test_candidate_score_reports_independently_recomputed_components() -> None:
         y_windows=((2, 2), (6, 6)),
         gap_area=5,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 1, 1)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 1, 1, (0,))
     weighted = NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0)
     context = feedback_cost_context(
         FeedbackState(
@@ -1099,7 +1337,7 @@ def test_missed_direct_insert_penalty_depends_on_candidate_geometry() -> None:
         y_windows=((1, 1), (0, 0)),
         gap_area=0,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
     context = feedback_cost_context(
         FeedbackState.empty((2, problem.outline_height)),
         problem,
@@ -1125,7 +1363,7 @@ def test_dynamic_direct_targets_score_with_one_validated_context() -> None:
         y_windows=((1, 1), (0, 0)),
         gap_area=0,
     )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2)
+    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
     context = feedback_cost_context(FeedbackState.empty((2, 2)), problem)
 
     without_target = sequence_pair_module.score_candidate(
@@ -1316,6 +1554,7 @@ def _archive_incumbent(
     history: float,
     missed_direct: int = 0,
     overflow: int = 0,
+    used_height: int = 1,
     seed: int = 0,
 ) -> AnnealIncumbent:
     state = AnnealState(
@@ -1328,20 +1567,20 @@ def _archive_incumbent(
         x=(0,),
         y=(0,),
         width=width,
-        used_height=1,
+        used_height=used_height,
         x_windows=((0, 0),),
         y_windows=((0, 0),),
         gap_area=0,
         variant_indices=(0,),
     )
-    dimensions = ((width, 1),)
+    dimensions = ((width, used_height),)
     return AnnealIncumbent(
         state=state,
         decoded=decoded,
         breakdown=EnergyBreakdown(
             width=width,
-            used_height=1,
-            box_area=width,
+            used_height=used_height,
+            box_area=width * used_height,
             gap_area=0,
             weighted_hpwl=hpwl,
             history_cost=history,
@@ -1358,6 +1597,163 @@ def _archive_incumbent(
             east_gaps=(0,),
             north_gaps=(0,),
         ),
+    )
+
+
+def test_quality_archive_key_prefers_scored_projected_area_over_width() -> None:
+    problem = PlacementProblem(
+        sizes=((4, 4), (1, 4)),
+        nets=(),
+        outline_height=8,
+        area_lower_bound=20,
+    )
+    context = PlacementCostContext(
+        net_weights=(),
+        net_pairs=(),
+        history_outline=(0, problem.outline_height),
+        history_summed_area=(0.0,) * (problem.outline_height + 1),
+    )
+    horizontal = AnnealState(
+        pair=SequencePair((0, 1), (0, 1)),
+        gaps=GapProfile.zero(2),
+        base_seed=0,
+        variant_indices=(0, 0),
+    )
+    vertical = replace(
+        horizontal,
+        pair=SequencePair((0, 1), (1, 0)),
+    )
+    area_aligned = sequence_pair_module._score_state(problem, horizontal, context)
+    narrower = sequence_pair_module._score_state(problem, vertical, context)
+
+    assert (
+        area_aligned.breakdown.box_area
+        == narrower.breakdown.box_area
+        == problem.area_lower_bound
+    )
+    assert (
+        area_aligned.breakdown.width,
+        area_aligned.breakdown.used_height,
+    ) == (5, 4)
+    assert (
+        narrower.breakdown.width,
+        narrower.breakdown.used_height,
+    ) == (4, 8)
+    assert sequence_pair_module.quality_archive_key(
+        area_aligned
+    ) < sequence_pair_module.quality_archive_key(narrower)
+
+
+def test_quality_archive_key_preserves_overflow_proxy_and_placement_tie_order() -> None:
+    best = _archive_incumbent(width=5, hpwl=1.0, history=2.0)
+    missed = replace(best, breakdown=replace(best.breakdown, missed_direct_inserts=1))
+    overflowing = replace(
+        best,
+        breakdown=replace(
+            best.breakdown,
+            hard_outline_overflow=1,
+            missed_direct_inserts=0,
+            weighted_hpwl=0.0,
+            history_cost=0.0,
+        ),
+    )
+    later_key = replace(best, key=replace(best.key, x=(1,)))
+
+    assert sequence_pair_module.quality_archive_key(
+        best
+    ) < sequence_pair_module.quality_archive_key(missed)
+    assert sequence_pair_module.quality_archive_key(
+        missed
+    ) < sequence_pair_module.quality_archive_key(overflowing)
+    assert sorted(
+        (later_key, best),
+        key=sequence_pair_module.quality_archive_key,
+    ) == [best, later_key]
+
+
+def _archive_relation_incumbent(
+    *,
+    pair: SequencePair,
+    width: int,
+    key_offset: int,
+) -> AnnealIncumbent:
+    candidate = _archive_incumbent(
+        width=width,
+        hpwl=10.0,
+        history=10.0,
+    )
+    size = len(pair.positive)
+    x = tuple(range(key_offset, key_offset + size))
+    y = (0,) * size
+    gaps = GapProfile.zero(size)
+    return replace(
+        candidate,
+        state=AnnealState(
+            pair=pair,
+            gaps=gaps,
+            base_seed=0,
+            variant_indices=(0,) * size,
+        ),
+        decoded=replace(
+            candidate.decoded,
+            x=x,
+            y=y,
+            x_windows=tuple((coordinate, coordinate) for coordinate in x),
+            y_windows=((0, 0),) * size,
+            variant_indices=(0,) * size,
+        ),
+        key=PlacementKey(
+            x=x,
+            y=y,
+            dimensions=((1, 1),) * size,
+            east_gaps=gaps.east,
+            north_gaps=gaps.north,
+        ),
+    )
+
+
+def test_elite_archive_substitutes_one_redundant_relation_under_fixed_cap() -> None:
+    mandatory = _archive_incumbent(width=1, hpwl=0.0, history=0.0)
+    shared_relation = SequencePair((0, 1), (0, 1))
+    first_shared = _archive_relation_incumbent(
+        pair=shared_relation,
+        width=10,
+        key_offset=10,
+    )
+    second_shared = _archive_relation_incumbent(
+        pair=shared_relation,
+        width=11,
+        key_offset=20,
+    )
+    distinct_relation = _archive_relation_incumbent(
+        pair=SequencePair((0, 1), (1, 0)),
+        width=12,
+        key_offset=30,
+    )
+    candidates = (
+        second_shared,
+        distinct_relation,
+        mandatory,
+        first_shared,
+    )
+
+    forward = sequence_pair_module.build_elite_archive(candidates, elite_count=3)
+    reverse = sequence_pair_module.build_elite_archive(
+        reversed(candidates),
+        elite_count=3,
+    )
+
+    assert forward == reverse
+    assert len(forward) == 3
+    assert tuple(entry.incumbent for entry in forward) == (
+        mandatory,
+        first_shared,
+        distinct_relation,
+    )
+    assert forward[0].categories == tuple(sequence_pair_module.EliteCategory)
+    assert tuple(entry.categories for entry in forward[1:]) == (
+        (sequence_pair_module.EliteCategory.BLENDED,),
+        (sequence_pair_module.EliteCategory.BLENDED,),
     )
 
 
@@ -1790,6 +2186,26 @@ def test_lns_selects_stranded_blocking_endpoints_and_sequence_neighbours() -> No
 
     neighbourhood = select_lns_neighbourhood(
         _lns_failure(stranded, blocking_nets=(blocker,)),
+        pair,
+        gaps,
+        problem,
+        decoded,
+    )
+
+    assert neighbourhood == frozenset({2, 3, 4, 5, 6, 7, 8})
+
+
+def test_static_access_lns_selects_failed_and_blocking_endpoint_owners() -> None:
+    pair, gaps, problem, decoded = _lns_geometry(10)
+    stranded = NetId(3, 4, "proliferator", NetRole.PROLIFERATOR, 0)
+    blocker = NetId(7, 7, "proliferator", NetRole.PROLIFERATOR, 1)
+
+    neighbourhood = select_lns_neighbourhood(
+        _lns_failure(
+            stranded,
+            kind=RouteFailureKind.STATIC_ACCESS,
+            blocking_nets=(blocker,),
+        ),
         pair,
         gaps,
         problem,

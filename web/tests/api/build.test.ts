@@ -3,6 +3,7 @@ import {
   BandSelection,
   BuildOptions,
   BuildRequestError,
+  CandidatePolicy,
   DEFAULT_OPTIONS,
   isSettled,
   pollBuild,
@@ -12,6 +13,41 @@ import {
 import { aJob, aResult, restoreFetch, serving } from '../support/build';
 
 afterEach(restoreFetch);
+
+test('candidate policy schema defaults to all three UI choices', () => {
+  expect(CandidatePolicy.options).toEqual(['no-proliferator', 'all-products', 'output-products']);
+  expect(DEFAULT_OPTIONS.candidate_policies).toEqual([
+    'all-products',
+    'output-products',
+    'no-proliferator',
+  ]);
+  expect(DEFAULT_OPTIONS).not.toHaveProperty('candidates');
+});
+
+test('candidate policy schema preserves an exact non-empty subset', () => {
+  const parsed = BuildOptions.parse({
+    ...DEFAULT_OPTIONS,
+    candidate_policies: ['output-products', 'no-proliferator'],
+  });
+  expect(parsed.candidate_policies).toEqual(['output-products', 'no-proliferator']);
+});
+
+test.each([
+  ['empty', []],
+  ['numeric', [1]],
+  ['duplicate', ['all-products', 'all-products']],
+  ['unknown', ['unknown']],
+] as const)('candidate policy schema rejects %s selections', (_name, candidate_policies) => {
+  expect(BuildOptions.safeParse({ ...DEFAULT_OPTIONS, candidate_policies }).success).toBe(false);
+});
+
+test('strict serialization rejects the legacy numeric candidate field', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  const pending = Reflect.apply(submitBuild, undefined, [{ ...DEFAULT_OPTIONS, candidates: 1 }]);
+
+  await expect(pending).rejects.toThrow();
+  expect(calls).toHaveLength(0);
+});
 
 test('submit posts sequence-pair with its exact wire spelling', async () => {
   const calls = serving({ status: 202, body: aJob({ state: 'queued', result: null }) });
@@ -29,29 +65,52 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   expect(body.proliferator_tier).toBe('auto');
   expect(body.fetch_flow).toBe(false);
   expect(body.band).toBe('portable');
+  expect(body.candidate_policies).toEqual(['all-products', 'output-products', 'no-proliferator']);
+  expect(body).not.toHaveProperty('candidates');
 
   await submitBuild({ ...DEFAULT_OPTIONS, proliferator_tier: '1' });
   const explicit = BuildOptions.parse(JSON.parse(String(calls[1]?.init?.body)));
   expect(explicit.proliferator_tier).toBe('1');
 });
 
-test('band selection uses the exact public strings and defaults to portable', () => {
+test('default options and submitted bodies omit the retired power option', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  expect(DEFAULT_OPTIONS).not.toHaveProperty('power');
+
+  await submitBuild({ ...DEFAULT_OPTIONS, url: 'https://example.invalid/x' });
+
+  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  expect(body).not.toHaveProperty('power');
+});
+
+test.each([false, true])(
+  'submit rejects legacy power: %s before making a request',
+  async (power) => {
+    const calls = serving({ status: 202, body: aJob() });
+    const pending = Reflect.apply(submitBuild, undefined, [{ ...DEFAULT_OPTIONS, power }]);
+
+    await expect(pending).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  },
+);
+
+test('band selection uses the exact ordered authoritative dimensions', () => {
   const expected = [
     'portable',
-    '4',
-    '8',
-    '16',
-    '20',
-    '32',
-    '40',
-    '60',
-    '80',
-    '100',
-    '120',
-    '160',
-    '200',
+    '5x20',
+    '5x40',
+    '5x80',
+    '5x100',
+    '10x160',
+    '10x200',
+    '15x300',
+    '15x400',
+    '25x500',
+    '25x600',
+    '50x800',
+    '160x1000',
   ];
-  expect([...BandSelection.options].sort()).toEqual([...expected].sort());
+  expect(BandSelection.options).toEqual(expected);
   expect(DEFAULT_OPTIONS.band).toBe('portable');
   expect(BandSelection.safeParse(160).success).toBe(false);
   expect(BandSelection.safeParse('240').success).toBe(false);

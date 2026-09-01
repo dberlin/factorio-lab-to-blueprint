@@ -134,6 +134,8 @@ namespace FlabOracle.Check
             CheckVector3("prefab slotPose0 position", pf.GetProperty("slotPoses")[0].GetProperty("position"), TrickyPos);
             Check("prefab portPoses null", pf.GetProperty("portPoses").ValueKind == JsonValueKind.Null);
 
+            CheckTargetCapture();
+
             if (_failures == 0)
             {
                 Console.WriteLine("OK: serializer check passed");
@@ -297,6 +299,233 @@ namespace FlabOracle.Check
             ctx.Records = new Dictionary<BuildPreview, MatchRecord> { { bad, rec } };
 
             return Dumper.Serialize(tool, "hotkey", true, true, ctx);
+        }
+
+        private static void CheckTargetCapture()
+        {
+            BlueprintArea area = New<BlueprintArea>();
+            area.areaSegments = 160;
+            area.width = 75;
+            area.height = 36;
+
+            BlueprintBuilding westBuilding = Building(36, 44f, 2f, 1f);
+            BlueprintBuilding splitterBuilding = Building(40, 45f, 2f, 0f);
+            splitterBuilding.yaw = 90f;
+            BlueprintBuilding feedBuilding = Building(36, 44.7723007f, 2.00012708f, 1.00009131f);
+            BlueprintBuilding drawBuilding = Building(36, 45.2276993f, 2.00012708f, 1.00009131f);
+            BlueprintBuilding eastBuilding = Building(36, 46f, 2f, 1f);
+            feedBuilding.outputObj = splitterBuilding;
+            drawBuilding.inputObj = splitterBuilding;
+
+            BlueprintBuilding primaryWestBuilding = Building(36, 44f, 6f, 1f);
+            BlueprintBuilding primarySplitterBuilding = Building(40, 45f, 6f, 0f);
+            primarySplitterBuilding.yaw = 90f;
+            BlueprintBuilding primaryFeedBuilding = Building(36, 44.7780228f, 6.00012112f, 1.00009131f);
+            BlueprintBuilding primaryDrawBuilding = Building(36, 45.2219772f, 6.00012112f, 1.00009131f);
+            BlueprintBuilding primaryEastBuilding = Building(36, 46f, 6f, 1f);
+            primaryFeedBuilding.outputObj = primarySplitterBuilding;
+            primaryDrawBuilding.inputObj = primarySplitterBuilding;
+            BlueprintBuilding rogueBuilding = Building(36, 10f, 10f, 1f);
+
+            BlueprintBuilding[] buildings =
+            {
+                westBuilding,
+                splitterBuilding,
+                feedBuilding,
+                drawBuilding,
+                eastBuilding,
+                primaryWestBuilding,
+                primarySplitterBuilding,
+                primaryFeedBuilding,
+                primaryDrawBuilding,
+                primaryEastBuilding,
+                rogueBuilding
+            };
+            for (int i = 0; i < buildings.Length; i++)
+            {
+                buildings[i].index = i;
+            }
+
+            BlueprintData blueprint = New<BlueprintData>();
+            blueprint.areas = new[] { area };
+            blueprint.buildings = buildings;
+
+            PrefabDesc beltDesc = New<PrefabDesc>();
+            beltDesc.isBelt = true;
+            PrefabDesc splitterDesc = New<PrefabDesc>();
+            splitterDesc.isSplitter = true;
+
+            BuildPreview west = Preview(beltDesc, 1, 401);
+            BuildPreview splitter = Preview(splitterDesc, 2, 402);
+            BuildPreview feed = Preview(beltDesc, 3, 403);
+            BuildPreview draw = Preview(beltDesc, 4, 404);
+            BuildPreview east = Preview(beltDesc, 5, 405);
+            feed.output = splitter;
+            draw.input = splitter;
+            west.output = feed;
+            east.input = draw;
+            BuildPreview primaryWest = Preview(beltDesc, 6, 406);
+            BuildPreview primarySplitter = Preview(splitterDesc, 7, 407);
+            BuildPreview primaryFeed = Preview(beltDesc, 8, 408);
+            BuildPreview primaryDraw = Preview(beltDesc, 9, 409);
+            BuildPreview primaryEast = Preview(beltDesc, 10, 410);
+            primaryFeed.output = primarySplitter;
+            primaryDraw.input = primarySplitter;
+            primaryWest.output = primaryFeed;
+            primaryEast.input = primaryDraw;
+            BuildPreview rogue = Preview(beltDesc, 11, 411);
+            rogue.bpgpuiModelId = -1;
+            rogue.lpos = new Vector3(10f, 20f, 30f);
+            rogue.lpos2 = new Vector3(11f, 21f, 31f);
+            rogue.lrot = new Quaternion(0.1f, 0.2f, 0.3f, 0.9f);
+            rogue.lrot2 = new Quaternion(0.4f, 0.5f, 0.6f, 0.7f);
+
+            BuildTool_BlueprintPaste tool = New<BuildTool_BlueprintPaste>();
+            tool.blueprint = blueprint;
+            tool.bpPool = new[] { primaryEast, east, primarySplitter, splitter, primaryDraw, draw, primaryWest, west, primaryFeed, feed, rogue };
+            tool.bpCursor = tool.bpPool.Length;
+            tool.blueprintPath = "/tmp/corrected.txt";
+
+            TargetCaptureSession session;
+            Check("target semantic match", TargetCaptureSession.TryCreate(tool, out session));
+            session.BeginCheckPass();
+            rogue.condition = EBuildCondition.Collide;
+            session.RecordAddError(rogue, EBuildCondition.Collide);
+            Vector3 rogueQueryCenter = rogue.lpos + rogue.lpos.normalized * 0.2f;
+            session.RecordSphere(rogueQueryCenter, 0.23f, new Collider[0], 395264, QueryTriggerInteraction.Collide, 0);
+            session.SnapshotAll("check-prefix");
+            session.RecordAddError(primaryFeed, EBuildCondition.Collide);
+            string json = session.Serialize("check-build-conditions-postfix", false, 700, true, true);
+
+            using JsonDocument doc = JsonDocument.Parse(json);
+            JsonElement root = doc.RootElement;
+            Check("target schema", root.GetProperty("schema").GetString() == "flab2bp-model40-belts/3");
+            Check("target sphere patch status", root.GetProperty("spherePatchApplied").GetBoolean());
+            Check("target capsule patch status", root.GetProperty("capsulePatchApplied").GetBoolean());
+            Check("target sphere hook observed", root.GetProperty("sphereHookFiredWhileTargetActive").GetBoolean());
+            Check("false condition pass retained", !root.GetProperty("checkBuildConditionsResult").GetBoolean());
+            Check("pass queries are not truncated", !root.GetProperty("passPhysicsQueriesTruncated").GetBoolean());
+            Check("target capsule hook not fabricated", !root.GetProperty("capsuleHookFiredWhileTargetActive").GetBoolean());
+            JsonElement groups = root.GetProperty("groups");
+            Check("two splitter groups", groups.GetArrayLength() == 2);
+            Check("control group label", groups[0].GetProperty("semantic").GetString() == "control-y2");
+            Check("primary group label", groups[1].GetProperty("semantic").GetString() == "suspect-y6");
+            Check("group target count", groups[1].GetProperty("targets").GetArrayLength() == 4);
+            Check("target timeline bounded", root.GetProperty("events").GetArrayLength() == 2);
+            Check("timeline includes both splitters", root.GetProperty("events")[0].GetProperty("targetStates").GetArrayLength() == 10);
+            Check("suspect splitter timeline label", root.GetProperty("events")[0].GetProperty("targetStates")[5]
+                .GetProperty("semantic").GetString() == "suspect-y6/model40-splitter");
+            JsonElement feedJson = groups[1].GetProperty("targets")[1];
+            Check("feed semantic label", feedJson.GetProperty("semantic").GetString() == "splitter-feed");
+            Check("feed blueprint slot", feedJson.GetProperty("blueprintArraySlot").GetInt32() == 7);
+            Check("feed active slot", feedJson.GetProperty("final").GetProperty("activeSlot").GetInt32() == 8);
+            JsonElement nonOk = root.GetProperty("nonOkPreviews");
+            Check("non-Ok count metadata", root.GetProperty("nonOkPreviewCount").GetInt32() == 1);
+            Check("non-Ok enumeration is complete", nonOk.GetArrayLength() == 1);
+            Check("non-Ok active slot", nonOk[0].GetProperty("activeSlot").GetInt32() == 10);
+            Check("non-Ok canonical slot", nonOk[0].GetProperty("blueprintArraySlot").GetInt32() == 10);
+            Check("non-Ok blueprint index", nonOk[0].GetProperty("blueprintIndexField").GetInt32() == 10);
+            Check("non-Ok blueprint group", nonOk[0].GetProperty("blueprintGroupOrdinal").GetInt32() == 0);
+            Check("non-Ok fallback mapping source", nonOk[0].GetProperty("mappingSource").GetString() == "active-pool-order");
+            Check("non-Ok local pose", nonOk[0].GetProperty("blueprintLocalOffset").GetArrayLength() == 3);
+            Check("non-Ok world pose", nonOk[0].GetProperty("state").GetProperty("lrot").GetArrayLength() == 4);
+            Check("non-Ok descriptor flags", nonOk[0].GetProperty("descIsBelt").GetBoolean());
+            Check("non-Ok condition", nonOk[0].GetProperty("state").GetProperty("conditionName").GetString() == "Collide");
+            Check("non-Ok AddError argument", nonOk[0].GetProperty("addErrorArguments")[0]
+                .GetProperty("conditionName").GetString() == "Collide");
+            Check("non-Ok nearby query", nonOk[0].GetProperty("nearbyPhysicsQueries").GetArrayLength() == 1);
+            rogue.condition = EBuildCondition.Ok;
+            Check("feed output actual slot", feedJson.GetProperty("final").GetProperty("output")
+                .GetProperty("bpPoolSlot").GetInt32() == 2);
+            Check("add-error group semantic", root.GetProperty("events")[1].GetProperty("semantic").GetString() == "suspect-y6/splitter-feed");
+
+            BlueprintData capturedBlueprint = tool.blueprint;
+            tool.blueprint = New<BlueprintData>();
+            Check("target session rejects changed blueprint identity", !session.Matches(tool));
+            tool.blueprint = capturedBlueprint;
+            BuildPreview[] capturedPool = tool.bpPool;
+            tool.bpPool = (BuildPreview[])capturedPool.Clone();
+            Check("target session rejects changed pool identity", !session.Matches(tool));
+            tool.bpPool = capturedPool;
+
+            session.ResetCycle();
+            string flushReason;
+            Check("monitor starts transient window", !session.MonitorFrame(90, out flushReason));
+            primaryFeed.condition = EBuildCondition.Collide;
+            Check("monitor observes transient non-Ok", !session.MonitorFrame(91, out flushReason));
+            primaryFeed.condition = EBuildCondition.Ok;
+            Check("monitor does not flush recovered target", !session.MonitorFrame(92, out flushReason));
+            Check("monitor keeps recovered target active", !session.MonitorFrame(94, out flushReason));
+
+            session.ResetCycle();
+            Check("monitor waits on first frame", !session.MonitorFrame(100, out flushReason));
+            primaryFeed.condition = EBuildCondition.Collide;
+            Check("monitor retains query window after non-Ok", !session.MonitorFrame(101, out flushReason));
+            Check("monitor waits for stable non-Ok", !session.MonitorFrame(102, out flushReason));
+            Check("monitor flushes stable non-Ok target", session.MonitorFrame(103, out flushReason) && flushReason == "target-non-ok-stable");
+            using JsonDocument monitored = JsonDocument.Parse(session.Serialize("update-monitor", null, 103, true, true));
+            Check("monitor metadata reports non-Ok", monitored.RootElement.GetProperty("nonOkObserved").GetBoolean());
+            Check("monitor metadata start frame", monitored.RootElement.GetProperty("monitorStartFrame").GetInt32() == 100);
+
+            session.ResetCycle();
+            primaryFeed.condition = EBuildCondition.Ok;
+            session.RecordPrestageResult(false, 200);
+            Check("prestage monitor starts armed", !session.MonitorFrame(200, out flushReason));
+            Check("prestage monitor waits for stable false", !session.MonitorFrame(201, out flushReason));
+            Check("prestage monitor flushes invalid placement", session.MonitorFrame(202, out flushReason) && flushReason == "prestage-false-stable");
+            using JsonDocument prestage = JsonDocument.Parse(session.Serialize("prestage-false-stable", null, 202, true, true));
+            Check("prestage result metadata", !prestage.RootElement.GetProperty("lastPrestageResult").GetBoolean());
+            Check("prestage observation metadata", prestage.RootElement.GetProperty("prestageObserved").GetBoolean());
+
+            session.ResetCycle();
+            primaryFeed.condition = EBuildCondition.Ok;
+
+            for (int i = 0; i < 130; i++)
+            {
+                session.RecordAddError(primaryFeed, EBuildCondition.Collide);
+            }
+            using JsonDocument bounded = JsonDocument.Parse(session.Serialize("createprebuilds-prefix", true, 701, true, true));
+            JsonElement boundedEvents = bounded.RootElement.GetProperty("events");
+            Check("target timeline keeps bounded length", boundedEvents.GetArrayLength() == 128);
+            Check("target timeline keeps latest event", boundedEvents[127].GetProperty("targetEventOrdinal").GetInt32() == 130);
+
+            splitterBuilding.modelIndex = 41;
+            TargetCaptureSession ignored;
+            Check("target rejects missing model40 splitter", !TargetCaptureSession.TryCreate(tool, out ignored));
+            splitterBuilding.modelIndex = 40;
+            splitterBuilding.localOffset_x = 45.001f;
+            Check("target rejects perturbed splitter coordinate", !TargetCaptureSession.TryCreate(tool, out ignored));
+            splitterBuilding.localOffset_x = 45f;
+            primarySplitterBuilding.localOffset_y = 6.001f;
+            Check("target rejects perturbed y6 splitter", !TargetCaptureSession.TryCreate(tool, out ignored));
+            primarySplitterBuilding.localOffset_y = 6f;
+            primaryFeedBuilding.outputObj = splitterBuilding;
+            Check("target rejects detached y6 feed", !TargetCaptureSession.TryCreate(tool, out ignored));
+            primaryFeedBuilding.outputObj = primarySplitterBuilding;
+            area.index = 3;
+            Check("target rejects buildings from another area", !TargetCaptureSession.TryCreate(tool, out ignored));
+        }
+
+        private static BlueprintBuilding Building(short modelIndex, float x, float y, float z)
+        {
+            BlueprintBuilding b = New<BlueprintBuilding>();
+            b.modelIndex = modelIndex;
+            b.localOffset_x = x;
+            b.localOffset_y = y;
+            b.localOffset_z = z;
+            return b;
+        }
+
+        private static BuildPreview Preview(PrefabDesc desc, int bpgpuiModelId, int previewIndex)
+        {
+            BuildPreview bp = New<BuildPreview>();
+            bp.desc = desc;
+            bp.bpgpuiModelId = bpgpuiModelId;
+            bp.previewIndex = previewIndex;
+            bp.condition = EBuildCondition.Ok;
+            bp.lrot = Quaternion.identity;
+            bp.lrot2 = Quaternion.identity;
+            return bp;
         }
 
         private static T New<T>()

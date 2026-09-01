@@ -11,6 +11,9 @@ uv run python scripts/ab_compare.py --tier small --budget 1,4 --repeat 3
 uv run python scripts/ab_compare.py --tier mid --repeat 5 --markdown docs/AB_RESULTS.md
 ```
 
+Current comparison runs are always powered. There is no power-mode selector;
+the persisted `power: true` field is constant historical-schema metadata.
+
 The harness is `src/flab2bp/bench/ab.py` (measurement engine, unit-tested in
 `tests/bench/test_ab.py`) driven by `scripts/ab_compare.py`. It is deliberately
 **not** part of `pytest`: a full sweep is minutes of CP-SAT and the suite stays
@@ -161,10 +164,9 @@ Without them, nine spec-conformance and flow checks silently skip, and
 `report.ok` degrades to "no check that ran failed" — a build that never ran its
 throughput checks reads as clean. Any unexpected skip fails the sample.
 
-The one tolerated skip is the `power.*` family under the default `--no-power`,
-because that is a *caller declaration*: we told the validator there would be no
-towers. Inferring it instead would make a dropped tower — a real bug —
-indistinguishable from a deliberate no-power build.
+Power checks are included in that policy. Current runs pass
+`expect_power=True`, so a skipped `power.*` check is an unchecked powered build
+and fails the sample rather than being tolerated as an off-mode declaration.
 
 ### 8. Fairness of the run itself
 
@@ -204,7 +206,7 @@ Alongside area the report carries, per paired URL:
 hour, not a design.** Re-run before quoting any of them.
 
 ```
-uv run python scripts/ab_compare.py --tier small --budget 1,4 --repeat 3 --candidates 3
+uv run python scripts/ab_compare.py --tier small --budget 1,4 --repeat 3
 # 180 samples, 167s wall
 ```
 

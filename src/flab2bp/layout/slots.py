@@ -69,7 +69,7 @@ from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import colliders
+from flab2bp.dsp import colliders, splitter_ports
 from flab2bp.dsp.rules import (
     ADDON_FROM_SLOT,
     ADDON_TO_SLOT,
@@ -82,7 +82,6 @@ from flab2bp.dsp.rules import (
     OUTPUT_FROM_SLOT,
     SLOT_ALIGN_COS,
     SLOT_REACH,
-    SPLITTER_MAX_PORTS,
     WORLD_UNITS_PER_LEVEL,
     world_gap,
 )
@@ -1049,15 +1048,23 @@ def assign_sorter_slots(
     return assign_belt_slots(_assign_sorter_slots_only(buildings))
 
 
-def _docks_into_a_port(buildings: Sequence[PlacedBuilding], link: int | None) -> bool:
-    """Does ``link`` name a building a belt attaches to by PORT rather than slot?
+def _links_splitter(
+    buildings: Sequence[PlacedBuilding], link: int | None
+) -> bool:
+    return (
+        link is not None
+        and 0 <= link < len(buildings)
+        and buildings[link].item_id == cat.SPLITTER_ID
+    )
 
-    Splitters are excluded although they carry ports of their own: their two
-    slot indices are the constants
-    :data:`~flab2bp.dsp.rules.SPLITTER_INPUT_TO_SLOT` and
-    :data:`~flab2bp.dsp.rules.SPLITTER_OUTPUT_FROM_SLOT`, unanimous over 25
-    junctions, and :func:`assign_belt_slots` has always assigned the junction
-    side from ``SPLITTER_MAX_PORTS`` rather than from a pose.
+
+def _docks_into_a_port(buildings: Sequence[PlacedBuilding], link: int | None) -> bool:
+    """Does ``link`` name a building a belt docks into by a non-Splitter port?
+
+    Splitters are excluded because this predicate controls the BELT's own
+    constant port-dock slot.  :func:`assign_belt_slots` handles the peer side of
+    a Splitter connection separately by selecting its exact
+    ``PrefabDesc.portPoses`` index.
     """
     if link is None or not 0 <= link < len(buildings):
         return False
@@ -1090,7 +1097,8 @@ def assign_belt_slots(
       **3** (38).  Never 0, never above 3.  Those are the three INPUT slots of
       the receiving belt; slot 0 is where its own output link lives, so writing
       0 puts a predecessor's back-link in the cell the successor link needs.
-    * belt <-> splitter: **0..3**, one per side, in both directions.
+    * belt <-> splitter: the one of ports **0..3** whose model/yaw-adjusted
+      ``PrefabDesc.portPoses`` forward and height match the adjoining belt path.
     * and across all ~10,000 connection records in the corpus, **no
       ``(object, slot)`` cell is named twice.**
 
@@ -1115,9 +1123,28 @@ def assign_belt_slots(
     takes a feeder, so it does not settle the case; it is settled the same way
     the pool is settled everywhere else, by not sharing a cell.
     """
+    supported_models = ", ".join(
+        str(model) for model in sorted(cat.SPLITTER_MODEL_INDICES)
+    )
+    for i, building in enumerate(buildings):
+        if (
+            building.item_id == cat.SPLITTER_ID
+            and building.model_index not in cat.SPLITTER_MODEL_INDICES
+        ):
+            raise SlotUndetermined(
+                f"splitter {i} uses model {building.model_index}; item "
+                f"{cat.SPLITTER_ID} supports only the supported models "
+                f"{supported_models}, so a foreign prefab's port table cannot be "
+                "encoded as a Splitter"
+            )
+
+    port_context = splitter_ports.placement_port_context(buildings)
     taken: dict[int, set[int]] = {}
     for i, b in enumerate(buildings):
-        if cat.is_belt(b.item_id) and _docks_into_a_port(buildings, b.input_obj):
+        if cat.is_belt(b.item_id) and (
+            _docks_into_a_port(buildings, b.input_obj)
+            or _links_splitter(buildings, b.input_obj)
+        ):
             taken.setdefault(i, set()).add(BELT_PORT_DRAW_TO_SLOT)
     out: list[PlacedBuilding] = []
     for i, b in enumerate(buildings):
@@ -1125,14 +1152,20 @@ def assign_belt_slots(
             out.append(b)
             continue
         changes: dict[str, int] = {}
-        # The belt's OWN end of a port dock. Constant, and counted: 178 records
-        # over the fixture corpus, `(out, 0)` on all 70 that feed a port and
-        # `(in, 1)` on all 108 that draw from one.
-        if _docks_into_a_port(buildings, b.output_obj):
+        # The belt's OWN end of a port dock. Constant for machines and
+        # Splitters alike: `(out, 0)` when feeding and `(in, 1)` when drawing.
+        if _docks_into_a_port(buildings, b.output_obj) or _links_splitter(
+            buildings, b.output_obj
+        ):
             changes["output_from_slot"] = BELT_PORT_FEED_FROM_SLOT
-        if _docks_into_a_port(buildings, b.input_obj):
+        if _docks_into_a_port(buildings, b.input_obj) or _links_splitter(
+            buildings, b.input_obj
+        ):
             changes["input_to_slot"] = BELT_PORT_DRAW_TO_SLOT
-        for field, link in (("output_to_slot", b.output_obj), ("input_from_slot", b.input_obj)):
+        for field, link in (
+            ("output_to_slot", b.output_obj),
+            ("input_from_slot", b.input_obj),
+        ):
             if link is None or not 0 <= link < len(buildings):
                 continue
             peer = buildings[link]
@@ -1143,9 +1176,21 @@ def assign_belt_slots(
                     # it draws from. Leaving it alone rather than inventing a
                     # slot for a link the corpus does not contain.
                     continue
-                legal = range(BELT_INPUT_SLOTS[0], BELT_INPUT_SLOTS[1])
+                legal: Sequence[int] = range(BELT_INPUT_SLOTS[0], BELT_INPUT_SLOTS[1])
             elif peer.item_id == cat.SPLITTER_ID:
-                legal = range(0, SPLITTER_MAX_PORTS)
+                direction: splitter_ports.Direction = (
+                    "feed" if field == "output_to_slot" else "draw"
+                )
+                port = port_context.expected_port(i, link, direction)
+                if port is None:
+                    raise SlotUndetermined(
+                        f"belt {i} at ({b.x}, {b.y}, {b.z}) cannot be matched to a "
+                        f"physical port of splitter {link} at "
+                        f"({peer.x}, {peer.y}, {peer.z}); the game selects a "
+                        "PrefabDesc.portPoses index from the adjoining path direction "
+                        "and height"
+                    )
+                legal = (port,)
             else:
                 # A machine, a station, an addon: the slot is the peer's own
                 # perimeter index and is not this function's to choose.

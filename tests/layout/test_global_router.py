@@ -83,6 +83,7 @@ def _problem(
         solid=frozenset(),
         reserved=tuple(sorted(reserved)),
         keep_out=frozenset(keep_out),
+        guard=frozenset(),
         nets=nets,
         core=bounds,
         route_bounds=bounds,
@@ -110,6 +111,30 @@ def _one_net_problem() -> tuple[_PreparedRoutingProblem, NetId]:
         ),
         net_id,
     )
+
+
+def test_prepared_workspaces_own_lists_and_share_frozen_building_templates() -> None:
+    problem, _net_id = _one_net_problem()
+
+    first = problem.new_workspace()
+    second = problem.new_workspace()
+
+    assert first.buildings is first.canvas.buildings
+    assert second.buildings is second.canvas.buildings
+    assert first.buildings is not second.buildings
+    assert all(
+        first_building is second_building is template
+        for first_building, second_building, template in zip(
+            first.buildings,
+            second.buildings,
+            problem.building_templates,
+            strict=True,
+        )
+    )
+
+    first.buildings.append(problem.building_templates[0])
+    assert len(first.buildings) == len(problem.building_templates) + 1
+    assert len(second.buildings) == len(problem.building_templates)
 
 
 def test_global_route_terminates_at_elevated_prepared_port() -> None:
@@ -332,9 +357,9 @@ def test_preparation_groups_internal_siblings_but_never_external_nets() -> None:
         None,
         first.dst,
         "iron",
-        ((0, 1, 0),),
-        (first_id,),
-        (stranger_id,),
+        boundary_goals=((0, 1, 0),),
+        src_group=(first_id,),
+        dst_group=(stranger_id,),
     )
 
     grouped = _with_sibling_groups((first, sibling, stranger, external))

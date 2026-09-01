@@ -9,19 +9,50 @@ must reproduce.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import defaultdict
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, replace
+from enum import Enum
 from itertools import combinations, product
 from typing import Literal
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
-from flab2bp.layout.base import Facing
-from flab2bp.layout.freeform import _dests, _logical_strip_plans, _LogicalStripPlan
+from flab2bp.layout.base import Facing, PlacedBuilding, Placement
+from flab2bp.layout.finalize import (
+    ProjectionFailure,
+    projection_safe_machine_pitch_x,
+)
 from flab2bp.spec import BuildSpec
 
 LaneKind = Literal["input", "output"]
 LaneSide = Literal["north", "south"]
 _CARDINAL_YAWS = (0.0, 90.0, 180.0, 270.0)
+
+
+class CargoDomain(Enum):
+    """Treatment identity that must remain disjoint while cargo is routed."""
+
+    UNSPRAYED = "unsprayed"
+    REQUIRES_SPRAY = "requires-spray"
+
+
+@dataclass(frozen=True, slots=True)
+class _LogicalStripPlan:
+    """One immutable rate/shard allocation before choosing physical geometry."""
+
+    group_key: str
+    shard_index: int
+    recipe_id: str
+    item_id: int
+    model_index: int
+    total_machine_count: int
+    cargo_domain: CargoDomain
+    in_above: tuple[tuple[str, ...], ...]
+    out_lanes: tuple[tuple[str, str, CargoDomain], ...]
+    in_below: tuple[tuple[str, ...], ...]
+    mode_params: tuple[int, ...] = ()
+    flank_outputs: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +93,19 @@ class MachinePlacementGeometry:
             raise ValueError("horizontal halos must complete the collider pitch")
         if self.north_halo + self.footprint_height + self.south_halo != self.pitch_y:
             raise ValueError("vertical halos must complete the collider pitch")
+
+    def with_minimum_pitch_x(self, required: int) -> MachinePlacementGeometry:
+        """Return this geometry with deterministic east-side X padding."""
+        if type(required) is not int or required <= 0:
+            raise ValueError("required X pitch must be a positive integer")
+        if required <= self.pitch_x:
+            return self
+        return replace(
+            self,
+            pitch_x=required,
+            east_halo=self.east_halo + required - self.pitch_x,
+        )
+
 
     @property
     def identity(self) -> tuple[int, ...]:
@@ -143,6 +187,7 @@ class LogicalLane:
     kind: LaneKind
     items: tuple[str, ...]
     destination_group_keys: tuple[str, ...]
+    cargo_domain: CargoDomain
     side: LaneSide
     side_index: int
 
@@ -248,6 +293,20 @@ class StripVariantId:
     attachments: tuple[tuple[str, int, tuple[LaneSorterAttachment, ...]], ...]
     port_docks: tuple[tuple[str, int, int, tuple[int, int], float], ...]
     box: tuple[int, int]
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class StripPoseId:
+    """Pitch-independent identity of one logical strip family pose."""
+
+    family_id: StripFamilyId
+    yaw_degrees: int
+    footprint: tuple[int, int]
+    placement_geometry: tuple[int, int, int, int]
+    lane_rows: tuple[tuple[str, int], ...]
+    attachments: tuple[tuple[str, int, tuple[LaneSorterAttachment, ...]], ...]
+    port_docks: tuple[tuple[str, int, int, tuple[int, int], float], ...]
+    box_height: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,6 +417,26 @@ class StripVariant:
         )
 
 
+def strip_pose_id(variant: StripVariant) -> StripPoseId:
+    """Return the bounded pose key shared by ordinary and padded variants."""
+    geometry = variant.placement_geometry
+    return StripPoseId(
+        family_id=variant.variant_id.family_id,
+        yaw_degrees=int(variant.yaw),
+        footprint=(variant.footprint_width, variant.footprint_height),
+        placement_geometry=(
+            geometry.pitch_y,
+            geometry.west_halo,
+            geometry.north_halo,
+            geometry.south_halo,
+        ),
+        lane_rows=variant.lane_plan.lane_rows,
+        attachments=tuple(plan.identity for plan in variant.attachment_plan),
+        port_docks=tuple(plan.identity for plan in variant.port_dock_plan),
+        box_height=variant.box_height,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class StripFamily:
     """Placement-independent work and every feasible cardinal physical pose."""
@@ -410,6 +489,19 @@ class StripInstanceId:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectionPitchRequirement:
+    """One exact projected same-strip collision requiring wider X pitch."""
+
+    family_id: StripFamilyId
+    instance_id: StripInstanceId
+    variant_id: StripVariantId
+    axis: Literal["x"]
+    rejected_pitch: int
+    required_pitch: int
+    failure: ProjectionFailure
+
+
+@dataclass(frozen=True, slots=True)
 class StripInstance:
     """A physical family range bound to one pose-valid variant."""
 
@@ -442,6 +534,185 @@ class StripInstance:
     @property
     def machine_stop(self) -> int:
         return self.machine_start + self.machine_count
+
+
+def _is_machine_building(building: PlacedBuilding) -> bool:
+    if (
+        catalog.is_belt(building.item_id)
+        or catalog.is_sorter(building.item_id)
+        or building.item_id == catalog.SPLITTER_ID
+    ):
+        return False
+    try:
+        info = catalog.building(building.item_id)
+    except KeyError:
+        return False
+    if info.is_belt_addon:
+        return False
+    if info.cover_radius <= 0:
+        return True
+    return any(
+        entry.machine_item_id == building.item_id
+        for entry in catalog.MODE_DRIVEN_MACHINE.values()
+    )
+
+
+type _ProjectionMachineKey = tuple[int, str | int, int, float, int, int]
+
+
+def projection_pitch_requirements(
+    placement: Placement,
+    *,
+    instance_ids: tuple[StripInstanceId, ...],
+    variants: tuple[StripVariant, ...],
+    failures: tuple[ProjectionFailure, ...],
+) -> tuple[ProjectionPitchRequirement | None, ...]:
+    """Map an ordered batch of collisions through one exact placement index."""
+    if (
+        not isinstance(instance_ids, tuple)
+        or not isinstance(variants, tuple)
+        or not instance_ids
+        or len(instance_ids) != len(variants)
+        or any(
+            not isinstance(instance_id, StripInstanceId)
+            or not isinstance(variant, StripVariant)
+            or variant.variant_id.family_id != instance_id.family_id
+            or len(variant.machine_origins_x) != instance_id.machine_count
+            or variant.box_width != instance_id.machine_count * variant.pitch_x
+            for instance_id, variant in zip(instance_ids, variants, strict=True)
+        )
+    ):
+        return (None,) * len(failures)
+
+    machine_flags: list[bool] = []
+    positions_by_key: dict[_ProjectionMachineKey, set[tuple[int, int]]] = {}
+    for building in placement.buildings:
+        is_machine = _is_machine_building(building)
+        machine_flags.append(is_machine)
+        owner = building.owner_strip
+        if not is_machine or type(owner) is not int or not 0 <= owner < len(variants):
+            continue
+        key: _ProjectionMachineKey = (
+            owner,
+            building.item_id,
+            building.model_index,
+            building.yaw,
+            building.width,
+            building.height,
+        )
+        positions_by_key.setdefault(key, set()).add((building.x, building.y))
+
+    ordinals_by_key: dict[_ProjectionMachineKey, dict[tuple[int, int], int]] = {}
+    for key, owned_positions in positions_by_key.items():
+        owner, _item_id, _model_index, yaw, width, height = key
+        variant = variants[owner]
+        if (
+            yaw != variant.yaw
+            or (width, height)
+            != (variant.footprint_width, variant.footprint_height)
+            or len(owned_positions) != len(variant.machine_origins_x)
+        ):
+            continue
+        local_origin_x = variant.machine_origins_x[0]
+        placed_origin_x, placed_origin_y = min(owned_positions)
+        translation_x = placed_origin_x - local_origin_x
+        translation_y = placed_origin_y - variant.lane_plan.machine_row
+        position_ordinals = {
+            (
+                translation_x + origin_x,
+                translation_y + variant.lane_plan.machine_row,
+            ): ordinal
+            for ordinal, origin_x in enumerate(variant.machine_origins_x)
+        }
+        if position_ordinals.keys() == owned_positions:
+            ordinals_by_key[key] = position_ordinals
+
+    requirements: list[ProjectionPitchRequirement | None] = []
+    building_count = len(placement.buildings)
+    for failure in failures:
+        if failure.check != "geom.collide" or not isinstance(failure.buildings, tuple):
+            requirements.append(None)
+            continue
+        indices = failure.buildings
+        if (
+            len(indices) != 2
+            or indices[0] == indices[1]
+            or any(type(index) is not int for index in indices)
+            or any(not 0 <= index < building_count for index in indices)
+        ):
+            requirements.append(None)
+            continue
+
+        left = placement.buildings[indices[0]]
+        right = placement.buildings[indices[1]]
+        owner = left.owner_strip
+        if (
+            type(owner) is not int
+            or type(right.owner_strip) is not int
+            or right.owner_strip != owner
+            or not 0 <= owner < len(instance_ids)
+            or not machine_flags[indices[0]]
+            or not machine_flags[indices[1]]
+        ):
+            requirements.append(None)
+            continue
+        instance_id = instance_ids[owner]
+        variant = variants[owner]
+        key = (
+            owner,
+            left.item_id,
+            left.model_index,
+            left.yaw,
+            left.width,
+            left.height,
+        )
+        ordinals = ordinals_by_key.get(key)
+        left_position = (left.x, left.y)
+        right_position = (right.x, right.y)
+        if (
+            (left.item_id, left.model_index, left.yaw)
+            != (right.item_id, right.model_index, right.yaw)
+            or left.yaw != variant.yaw
+            or (left.width, left.height)
+            != (variant.footprint_width, variant.footprint_height)
+            or (right.width, right.height)
+            != (variant.footprint_width, variant.footprint_height)
+            or abs(left.x - right.x) != variant.pitch_x
+            or ordinals is None
+            or left_position not in ordinals
+            or right_position not in ordinals
+            or abs(ordinals[left_position] - ordinals[right_position]) != 1
+        ):
+            requirements.append(None)
+            continue
+        requirements.append(
+            ProjectionPitchRequirement(
+                family_id=instance_id.family_id,
+                instance_id=instance_id,
+                variant_id=variant.variant_id,
+                axis="x",
+                rejected_pitch=variant.pitch_x,
+                required_pitch=variant.pitch_x + 1,
+                failure=failure,
+            )
+        )
+    return tuple(requirements)
+
+
+def projection_pitch_requirement(
+    placement: Placement,
+    *,
+    instance_ids: tuple[StripInstanceId, ...],
+    variants: tuple[StripVariant, ...],
+    failure: ProjectionFailure,
+) -> ProjectionPitchRequirement | None:
+    """Map one collision through the same exact indexed batch implementation."""
+    return projection_pitch_requirements(
+        placement,
+        instance_ids=instance_ids,
+        variants=variants,
+        failures=(failure,),
+    )[0]
 
 
 def placement_geometry(machine_item_id: str | int, yaw: float) -> MachinePlacementGeometry:
@@ -509,18 +780,19 @@ def lane_reach_profiles(
     return tuple(profiles)
 
 
-def _logical_lanes(
-    plan: _LogicalStripPlan,
-) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
-    in_above = plan.in_above
-    out_lanes = plan.out_lanes
-    in_below = plan.in_below
-    inputs = tuple(
+def _input_logical_lanes(
+    in_above: Sequence[tuple[str, ...]],
+    in_below: Sequence[tuple[str, ...]],
+    cargo_domain: CargoDomain,
+    output_count: int,
+) -> tuple[LogicalLane, ...]:
+    return tuple(
         LogicalLane(
             lane_id=f"input:south:{index}",
             kind="input",
             items=items,
             destination_group_keys=(),
+            cargo_domain=cargo_domain,
             side="south",
             side_index=index,
         )
@@ -532,22 +804,315 @@ def _logical_lanes(
             items=items,
             destination_group_keys=(),
             side="north",
-            side_index=len(out_lanes) + index,
+            cargo_domain=cargo_domain,
+            side_index=output_count + index,
         )
         for index, items in enumerate(in_below)
     )
-    outputs = tuple(
+
+
+def _output_side_assignments(count: int) -> Iterable[tuple[LaneSide, ...]]:
+    """Yield the historical face first, then deterministic overflow assignments."""
+    return product(("north", "south"), repeat=count)
+
+
+def _output_logical_lanes(
+    plan: _LogicalStripPlan,
+    sides: tuple[LaneSide, ...],
+) -> tuple[LogicalLane, ...]:
+    from flab2bp.layout.freeform import _dests
+
+    if len(sides) != len(plan.out_lanes):
+        raise ValueError("output side assignment does not cover every output lane")
+    return tuple(
         LogicalLane(
-            lane_id=f"output:north:{index}",
+            lane_id=f"output:{side}:{index}",
             kind="output",
             items=(item,),
             destination_group_keys=_dests(destination),
-            side="north",
+            cargo_domain=cargo_domain,
+            side=side,
             side_index=index,
         )
-        for index, (item, destination) in enumerate(out_lanes)
+        for index, ((item, destination, cargo_domain), side) in enumerate(
+            zip(plan.out_lanes, sides, strict=True)
+        )
     )
-    return inputs, outputs
+
+
+def _cargo_keys(sinks: Sequence[tuple[str, str, CargoDomain]]) -> set[tuple[str, CargoDomain]]:
+    return {(item, cargo_domain) for item, _destination, cargo_domain in sinks}
+
+
+def _has_exact_two_face_seating(
+    item_id: int,
+    in_above: Sequence[tuple[str, ...]],
+    in_below: Sequence[tuple[str, ...]],
+    input_domain: CargoDomain,
+    output_count: int,
+) -> bool:
+    """Prove one lane per cargo key against exact rows, slots, and sorter spans."""
+    # One lane occupies one row, and each of the two faces exposes at most the
+    # catalog reach in contiguous rows.  Reject above that physical constant
+    # before enumerating side assignments; input size never sets this search.
+    if output_count > 2 * catalog.SORTER_MAX_REACH:
+        return False
+    inputs = _input_logical_lanes(in_above, in_below, input_domain, output_count)
+    for sides in _output_side_assignments(output_count):
+        outputs = tuple(
+            LogicalLane(
+                lane_id=f"output:{side}:{index}",
+                kind="output",
+                items=(f"cargo-{index}",),
+                destination_group_keys=(),
+                cargo_domain=CargoDomain.UNSPRAYED,
+                side=side,
+                side_index=index,
+            )
+            for index, side in enumerate(sides)
+        )
+        lanes = inputs + outputs
+        if any(
+            _attachment_plan_seatings(item_id, yaw, lanes)
+            for yaw in _CARDINAL_YAWS
+        ):
+            return True
+    return False
+
+
+def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
+    """Allocate lane shards, admitting exact two-face output overflow.
+
+    The historical planner budgets outputs only on the face below the machine
+    band.  Keep that byte-identical path whenever it can represent every cargo
+    key.  When it cannot, ask the pose-aware slot matcher whether the minimum
+    one-lane-per-cargo representation fits across both existing faces.  This is
+    an exact legality proof, not a widened reach: every accepted connection has
+    a prefab slot and a span no greater than ``SORTER_MAX_REACH``.
+    """
+    from flab2bp.layout.freeform import (
+        DEST_SEP,
+        _adapt,
+        _allocate_machines,
+        _flank_seat,
+        _merge_lanes,
+        _seat_inputs,
+        _shard_sinks,
+        _sink_demand,
+    )
+
+    groups = _adapt(spec)
+    producers: dict[str, list[str]] = defaultdict(list)
+    for key, group in groups.items():
+        for item in group.outputs:
+            producers[item].append(key)
+
+    consumers: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for key, group in groups.items():
+        for item in group.inputs:
+            for source in producers.get(item, []):
+                consumers[source, item].append(key)
+
+    plans: list[_LogicalStripPlan] = []
+    for key, group in groups.items():
+        above_cap, below_cap = _legacy_side_lane_caps(
+            group.item_id,
+            group.yaw,
+            group.pitch_h,
+        )
+        input_items = tuple(sorted(group.inputs))
+        sinks: list[tuple[str, str, CargoDomain]] = []
+        for item in sorted(group.outputs):
+            destinations = consumers.get((key, item), [])
+            boundary = item in spec.outputs or item in spec.surplus_outputs
+            shared_boundary: str | None = None
+            if item in spec.surplus_outputs and destinations:
+                surplus = spec.surplus_outputs[item]
+                shareable = [
+                    destination
+                    for destination in destinations
+                    if not groups[destination].proliferated
+                    and surplus + _sink_demand(groups, spec, item, destination)
+                    <= spec.belt_items_per_second
+                ]
+                if shareable:
+                    shared_boundary = min(
+                        shareable,
+                        key=lambda destination: (
+                            _sink_demand(groups, spec, item, destination),
+                            destination,
+                        ),
+                    )
+                    boundary = False
+            sinks.extend(
+                (
+                    item,
+                    (
+                        DEST_SEP.join((destination, ""))
+                        if destination == shared_boundary
+                        else destination
+                    ),
+                    (
+                        CargoDomain.REQUIRES_SPRAY
+                        if groups[destination].proliferated
+                        else CargoDomain.UNSPRAYED
+                    ),
+                )
+                for destination in destinations
+            )
+            if boundary or not destinations:
+                sinks.append((item, "", CargoDomain.UNSPRAYED))
+
+        probe = slots.probe_building(group.item_id, group.yaw)
+        columns = len(slots.attachable_columns(probe, -1)) or 1
+        flank = False
+        try:
+            in_above, in_below = _seat_inputs(
+                input_items,
+                len(sinks),
+                above_cap,
+                below_cap,
+                max_per_lane=group.width,
+                columns=columns,
+            )
+        except ValueError as exc:
+            seat = (
+                _flank_seat(group.item_id, group.yaw, group.pitch_w)
+                if len(sinks) == 1
+                else None
+            )
+            if seat is None:
+                raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
+            try:
+                in_above, in_below = _seat_inputs(
+                    input_items,
+                    len(sinks),
+                    above_cap,
+                    below_cap,
+                    max_per_lane=group.width,
+                    columns=columns,
+                    flank_outputs=True,
+                )
+            except ValueError as flanked:
+                raise ValueError(f"recipe {group.recipe_id!r}: {flanked}") from None
+            flank = True
+
+        south_columns = len(slots.attachable_columns(probe, group.pitch_h))
+        out_capacity = below_cap - len(in_below)
+        if flank:
+            out_capacity = min(out_capacity, 1)
+        elif south_columns:
+            out_capacity = min(
+                out_capacity,
+                south_columns - sum(len(lane) for lane in in_below),
+            )
+
+        cargo_count = len(_cargo_keys(sinks))
+        input_domain = (
+            CargoDomain.REQUIRES_SPRAY
+            if group.proliferated
+            else CargoDomain.UNSPRAYED
+        )
+        if (
+            not flank
+            and cargo_count > out_capacity
+            and _has_exact_two_face_seating(
+                group.item_id,
+                in_above,
+                in_below,
+                input_domain,
+                cargo_count,
+            )
+        ):
+            out_capacity = cargo_count
+
+        shards = (
+            _shard_sinks(sinks, cap=out_capacity, max_shards=group.count)
+            if sinks
+            else [[]]
+        )
+        demand = {
+            (item, destination, cargo_domain): _sink_demand(
+                groups,
+                spec,
+                item,
+                destination,
+            )
+            for item, destination, cargo_domain in sinks
+        }
+        allocation_demand = {
+            (item, destination, cargo_domain): _sink_demand(
+                groups,
+                spec,
+                item,
+                destination,
+                include_boundary=False,
+            )
+            for item, destination, cargo_domain in sinks
+        }
+        per_shard = (
+            _allocate_machines(group.count, shards, allocation_demand)
+            if len(shards) > 1
+            else [group.count]
+        )
+        try:
+            lane_shards = [
+                _merge_lanes(
+                    shard,
+                    out_capacity,
+                    demand,
+                    spec.belt_items_per_second,
+                )
+                for shard in shards
+            ]
+        except ValueError as exc:
+            raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
+
+        for shard_index, (lane_shard, machine_count) in enumerate(
+            zip(lane_shards, per_shard, strict=True)
+        ):
+            if machine_count <= 0:
+                continue
+            plans.append(
+                _LogicalStripPlan(
+                    group_key=key,
+                    shard_index=shard_index,
+                    recipe_id=group.recipe_id,
+                    item_id=group.item_id,
+                    model_index=group.model_index,
+                    total_machine_count=machine_count,
+                    cargo_domain=input_domain,
+                    in_above=in_above,
+                    out_lanes=tuple(lane_shard),
+                    in_below=in_below,
+                    mode_params=group.mode_params,
+                    flank_outputs=flank,
+                )
+            )
+    return tuple(plans)
+
+
+def _legacy_side_lane_caps(item_id: int, yaw: float, band_rows: int) -> tuple[int, int]:
+    from flab2bp.layout.freeform import _side_lane_caps
+
+    return _side_lane_caps(item_id, yaw, band_rows)
+
+
+def _logical_lanes(
+    plan: _LogicalStripPlan,
+    output_sides: tuple[LaneSide, ...] | None = None,
+) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
+    default_output_side: LaneSide = "north"
+    sides = output_sides or (default_output_side,) * len(plan.out_lanes)
+    return (
+        _input_logical_lanes(
+            plan.in_above,
+            plan.in_below,
+            plan.cargo_domain,
+            len(plan.out_lanes),
+        ),
+        _output_logical_lanes(plan, sides),
+    )
 
 
 def _match_attachment_plans(
@@ -683,6 +1248,20 @@ def _variant_id(
     )
 
 
+def _with_projection_safe_pitch(
+    item_id: int,
+    variant: StripVariant,
+) -> StripVariant:
+    """Reserve the shared exact pitch before either strategy sees a variant."""
+    required = projection_safe_machine_pitch_x(
+        item_id,
+        variant.yaw,
+        machine_count=len(variant.machine_origins_x),
+        box_height=variant.box_height,
+    )
+    return variant_with_minimum_pitch(variant, required)
+
+
 def _port_variants(
     family_id: StripFamilyId,
     item_id: int,
@@ -739,18 +1318,21 @@ def _port_variants(
         box_height,
     )
     return (
-        StripVariant(
-            variant_id=variant_id,
-            yaw=yaw,
-            footprint_width=geometry.footprint_width,
-            footprint_height=geometry.footprint_height,
-            placement_geometry=geometry,
-            lane_plan=lane_plan,
-            box_width=box_width,
-            box_height=box_height,
-            attachment_plan=(),
-            port_dock_plan=port_docks,
-            machine_origins_x=machine_origins_x,
+        _with_projection_safe_pitch(
+            item_id,
+            StripVariant(
+                variant_id=variant_id,
+                yaw=yaw,
+                footprint_width=geometry.footprint_width,
+                footprint_height=geometry.footprint_height,
+                placement_geometry=geometry,
+                lane_plan=lane_plan,
+                box_width=box_width,
+                box_height=box_height,
+                attachment_plan=(),
+                port_dock_plan=port_docks,
+                machine_origins_x=machine_origins_x,
+            ),
         ),
     )
 
@@ -787,18 +1369,21 @@ def _variants(
             box_height,
         )
         variants.append(
-            StripVariant(
-                variant_id=variant_id,
-                yaw=yaw,
-                footprint_width=geometry.footprint_width,
-                footprint_height=geometry.footprint_height,
-                placement_geometry=geometry,
-                lane_plan=lane_plan,
-                box_width=box_width,
-                box_height=box_height,
-                attachment_plan=attachments,
-                port_dock_plan=(),
-                machine_origins_x=machine_origins_x,
+            _with_projection_safe_pitch(
+                item_id,
+                StripVariant(
+                    variant_id=variant_id,
+                    yaw=yaw,
+                    footprint_width=geometry.footprint_width,
+                    footprint_height=geometry.footprint_height,
+                    placement_geometry=geometry,
+                    lane_plan=lane_plan,
+                    box_width=box_width,
+                    box_height=box_height,
+                    attachment_plan=attachments,
+                    port_dock_plan=(),
+                    machine_origins_x=machine_origins_x,
+                ),
             )
         )
     return tuple(variants)
@@ -809,9 +1394,8 @@ def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
     families: list[StripFamily] = []
     for plan in _logical_strip_plans(spec):
         family_id = StripFamilyId(plan.group_key, plan.shard_index)
-        input_lanes, output_lanes = _logical_lanes(plan)
-        lanes = input_lanes + output_lanes
         building = catalog.building(plan.item_id)
+        input_lanes, output_lanes = _logical_lanes(plan)
         generated: tuple[StripVariant, ...]
         if plan.flank_outputs:
             generated = ()
@@ -829,17 +1413,25 @@ def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
                 )
             )
         else:
-            generated = tuple(
-                candidate
-                for yaw in _CARDINAL_YAWS
-                for candidate in _variants(
-                    family_id,
-                    plan.item_id,
-                    plan.total_machine_count,
-                    lanes,
-                    yaw,
+            generated = ()
+            for sides in _output_side_assignments(len(plan.out_lanes)):
+                candidate_inputs, candidate_outputs = _logical_lanes(plan, sides)
+                candidates = tuple(
+                    candidate
+                    for yaw in _CARDINAL_YAWS
+                    for candidate in _variants(
+                        family_id,
+                        plan.item_id,
+                        plan.total_machine_count,
+                        candidate_inputs + candidate_outputs,
+                        yaw,
+                    )
                 )
-            )
+                if candidates:
+                    input_lanes = candidate_inputs
+                    output_lanes = candidate_outputs
+                    generated = candidates
+                    break
         unique = {candidate.variant_id: candidate for candidate in generated}
         variants = tuple(sorted(unique.values(), key=lambda candidate: candidate.sort_key))
         families.append(
@@ -900,6 +1492,43 @@ def _variant_for_count(template: StripVariant, machine_count: int) -> StripVaria
     )
 
 
+def variant_with_minimum_pitch(
+    variant: StripVariant,
+    required_pitch_x: int,
+) -> StripVariant:
+    """Regenerate a physically distinct variant at the required X pitch."""
+    geometry = variant.placement_geometry.with_minimum_pitch_x(required_pitch_x)
+    if geometry is variant.placement_geometry:
+        return variant
+    machine_count = len(variant.machine_origins_x)
+    machine_origins_x = tuple(range(0, machine_count * geometry.pitch_x, geometry.pitch_x))
+    box_width = machine_count * geometry.pitch_x
+    variant_id = _variant_id(
+        variant.variant_id.family_id,
+        variant.yaw,
+        machine_origins_x,
+        geometry,
+        variant.lane_plan,
+        variant.attachment_plan,
+        variant.port_dock_plan,
+        box_width,
+        variant.box_height,
+    )
+    return StripVariant(
+        variant_id=variant_id,
+        yaw=variant.yaw,
+        footprint_width=variant.footprint_width,
+        footprint_height=variant.footprint_height,
+        placement_geometry=geometry,
+        lane_plan=variant.lane_plan,
+        box_width=box_width,
+        box_height=variant.box_height,
+        attachment_plan=variant.attachment_plan,
+        port_dock_plan=variant.port_dock_plan,
+        machine_origins_x=machine_origins_x,
+    )
+
+
 def variants_for_count(
     family: StripFamily,
     machine_count: int,
@@ -908,20 +1537,32 @@ def variants_for_count(
     return tuple(_variant_for_count(template, machine_count) for template in family.variants)
 
 
-def partition_strip_family(
+def _family_pose_minimum_pitches(family: StripFamily) -> dict[StripPoseId, int]:
+    minimum_pitches: dict[StripPoseId, int] = {}
+    for candidate in family.variants:
+        pose_id = strip_pose_id(candidate)
+        minimum_pitches[pose_id] = min(
+            candidate.pitch_x,
+            minimum_pitches.get(pose_id, candidate.pitch_x),
+        )
+    return minimum_pitches
+
+
+def partition_strip_variant(
     family: StripFamily,
+    variant: StripVariant,
     *,
     max_machine_count: int,
-    variant_id: StripVariantId | None = None,
 ) -> tuple[StripInstance, ...]:
-    """Create balanced initial physical ranges without mutating the logical family."""
+    """Partition a family through one explicit ordinary or padded variant."""
     if max_machine_count <= 0:
         raise ValueError("maximum strip machine count must be positive")
-    chosen_id = variant_id or default_strip_variant(family).variant_id
-    try:
-        template = next(variant for variant in family.variants if variant.variant_id == chosen_id)
-    except StopIteration:
-        raise ValueError("strip instance variant does not belong to the family") from None
+    minimum_pitches = _family_pose_minimum_pitches(family)
+    pose_id = strip_pose_id(variant)
+    if variant.variant_id.family_id != family.family_id or pose_id not in minimum_pitches:
+        raise ValueError("strip instance variant does not belong to the family")
+    if variant.pitch_x < minimum_pitches[pose_id]:
+        raise ValueError("strip instance variant pitch is below the ordinary family pose")
     instance_count = max(
         1,
         (family.total_machine_count + max_machine_count - 1) // max_machine_count,
@@ -937,13 +1578,36 @@ def partition_strip_family(
                 instance_id=instance_id,
                 machine_start=machine_start,
                 machine_count=machine_count,
-                variant=_variant_for_count(template, machine_count),
+                variant=_variant_for_count(variant, machine_count),
             )
         )
         machine_start += machine_count
     result = tuple(instances)
     validate_instance_partition(family, result)
     return result
+
+
+def partition_strip_family(
+    family: StripFamily,
+    *,
+    max_machine_count: int,
+    variant_id: StripVariantId | None = None,
+) -> tuple[StripInstance, ...]:
+    """Choose an ordinary family variant and partition its logical work."""
+    if max_machine_count <= 0:
+        raise ValueError("maximum strip machine count must be positive")
+    chosen_id = variant_id or default_strip_variant(family).variant_id
+    try:
+        variant = next(
+            candidate for candidate in family.variants if candidate.variant_id == chosen_id
+        )
+    except StopIteration:
+        raise ValueError("strip instance variant does not belong to the family") from None
+    return partition_strip_variant(
+        family,
+        variant,
+        max_machine_count=max_machine_count,
+    )
 
 
 def split_strip_instance(
@@ -1041,12 +1705,16 @@ def validate_instance_partition(
 ) -> None:
     """Require active physical ranges to cover ``0..total`` exactly once."""
     expected_start = 0
-    valid_templates = {variant.template_key for variant in family.variants}
+    minimum_pitches = _family_pose_minimum_pitches(family)
     for instance in sorted(instances, key=lambda candidate: candidate.machine_start):
         if instance.family_id != family.family_id:
             raise ValueError("strip instances do not partition one logical family")
-        if instance.variant.template_key not in valid_templates:
+        pose_id = strip_pose_id(instance.variant)
+        minimum_pitch = minimum_pitches.get(pose_id)
+        if minimum_pitch is None:
             raise ValueError("strip instance uses a variant outside its family")
+        if instance.variant.pitch_x < minimum_pitch:
+            raise ValueError("strip instance variant pitch is below the ordinary family pose")
         if instance.machine_start != expected_start:
             raise ValueError("strip instance ranges do not partition the logical family")
         expected_start = instance.machine_stop
@@ -1055,6 +1723,7 @@ def validate_instance_partition(
 
 
 __all__ = [
+    "CargoDomain",
     "LaneAttachmentPlan",
     "LanePortDockPlan",
     "LanePlan",
@@ -1062,10 +1731,12 @@ __all__ = [
     "LaneSorterAttachment",
     "LogicalLane",
     "MachinePlacementGeometry",
+    "ProjectionPitchRequirement",
     "StripFamily",
     "StripFamilyId",
     "StripInstance",
     "StripInstanceId",
+    "StripPoseId",
     "StripVariant",
     "StripVariantId",
     "default_strip_variant",
@@ -1073,8 +1744,13 @@ __all__ = [
     "lane_reach_profiles",
     "merge_strip_instances",
     "partition_strip_family",
+    "partition_strip_variant",
     "placement_geometry",
+    "projection_pitch_requirement",
+    "projection_pitch_requirements",
     "split_strip_instance",
+    "strip_pose_id",
     "validate_instance_partition",
     "variants_for_count",
+    "variant_with_minimum_pitch",
 ]

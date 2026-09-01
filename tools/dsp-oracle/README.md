@@ -4,12 +4,13 @@ A BepInEx plugin for Dyson Sphere Program that writes down **the game's own
 build-condition verdicts** for a blueprint on the cursor, so they can be diffed
 against what our Python port predicts.
 
-Its whole value is that it reimplements nothing. It reads `BuildPreview.condition`
-after the game set it, reads the input/output objIds and slots after the game
-chose them, and reads how many colliders PhysX handed `MatchInserter` and what
-the game's own `PlanetPhysics.GetColliderData` says each one is. There is no
-geometry, no snap rule, and no condition logic in this plugin. If a number here
-is wrong, the game is what produced it.
+Its whole value is that it reimplements no game rule. It reads
+`BuildPreview.condition` after the game set it, reads the live references,
+objIds and slots after the game chose them, and records the exact PhysX query
+arguments/results plus the game's own `PlanetPhysics.GetColliderData`. The
+automatic diagnostic uses blueprint-local coordinates only to identify the
+requested four-belt cluster and attribute its queries; it never computes or
+changes a condition.
 
 ## Requirements
 
@@ -25,7 +26,7 @@ is wrong, the game is what produced it.
 
 The zip is a Thunderstore package, so **r2modman** installs it directly:
 
-> Settings → Import local mod → pick `flab2bp_oracle-1.0.0.zip`
+> Settings → Import local mod → pick `flab2bp_oracle-1.1.3.zip`
 
 r2modman reads `manifest.json` from the archive root and drops `FlabOracle.dll`
 into the profile's `BepInEx/plugins/`. Nothing else to do; it appears in the mod
@@ -40,7 +41,7 @@ be if any other mod is installed there.
 
 ```sh
 mkdir -p "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
-unzip -oj /path/to/flab2bp_oracle-1.0.0.zip FlabOracle.dll \
+unzip -oj /path/to/flab2bp_oracle-1.1.3.zip FlabOracle.dll \
   -d "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
 ```
 
@@ -50,8 +51,9 @@ unzip -oj /path/to/flab2bp_oracle-1.0.0.zip FlabOracle.dll \
 Start the game; the BepInEx console should show:
 
 ```
-[Info   : flab2bp build-condition oracle] Patched BuildTool_BlueprintPaste (CheckBuildConditions, MatchInserter, CreatePrebuilds).
+[Info   : flab2bp build-condition oracle] Patched BuildTool_BlueprintPaste timeline (DeterminePreviewsPrestage, CheckBuildConditionsPrestage, ArrangeOverlapBP, ActiveColliders, CheckBuildConditions, AddErrorMessage, MatchInserter, CreatePrebuilds).
 [Info   : flab2bp build-condition oracle] Patched Physics.OverlapSphereNonAlloc.
+[Info   : flab2bp build-condition oracle] Patched Physics.OverlapCapsuleNonAlloc.
 [Message: flab2bp build-condition oracle] flab2bp oracle ready. Dump key = F9, output = .../BepInEx/flab2bp-oracle
 ```
 
@@ -75,9 +77,40 @@ produces two records: `createprebuilds-pre` (the verdicts as they stood going in
 and `createprebuilds-post` (after the commit, so `objId` is populated). Turn this
 off with `DumpOnPaste = false`.
 
-Files are `BepInEx/flab2bp-oracle/dump-00001.json`, `dump-00002.json`, … The
-counter continues from the highest number already in the directory, so nothing is
-ever overwritten and the newest dump is the highest number.
+**Canonical model40 belt capture (automatic, no keypress and no successful
+build required).** Import `corrected.txt` and put its preview on the cursor. A
+semantic match requires the 75x36/160-band area and both yaw-90 model40
+splitters: the y2 control at local `(45,2,0)` and the y6 suspect at `(45,6,0)`,
+including each splitter's four attached z1 feed/draw belts. The plugin retains
+only condition/pointer state changes and matching Physics queries.
+
+It writes one `model40-belt-capture-YYYYMMDD-HHMMSS-fff.json` from the
+`CheckBuildConditions` postfix, after the game's collision rescue and condition
+propagation are complete, whether that method returns true or false. A false
+`CheckBuildConditionsPrestage`, a stable non-Ok target, and a 1,800-frame window
+remain bounded fallbacks if the full check is not reached. The same loaded
+blueprint object is deduplicated after the file is written.
+
+The target file keeps the y2 and y6 groups as controls, then enumerates **every**
+active non-Ok `bpPool` preview in `nonOkPreviews`; this array is decisive when
+the failing records are outside those controls. Each entry maps back to the
+canonical blueprint slot/index (using the positive `bpgpuiModelId`, or the
+game's active-pool order after overlap handling clears that id), and includes
+item/model/descriptor flags, blueprint-local pose, world preview poses,
+condition, connection fields, input/output/`coverbp` identities and conditions,
+all `AddErrorMessage` arguments, and nearby captured Physics queries.
+
+Control timeline snapshots still include both splitters and all eight adjacent
+belts. Root-level prestage, tool-stage, raw grat-box, patch-applied, query
+truncation, and target-active-hook-fired metadata distinguish an unavailable
+wrapper from a real zero-collider result. The capture is independent of
+`DumpOnPaste`; disabling the generic two-file paste dump does not disable this
+one-shot diagnostic.
+
+Generic files are `BepInEx/flab2bp-oracle/dump-00001.json`,
+`dump-00002.json`, … The counter continues from the highest number already in
+the directory. Target captures use the separate timestamped
+`model40-belt-capture-*.json` pattern.
 
 ## Configuration
 
@@ -88,7 +121,7 @@ ever overwritten and the newest dump is the highest number.
 | Trigger | `DumpKey` | `F9` | Dumps the current preview set without building. |
 | Trigger | `DumpOnPaste` | `true` | Also dump on `CreatePrebuilds` (pre and post). |
 | Capture | `AlwaysCaptureColliderDetail` | `false` | Identify every overlap collider on **every** frame, not just the armed one. Makes the paste dump carry snap-candidate detail too, at the cost of frame time while a blueprint is on the cursor. |
-| Capture | `PatchPhysicsOverlap` | `true` | Hook `Physics.OverlapSphereNonAlloc`. The hook is process-wide but returns on a single null check unless `MatchInserter` is on the stack. Turn off if suspicious. |
+| Capture | `PatchPhysicsOverlap` | `true` | Hook the exact managed `Physics.OverlapSphereNonAlloc` and `OverlapCapsuleNonAlloc` overloads used by the belt checks. Hooks are process-wide but target capture returns immediately outside the active semantic match. |
 | Output | `OutputDirectory` | *(empty)* | Empty means `<BepInEx>/flab2bp-oracle`. |
 
 ## What is in a dump
@@ -182,29 +215,28 @@ prebuild id, and the ladder negates the latter. The plugin records what
 
 These are stated because the plugin cannot be end-to-end tested outside the game.
 
-1. **`overlapObserved` may be false.** `Physics.OverlapSphereNonAlloc` is a small
-   managed forwarder. If Mono inlines it into `MatchInserter` before the patch
-   lands, the postfix never fires and `colliderCount` will be absent for every
-   call. That is why the dump carries `overlapPatchApplied` and
-   `overlapHookEverFired` explicitly: if the second is `false`, the candidate
-   counts are missing, not zero. Everything else in the dump is unaffected.
+1. **Physics observations may be absent.** Both exact managed non-alloc
+   overloads are patched manually. If either overload cannot be resolved or
+   detoured on a changed game build, startup logs a warning and the rest of the
+   target timeline still works. Inspect `spherePatchApplied`,
+   `capsulePatchApplied`, and the matching `*HookFiredWhileTargetActive` fields;
+   a missing event is never silently presented as a zero-collider result.
 2. **`conditionText` is best-effort.** It calls into the game's localization; if
    that throws, the field is `null` and the numeric `condition` — which is what
    matters — is still exact.
-3. **Compile-verified, not play-verified.** Every field name, method signature
-   and parameter name the plugin touches was checked by reflection against the
-   real `Assembly-CSharp.dll` and `UnityEngine.PhysicsModule.dll` shipped with
-   the installed game, and the JSON serialiser is exercised by `SerializerCheck`
-   against those same real types. The Harmony patching itself and the in-game
-   behaviour of the hotkey have not been run. Every hook body is wrapped in
-   `try`/`catch` that logs and continues, so a mistake costs a console line, not
-   the session.
+3. **The current game build has been play-verified.** The 1.1.1 target hooks
+   produced an in-game capture for `corrected.txt`, including managed Physics
+   results and the full condition pass. `SerializerCheck` also exercises
+   two-cluster semantic matching, pool/reference identity, bounded timeline JSON,
+   and strict parsing against the installed game types. A changed DSP or Unity
+   build can still invalidate a Harmony target; startup logs and the
+   patch/hook-fired fields make that explicit.
 
 ## Building
 
 ```sh
 cd tools/dsp-oracle
-./build-zip.sh          # -> dist/flab2bp-oracle-1.0.0.zip
+./build-zip.sh          # -> dist/flab2bp_oracle-1.1.3.zip
 ```
 
 Requires the .NET SDK and the game's managed assemblies (referenced by
@@ -246,7 +278,13 @@ Against the decompiled source at
 
 | Hook | Location | What it observes |
 | --- | --- | --- |
-| `CheckBuildConditions` prefix/postfix | line 1778 | serves the armed hotkey dump; the postfix is the only point where every verdict is final |
+| `DeterminePreviewsPrestage` postfix | stage-0 preview refresh | semantic arming and target state after the actually-invoked preview updater |
+| `CheckBuildConditionsPrestage` postfix | line 1111; called every `_OnTick` | the stage-0 boolean gate; deduplicated transitions plus raw tech/area/grat-box evidence |
+| plugin `Update` monitor | every Unity frame while semantically armed | condition/pointer tuple changes and automatic flush even when stage 1 is unreachable |
+| `ArrangeOverlapBP` prefix/postfix | line 878 | target conditions/pointers before and after blueprint-overlap arrangement |
+| `ActiveColliders(BuildModel)` postfix | line 1748 | target state after preview colliders are activated |
+| `CheckBuildConditions` prefix/postfix | line 1778 | target state before collision rescue and after final propagation; also serves the manual hotkey dump |
+| `AddErrorMessage(EBuildCondition, BuildPreview)` prefix | line 4814 | target condition at pre-rescue, post-rescue, and propagation error-report calls |
 | `MatchInserter` prefix/postfix | line 1462 | the connection fields before and after each snap attempt |
-| `Physics.OverlapSphereNonAlloc` postfix | called at line ~1491 | the PhysX candidate count and identities |
-| `CreatePrebuilds` prefix/postfix | line 4074 | the committed set, before and after |
+| exact managed `Physics.OverlapSphereNonAlloc` / `OverlapCapsuleNonAlloc` postfixes | belt checks near lines 3749/3753 and 3829/3833 | query centres/endpoints, radius/mask/result count, and returned collider/preview-model identities |
+| `CreatePrebuilds` prefix/postfix | line 4074 | generic committed set; the prefix is an additional successful-placement flush path |

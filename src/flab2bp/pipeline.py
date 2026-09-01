@@ -38,12 +38,17 @@ from flab2bp.layout.base import (
     LayoutAttemptFailure,
     NoValidLayout,
     Placement,
+    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.rates.adjust import ProliferatorTier
-from flab2bp.rates.candidates import _build_candidates_canonical
+from flab2bp.rates.candidates import (
+    DEFAULT_CANDIDATE_POLICIES,
+    CandidatePolicy,
+    _build_candidates_canonical,
+)
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
 ExplicitStrategyName = Literal["freeform", "sequence-pair"]
@@ -72,7 +77,6 @@ def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
 def _new_layout(
     strategy: ExplicitStrategyName,
     *,
-    power: bool,
     belt_vertical_construction: bool,
     sequence_islands: int = 1,
     band_policy: BandPolicy,
@@ -80,12 +84,10 @@ def _new_layout(
     """Construct one explicitly selected layout backend."""
     if strategy == "freeform":
         return FreeformLayout(
-            power=power,
             belt_vertical_construction=belt_vertical_construction,
             band_policy=band_policy,
         )
     return SequencePairLayout(
-        power=power,
         belt_vertical_construction=belt_vertical_construction,
         islands=sequence_islands,
         band_policy=band_policy,
@@ -94,6 +96,66 @@ def _new_layout(
 
 #: Outputs named in a title before it gives up and counts the rest.
 _TITLE_OUTPUTS = 2
+
+#: Dyson Sphere Program's save check uses C# ``string.Length`` on this field.
+BLUEPRINT_SHORT_DESC_UTF16_LIMIT = 60
+
+
+def _utf16_units(text: str) -> int:
+    """Return the number of C# UTF-16 code units in ``text``."""
+    return sum(2 if ord(char) > 0xFFFF else 1 for char in text)
+
+
+def _utf16_prefix(text: str, max_units: int) -> str:
+    """The longest prefix that fits without splitting an astral character."""
+    used = 0
+    for index, char in enumerate(text):
+        width = 2 if ord(char) > 0xFFFF else 1
+        if used + width > max_units:
+            return text[:index]
+        used += width
+    return text
+
+
+def _ellipsize_utf16(
+    text: str,
+    max_units: int = BLUEPRINT_SHORT_DESC_UTF16_LIMIT,
+) -> str:
+    """Fit arbitrary text in ``max_units``, reserving one unit for ``…``."""
+    if _utf16_units(text) <= max_units:
+        return text
+    if max_units < 1:
+        return ""
+    return _utf16_prefix(text, max_units - 1) + "…"
+
+
+def _product_initials(product_id: str) -> str:
+    """Uppercase word initials, preserving whole numeric hyphen tokens."""
+    initials = "".join(
+        part if part.isdigit() else part[0].upper()
+        for part in product_id.split("-")
+        if part
+    )
+    return initials or product_id.upper()
+
+
+def _ranked_title_outputs(spec: BuildSpec) -> list[tuple[str, Fraction]]:
+    return sorted(spec.outputs.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def _abbreviate_displayed_product(
+    title: str,
+    products: Sequence[str],
+    target_index: int,
+) -> str:
+    """Replace the requested displayed product, not an earlier substring."""
+    search_from = 0
+    for index, product in enumerate(products):
+        start = title.index(product, search_from)
+        if index == target_index:
+            return title[:start] + _product_initials(product) + title[start + len(product) :]
+        search_from = start + len(product)
+    return title
 
 
 def _rate_per_minute(per_second: Fraction) -> str:
@@ -125,7 +187,7 @@ def _title(spec: BuildSpec) -> str:
     if not spec.outputs:
         return spec.label or "flab2bp"
 
-    ranked = sorted(spec.outputs.items(), key=lambda kv: (-kv[1], kv[0]))
+    ranked = _ranked_title_outputs(spec)
     named = ", ".join(
         f"{item} {_rate_per_minute(rate)}/min" for item, rate in ranked[:_TITLE_OUTPUTS]
     )
@@ -139,6 +201,22 @@ def _title(spec: BuildSpec) -> str:
         "output-products": " (output products)",
     }.get(spec.label or "", "")
     return named + note
+
+
+def _generated_title(spec: BuildSpec) -> str:
+    """Compose the normal title, then fit only auto-generated names for the game."""
+    title = _title(spec)
+    if _utf16_units(title) <= BLUEPRINT_SHORT_DESC_UTF16_LIMIT:
+        return title
+
+    products = [item for item, _rate in _ranked_title_outputs(spec)[:_TITLE_OUTPUTS]]
+    for index in (1, 0):
+        if index >= len(products):
+            continue
+        title = _abbreviate_displayed_product(title, products, index)
+        if _utf16_units(title) <= BLUEPRINT_SHORT_DESC_UTF16_LIMIT:
+            return title
+    return _ellipsize_utf16(title)
 
 
 def _id_map(spec: BuildSpec) -> validate.IdMap:
@@ -270,8 +348,9 @@ def build(
     *,
     strategy: StrategyName = "best",
     band: BandSelection = "portable",
-    power: bool = True,
-    candidates: int = 3,
+    candidate_policies: tuple[
+        CandidatePolicy, ...
+    ] = DEFAULT_CANDIDATE_POLICIES,
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
     sequence_islands: int = 1,
@@ -358,7 +437,7 @@ def build(
         data,
         request,
         tier=proliferator_tier,
-        count=candidates,
+        candidate_policies=candidate_policies,
         flow=selection,
     )
 
@@ -450,7 +529,6 @@ def build(
                 )
             layout = _new_layout(
                 sname,
-                power=power,
                 belt_vertical_construction=belt_rules.vertical_construction,
                 sequence_islands=sequence_islands,
                 band_policy=policy,
@@ -481,35 +559,40 @@ def build(
                         )
                     )
                 continue
-            placement = finalize.compact_open_boundary_belts(
-                placement,
-                spec,
-                expect_power=power,
-            )
-            try:
-                placement = finalize.finalize_placement(placement, policy)
-            except finalize.ProjectionRefusal as exc:
-                reason = str(exc)
-                failure = LayoutAttemptFailure(
-                    candidate=spec.label,
-                    strategy=sname,
-                    reason=reason,
-                    projection_failures=_projection_records(exc.failures),
+            if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
+                placement = finalize.compact_open_boundary_belts(
+                    placement,
+                    spec,
+                    expect_power=True,
                 )
-                refused.append(failure)
-                if on_progress is not None:
-                    on_progress(
-                        AttemptProgress(
-                            index=pair_index,
-                            total=total_pairs,
-                            candidate=spec.label,
-                            strategy=sname,
-                            phase="refused",
-                            reason=reason,
-                            projection_failures=failure.projection_failures,
-                        )
+                try:
+                    placement = finalize.finalize_placement(placement, policy)
+                except finalize.ProjectionRefusal as exc:
+                    reason = str(exc)
+                    failure = LayoutAttemptFailure(
+                        candidate=spec.label,
+                        strategy=sname,
+                        reason=reason,
+                        projection_failures=_projection_records(exc.failures),
                     )
-                continue
+                    refused.append(failure)
+                    if on_progress is not None:
+                        on_progress(
+                            AttemptProgress(
+                                index=pair_index,
+                                total=total_pairs,
+                                candidate=spec.label,
+                                strategy=sname,
+                                phase="refused",
+                                reason=reason,
+                                projection_failures=failure.projection_failures,
+                            )
+                        )
+                    continue
+                placement = replace(
+                    placement,
+                    completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+                )
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.
@@ -517,7 +600,7 @@ def build(
                 placement,
                 spec,
                 ids=_id_map(spec),
-                expect_power=power,
+                expect_power=True,
                 max_belt_z=belt_rules.max_z,
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
@@ -562,13 +645,13 @@ def build(
 
     # Label the belts you have to connect to something. Done here rather than
     # in each strategy: it needs only the Placement graph plus the spec's
-    # external inputs, so one implementation covers every layout backend.
-    marked = markers.mark_external_inputs(best.placement, chosen_spec)
+    # boundary items, so one implementation covers every layout backend.
+    marked = markers.mark_external_belts(best.placement, chosen_spec)
 
     # Titles ride on the Placement, not on encode(), so stamp them here.
     labelled = replace(
         marked,
-        short_desc=name or _title(chosen_spec),
+        short_desc=name or _generated_title(chosen_spec),
         description=(
             f"flab2bp {best.strategy} layout, {chosen_spec.label} candidate, "
             f"{chosen_spec.machine_count} machines, {best.area} tiles"

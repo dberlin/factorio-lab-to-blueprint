@@ -10,6 +10,7 @@ def decode_score(
     weights: array[float],
     history: array[float],
     targets: array[int],
+    origin_deltas: array[int],
     negative_position: array[int],
     horizontal: bytearray,
     vertical: bytearray,

@@ -28,8 +28,9 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from flab2bp import pipeline
-from flab2bp.layout.band_policy import BAND_SELECTIONS, BandSelection
+from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
 from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
 
@@ -37,8 +38,8 @@ State = Literal["queued", "running", "done", "refused", "error"]
 WebStrategyName = Literal["best", "freeform", "sequence-pair"]
 
 #: The most solver time one submitted job may ask for, in seconds.  This is a
-#: ceiling on ``candidates * strategies * budget``, because that product is
-#: what actually runs.
+#: ceiling on ``effective candidates * strategies * budget``, because that
+#: product is what actually runs.
 MAX_SOLVER_SECONDS = 300.0
 
 #: Jobs kept after they finish, so a poll that arrives late still finds its
@@ -54,8 +55,7 @@ class Options:
     #: Public and CLI callers share the same production strategy set.
     strategy: WebStrategyName = "best"
     band: BandSelection = "portable"
-    power: bool = True
-    candidates: int = 3
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES
     budget_s: float = 15.0
     proliferator_tier: ProliferatorTier | None = None
     name: str = ""
@@ -73,6 +73,11 @@ class Options:
     fetch_flow: bool = False
 
     @property
+    def effective_candidate_count(self) -> int:
+        """Candidates this request executes after flow pinning."""
+        return 1 if self.flow.strip() or self.fetch_flow else len(self.candidate_policies)
+
+    @property
     def solver_ceiling_s(self) -> float:
         """An upper bound on the LAYOUT solving this job will do.
 
@@ -82,7 +87,7 @@ class Options:
         an exact finish time.
         """
         per_spec = pipeline.PRODUCTION_STRATEGY_COUNT if self.strategy == "best" else 1
-        return self.candidates * per_spec * self.budget_s
+        return self.effective_candidate_count * per_spec * self.budget_s
 
 
 class InvalidOptions(ValueError):
@@ -125,6 +130,23 @@ def parse_options(raw: JsonValue) -> Options:
     if not isinstance(raw, dict):
         raise InvalidOptions("expected a JSON object")
 
+    allowed = {
+        "url",
+        "strategy",
+        "band",
+        "candidate_policies",
+        "budget_s",
+        "proliferator_tier",
+        "name",
+        "allow_invalid",
+        "flow",
+        "fetch_flow",
+    }
+    unknown = sorted(raw.keys() - allowed)
+    if unknown:
+        names = ", ".join(f"'{name}'" for name in unknown)
+        raise InvalidOptions(f"unknown option(s): {names}")
+
     url = raw.get("url")
     if not isinstance(url, str) or not url.strip():
         raise InvalidOptions("'url' is required")
@@ -137,15 +159,43 @@ def parse_options(raw: JsonValue) -> Options:
             raise InvalidOptions("'strategy' must be one of best, freeform, sequence-pair")
 
     raw_band = raw.get("band", "portable")
-    if not isinstance(raw_band, str) or raw_band not in BAND_SELECTIONS:
+    if not isinstance(raw_band, str):
+        raise InvalidOptions("'band' must be one of " + ", ".join(BAND_SELECTIONS))
+    try:
+        band: BandSelection = BandPolicy.parse(raw_band).selection
+    except ValueError as exc:
         raise InvalidOptions(
             "'band' must be one of " + ", ".join(BAND_SELECTIONS)
-        )
-    band: BandSelection = raw_band
+        ) from exc
 
-    candidates = raw.get("candidates", 3)
-    if not isinstance(candidates, int) or isinstance(candidates, bool) or not 1 <= candidates <= 8:
-        raise InvalidOptions("'candidates' must be an integer from 1 to 8")
+    raw_candidate_policies = raw.get(
+        "candidate_policies",
+        [policy.value for policy in DEFAULT_CANDIDATE_POLICIES],
+    )
+    if not isinstance(raw_candidate_policies, list) or not raw_candidate_policies:
+        raise InvalidOptions(
+            "'candidate_policies' must be a non-empty array of named policies"
+        )
+    selected_policies: set[CandidatePolicy] = set()
+    for value in raw_candidate_policies:
+        if not isinstance(value, str):
+            raise InvalidOptions(
+                f"'candidate_policies' contains an unknown policy: {value!r}"
+            )
+        try:
+            policy = CandidatePolicy(value)
+        except ValueError as exc:
+            raise InvalidOptions(
+                f"'candidate_policies' contains an unknown policy: {value!r}"
+            ) from exc
+        if policy in selected_policies:
+            raise InvalidOptions(
+                "'candidate_policies' must not contain duplicate policies"
+            )
+        selected_policies.add(policy)
+    candidate_policies = tuple(
+        policy for policy in DEFAULT_CANDIDATE_POLICIES if policy in selected_policies
+    )
 
     raw_budget = raw.get("budget_s", 15.0)
     if isinstance(raw_budget, bool) or not isinstance(raw_budget, (int, float)):
@@ -171,10 +221,6 @@ def parse_options(raw: JsonValue) -> Options:
         case _:
             raise InvalidOptions("'proliferator_tier' must be one of auto, none, 1, 2, 3")
 
-    power = raw.get("power", True)
-    if not isinstance(power, bool):
-        raise InvalidOptions("'power' must be a boolean")
-
     allow_invalid = raw.get("allow_invalid", False)
     if not isinstance(allow_invalid, bool):
         raise InvalidOptions("'allow_invalid' must be a boolean")
@@ -199,8 +245,7 @@ def parse_options(raw: JsonValue) -> Options:
         url=url.strip(),
         strategy=web_strategy,
         band=band,
-        power=power,
-        candidates=candidates,
+        candidate_policies=candidate_policies,
         budget_s=budget,
         proliferator_tier=proliferator_tier,
         name=name,
@@ -210,10 +255,10 @@ def parse_options(raw: JsonValue) -> Options:
     )
     if options.solver_ceiling_s > MAX_SOLVER_SECONDS:
         raise InvalidOptions(
-            f"{options.candidates} candidate(s) x {options.strategy} at "
+            f"{options.effective_candidate_count} candidate(s) x {options.strategy} at "
             f"{options.budget_s:g}s is up to {options.solver_ceiling_s:g}s of solving, "
-            f"over the {MAX_SOLVER_SECONDS:g}s ceiling. Lower the budget or the "
-            f"candidate count, or pick an explicit strategy."
+            f"over the {MAX_SOLVER_SECONDS:g}s ceiling. Lower the budget, choose fewer "
+            f"candidate policies, or pick an explicit strategy."
         )
     return options
 
@@ -269,8 +314,7 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
         options.url,
         strategy=options.strategy,
         band=options.band,
-        power=options.power,
-        candidates=options.candidates,
+        candidate_policies=options.candidate_policies,
         time_budget_s=options.budget_s,
         proliferator_tier=options.proliferator_tier,
         name=options.name,
@@ -386,14 +430,15 @@ class Builder:
                     "url": job.options.url,
                     "strategy": job.options.strategy,
                     "band": job.options.band,
-                    "candidates": job.options.candidates,
+                    "candidate_policies": [
+                        policy.value for policy in job.options.candidate_policies
+                    ],
                     "budget_s": job.options.budget_s,
                     "proliferator_tier": (
                         job.options.proliferator_tier.value
                         if job.options.proliferator_tier is not None
                         else "auto"
                     ),
-                    "power": job.options.power,
                     "allow_invalid": job.options.allow_invalid,
                     "name": job.options.name,
                     # The CSV itself is not echoed -- it is up to 256kB and the

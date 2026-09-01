@@ -88,9 +88,17 @@ is importable. The pin remains until a newer importable release is verified.
 
 ## What the page shows
 
-The blueprint's own **title** — which names the *product*, `space-warper 10/min (max prolif)`,
-not the candidate that won — then machine count, tile count, building count, which strategy
-and candidate produced it, what it makes and what has to be belted in.
+The blueprint's own **title** names the *product*, `space-warper 10/min (max prolif)`,
+not the candidate that won. Auto-generated titles are capped at 60 C# UTF-16 code units,
+matching Dyson Sphere Program's save check. If the composed title is too long, the second
+displayed product is shortened to uppercase initials first, then the first product; numeric
+hyphen-delimited tokens remain whole. Rates, output order, `+N more`, and the policy suffix
+stay unchanged whenever initials are enough. If they are not, the whole title is truncated
+at a valid UTF-16 boundary and ends in one `…`.
+
+The web **Name** input has the same 60-character browser limit. The page then shows the title,
+machine count, tile count, building count, which strategy and candidate produced it, what it
+makes and what has to be belted in.
 
 Then the parts that read as silence if nobody prints them:
 
@@ -196,8 +204,10 @@ GET  /*                  the built front end, with an SPA fallback
 
 The submit body takes `url`, `strategy` (`best`/`freeform`/`sequence-pair`), `candidates`
 (1–8), positive finite `budget_s`, `band`
-(`portable`/`4`/`8`/`16`/`20`/`32`/`40`/`60`/`80`/`100`/`120`/`160`/`200`), `power`,
+(`portable`/`4`/`8`/`16`/`20`/`32`/`40`/`60`/`80`/`100`/`120`/`160`/`200`),
 `name`, `allow_invalid`, `flow`, and `fetch_flow`. `band` defaults to `portable`.
+Power is always enabled: every web build includes Tesla Towers, and the page has no power
+selector. The retired `power` request key is rejected rather than ignored.
 `flow` is a FactorioLab CSV export as text, while `fetch_flow: true` asks the server to capture
 one from an allowlisted FactorioLab page; the two are mutually exclusive. A poll echoes
 `flow_supplied` rather than the CSV itself (it can be hundreds of kB and the page already has

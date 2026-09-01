@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 
 from flab2bp.layout import finalize
+from flab2bp.rates import CandidatePolicy
 from scripts import audit, benchmark_projection
 from scripts.benchmark_projection import BenchmarkResult, CaseResult, run_benchmark
 
@@ -150,9 +151,8 @@ def test_audit_json_record_includes_build_wall_time_and_finalization_counters() 
         url="https://example.invalid",
         tier="small",
         spec_index=0,
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         budget=4.0,
-        power=True,
         workers=1,
     )
     result = audit.Result(

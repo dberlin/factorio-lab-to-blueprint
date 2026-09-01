@@ -23,6 +23,7 @@ type _DecodeScore = Callable[
         array[float],
         array[int],
         array[int],
+        array[int],
         bytearray,
         bytearray,
         array[int],
@@ -129,8 +130,11 @@ class CompiledSequenceKernel:
             self._sizes[zero_indices] = (zero_sizes, _integer_buffer(zero_sizes))
         else:
             self._fixed_sizes = (problem.sizes, _integer_buffer(problem.sizes))
-        self._targets: dict[tuple[sequence_pair.DirectInsertTarget, ...], array[int]] = {
-            context.direct_targets: _target_buffer(context.direct_targets)
+        self._targets: dict[
+            tuple[sequence_pair.DirectInsertTarget, ...],
+            tuple[array[int], array[int]],
+        ] = {
+            context.direct_targets: _target_buffers(context.direct_targets)
         }
         size = problem.size
         adjacency_size = size * size
@@ -162,10 +166,10 @@ class CompiledSequenceKernel:
             raise ValueError("direct-insert targets must be an immutable tuple")
         for target in targets:
             sequence_pair._validate_direct_target(self.problem, target, sizes)
-        targets_buffer = self._targets.get(targets)
-        if targets_buffer is None:
-            targets_buffer = _target_buffer(targets)
-            self._targets[targets] = targets_buffer
+        target_buffers = self._targets.get(targets)
+        if target_buffers is None:
+            target_buffers = _target_buffers(targets)
+            self._targets[targets] = target_buffers
 
         compiled_decode_score = _compiled_decode_score
         if compiled_decode_score is None:
@@ -179,8 +183,15 @@ class CompiledSequenceKernel:
             self._nets,
             self._weights,
             self._history,
-            targets_buffer,
-            *self._workspace_buffers,
+            target_buffers[0],
+            target_buffers[1],
+            self._workspace_buffers[0],
+            self._workspace_buffers[1],
+            self._workspace_buffers[2],
+            self._workspace_buffers[3],
+            self._workspace_buffers[4],
+            self._workspace_buffers[5],
+            self._workspace_buffers[6],
             self.problem.outline_height,
             self.context.history_outline[0],
             catalog.SORTER_MAX_REACH,
@@ -287,6 +298,7 @@ def _compiled_inputs_are_safe(
         size * 2,
         len(context.net_pairs) * 2,
         len(context.direct_targets) * 6,
+        sum(len(target.origin_deltas) for target in context.direct_targets),
         (history_width + 1) * (history_height + 1),
     )
     if any(product > _BUFFER_INDEX_MAX for product in workspace_products):
@@ -355,17 +367,22 @@ def _integer_buffer(rows: tuple[tuple[int, ...], ...]) -> array[int]:
     return values
 
 
-def _target_buffer(targets: tuple[sequence_pair.DirectInsertTarget, ...]) -> array[int]:
-    values = array("q")
+def _target_buffers(
+    targets: tuple[sequence_pair.DirectInsertTarget, ...],
+) -> tuple[array[int], array[int]]:
+    headers = array("q")
+    origin_deltas = array("q")
     for target in targets:
-        values.extend(
+        delta_start = len(origin_deltas)
+        origin_deltas.extend(target.origin_deltas)
+        headers.extend(
             (
                 target.producer,
                 target.consumer,
                 target.producer_row,
                 target.consumer_row,
-                target.producer_span,
-                target.consumer_span,
+                delta_start,
+                len(origin_deltas),
             )
         )
-    return values
+    return headers, origin_deltas

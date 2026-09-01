@@ -46,15 +46,16 @@ import sys
 import tempfile
 import time
 import zlib
-from collections.abc import Generator
+from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, NotRequired, Protocol, TypedDict, runtime_checkable
+from typing import Literal, NotRequired, Protocol, TypedDict, cast, runtime_checkable
 
 from pydantic import TypeAdapter, ValidationError
 
 from flab2bp.dsp.codec import decode, encode_blueprint
 from flab2bp.lab.capture import _ARGS, _await_devtools, _free_port, find_browser
+from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 
 #: The user's own URL.  Freeform, max-proliferation, and it builds.
 BUILD_URL = (
@@ -364,6 +365,41 @@ _SET_OPTION_JS = """((label, value) => {
   return 'ok';
 })(%s, %s)"""
 
+
+_SET_CANDIDATE_POLICIES_JS = """((selected) => {
+  const fieldsets = Array.from(
+    document.querySelectorAll('.build-panel .options fieldset'));
+  const fieldset = fieldsets.find((candidate) => {
+    const legend = candidate.querySelector('legend');
+    return legend && legend.textContent.trim() === 'Candidate policies';
+  });
+  if (!fieldset) return 'no fieldset Candidate policies';
+  const known = ['no-proliferator', 'all-products', 'output-products'];
+  if (selected.some((policy) => !known.includes(policy))) {
+    return 'unknown candidate policy ' + selected.find((policy) => !known.includes(policy));
+  }
+  const controls = new Map();
+  for (const label of fieldset.querySelectorAll('label')) {
+    const policy = label.textContent.trim();
+    if (!known.includes(policy)) continue;
+    const control = label.querySelector('input[type="checkbox"]');
+    if (!control) return 'no checkbox for candidate policy ' + policy;
+    controls.set(policy, control);
+  }
+  for (const policy of known) {
+    const control = controls.get(policy);
+    if (!control) return 'no candidate policy ' + policy;
+    const wanted = selected.includes(policy);
+    if (control.checked !== wanted) control.click();
+  }
+  const actual = known.filter((policy) => controls.get(policy).checked);
+  if (actual.length !== selected.length ||
+      actual.some((policy) => !selected.includes(policy))) {
+    return 'candidate policies did not settle: ' + actual.join(',');
+  }
+  return 'ok';
+})(%s)"""
+
 _CLICK_JS = """((text) => {
   const button = Array.from(document.querySelectorAll('button'))
     .find(b => b.textContent.trim() === text);
@@ -636,7 +672,7 @@ async def _drive(
     *,
     url: str,
     strategy: Strategy,
-    candidates: int,
+    candidate_policies: tuple[CandidatePolicy, ...],
     budget_s: float,
     out: Path,
     tag: str,
@@ -655,8 +691,9 @@ async def _drive(
     )
     await _expect_ok(
         page,
-        _SET_OPTION_JS % (json.dumps("Candidates"), json.dumps(str(candidates))),
-        "setting candidates",
+        _SET_CANDIDATE_POLICIES_JS
+        % json.dumps([policy.value for policy in candidate_policies]),
+        "setting candidate policies",
     )
     await _expect_ok(
         page, _SET_OPTION_JS % (json.dumps("Budget"), json.dumps(str(budget_s))), "setting budget"
@@ -674,7 +711,7 @@ async def _case_success(page: _Page, cdp: _Cdp, out: Path) -> SuccessResult:
         page,
         url=BUILD_URL,
         strategy="freeform",
-        candidates=3,
+        candidate_policies=DEFAULT_CANDIDATE_POLICIES,
         budget_s=10,
         out=out,
         tag="success",
@@ -745,7 +782,7 @@ async def _case_refusal(page: _Page, cdp: _Cdp, out: Path) -> RefusalResult:
         page,
         url=REFUSE_URL,
         strategy="freeform",
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         budget_s=4,
         out=out,
         tag="refusal",
@@ -772,6 +809,11 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> Smoke
     import nodriver
     from nodriver import cdp
 
+    start = cast(
+        Callable[..., Awaitable[_Browser]],
+        vars(nodriver)["start"],
+    )
+
     cdp_api: _Cdp = _CdpFacade(cdp)
 
     port = _free_port()
@@ -790,7 +832,7 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> Smoke
     browser: _Browser | None = None
     try:
         await _await_devtools(port, process, 30.0)
-        browser = await nodriver.start(host="127.0.0.1", port=port)
+        browser = await start(host="127.0.0.1", port=port)
 
         # Everything below is set up on `about:blank` and the app is then loaded
         # ONCE. Loading it and reloading it to get the console hook in first
@@ -875,7 +917,7 @@ async def _case_flow_pin(page: _Page, out: Path) -> FlowResult:
         page,
         url=FLOW_URL,
         strategy="freeform",
-        candidates=1,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         budget_s=4,
         out=out,
         tag="flow",

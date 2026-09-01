@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import flab2bp.layout.validate as validate_module
 from flab2bp.dsp import params, rules
 from flab2bp.dsp.catalog import (
     DEFAULT_MAX_BELT_Z,
@@ -59,7 +60,7 @@ ACCUMULATOR = 2206  # isAccumulator: the one exemption from the spacing rule
 GEOTHERMAL = 2213  # geothermal: the widest spacing tier, 12.0 world units
 SIGNAL_TOWER = 3007  # a power node OUTSIDE the paste's 2199..2299 scan window
 CHEM_PLANT = 2309  # Chemical Plant, 9x5 -- big enough to distinguish
-                   # centre-based from tile-based power coverage
+# centre-based from tile-based power coverage
 BELT_REQUIRED = "prolif.belt_required_edges_not_direct_inserted"
 
 
@@ -272,9 +273,7 @@ def test_geom_footprint_fires_on_an_understated_machine() -> None:
     collider box where it is not.
     """
     p = Placement(
-        buildings=(
-            dataclasses.replace(machine(0, 0, item_id=CHEM_PLANT), width=1, height=1),
-        )
+        buildings=(dataclasses.replace(machine(0, 0, item_id=CHEM_PLANT), width=1, height=1),)
     )
     r = validate(p, only=FOOTPRINT)
     assert fired(r, "geom.footprint")
@@ -290,11 +289,7 @@ def test_geom_footprint_fires_when_a_quarter_turn_is_not_applied() -> None:
     Without this the check could be satisfied by copying ``catalog.footprint``
     and ignoring yaw.
     """
-    p = Placement(
-        buildings=(
-            dataclasses.replace(machine(0, 0, item_id=CHEM_PLANT), yaw=90.0),
-        )
-    )
+    p = Placement(buildings=(dataclasses.replace(machine(0, 0, item_id=CHEM_PLANT), yaw=90.0),))
     r = validate(p, only=FOOTPRINT)
     assert fired(r, "geom.footprint")
     assert r.by_check("geom.footprint")[0].detail["expected"] == "5x7"
@@ -657,18 +652,15 @@ def test_multi_output_sorter_requires_a_filter() -> None:
 
 
 def test_multi_output_sorter_rejects_the_wrong_lane_filter() -> None:
-    findings = _output_filter_report(1120, carries="graphene").by_check(
-        "sorter.output_filter"
-    )
+    findings = _output_filter_report(1120, carries="graphene").by_check("sorter.output_filter")
 
     assert findings
     assert all(finding.severity is Severity.ERROR for finding in findings)
 
 
 def test_multi_output_sorter_accepts_the_exact_lane_filter() -> None:
-    assert not _output_filter_report(1123, carries="graphene").by_check(
-        "sorter.output_filter"
-    )
+    assert not _output_filter_report(1123, carries="graphene").by_check("sorter.output_filter")
+
 
 def _coproduct_buffer_report(*, connected: bool, malformed: bool = False) -> Report:
     proof = CoproductBufferProof(
@@ -740,10 +732,11 @@ def test_flow_coproduct_buffer_requires_one_aggregating_consumer_path() -> None:
 def test_flow_coproduct_buffer_accepts_the_certified_consumer_path() -> None:
     assert not _coproduct_buffer_report(connected=True).by_check("flow.coproduct_buffer")
 
+
 def test_flow_coproduct_buffer_reports_a_malformed_output_link() -> None:
-    assert _coproduct_buffer_report(
-        connected=True, malformed=True
-    ).by_check("flow.coproduct_buffer")
+    assert _coproduct_buffer_report(connected=True, malformed=True).by_check(
+        "flow.coproduct_buffer"
+    )
 
 
 SPRAY_COATER = 2313  # a belt addon: no insert pose, fed by belt from its addon area
@@ -769,9 +762,7 @@ def _retagged(
         b,
         output_to_slot=b.output_to_slot if output_to_slot is None else output_to_slot,
         input_from_slot=b.input_from_slot if input_from_slot is None else input_from_slot,
-        output_from_slot=(
-            b.output_from_slot if output_from_slot is None else output_from_slot
-        ),
+        output_from_slot=(b.output_from_slot if output_from_slot is None else output_from_slot),
         input_to_slot=b.input_to_slot if input_to_slot is None else input_to_slot,
         yaw=b.yaw if yaw is None else yaw,
         yaw2=b.yaw2 if yaw is None else yaw,
@@ -924,11 +915,49 @@ def test_game_slot_occupancy_fires_when_two_sorters_name_one_machine_slot() -> N
     assert fired(r, "game.slot_occupancy")
     assert not r.ok
     finding = r.by_check("game.slot_occupancy")[0]
-    assert finding.detail["peer"] == 0
+    assert finding.detail["object"] == 0
     assert finding.detail["slot"] == 8, finding.message
     # The report has to NAME the machine and the slot, not merely count.
     assert "Assembling Machine" in finding.message
     assert "slot 8" in finding.message
+
+
+def test_game_slot_occupancy_fires_on_a_splitter_draw_own_slot_collision() -> None:
+    """The draw and upstream feeder are different records claiming belt slot 1."""
+    reservation = place(
+        splitter(0, 0),
+        belt(0, 0, inp=0, out=2),
+        belt(-1, 0),
+        belt(0, 1, out=1),
+    )
+    assert reservation.buildings[3].output_to_slot == 2
+    buildings = list(reservation.buildings)
+    buildings[3] = dataclasses.replace(buildings[3], output_to_slot=1)
+
+    report = validate(
+        Placement(buildings=tuple(buildings)),
+        only=SLOT_OCCUPANCY,
+    )
+
+    finding = report.by_check("game.slot_occupancy")[0]
+    assert finding.detail["object"] == 1
+    assert finding.detail["slot"] == 1
+    assert finding.detail["claim_count"] == 2
+    assert "input own" in finding.detail["claims"]
+    assert "output peer" in finding.detail["claims"]
+
+
+def test_game_slot_occupancy_counts_one_record_once_when_both_ends_share_a_cell() -> None:
+    self_link = dataclasses.replace(
+        belt(0, 0, out=0),
+        output_from_slot=1,
+        output_to_slot=1,
+    )
+
+    assert not fired(
+        validate(Placement(buildings=(self_link,)), only=SLOT_OCCUPANCY),
+        "game.slot_occupancy",
+    )
 
 
 def test_game_slot_occupancy_exempts_the_belt_end_of_a_sorter() -> None:
@@ -953,11 +982,11 @@ def test_game_slot_occupancy_exempts_the_belt_end_of_a_sorter() -> None:
 
 @pytest.mark.parametrize("name", GEOMETRY_SAFE_FIXTURES)
 def test_real_blueprint_never_shares_a_connection_slot(name: str) -> None:
-    """The wider negative control: blueprints the GAME wrote.
+    """The wider own-and-peer endpoint control over blueprints the game wrote.
 
     Run on the decoded records rather than through
     :func:`decode_fixture_to_placement`, which drops sorters and addons -- the
-    very records that carry the machine-side slot indices this check is about.
+    very records that carry the connection-pool indices this check is about.
     """
     from collections import defaultdict
 
@@ -965,16 +994,30 @@ def test_real_blueprint_never_shares_a_connection_slot(name: str) -> None:
 
     raw = decode((Path("tests/fixtures") / f"{name}.txt").read_text()).buildings
     by_index = {b.index: b for b in raw}
-    claims: dict[tuple[int, int], list[int]] = defaultdict(list)
+    claims: dict[tuple[int, int], list[tuple[int, str]]] = defaultdict(list)
     for b in raw:
-        for link, slot in (
-            (b.output_obj_idx, b.output_to_slot),
-            (b.input_obj_idx, b.input_from_slot),
+        for record, link, own_slot, peer_slot in (
+            (
+                "output",
+                b.output_obj_idx,
+                b.output_from_slot,
+                b.output_to_slot,
+            ),
+            (
+                "input",
+                b.input_obj_idx,
+                b.input_to_slot,
+                b.input_from_slot,
+            ),
         ):
-            if link not in by_index or slot < 0:
+            if link not in by_index:
                 continue
-            claims[(link, slot)].append(b.index)
-    shared = {k: v for k, v in claims.items() if len(v) > 1}
+            record_cells = {
+                cell for cell in ((b.index, own_slot), (link, peer_slot)) if cell[1] >= 0
+            }
+            for cell in record_cells:
+                claims[cell].append((b.index, record))
+    shared = {key: occupants for key, occupants in claims.items() if len(occupants) > 1}
     assert not shared, f"{name}: {list(shared.items())[:5]}"
     assert claims, f"{name} decoded to no connection at all"
 
@@ -1307,6 +1350,32 @@ def test_game_belt_crossing_excuses_a_belt_beside_a_coater_on_the_ground() -> No
     assert not fired(validate(p, only=CROSSING), "game.belt_crossing")
 
 
+def test_game_belt_crossing_exact_probe_ignores_distant_belts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = validate_module.dsp_colliders.belt_crossings
+    probes = 0
+
+    def counted(*args: object, **kwargs: object) -> list[tuple[int, int]]:
+        nonlocal probes
+        probes += len(args[0])  # type: ignore[arg-type]
+        return exact(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(validate_module.dsp_colliders, "belt_crossings", counted)
+    placement = _coater_with_a_belt_at(1)
+    placement = Placement(
+        buildings=(
+            *placement.buildings,
+            *(belt(1_000 + offset, 1_000, 1) for offset in range(64)),
+        )
+    )
+
+    report = validate(placement, only=CROSSING)
+
+    assert fired(report, "game.belt_crossing")
+    assert probes == 1
+
+
 def test_game_inserter_paste_allows_a_purely_radial_stretch() -> None:
     """0.90 world units straight out of the face is legal on paste, not on copy.
 
@@ -1388,9 +1457,7 @@ def test_two_assemblers_collide_at_pitch_3_and_clear_at_pitch_4() -> None:
     assert _cat.clearance(ASSEMBLER, 0.0)[0] == 4, "and needs a fourth"
 
 
-def _coater(
-    x: int, y: int, z: Fraction | int = 0, *, yaw: float = 90.0
-) -> PlacedBuilding:
+def _coater(x: int, y: int, z: Fraction | int = 0, *, yaw: float = 90.0) -> PlacedBuilding:
     """A Spray Coater on the belt at ``(x, y)``.
 
     It is deliberately represented as 1x1: a belt addon is anchored on its host
@@ -1430,9 +1497,7 @@ def test_game_addon_supply_fires_when_a_coater_has_no_proliferator_belt() -> Non
         (270.0, (1, 0)),
     ],
 )
-def test_game_addon_supply_uses_rotated_elevated_pose(
-    yaw: float, supply: tuple[int, int]
-) -> None:
+def test_game_addon_supply_uses_rotated_elevated_pose(yaw: float, supply: tuple[int, int]) -> None:
     ground = validate(
         place(belt(0, 0), belt(*supply, 0), _coater(0, 0, yaw=yaw)),
         only={"game.addon_supply"},
@@ -1446,6 +1511,40 @@ def test_game_addon_supply_uses_rotated_elevated_pose(
     assert not fired(elevated, "game.addon_supply"), [
         f.message for f in elevated.by_check("game.addon_supply")
     ]
+
+def test_game_addon_supply_rejects_broke4_horizontal_raised_bus() -> None:
+    """The area-to-belt gap is 0.3142 world units, above the strict 0.3 gate."""
+    placement = place(
+        belt(0, 0),  # 0: cargo belt the coater rides
+        belt(1, -1, 1, out=2),  # 1
+        belt(0, -1, 1, out=3),  # 2: nearest area-1 belt, running horizontally
+        belt(-1, -1, 1),  # 3
+        _coater(0, 0, yaw=0.0),  # 4: area 1 is at (0, -1.25, 1)
+    )
+
+    findings = validate(
+        placement,
+        only={"game.addon_supply"},
+    ).by_check("game.addon_supply")
+
+    assert len(findings) == 1
+    assert findings[0].buildings == (4, 2)
+    assert findings[0].detail["line_distance"] == "0.3142"
+
+
+def test_game_addon_supply_accepts_vertical_terminal_stub() -> None:
+    """A terminal supply tile running along the coater axis crosses area 1."""
+    placement = place(
+        belt(0, 0),  # 0: cargo belt
+        belt(0, -2, 1, out=2),  # 1
+        belt(0, -1, 1),  # 2: vertical terminal in area 1
+        _coater(0, 0, yaw=0.0),  # 3
+    )
+
+    assert not fired(
+        validate(placement, only={"game.addon_supply"}),
+        "game.addon_supply",
+    )
 
 
 def test_game_addon_supply_accepts_belt_inside_authoritative_radius() -> None:
@@ -1468,6 +1567,41 @@ COATER_SPEC = BuildSpec(
     external_inputs={"proliferator-3": Fraction(1)},
     spray_lanes={"ore": True},
 )
+
+
+def test_addon_belt_lookup_reuses_exact_result_across_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact = validate_module.slots.world_gap
+    probes = 0
+
+    def counted(dx: float, dy: float, dz: float) -> float:
+        nonlocal probes
+        probes += 1
+        return exact(dx, dy, dz)
+
+    monkeypatch.setattr(validate_module.slots, "world_gap", counted)
+    placement = place(
+        belt(0, 0, carries="ore"),
+        belt(-1, 0, 1, carries="proliferator-3"),
+        _coater(0, 0),
+        *(belt(1_000 + offset, 1_000, 1) for offset in range(64)),
+    )
+
+    report = validate(
+        placement,
+        COATER_SPEC,
+        ids=IdMap(),
+        only={
+            "game.addon_supply",
+            "belt.termination",
+            "prolif.coaters_are_supplied",
+        },
+    )
+
+    assert not fired(report, "game.addon_supply")
+    assert not fired(report, "prolif.coaters_are_supplied")
+    assert probes <= 4
 
 
 def _coater_supply_report(
@@ -1502,8 +1636,7 @@ def test_spec_coater_host_requires_a_declared_sprayed_item() -> None:
 def test_spec_coater_host_and_supply_items_validate_together() -> None:
     report = _coater_supply_report()
     assert not fired(report, "prolif.coaters_are_supplied"), [
-        finding.message
-        for finding in report.by_check("prolif.coaters_are_supplied")
+        finding.message for finding in report.by_check("prolif.coaters_are_supplied")
     ]
 
 
@@ -1536,10 +1669,7 @@ def test_game_addon_supply_rejects_a_sorter_targeting_a_coater() -> None:
     report = validate(placement, only={"game.addon_supply"})
 
     assert fired(report, "game.addon_supply")
-    assert any(
-        "sorter" in finding.message
-        for finding in report.by_check("game.addon_supply")
-    )
+    assert any("sorter" in finding.message for finding in report.by_check("game.addon_supply"))
 
 
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
@@ -1727,8 +1857,12 @@ def test_game_power_too_close_sees_a_node_that_covers_nothing() -> None:
     panel = catalog_building(SOLAR_PANEL)
     assert panel.cover_radius == 0 and panel.is_power_node
     a = PlacedBuilding(
-        item_id=SOLAR_PANEL, model_index=panel.model_index, x=0, y=0,
-        width=panel.width, height=panel.height,
+        item_id=SOLAR_PANEL,
+        model_index=panel.model_index,
+        x=0,
+        y=0,
+        width=panel.width,
+        height=panel.height,
     )
     b = dataclasses.replace(a, x=1, y=1)
     assert fired(validate(place(a, b)), "game.power_too_close")
@@ -1745,8 +1879,12 @@ def test_game_power_too_close_exempts_a_stacked_pair_of_accumulators() -> None:
     acc = catalog_building(ACCUMULATOR)
     assert acc.is_accumulator and acc.is_power_node
     a = PlacedBuilding(
-        item_id=ACCUMULATOR, model_index=acc.model_index, x=0, y=0,
-        width=acc.width, height=acc.height,
+        item_id=ACCUMULATOR,
+        model_index=acc.model_index,
+        x=0,
+        y=0,
+        width=acc.width,
+        height=acc.height,
     )
     assert not fired(validate(place(a, dataclasses.replace(a, x=3, y=0))), "game.power_too_close")
     assert fired(validate(place(a, tower(2, 0))), "game.power_too_close")
@@ -1762,8 +1900,12 @@ def test_game_power_too_close_holds_wind_turbines_to_the_wider_tier() -> None:
     turbine = catalog_building(WIND_TURBINE)
     assert turbine.wind_forced_power
     a = PlacedBuilding(
-        item_id=WIND_TURBINE, model_index=turbine.model_index, x=0, y=0,
-        width=turbine.width, height=turbine.height,
+        item_id=WIND_TURBINE,
+        model_index=turbine.model_index,
+        x=0,
+        y=0,
+        width=turbine.width,
+        height=turbine.height,
     )
     assert fired(validate(place(a, dataclasses.replace(a, x=8))), "game.power_too_close")
     assert not fired(validate(place(a, dataclasses.replace(a, x=9))), "game.power_too_close")
@@ -1782,8 +1924,12 @@ def test_game_power_too_close_holds_geothermal_to_the_widest_tier() -> None:
     station = catalog_building(GEOTHERMAL)
     assert station.geothermal and not station.wind_forced_power
     a = PlacedBuilding(
-        item_id=GEOTHERMAL, model_index=station.model_index, x=0, y=0,
-        width=station.width, height=station.height,
+        item_id=GEOTHERMAL,
+        model_index=station.model_index,
+        x=0,
+        y=0,
+        width=station.width,
+        height=station.height,
     )
     assert fired(validate(place(a, dataclasses.replace(a, x=9))), "game.power_too_close")
     assert not fired(validate(place(a, dataclasses.replace(a, x=10))), "game.power_too_close")
@@ -1791,8 +1937,12 @@ def test_game_power_too_close_holds_geothermal_to_the_widest_tier() -> None:
     # the ordinary 3.5 and five tiles clears it.
     turbine = catalog_building(WIND_TURBINE)
     other = PlacedBuilding(
-        item_id=WIND_TURBINE, model_index=turbine.model_index, x=5, y=0,
-        width=turbine.width, height=turbine.height,
+        item_id=WIND_TURBINE,
+        model_index=turbine.model_index,
+        x=5,
+        y=0,
+        width=turbine.width,
+        height=turbine.height,
     )
     assert not fired(validate(place(a, other)), "game.power_too_close")
 
@@ -1810,8 +1960,12 @@ def test_game_power_too_close_ignores_a_peer_outside_the_pastes_id_window() -> N
     lo, hi = rules.PASTE_POWER_NODE_IDS
     assert signal.is_power_node and not (lo <= SIGNAL_TOWER < hi)
     a = PlacedBuilding(
-        item_id=SIGNAL_TOWER, model_index=signal.model_index, x=0, y=0,
-        width=signal.width, height=signal.height,
+        item_id=SIGNAL_TOWER,
+        model_index=signal.model_index,
+        x=0,
+        y=0,
+        width=signal.width,
+        height=signal.height,
     )
     # A Signal Tower is 9x9, so `a`'s centre is (4, 4); one tile of centre
     # separation is 1.257 world units, well inside the 3.5 bound.
@@ -1952,11 +2106,9 @@ def test_power_connectivity_agrees_with_exact_rational_geometry_around_its_edge(
             if abs(dx * dx + dy * dy - int(reach**2)) > 60:
                 continue
             a, b = tower(0, 0), tower(dx, dy)
-            linked = (
-                (Fraction(2 * a.x + a.width, 2) - Fraction(2 * b.x + b.width, 2)) ** 2
-                + (Fraction(2 * a.y + a.height, 2) - Fraction(2 * b.y + b.height, 2)) ** 2
-                <= reach**2
-            )
+            linked = (Fraction(2 * a.x + a.width, 2) - Fraction(2 * b.x + b.width, 2)) ** 2 + (
+                Fraction(2 * a.y + a.height, 2) - Fraction(2 * b.y + b.height, 2)
+            ) ** 2 <= reach**2
             seen.add(linked)
             tested += 1
             assert fired(validate(place(a, b)), "power.connectivity") is not linked, (dx, dy)
@@ -2113,9 +2265,7 @@ CHARGE = params.parameters_for("accumulator-full")
 DISCHARGE = params.parameters_for("accumulator-discharge")
 
 
-def exchanger(
-    x: int, y: int, *, parameters: tuple[int, ...] = CHARGE
-) -> PlacedBuilding:
+def exchanger(x: int, y: int, *, parameters: tuple[int, ...] = CHARGE) -> PlacedBuilding:
     """An Energy Exchanger exactly as a strategy emits one.
 
     ``recipe_id`` is zero and the mode rides in ``parameters``; see
@@ -2236,9 +2386,9 @@ def test_the_set_of_power_nodes_is_unchanged_by_the_reclassification() -> None:
 
     checked = 0
     for item_id in (*_cat.BELT_IDS, *_cat.SORTER_IDS, _cat.SPLITTER_ID):
-        assert not _supplies_power(
-            PlacedBuilding(item_id=item_id, model_index=0, x=0, y=0)
-        ), item_id
+        assert not _supplies_power(PlacedBuilding(item_id=item_id, model_index=0, x=0, y=0)), (
+            item_id
+        )
         checked += 1
     assert checked >= 7, f"only {checked} belt-integrated ids checked"
 
@@ -2249,9 +2399,7 @@ def test_two_exchangers_and_no_sorters_at_all_must_not_pass() -> None:
     Both machines need one ingredient delivered and one product taken away, and
     there is not a sorter in the placement to do either.
     """
-    r = validate(
-        unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False
-    )
+    r = validate(unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False)
     assert not r.ok, "a build with zero sorters and two hungry machines passed"
     assert fired(r, "machine.inputs_supplied"), errors(r)
     assert fired(r, "machine.output_removed"), errors(r)
@@ -2303,9 +2451,7 @@ def test_spec_machine_counts_counts_a_mode_driven_machine() -> None:
     The result was "recipe 0 on machine 2209: spec demands 0, placement has 2"
     for a spec demanding exactly 2.
     """
-    r = validate(
-        unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False
-    )
+    r = validate(unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False)
     assert not fired(r, "spec.machine_counts"), [
         f.message for f in r.by_check("spec.machine_counts")
     ]
@@ -2453,9 +2599,7 @@ def test_the_same_checks_do_run_when_every_machine_resolves() -> None:
     too, the test above would pass for a reason that has nothing to do with
     resolution.
     """
-    r = validate(
-        unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False
-    )
+    r = validate(unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False)
     assert not r.by_check("machine.group_resolved")
     for cid in NEEDS_GROUPS:
         assert cid in r.checks_run, cid
@@ -2486,8 +2630,6 @@ def test_a_partly_evaluated_check_still_reports_what_it_did_find() -> None:
     assert supplied, "the resolvable machine starves and must still be reported"
     assert supplied[0].buildings == (0,)
     assert "machine.inputs_supplied" in r.skipped
-
-
 
 
 # --- machine conformance, continued ----------------------------------------
@@ -2623,6 +2765,7 @@ def test_flow_rates_are_reported_as_exact_fractions() -> None:
     f = r.by_check("flow.belt_capacity")[0]
     assert f.detail["required"] == "50/3"
 
+
 # --- per-item demand attribution -------------------------------------------
 #
 # Demand used to be split EVENLY across the sorters feeding a machine, which
@@ -2631,7 +2774,7 @@ def test_flow_rates_are_reported_as_exact_fractions() -> None:
 # a sorter moves and was never consulted.
 
 PILE = 2014  # Pile Sorter, 20/s at one tile -- lets belt limits be tested
-             # without the sorter limit firing first and masking them
+# without the sorter limit firing first and masking them
 COPPER_ID = 1104
 IRON_ID = 1101
 
@@ -3108,6 +3251,102 @@ def test_junction_ports_clean_at_four_attachments() -> None:
     assert not fired(validate(p), "junction.ports")
 
 
+def test_junction_stack_uses_two_level_pitch_and_names_its_support() -> None:
+    stack = junction.make_splitter_stack(
+        4,
+        5,
+        2,
+        first_index=7,
+        carries_item="iron-ore",
+    )
+
+    assert [(building.z, building.input_obj, building.carries_item) for building in stack] == [
+        (0, None, None),
+        (2, 7, "iron-ore"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [
+        (1, [(Fraction(0), 40, None, "iron-ore")]),
+        (
+            3,
+            [
+                (Fraction(0), 38, None, None),
+                (Fraction(2), 40, 7, "iron-ore"),
+            ],
+        ),
+    ],
+)
+def test_odd_level_junction_stack_uses_a_mixed_height_top(
+    level: int,
+    expected: list[tuple[Fraction, int, int | None, str | None]],
+) -> None:
+    stack = junction.make_splitter_stack(
+        4,
+        5,
+        level,
+        first_index=7,
+        carries_item="iron-ore",
+        carry_direction=(1, 0),
+    )
+
+    assert [
+        (building.z, building.model_index, building.input_obj, building.carries_item)
+        for building in stack
+    ] == expected
+    assert stack[-1].yaw == 90.0
+
+
+def test_junction_support_link_does_not_consume_a_physical_port() -> None:
+    base, upper = junction.make_splitter_stack(0, 0, 2, first_index=0)
+    placement = place(
+        base,
+        upper,
+        belt(0, 0, out=0),
+        belt(0, 0, inp=0),
+        belt(0, 0, inp=0),
+        belt(0, 0, inp=0),
+    )
+
+    assert not fired(validate(placement), "junction.ports")
+
+
+def test_junction_stack_support_link_is_valid_and_support_may_be_idle() -> None:
+    base, upper = junction.make_splitter_stack(0, 0, 2, first_index=0)
+    placement = place(
+        base,
+        upper,
+        belt(0, 0, z=2, out=1),
+        belt(0, 0, z=2, inp=1),
+    )
+
+    report = validate(placement)
+
+    assert not fired(report, "junction.stack_support")
+    assert not fired(report, "junction.records_no_links")
+    assert not any(
+        finding.detail.get("junction") == 0
+        for finding in report.by_check("belt.continuity")
+    )
+
+
+def test_junction_stack_support_fires_without_the_required_lower_splitter() -> None:
+    placement = place(
+        splitter(0, 0, 2),
+        belt(0, 0, z=2, out=0),
+        belt(0, 0, z=2, inp=0),
+    )
+
+    report = validate(placement)
+
+    assert fired(report, "junction.stack_support")
+    finding = report.by_check("junction.stack_support")[0]
+    assert finding.detail["junction"] == 0
+    assert finding.detail["expected_z"] == "0"
+
+
 def test_junction_ports_fires_on_a_fifth_attachment() -> None:
     """A splitter with five attachments pastes cleanly and drops one.
 
@@ -3151,10 +3390,81 @@ def test_junction_colocated_fires_on_an_adjacent_attachment() -> None:
     assert f.detail["belt"] == 2
 
 
-def test_junction_colocated_fires_across_altitudes_too() -> None:
-    """Same tile, wrong level, is still a side that pastes unconnected."""
-    p = place(belt(0, 0, out=1), splitter(0, 0), belt(0, 0, 1, inp=1))
-    assert fired(validate(p), "junction.colocated")
+def test_junction_colocated_allows_an_elevated_splitter_variant_port() -> None:
+    """The two vertical Splitter models expose legal ports one level higher."""
+    from dataclasses import replace
+
+    p = place(
+        replace(splitter(0, 0), model_index=39),
+        replace(belt(0, 0, 1, inp=0, out=2), input_from_slot=1),
+        belt(0, 1, 1),
+    )
+    result = validate(p)
+    assert not fired(result, "junction.colocated")
+    assert not fired(result, "junction.port_pose")
+
+
+def test_junction_port_pose_fires_when_a_free_slot_is_on_the_wrong_side() -> None:
+    from dataclasses import replace
+
+    buildings = list(junction_pair().buildings)
+    buildings[3] = replace(buildings[3], input_from_slot=0)
+    buildings[5] = replace(buildings[5], input_from_slot=0)
+    findings = validate(Placement(buildings=tuple(buildings))).by_check("junction.port_pose")
+
+    assert {
+        (
+            finding.detail["belt"],
+            finding.detail["recorded_port"],
+            finding.detail["expected_port"],
+        )
+        for finding in findings
+    } == {(3, 0, 1), (5, 0, 2)}
+
+
+def test_junction_port_pose_rejects_a_draw_using_belt_own_slot_zero() -> None:
+    from dataclasses import replace
+
+    buildings = list(junction_pair().buildings)
+    buildings[3] = replace(buildings[3], input_to_slot=0)
+
+    findings = validate(Placement(buildings=tuple(buildings))).by_check("junction.port_pose")
+
+    assert len(findings) == 1
+    assert findings[0].detail == {
+        "code": "own_slot",
+        "splitter": 2,
+        "belt": 3,
+        "direction": "draw",
+        "recorded_port": 1,
+        "expected_port": 1,
+        "model_index": 38,
+        "own_slot_field": "input_to_slot",
+        "recorded_own_slot": 0,
+        "expected_own_slot": 1,
+    }
+
+
+def test_junction_port_pose_rejects_foreign_splitter_model_structurally() -> None:
+    foreign = dataclasses.replace(splitter(0, 0), model_index=121)
+
+    findings = validate(
+        Placement(buildings=(foreign,)),
+        only={"junction.port_pose"},
+    ).by_check("junction.port_pose")
+
+    assert len(findings) == 1
+    assert findings[0].buildings == (0,)
+    assert findings[0].detail == {
+        "code": "model",
+        "splitter": 0,
+        "belt": None,
+        "direction": None,
+        "recorded_port": None,
+        "expected_port": None,
+        "model_index": 121,
+        "supported_models": (38, 39, 40),
+    }
 
 
 def test_junction_records_no_links_fires_when_a_splitter_names_a_neighbour() -> None:
@@ -3183,6 +3493,38 @@ def test_geom_belt_single_occupancy_allows_belts_stacked_on_a_junction() -> None
     would flag a blueprint the game produced.
     """
     assert not fired(validate(junction_pair()), "geom.belt_single_occupancy")
+
+def test_geom_belt_single_occupancy_allows_model_40_elevated_carry() -> None:
+    """Model 40's straight pair is one level above its Splitter anchor."""
+    elevated = place(
+        dataclasses.replace(splitter(0, 0), model_index=40),  # 0
+        belt(0, 0, 1, out=0),  # 1
+        belt(0, 0, 1, inp=0),  # 2
+    )
+
+    assert not fired(
+        validate(elevated, only={"geom.belt_single_occupancy"}),
+        "geom.belt_single_occupancy",
+    )
+
+
+def test_geom_belt_single_occupancy_rejects_foreign_belt_above_model_40() -> None:
+    """The elevated-port exemption still requires every belt to name the Splitter."""
+    elevated = place(
+        dataclasses.replace(splitter(0, 0), model_index=40),  # 0
+        belt(0, 0, 1, out=0),  # 1
+        belt(0, 0, 1, inp=0),  # 2
+        belt(0, 0, 1),  # 3: merely crosses the physical port
+    )
+
+    findings = validate(
+        elevated,
+        only={"geom.belt_single_occupancy"},
+    ).by_check("geom.belt_single_occupancy")
+
+    assert len(findings) == 1
+    assert findings[0].buildings == (3,)
+    assert findings[0].detail["unattached"] == 1
 
 
 def test_geom_belt_single_occupancy_still_fires_on_an_unattached_stack() -> None:
@@ -3399,9 +3741,7 @@ def test_flow_belt_capacity_does_not_invent_a_violation_on_a_merged_feed() -> No
     is worse than missing an overload because it makes the tool refuse to emit.
     """
     r = validate(merge_trunks(), two_consumers_of_ore(Fraction(8)), ids=SPLIT_IDS)
-    assert not fired(r, "flow.belt_capacity"), [
-        f.message for f in r.by_check("flow.belt_capacity")
-    ]
+    assert not fired(r, "flow.belt_capacity"), [f.message for f in r.by_check("flow.belt_capacity")]
 
 
 def test_flow_belt_capacity_still_fires_when_a_merged_feed_genuinely_overflows() -> None:
@@ -3466,9 +3806,7 @@ def test_a_lane_carries_what_flows_through_it_not_twice_that() -> None:
     r = validate(
         one_lane_between_two_machines(), producer_to_consumer_spec(Fraction(10)), ids=SPLIT_IDS
     )
-    assert not fired(r, "flow.belt_capacity"), [
-        f.message for f in r.by_check("flow.belt_capacity")
-    ]
+    assert not fired(r, "flow.belt_capacity"), [f.message for f in r.by_check("flow.belt_capacity")]
     carried = {str(f.detail["required"]) for f in r.by_check("flow.headroom")}
     assert "10" in carried and "20" not in carried, carried
 
@@ -3751,6 +4089,7 @@ def test_flow_lane_attribution_sees_items_arriving_through_a_junction() -> None:
 # wasting two tiles out of fifty.  Measured across both strategies' fixtures it
 # warned on 95 of 130 runs, and on the twelve-URL bake-off corpus on 380 of 517.
 # It now measures the SIZE of the overshoot, and those rates fall to 7% and 14%.
+
 
 def _supplied_coater_lane() -> Placement:
     return place(
@@ -4255,6 +4594,29 @@ def test_belt_crossing_names_the_height_it_needs() -> None:
     assert f.detail["needs_z_above"] == "3.5325"
 
 
+def _model40_perpendicular_merge(*, branch_first: bool) -> Placement:
+    """A direct Splitter branch merging into the centre of a through-line."""
+    junction_building = dataclasses.replace(splitter(0, 0), model_index=40, yaw=90.0)
+    branch = belt(0, 0, 1, inp=0, out=3)
+    opposing = belt(-1, 1, 1, out=3)
+    centre = belt(0, 1, 1, out=4)
+    onward = belt(1, 1, 1)
+    feeders = (branch, opposing) if branch_first else (opposing, branch)
+    return place(junction_building, *feeders, centre, onward)
+
+
+@pytest.mark.parametrize("branch_first", [True, False])
+def test_belt_collide_rejects_a_preview_order_dependent_merge(branch_first: bool) -> None:
+    """Certification cannot depend on which merge feeder canonicalization puts last."""
+    report = validate(
+        _model40_perpendicular_merge(branch_first=branch_first),
+        only={"game.belt_collide"},
+    )
+    (finding,) = report.by_check("game.belt_collide")
+    assert finding.detail["collider_index"] == 0
+    assert finding.detail["unstable_merge_indices"] == (3,)
+
+
 #: Every fixture whose coordinates survive rounding into tile space, so that a
 #: finding against one is about the RULE and not about the rounding.  The union
 #: of the two derived sets the repository already keeps: `GEOMETRY_SAFE_FIXTURES`
@@ -4343,8 +4705,7 @@ def _sprayed_scene(coater_at: int | None) -> Placement:
     ``coater_at`` is the lane tile index a Spray Coater rides, or ``None`` for
     the case both strategies could produce silently -- no coater at all.
     """
-    lane = [belt(x, 0, out=x + 1 if x < 3 else None, carries="copper-ore")
-            for x in range(4)]
+    lane = [belt(x, 0, out=x + 1 if x < 3 else None, carries="copper-ore") for x in range(4)]
     parts: list[PlacedBuilding] = [
         *lane,
         machine(0, 1, recipe_id=6),  # 4x4, x0..3 y1..4
@@ -4370,8 +4731,7 @@ def test_sprayed_cargo_fires_when_the_lane_has_no_coater_at_all() -> None:
     assert fired(r, SPRAYED_REACHES), errors(r)
     assert Severity.ERROR in {f.severity for f in r.by_check(SPRAYED_REACHES)}
     assert not fired(r, "prolif.coaters_are_supplied"), (
-        "the older check convicted this, so it was never vacuous and this one "
-        "is redundant"
+        "the older check convicted this, so it was never vacuous and this one is redundant"
     )
 
 
@@ -4383,9 +4743,7 @@ def test_sprayed_cargo_fires_when_the_coater_is_downstream_of_the_pickup() -> No
 
 def test_sprayed_cargo_clean_when_the_coater_rides_the_lane_head() -> None:
     r = validate(_sprayed_scene(0), _sprayed_spec(), ids=_SPRAYED_IDS)
-    assert not fired(r, SPRAYED_REACHES), [
-        f.message for f in r.by_check(SPRAYED_REACHES)
-    ]
+    assert not fired(r, SPRAYED_REACHES), [f.message for f in r.by_check(SPRAYED_REACHES)]
 
 
 def test_sprayed_cargo_clean_when_the_coater_rides_the_pickup_tile_itself() -> None:
@@ -4397,9 +4755,7 @@ def test_sprayed_cargo_clean_when_the_coater_rides_the_pickup_tile_itself() -> N
     become a refusal.
     """
     r = validate(_sprayed_scene(1), _sprayed_spec(), ids=_SPRAYED_IDS)
-    assert not fired(r, SPRAYED_REACHES), [
-        f.message for f in r.by_check(SPRAYED_REACHES)
-    ]
+    assert not fired(r, SPRAYED_REACHES), [f.message for f in r.by_check(SPRAYED_REACHES)]
 
 
 def test_sprayed_cargo_says_nothing_about_an_unproliferated_consumer() -> None:
@@ -4407,16 +4763,14 @@ def test_sprayed_cargo_says_nothing_about_an_unproliferated_consumer() -> None:
     spec = _sprayed_spec().model_copy(
         update={
             "groups": (
-                _sprayed_spec().groups[0].model_copy(
-                    update={"proliferator_mode": ProliferatorMode.NONE}
-                ),
+                _sprayed_spec()
+                .groups[0]
+                .model_copy(update={"proliferator_mode": ProliferatorMode.NONE}),
             )
         }
     )
     r = validate(_sprayed_scene(None), spec, ids=_SPRAYED_IDS)
-    assert not fired(r, SPRAYED_REACHES), [
-        f.message for f in r.by_check(SPRAYED_REACHES)
-    ]
+    assert not fired(r, SPRAYED_REACHES), [f.message for f in r.by_check(SPRAYED_REACHES)]
 
 
 def _hop_scene(coated: bool) -> Placement:
@@ -4446,15 +4800,15 @@ def _hop_scene(coated: bool) -> Placement:
 def test_sprayed_cargo_follows_a_belt_to_belt_sorter_hop() -> None:
     """The coater is two lanes upstream and a sorter apart, and that is fine."""
     r = validate(_hop_scene(coated=True), _sprayed_spec(), ids=_SPRAYED_IDS)
-    assert not fired(r, SPRAYED_REACHES), [
-        f.message for f in r.by_check(SPRAYED_REACHES)
-    ]
+    assert not fired(r, SPRAYED_REACHES), [f.message for f in r.by_check(SPRAYED_REACHES)]
 
 
 def test_sprayed_cargo_still_fires_across_a_hop_with_no_coater_anywhere() -> None:
     """Without this the clause above could be passing by switching the check off."""
     r = validate(_hop_scene(coated=False), _sprayed_spec(), ids=_SPRAYED_IDS)
     assert fired(r, SPRAYED_REACHES), errors(r)
+
+
 # --- belt.port_dock: the connection a Ray Receiver takes ---------------------
 #
 # A Ray Receiver's prefab ships ZERO insert poses and two belt PORTS.  Nothing
@@ -4574,13 +4928,7 @@ def test_belt_port_dock_fires_on_the_wrong_own_slot() -> None:
 
 
 def test_belt_port_dock_fires_when_a_feeder_takes_the_docked_belt_s_own_slot() -> None:
-    """``entityConnPool[objId * 16 + slot]`` is one cell, and this names it twice.
-
-    ``game.slot_occupancy`` cannot see this: it keys on the PEER side of every
-    record, and both of these name a different peer -- the dock names the Ray
-    Receiver, the feeder names the belt.  The clash is on the BELT, which is the
-    peer of only one of them.
-    """
+    """Both the global pool check and dock-specific finding name the collision."""
     p = Placement(
         buildings=(
             receiver(0, 0),
@@ -4595,10 +4943,12 @@ def test_belt_port_dock_fires_when_a_feeder_takes_the_docked_belt_s_own_slot() -
             dataclasses.replace(p.buildings[2], output_to_slot=1),
         )
     )
-    r = validate(hand, only={"belt.port_dock"})
+    r = validate(hand, only={"belt.port_dock", "game.slot_occupancy"})
     assert fired(r, "belt.port_dock")
     assert "already spends that slot" in r.by_check("belt.port_dock")[-1].message
-    assert not fired(validate(hand, only={"game.slot_occupancy"}), "game.slot_occupancy")
+    pool = r.by_check("game.slot_occupancy")[0]
+    assert pool.detail["object"] == 1
+    assert pool.detail["slot"] == 1
 
 
 def test_assign_belt_slots_never_hands_out_a_docked_belt_s_own_slot() -> None:
@@ -4705,9 +5055,7 @@ def test_machine_output_removed_still_convicts_an_undocked_port_machine() -> Non
     unwired one through, which is the two-idle-exchangers placement the whole
     mode-driven entry was opened over.
     """
-    r = validate(
-        unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False
-    )
+    r = validate(unwired_exchangers(), mode_driven_spec(), ids=MODE_DRIVEN_IDS, expect_power=False)
     assert fired(r, "machine.output_removed")
     assert "belts docked into its ports" in r.by_check("machine.output_removed")[0].message
 

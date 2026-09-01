@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from '@rstest/core';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { BlueprintProvider, useBlueprint } from '../../src/state/BlueprintProvider';
 import { BuildPanel } from '../../src/ui/BuildPanel';
 import { A_BLUEPRINT, aJob, aResult, restoreFetch, serving } from '../support/build';
@@ -29,6 +29,71 @@ function build(url = 'https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11'
 test('build is disabled until there is a URL', () => {
   mount();
   expect(screen.getByRole('button', { name: 'Build' })).toBeDisabled();
+});
+
+
+test('the Name input exposes the game title limit to the browser', () => {
+  mount();
+  const name = screen.getByRole('textbox', { name: 'Name' });
+
+  expect(name).toHaveAttribute('maxlength', '60');
+  expect((name as HTMLInputElement).maxLength).toBe(60);
+});
+
+test('candidate policies are all checked in presentation order by default', () => {
+  mount();
+  const group = screen.getByRole('group', { name: 'Candidate policies' });
+  const allProducts = within(group).getByRole('checkbox', { name: 'all-products' });
+  const outputProducts = within(group).getByRole('checkbox', { name: 'output-products' });
+  const noProliferator = within(group).getByRole('checkbox', { name: 'no-proliferator' });
+
+  expect(within(group).getAllByRole('checkbox')).toEqual([
+    allProducts,
+    outputProducts,
+    noProliferator,
+  ]);
+  expect(allProducts).toBeChecked();
+  expect(outputProducts).toBeChecked();
+  expect(noProliferator).toBeChecked();
+});
+
+test('an exact candidate policy subset is submitted in presentation order', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  mount();
+  const group = screen.getByRole('group', { name: 'Candidate policies' });
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'output-products' }));
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'no-proliferator' }));
+  build();
+
+  await waitFor(() => expect(calls).toHaveLength(1));
+  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  expect(body.candidate_policies).toEqual(['all-products']);
+  expect(body).not.toHaveProperty('candidates');
+});
+
+test('empty candidate policy selection disables Build and shows inline validation', () => {
+  const calls = serving({ status: 202, body: aJob() });
+  mount();
+  fireEvent.change(screen.getByLabelText('FactorioLab URL'), {
+    target: { value: 'https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11' },
+  });
+  const group = screen.getByRole('group', { name: 'Candidate policies' });
+  for (const checkbox of within(group).getAllByRole('checkbox')) {
+    fireEvent.click(checkbox);
+  }
+
+  expect(screen.getByRole('button', { name: 'Build' })).toBeDisabled();
+  expect(screen.getByText('Select at least one candidate policy.')).toHaveAttribute(
+    'aria-live',
+    'polite',
+  );
+  expect(calls).toHaveLength(0);
+});
+
+test('power is always on and has no selector', () => {
+  mount();
+  expect(screen.queryByRole('checkbox', { name: /Tesla Towers/i })).not.toBeInTheDocument();
+  expect(screen.queryByText(/--no-power/i)).not.toBeInTheDocument();
 });
 
 test('automatic flow fetch is off by default and is submitted when selected', async () => {
@@ -233,20 +298,42 @@ test('progress says where the job is while it is still running', async () => {
   await waitFor(() => expect(screen.getByTestId('progress')).toHaveTextContent('3.5s elapsed'));
 });
 
-test('latitude band defaults to portable and submits a changed selection', async () => {
-  const calls = serving({ status: 202, body: aJob() });
+test('latitude band selector exposes every authoritative height by width option', () => {
   mount();
-  const band = screen.getByLabelText('Latitude band');
-  expect(band).toHaveValue('portable');
-  expect(band).toHaveTextContent('Portable (smallest + up to two wider)');
-
-  fireEvent.change(band, { target: { value: '160' } });
-  build();
-
-  await waitFor(() => expect(calls).toHaveLength(1));
-  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
-  expect(body.band).toBe('160');
+  const band = screen.getByLabelText<HTMLSelectElement>('Latitude band');
+  expect(Array.from(band.options, (option) => [option.value, option.text])).toEqual([
+    ['portable', 'Portable (smallest + up to two wider)'],
+    ['5x20', '5 × 20 (height × width)'],
+    ['5x40', '5 × 40 (height × width)'],
+    ['5x80', '5 × 80 (height × width)'],
+    ['5x100', '5 × 100 (height × width)'],
+    ['10x160', '10 × 160 (height × width)'],
+    ['10x200', '10 × 200 (height × width)'],
+    ['15x300', '15 × 300 (height × width)'],
+    ['15x400', '15 × 400 (height × width)'],
+    ['25x500', '25 × 500 (height × width)'],
+    ['25x600', '25 × 600 (height × width)'],
+    ['50x800', '50 × 800 (height × width)'],
+    ['160x1000', '160 × 1000 (height × width)'],
+  ]);
 });
+
+test.each(['50x800', '160x1000'])(
+  'latitude band %s reaches the build request unchanged',
+  async (selection) => {
+    const calls = serving({ status: 202, body: aJob() });
+    mount();
+    const band = screen.getByLabelText('Latitude band');
+    expect(band).toHaveValue('portable');
+
+    fireEvent.change(band, { target: { value: selection } });
+    build();
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+    expect(body.band).toBe(selection);
+  },
+);
 
 test('the strategy choices are exactly the production strategy set', () => {
   mount();
@@ -283,15 +370,22 @@ test.each([
   expect(body.proliferator_tier).toBe(tier);
 });
 
-test('the budget copy matches the two active best strategies', () => {
+test('the budget copy follows selected and pinned effective candidates', () => {
   mount();
   // Defaults: 3 candidates x 2 active production strategies x 15s.
   expect(screen.getByText(/up to 90s of solving/)).toBeInTheDocument();
 
-  fireEvent.change(screen.getByLabelText('Strategy'), {
-    target: { value: 'sequence-pair' },
-  });
-  expect(screen.getByText(/up to 45s of solving/)).toBeInTheDocument();
+  const group = screen.getByRole('group', { name: 'Candidate policies' });
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'output-products' }));
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'no-proliferator' }));
+  expect(screen.getByText(/1 candidate × 2 strategies × 15s/)).toBeInTheDocument();
+  expect(screen.getByText(/up to 30s of solving/)).toBeInTheDocument();
+
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'output-products' }));
+  fireEvent.click(within(group).getByRole('checkbox', { name: 'no-proliferator' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Fetch FactorioLab flow automatically' }));
+  expect(screen.getByText(/1 candidate × 2 strategies × 15s/)).toBeInTheDocument();
+  expect(screen.getByText(/up to 30s of solving/)).toBeInTheDocument();
 });
 
 test('the blueprint title is what the game will show, and it names the product', async () => {

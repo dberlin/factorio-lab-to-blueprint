@@ -58,6 +58,10 @@ if TYPE_CHECKING:
 DEFAULT_SEARCH_WORKERS = 0
 DETERMINISTIC_WORKERS = 1
 
+#: Search stops at the requested wall. Once every net is wired, exact
+#: compaction, projection, and certification may finish atomically under load.
+ATOMIC_COMPLETION_GRACE_S = 5.0
+
 
 class Facing(Enum):
     """Cardinal direction in tile space, as a DSP yaw in degrees."""
@@ -183,6 +187,12 @@ class AreaFrame:
             raise ValueError("area frame requires at least one certified band")
         if self.certified_bands[0] != self.primary_band:
             raise ValueError("area frame primary band must be the first certified band")
+
+
+class PlacementCompletion(Enum):
+    """Externally visible geometry has passed both completion transforms."""
+
+    COMPACTED_AND_FINALIZED = "compacted-and-finalized"
 
 
 class PlacementStats(TypedDict, total=False):
@@ -336,6 +346,12 @@ class Placement:
     stats: PlacementStats = field(default_factory=PlacementStats)
     #: Finalized area authority. ``None`` while geometry is still being laid out.
     frame: AreaFrame | None = None
+    #: Explicit ownership handoff: pipeline completion is skipped only when set.
+    completion: PlacementCompletion | None = None
+
+    def __post_init__(self) -> None:
+        if self.completion is not None and self.frame is None:
+            raise ValueError("completed placement requires a finalized area frame")
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:

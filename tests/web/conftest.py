@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.rates.candidates import CandidatePolicy
 
 #: A small, known-buildable spec.
 SMALL_URL = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&v=11"
@@ -19,4 +20,9 @@ SMALL_URL = "https://factoriolab.github.io/dsp/flow?o=electromagnetic-matrix*60&
 
 @pytest.fixture(scope="session")
 def small_build() -> pipeline.Build:
-    return pipeline.build(SMALL_URL, strategy="freeform", candidates=1, time_budget_s=3.0)
+    return pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=3.0,
+    )
