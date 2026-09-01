@@ -3035,9 +3035,7 @@ def _variant_search_inputs(
     variant_tables: list[tuple[StripVariant, ...]] = []
     strip_index = 0
     selected_families = (
-        tuple(generate_strip_families(spec, prefer_shared_proliferation=True))
-        if families is None
-        else tuple(families)
+        tuple(generate_strip_families(spec)) if families is None else tuple(families)
     )
     for family in selected_families:
         if not family.variants:
@@ -3969,9 +3967,11 @@ def _production_run(
     planning_started = time.monotonic()
     try:
         planned_strip_len = strip_len
-        families = tuple(
-            generate_strip_families(spec, prefer_shared_proliferation=True)
-        )
+        # A filtered shared input lane is not independently routable: one
+        # ingredient can own the physical feed while the other sorter filters
+        # wait forever. SequencePair therefore keeps one physical lane per
+        # ingredient, matching the default Freeform strip plan.
+        families = tuple(generate_strip_families(spec))
         try:
             strips = plan_strips(
                 spec,

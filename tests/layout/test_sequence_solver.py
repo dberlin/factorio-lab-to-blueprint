@@ -103,6 +103,7 @@ from tests.layout.test_freeform import (
     projected_chemical_plant_spec,
     proliferated_spec,
     ray_receiver_spec,
+    single_recipe_spec,
     spray_domain_spec,
     two_stage_spec,
 )
@@ -143,6 +144,59 @@ def _placement(*, area: int, belt_tiles: int, valid: bool = True) -> Placement:
     )
 
 
+def _machines_with_mixed_input_belts(placement: Placement) -> dict[int, set[str]]:
+    belts = {
+        index
+        for index, building in enumerate(placement.buildings)
+        if catalog.is_belt(building.item_id)
+    }
+    parent = {index: index for index in belts}
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(first: int, second: int) -> None:
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parent[second_root] = first_root
+
+    for index in belts:
+        building = placement.buildings[index]
+        for neighbour in (building.input_obj, building.output_obj):
+            if neighbour in belts:
+                union(index, neighbour)
+
+    mixed: dict[int, set[str]] = {}
+    for machine_index, machine in enumerate(placement.buildings):
+        if machine.recipe_id == 0:
+            continue
+        items_by_component: dict[int, set[str]] = {}
+        for sorter in placement.buildings:
+            if (
+                not catalog.is_sorter(sorter.item_id)
+                or sorter.output_obj != machine_index
+                or sorter.input_obj not in belts
+                or sorter.carries_item is None
+            ):
+                continue
+            items_by_component.setdefault(find(sorter.input_obj), set()).add(
+                sorter.carries_item
+            )
+        mixed_items = {
+            item
+            for items in items_by_component.values()
+            if len(items) > 1
+            for item in items
+        }
+        if mixed_items:
+            mixed[machine_index] = mixed_items
+    return mixed
+
+
 def test_sequence_pair_preserves_mixed_spray_domain_logical_nets() -> None:
     spec = spray_domain_spec(clean=True, sprayed=True)
     strips = plan_strips(spec, strip_len=6)
@@ -159,6 +213,30 @@ def test_sequence_pair_preserves_mixed_spray_domain_logical_nets() -> None:
     }
     for (_source, destination), logical in iron_nets:
         assert strips[destination].cargo_domain is logical.cargo_domain
+
+
+def test_sequence_pair_routes_requested_outputs_to_the_boundary() -> None:
+    spec = single_recipe_spec()
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+        islands=1,
+        config=SequenceSolverConfig.test(),
+    ).lay_out(spec, time_budget_s=2.0)
+    min_x, min_y, max_x, max_y = placement.bounds
+    terminals = [
+        building
+        for building in placement.buildings
+        if catalog.is_belt(building.item_id)
+        and building.carries_item in spec.outputs
+        and building.output_obj is None
+    ]
+
+    assert terminals
+    assert all(
+        building.x in (min_x, max_x) or building.y in (min_y, max_y)
+        for building in terminals
+    )
+    assert validate.certify(placement, spec, expect_power=True).ok
 
 
 def _routing(
@@ -5938,6 +6016,50 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
         refined_oil_feedback_spec,
         expect_power=True,
     ).ok
+
+
+@pytest.mark.slow
+def test_reported_sequence_output_products_keeps_machine_inputs_separate() -> None:
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import CandidatePolicy, build_candidates
+
+    url = (
+        "https://factoriolab.github.io/dsp/flow?"
+        "z=eJw9zMkOgjAQBuC36eFPTCiyeJnLNKAHY8Q1vaocEAkR3A99dgOFXqZf.1lqSgOEoi"
+        "Yu4IuaFsf-4aUNY.s7Q4aA7Ph1jOEPOiD0rHZOPEHkjdaQ.sCD228RDOEU0o1e4Y-8Q"
+        "458O3ahG1aYWT0QWfwQjc3tcCknpKIiDU9UxH1N4InilBOLJv.QGhoXlHiCV-A9uDR8"
+        "A7dQc6jMqI2oqoa0YZOYTLxIyj9n20xV&v=11"
+    )
+    spec = build_candidates(
+        load_vendored(),
+        parse_url(url),
+        candidate_policies=(CandidatePolicy("output-products"),),
+    ).candidates[0]
+
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+        islands=1,
+    ).lay_out(
+        spec,
+        time_budget_s=10.0,
+    )
+
+    assert validate.certify(placement, spec, expect_power=True).ok
+    assert _machines_with_mixed_input_belts(placement) == {}
+    min_x, min_y, max_x, max_y = placement.bounds
+    output_terminals = [
+        building
+        for building in placement.buildings
+        if catalog.is_belt(building.item_id)
+        and building.carries_item in spec.outputs
+        and building.output_obj is None
+    ]
+    assert output_terminals
+    assert all(
+        building.x in (min_x, max_x) or building.y in (min_y, max_y)
+        for building in output_terminals
+    )
 
 
 def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plans(

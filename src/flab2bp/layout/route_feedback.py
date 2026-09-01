@@ -26,6 +26,7 @@ Cell = tuple[int, int, int]
 class NetRole(StrEnum):
     INTERNAL = "internal"
     EXTERNAL = "external"
+    EXTERNAL_OUTPUT = "external-output"
     PROLIFERATOR = "proliferator"
 
 

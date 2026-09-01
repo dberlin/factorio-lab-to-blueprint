@@ -2907,6 +2907,7 @@ def _remove_buildings(
 def _prunable_open_belts(
     placement: Placement,
     *,
+    protected_roots: frozenset[int] = _NO_PROTECTED_ROOTS,
     cancelled: Callable[[], bool] | None = None,
 ) -> frozenset[int]:
     """Unreferenced outer belt leaves that can be removed as one structural wave."""
@@ -2951,7 +2952,11 @@ def _prunable_open_belts(
             or building.y == bottom
             or building.y + building.height - 1 == top
         )
-        protected = index in nonbelt_references or bool(building.parameters)
+        protected = (
+            index in protected_roots
+            or index in nonbelt_references
+            or bool(building.parameters)
+        )
         if outer and open_end and not protected and neighbours <= 1:
             selected.add(index)
     return frozenset(selected)
@@ -2991,7 +2996,9 @@ def _required_external_input_belts(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> frozenset[int]:
-    """Find every connected player-fed input belt that cleanup must retain."""
+    """Find every connected player-facing I/O belt that cleanup must retain."""
+    output_items = set(spec.outputs) | set(spec.surplus_outputs)
+    left, bottom, right, top = placement.bounds
     belts: list[bool] = []
     for building in placement.buildings:
         if cancelled is not None and cancelled():
@@ -3017,7 +3024,19 @@ def _required_external_input_belts(
         if (
             belts[index]
             and index in connected
-            and building.carries_item in spec.external_inputs
+            and (
+                building.carries_item in spec.external_inputs
+                or (
+                    building.carries_item in output_items
+                    and building.output_obj is None
+                    and (
+                        building.x == left
+                        or building.x + building.width - 1 == right
+                        or building.y == bottom
+                        or building.y + building.height - 1 == top
+                    )
+                )
+            )
         )
     )
 
@@ -3883,16 +3902,20 @@ def compact_open_boundary_belts_certified(
     started = time.perf_counter()
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
-    # The structural peel can only start from one of these leaves.  Building
-    # the event graph costs four coordinate indexes over every record; when the
-    # initial frontier is empty the exact fixed point is already the input.
-    if not _prunable_open_belts(placement, cancelled=cancelled):
-        return BoundaryCompactionResult(placement, None)
     protected_roots = _required_external_input_belts(
         placement,
         spec,
         cancelled=cancelled,
     )
+    # The structural peel can only start from one of these leaves. Building
+    # the event graph costs four coordinate indexes over every record; when the
+    # initial frontier is empty the exact fixed point is already the input.
+    if not _prunable_open_belts(
+        placement,
+        protected_roots=protected_roots,
+        cancelled=cancelled,
+    ):
+        return BoundaryCompactionResult(placement, None)
     graph = _CleanupSurvivorGraph(
         placement,
         cancelled=cancelled,

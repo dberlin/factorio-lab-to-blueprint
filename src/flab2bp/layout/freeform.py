@@ -6480,15 +6480,15 @@ def _with_sibling_groups(
     nets: Sequence[_PreparedNet],
 ) -> tuple[_PreparedNet, ...]:
     """Freeze the detailed router's exact branch/merge groups onto each net."""
-    same_src: dict[tuple[CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
-    same_dst: dict[tuple[CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
+    same_src: dict[tuple[str, CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
+    same_dst: dict[tuple[str, CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
             continue
         if net.src is None:
             raise ValueError("non-external prepared nets require source ports")
-        same_src[net.cargo_domain, net.src.y, net.src.x0, net.src.z].append(net.net_id)
-        same_dst[net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
+        same_src[net.item, net.cargo_domain, net.src.y, net.src.x0, net.src.z].append(net.net_id)
+        same_dst[net.item, net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
     grouped: list[_PreparedNet] = []
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
@@ -6501,12 +6501,24 @@ def _with_sibling_groups(
                 net,
                 src_group=tuple(
                     sibling
-                    for sibling in same_src[net.cargo_domain, net.src.y, net.src.x0, net.src.z]
+                    for sibling in same_src[
+                        net.item,
+                        net.cargo_domain,
+                        net.src.y,
+                        net.src.x0,
+                        net.src.z,
+                    ]
                     if sibling != net.net_id
                 ),
                 dst_group=tuple(
                     sibling
-                    for sibling in same_dst[net.cargo_domain, net.dst.x, net.dst.y, net.dst.z]
+                    for sibling in same_dst[
+                        net.item,
+                        net.cargo_domain,
+                        net.dst.x,
+                        net.dst.y,
+                        net.dst.z,
+                    ]
                     if sibling != net.net_id
                 ),
             )
@@ -6531,6 +6543,7 @@ class _RoutingWorkspace:
     canvas: _Canvas
     buildings: list[PlacedBuilding]
     nets: list[_Net]
+    external_output_nets: list[_Net]
 
 
 @dataclass(frozen=True, slots=True)
@@ -6565,6 +6578,7 @@ class _PreparedRoutingProblem:
     junction_ban: frozenset[Cell] = frozenset()
     junction_frame_bans: tuple[frozenset[Cell], ...] = ()
     preparation_failures: tuple[NetFailure, ...] = ()
+    external_output_nets: tuple[_PreparedNet, ...] = ()
 
     def new_workspace(self) -> _RoutingWorkspace:
         buildings = list(self.building_templates)
@@ -6585,7 +6599,15 @@ class _PreparedRoutingProblem:
             junction_geometry_prepared=True,
         )
         nets = [_bind_prepared_net(net, buildings) for net in self.nets]
-        return _RoutingWorkspace(canvas=canvas, buildings=buildings, nets=nets)
+        external_output_nets = [
+            _bind_prepared_net(net, buildings) for net in self.external_output_nets
+        ]
+        return _RoutingWorkspace(
+            canvas=canvas,
+            buildings=buildings,
+            nets=nets,
+            external_output_nets=external_output_nets,
+        )
 
 
 def _bind_prepared_net(net: _PreparedNet, buildings: list[PlacedBuilding]) -> _Net:
@@ -7194,26 +7216,38 @@ def _route_all(
     # one grid.  Everybody else routes a handful of nets and gets Manhattan.
     grid.build_landmarks(_ALT_LANDMARKS)
 
-    # Nets that end at the same lane. Ordered, so "the ones before me" is
-    # well defined however the router chooses to sequence a round.
-    same_dst: dict[tuple[int, int, int], list[int]] = defaultdict(list)
+    # Nets carrying the same item and cargo domain that end at the same lane.
+    # Ordered, so "the ones before me" is well defined however the router
+    # chooses to sequence a round.
+    same_dst: dict[tuple[str, CargoDomain, int, int, int], list[int]] = defaultdict(list)
     for i, net in enumerate(nets):
-        same_dst[net.dst.x, net.dst.y, net.dst.z].append(i)
+        same_dst[net.item, net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(i)
     dst_group = {
-        i: tuple(g for g in same_dst[net.dst.x, net.dst.y, net.dst.z] if g != i)
+        i: tuple(
+            g
+            for g in same_dst[net.item, net.cargo_domain, net.dst.x, net.dst.y, net.dst.z]
+            if g != i
+        )
         for i, net in enumerate(nets)
     }
     # The same story on the producer side, and it needs the same answer. An
     # out-lane sandwiched between its neighbours is only reachable at its ends,
     # so walking it tile by tile hands the later nets a walled-in start. They
     # BRANCH instead: leave from a sibling's path, which becomes a splitter on
-    # that path at commit time. Keyed by the LANE (row and west edge), not the
-    # port, because `at_tile` moves the port along the lane it belongs to.
-    same_src: dict[tuple[int, int, int], list[int]] = defaultdict(list)
+    # that path at commit time. Keyed by the ITEM, DOMAIN, and LANE (row and
+    # west edge), not the port, because `at_tile` moves the port along the lane
+    # it belongs to.
+    same_src: dict[tuple[str, CargoDomain, int, int, int], list[int]] = defaultdict(list)
     for i, net in enumerate(nets):
-        same_src[net.source.y, net.source.x0, net.source.z].append(i)
+        same_src[net.item, net.cargo_domain, net.source.y, net.source.x0, net.source.z].append(i)
     src_group = {
-        i: tuple(g for g in same_src[net.source.y, net.source.x0, net.source.z] if g != i)
+        i: tuple(
+            g
+            for g in same_src[
+                net.item, net.cargo_domain, net.source.y, net.source.x0, net.source.z
+            ]
+            if g != i
+        )
         for i, net in enumerate(nets)
     }
     # Chained nets -- one net leaving the belt another delivers to, which is what
@@ -9395,6 +9429,89 @@ def _splitter_successors(canvas: _Canvas) -> dict[int, tuple[int, ...]]:
     return {splitter: tuple(branches) for splitter, branches in successors.items()}
 
 
+def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
+    """Move shared output taps past their internal consumers.
+
+    A producer lane that also feeds an internal recipe has one physical exit.
+    Routing an exterior branch from that exit first either seals the internal
+    net or forces both branches onto a Splitter beside the machine row. Route
+    the internal graph first, then continue from its open downstream tail: every
+    upstream source reaches that tail through the committed merges, and one
+    exterior belt carries the actual surplus left after the consumers draw.
+    """
+    successors = _splitter_successors(canvas)
+    selected: dict[int, _Net] = {}
+    limit = canvas.limit
+
+    def boundary_distance(index: int) -> int:
+        if limit is None:
+            return 0
+        building = canvas.buildings[index]
+        min_x, min_y, max_x, max_y = limit
+        return min(
+            abs(building.x - min_x),
+            abs(building.x - max_x),
+            abs(building.y - min_y),
+            abs(building.y - max_y),
+        )
+
+    for net in nets:
+        if net.src is None:
+            continue
+        tails: list[int] = []
+        seen: set[int] = set()
+        stack = [net.src.belt]
+        while stack:
+            index = stack.pop()
+            if index in seen or not 0 <= index < len(canvas.buildings):
+                continue
+            seen.add(index)
+            building = canvas.buildings[index]
+            if building.item_id == catalog.SPLITTER_ID:
+                stack.extend(successors.get(index, ()))
+                continue
+            if not catalog.is_belt(building.item_id) or building.carries_item != net.item:
+                continue
+            if building.output_obj is None:
+                if building.z.denominator == 1:
+                    tails.append(index)
+                continue
+            stack.append(building.output_obj)
+
+        if not tails:
+            selected.setdefault(net.src.belt, net)
+            continue
+        tail_index = min(
+            tails,
+            key=lambda index: (
+                not any(
+                    canvas.free(
+                        (
+                            canvas.buildings[index].x + dx,
+                            canvas.buildings[index].y + dy,
+                            int(canvas.buildings[index].z),
+                        )
+                    )
+                    for dx, dy in _STEPS
+                ),
+                boundary_distance(index),
+                index,
+            ),
+        )
+        tail = canvas.buildings[tail_index]
+        port = _Port(
+            tail_index,
+            tail.x,
+            tail.y,
+            tail.x,
+            tail.x,
+            z=int(tail.z),
+            cargo_domain=net.cargo_domain,
+        )
+        selected.setdefault(tail_index, replace(net, src=port, dst=port))
+    return list(selected.values())
+
+
 def _leads_back(
     canvas: _Canvas,
     start: int,
@@ -9972,7 +10089,7 @@ def _straight_to_edge(
     return min(clear, key=len)
 
 
-def _route_external_inputs(
+def _route_boundary_nets(
     canvas: _Canvas,
     nets: Sequence[_Net],
     belt_id: int,
@@ -9980,39 +10097,31 @@ def _route_external_inputs(
     core: tuple[int, int, int, int],
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
+    *,
+    outward: bool,
 ) -> DetailedRouteResult:
-    """Run every outside input from the block edge to the lane that wants it.
+    """Run external input or output lanes between their ports and the block edge.
 
-    Without this, an external input was just a lane wearing a marker icon.  On a
-    packed build that lane is frequently WALLED IN -- above it another lane,
-    below it the machine band, either side the lane itself -- so no belt could
-    be run to it, by the router or by the player standing in front of it.  The
-    icon said "connect here" pointing at a tile nothing can connect to.
+    Without explicit boundary routing, an external lane is just a lane wearing
+    a marker icon. On a packed build that lane is frequently walled in, so the
+    operator cannot connect it even though the blueprint claims it is usable.
 
-    Routing to the boundary fixes three things at once: the lane is reachable,
-    the marker now sits on a belt the player can actually see the end of, and
-    the blueprint describes its own inputs instead of relying on the operator to
-    work out which of forty belts is the iron-ore one.
-
-    Belts flow INWARD here -- from the edge to the lane -- which is the opposite
-    direction to every other net, so the path is committed head-first with the
-    last belt feeding the lane.
-
-    Runs terminate on the ENTRY RING, the outermost ring anything may occupy.
-    That is what makes each of them reachable: nothing else can be placed
-    further out, so a run's head is on the finished bounding box and has open
-    ground on its outward side whatever the router does afterwards.  Running out
-    to "one tile past the current edge" -- which is what this did -- put the head
-    on a boundary that later passes moved, and the head then sat interior.
+    Input belts flow inward from the edge to their lane. Output belts flow
+    outward from their lane to the edge. Both terminate on the ENTRY RING, the
+    outermost ring anything may occupy, so their open ends remain on the
+    finished bounding box after every later routing pass.
     """
     bounds = _grow(core, _ENTRY_RING - 1)
     # The fallback search may travel ALONG the entry ring, which the straight
     # runs already use; a cell on the outermost ring cannot wall anything in,
     # because outward of it is ground no pass can reach.
     astar_bounds = _grow(core, _ENTRY_RING)
-    wanted = {net.dst.belt: net for net in nets}
+    def port_of(net: _Net) -> _Port:
+        return net.source if outward else net.dst
+
+    wanted = {port_of(net).belt: net for net in nets}
     ordered = list(wanted.items())
-    starts = list(
+    boundary = list(
         dict.fromkeys(cell for net in nets for cell in net.boundary_goals if canvas.free(cell))
     )
     history: dict[Cell, float] = defaultdict(float)
@@ -10028,16 +10137,19 @@ def _route_external_inputs(
         return net.net_id
 
     def failed(net: _Net, search: _PathSearchResult) -> NetFailure:
+        port = port_of(net)
+        endpoint = (port.x, port.y, port.z)
         return NetFailure(
             net_id(net),
             search.kind or RouteFailureKind.DYNAMIC_ACCESS,
             search.wall,
             (),
             search.expansions,
-            destination=(net.dst.x, net.dst.y, net.dst.z),
+            source=endpoint if outward else None,
+            destination=None if outward else endpoint,
         )
 
-    if not starts:
+    if not boundary:
         failures.extend(
             NetFailure(
                 net_id(net),
@@ -10045,7 +10157,14 @@ def _route_external_inputs(
                 (),
                 (),
                 0,
-                destination=(net.dst.x, net.dst.y, net.dst.z),
+                source=(
+                    (port_of(net).x, port_of(net).y, port_of(net).z) if outward else None
+                ),
+                destination=(
+                    None
+                    if outward
+                    else (port_of(net).x, port_of(net).y, port_of(net).z)
+                ),
             )
             for _belt, net in ordered
         )
@@ -10057,30 +10176,38 @@ def _route_external_inputs(
                     for _pending_belt, pending in ordered[done:]
                 )
                 break
-            port = net.dst
+            port = port_of(net)
             item = net.item
-            # Spend exactly one of this lane's access reservations and leave the
-            # rest held. A shared external/internal lane therefore keeps one
-            # access cell for the later internal net.
-            mine = next(
-                (cell for cell, key in canvas.reserved.items() if key == (port.x, port.y, port.z)),
-                None,
-            )
-            if mine is not None:
-                del canvas.reserved[mine]
+            # Spend exactly one complete access corridor. Reserving only its
+            # first cell was sufficient before reservations gained a two-cell
+            # onward witness; releasing just one cell now leaves that witness
+            # blocking the straight path and seals the port behind its own
+            # claim. Leave any other corridor held for the opposite role.
+            port_key = (port.x, port.y, port.z)
+            retired = _retire_port_corridor(canvas, port_key, ())
+            if retired is None:
+                mine = next(
+                    (cell for cell, key in canvas.reserved.items() if key == port_key),
+                    None,
+                )
+                if mine is not None:
+                    del canvas.reserved[mine]
 
             # The straight fast path is ground-only. Elevated ports must use
             # the shared z-aware search so the level transition is explicit.
             path: Sequence[Cell] | None = (
                 _straight_to_edge(canvas, port, bounds) if port.z == 0 else None
             )
+            if path is not None and outward:
+                path = tuple(reversed(path))
             if path is None:
-                goals = {
+                access = {
                     (port.x + dx, port.y + dy, port.z)
                     for dx, dy in _STEPS
                     if canvas.free((port.x + dx, port.y + dy, port.z))
                 }
-                if not goals:
+                live_boundary = [cell for cell in boundary if canvas.free(cell)]
+                if not access or not live_boundary:
                     failures.append(
                         NetFailure(
                             net_id(net),
@@ -10088,14 +10215,18 @@ def _route_external_inputs(
                             (),
                             (),
                             0,
-                            destination=(net.dst.x, net.dst.y, net.dst.z),
+                            source=(port.x, port.y, port.z) if outward else None,
+                            destination=(
+                                None if outward else (port.x, port.y, port.z)
+                            ),
                         )
                     )
                     continue
-                live = [cell for cell in starts if canvas.free(cell)]
+                starts = sorted(access) if outward else live_boundary
+                goals = set(live_boundary) if outward else access
                 searched = _astar(
                     canvas,
-                    live,
+                    starts,
                     goals,
                     history,
                     1.0,
@@ -10118,7 +10249,8 @@ def _route_external_inputs(
                         (),
                         (),
                         0,
-                        destination=(net.dst.x, net.dst.y, net.dst.z),
+                        source=(port.x, port.y, port.z) if outward else None,
+                        destination=None if outward else (port.x, port.y, port.z),
                     )
                 )
                 continue
@@ -10134,7 +10266,20 @@ def _route_external_inputs(
                         (),
                         (),
                         0,
-                        destination=(net.dst.x, net.dst.y, net.dst.z),
+                        source=(port.x, port.y, port.z) if outward else None,
+                        destination=None if outward else (port.x, port.y, port.z),
+                    )
+                )
+                continue
+            if outward and canvas.buildings[port.belt].output_obj is not None:
+                failures.append(
+                    NetFailure(
+                        net_id(net),
+                        RouteFailureKind.COMMIT_LINK,
+                        (),
+                        (),
+                        0,
+                        source=(port.x, port.y, port.z),
                     )
                 )
                 continue
@@ -10157,9 +10302,14 @@ def _route_external_inputs(
             ]
             for a, b in zip(indices, indices[1:], strict=False):
                 canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
-            canvas.buildings[indices[-1]] = _relink(
-                canvas.buildings[indices[-1]], output_obj=port.belt
-            )
+            if outward:
+                canvas.buildings[port.belt] = _relink(
+                    canvas.buildings[port.belt], output_obj=indices[0]
+                )
+            else:
+                canvas.buildings[indices[-1]] = _relink(
+                    canvas.buildings[indices[-1]], output_obj=port.belt
+                )
             routed.append(net_id(net))
 
     status = (
@@ -10173,6 +10323,48 @@ def _route_external_inputs(
         failures=tuple(failures),
         iterations=0,
         expansions=expansions,
+    )
+
+
+def _route_external_inputs(
+    canvas: _Canvas,
+    nets: Sequence[_Net],
+    belt_id: int,
+    belt_model: int,
+    core: tuple[int, int, int, int],
+    deadline: float | None = None,
+    budget: dict[str, int] | None = None,
+) -> DetailedRouteResult:
+    return _route_boundary_nets(
+        canvas,
+        nets,
+        belt_id,
+        belt_model,
+        core,
+        deadline,
+        budget,
+        outward=False,
+    )
+
+
+def _route_external_outputs(
+    canvas: _Canvas,
+    nets: Sequence[_Net],
+    belt_id: int,
+    belt_model: int,
+    core: tuple[int, int, int, int],
+    deadline: float | None = None,
+    budget: dict[str, int] | None = None,
+) -> DetailedRouteResult:
+    return _route_boundary_nets(
+        canvas,
+        nets,
+        belt_id,
+        belt_model,
+        core,
+        deadline,
+        budget,
+        outward=True,
     )
 
 
@@ -12830,9 +13022,28 @@ def _prepare_routing_problem(
         for item, port in sorted(ports.items(), reverse=True):
             if item in spec.external_inputs:
                 carried[port.belt] = item
+
+    requested_outputs = set(spec.outputs) | set(spec.surplus_outputs)
+    wanted_outputs: dict[int, tuple[str, _Port]] = {}
+    for (
+        _group_key,
+        output_item,
+        destination,
+        _cargo_domain,
+    ), output_ports in out_ports.items():
+        destinations = _dests(destination)
+        if (
+            output_item not in requested_outputs
+            or (destination and "" not in destinations)
+        ):
+            continue
+        for output_port in output_ports:
+            wanted_outputs.setdefault(
+                output_port.belt,
+                (output_item, output_port),
+            )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-
     min_x, min_y, max_x, max_y = _grow(core, _ENTRY_RING - 1)
     boundary = tuple(
         cell
@@ -12864,6 +13075,18 @@ def _prepare_routing_problem(
         )
         for belt, (port, _strip_index) in wanted.items()
     )
+    tagged_nets.extend(
+        (
+            _Net(
+                src=port,
+                dst=port,
+                item=item,
+                cargo_domain=port.cargo_domain,
+            ),
+            NetRole.EXTERNAL_OUTPUT,
+        )
+        for item, port in wanted_outputs.values()
+    )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -12872,11 +13095,16 @@ def _prepare_routing_problem(
         int,
     ] = defaultdict(int)
     prepared_nets: list[_PreparedNet] = []
+    prepared_output_nets: list[_PreparedNet] = []
     for net, role in tagged_nets:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         source_strip = strip_of_belt.get(net.src.belt) if net.src is not None else None
-        destination_strip = strip_of_belt.get(net.dst.belt)
+        destination_strip = (
+            None
+            if role is NetRole.EXTERNAL_OUTPUT
+            else strip_of_belt.get(net.dst.belt)
+        )
         identity = (
             source_strip,
             destination_strip,
@@ -12903,16 +13131,22 @@ def _prepare_routing_problem(
             logical_id=logical_id,
         )
         ordinals[identity] += 1
-        prepared_nets.append(
-            _PreparedNet(
-                net_id=net_id,
-                src=_prepare_port(net.src) if net.src is not None else None,
-                dst=_prepare_port(net.dst),
-                item=net.item,
-                cargo_domain=net.cargo_domain,
-                boundary_goals=boundary if role is NetRole.EXTERNAL else (),
-            )
+        prepared = _PreparedNet(
+            net_id=net_id,
+            src=_prepare_port(net.src) if net.src is not None else None,
+            dst=_prepare_port(net.dst),
+            item=net.item,
+            cargo_domain=net.cargo_domain,
+            boundary_goals=(
+                boundary
+                if role in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
+                else ()
+            ),
         )
+        if role is NetRole.EXTERNAL_OUTPUT:
+            prepared_output_nets.append(prepared)
+        else:
+            prepared_nets.append(prepared)
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -12922,7 +13156,8 @@ def _prepare_routing_problem(
         source = None if prepared.src is None else (prepared.src.x, prepared.src.y, prepared.src.z)
         return source, (prepared.dst.x, prepared.dst.y, prepared.dst.z)
 
-    net_by_id = {prepared.net_id: prepared for prepared in prepared_nets}
+    all_prepared_nets = (*prepared_nets, *prepared_output_nets)
+    net_by_id = {prepared.net_id: prepared for prepared in all_prepared_nets}
 
     def static_access_failure(
         prepared: _PreparedNet,
@@ -12945,7 +13180,7 @@ def _prepare_routing_problem(
         }
         blocking_nets = tuple(
             net_id
-            for candidate in prepared_nets
+            for candidate in all_prepared_nets
             if candidate.net_id != prepared.net_id
             and any(
                 endpoint in blocking_ports
@@ -12969,7 +13204,7 @@ def _prepare_routing_problem(
 
     preparation_failures = tuple(
         static_access_failure(net, failed)
-        for net in prepared_nets
+        for net in all_prepared_nets
         for failed in (
             next(
                 (
@@ -13064,9 +13299,18 @@ def _prepare_routing_problem(
     # their elevated static geometry must be frozen with the prepared problem,
     # so power reservations retain exact machine-and-tower bans even when this
     # candidate's current net grouping cannot branch.
-    junction_possible = not preparation_failures and _junction_geometry_required(
-        grouped_nets,
-        canvas.buildings,
+    output_source_belts = {
+        net.src.belt_index
+        for net in prepared_output_nets
+        if net.src is not None
+    }
+    shared_boundary_output = any(
+        net.src is not None and net.src.belt_index in output_source_belts
+        for net in grouped_nets
+    )
+    junction_possible = not preparation_failures and (
+        _junction_geometry_required(grouped_nets, canvas.buildings)
+        or shared_boundary_output
     )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
@@ -13127,6 +13371,7 @@ def _prepare_routing_problem(
         keep_out=frozenset(canvas.keep_out),
         guard=frozenset(canvas.guard),
         nets=grouped_nets,
+        external_output_nets=tuple(prepared_output_nets),
         core=core,
         route_bounds=route_bounds,
         limit=canvas.limit,
@@ -13437,6 +13682,17 @@ def _build_prepared(
         for net in workspace.nets
         if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
     ]
+    internal_source_belts = {
+        net.source.belt for net in route_nets if net.src is not None
+    }
+    early_output_nets = [
+        net
+        for net in workspace.external_output_nets
+        if net.source.belt not in internal_source_belts
+    ]
+    late_output_nets = [
+        net for net in workspace.external_output_nets if net.source.belt in internal_source_belts
+    ]
 
     empty_routing = DetailedRouteResult(
         DetailedRouteStatus.ROUTED,
@@ -13447,7 +13703,9 @@ def _build_prepared(
         exhaustive=True,
     )
     external_routing = empty_routing
+    early_output_routing = empty_routing
     internal_routing = empty_routing
+    late_output_routing = empty_routing
 
     if route and prepared.preparation_failures:
         internal_routing = DetailedRouteResult(
@@ -13458,11 +13716,22 @@ def _build_prepared(
             0,
         )
     else:
-        # External inputs retain first claim on routing space.
+        # Inputs and pure outputs retain first claim on routing space. An
+        # output lane that also feeds an internal consumer is continued only
+        # after that internal graph exists, from its downstream surplus tail.
         if route:
             external_routing = _route_external_inputs(
                 canvas,
                 external_nets,
+                belt_id,
+                belt_model,
+                prepared.core,
+                deadline,
+                budget,
+            )
+            early_output_routing = _route_external_outputs(
+                canvas,
+                early_output_nets,
                 belt_id,
                 belt_model,
                 prepared.core,
@@ -13484,25 +13753,65 @@ def _build_prepared(
             prioritize_source_families=prioritize_source_families,
         )
 
-    failures = external_routing.failures + internal_routing.failures
+    if (
+        route
+        and late_output_nets
+        and not prepared.preparation_failures
+        and external_routing.status is DetailedRouteStatus.ROUTED
+        and early_output_routing.status is DetailedRouteStatus.ROUTED
+        and internal_routing.status is DetailedRouteStatus.ROUTED
+    ):
+        late_output_routing = _route_external_outputs(
+            canvas,
+            _output_tail_nets(canvas, late_output_nets),
+            belt_id,
+            belt_model,
+            prepared.core,
+            deadline,
+            budget,
+        )
+
+    failures = (
+        external_routing.failures
+        + early_output_routing.failures
+        + internal_routing.failures
+        + late_output_routing.failures
+    )
     routing_status = (
         DetailedRouteStatus.BUDGET
-        if (
-            external_routing.status is DetailedRouteStatus.BUDGET
-            or internal_routing.status is DetailedRouteStatus.BUDGET
+        if any(
+            result.status is DetailedRouteStatus.BUDGET
+            for result in (
+                external_routing,
+                early_output_routing,
+                internal_routing,
+                late_output_routing,
+            )
         )
         else (DetailedRouteStatus.STRANDED if failures else DetailedRouteStatus.ROUTED)
     )
     routing = DetailedRouteResult(
         status=routing_status,
-        routed=external_routing.routed + internal_routing.routed,
+        routed=(
+            external_routing.routed
+            + early_output_routing.routed
+            + internal_routing.routed
+            + late_output_routing.routed
+        ),
         failures=failures,
         iterations=internal_routing.iterations,
-        expansions=external_routing.expansions + internal_routing.expansions,
+        expansions=(
+            external_routing.expansions
+            + early_output_routing.expansions
+            + internal_routing.expansions
+            + late_output_routing.expansions
+        ),
         exhaustive=(
             not prepared.preparation_failures
             and external_routing.exhaustive
+            and early_output_routing.exhaustive
             and internal_routing.exhaustive
+            and late_output_routing.exhaustive
         ),
     )
     if routing.status is DetailedRouteStatus.BUDGET:
