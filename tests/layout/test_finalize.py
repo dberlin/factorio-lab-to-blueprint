@@ -341,6 +341,7 @@ def test_cleanup_prefix_snapshots_match_oracle_with_linear_aggregate_work() -> N
     scale = len(buildings)
     assert operations.node_visits <= 12 * scale
     assert operations.edge_visits <= 20 * scale
+    assert operations.coordinate_visits <= 160 * scale
 
 
 def test_cleanup_prefix_snapshot_rechecks_linked_and_boundary_additions() -> None:
@@ -391,7 +392,7 @@ def test_compaction_prunes_open_belt_leaves_to_a_structural_fixed_point(
     assert [(belt.x, belt.y) for belt in compacted.buildings] == [(1, 1)]
 
 
-def test_compaction_preserves_required_external_input_boundary_roots(
+def test_compaction_preserves_connected_external_input_belts_inside_initial_bounds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     required_root = replace(
@@ -407,7 +408,17 @@ def test_compaction_preserves_required_external_input_boundary_roots(
         _linked_belt(-1, 1, input_obj=None, output_obj=None),
         carries_item="iron-ore",
     )
-    placement = Placement(buildings=(required_root, lane, consumer, dead_leaf))
+    south_leaf = replace(
+        _linked_belt(-1, -1, input_obj=None, output_obj=None),
+        carries_item="iron-ore",
+    )
+    placement = Placement(
+        buildings=(required_root, lane, consumer, dead_leaf, south_leaf)
+    )
+    assert finalize._required_external_input_belts(
+        placement,
+        two_stage_spec(),
+    ) == frozenset({0, 1})
     certified: list[Placement] = []
 
     def certify(candidate: Placement, *_args: object, **_kwargs: object) -> _Report:
@@ -432,6 +443,7 @@ def test_compaction_preserves_required_external_input_boundary_roots(
     assert first.buildings == second.buildings
     assert required_root in first.buildings
     assert dead_leaf not in first.buildings
+    assert south_leaf not in first.buildings
     assert required_root.x == first.bounds[0]
 
 
@@ -2315,6 +2327,44 @@ def test_projection_counters_count_only_observed_rule_loop_work(
     assert counters.collider_pairs == sum(collider_work)
 
 
+def test_projection_cache_computes_power_candidates_once_per_latitude(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = rules.PowerNode(
+        is_power_node=True,
+        is_accumulator=False,
+        wind_forced_power=False,
+        geothermal=False,
+    )
+    nodes = (
+        (0, _building(catalog.TESLA_TOWER_ID, 0, 0), node),
+        (1, _building(catalog.TESLA_TOWER_ID, 10, 0), node),
+    )
+    projection = _broke2_projection()
+    original = finalize._projected_power_candidates
+    calls = 0
+
+    def counted_candidates(
+        candidate_nodes: tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...],
+        candidate_projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[tuple[tuple[float, float, float], ...], tuple[tuple[int, int], ...]]:
+        nonlocal calls
+        calls += 1
+        return original(
+            candidate_nodes,
+            candidate_projection,
+            cancelled=cancelled,
+        )
+
+    monkeypatch.setattr(finalize, "_projected_power_candidates", counted_candidates)
+    cache = finalize._ProjectionCache(finalize._ProjectionCounters())
+
+    assert cache.power_failure(nodes, projection) is None
+    assert calls == 1
+
+
 @pytest.mark.parametrize(
     ("belt_x", "expected_check"),
     ((0, None), (1, "game.addon_supply")),
@@ -2430,6 +2480,56 @@ def test_projected_addon_supply_projects_only_nearby_belts_once() -> None:
         is None
     )
     assert projection.calls == len(areas) + 2
+
+
+def test_projection_cache_reuses_addon_belt_neighborhood_across_latitudes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    band = next(candidate for candidate in planet.bands() if candidate.area_segments == 200)
+    projections = tuple(
+        planet.Projection(
+            band=band,
+            anchor_row=anchor,
+            segment=colliders.PLANET_SEGMENT,
+            radius=colliders.PLANET_RADIUS,
+        )
+        for anchor in (-80, -79)
+    )
+    belts = ((0, _belt(0, 0, output=None)),) + tuple(
+        (index, _belt(100 + index, 20, output=None))
+        for index in range(1, 101)
+    )
+    coater = _building(catalog.SPRAY_COATER_ID, 0, 0)
+    area = catalog.AddonSupplyPose(Fraction(), Fraction(), Fraction(), area=0)
+    addons = ((101, coater, (area,)),)
+    original = finalize._addon_candidate_belts
+    calls = 0
+
+    def counted_candidates(
+        candidate_belts: tuple[tuple[int, PlacedBuilding], ...],
+        candidate_addons: tuple[
+            tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]],
+            ...,
+        ],
+        projection: planet.Projection,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[tuple[int, PlacedBuilding], ...]:
+        nonlocal calls
+        calls += 1
+        return original(
+            candidate_belts,
+            candidate_addons,
+            projection,
+            cancelled=cancelled,
+        )
+
+    monkeypatch.setattr(finalize, "_addon_candidate_belts", counted_candidates)
+    cache = finalize._ProjectionCache(finalize._ProjectionCounters())
+
+    assert cache.addon_failure(belts, addons, projections[0]) is None
+    assert cache.addon_failure(belts, addons, projections[1]) is None
+    assert calls == 1
 
 
 

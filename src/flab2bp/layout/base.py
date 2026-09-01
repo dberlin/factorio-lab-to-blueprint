@@ -58,6 +58,10 @@ if TYPE_CHECKING:
 DEFAULT_SEARCH_WORKERS = 0
 DETERMINISTIC_WORKERS = 1
 
+#: Search stops at the requested wall. Once every net is wired, exact
+#: compaction, projection, and certification may finish atomically under load.
+ATOMIC_COMPLETION_GRACE_S = 5.0
+
 
 class Facing(Enum):
     """Cardinal direction in tile space, as a DSP yaw in degrees."""

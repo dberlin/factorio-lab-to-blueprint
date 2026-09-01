@@ -155,6 +155,7 @@ _GEOMETRIC_FAILURES = frozenset(
         RouteFailureKind.COMMIT_LINK,
     }
 )
+_PLACEMENT_FAILURES = _GEOMETRIC_FAILURES | {RouteFailureKind.STATIC_ACCESS}
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,7 +476,7 @@ def geometric_failure_instances(
         raise ValueError("instance count must be a non-negative integer")
     implicated: set[int] = set()
     for failure in result.failures:
-        if failure.kind not in _GEOMETRIC_FAILURES:
+        if failure.kind not in _PLACEMENT_FAILURES:
             continue
         _add_net_endpoints(implicated, failure.net_id, instance_count)
         for blocker in failure.blocking_nets:
@@ -566,7 +567,9 @@ def select_lns_neighbourhood(
     if type(grow_after) is not int or grow_after <= 0:
         raise ValueError("LNS growth interval must be a positive integer")
 
-    failures = tuple(failure for failure in result.failures if failure.kind in _GEOMETRIC_FAILURES)
+    failures = tuple(
+        failure for failure in result.failures if failure.kind in _PLACEMENT_FAILURES
+    )
     if not failures:
         return frozenset()
 

@@ -11,6 +11,7 @@ import pytest
 
 import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
+import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog, rules
 from flab2bp.layout import finalize, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
@@ -86,6 +87,7 @@ from flab2bp.layout.sequence_solver import (
 )
 from flab2bp.layout.strip_variants import (
     ProjectionPitchRequirement,
+    StripFamily,
     StripInstanceId,
     StripVariant,
     generate_strip_families,
@@ -94,7 +96,7 @@ from flab2bp.layout.strip_variants import (
     variant_with_minimum_pitch,
     variants_for_count,
 )
-from flab2bp.spec import BuildSpec, MachineGroup
+from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 from tests.layout.test_freeform import (
     band_120_control_spec,
     plastic_spec,
@@ -303,6 +305,7 @@ def _solver(
     deadline_reached: Callable[[], bool] | None = None,
     initial_states: dict[int, AnnealState] | None = None,
     borrow_first_discovery: bool = False,
+    routing_seed_allowance_cap: int | None = None,
     stage_admission: sequence_solver_module._MeasuredStageAdmission | None = None,
 ) -> SequenceSolver[Prepared]:
     return SequenceSolver(
@@ -325,6 +328,7 @@ def _solver(
         deadline_reached=deadline_reached or (lambda: False),
         initial_states=initial_states,
         borrow_first_discovery=borrow_first_discovery,
+        routing_seed_allowance_cap=routing_seed_allowance_cap,
         stage_admission=stage_admission,
     )
 
@@ -388,6 +392,37 @@ def test_validator_rejected_compact_seed_never_escapes_and_discovery_recovers() 
     assert seed_observation.exact_key is None
     assert seed_observation.validation_failures == ("fake.invalid",)
     assert discovery.exact_key == (20, 4)
+
+
+def test_compact_seed_closure_preserves_expansions_for_followup_candidates() -> None:
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(
+                    DetailedRouteStatus.STRANDED,
+                    geometric_failure=True,
+                    failure_kind=RouteFailureKind.CONGESTION_WALL,
+                ),
+                None,
+            ),
+            DetailedStageResult(_routing(DetailedRouteStatus.BUDGET), None),
+        ),
+        spend_allowance=True,
+    )
+    solver = _solver(
+        fake,
+        heights=(40, 60),
+        budget=ExpansionBudget(total=1_000),
+        initial_states={40: AnnealState.initial(1, 17)},
+        routing_seed_allowance_cap=125,
+    )
+
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=2)
+
+    assert fake.detailed_allowances == [125, 875]
+    assert solver.budget.spent == 1_000
+
 
 
 def test_compact_exact_incumbent_cannot_be_displaced_by_worse_discovery() -> None:
@@ -686,15 +721,26 @@ def test_exact_seed_routing_failure_becomes_shared_search_feedback() -> None:
     }
 
 
-def test_compact_seed_near_miss_substitutes_local_repair_without_proxy() -> None:
+@pytest.mark.parametrize(
+    ("status", "failure_kind"),
+    (
+        (DetailedRouteStatus.STRANDED, RouteFailureKind.CONGESTION_WALL),
+        (DetailedRouteStatus.STRANDED, RouteFailureKind.STATIC_ACCESS),
+        (DetailedRouteStatus.BUDGET, RouteFailureKind.CONGESTION_WALL),
+    ),
+)
+def test_compact_seed_near_miss_closes_local_repair_without_reannealing(
+    status: DetailedRouteStatus,
+    failure_kind: RouteFailureKind,
+) -> None:
     exact = _placement(area=20, belt_tiles=4)
     fake = _FakeRouting(
         detailed_results=(
             DetailedStageResult(
                 _routing(
-                    DetailedRouteStatus.STRANDED,
-                    geometric_failure=True,
-                    failure_kind=RouteFailureKind.CONGESTION_WALL,
+                    status,
+                    geometric_failure=failure_kind is not RouteFailureKind.STATIC_ACCESS,
+                    failure_kind=failure_kind,
                 ),
                 None,
             ),
@@ -720,9 +766,49 @@ def test_compact_seed_near_miss_substitutes_local_repair_without_proxy() -> None
     assert [stage.global_skip_reason for stage in result.stages] == [
         "compact-seed",
         "proxy-budget",
+
     ]
     assert fake.global_allowances == []
-    assert fake.prepared_candidates[1][1].gap_area == 1
+    assert result.stages[1].anneal_moves == 0
+def test_owned_geometric_failures_remain_local_feedback_above_three_nets() -> None:
+    problem = PlacementProblem(((1, 1),) * 10, (), 10, 10)
+    state = AnnealState.initial(problem.size, 7)
+    decoded = decode_state(problem, state)
+    failures = tuple(
+        NetFailure(
+            net_id=NetId(0, 1, f"item-{ordinal}", NetRole.INTERNAL, ordinal),
+            kind=RouteFailureKind.DYNAMIC_ACCESS,
+            wall=(),
+            blocking_nets=(
+                NetId(1, 0, f"blocker-{ordinal}", NetRole.INTERNAL, ordinal),
+            ),
+            expansions=0,
+        )
+        for ordinal in range(4)
+    )
+    detailed = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=failures,
+        iterations=1,
+        expansions=0,
+    )
+
+    repaired, neighbourhood = (
+        sequence_solver_module._routing_feedback_substitution(
+            detailed,
+            state,
+            problem,
+            decoded,
+            seed=7,
+            stage_index=0,
+        )
+    )
+
+    assert neighbourhood
+    assert len(neighbourhood) < problem.size
+    assert repaired.stage_index == 0
+
 
 
 def test_geometric_near_miss_substitutes_feedback_candidate_before_next_height() -> None:
@@ -2830,9 +2916,44 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     assert captured["direct_eligibility"] == ()
     assert isinstance(compact_deadline, float)
     assert 0.0 < compact_deadline - called_at <= 2.0 / 3.0
+    assert run.solver._borrow_first_discovery is False
 
 
-def test_validator_crossing_deadline_returns_incomplete_budget(
+def test_production_planning_generates_variant_families_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = sequence_solver_module.generate_strip_families
+    calls = 0
+
+    def counted_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
+        nonlocal calls
+        calls += 1
+        return original(spec)
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "generate_strip_families",
+        counted_families,
+    )
+    monkeypatch.setattr(
+        strip_variants_module,
+        "generate_strip_families",
+        lambda _spec: pytest.fail("strip planning regenerated carried families"),
+    )
+
+    _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+
+    assert calls == 1
+
+
+def test_validator_finishes_inside_atomic_completion_grace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Report:
@@ -2867,6 +2988,44 @@ def test_validator_crossing_deadline_returns_incomplete_budget(
     candidate = _placement(area=1, belt_tiles=1)
     verdict = run.solver.adapters.validate(candidate)
     assert certify_called == [True]
+
+    assert verdict.ok
+    assert verdict.status is DetailedRouteStatus.ROUTED
+    assert verdict.failed_checks == ()
+    assert verdict.placement is not None
+
+
+def test_validator_crossing_atomic_completion_grace_returns_incomplete_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Report:
+        errors: tuple[()] = ()
+
+    now = [0.0]
+
+    def crossing_certify(
+        _placement: Placement,
+        _spec: BuildSpec,
+        *,
+        expect_power: bool,
+    ) -> Report:
+        del expect_power
+        now[0] = 6.2
+        return Report()
+
+    monkeypatch.setattr(sequence_solver_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(validate, "certify", crossing_certify)
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=1.0,
+    )
+
+    verdict = run.solver.adapters.validate(_placement(area=1, belt_tiles=1))
 
     assert not verdict.ok
     assert verdict.status is DetailedRouteStatus.BUDGET
@@ -4675,7 +4834,7 @@ def test_sequence_backend_returns_authoritative_finalized_placement_once(
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
 
 
-def test_sequence_completion_compacts_then_finalizes_then_validates_once(
+def test_sequence_completion_reuses_clean_compaction_report_after_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = two_stage_spec()
@@ -4740,7 +4899,6 @@ def test_sequence_completion_compacts_then_finalizes_then_validates_once(
     assert trace == [
         ("compact", routed),
         ("finalize", compacted),
-        ("validate", projected),
     ]
 
 def test_sequence_completion_cancels_projection_before_atomic_validation(
@@ -5234,6 +5392,40 @@ def test_chemical_closed_loop_emits_exact_inner_anchor_sorters() -> None:
     )
     assert not validate.certify(placement, spec, expect_power=False).errors
     assert placement.stats["pose_count"] == 1.0
+
+
+def test_trivial_proliferated_boundary_splitter_keeps_a_viable_frame() -> None:
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                proliferator_mode=ProliferatorMode.PRODUCTS,
+                inputs_per_machine={"iron-ore": Fraction(4, 5)},
+                outputs_per_machine={"iron-ingot": Fraction(1)},
+            ),
+        ),
+        external_inputs={
+            "iron-ore": Fraction(4, 5),
+            "proliferator-3": Fraction(1, 75),
+        },
+        outputs={"iron-ingot": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+        label="trivial-proliferated-frame",
+        spray_lanes={"iron-ore": True},
+    )
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+    ).lay_out(spec, time_budget_s=2.0)
+
+    assert placement.frame is not None
+    assert any(
+        building.item_id == catalog.SPLITTER_ID
+        for building in placement.buildings
+    )
+    assert validate.certify(placement, spec, expect_power=True).ok
 
 
 def test_proliferated_closed_loop_routes_elevated_supply_without_coater_sorter() -> None:

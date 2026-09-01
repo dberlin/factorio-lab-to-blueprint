@@ -21,6 +21,7 @@ from typing import Protocol
 from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
+    ATOMIC_COMPLETION_GRACE_S,
     DETERMINISTIC_WORKERS,
     NoValidLayout,
     Placement,
@@ -731,6 +732,7 @@ class _AnnealedRestart:
     restart: _RestartState
     stage_start: AnnealState
     result: AnnealStageResult
+    move_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -802,6 +804,7 @@ class SequenceSolver[PreparedT]:
         borrow_first_discovery: bool = False,
         stop_on_stable_exact: bool = False,
         stage_admission: _MeasuredStageAdmission | None = None,
+        routing_seed_allowance_cap: int | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -825,12 +828,18 @@ class SequenceSolver[PreparedT]:
             raise ValueError("borrow-first-discovery mode must be a bool")
         if type(stop_on_stable_exact) is not bool:
             raise ValueError("stable exact stopping mode must be a bool")
+        if routing_seed_allowance_cap is not None and (
+            type(routing_seed_allowance_cap) is not int
+            or routing_seed_allowance_cap <= 0
+        ):
+            raise ValueError("routing-seed allowance cap must be a positive integer")
         self.config = config or SequenceSolverConfig()
         self.adapters = adapters
         self.budget = expansion_budget
         self.deadline_reached = deadline_reached or (lambda: False)
         self.stop_on_stable_exact = stop_on_stable_exact
         self.stage_admission = stage_admission
+        self.routing_seed_allowance_cap = routing_seed_allowance_cap
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
@@ -960,8 +969,19 @@ class SequenceSolver[PreparedT]:
             )
             if seed_height is not None:
                 seed_height.routing_seed_closed = True
-                allowance = self.budget.detailed_discovery_allowance(seed_height.height)
-                spent, cancelled = self._route_seed_closure(seed_height, allowance)
+                closure_allowance = self.budget.detailed_discovery_allowance(
+                    seed_height.height
+                )
+                seed_allowance = closure_allowance
+                if self.routing_seed_allowance_cap is not None:
+                    seed_allowance = min(
+                        seed_allowance,
+                        self.routing_seed_allowance_cap,
+                    )
+                spent, cancelled = self._route_seed_closure(
+                    seed_height,
+                    seed_allowance,
+                )
                 seed_stages = seed_height.stages
                 followup_spent, followup_cancelled = (
                     self._run_pending_projection_feedback(
@@ -969,7 +989,7 @@ class SequenceSolver[PreparedT]:
                         0,
                         stage_limit,
                         prior_cancelled=cancelled,
-                        closure_allowance=allowance - spent,
+                        closure_allowance=closure_allowance - spent,
                     )
                     if self._measured_stage_can_continue(measured_stage_started)
                     else (0, False)
@@ -1419,11 +1439,60 @@ class SequenceSolver[PreparedT]:
             or self.deadline_reached()
         ):
             return 0, False
-        return self._run_stage(
+        return self._run_feedback_closure(
             height_state,
             feedback_restart,
             allowance,
             closure_allowance=closure_allowance,
+        )
+
+    def _run_feedback_closure(
+        self,
+        height_state: _HeightState,
+        restart: _RestartState,
+        allowance: int,
+        *,
+        closure_allowance: int | None,
+    ) -> tuple[int, bool]:
+        """Close one evidence-scoped repair exactly before further annealing."""
+        problem = height_state.problem
+        state = restart.anneal
+        context = feedback_cost_context(
+            height_state.feedback,
+            problem,
+            self.direct_targets,
+        )
+        direct_targets = (
+            self.direct_targets
+            if self.direct_targets_for_state is None
+            else self.direct_targets_for_state(problem, state)
+        )
+        kernel = build_sequence_kernel(problem, context)
+        incumbent = kernel.score_state(state, direct_targets=direct_targets)
+        source = _AnnealedRestart(
+            restart=restart,
+            stage_start=state,
+            result=AnnealStageResult(
+                final_state=replace(
+                    incumbent.state,
+                    base_seed=state.base_seed,
+                    stage_index=state.stage_index + 1,
+                ),
+                incumbent=incumbent,
+                accepted_moves=0,
+                elites=(incumbent,),
+                archive=build_elite_archive((incumbent,), 1),
+                backend=kernel.backend,
+            ),
+            move_count=0,
+        )
+        annealed = (source,)
+        self._persist_annealed_restarts(annealed)
+        return self._route_annealed(
+            height_state,
+            annealed,
+            allowance,
+            closure_allowance=allowance if closure_allowance is None else closure_allowance,
         )
 
 
@@ -1494,6 +1563,7 @@ class SequenceSolver[PreparedT]:
                     restart=restart,
                     stage_start=stage_start,
                     result=result,
+                    move_count=self.config.moves_per_stage,
                 )
             )
         return tuple(results)
@@ -1587,8 +1657,8 @@ class SequenceSolver[PreparedT]:
             key=elite.key,
             breakdown=elite.breakdown,
             archive_categories=tagged.categories,
-            anneal_stages=len(annealed),
-            anneal_moves=len(annealed) * self.config.moves_per_stage,
+            anneal_stages=sum(item.move_count > 0 for item in annealed),
+            anneal_moves=sum(item.move_count for item in annealed),
             accepted_moves=sum(item.result.accepted_moves for item in annealed),
             anneal_seeds=tuple(item.restart.seed for item in annealed),
         )
@@ -1629,8 +1699,8 @@ class SequenceSolver[PreparedT]:
         spent = 0
         preparation_time_s = 0.0
         global_route_time_s = 0.0
-        anneal_stages = len(annealed)
-        anneal_moves = anneal_stages * self.config.moves_per_stage
+        anneal_stages = sum(item.move_count > 0 for item in annealed)
+        anneal_moves = sum(item.move_count for item in annealed)
         accepted_moves = sum(item.result.accepted_moves for item in annealed)
         anneal_seeds = tuple(item.restart.seed for item in annealed)
         detailed_reserve = (
@@ -2261,7 +2331,7 @@ def _routing_feedback_substitution(
     seed: int,
     stage_index: int,
 ) -> tuple[AnnealState, frozenset[int]]:
-    """Replace a near-miss candidate with one local evidence-scoped repair."""
+    """Replace a failed candidate with one evidence-scoped local repair."""
     unchanged = AnnealState(
         pair=selected_state.pair,
         gaps=selected_state.gaps,
@@ -2269,7 +2339,17 @@ def _routing_feedback_substitution(
         stage_index=stage_index,
         variant_indices=selected_state.variant_indices,
     )
-    if not 0 < detailed.failed_count <= 3:
+    if not any(
+        failure.kind
+        in {
+            RouteFailureKind.STATIC_ACCESS,
+            RouteFailureKind.DYNAMIC_ACCESS,
+            RouteFailureKind.SEALED_POCKET,
+            RouteFailureKind.CONGESTION_WALL,
+            RouteFailureKind.COMMIT_LINK,
+        }
+        for failure in detailed.failures
+    ):
         return unchanged, frozenset()
     neighbourhood = _lns_neighbourhood(
         detailed,
@@ -2277,8 +2357,10 @@ def _routing_feedback_substitution(
         problem,
         decoded,
     )
-    if not neighbourhood:
-        return unchanged, neighbourhood
+    if not neighbourhood or (
+        problem.size > 1 and len(neighbourhood) == problem.size
+    ):
+        return unchanged, frozenset()
     repaired = repair_neighbourhood(
         selected_state.pair,
         selected_state.gaps,
@@ -2613,6 +2695,7 @@ def _variant_search_inputs(
     spec: BuildSpec,
     strips: list[Strip],
     *,
+    families: Sequence[StripFamily] | None = None,
     strip_len: int,
 ) -> tuple[
     tuple[StripInstanceId, ...],
@@ -2622,7 +2705,12 @@ def _variant_search_inputs(
     instance_ids: list[StripInstanceId] = []
     variant_tables: list[tuple[StripVariant, ...]] = []
     strip_index = 0
-    for family in generate_strip_families(spec):
+    selected_families = (
+        tuple(generate_strip_families(spec))
+        if families is None
+        else tuple(families)
+    )
+    for family in selected_families:
         if not family.variants:
             return (), ()
         default = default_strip_variant(family)
@@ -3551,11 +3639,13 @@ def _production_run(
     planning_started = time.monotonic()
     try:
         planned_strip_len = strip_len
+        families = tuple(generate_strip_families(spec))
         try:
             strips = plan_strips(
                 spec,
                 strip_len=planned_strip_len,
                 band_policy=band_policy,
+                families=families,
             )
         except (KeyError, ValueError) as exc:
             try:
@@ -3564,6 +3654,7 @@ def _production_run(
                     spec,
                     strip_len=planned_strip_len,
                     band_policy=band_policy,
+                    families=families,
                 )
             except KeyError, ValueError:
                 raise NoValidLayout(
@@ -3584,6 +3675,7 @@ def _production_run(
                 spec,
                 strip_len=planned_strip_len,
                 band_policy=band_policy,
+                families=families,
             )
         needs_initial_direct_count = (
             len(spec.spray_lanes) >= _DENSE_SPRAY_LANE_THRESHOLD
@@ -3610,12 +3702,14 @@ def _production_run(
                 spec,
                 strip_len=planned_strip_len,
                 band_policy=band_policy,
+                families=families,
             )
         strips, planned_strip_len = _coarsen_saturated_strip_plan(
             spec,
             strips,
             strip_len=planned_strip_len,
             band_policy=band_policy,
+            families=families,
         )
         strips = _sequence_reservation_strips(strips)
         if not strips:
@@ -3637,6 +3731,7 @@ def _production_run(
             spec,
             strips,
             strip_len=planned_strip_len,
+            families=families,
         )
         direct_candidates = _direct_net_candidates(strips, spec)
         direct_targets = _refinement_direct_targets(
@@ -4136,6 +4231,11 @@ def _production_run(
                 status=DetailedRouteStatus.BUDGET,
             )
 
+        completion_deadline = deadline + ATOMIC_COMPLETION_GRACE_S
+
+        def completion_deadline_reached() -> bool:
+            return time.monotonic() >= completion_deadline
+
         def project(candidate: Placement) -> Placement:
             finalizer_parameters = inspect.signature(
                 finalize.finalize_placement
@@ -4147,30 +4247,32 @@ def _production_run(
                 return finalize.finalize_placement(
                     candidate,
                     band_policy,
-                    cancelled=deadline_reached,
+                    cancelled=completion_deadline_reached,
                 )
             return finalize.finalize_placement(candidate, band_policy)
 
-        if deadline_reached():
+        if completion_deadline_reached():
             return budget_verdict()
         try:
             compacted = finalize.compact_open_boundary_belts_certified(
                 placement,
                 spec,
                 expect_power=power,
-                cancelled=deadline_reached,
+                cancelled=completion_deadline_reached,
             )
-            if deadline_reached():
+            if completion_deadline_reached():
                 return budget_verdict()
             finalized = project(compacted.placement)
         except finalize.ProjectionRefusal as exc:
             return ValidationVerdict(False, exc.checks, None, exc.failures)
         except finalize.ProjectionCancelled:
             return budget_verdict()
-        if deadline_reached():
+        if completion_deadline_reached():
             return budget_verdict()
-        report = validate.certify(finalized, spec, expect_power=power)
-        if deadline_reached():
+        report = compacted.report
+        if report is None:
+            report = validate.certify(finalized, spec, expect_power=power)
+        if completion_deadline_reached():
             return budget_verdict()
         failures = tuple(sorted({finding.check for finding in report.errors}))
         if failures:
@@ -4184,7 +4286,7 @@ def _production_run(
             ),
         )
 
-    family_by_id = {family.family_id: family for family in generate_strip_families(spec)}
+    family_by_id = {family.family_id: family for family in families}
     telemetry.pose_feasibility_rejects = sum(
         4 - len({variant.yaw for variant in family.variants}) for family in family_by_id.values()
     )
@@ -4368,6 +4470,7 @@ def _production_run(
     )
     solver = SequenceSolver(
         stage_admission=stage_admission,
+        routing_seed_allowance_cap=max(1, expansion_total // 12),
         heights=heights,
         problem_for_height=problems.__getitem__,
         adapters=StageAdapters(
@@ -4383,7 +4486,7 @@ def _production_run(
         ),
         expansion_budget=ExpansionBudget(expansion_total),
         borrow_first_discovery=(
-            compact_seed_attempt is not None or use_topology_beam or use_shared_pack
+            bool(initial_states) or use_topology_beam or use_shared_pack
         ),
         protected_followup_heights=protected_followup_heights,
         config=config,

@@ -2195,6 +2195,26 @@ def test_lns_selects_stranded_blocking_endpoints_and_sequence_neighbours() -> No
     assert neighbourhood == frozenset({2, 3, 4, 5, 6, 7, 8})
 
 
+def test_static_access_lns_selects_failed_and_blocking_endpoint_owners() -> None:
+    pair, gaps, problem, decoded = _lns_geometry(10)
+    stranded = NetId(3, 4, "proliferator", NetRole.PROLIFERATOR, 0)
+    blocker = NetId(7, 7, "proliferator", NetRole.PROLIFERATOR, 1)
+
+    neighbourhood = select_lns_neighbourhood(
+        _lns_failure(
+            stranded,
+            kind=RouteFailureKind.STATIC_ACCESS,
+            blocking_nets=(blocker,),
+        ),
+        pair,
+        gaps,
+        problem,
+        decoded,
+    )
+
+    assert neighbourhood == frozenset({2, 3, 4, 5, 6, 7, 8})
+
+
 def test_lns_selects_only_gap_strips_intersecting_failure_hot_boxes() -> None:
     gaps = GapProfile(
         east=(0, 2, 0),

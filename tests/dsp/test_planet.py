@@ -490,6 +490,7 @@ def test_collisions_at_the_equator_reproduce_the_flat_model() -> None:
         assert planet.collisions_at(pair, projection) == expected, pitch
 
 
+
 def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band() -> None:
     """The gap the flat model leaves, made concrete.
 

@@ -242,6 +242,10 @@ class _ProjectionCache:
     sorter_conditions: dict[tuple[object, ...], str | None] = field(
         default_factory=dict
     )
+    addon_belt_neighborhoods: dict[
+        tuple[int, int, int, int, float, bool],
+        tuple[tuple[int, PlacedBuilding], ...],
+    ] = field(default_factory=dict)
     _sorter_misses: int = field(init=False, default=0)
     _static_misses: int = field(init=False, default=0)
     _power_misses: int = field(init=False, default=0)
@@ -289,6 +293,14 @@ class _ProjectionCache:
             projection: planet.Projection,
         ) -> ProjectionFailure | None:
             self._power_misses += 1
+            if projected_power_failure is _NATIVE_PROJECTED_POWER_FAILURE:
+                failure, examined = _projected_power_verdict(
+                    nodes,
+                    projection,
+                    cancelled=self.cancelled,
+                )
+                self.counters.power_pairs += examined
+                return failure
             failure = projected_power_failure(
                 nodes,
                 projection,
@@ -399,8 +411,25 @@ class _ProjectionCache:
         projection: planet.Projection,
     ) -> ProjectionFailure | None:
         self._poll_cancellation()
+        neighborhood_key = (
+            id(belts),
+            id(addons),
+            projection.band.area_segments,
+            projection.segment,
+            projection.radius,
+            projection.rotated,
+        )
+        candidate_belts = self.addon_belt_neighborhoods.get(neighborhood_key)
+        if candidate_belts is None:
+            candidate_belts = _addon_candidate_belts(
+                belts,
+                addons,
+                projection,
+                cancelled=self.cancelled,
+            )
+            self.addon_belt_neighborhoods[neighborhood_key] = candidate_belts
         misses = self._addon_misses
-        failure = self._addon_failure(belts, addons, projection)
+        failure = self._addon_failure(candidate_belts, addons, projection)
         if self._addon_misses == misses:
             self.counters.addon_result_cache_hits += 1
         return failure
@@ -688,6 +717,39 @@ def _projected_power_candidates(
     return poses, tuple(pairs)
 
 
+def _projected_power_verdict(
+    nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
+    projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[ProjectionFailure | None, int]:
+    """Return the first power refusal and exact predicate count in one scan."""
+    poses, pairs = _projected_power_candidates(
+        nodes,
+        projection,
+        cancelled=cancelled,
+    )
+    for examined, (left, right) in enumerate(pairs, 1):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        distance2 = math.dist(poses[left], poses[right]) ** 2
+        condition = _power_pair_condition(nodes[left], nodes[right], distance2)
+        if condition is not None:
+            return (
+                ProjectionFailure(
+                    check="game.power_too_close",
+                    buildings=(nodes[left][0], nodes[right][0]),
+                    detail=(
+                        f"{distance2**0.5:.4f} world units apart, below the "
+                        f"3.5-unit PowerTooClose gate ({condition})"
+                    ),
+                    band=projection.band.area_segments,
+                ),
+                examined,
+            )
+    return None, len(pairs)
+
+
 def projected_power_failure(
     nodes: Sequence[tuple[int, PlacedBuilding, rules.PowerNode]],
     projection: planet.Projection,
@@ -695,27 +757,15 @@ def projected_power_failure(
     cancelled: Callable[[], bool] | None = None,
 ) -> ProjectionFailure | None:
     """Return the first authoritative power-pair refusal in one projection."""
-    poses, pairs = _projected_power_candidates(
+    failure, _examined = _projected_power_verdict(
         nodes,
         projection,
         cancelled=cancelled,
     )
-    for left, right in pairs:
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
-        distance2 = math.dist(poses[left], poses[right]) ** 2
-        condition = _power_pair_condition(nodes[left], nodes[right], distance2)
-        if condition is not None:
-            return ProjectionFailure(
-                check="game.power_too_close",
-                buildings=(nodes[left][0], nodes[right][0]),
-                detail=(
-                    f"{distance2**0.5:.4f} world units apart, below the "
-                    f"3.5-unit PowerTooClose gate ({condition})"
-                ),
-                band=projection.band.area_segments,
-            )
-    return None
+    return failure
+
+
+_NATIVE_PROJECTED_POWER_FAILURE = projected_power_failure
 
 
 def _power_pairs_examined(
@@ -971,18 +1021,8 @@ def projected_static_failure(
     )
 
 
-def _projected_addon_failure(
-    belts: Sequence[tuple[int, PlacedBuilding]],
-    addons: Sequence[
-        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
-    ],
-    projection: planet.Projection,
-    *,
-    cancelled: Callable[[], bool] | None = None,
-) -> ProjectionFailure | None:
-    if not belts or not addons:
-        return None
-    radius2 = rules.ADDON_AREA_RADIUS**2
+def _addon_grid_reach(projection: planet.Projection) -> tuple[int, int]:
+    """Conservative blueprint-space reach for one projected addon area."""
     latitude_step = planet.latitude_rad_per_grid(projection.segment)
     poleward = min(
         math.cos(
@@ -1004,26 +1044,134 @@ def _projected_addon_failure(
         * 0.9
     )
     row_lower_bound = projection.radius * latitude_step * 0.9
-    column_reach = min(
-        projection.band.columns,
-        math.ceil(rules.ADDON_AREA_RADIUS / max(column_lower_bound, 1e-9)) + 1,
+    return (
+        min(
+            projection.band.columns,
+            math.ceil(rules.ADDON_AREA_RADIUS / max(column_lower_bound, 1e-9)) + 1,
+        ),
+        math.ceil(rules.ADDON_AREA_RADIUS / max(row_lower_bound, 1e-9)) + 1,
     )
-    row_reach = math.ceil(
-        rules.ADDON_AREA_RADIUS / max(row_lower_bound, 1e-9)
-    ) + 1
+
+
+def _addon_candidate_belts(
+    belts: tuple[tuple[int, PlacedBuilding], ...],
+    addons: tuple[
+        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]],
+        ...,
+    ],
+    projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[tuple[int, PlacedBuilding], ...]:
+    """Build one conservative addon neighborhood reusable across latitudes."""
+    if not belts or not addons:
+        return belts
+    column_reach, row_reach = _addon_grid_reach(projection)
+    if len(belts) <= (2 * column_reach + 1) * (2 * row_reach + 1):
+        return belts
 
     def transformed(x: float, y: float) -> tuple[float, float]:
         return (y, x) if projection.rotated else (x, y)
 
-    # Index in blueprint space first.  Projecting all belts for every legal
-    # latitude was the dominant cost here; the lower bounds above can only
-    # over-include, and the exact projected distance remains the verdict.
-    belt_position_by_index = {
-        belt_index: belt_position
-        for belt_position, (belt_index, _belt) in enumerate(belts)
+    position_by_index = {
+        belt_index: position
+        for position, (belt_index, _belt) in enumerate(belts)
     }
     predecessor_by_position: dict[int, int] = {}
-    for belt_position, (_belt_index, placed_belt) in enumerate(belts):
+    grid: dict[tuple[int, int], list[int]] = {}
+    for position, (_belt_index, belt) in enumerate(belts):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        target = (
+            position_by_index.get(belt.output_obj)
+            if belt.output_obj is not None
+            else None
+        )
+        if target is not None:
+            predecessor_by_position[target] = position
+        longitude, latitude = transformed(belt.x, belt.y)
+        cell = (
+            math.floor(longitude) % projection.band.columns,
+            math.floor(latitude),
+        )
+        grid.setdefault(cell, []).append(position)
+
+    nearby: set[int] = set()
+    for _addon_index, addon, areas in addons:
+        for area in areas:
+            if cancelled is not None and cancelled():
+                raise ProjectionCancelled
+            wanted = slots.addon_supply_position(
+                addon.item_id,
+                x=addon.x,
+                y=addon.y,
+                z=addon.z,
+                yaw=addon.yaw,
+                area=area.area,
+            )
+            longitude, latitude = transformed(float(wanted[0]), float(wanted[1]))
+            target_column = math.floor(longitude) % projection.band.columns
+            target_row = math.floor(latitude)
+            nearby.update(
+                position
+                for dx in range(-column_reach, column_reach + 1)
+                for dy in range(-row_reach, row_reach + 1)
+                for position in grid.get(
+                    (
+                        (target_column + dx) % projection.band.columns,
+                        target_row + dy,
+                    ),
+                    (),
+                )
+            )
+
+    if not nearby:
+        return belts[:1]
+    with_neighbours = set(nearby)
+    for position in tuple(nearby):
+        belt = belts[position][1]
+        if belt.output_obj is not None:
+            target = position_by_index.get(belt.output_obj)
+            if target is not None:
+                with_neighbours.add(target)
+        predecessor = predecessor_by_position.get(position)
+        if predecessor is not None:
+            with_neighbours.add(predecessor)
+    return tuple(
+        belt
+        for position, belt in enumerate(belts)
+        if position in with_neighbours
+    )
+
+
+@dataclass(slots=True)
+class _AddonProjectionContext:
+    """Projection-invariant addon topology and requested supply positions."""
+
+    belts: tuple[tuple[int, PlacedBuilding], ...]
+    belt_position_by_index: dict[int, int]
+    predecessor_by_position: dict[int, int]
+    wanted_areas: tuple[tuple[int, int, float, float, float], ...]
+
+
+def _addon_projection_context(
+    belts: Sequence[tuple[int, PlacedBuilding]],
+    addons: Sequence[
+        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
+    ],
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> _AddonProjectionContext:
+    """Prepare link topology and addon seats once for every latitude anchor."""
+    frozen_belts = tuple(belts)
+    belt_position_by_index = {
+        belt_index: belt_position
+        for belt_position, (belt_index, _belt) in enumerate(frozen_belts)
+    }
+    predecessor_by_position: dict[int, int] = {}
+    for belt_position, (_belt_index, placed_belt) in enumerate(frozen_belts):
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         target_position = (
             belt_position_by_index.get(placed_belt.output_obj)
             if placed_belt.output_obj is not None
@@ -1031,6 +1179,52 @@ def _projected_addon_failure(
         )
         if target_position is not None:
             predecessor_by_position[target_position] = belt_position
+    wanted_areas: list[tuple[int, int, float, float, float]] = []
+    for addon_index, addon, areas in addons:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        for area in areas:
+            wanted = slots.addon_supply_position(
+                addon.item_id,
+                x=addon.x,
+                y=addon.y,
+                z=addon.z,
+                yaw=addon.yaw,
+                area=area.area,
+            )
+            wanted_areas.append(
+                (
+                    addon_index,
+                    area.area,
+                    float(wanted[0]),
+                    float(wanted[1]),
+                    float(wanted[2]),
+                )
+            )
+    return _AddonProjectionContext(
+        belts=frozen_belts,
+        belt_position_by_index=belt_position_by_index,
+        predecessor_by_position=predecessor_by_position,
+        wanted_areas=tuple(wanted_areas),
+    )
+
+
+def _projected_addon_failure_from_context(
+    context: _AddonProjectionContext,
+    projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> ProjectionFailure | None:
+    """Evaluate one latitude while reusing the addon's invariant topology."""
+    belts = context.belts
+    if not belts or not context.wanted_areas:
+        return None
+    radius2 = rules.ADDON_AREA_RADIUS**2
+    column_reach, row_reach = _addon_grid_reach(projection)
+
+    def transformed(x: float, y: float) -> tuple[float, float]:
+        return (y, x) if projection.rotated else (x, y)
+
     scan_all_belts = len(belts) <= (2 * column_reach + 1) * (2 * row_reach + 1)
     belt_grid: dict[tuple[int, int], list[int]] = {}
     if not scan_all_belts:
@@ -1058,103 +1252,113 @@ def _projected_addon_failure(
         belt_positions[belt_position] = projected
         return projected
 
-    for addon_index, addon, areas in addons:
+    for addon_index, area, wanted_x, wanted_y, wanted_z in context.wanted_areas:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        for area in areas:
+        target = projection.position(wanted_x, wanted_y, wanted_z)
+        longitude, latitude = transformed(wanted_x, wanted_y)
+        target_column = math.floor(longitude) % projection.band.columns
+        target_row = math.floor(latitude)
+        candidates: Iterable[int] = (
+            range(len(belts))
+            if scan_all_belts
+            else sorted(
+                {
+                    belt_position
+                    for dx in range(-column_reach, column_reach + 1)
+                    for dy in range(-row_reach, row_reach + 1)
+                    for belt_position in belt_grid.get(
+                        (
+                            (target_column + dx) % projection.band.columns,
+                            target_row + dy,
+                        ),
+                        (),
+                    )
+                }
+            )
+        )
+        supplied = False
+        line_misses: list[tuple[float, int, float]] = []
+        for belt_position in candidates:
             if cancelled is not None and cancelled():
                 raise ProjectionCancelled
-            wanted = slots.addon_supply_position(
-                addon.item_id,
-                x=addon.x,
-                y=addon.y,
-                z=addon.z,
-                yaw=addon.yaw,
-                area=area.area,
+            belt_point = projected_belt(belt_position)
+            distance2 = (
+                (target[0] - belt_point[0]) ** 2
+                + (target[1] - belt_point[1]) ** 2
+                + (target[2] - belt_point[2]) ** 2
             )
-            target = projection.position(
-                float(wanted[0]),
-                float(wanted[1]),
-                float(wanted[2]),
-            )
-            longitude, latitude = transformed(float(wanted[0]), float(wanted[1]))
-            target_column = math.floor(longitude) % projection.band.columns
-            target_row = math.floor(latitude)
-            candidates: Iterable[int] = (
-                range(len(belts))
-                if scan_all_belts
-                else sorted(
-                    {
-                        belt_position
-                        for dx in range(-column_reach, column_reach + 1)
-                        for dy in range(-row_reach, row_reach + 1)
-                        for belt_position in belt_grid.get(
-                            (
-                                (target_column + dx) % projection.band.columns,
-                                target_row + dy,
-                            ),
-                            (),
-                        )
-                    }
-                )
-            )
-            supplied = False
-            line_misses: list[tuple[float, int, float]] = []
-            for belt_position in candidates:
-                if cancelled is not None and cancelled():
-                    raise ProjectionCancelled
-                belt_point = projected_belt(belt_position)
-                distance2 = (
-                    (target[0] - belt_point[0]) ** 2
-                    + (target[1] - belt_point[1]) ** 2
-                    + (target[2] - belt_point[2]) ** 2
-                )
-                if distance2 >= radius2:
-                    continue
-                placed = belts[belt_position][1]
-                neighbour_position = (
-                    belt_position_by_index.get(placed.output_obj)
-                    if placed.output_obj is not None
-                    else None
-                )
-                if neighbour_position is None:
-                    neighbour_position = predecessor_by_position.get(belt_position)
-                if neighbour_position is None:
-                    supplied = True
-                    break
-                line_distance = rules.addon_line_distance(
-                    target,
-                    belt_point,
-                    projected_belt(neighbour_position),
-                )
-                if line_distance < rules.ADDON_LINE_MAX_DISTANCE:
-                    supplied = True
-                    break
-                line_misses.append((distance2, belt_position, line_distance))
-            if supplied:
+            if distance2 >= radius2:
                 continue
-            if line_misses:
-                _distance2, belt_position, line_distance = min(line_misses)
-                belt_index = belts[belt_position][0]
-                return ProjectionFailure(
-                    check="game.addon_supply",
-                    buildings=(addon_index, belt_index),
-                    detail=(
-                        f"addon area {area.area} misses belt {belt_index}'s line by "
-                        f"{line_distance:.4f} world units"
-                    ),
-                    band=projection.band.area_segments,
+            placed = belts[belt_position][1]
+            neighbour_position = (
+                context.belt_position_by_index.get(placed.output_obj)
+                if placed.output_obj is not None
+                else None
+            )
+            if neighbour_position is None:
+                neighbour_position = context.predecessor_by_position.get(
+                    belt_position
                 )
+            if neighbour_position is None:
+                supplied = True
+                break
+            line_distance = rules.addon_line_distance(
+                target,
+                belt_point,
+                projected_belt(neighbour_position),
+            )
+            if line_distance < rules.ADDON_LINE_MAX_DISTANCE:
+                supplied = True
+                break
+            line_misses.append((distance2, belt_position, line_distance))
+        if supplied:
+            continue
+        if line_misses:
+            _distance2, belt_position, line_distance = min(line_misses)
+            belt_index = belts[belt_position][0]
             return ProjectionFailure(
                 check="game.addon_supply",
-                buildings=(addon_index,),
+                buildings=(addon_index, belt_index),
                 detail=(
-                    f"addon area {area.area} has no belt within "
-                    f"{rules.ADDON_AREA_RADIUS} world unit"
+                    f"addon area {area} misses belt {belt_index}'s line by "
+                    f"{line_distance:.4f} world units"
                 ),
                 band=projection.band.area_segments,
             )
+        return ProjectionFailure(
+            check="game.addon_supply",
+            buildings=(addon_index,),
+            detail=(
+                f"addon area {area} has no belt within "
+                f"{rules.ADDON_AREA_RADIUS} world unit"
+            ),
+            band=projection.band.area_segments,
+        )
     return None
+
+
+def _projected_addon_failure(
+    belts: Sequence[tuple[int, PlacedBuilding]],
+    addons: Sequence[
+        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
+    ],
+    projection: planet.Projection,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> ProjectionFailure | None:
+    if not belts or not addons:
+        return None
+    context = _addon_projection_context(
+        belts,
+        addons,
+        cancelled=cancelled,
+    )
+    return _projected_addon_failure_from_context(
+        context,
+        projection,
+        cancelled=cancelled,
+    )
 
 
 def projected_coater_keepout_boxes(
@@ -2780,19 +2984,18 @@ def _boundary_open_belts(
     return frozenset(selected)
 
 
-def _required_external_input_boundary_roots(
+def _required_external_input_belts(
     placement: Placement,
     spec: BuildSpec,
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> frozenset[int]:
-    """Find required player-fed roots from the emitted graph and build spec."""
+    """Find every connected player-fed input belt that cleanup must retain."""
     belts: list[bool] = []
     for building in placement.buildings:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         belts.append(catalog.is_belt(building.item_id))
-    incoming: set[int] = set()
     connected: set[int] = set()
     for source, building in enumerate(placement.buildings):
         if cancelled is not None and cancelled():
@@ -2804,33 +3007,18 @@ def _required_external_input_boundary_roots(
                 connected.add(source)
             if belts[target]:
                 connected.add(target)
-        target = building.output_obj
-        if (
-            belts[source]
-            and target is not None
-            and 0 <= target < len(belts)
-            and belts[target]
-        ):
-            incoming.add(target)
-    left, bottom, right, top = placement.bounds
-    roots: set[int] = set()
-    for index, building in enumerate(placement.buildings):
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
+    # A required lane may start one or more cells inside the initial bounds:
+    # unrelated leaves can define the outer edge before the cleanup wave peels
+    # inward. Protect the connected lane by graph semantics, not its initial pose.
+    return frozenset(
+        index
+        for index, building in enumerate(placement.buildings)
         if (
             belts[index]
-            and index not in incoming
             and index in connected
             and building.carries_item in spec.external_inputs
-            and (
-                building.x == left
-                or building.y == bottom
-                or building.x + building.width - 1 == right
-                or building.y + building.height - 1 == top
-            )
-        ):
-            roots.add(index)
-    return frozenset(roots)
+        )
+    )
 
 
 @dataclass(slots=True)
@@ -3027,6 +3215,32 @@ class _CleanupSurvivorGraph:
             values = descending
         return values
 
+    def _insert_ordered_coordinate(
+        self,
+        coordinates: list[int],
+        value: int,
+        *,
+        reverse: bool = False,
+    ) -> None:
+        """Insert one new coordinate without reordering the immutable prefix."""
+        self._poll()
+        self.coordinate_visits += 1
+        if not self._COORDINATE_MIN <= value <= self._COORDINATE_MAX:
+            raise ValueError("cleanup coordinates must fit a signed 64-bit integer")
+        lo = 0
+        hi = len(coordinates)
+        while lo < hi:
+            self._poll()
+            self.coordinate_visits += 1
+            middle = (lo + hi) // 2
+            before = coordinates[middle] > value if reverse else coordinates[middle] < value
+            if before:
+                lo = middle + 1
+            else:
+                hi = middle
+        coordinates.insert(lo, value)
+
+
     def _fork(self) -> _CleanupSurvivorGraph:
         """Copy mutable cleanup state while sharing its aggregate work counter."""
         fork = object.__new__(type(self))
@@ -3147,28 +3361,45 @@ class _CleanupSurvivorGraph:
             building = extended.buildings[index]
             right = building.x + building.width - 1
             top = building.y + building.height - 1
-            for coordinate, records, counts in (
-                (building.x, extended.left_records, extended.left_counts),
-                (building.y, extended.bottom_records, extended.bottom_counts),
-                (right, extended.right_records, extended.right_counts),
-                (top, extended.top_records, extended.top_counts),
+            for coordinate, records, counts, coordinates, reverse in (
+                (
+                    building.x,
+                    extended.left_records,
+                    extended.left_counts,
+                    extended.left_coordinates,
+                    False,
+                ),
+                (
+                    building.y,
+                    extended.bottom_records,
+                    extended.bottom_counts,
+                    extended.bottom_coordinates,
+                    False,
+                ),
+                (
+                    right,
+                    extended.right_records,
+                    extended.right_counts,
+                    extended.right_coordinates,
+                    True,
+                ),
+                (
+                    top,
+                    extended.top_records,
+                    extended.top_counts,
+                    extended.top_coordinates,
+                    True,
+                ),
             ):
+                new_coordinate = coordinate not in counts
                 records.setdefault(coordinate, []).append(index)
                 counts[coordinate] = counts.get(coordinate, 0) + 1
-        extended.left_coordinates = extended._ordered_coordinates(
-            extended.left_counts,
-        )
-        extended.bottom_coordinates = extended._ordered_coordinates(
-            extended.bottom_counts,
-        )
-        extended.right_coordinates = extended._ordered_coordinates(
-            extended.right_counts,
-            reverse=True,
-        )
-        extended.top_coordinates = extended._ordered_coordinates(
-            extended.top_counts,
-            reverse=True,
-        )
+                if new_coordinate:
+                    extended._insert_ordered_coordinate(
+                        coordinates,
+                        coordinate,
+                        reverse=reverse,
+                    )
         extended.left_position = 0
         extended.bottom_position = 0
         extended.right_position = 0
@@ -3596,7 +3827,7 @@ def _certified_side_fallback(
         sprayed_lanes=len(spec.spray_lanes),
     ):
         for side in ("left", "bottom", "right", "top"):
-            protected_roots = _required_external_input_boundary_roots(
+            protected_roots = _required_external_input_belts(
                 compacted,
                 spec,
                 cancelled=cancelled,
@@ -3611,7 +3842,7 @@ def _certified_side_fallback(
             )
     else:
         for _round in range(4):
-            protected_roots = _required_external_input_boundary_roots(
+            protected_roots = _required_external_input_belts(
                 compacted,
                 spec,
                 cancelled=cancelled,
@@ -3656,7 +3887,7 @@ def compact_open_boundary_belts_certified(
     # initial frontier is empty the exact fixed point is already the input.
     if not _prunable_open_belts(placement, cancelled=cancelled):
         return BoundaryCompactionResult(placement, None)
-    protected_roots = _required_external_input_boundary_roots(
+    protected_roots = _required_external_input_belts(
         placement,
         spec,
         cancelled=cancelled,

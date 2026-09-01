@@ -529,6 +529,43 @@ def test_a_belt_beside_a_machine_it_has_nothing_to_do_with_still_collides() -> N
     assert not C.stable_belt_collisions(linked)
 
 
+def test_belt_overlap_broadphase_visits_only_geometrically_near_colliders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = 100
+    previews = [
+        C.Preview(_ASSEMBLER_2, float(index * 5), 0.0, 0.0)
+        for index in range(count)
+    ] + [
+        C.Preview(
+            _BELT_MK3,
+            float(index * 5 + 1),
+            0.0,
+            0.0,
+            is_belt=True,
+        )
+        for index in range(count)
+    ]
+    original = C.sphere_box_overlap
+    calls = 0
+
+    def counted_overlap(
+        centre: C.Vec3,
+        radius: float,
+        box: C.Box,
+    ) -> bool:
+        nonlocal calls
+        calls += 1
+        return original(centre, radius, box)
+
+    monkeypatch.setattr(C, "sphere_box_overlap", counted_overlap)
+
+    assert C._belt_overlap_candidates(previews) == tuple(
+        (count + index, (index,)) for index in range(count)
+    )
+    assert calls <= 9 * count // 4
+
+
 def test_a_raw_sorter_box_test_convicts_blueprints_the_game_wrote() -> None:
     """Why :func:`C.collisions` still says nothing about sorter-on-sorter.
 

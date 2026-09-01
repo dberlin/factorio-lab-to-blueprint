@@ -1229,10 +1229,17 @@ def _belt_overlap_candidates(
     grid: dict[tuple[int, int], list[int]] = {}
     for j, bxs in enumerate(boxes):
         for box in bxs:
-            key = (int(box.centre[0] // cell), int(box.centre[2] // cell))
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    grid.setdefault((key[0] + dx, key[1] + dy), []).append(j)
+            # An OBB's horizontal circumradius is rotation-invariant. Index
+            # exactly the grid cells its probe-expanded AABB can reach instead
+            # of copying every collider into a fixed 3x3 neighbourhood.
+            reach = math.hypot(box.half[0], box.half[2]) + BELT_PROBE_RADIUS
+            min_x = math.floor((box.centre[0] - reach) / cell)
+            max_x = math.floor((box.centre[0] + reach) / cell)
+            min_y = math.floor((box.centre[2] - reach) / cell)
+            max_y = math.floor((box.centre[2] + reach) / cell)
+            for x in range(min_x, max_x + 1):
+                for y in range(min_y, max_y + 1):
+                    grid.setdefault((x, y), []).append(j)
 
     candidates: list[tuple[int, tuple[int, ...]]] = []
     for i, belt in enumerate(previews):

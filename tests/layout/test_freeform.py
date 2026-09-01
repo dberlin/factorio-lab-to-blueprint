@@ -74,7 +74,7 @@ from flab2bp.layout.freeform import (
     _Port,
     _power_plan,
     _prepare_routing_problem,
-    _proliferator_nets,
+    _proliferator_supply_tree,
     _relink,
     _reserve_port_access,
     _room_for_another,
@@ -994,6 +994,13 @@ def test_prepared_net_ids_preserve_routing_roles() -> None:
     roles = {net.net_id.role for net in prepared.nets}
     assert NetRole.EXTERNAL in roles
     assert NetRole.PROLIFERATOR in roles
+    proliferator_nets = tuple(
+        net for net in prepared.nets if net.net_id.role is NetRole.PROLIFERATOR
+    )
+    assert all(net.net_id.destination_strip is not None for net in proliferator_nets)
+    assert all(
+        net.net_id.logical.destination_family is not None for net in proliferator_nets
+    )
 
 
 def test_prepared_proliferator_ports_round_trip_elevated_level() -> None:
@@ -1176,6 +1183,150 @@ def test_commit_link_rejection_reroutes_the_same_net_before_emission(
     assert len(attempts) >= 3, "preflight rejection did not trigger same-pack repair"
     assert attempts[0][0] != attempts[1][0], (
         "the rejected endpoint was offered again instead of withdrawing it"
+    )
+
+
+
+def test_commit_preflight_repairs_a_routed_net_while_another_remains_stranded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas = _Canvas(limit=(0, -2, 6, 5))
+    blocked_source = canvas.add(
+        PlacedBuilding(2001, 35, 0, 0, carries_item="blocked"),
+        level=0,
+    )
+    blocked_destination = canvas.add(
+        PlacedBuilding(2001, 35, 6, 0, z=F(1), carries_item="blocked"),
+        level=1,
+    )
+    routed_source = canvas.add(
+        PlacedBuilding(2001, 35, 0, 3, carries_item="routed"),
+        level=0,
+    )
+    routed_destination = canvas.add(
+        PlacedBuilding(2001, 35, 6, 3, carries_item="routed"),
+        level=0,
+    )
+    for cell in ((5, 0, 1), (6, -1, 1), (6, 1, 1)):
+        canvas.blocked[cell] = -1
+    blocked_id = NetId(0, 1, "blocked", NetRole.INTERNAL, 0)
+    routed_id = NetId(2, 3, "routed", NetRole.INTERNAL, 0)
+    nets = [
+        _Net(
+            src=_Port(blocked_source, 0, 0, 0, 0),
+            dst=_Port(blocked_destination, 6, 0, 6, 6, z=1),
+            item="blocked",
+            net_id=blocked_id,
+        ),
+        _Net(
+            src=_Port(routed_source, 0, 3, 0, 0),
+            dst=_Port(routed_destination, 6, 3, 6, 6),
+            item="routed",
+            net_id=routed_id,
+        ),
+    ]
+    original = freeform._commit_paths
+    attempts = 0
+
+    def reject_first_routed_path(
+        attempt_canvas: _Canvas,
+        attempt_nets: list[_Net],
+        paths: Mapping[int, Sequence[Cell]],
+        belt_id: int,
+        belt_model: int,
+        src_group: Mapping[int, tuple[int, ...]] | None = None,
+        dst_group: Mapping[int, tuple[int, ...]] | None = None,
+        *,
+        source_hints: Mapping[int, Cell] | None = None,
+        sink_hints: Mapping[int, Cell] | None = None,
+        failure_details: dict[int, freeform._CommitFailure] | None = None,
+    ) -> tuple[int, ...]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            if failure_details is not None:
+                failure_details[1] = freeform._CommitFailure(
+                    cell=paths[1][0],
+                    side="source",
+                )
+            return (1,)
+        return original(
+            attempt_canvas,
+            attempt_nets,
+            paths,
+            belt_id,
+            belt_model,
+            src_group,
+            dst_group,
+            source_hints=source_hints,
+            sink_hints=sink_hints,
+            failure_details=failure_details,
+        )
+
+    monkeypatch.setattr(freeform, "_commit_paths", reject_first_routed_path)
+    result = _route_all(
+        canvas,
+        nets,
+        2001,
+        35,
+        (0, -2, 6, 5),
+        budget={"left": 100_000},
+    )
+
+    assert result.status is DetailedRouteStatus.STRANDED
+    assert result.routed == (routed_id,)
+    assert tuple(failure.net_id for failure in result.failures) == (blocked_id,)
+    assert attempts >= 3
+
+
+
+def test_commit_rolls_back_a_failed_path_before_laying_later_paths() -> None:
+    canvas = _Canvas(limit=(-1, -2, 4, 3))
+    first_source = canvas.add(
+        PlacedBuilding(2001, 35, 0, 0, carries_item="first")
+    )
+    first_destination = canvas.add(
+        PlacedBuilding(2001, 35, 3, 0, carries_item="first")
+    )
+    second_source = canvas.add(
+        PlacedBuilding(2001, 35, 1, -1, carries_item="second")
+    )
+    second_destination = canvas.add(
+        PlacedBuilding(2001, 35, 1, 2, carries_item="second")
+    )
+    canvas.blocked[2, 0, 0] = -1
+    nets = [
+        _Net(
+            _Port(first_source, 0, 0, 0, 0),
+            _Port(first_destination, 3, 0, 3, 3),
+            "first",
+            net_id=NetId(0, 1, "first", NetRole.INTERNAL, 0),
+        ),
+        _Net(
+            _Port(second_source, 1, -1, 1, 1),
+            _Port(second_destination, 1, 2, 1, 1),
+            "second",
+            net_id=NetId(2, 3, "second", NetRole.INTERNAL, 0),
+        ),
+    ]
+
+    unlinked = _commit_paths(
+        canvas,
+        nets,
+        {
+            0: ((1, 0, 0), (2, 0, 0)),
+            1: ((1, 0, 0), (1, 1, 0)),
+        },
+        2001,
+        35,
+    )
+
+    assert unlinked == (0,)
+    assert any(
+        building.x == 1
+        and building.y == 0
+        and building.carries_item == "second"
+        for building in canvas.buildings
     )
 
 
@@ -2702,12 +2853,19 @@ def test_unrealized_promised_direct_is_typed_evidence_not_a_restored_net(
     )
     assert pack is not None and pack.direct
     monkeypatch.setattr(freeform, "_bridge", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        freeform,
+        "_power_plan",
+        lambda *_args, **_kwargs: pytest.fail(
+            "typed preparation failure reached power planning"
+        ),
+    )
 
     prepared = _prepare_routing_problem(
         spec,
         strips,
         pack,
-        power=False,
+        power=True,
         policy=BandPolicy("portable"),
     )
 
@@ -3176,7 +3334,42 @@ def _sweep_after_first_routing(
     return result, seen, attempts
 
 
-def test_fully_routed_attempt_crossing_certification_deadline_is_not_returned(
+def test_fully_routed_attempt_finishes_certification_inside_atomic_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+
+    def monotonic() -> float:
+        return clock
+
+    def finish_in_grace(
+        *_args: object,
+        **_kwargs: object,
+    ) -> validate.Report:
+        nonlocal clock
+        clock += 0.2
+        return validate.Report(findings=())
+
+    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    result, _seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(),
+        arrangements=1,
+        deadline=0.1,
+        certifier=finish_in_grace,
+        finalizer=lambda placement, *_args, **_kwargs: replace(
+            placement,
+            frame=AreaFrame(1, 1, 4, (4,), False),
+        ),
+    )
+
+    assert result is not None
+    assert result.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+    assert len(attempts) == 1
+    assert attempts[0].budget_stage is None
+
+
+def test_fully_routed_attempt_crossing_atomic_completion_grace_is_not_returned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = 0.0
@@ -3189,7 +3382,7 @@ def test_fully_routed_attempt_crossing_certification_deadline_is_not_returned(
         **_kwargs: object,
     ) -> validate.Report:
         nonlocal clock
-        clock += 0.2
+        clock += 5.2
         return validate.Report(findings=())
 
     monkeypatch.setattr(freeform.time, "monotonic", monotonic)
@@ -8375,91 +8568,133 @@ class TestPortAccessIsReservedForEveryRole:
         assert first == (1, ((1, 0, 0), (2, 0, 0)), True)
 
 
-class TestTheProliferatorChainIsOneLinearRun:
-    """No splitter may carry the proliferator, and no drop may be bypassed.
+class TestProliferatorSupplyIsOneReachableTree:
+    """Every coater drop belongs to one externally fed terminal supply run."""
 
-    A branch drawn off a splitter is a belt run of its own that nothing inside
-    the blueprint fills, so the validator -- correctly -- reads every one of them
-    as another lane the player must belt proliferator into, buried in the middle
-    of the block where no belt can reach.  A chain has no junctions at all.
-    """
-
-    def test_neighbouring_drops_are_linked_rather_than_routed(self) -> None:
-        """Two drops one tile apart need no path between them, and no cell.
-
-        Two coaters on neighbouring lanes of one strip put their drops in the
-        same margin column, one directly above the other, and the lower one then
-        has a single free neighbour in the world.  Routing between them would
-        need two.
-        """
+    def test_coater_drops_are_sinks_not_pass_through_nodes(self) -> None:
         canvas = _Canvas()
-        entry = _Port(canvas.add(_belt(-9, -9)), -9, -9, -9, -9)
-        first_drop = canvas.add(replace(_belt(3, 0), z=F(1)), level=1)
-        second_drop = canvas.add(replace(_belt(3, 1), z=F(1)), level=1)
-        first = CoaterSupplyPort(
-            coater=-1,
-            host_belt=-1,
-            supply_belt=first_drop,
-            item="ore",
-            yaw=90.0,
-            host_x=2,
-            host_y=0,
-            host_z=0,
-            x=3,
-            y=0,
-            z=1,
+        belt_id = 2001
+        belt_model = 35
+        core = (0, 0, 20, 8)
+        canvas.limit = (
+            core[0] - _ENTRY_RING,
+            core[1] - _ENTRY_RING,
+            core[2] + _ENTRY_RING,
+            core[3] + _ENTRY_RING,
         )
-        second = CoaterSupplyPort(
-            coater=-1,
-            host_belt=-1,
-            supply_belt=second_drop,
-            item="ore",
-            yaw=90.0,
-            host_x=2,
-            host_y=1,
-            host_z=0,
-            x=3,
-            y=1,
-            z=1,
+        entry = _Port(
+            canvas.add(
+                _belt(core[0] - _ENTRY_RING, core[1] - _ENTRY_RING),
+                level=0,
+            ),
+            core[0] - _ENTRY_RING,
+            core[1] - _ENTRY_RING,
+            core[0] - _ENTRY_RING,
+            core[0] - _ENTRY_RING,
         )
-        nets = _proliferator_nets(canvas, entry, [first, second], "proliferator-3")
-        assert [
-            (n.source.x, n.source.y, n.dst.x, n.dst.y) for n in nets
-        ] == [(-9, -9, 3, 0)], (
-            "the adjacent pair should have been linked, not routed"
+        coaters: list[CoaterSupplyPort] = []
+        for x, y in ((0, 1), (2, 2), (4, 3), (6, 4), (20, 7)):
+            drop = canvas.add(replace(_belt(x, y), z=F(1)), level=1)
+            outward = -1 if x < core[2] // 2 else 1
+            approach = canvas.add(
+                replace(
+                    _belt(x + outward, y),
+                    z=F(1),
+                    output_obj=drop,
+                ),
+                level=1,
+            )
+            coaters.append(
+                CoaterSupplyPort(
+                    coater=-1,
+                    host_belt=-1,
+                    approach_belt=approach,
+                    supply_belt=drop,
+                    item="ore",
+                    yaw=90.0,
+                    host_x=x + 1 if x < core[2] // 2 else x - 1,
+                    host_y=y,
+                    host_z=0,
+                    x=x,
+                    y=y,
+                    z=1,
+                )
+            )
+
+        nets = _proliferator_supply_tree(
+            canvas,
+            entry,
+            coaters,
+            "proliferator-3",
+            belt_id=belt_id,
+            belt_model=belt_model,
+            core=core,
+        )
+
+        drops = {coater.supply_belt for coater in coaters}
+        approaches = {coater.approach_belt for coater in coaters}
+        routed_approaches = {net.dst.belt for net in nets}
+        assert routed_approaches == approaches
+        assert not {net.source.belt for net in nets} & (drops | approaches)
+        assert all(
+            canvas.buildings[coater.approach_belt].output_obj
+            == coater.supply_belt
+            for coater in coaters
+        )
+        assert all(
+            canvas.buildings[coater.supply_belt].output_obj is None
+            for coater in coaters
+        )
+        assert {
+            net.source.x for net in nets
+        } == {
+            core[0] - _ENTRY_RING,
+            core[2] + _ENTRY_RING,
+        }
+        source_by_approach = {net.dst.belt: net.source.x for net in nets}
+        assert (
+            source_by_approach[coaters[0].approach_belt]
+            == core[0] - _ENTRY_RING
         )
         assert (
-            canvas.buildings[first.supply_belt].output_obj == second.supply_belt
-        ), "the first drop must feed the second directly"
+            source_by_approach[coaters[-1].approach_belt]
+            == core[2] + _ENTRY_RING
+        )
+        assert len({net.source.belt for net in nets}) == len(nets)
 
-    def test_no_splitter_carries_the_proliferator(self) -> None:
+    def test_small_proliferated_factory_certifies_with_splitter_fanout(self) -> None:
         spec = proliferated_spec()
-        p = FreeformLayout(
+        placement = FreeformLayout(
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
-        ).lay_out(
-            spec, time_budget_s=1.0
+        ).lay_out(spec, time_budget_s=3.0)
+
+        report = validate.certify(
+            placement,
+            spec,
+            expect_power=True,
         )
-        prolif = {i for i in spec.external_inputs if i.startswith("proliferator")}
-        carriers = {
-            i
-            for i, b in enumerate(p.buildings)
-            if catalog.is_belt(b.item_id) and b.carries_item in prolif
+        assert not report.errors, "\n".join(f.message for f in report.errors)
+
+        proliferator = {
+            item for item in spec.external_inputs if item.startswith("proliferator")
         }
-        assert carriers, "fixture must lay a proliferator lane"
         splitters = {
-            i for i, b in enumerate(p.buildings) if b.item_id == catalog.SPLITTER_ID
+            index
+            for index, building in enumerate(placement.buildings)
+            if building.item_id == catalog.SPLITTER_ID
         }
         attached = {
-            i
-            for i in carriers
-            if p.buildings[i].output_obj in splitters
-            or p.buildings[i].input_obj in splitters
+            index
+            for index, building in enumerate(placement.buildings)
+            if catalog.is_belt(building.item_id)
+            and building.carries_item in proliferator
+            and (
+                building.input_obj in splitters
+                or building.output_obj in splitters
+            )
         }
-        assert not attached, (
-            f"belts {sorted(attached)} put the proliferator through a splitter; every "
-            "branch off it becomes an entry lane nobody can reach"
-        )
+        assert attached, "the shared supply tree never branches through a splitter"
 
 
 class TestTheExtentIsDecidedBeforeAnythingRoutes:
@@ -8820,7 +9055,9 @@ class TestPowerClaimsItsGroundBeforeRouting:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A legal route-ring junction must not be the router's dark surprise."""
-        demands: list[tuple[int, int, int, int]] = []
+        demands: list[
+            tuple[tuple[int, int, int, int], tuple[tuple[int, int], ...]]
+        ] = []
         plan = freeform._power_plan
 
         def observe_demand(
@@ -8828,9 +9065,15 @@ class TestPowerClaimsItsGroundBeforeRouting:
             demand: tuple[int, int, int, int],
             *,
             policy: BandPolicy,
+            additional_demand: Sequence[tuple[int, int]] = (),
         ) -> list[tuple[int, int]]:
-            demands.append(demand)
-            return plan(canvas, demand, policy=policy)
+            demands.append((demand, tuple(additional_demand)))
+            return plan(
+                canvas,
+                demand,
+                policy=policy,
+                additional_demand=additional_demand,
+            )
 
         monkeypatch.setattr(freeform, "_power_plan", observe_demand)
         spec = two_stage_spec()
@@ -8866,13 +9109,19 @@ class TestPowerClaimsItsGroundBeforeRouting:
         )
         assert report.ok, "\n".join(f.message for f in report.errors)
 
-        assert demands == [prepared.route_bounds]
-        assert prepared.limit == (
-            prepared.route_bounds[0] - 1,
-            prepared.route_bounds[1] - 1,
-            prepared.route_bounds[2] + 1,
-            prepared.route_bounds[3] + 1,
-        ), "the outer entry ring is standing capacity, not powered demand"
+        assert demands == [(prepared.route_bounds, ())]
+
+    def test_splitter_candidate_power_check_uses_exact_tower_radius(self) -> None:
+        discs = freeform._power_coverage_discs((), ((0, 0),))
+
+        assert freeform._buildings_are_powered(
+            freeform._splitter_stack_geometry(10, 0, 1),
+            discs,
+        )
+        assert not freeform._buildings_are_powered(
+            freeform._splitter_stack_geometry(11, 0, 1),
+            discs,
+        )
 
     def test_planned_sites_are_closed_to_everything_else(self) -> None:
         canvas = _Canvas(limit=(0, 0, 40, 40))
@@ -9422,6 +9671,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
             _core: tuple[int, int, int, int],
             *,
             policy: BandPolicy,
+            additional_demand: Sequence[tuple[int, int]] = (),
         ) -> list[tuple[int, int]]:
             seen.append(policy)
             raise _Unpowerable("projected power refusal", failure=failure)
@@ -10618,7 +10868,7 @@ class TestDetailedRoutingDiagnostics:
         assert result.failures[0].wall == ()
         assert result.failures[0].blocking_nets == ()
 
-    def test_bottom_of_round_deadline_never_commits_and_keeps_budget_evidence(
+    def test_bottom_of_round_deadline_retains_exact_near_miss_without_commit(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         canvas = _Canvas()
@@ -10630,14 +10880,12 @@ class TestDetailedRoutingDiagnostics:
             self._net(canvas, (-6, -2), (-4, -2), first_id),
             self._net(canvas, (-6, 2), (-4, 2), second_id),
         ]
-        walls = (((0, -1, 0),), ((0, 1, 0),))
+        wall = ((0, 1, 0),)
         searches = iter(
             (
+                _PathSearchResult(((-5, -2, 0),), None, (), 3),
                 _PathSearchResult(
-                    None, RouteFailureKind.SEALED_POCKET, walls[0], 3
-                ),
-                _PathSearchResult(
-                    None, RouteFailureKind.SEALED_POCKET, walls[1], 5
+                    None, RouteFailureKind.SEALED_POCKET, wall, 5
                 ),
             )
         )
@@ -10672,20 +10920,14 @@ class TestDetailedRoutingDiagnostics:
         )
 
         assert result.status is DetailedRouteStatus.BUDGET
-        assert tuple(failure.net_id for failure in result.failures) == (
-            first_id,
-            second_id,
-        )
-        assert tuple(failure.kind for failure in result.failures) == (
-            RouteFailureKind.BUDGET,
-            RouteFailureKind.BUDGET,
-        )
-        assert tuple(failure.wall for failure in result.failures) == ((), ())
-        assert tuple(failure.blocking_nets for failure in result.failures) == ((), ())
-        assert tuple(failure.expansions for failure in result.failures) == (3, 5)
+        assert result.routed == (first_id,)
+        assert tuple(failure.net_id for failure in result.failures) == (second_id,)
+        assert result.failures[0].kind is RouteFailureKind.SEALED_POCKET
+        assert result.failures[0].wall == wall
+        assert result.failures[0].expansions == 5
         assert result.expansions == 8
 
-    def test_successful_round_deadline_expires_before_commit_preflight(
+    def test_successful_round_deadline_retains_routed_ids_without_commit(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         canvas = _Canvas()
@@ -10733,18 +10975,8 @@ class TestDetailedRoutingDiagnostics:
         )
 
         assert result.status is DetailedRouteStatus.BUDGET
-        assert result.routed == ()
-        assert tuple(failure.net_id for failure in result.failures) == (
-            first_id,
-            second_id,
-        )
-        assert tuple(failure.kind for failure in result.failures) == (
-            RouteFailureKind.BUDGET,
-            RouteFailureKind.BUDGET,
-        )
-        assert tuple(failure.wall for failure in result.failures) == ((), ())
-        assert tuple(failure.blocking_nets for failure in result.failures) == ((), ())
-        assert tuple(failure.expansions for failure in result.failures) == (3, 5)
+        assert result.routed == (first_id, second_id)
+        assert result.failures == ()
         assert result.iterations == 1
         assert result.expansions == 8
 
@@ -10765,6 +10997,54 @@ class TestDetailedRoutingDiagnostics:
 
         assert result.kind is RouteFailureKind.DYNAMIC_ACCESS
         assert result.expansions == 0
+
+    def test_astar_opens_only_the_explicitly_owned_guarded_start(self) -> None:
+        canvas = _Canvas(limit=(-2, -2, 4, 2))
+        start = (0, 0, 0)
+        foreign_guard = (1, 0, 0)
+        canvas.guard.update((start, foreign_guard))
+        bounds = (-2, -2, 4, 2)
+
+        refused = _astar(
+            canvas,
+            [start],
+            {(3, 0, 0)},
+            {},
+            1.0,
+            bounds,
+        )
+        routed = _astar(
+            canvas,
+            [start],
+            {(3, 0, 0)},
+            {},
+            1.0,
+            bounds,
+            owned_starts={start},
+        )
+
+        assert refused.kind is RouteFailureKind.DYNAMIC_ACCESS
+        assert routed.path is not None
+        assert routed.path[0] == start
+        assert foreign_guard not in routed.path
+
+    def test_astar_excludes_a_prior_commit_collision_cell(self) -> None:
+        bounds = (-2, -2, 4, 2)
+        canvas = _Canvas(limit=bounds)
+        rejected = (1, 0, 0)
+
+        result = _astar(
+            canvas,
+            [(0, 0, 0)],
+            {(3, 0, 0)},
+            {},
+            1.0,
+            bounds,
+            forbidden={rejected},
+        )
+
+        assert result.path is not None
+        assert rejected not in result.path
 
     def test_repair_open_grid_excludes_passable_paths_from_the_wall(self) -> None:
         canvas = _Canvas()
@@ -10922,12 +11202,149 @@ class TestDetailedRoutingDiagnostics:
             provenance=provenance,
             tentative_ok=True,
         )
-
         assert strict == set()
         assert (0, 1, 0) in repair
         assert provenance[0, 1, 0] == (0, 0, 0)
 
-    def test_first_fanout_route_detours_to_hold_a_future_tap(
+    def test_merge_frontier_offers_an_owned_junction_guard_port(self) -> None:
+        canvas = _Canvas(limit=(-2, -2, 2, 2))
+        path = ((0, -1, 0), (0, 0, 0), (0, 1, 0))
+        for cell in path:
+            canvas.blocked[cell] = _TENTATIVE
+        branch = (1, 0, 0)
+        canvas.guard.add(branch)
+
+        refused = freeform._merge_frontier(
+            canvas,
+            {0: path},
+            (0,),
+            lambda x, y, level: (x, y, level) == (0, 0, 0),
+            belt_prefab=(2001, 35),
+        )
+        owned = freeform._merge_frontier(
+            canvas,
+            {0: path},
+            (0,),
+            lambda x, y, level: (x, y, level) == (0, 0, 0),
+            belt_prefab=(2001, 35),
+            owned_guard={branch: (0, 0, 0)},
+        )
+
+        assert branch not in refused
+        assert branch in owned
+
+    def test_commit_materializes_an_owned_junction_guard_port(self) -> None:
+        canvas = _Canvas(limit=(-2, -2, 5, 3))
+        source = canvas.add(_belt(-1, 0, item="gear"))
+        first_destination = canvas.add(_belt(3, 0, item="gear"))
+        second_destination = canvas.add(_belt(3, 2, item="gear"))
+        shared_port = _Port(source, -1, 0, -1, -1)
+        nets = [
+            _Net(
+                src=shared_port,
+                dst=_Port(first_destination, 3, 0, 3, 3),
+                item="gear",
+                net_id=NetId(0, 1, "gear", NetRole.INTERNAL, 0),
+            ),
+            _Net(
+                src=shared_port,
+                dst=_Port(second_destination, 3, 2, 3, 3),
+                item="gear",
+                net_id=NetId(0, 2, "gear", NetRole.INTERNAL, 1),
+            ),
+        ]
+        first_path = ((0, 0, 0), (1, 0, 0), (2, 0, 0))
+        branch = (1, 1, 0)
+        second_path = (branch, (2, 1, 0), (3, 1, 0))
+        canvas.guard.add(branch)
+
+        unlinked = _commit_paths(
+            canvas,
+            nets,
+            {0: first_path, 1: second_path},
+            2001,
+            35,
+            src_group={0: (1,), 1: (0,)},
+            source_hints={1: (1, 0, 0)},
+        )
+
+        assert unlinked == ()
+        assert any(
+            building.item_id == catalog.SPLITTER_ID
+            for building in canvas.buildings
+        )
+
+
+    def test_zero_start_fanout_failure_names_the_sibling_that_consumed_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        canvas = _Canvas()
+        bounds = (-4, -4, 8, 4)
+        canvas.limit = bounds
+        source = canvas.add(_belt(0, 0, item="gear"))
+        first_destination = canvas.add(_belt(4, -2, item="gear"))
+        canvas.junction_ban.add((1, 0, 0))
+        second_destination = canvas.add(_belt(4, 2, item="gear"))
+        shared_port = _Port(source, 0, 0, 0, 0)
+        first_id = NetId(0, 1, "gear", NetRole.INTERNAL, 0)
+        second_id = NetId(0, 2, "gear", NetRole.INTERNAL, 1)
+        nets = [
+            _Net(
+                src=shared_port,
+                dst=_Port(first_destination, 4, -2, 4, 4),
+                item="gear",
+                net_id=first_id,
+            ),
+            _Net(
+                src=shared_port,
+                dst=_Port(second_destination, 4, 2, 4, 4),
+                item="gear",
+                net_id=second_id,
+            ),
+        ]
+        searches = 0
+
+        def scripted_astar(
+            _canvas: _Canvas,
+            starts: list[tuple[int, int, int]],
+            _goals: set[tuple[int, int, int]],
+            *_args: object,
+            **_kwargs: object,
+        ) -> _PathSearchResult:
+            nonlocal searches
+            searches += 1
+            if searches == 1:
+                assert starts
+                return _PathSearchResult(((1, 0, 0),), None, (), 1)
+            assert starts == []
+            return _PathSearchResult(
+                None,
+                RouteFailureKind.DYNAMIC_ACCESS,
+                (),
+                0,
+            )
+
+        monkeypatch.setattr(freeform, "_astar", scripted_astar)
+        monkeypatch.setattr(freeform, "RRR_MAX", 1)
+        monkeypatch.setattr(freeform, "_REPAIR_PASSES", 0)
+        monkeypatch.setattr(
+            freeform,
+            "_commit_paths",
+            lambda *_args, **_kwargs: (),
+        )
+
+        result = _route_all(canvas, nets, 2001, 35, bounds)
+
+        failure = next(f for f in result.failures if f.net_id == second_id)
+        assert failure.kind is RouteFailureKind.DYNAMIC_ACCESS
+        assert failure.blocking_nets == (first_id,)
+        assert failure.blocking_endpoints == (
+            ((0, 0, 0), (4, -2, 0)),
+        )
+
+
+
+    def test_first_fanout_route_tries_bounded_detours_for_a_future_tap(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         canvas = _Canvas()
@@ -10963,14 +11380,18 @@ class TestDetailedRoutingDiagnostics:
         ) -> _PathSearchResult:
             nonlocal searches
             searches += 1
-            if searches == 1:
+            if searches == 4:
+                owned_starts = set(_kwargs["owned_starts"])
+                assert owned_starts
+                assert owned_starts <= attempt_canvas.guard
+            if searches in (1, 2):
                 return _PathSearchResult(
                     tuple((x, 0, 0) for x in range(1, 10)),
                     None,
                     (),
                     9,
                 )
-            if searches == 2:
+            if searches == 3:
                 detour = (
                     (-1, 0, 0),
                     (-1, -1, 0),
@@ -10995,7 +11416,45 @@ class TestDetailedRoutingDiagnostics:
         result = _route_all(canvas, nets, 2001, 35, bounds)
 
         assert result.status is DetailedRouteStatus.BUDGET
-        assert searches == 3
+        assert searches == 4
+
+    def test_lower_junction_guard_keeps_same_source_sibling_as_victim(
+        self,
+    ) -> None:
+        sibling_path = 54
+        branch_path = 76
+        guard_cell = (84, 96, 1)
+        tap_cell = (84, 97, 2)
+        owner = {
+            guard_cell: sibling_path,
+            tap_cell: branch_path,
+        }
+
+        victims = freeform._junction_guard_victims(
+            owner,
+            (guard_cell, tap_cell),
+            excused={tap_cell},
+        )
+
+        assert victims == {sibling_path}
+
+
+    def test_future_junction_rejects_its_own_lower_stack_crossing(
+        self,
+    ) -> None:
+        canvas = _Canvas()
+        path = (
+            (84, 98, 1),
+            (84, 97, 2),
+            (85, 97, 2),
+        )
+
+        assert not freeform._junction_belt_clear(
+            canvas,
+            (84, 97, 2),
+            path,
+            1,
+        )
 
     def test_repair_moves_a_route_out_of_a_future_fanout_junction(self) -> None:
         canvas = _Canvas()
@@ -11620,6 +12079,7 @@ class TestAPortKnowsItsOwnAltitude:
 
 
 
+
 class TestTheRoutingGridAgreesWithTheCanvas:
     """A* searches ``_make_grid``'s flat array, and it must refuse what ``free`` does.
 
@@ -11756,6 +12216,27 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
             "the junction was refused with nothing foreign beside it, so the "
             "predicate is refusing sites the game builds"
         )
+        assert unlinked == ()
+
+    def test_a_merge_on_the_splitter_feed_is_stable_in_every_order(self) -> None:
+        """Every reconstructed feeder still reaches the Splitter downstream."""
+        canvas, nets, paths = self._scene(stranger=False)
+        lane = nets[0].src.belt
+        upstream = next(
+            index
+            for index, belt in enumerate(canvas.buildings)
+            if belt.output_obj == lane
+        )
+        for x, y in ((0, -2), (1, -1)):
+            merge_feeder = canvas.add(_belt(x, y, item="x"))
+            canvas.buildings[merge_feeder] = _relink(
+                canvas.buildings[merge_feeder],
+                output_obj=upstream,
+            )
+
+        unlinked = _commit_paths(canvas, nets, paths, 2001, 35)
+
+        assert len(self._splitters(canvas)) == 1
         assert unlinked == ()
 
     def test_the_junction_holds_its_collider_against_later_passes(self) -> None:
@@ -12673,7 +13154,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         assert tuple(canvas.buildings) == before
         assert failure == finalize.ProjectionFailure(
             check="game.addon_splitter_clearance",
-            buildings=(len(before) + 1, splitter_index),
+            buildings=(len(before) + 2, splitter_index),
             detail=(
                 "Splitter connection body enters the Spray Coater projected "
                 "lateral keepout"
@@ -12683,7 +13164,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         assert caught.value.failures == (failure,)
         assert (
             f"band 160 game.addon_splitter_clearance "
-            f"({len(before) + 1}, {splitter_index})"
+            f"({len(before) + 2}, {splitter_index})"
         ) in str(caught.value)
         assert canvas.limit is None
 
@@ -12886,6 +13367,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
                 35,
                 policy=BandPolicy("portable"),
             )
+
 
     def test_reported_coater_assembler_pair_is_refused_before_emission(
         self,
@@ -13210,6 +13692,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         assert canvas.buildings[got[0].coater].owner_strip == 0
         assert canvas.buildings[got[0].supply_belt].owner_strip == 0
 
+
     def test_projected_supply_failure_tries_the_next_coater_seat(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -13275,6 +13758,49 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             "the initial graph construction and exact survivor proof each visit "
             "the lane once; static coater proposals must add no visits"
         )
+
+    def test_coater_projection_contexts_are_reused_across_preparations(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cache = freeform._StagedStaticCache()
+        checks = 0
+        original = freeform._projected_coater_supply_frame_failure
+
+        def counted(
+            candidate: freeform._StagedCoater,
+            host: PlacedBuilding,
+            frame: freeform._JunctionProjectionFrame,
+            *,
+            cancelled: Callable[[], bool] | None = None,
+        ) -> finalize.ProjectionFailure | None:
+            nonlocal checks
+            checks += 1
+            return original(candidate, host, frame, cancelled=cancelled)
+
+        monkeypatch.setattr(
+            freeform,
+            "_projected_coater_supply_frame_failure",
+            counted,
+        )
+        for _attempt in range(2):
+            canvas, spec, strips, ports = self._fixture(4)
+            got = freeform._place_coaters(
+                canvas,
+                spec,
+                strips,
+                ports,
+                2001,
+                35,
+                policy=BandPolicy("portable"),
+                staged_static_cache=cache,
+            )
+            assert len(got) == 1
+            if _attempt == 0:
+                first_checks = checks
+
+        assert first_checks > 0
+        assert checks == first_checks
 
     def test_items_sharing_one_lane_share_one_positional_coater(self) -> None:
         canvas, spec, strips, ports = self._fixture(4)
@@ -14177,6 +14703,11 @@ def test_projected_coater_supply_is_checked_during_preparation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     host = _belt(0, 0, item="hydrogen")
+    approach = replace(
+        _belt(2, 0, item="proliferator"),
+        z=F(1),
+        output_obj=2,
+    )
     supply = replace(_belt(1, 0, item="proliferator"), z=F(1))
     info = catalog.building(catalog.SPRAY_COATER_ID)
     coater = PlacedBuilding(
@@ -14188,9 +14719,10 @@ def test_projected_coater_supply_is_checked_during_preparation(
         height=info.height,
     )
     port = CoaterSupplyPort(
-        coater=2,
+        coater=3,
         host_belt=0,
-        supply_belt=1,
+        approach_belt=1,
+        supply_belt=2,
         item="hydrogen",
         yaw=0.0,
         host_x=0,
@@ -14201,9 +14733,10 @@ def test_projected_coater_supply_is_checked_during_preparation(
         z=1,
     )
     staged = freeform._StagedCoater(
+        approach=approach,
         supply=supply,
         coater=coater,
-        projected_pair=(2, freeform._collision_pose(coater)),
+        projected_pair=(3, freeform._collision_pose(coater)),
         port=port,
     )
     band = planet.bands()[0]
@@ -14215,7 +14748,7 @@ def test_projected_coater_supply_is_checked_during_preparation(
     )
     expected = finalize.ProjectionFailure(
         "game.addon_supply",
-        (2,),
+        (3,),
         "the staged coater loses one of its supply belts",
         band.area_segments,
     )
@@ -14233,31 +14766,48 @@ def test_projected_coater_supply_is_checked_during_preparation(
         ]
     ] = []
 
-    def reject(
+    prepared_context = object()
+    checks = 0
+
+    def prepare(
         belts: Sequence[tuple[int, PlacedBuilding]],
         addons: Sequence[
             tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
         ],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> object:
+        assert cancelled is None
+        observed.append((tuple(belts), tuple(addons)))
+        return prepared_context
+
+    def reject(
+        context: object,
         _projection: planet.Projection,
         *,
         cancelled: Callable[[], bool] | None = None,
-    ) -> finalize.ProjectionFailure:
+    ) -> finalize.ProjectionFailure | None:
+        nonlocal checks
         assert cancelled is None
-        observed.append((tuple(belts), tuple(addons)))
-        return expected
+        assert context is prepared_context
+        checks += 1
+        return expected if checks == 2 else None
 
-    monkeypatch.setattr(finalize, "_projected_addon_failure", reject)
+    monkeypatch.setattr(finalize, "_addon_projection_context", prepare)
+    monkeypatch.setattr(finalize, "_projected_addon_failure_from_context", reject)
 
     assert (
         freeform._projected_coater_supply_failure(
             staged,
             host,
-            (projection,),
+            (projection, projection),
         )
         is expected
     )
-    assert observed[0][0] == ((0, host), (1, supply))
-    assert observed[0][1][0][:2] == (2, coater)
+    assert len(observed) == 1
+    assert checks == 2
+    assert observed[0][0] == ((0, host), (1, approach), (2, supply))
+    assert observed[0][1][0][:2] == (3, coater)
 
 
 def test_projected_coater_junction_ban_reuses_identical_exact_relations(

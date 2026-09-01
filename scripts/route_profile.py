@@ -134,6 +134,9 @@ def install(tally: Tally) -> Callable[[], None]:
         deadline: float | None = None,
         blame: dict[Cell, float] | None = None,
         grid: freeform._Grid | None = None,
+        owned_starts: Collection[Cell] = (),
+        released_starts: Collection[Cell] = (),
+        forbidden: Collection[Cell] = (),
     ) -> freeform._PathSearchResult:
         t0 = time.perf_counter()
         out = orig_astar(
@@ -147,6 +150,9 @@ def install(tally: Tally) -> Callable[[], None]:
             deadline,
             blame,
             grid,
+            owned_starts,
+            released_starts,
+            forbidden,
         )
         dt = time.perf_counter() - t0
         tally.add("astar", dt)
@@ -169,10 +175,20 @@ def install(tally: Tally) -> Callable[[], None]:
         bounds: tuple[int, int, int, int],
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
+        planned_power_sites: Sequence[tuple[int, int]] | None = None,
+        junction_frame_bans: Sequence[frozenset[Cell]] = (),
     ) -> DetailedRouteResult:
         t0 = time.perf_counter()
         out = orig_route_all(
-            canvas, nets, belt_id, belt_model, bounds, deadline, budget
+            canvas,
+            nets,
+            belt_id,
+            belt_model,
+            bounds,
+            deadline,
+            budget,
+            planned_power_sites,
+            junction_frame_bans,
         )
         tally.add("route_all", time.perf_counter() - t0)
         tally.passes += 1
@@ -251,6 +267,8 @@ def install(tally: Tally) -> Callable[[], None]:
         *,
         provenance: dict[Cell, Cell] | None = None,
         belt_prefab: tuple[int, int] | None = None,
+        tentative_ok: bool = False,
+        owned_guard: Mapping[Cell, Cell] | None = None,
     ) -> set[Cell]:
         t0 = time.perf_counter()
         out = orig_merge(
@@ -260,6 +278,8 @@ def install(tally: Tally) -> Callable[[], None]:
             junctionable,
             provenance=provenance,
             belt_prefab=belt_prefab,
+            tentative_ok=tentative_ok,
+            owned_guard=owned_guard,
         )
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out
