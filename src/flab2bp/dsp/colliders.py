@@ -127,8 +127,10 @@ __all__ = [
     "Box",
     "GRID_ARC",
     "Preview",
+    "StableBeltCollision",
     "belt_chain_excuses",
     "belt_collisions",
+    "stable_belt_collisions",
     "belt_crossing_height",
     "belt_crossings",
     "belt_keepout_offsets",
@@ -1057,6 +1059,20 @@ class Preview:
     input: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class StableBeltCollision:
+    """A collision that is not safe under every preview serialization.
+
+    ``unstable_merges`` names the belt previews whose reconstructed reverse
+    input can choose both a rescuing and a non-rescuing feeder.  It is empty for
+    an ordinary collision that no feeder order can rescue.
+    """
+
+    belt: int
+    collider: int
+    unstable_merges: tuple[int, ...] = ()
+
+
 def _resolve(previews: Sequence[Preview], j: int | None) -> int | None:
     """A link, or ``None`` when it names nothing in this sequence.
 
@@ -1081,9 +1097,12 @@ def paste_input_links(previews: Sequence[Preview]) -> tuple[int | None, ...]:
             buildPreview.output.input = buildPreview;
         }
 
-    Ascending, so a merge leaves the last feeder in place, and it OVERWRITES a
-    belt's recorded non-belt input.  See :func:`belt_collisions` for why this is
-    load-bearing and for the one thing about it that is not settled.
+    Ascending, so a merge leaves the last feeder in place, overwriting both an
+    earlier feeder and a belt's recorded non-belt input.  This is the exact
+    current-preview-order primitive: blueprint canonicalization may reorder
+    previews without changing their forward links, so any feeder at a merge can
+    become the last writer.  Production certification must therefore use
+    :func:`stable_belt_collisions`, not treat this tuple as serialization-stable.
     """
     links: list[int | None] = [_resolve(previews, p.input) for p in previews]
     for i, p in enumerate(previews):
@@ -1118,6 +1137,34 @@ def _hops(
     return out[0], out[1], out[2]
 
 
+def _chain_near(
+    previews: Sequence[Preview], links: Sequence[int | None], other: int
+) -> frozenset[int]:
+    """Preview indices accepted as the first two hops for ``other``."""
+    near = {other}
+    if previews[other].is_splitter:
+        for candidate in (
+            _resolve(previews, previews[other].output),
+            links[other],
+        ):
+            if candidate is not None:
+                near.add(candidate)
+    return frozenset(near)
+
+
+def _belt_chain_excuses_direction(
+    previews: Sequence[Preview],
+    links: Sequence[int | None],
+    belt: int,
+    other: int,
+    *,
+    downstream: bool,
+) -> bool:
+    near = _chain_near(previews, links, other)
+    one, two, three = _hops(previews, links, belt, downstream=downstream)
+    return one in near or two in near or three == other
+
+
 def belt_chain_excuses(
     previews: Sequence[Preview], links: Sequence[int | None], belt: int, other: int
 ) -> bool:
@@ -1126,39 +1173,19 @@ def belt_chain_excuses(
     ``other`` is a preview the belt's probe overlapped, and the answer is
     whether the belt's own run reaches it within three hops -- or, when it is a
     Splitter, reaches either of the previews that Splitter is linked to within
-    two::
-
-        int num156 = ((bp13.previewIndex == -1) ? (-2) : bp13.previewIndex);
-        int num157 = ((bp13.desc.isSplitter && bp13.output != null)
-                          ? bp13.output.previewIndex : (-2));
-        int num158 = ((bp13.desc.isSplitter && bp13.input != null)
-                          ? bp13.input.previewIndex : (-2));
-        if ((bp12.output != null
-                && (bp12.output.previewIndex == num156 || == num157 || == num158))
-            || (bp12.output != null && bp12.output.desc.isBelt
-                && bp12.output.output != null && (... == num156 || num157 || num158))
-            || (... && bp12.output.output.output.previewIndex == num156)
-            || (bp12.input != null && (... == num156 || num157 || num158))
-            || (bp12.input != null && bp12.input.desc.isBelt
-                && bp12.input.input != null && (... == num156 || num157 || num158))
-            || (... && bp12.input.input.input.previewIndex == num156))
-        {
-            continue;
-        }
-
-    The third hop matches only the hit itself, never the Splitter's neighbours;
-    that asymmetry is the game's and is reproduced.
+    two.  The third hop matches only the hit itself, never the Splitter's
+    neighbours; that asymmetry is the game's and is reproduced.
     """
-    near: set[int | None] = {other}
-    if previews[other].is_splitter:
-        near.add(_resolve(previews, previews[other].output))
-        near.add(links[other])
-    near.discard(None)
-    for downstream in (True, False):
-        one, two, three = _hops(previews, links, belt, downstream=downstream)
-        if one in near or two in near or three == other:
-            return True
-    return False
+    return any(
+        _belt_chain_excuses_direction(
+            previews,
+            links,
+            belt,
+            other,
+            downstream=downstream,
+        )
+        for downstream in (True, False)
+    )
 
 
 def belt_run_ends_in_a_building(
@@ -1189,67 +1216,14 @@ def belt_run_ends_in_a_building(
     return False
 
 
-def belt_collisions(previews: Sequence[Preview]) -> list[tuple[int, int]]:
-    """``(belt, building)`` pairs a blueprint paste would call ``Collide``.
-
-    The whole belt verdict, lateral half included: the 0.23 probe of
-    :func:`belt_crossings` and every excusal the paste path applies to it.
-
-    A hit is not the verdict.  ``CheckBuildConditions`` sets a belt's condition
-    to ``Collide`` at 146072 WITHOUT calling ``AddErrorMessage`` -- the one
-    branch in that method that stays silent -- because a later pass over the
-    belts, at 147257, re-probes every belt already marked ``Collide`` and can
-    put it back to ``Ok``.  That pass is what the lateral half was missing, and
-    :func:`belt_chain_excuses` and :func:`belt_run_ends_in_a_building` are its
-    two clauses.  Before them, the same loop excuses by ``PrefabDesc`` flag:
-    a sorter (the ``isInserter`` asymmetry at 147437, in both directions) and a
-    belt addon (147454, ``AddonPass``'s twin) are never a collision for a belt.
-    Belt on belt is left out here -- it is a single-occupancy question, and the
-    game's own answer to it turns on ``dotsCursor``.
-
-    ONE DETAIL IS READ BUT NOT SETTLED, and it decides whether the upstream half
-    of 147451 is reachable at all.  ``ArrangeOverlapBP`` materialises the
-    reverse belt links at 144472-144479 (:func:`paste_input_links`) and then
-    CLEARS them again at 144554-144560::
-
-        if (buildPreview5.desc.isBelt && buildPreview5.input != null
-            && buildPreview5.input.desc.isBelt)
-        {
-            buildPreview5.input = null;
-        }
-
-    Taken at face value that makes the three ``input`` clauses dead on a paste.
-    The corpus refutes it.  With them dead, 25 belts across the single-area
-    fixtures are convicted in blueprints the game itself wrote -- 4 against a
-    Splitter at exact, uncontaminated spacing, 21 against a station -- and each
-    of the 4 is the second or third node of a run leaving a Splitter, which is
-    exactly what those clauses describe.  With the reverse links live, ZERO are
-    convicted across every fixture whose geometry this model can place.  So
-    either the clearing does not survive to 147384 or something restores it;
-    what is MEASURED is that the rule is symmetric, and that is what is here.
-
-    ONE SIMPLIFICATION, in the conservative direction.  The re-probe at 147384
-    is not always the same sphere: when a belt has a belt on BOTH sides it uses
-    ``Physics.OverlapCapsuleNonAlloc`` between its neighbours scaled to 0.65 and
-    pulled 0.45 back toward the middle.  On a straight run that collapses to a
-    segment of +-0.065 tiles about the node -- the sphere, to three decimals --
-    but on a corner it shifts about 0.46 tiles toward the outside of the turn.
-    The hits fed to the excusals here are the MAIN loop's sphere in every case.
-    That can only convict where the game would excuse, never the reverse: the
-    belt is already ``Collide`` when this pass begins, so the pass can lower the
-    verdict and never raise it, and a hit the capsule would have missed is one
-    the game drops.  It costs nothing on the corpus -- zero either way -- and
-    modelling it would mean carrying neighbour positions into a query that is
-    otherwise pure geometry.
-
-    Not vacuous, and the falsifier is the same measurement run the other way:
-    the raw probe flags 1189 belts over the fixture corpus, so a sample that
-    could not have shown a residue is not what this is.
-    """
-    links = paste_input_links(previews)
+def _belt_overlap_candidates(
+    previews: Sequence[Preview],
+) -> tuple[tuple[int, tuple[int, ...]], ...]:
+    """Raw belt/collider probe hits after flag excusals, before graph rescue."""
     poses = [flat_pose(p.x, p.y, p.z, p.yaw) for p in previews]
     boxes = [
-        target_boxes(p, *poses[i]) if not p.is_belt else [] for i, p in enumerate(previews)
+        target_boxes(p, *poses[i]) if not p.is_belt else []
+        for i, p in enumerate(previews)
     ]
     cell = 8.0
     grid: dict[tuple[int, int], list[int]] = {}
@@ -1259,25 +1233,185 @@ def belt_collisions(previews: Sequence[Preview]) -> list[tuple[int, int]]:
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     grid.setdefault((key[0] + dx, key[1] + dy), []).append(j)
-    hits: list[tuple[int, int]] = []
+
+    candidates: list[tuple[int, tuple[int, ...]]] = []
     for i, belt in enumerate(previews):
         if not belt.is_belt:
             continue
         probe = belt_probe(belt.x, belt.y, belt.z)
         key = (int(probe[0] // cell), int(probe[2] // cell))
-        bad: list[int] = []
+        hits: list[int] = []
         for j in dict.fromkeys(grid.get(key, ())):
             if j == i:
                 continue
             other = previews[j]
             if other.is_inserter or other.is_belt_addon:
                 continue
-            if not any(sphere_box_overlap(probe, BELT_PROBE_RADIUS, b) for b in boxes[j]):
-                continue
-            if belt_chain_excuses(previews, links, i, j):
-                continue
-            bad.append(j)
-        if not bad or belt_run_ends_in_a_building(previews, links, i):
+            if any(sphere_box_overlap(probe, BELT_PROBE_RADIUS, box) for box in boxes[j]):
+                hits.append(j)
+        if hits:
+            candidates.append((i, tuple(sorted(hits))))
+    return tuple(candidates)
+
+
+def belt_collisions(previews: Sequence[Preview]) -> list[tuple[int, int]]:
+    """Exact current-order ``(belt, building)`` pairs DSP calls ``Collide``.
+
+    This is the source-faithful verdict for one concrete preview sequence.  The
+    paste first reconstructs reverse links with :func:`paste_input_links`, then
+    re-probes each collided belt and applies the one/two/three-hop rescue from
+    ``CheckBuildConditions`` 147443-147453.  A belt addon or sorter is excused
+    before that walk, and a run directly ending in a good non-belt building is
+    restored to ``Ok`` at 147492-147500.
+
+    At a merge the reconstructed reverse input is last-preview-wins, so this
+    result is intentionally order-sensitive.  Use :func:`stable_belt_collisions`
+    to certify a placement that may be canonicalized before it reaches DSP.
+    """
+    links = paste_input_links(previews)
+    hits: list[tuple[int, int]] = []
+    for belt, candidates in _belt_overlap_candidates(previews):
+        bad = [
+            other
+            for other in candidates
+            if not belt_chain_excuses(previews, links, belt, other)
+        ]
+        if not bad or belt_run_ends_in_a_building(previews, links, belt):
             continue
-        hits.extend((i, j) for j in sorted(bad))
+        hits.extend((belt, other) for other in bad)
+    return hits
+
+
+def _reverse_input_choices(
+    previews: Sequence[Preview],
+) -> tuple[tuple[int | None, ...], ...]:
+    """Every reverse input DSP's last-writer reconstruction can leave behind."""
+    feeders: list[set[int]] = [set() for _ in previews]
+    for i, preview in enumerate(previews):
+        output = _resolve(previews, preview.output)
+        if (
+            preview.is_belt
+            and output is not None
+            and previews[output].is_belt
+        ):
+            feeders[output].add(i)
+    return tuple(
+        tuple(sorted(own)) if own else (_resolve(previews, preview.input),)
+        for preview, own in zip(previews, feeders, strict=True)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _UniversalRescue:
+    all_paths: bool
+    any_path: bool
+    unstable_merges: frozenset[int]
+
+
+def _upstream_rescue_for_every_choice(
+    previews: Sequence[Preview],
+    choices: Sequence[tuple[int | None, ...]],
+    links: Sequence[int | None],
+    belt: int,
+    other: int,
+) -> _UniversalRescue:
+    """Universally evaluate the game's bounded upstream walk without permutations."""
+    near = _chain_near(previews, links, other)
+    memo: dict[tuple[int, int], _UniversalRescue] = {}
+
+    def walk(current: int, hop: int) -> _UniversalRescue:
+        key = (current, hop)
+        if key in memo:
+            return memo[key]
+        branches: list[_UniversalRescue] = []
+        for predecessor in choices[current]:
+            direct = (
+                predecessor is not None
+                and ((hop < 3 and predecessor in near) or (hop == 3 and predecessor == other))
+            )
+            if direct:
+                branch = _UniversalRescue(True, True, frozenset())
+            elif (
+                predecessor is None
+                or hop == 3
+                or not previews[predecessor].is_belt
+            ):
+                branch = _UniversalRescue(False, False, frozenset())
+            else:
+                branch = walk(predecessor, hop + 1)
+            branches.append(branch)
+
+        all_paths = all(branch.all_paths for branch in branches)
+        any_path = any(branch.any_path for branch in branches)
+        unstable = frozenset().union(
+            *(branch.unstable_merges for branch in branches)
+        )
+        if len(choices[current]) > 1 and any_path and not all_paths:
+            unstable |= frozenset((current,))
+        result = _UniversalRescue(all_paths, any_path, unstable)
+        memo[key] = result
+        return result
+
+    return walk(belt, 1)
+
+
+def _belt_run_stably_ends_in_a_building(
+    previews: Sequence[Preview],
+    choices: Sequence[tuple[int | None, ...]],
+    belt: int,
+) -> bool:
+    output = _resolve(previews, previews[belt].output)
+    if output is not None and not previews[output].is_belt:
+        return True
+    return all(
+        predecessor is not None and not previews[predecessor].is_belt
+        for predecessor in choices[belt]
+    )
+
+
+def stable_belt_collisions(
+    previews: Sequence[Preview],
+) -> list[StableBeltCollision]:
+    """Collisions that survive universal last-writer reverse-link reasoning.
+
+    Forward links never change during preview serialization, so a downstream
+    one/two/three-hop rescue is stable immediately.  Upstream, every feeder of a
+    merge can become DSP's reconstructed ``input``.  The bounded dynamic program
+    requires every such reverse path to satisfy the same rescue; it visits each
+    ``(belt, hop)`` state once rather than enumerating feeder permutations.
+
+    The direct-good-building override is likewise accepted only when its
+    relevant link is stable.  Each returned value carries the collider and any
+    merge at which rescuing and non-rescuing choices diverge.
+    """
+    choices = _reverse_input_choices(previews)
+    recorded_links = tuple(_resolve(previews, preview.input) for preview in previews)
+    hits: list[StableBeltCollision] = []
+    for belt, candidates in _belt_overlap_candidates(previews):
+        if _belt_run_stably_ends_in_a_building(previews, choices, belt):
+            continue
+        for other in candidates:
+            if _belt_chain_excuses_direction(
+                previews,
+                recorded_links,
+                belt,
+                other,
+                downstream=True,
+            ):
+                continue
+            rescue = _upstream_rescue_for_every_choice(
+                previews,
+                choices,
+                recorded_links,
+                belt,
+                other,
+            )
+            if not rescue.all_paths:
+                hits.append(
+                    StableBeltCollision(
+                        belt,
+                        other,
+                        tuple(sorted(rescue.unstable_merges)),
+                    )
+                )
     return hits

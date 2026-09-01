@@ -4594,6 +4594,29 @@ def test_belt_crossing_names_the_height_it_needs() -> None:
     assert f.detail["needs_z_above"] == "3.5325"
 
 
+def _model40_perpendicular_merge(*, branch_first: bool) -> Placement:
+    """A direct Splitter branch merging into the centre of a through-line."""
+    junction_building = dataclasses.replace(splitter(0, 0), model_index=40, yaw=90.0)
+    branch = belt(0, 0, 1, inp=0, out=3)
+    opposing = belt(-1, 1, 1, out=3)
+    centre = belt(0, 1, 1, out=4)
+    onward = belt(1, 1, 1)
+    feeders = (branch, opposing) if branch_first else (opposing, branch)
+    return place(junction_building, *feeders, centre, onward)
+
+
+@pytest.mark.parametrize("branch_first", [True, False])
+def test_belt_collide_rejects_a_preview_order_dependent_merge(branch_first: bool) -> None:
+    """Certification cannot depend on which merge feeder canonicalization puts last."""
+    report = validate(
+        _model40_perpendicular_merge(branch_first=branch_first),
+        only={"game.belt_collide"},
+    )
+    (finding,) = report.by_check("game.belt_collide")
+    assert finding.detail["collider_index"] == 0
+    assert finding.detail["unstable_merge_indices"] == (3,)
+
+
 #: Every fixture whose coordinates survive rounding into tile space, so that a
 #: finding against one is about the RULE and not about the rounding.  The union
 #: of the two derived sets the repository already keeps: `GEOMETRY_SAFE_FIXTURES`

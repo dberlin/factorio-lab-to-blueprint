@@ -2658,22 +2658,13 @@ def _belt_collide(ctx: Context) -> Iterable[Finding]:
     been found.  It has, and it is the pass at 147257 --
     :func:`flab2bp.dsp.colliders.belt_collisions` holds it with the C#.
 
-    WHY THIS IS IN :data:`OPT_IN` AND ``game.belt_crossing`` IS NOT, with the
-    measurement OPT_IN asks for.  On the fixture corpus it is clean: zero
-    findings on every single-area fixture, against 1189 for the same geometry
-    with nothing excused.  On OUR OWN output it is not, and the reason is the
-    defect the backlog entry this came from exists to fix.  A Splitter's
-    ``catalog.footprint`` is 1x1; its build collider is a 2.38-unit cross, which
-    needs two tiles.  So both strategies route belts one tile from a Splitter --
-    at ground level and, on ramps, one level up, where the probe still catches
-    the 1.19-unit arm by 0.16 of its 0.23 radius.  Turning this on turns 15
-    ``spine`` tests red -- ``magnetic-ring``, ``quantum-chip/no-proliferator``
-    and ``free-proliferation`` -- because the strategy's own self-check then
-    refuses every plan it emits.  That is a ROUTER bug, not a rule bug: the belt
-    needs
-    ``z > 1.7475`` or one more tile of clearance, and neither is this check's to
-    arrange.  Fix the footprints (steps 1 and 2 of the entry) and this comes on
-    by name first, then by default.
+    Blueprint canonicalization can reorder previews without changing their
+    forward links.  DSP reconstructs a merge's reverse link with a
+    last-preview-wins assignment, so certification uses
+    :func:`flab2bp.dsp.colliders.stable_belt_collisions`: every reverse feeder
+    choice must preserve the bounded chain rescue.  The exact order-sensitive
+    game primitive remains available as
+    :func:`flab2bp.dsp.colliders.belt_collisions` for source fidelity.
     """
     yield from _belt_collide_findings(ctx, "game.belt_collide", crossings_only=False)
 
@@ -2684,7 +2675,16 @@ def _belt_collide_findings(ctx: Context, cid: str, *, crossings_only: bool) -> I
     previews = _paste_previews(ctx)
     if not any(p.is_belt for p in previews):
         return
-    for ia, ic in dsp_colliders.belt_collisions(previews):
+    if crossings_only:
+        collisions = [
+            dsp_colliders.StableBeltCollision(belt, collider)
+            for belt, collider in dsp_colliders.belt_collisions(previews)
+        ]
+    else:
+        collisions = dsp_colliders.stable_belt_collisions(previews)
+    for collision in collisions:
+        ia = collision.belt
+        ic = collision.collider
         if bs[ic].item_id in cat.LOW_CONFIDENCE_FOOTPRINTS:
             continue
         over = _probe_inside(previews[ia], previews[ic]) and bs[ia].z > bs[ic].z
@@ -2692,17 +2692,30 @@ def _belt_collide_findings(ctx: Context, cid: str, *, crossings_only: bool) -> I
             continue
         need = dsp_colliders.belt_crossing_height(bs[ic].model_index) + float(bs[ic].z)
         how = "passes over" if over else "grazes"
+        unstable = ""
+        if collision.unstable_merges:
+            unstable = (
+                "; preview ordering can select a non-rescuing feeder at merge belt(s) "
+                f"{collision.unstable_merges}"
+            )
         yield Finding(
             cid,
             Severity.ERROR,
             f"belt at ({bs[ia].x}, {bs[ia].y}) z={bs[ia].z} {how} "
             f"{cat.building(bs[ic].item_id).name} at ({bs[ic].x}, {bs[ic].y}) "
-            f"without clearing its build collider; the game needs z > {need:.4f}",
+            f"without clearing its build collider; the game needs z > {need:.4f}"
+            f"{unstable}",
             (ia, ic),
             {
                 "belt_z": str(bs[ia].z),
                 "needs_z_above": f"{need:.4f}",
                 "under": str((bs[ic].x, bs[ic].y, str(bs[ic].z))),
+                "collider_index": ic,
+                "unstable_merge_indices": collision.unstable_merges,
+                "unstable_merge_cells": tuple(
+                    (bs[index].x, bs[index].y, str(bs[index].z))
+                    for index in collision.unstable_merges
+                ),
             },
         )
 
