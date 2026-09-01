@@ -83,6 +83,7 @@ def _problem(
         solid=frozenset(),
         reserved=tuple(sorted(reserved)),
         keep_out=frozenset(keep_out),
+        guard=frozenset(),
         nets=nets,
         core=bounds,
         route_bounds=bounds,
@@ -356,9 +357,9 @@ def test_preparation_groups_internal_siblings_but_never_external_nets() -> None:
         None,
         first.dst,
         "iron",
-        ((0, 1, 0),),
-        (first_id,),
-        (stranger_id,),
+        boundary_goals=((0, 1, 0),),
+        src_group=(first_id,),
+        dst_group=(stranger_id,),
     )
 
     grouped = _with_sibling_groups((first, sibling, stranger, external))
