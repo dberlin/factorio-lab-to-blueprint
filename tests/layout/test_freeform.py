@@ -8318,7 +8318,7 @@ class TestPortAccessIsReservedForEveryRole:
         def replay() -> tuple[
             int,
             tuple[tuple[int, int, int], ...],
-            tuple[tuple[int, int, int], ...],
+            bool,
         ]:
             canvas = _Canvas()
             source = _Port(canvas.add(_belt(0, 0)), 0, 0, 0, 0)
@@ -8346,25 +8346,29 @@ class TestPortAccessIsReservedForEveryRole:
             access = tuple(
                 sorted(cell for cell, owner in canvas.reserved.items() if owner == (0, 0, 0))
             )
-            onward = tuple(
-                sorted(
-                    candidate
-                    for cell in access
-                    for dx, dy in freeform._STEPS
-                    if (
-                        candidate := (cell[0] + dx, cell[1] + dy, cell[2])
+            first_access = (1, 0, 0)
+            usable = any(
+                (
+                    candidate := (
+                        first_access[0] + dx,
+                        first_access[1] + dy,
+                        first_access[2],
                     )
-                    != (0, 0, 0)
-                    and canvas.free(candidate)
                 )
+                != (0, 0, 0)
+                and (
+                    canvas.free(candidate)
+                    or canvas.reserved.get(candidate) == (0, 0, 0)
+                )
+                for dx, dy in freeform._STEPS
             )
-            return missing, access, onward
+            return missing, access, usable
 
         first = replay()
         second = replay()
 
         assert first == second
-        assert first == (0, ((1, 0, 0),), ())
+        assert first == (1, ((1, 0, 0), (2, 0, 0)), True)
 
 
 class TestTheProliferatorChainIsOneLinearRun:

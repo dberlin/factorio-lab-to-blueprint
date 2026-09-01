@@ -8077,75 +8077,91 @@ def _route_all(
     )
 
 
-def _match_access(
-    order: Sequence[tuple[int, int, int]],
-    options: Mapping[tuple[int, int, int], Sequence[tuple[int, int, int]]],
-    wants: Mapping[tuple[int, int, int], int],
-) -> dict[tuple[int, int, int], tuple[int, int, int]]:
-    """Assign access cells to ports so that as many CLAIMS as possible are met.
+def _match_access_corridors(
+    order: Sequence[Cell],
+    corridors: Mapping[Cell, Sequence[tuple[Cell, Cell]]],
+    wants: Mapping[Cell, int],
+) -> dict[Cell, Cell]:
+    """Assign access cells while preserving at least one usable onward cell."""
 
-    A claim is one port's need for one cell: a port that both receives and sends
-    makes two, and :func:`_reserve_port_access` explains why they are not
-    interchangeable.  Returns ``cell -> port``.
+    claims = [
+        (key, rank)
+        for rank in range(max(wants.values(), default=0))
+        for key in order
+        if wants[key] > rank
+    ]
+    model = cp_model.CpModel()
+    choices: dict[tuple[Cell, int, Cell, Cell], cp_model.IntVar] = {}
+    by_claim: dict[tuple[Cell, int], list[cp_model.IntVar]] = defaultdict(list)
+    by_rank: dict[int, list[cp_model.IntVar]] = defaultdict(list)
+    access_by_owner: dict[Cell, dict[Cell, list[cp_model.IntVar]]] = {}
+    for key, rank in claims:
+        for access, exit_cell in corridors[key]:
+            variable = model.new_bool_var(
+                f"access_{key}_{rank}_{access}_{exit_cell}"
+            )
+            choices[key, rank, access, exit_cell] = variable
+            by_claim[key, rank].append(variable)
+            by_rank[rank].append(variable)
+            access_by_owner.setdefault(access, {}).setdefault(key, []).append(
+                variable
+            )
 
-    This is a maximum bipartite matching between claims and cells, by augmenting
-    paths.  The greedy alternative -- walk the ports and take the first free
-    neighbour -- is not merely less tidy, it is *wrong*, because it never gives a
-    cell back: a port with two ways out can take the one cell some other port
-    has, and no later port can ask it to move.  An augmenting path is exactly the
-    request "move, and take your second choice", chained as far as it needs to
-    go.
+    for claim in claims:
+        model.add(sum(by_claim[claim]) <= 1)
 
-    ``order`` fixes the sequence claims are offered in, and it matters twice.
-    Priority: every port's FIRST claim is offered before any port's second, so a
-    port that wants two can never leave a port that wants one with nothing --
-    matchings only grow, so a rank-0 claim matched in the first pass stays
-    matched through every later augmentation.  And determinism: the same pack
-    must reserve the same cells, or a routing comparison measures the reservation
-    order instead of what it is trying to measure.
-    """
-    owner: dict[tuple[int, int, int], tuple[tuple[int, int, int], int]] = {}
+    for owners in access_by_owner.values():
+        model.add(
+            sum(variable for variables in owners.values() for variable in variables)
+            <= 1
+        )
 
-    def augment(start: tuple[tuple[int, int, int], int]) -> bool:
-        # Iterative, not recursive: an alternating path can run the length of
-        # the port list, and Python's stack limit is not a routing parameter.
-        seen: set[tuple[int, int, int]] = set()
-        #: claim -> (the claim that wants its cell, that cell).  This is the
-        #: path back to ``start``, and it is walked to hand the cells over only
-        #: once a free one has actually been found.
-        came_from: dict[
-            tuple[tuple[int, int, int], int],
-            tuple[
-                tuple[tuple[int, int, int], int],
-                tuple[int, int, int],
-            ],
-        ] = {}
-        stack = [start]
-        while stack:
-            claim = stack.pop()
-            for cell in options[claim[0]]:
-                if cell in seen:
-                    continue
-                seen.add(cell)
-                holder = owner.get(cell)
-                if holder is None:
-                    owner[cell] = claim
-                    cur = claim
-                    while cur in came_from:
-                        parent, parent_cell = came_from[cur]
-                        owner[parent_cell] = parent
-                        cur = parent
-                    return True
-                if holder != start and holder not in came_from:
-                    came_from[holder] = (claim, cell)
-                    stack.append(holder)
-        return False
+    # A corridor may pass through another claim held for the SAME port: the
+    # detailed router sets ``routing_ports`` and can use every reservation that
+    # port owns. A different port's reservation is a wall.
+    for (key, _rank, _access, exit_cell), corridor_var in choices.items():
+        foreign_access = [
+            variable
+            for owner, variables in access_by_owner.get(exit_cell, {}).items()
+            if owner != key
+            for variable in variables
+        ]
+        if foreign_access:
+            model.add(sum(foreign_access) + corridor_var <= 1)
 
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = 0
     for rank in range(max(wants.values(), default=0)):
-        for key in order:
-            if wants[key] > rank:
-                augment((key, rank))
-    return {cell: claim[0] for cell, claim in owner.items()}
+        rank_vars = by_rank[rank]
+        if not rank_vars:
+            continue
+        model.maximize(sum(rank_vars))
+        status = solver.solve(model)
+        if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            return {}
+        model.add(sum(rank_vars) == round(solver.objective_value))
+
+    # The rank totals are now fixed. This final objective makes an otherwise
+    # equivalent solution stable without weakening first-claim priority.
+    ordered_choices = list(choices)
+    model.minimize(
+        sum(
+            ordinal * choices[choice]
+            for ordinal, choice in enumerate(ordered_choices, start=1)
+        )
+    )
+    status = solver.solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return {}
+
+    access_owner: dict[Cell, Cell] = {}
+    for choice in ordered_choices:
+        if not solver.boolean_value(choices[choice]):
+            continue
+        key, _rank, access, _exit_cell = choice
+        access_owner[access] = key
+    return access_owner
 
 
 def _reserve_port_access(
@@ -8157,9 +8173,9 @@ def _reserve_port_access(
 ) -> int:
     """Hold a cell next to every port, so no net can be walled in by another.
 
-    Returns the number of ports that had no free neighbour to reserve -- those
-    are genuinely boxed in by the packing and no routing order can save them,
-    which is worth knowing separately from a net that merely lost a race.
+    Returns the number of ports that could not retain a usable access corridor.
+    An adjacent cell with no onward move is inaccessible, just like a port with
+    no free neighbour.
 
     Reservations are per PORT, not per net: several nets can share one lane end
     (a lane feeding two consumers), and they can share its access cell too,
@@ -8231,21 +8247,40 @@ def _reserve_port_access(
     # expands nothing registers no conflict -- so net 89 stranded in all seven
     # rounds of three runs and was the ONLY failure on the pack.
     #
-    # An assignment where every port gets what it wants exists on that pack; the
-    # greedy pass just cannot reach it.  So this is a maximum bipartite
-    # b-matching (`_match_access`), taken in the same round order, which finds
-    # one whenever one exists.  It costs ~200 ports of at most four options
-    # each, once per routing pass, against a CP-SAT solve and hundreds of A*
-    # searches.
+    # The assignment is joint over `(access, exit)` corridors. An access-only
+    # maximum matching can consume another selected access as the first port's
+    # sole exit; that is the zero-onward replay retained beside this code.
+    # Rank-wise CP-SAT objectives preserve the old first-claim-before-second
+    # priority, while a one-worker final solve fixes deterministic tie-breaking.
     options = {
-        key: [
+        key: tuple(
             cell
-            for cell in ((key[0] + dx, key[1] + dy, key[2]) for dx, dy in _STEPS)
+            for cell in (
+                (key[0] + dx, key[1] + dy, key[2])
+                for dx, dy in _STEPS
+            )
             if canvas.free(cell)
-        ]
+        )
         for key in order
     }
-    for cell, key in _match_access(order, options, wants).items():
+    corridors = {
+        key: tuple(
+            (access, exit_cell)
+            for access in options[key]
+            for exit_cell in (
+                (access[0] + dx, access[1] + dy, access[2])
+                for dx, dy in _STEPS
+            )
+            if exit_cell != key and canvas.free(exit_cell)
+        )
+        for key in order
+    }
+    access_owner = _match_access_corridors(
+        order,
+        corridors,
+        wants,
+    )
+    for cell, key in access_owner.items():
         canvas.reserved[cell] = key
         held[key] += 1
 
@@ -8267,15 +8302,23 @@ def _reserve_port_access(
     # Only where there is exactly ONE onward move. Two or more and the cell is
     # not a cul-de-sac, and holding ground a port does not need is how a
     # reservation pass starts costing more than it buys.
-    exits: list[tuple[tuple[int, int, int], tuple[int, int, int]]] = []
-    for cell, key in canvas.reserved.items():
-        cx, cy, lvl = cell
-        onward = [c for c in ((cx + dx, cy + dy, lvl) for dx, dy in _STEPS) if canvas.free(c)]
-        if len(onward) == 1:
+    exits: list[tuple[Cell, Cell]] = []
+    for cell, key in access_owner.items():
+        cx, cy, level = cell
+        onward = [
+            candidate
+            for candidate in (
+                (cx + dx, cy + dy, level)
+                for dx, dy in _STEPS
+            )
+            if candidate != key
+            and (
+                canvas.free(candidate)
+                or canvas.reserved.get(candidate) == key
+            )
+        ]
+        if len(onward) == 1 and canvas.reserved.get(onward[0]) != key:
             exits.append((key, onward[0]))
-    # Applied after the scan, not during it: `free` reads `canvas.reserved`, so
-    # staking inside the loop would let an early exit claim decide whether a
-    # later cell counts as a cul-de-sac.
     for key, cell in exits:
         if canvas.free(cell):
             canvas.reserved[cell] = key
