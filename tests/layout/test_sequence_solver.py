@@ -2193,6 +2193,48 @@ def test_broad_topology_budget_requires_half_the_beam_strips_unresolved() -> Non
     )
 
 
+@pytest.mark.parametrize(
+    (
+        "machine_count",
+        "strip_count",
+        "sprayed_lanes",
+        "power",
+        "narrowest_height",
+        "scheduled_heights",
+        "expected",
+    ),
+    (
+        (955, 76, 0, True, 203, (203, 158), 203),
+        (955, 76, 0, True, 203, (19, 158), 126),
+        (250, 76, 0, True, 203, (203,), 126),
+        (955, 40, 0, True, 203, (203,), 126),
+        (955, 76, 1, True, 203, (203,), 126),
+        (955, 76, 0, False, 203, (203,), 126),
+    ),
+)
+def test_large_sparse_compact_seed_prefers_narrowest_width_height(
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+    power: bool,
+    narrowest_height: int,
+    scheduled_heights: tuple[int, ...],
+    expected: int,
+) -> None:
+    assert (
+        sequence_solver_module._large_sparse_compact_seed_height(
+            126,
+            narrowest_height=narrowest_height,
+            scheduled_heights=scheduled_heights,
+            machine_count=machine_count,
+            strip_count=strip_count,
+            sprayed_lanes=sprayed_lanes,
+            power=power,
+        )
+        == expected
+    )
+
+
 def test_small_direct_shared_pack_uses_the_wider_height_rank() -> None:
     assert (
         sequence_solver_module._shared_pack_height_rank(

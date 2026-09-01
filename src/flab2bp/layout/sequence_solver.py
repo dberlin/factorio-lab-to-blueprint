@@ -161,6 +161,8 @@ _DENSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 120
 _COARSE_SPRAY_NO_POWER_MACHINE_THRESHOLD = 250
 _COMPACT_LARGE_VARIANT_SIZE = 40
 _COMPACT_LARGE_VARIANT_DETERMINISTIC_CAP = 0.1
+_LARGE_SPARSE_COMPACT_MIN_MACHINES = 251
+_LARGE_SPARSE_COMPACT_MIN_STRIPS = 41
 _DENSE_SPRAY_ZERO_DIRECT_STRIP_LEN = 16
 _MODERATE_ROUTED_STRIP_LEN = 12
 _TOPOLOGY_BEAM_MIN_STRIPS = 7
@@ -2781,6 +2783,28 @@ def _balanced_compact_seed_height(problem: PlacementProblem) -> int:
     return max(minimum_height, balanced_height)
 
 
+def _large_sparse_compact_seed_height(
+    balanced_height: int,
+    *,
+    narrowest_height: int,
+    scheduled_heights: tuple[int, ...],
+    machine_count: int,
+    strip_count: int,
+    sprayed_lanes: int,
+    power: bool,
+) -> int:
+    """Start routing-saturated sparse plans from the narrowest greedy height."""
+    if (
+        narrowest_height in scheduled_heights
+        and power
+        and sprayed_lanes == 0
+        and machine_count >= _LARGE_SPARSE_COMPACT_MIN_MACHINES
+        and strip_count >= _LARGE_SPARSE_COMPACT_MIN_STRIPS
+    ):
+        return narrowest_height
+    return balanced_height
+
+
 def _uses_tall_topology_height(
     *,
     machine_count: int,
@@ -3634,6 +3658,7 @@ def _production_run(
         )
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
         coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+        narrowest_greedy_height = coarse_heights[0]
         coarse_height_count = len(coarse_heights)
         neighbor_heights: list[int] = []
         for height in coarse_heights:
@@ -3703,7 +3728,15 @@ def _production_run(
         }
         if compact_seed_attempt is not None and not (use_topology_beam or use_shared_pack):
             template_problem = problems[heights[0]]
-            compact_height = _balanced_compact_seed_height(template_problem)
+            compact_height = _large_sparse_compact_seed_height(
+                _balanced_compact_seed_height(template_problem),
+                narrowest_height=narrowest_greedy_height,
+                scheduled_heights=coarse_heights,
+                machine_count=spec.machine_count,
+                strip_count=len(strips),
+                sprayed_lanes=len(spec.spray_lanes),
+                power=power,
+            )
             telemetry.compact_seed_base_seed = chosen_compact_base_seed
             telemetry.compact_seed_height = compact_height
             if compact_height not in seeds:
