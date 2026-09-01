@@ -23,11 +23,26 @@ from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.spec import BuildSpec
 
 
+def _links_splitter(
+    buildings: tuple[PlacedBuilding, ...], belt: PlacedBuilding
+) -> bool:
+    """Whether either belt end is anchored to a Splitter port."""
+    for peer in (belt.input_obj, belt.output_obj):
+        if (
+            peer is not None
+            and 0 <= peer < len(buildings)
+            and buildings[peer].item_id == catalog.SPLITTER_ID
+        ):
+            return True
+    return False
+
+
 def input_belt_heads(placement: Placement) -> list[int]:
-    """Indices of belts that nothing upstream feeds -- the block's entry points.
+    """Indices of genuinely exposed belt entry points.
 
     Belt chains are forward-linked (``output_obj`` names the next tile), so a
-    head is simply a belt no other belt points at.
+    head has no belt predecessor. A belt whose other link names a Splitter is
+    anchored at that Splitter's port, not at the factory boundary.
     """
     fed = {
         b.output_obj
@@ -37,7 +52,9 @@ def input_belt_heads(placement: Placement) -> list[int]:
     return [
         i
         for i, b in enumerate(placement.buildings)
-        if catalog.is_belt(b.item_id) and i not in fed
+        if catalog.is_belt(b.item_id)
+        and i not in fed
+        and not _links_splitter(placement.buildings, b)
     ]
 
 
@@ -64,6 +81,8 @@ def output_belt_tails(placement: Placement) -> list[int]:
         seen: set[int] = set()
         while cursor not in seen:
             seen.add(cursor)
+            if _links_splitter(buildings, buildings[cursor]):
+                break
             following = buildings[cursor].output_obj
             if following is None:
                 tails.add(cursor)
