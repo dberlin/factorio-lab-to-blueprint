@@ -69,8 +69,7 @@ from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import colliders
-from flab2bp.dsp import splitter_ports
+from flab2bp.dsp import colliders, splitter_ports
 from flab2bp.dsp.rules import (
     ADDON_FROM_SLOT,
     ADDON_TO_SLOT,
@@ -83,7 +82,6 @@ from flab2bp.dsp.rules import (
     OUTPUT_FROM_SLOT,
     SLOT_ALIGN_COS,
     SLOT_REACH,
-    SPLITTER_MAX_PORTS,
     WORLD_UNITS_PER_LEVEL,
     world_gap,
 )
@@ -1178,7 +1176,7 @@ def assign_belt_slots(
                     # it draws from. Leaving it alone rather than inventing a
                     # slot for a link the corpus does not contain.
                     continue
-                legal = range(BELT_INPUT_SLOTS[0], BELT_INPUT_SLOTS[1])
+                legal: Sequence[int] = range(BELT_INPUT_SLOTS[0], BELT_INPUT_SLOTS[1])
             elif peer.item_id == cat.SPLITTER_ID:
                 direction: splitter_ports.Direction = (
                     "feed" if field == "output_to_slot" else "draw"
