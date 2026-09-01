@@ -26,7 +26,7 @@ changes a condition.
 
 The zip is a Thunderstore package, so **r2modman** installs it directly:
 
-> Settings → Import local mod → pick `flab2bp_oracle-1.1.0.zip`
+> Settings → Import local mod → pick `flab2bp_oracle-1.1.1.zip`
 
 r2modman reads `manifest.json` from the archive root and drops `FlabOracle.dll`
 into the profile's `BepInEx/plugins/`. Nothing else to do; it appears in the mod
@@ -41,7 +41,7 @@ be if any other mod is installed there.
 
 ```sh
 mkdir -p "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
-unzip -oj /path/to/flab2bp_oracle-1.1.0.zip FlabOracle.dll \
+unzip -oj /path/to/flab2bp_oracle-1.1.1.zip FlabOracle.dll \
   -d "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
 ```
 
@@ -51,7 +51,7 @@ unzip -oj /path/to/flab2bp_oracle-1.1.0.zip FlabOracle.dll \
 Start the game; the BepInEx console should show:
 
 ```
-[Info   : flab2bp build-condition oracle] Patched BuildTool_BlueprintPaste condition timeline (ArrangeOverlapBP, ActiveColliders, CheckBuildConditions, AddErrorMessage, MatchInserter, CreatePrebuilds).
+[Info   : flab2bp build-condition oracle] Patched BuildTool_BlueprintPaste timeline (DeterminePreviewsPrestage, CheckBuildConditionsPrestage, ArrangeOverlapBP, ActiveColliders, CheckBuildConditions, AddErrorMessage, MatchInserter, CreatePrebuilds).
 [Info   : flab2bp build-condition oracle] Patched Physics.OverlapSphereNonAlloc.
 [Info   : flab2bp build-condition oracle] Patched Physics.OverlapCapsuleNonAlloc.
 [Message: flab2bp build-condition oracle] flab2bp oracle ready. Dump key = F9, output = .../BepInEx/flab2bp-oracle
@@ -77,23 +77,26 @@ produces two records: `createprebuilds-pre` (the verdicts as they stood going in
 and `createprebuilds-post` (after the commit, so `objId` is populated). Turn this
 off with `DumpOnPaste = false`.
 
-**Canonical model40 belt capture (automatic, no keypress).** Import
-`corrected.txt`, place it, and build it once. A semantic match requires the
-75x36/160-band area, the model40 splitter at local `(45,2,0)` with yaw 90, and
-its attached z1 feed/draw plus the outer belts. The plugin retains only the
-latest bounded condition/query timeline while the preview is active, then
-writes exactly one `model40-belt-capture-YYYYMMDD-HHMMSS-fff.json` from the
-`CreatePrebuilds` prefix. Re-hovering does not write files, and the same loaded
-blueprint object is not captured again after that build.
+**Canonical model40 belt capture (automatic, no keypress and no successful
+build required).** Import `corrected.txt` and put its preview on the cursor. A
+semantic match requires the 75x36/160-band area, the model40 splitter at local
+`(45,2,0)` with yaw 90, and its attached z1 feed/draw plus the outer belts. The
+plugin retains only condition/pointer state changes and matching Physics queries.
+It writes one `model40-belt-capture-YYYYMMDD-HHMMSS-fff.json` after a false
+`CheckBuildConditionsPrestage` or a non-Ok target stabilizes for two frames. A
+successful `CreatePrebuilds` also flushes; a 1,800-frame safety window prevents a
+silent hang. The same loaded blueprint object is deduplicated after the file is
+written.
 
 The target file includes blueprint-array slots, live `bpPool`/active slots,
 reference identities, `previewIndex`, every connection slot, input/output/
 `coverbp` pointers, condition snapshots around rescue and propagation, and the
 exact sphere/capsule arguments and returned collider/`BuildPreviewModel`
-identities. Root-level patch-applied and target-check-hook-fired flags distinguish
-an unavailable/unobserved wrapper from a real zero-collider result. The capture
-is independent of `DumpOnPaste`; disabling the generic two-file paste dump does
-not disable this one-shot diagnostic.
+identities. Root-level semantic-match, prestage, tool-stage, raw grat-box,
+patch-applied, and target-active-hook-fired metadata distinguish an invalid
+stage-0 placement or unavailable wrapper from a real zero-collider result. The
+capture is independent of `DumpOnPaste`; disabling the generic two-file paste
+dump does not disable this one-shot diagnostic.
 
 Generic files are `BepInEx/flab2bp-oracle/dump-00001.json`,
 `dump-00002.json`, … The counter continues from the highest number already in
@@ -109,7 +112,7 @@ the directory. Target captures use the separate timestamped
 | Trigger | `DumpKey` | `F9` | Dumps the current preview set without building. |
 | Trigger | `DumpOnPaste` | `true` | Also dump on `CreatePrebuilds` (pre and post). |
 | Capture | `AlwaysCaptureColliderDetail` | `false` | Identify every overlap collider on **every** frame, not just the armed one. Makes the paste dump carry snap-candidate detail too, at the cost of frame time while a blueprint is on the cursor. |
-| Capture | `PatchPhysicsOverlap` | `true` | Hook the exact managed `Physics.OverlapSphereNonAlloc` and `OverlapCapsuleNonAlloc` overloads used by the belt checks. Hooks are process-wide but target capture returns immediately outside the active semantic match/check. |
+| Capture | `PatchPhysicsOverlap` | `true` | Hook the exact managed `Physics.OverlapSphereNonAlloc` and `OverlapCapsuleNonAlloc` overloads used by the belt checks. Hooks are process-wide but target capture returns immediately outside the active semantic match. |
 | Output | `OutputDirectory` | *(empty)* | Empty means `<BepInEx>/flab2bp-oracle`. |
 
 ## What is in a dump
@@ -207,7 +210,7 @@ These are stated because the plugin cannot be end-to-end tested outside the game
    overloads are patched manually. If either overload cannot be resolved or
    detoured on a changed game build, startup logs a warning and the rest of the
    target timeline still works. Inspect `spherePatchApplied`,
-   `capsulePatchApplied`, and the matching `*HookFiredDuringTargetCheck` fields;
+   `capsulePatchApplied`, and the matching `*HookFiredWhileTargetActive` fields;
    a missing event is never silently presented as a zero-collider result.
 2. **`conditionText` is best-effort.** It calls into the game's localization; if
    that throws, the field is `null` and the numeric `condition` — which is what
@@ -225,7 +228,7 @@ These are stated because the plugin cannot be end-to-end tested outside the game
 
 ```sh
 cd tools/dsp-oracle
-./build-zip.sh          # -> dist/flab2bp_oracle-1.1.0.zip
+./build-zip.sh          # -> dist/flab2bp_oracle-1.1.1.zip
 ```
 
 Requires the .NET SDK and the game's managed assemblies (referenced by
@@ -267,10 +270,13 @@ Against the decompiled source at
 
 | Hook | Location | What it observes |
 | --- | --- | --- |
+| `DeterminePreviewsPrestage` postfix | stage-0 preview refresh | semantic arming and target state after the actually-invoked preview updater |
+| `CheckBuildConditionsPrestage` postfix | line 1111; called every `_OnTick` | the stage-0 boolean gate; deduplicated transitions plus raw tech/area/grat-box evidence |
+| plugin `Update` monitor | every Unity frame while semantically armed | condition/pointer tuple changes and automatic flush even when stage 1 is unreachable |
 | `ArrangeOverlapBP` prefix/postfix | line 878 | target conditions/pointers before and after blueprint-overlap arrangement |
 | `ActiveColliders(BuildModel)` postfix | line 1748 | target state after preview colliders are activated |
 | `CheckBuildConditions` prefix/postfix | line 1778 | target state before collision rescue and after final propagation; also serves the manual hotkey dump |
 | `AddErrorMessage(EBuildCondition, BuildPreview)` prefix | line 4814 | target condition at pre-rescue, post-rescue, and propagation error-report calls |
 | `MatchInserter` prefix/postfix | line 1462 | the connection fields before and after each snap attempt |
 | exact managed `Physics.OverlapSphereNonAlloc` / `OverlapCapsuleNonAlloc` postfixes | belt checks near lines 3749/3753 and 3829/3833 | query centres/endpoints, radius/mask/result count, and returned collider/preview-model identities |
-| `CreatePrebuilds` prefix/postfix | line 4074 | generic committed set; the prefix writes and deduplicates the automatic target capture |
+| `CreatePrebuilds` prefix/postfix | line 4074 | generic committed set; the prefix is an additional successful-placement flush path |

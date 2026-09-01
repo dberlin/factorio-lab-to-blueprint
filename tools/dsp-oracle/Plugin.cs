@@ -24,7 +24,7 @@ namespace FlabOracle
     {
         public const string PluginGuid = "org.dberlin.flab2bp.oracle";
         public const string PluginName = "flab2bp build-condition oracle";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.1.1";
 
         private Harmony _harmony;
 
@@ -54,7 +54,7 @@ namespace FlabOracle
                 "Capture",
                 "PatchPhysicsOverlap",
                 true,
-                "Hook the exact Physics.OverlapSphereNonAlloc and OverlapCapsuleNonAlloc overloads used by belt collision checks. Hooks are process-wide but return immediately outside an active target/check capture.");
+                "Hook the exact Physics.OverlapSphereNonAlloc and OverlapCapsuleNonAlloc overloads used by belt collision checks. Hooks are process-wide but return immediately outside an active semantic target capture.");
 
             Oracle.OutputDir = Config.Bind(
                 "Output",
@@ -68,7 +68,7 @@ namespace FlabOracle
             try
             {
                 _harmony.PatchAll(typeof(OraclePlugin).Assembly);
-                Logger.LogInfo("Patched BuildTool_BlueprintPaste condition timeline (ArrangeOverlapBP, ActiveColliders, CheckBuildConditions, AddErrorMessage, MatchInserter, CreatePrebuilds).");
+                Logger.LogInfo("Patched BuildTool_BlueprintPaste timeline (DeterminePreviewsPrestage, CheckBuildConditionsPrestage, ArrangeOverlapBP, ActiveColliders, CheckBuildConditions, AddErrorMessage, MatchInserter, CreatePrebuilds).");
             }
             catch (Exception e)
             {
@@ -193,6 +193,7 @@ namespace FlabOracle
                     Oracle.ArmHotkey();
                 }
 
+                TargetCaptureRuntime.MonitorUpdate(Time.frameCount);
                 Oracle.TickArmTimeout();
             }
             catch (Exception e)

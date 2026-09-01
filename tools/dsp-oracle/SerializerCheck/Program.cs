@@ -366,8 +366,8 @@ namespace FlabOracle.Check
             Check("target schema", root.GetProperty("schema").GetString() == "flab2bp-model40-belts/1");
             Check("target sphere patch status", root.GetProperty("spherePatchApplied").GetBoolean());
             Check("target capsule patch status", root.GetProperty("capsulePatchApplied").GetBoolean());
-            Check("target sphere hook not fabricated", !root.GetProperty("sphereHookFiredDuringTargetCheck").GetBoolean());
-            Check("target capsule hook not fabricated", !root.GetProperty("capsuleHookFiredDuringTargetCheck").GetBoolean());
+            Check("target sphere hook not fabricated", !root.GetProperty("sphereHookFiredWhileTargetActive").GetBoolean());
+            Check("target capsule hook not fabricated", !root.GetProperty("capsuleHookFiredWhileTargetActive").GetBoolean());
             Check("target count", root.GetProperty("targets").GetArrayLength() == 4);
             Check("target timeline bounded", root.GetProperty("events").GetArrayLength() == 2);
             JsonElement feedJson = root.GetProperty("targets")[1];
@@ -387,6 +387,38 @@ namespace FlabOracle.Check
             Check("target session rejects changed pool identity", !session.Matches(tool));
             tool.bpPool = capturedPool;
 
+            session.ResetCycle();
+            string flushReason;
+            Check("monitor starts transient window", !session.MonitorFrame(90, out flushReason));
+            feed.condition = EBuildCondition.Collide;
+            Check("monitor observes transient non-Ok", !session.MonitorFrame(91, out flushReason));
+            feed.condition = EBuildCondition.Ok;
+            Check("monitor does not flush recovered target", !session.MonitorFrame(92, out flushReason));
+            Check("monitor keeps recovered target active", !session.MonitorFrame(94, out flushReason));
+
+            session.ResetCycle();
+            Check("monitor waits on first frame", !session.MonitorFrame(100, out flushReason));
+            feed.condition = EBuildCondition.Collide;
+            Check("monitor retains query window after non-Ok", !session.MonitorFrame(101, out flushReason));
+            Check("monitor waits for stable non-Ok", !session.MonitorFrame(102, out flushReason));
+            Check("monitor flushes stable non-Ok target", session.MonitorFrame(103, out flushReason) && flushReason == "target-non-ok-stable");
+            using JsonDocument monitored = JsonDocument.Parse(session.Serialize("update-monitor", null, 103, true, true));
+            Check("monitor metadata reports non-Ok", monitored.RootElement.GetProperty("nonOkObserved").GetBoolean());
+            Check("monitor metadata start frame", monitored.RootElement.GetProperty("monitorStartFrame").GetInt32() == 100);
+
+            session.ResetCycle();
+            feed.condition = EBuildCondition.Ok;
+            session.RecordPrestageResult(false, 200);
+            Check("prestage monitor starts armed", !session.MonitorFrame(200, out flushReason));
+            Check("prestage monitor waits for stable false", !session.MonitorFrame(201, out flushReason));
+            Check("prestage monitor flushes invalid placement", session.MonitorFrame(202, out flushReason) && flushReason == "prestage-false-stable");
+            using JsonDocument prestage = JsonDocument.Parse(session.Serialize("prestage-false-stable", null, 202, true, true));
+            Check("prestage result metadata", !prestage.RootElement.GetProperty("lastPrestageResult").GetBoolean());
+            Check("prestage observation metadata", prestage.RootElement.GetProperty("prestageObserved").GetBoolean());
+
+            session.ResetCycle();
+            feed.condition = EBuildCondition.Ok;
+
             for (int i = 0; i < 130; i++)
             {
                 session.RecordAddError(feed, EBuildCondition.Collide);
@@ -394,7 +426,7 @@ namespace FlabOracle.Check
             using JsonDocument bounded = JsonDocument.Parse(session.Serialize("createprebuilds-prefix", true, 701, true, true));
             JsonElement boundedEvents = bounded.RootElement.GetProperty("events");
             Check("target timeline keeps bounded length", boundedEvents.GetArrayLength() == 128);
-            Check("target timeline keeps latest event", boundedEvents[127].GetProperty("targetEventOrdinal").GetInt32() == 131);
+            Check("target timeline keeps latest event", boundedEvents[127].GetProperty("targetEventOrdinal").GetInt32() == 130);
 
             splitterBuilding.modelIndex = 41;
             TargetCaptureSession ignored;

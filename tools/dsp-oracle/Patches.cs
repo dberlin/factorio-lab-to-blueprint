@@ -69,6 +69,42 @@ namespace FlabOracle
         }
     }
 
+    [HarmonyPatch(typeof(BuildTool_BlueprintPaste), "DeterminePreviewsPrestage")]
+    internal static class DeterminePreviewsPrestagePatch
+    {
+        [HarmonyPostfix]
+        private static void Postfix(BuildTool_BlueprintPaste __instance)
+        {
+            try
+            {
+                TargetCaptureRuntime.Ensure(__instance);
+                TargetCaptureRuntime.Snapshot(__instance, "determine-previews-prestage-postfix");
+            }
+            catch (Exception e)
+            {
+                TargetCaptureRuntime.LogFailure("DeterminePreviewsPrestage postfix", e);
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(BuildTool_BlueprintPaste), "CheckBuildConditionsPrestage")]
+    internal static class CheckBuildConditionsPrestagePatch
+    {
+        [HarmonyPostfix]
+        private static void Postfix(BuildTool_BlueprintPaste __instance, bool __result)
+        {
+            try
+            {
+                TargetCaptureRuntime.Ensure(__instance);
+                TargetCaptureRuntime.RecordPrestage(__instance, __result);
+            }
+            catch (Exception e)
+            {
+                TargetCaptureRuntime.LogFailure("CheckBuildConditionsPrestage postfix", e);
+            }
+        }
+    }
+
     [HarmonyPatch(typeof(BuildTool_BlueprintPaste), "ArrangeOverlapBP")]
     internal static class ArrangeOverlapBPPatch
     {
@@ -351,11 +387,11 @@ namespace FlabOracle
         private static readonly HashSet<string> LoggedFailures = new HashSet<string>();
 
         [ThreadStatic]
-        private static TargetCaptureSession _activeCheck;
+        private static TargetCaptureSession _activeCapture;
 
         internal static void LogFailure(string hook, Exception error)
         {
-            _activeCheck = null;
+            _activeCapture = null;
             if (LoggedFailures.Add(hook))
             {
                 Oracle.Log.LogError(
@@ -366,39 +402,27 @@ namespace FlabOracle
 
         internal static void BeginCycle(BuildTool_BlueprintPaste tool)
         {
-            _activeCheck = null;
             _checkResult = null;
-            if (tool == null || ReferenceEquals(_completedBlueprint, tool.blueprint))
-            {
-                _pending = null;
-                return;
-            }
-            if (_pending != null && _pending.Matches(tool))
-            {
-                _pending.ResetCycle();
-                return;
-            }
-
-
-            TargetCaptureSession next;
-            _pending = TargetCaptureSession.TryCreate(tool, out next) ? next : null;
-            Announce(tool);
+            Ensure(tool);
         }
 
         internal static void Ensure(BuildTool_BlueprintPaste tool)
         {
             if (_pending != null && _pending.Matches(tool))
             {
+                _activeCapture = _pending;
                 return;
             }
             if (tool == null || ReferenceEquals(_completedBlueprint, tool.blueprint))
             {
                 _pending = null;
+                _activeCapture = null;
                 return;
             }
 
             TargetCaptureSession next;
             _pending = TargetCaptureSession.TryCreate(tool, out next) ? next : null;
+            _activeCapture = _pending;
             Announce(tool);
         }
 
@@ -409,7 +433,7 @@ namespace FlabOracle
                 _announcedBlueprint = tool.blueprint;
                 Oracle.Log.LogMessage(
                     "flab2bp oracle automatically armed for the canonical model40 belt cluster; " +
-                    "one target capture will be written when CreatePrebuilds runs.");
+                    "a bounded target capture will be written automatically from the Update monitor.");
             }
         }
 
@@ -427,7 +451,7 @@ namespace FlabOracle
             {
                 return;
             }
-            _activeCheck = _pending;
+            _activeCapture = _pending;
             _pending.SnapshotAll("check-prefix-before-collision-rescue");
         }
 
@@ -438,30 +462,61 @@ namespace FlabOracle
                 _pending.SnapshotAll("check-postfix-after-propagation");
                 _checkResult = result;
             }
-            _activeCheck = null;
+            _activeCapture = _pending;
+        }
+
+        internal static void RecordPrestage(BuildTool_BlueprintPaste tool, bool result)
+        {
+            if (_pending != null && _pending.Matches(tool))
+            {
+                _checkResult = null;
+                _activeCapture = _pending;
+                _pending.RecordPrestageResult(result, Time.frameCount);
+            }
         }
 
         internal static void RecordAddError(BuildPreview bp, EBuildCondition condition)
         {
-            if (_activeCheck != null && _activeCheck.Matches(_activeCheck.Tool))
+            if (_activeCapture != null && _activeCapture.Matches(_activeCapture.Tool))
             {
-                _activeCheck.RecordAddError(bp, condition);
+                _activeCapture.RecordAddError(bp, condition);
             }
         }
 
         internal static void RecordSphere(Vector3 center, float radius, Collider[] results, int mask, QueryTriggerInteraction qti, int result)
         {
-            if (_activeCheck != null && _activeCheck.Matches(_activeCheck.Tool))
+            if (_activeCapture != null && _activeCapture.Matches(_activeCapture.Tool))
             {
-                _activeCheck.RecordSphere(center, radius, results, mask, qti, result);
+                _activeCapture.RecordSphere(center, radius, results, mask, qti, result);
             }
         }
 
         internal static void RecordCapsule(Vector3 p0, Vector3 p1, float radius, Collider[] results, int mask, QueryTriggerInteraction qti, int result)
         {
-            if (_activeCheck != null && _activeCheck.Matches(_activeCheck.Tool))
+            if (_activeCapture != null && _activeCapture.Matches(_activeCapture.Tool))
             {
-                _activeCheck.RecordCapsule(p0, p1, radius, results, mask, qti, result);
+                _activeCapture.RecordCapsule(p0, p1, radius, results, mask, qti, result);
+            }
+        }
+
+        internal static void MonitorUpdate(int frame)
+        {
+            if (_pending == null)
+            {
+                return;
+            }
+            if (!_pending.Matches(_pending.Tool))
+            {
+                _pending = null;
+                _activeCapture = null;
+                return;
+            }
+
+            _activeCapture = _pending;
+            string reason;
+            if (_pending.MonitorFrame(frame, out reason))
+            {
+                Flush(reason);
             }
         }
 
@@ -472,10 +527,20 @@ namespace FlabOracle
                 return;
             }
             _pending.SnapshotAll("createprebuilds-prefix");
-            DumpSink.DumpTargetCapture(_pending, _checkResult);
-            _completedBlueprint = tool.blueprint;
+            Flush("createprebuilds-prefix");
+        }
+
+        private static void Flush(string trigger)
+        {
+            TargetCaptureSession capture = _pending;
+            if (capture == null)
+            {
+                return;
+            }
+            DumpSink.DumpTargetCapture(capture, trigger, _checkResult);
+            _completedBlueprint = capture.Tool.blueprint;
             _pending = null;
-            _activeCheck = null;
+            _activeCapture = null;
         }
     }
 }

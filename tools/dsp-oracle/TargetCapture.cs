@@ -9,6 +9,8 @@ namespace FlabOracle
     {
         internal const string SchemaId = "flab2bp-model40-belts/1";
         private const int EventLimit = 128;
+        private const int NonOkSettleFrames = 2;
+        private const int MonitorWindowFrames = 1800;
         private readonly BuildTool_BlueprintPaste _tool;
         private readonly BlueprintData _blueprint;
         private readonly BuildPreview[] _pool;
@@ -22,6 +24,15 @@ namespace FlabOracle
         private bool _truncated;
         private bool _sphereHookFired;
         private bool _capsuleHookFired;
+        private int _monitorStartFrame = -1;
+        private int _monitorLastFrame = -1;
+        private bool _nonOkObserved;
+        private int _monitorLastChangeFrame = -1;
+        private bool _hasMonitorState;
+        private readonly MonitorState[] _monitorStates = new MonitorState[4];
+        private bool _prestageObserved;
+        private bool _lastPrestageResult;
+        private int _prestageLastChangeFrame = -1;
 
         private TargetCaptureSession(BuildTool_BlueprintPaste tool, BlueprintArea area, int areaArraySlot, Target[] targets, Target splitter)
         {
@@ -98,11 +109,75 @@ namespace FlabOracle
             _truncated = false;
             _sphereHookFired = false;
             _capsuleHookFired = false;
+            _monitorStartFrame = -1;
+            _monitorLastFrame = -1;
+            _nonOkObserved = false;
+            _monitorLastChangeFrame = -1;
+            _hasMonitorState = false;
+            _prestageObserved = false;
+            _lastPrestageResult = false;
+            _prestageLastChangeFrame = -1;
             for (int i = 0; i < _targets.Length; i++)
             {
                 _targets[i].QueryCount = 0;
                 _targets[i].AddErrorCount = 0;
             }
+        }
+
+        internal bool MonitorFrame(int frame, out string flushReason)
+        {
+            flushReason = null;
+            if (_monitorLastFrame == frame) return false;
+            if (_monitorStartFrame < 0) _monitorStartFrame = frame;
+            _monitorLastFrame = frame;
+
+            bool currentNonOk = false;
+            bool changed = !_hasMonitorState;
+            for (int i = 0; i < _targets.Length; i++)
+            {
+                BuildPreview bp = _targets[i].Preview;
+                if (!changed && !_monitorStates[i].Matches(bp)) changed = true;
+                if (bp.condition != EBuildCondition.Ok)
+                {
+                    currentNonOk = true;
+                    _nonOkObserved = true;
+                }
+            }
+            if (changed)
+            {
+                for (int i = 0; i < _targets.Length; i++) _monitorStates[i] = MonitorState.Read(_targets[i].Preview);
+                _hasMonitorState = true;
+                _monitorLastChangeFrame = frame;
+                SnapshotAll("update-monitor-state-change");
+            }
+
+            if (_prestageObserved && !_lastPrestageResult &&
+                frame - _prestageLastChangeFrame >= NonOkSettleFrames)
+            {
+                flushReason = "prestage-false-stable";
+                return true;
+            }
+            if (currentNonOk && frame - _monitorLastChangeFrame >= NonOkSettleFrames)
+            {
+                flushReason = "target-non-ok-stable";
+                return true;
+            }
+            if (frame - _monitorStartFrame >= MonitorWindowFrames)
+            {
+                flushReason = "monitor-window-expired";
+                return true;
+            }
+            return false;
+        }
+
+        internal void RecordPrestageResult(bool result, int frame)
+        {
+            if (_prestageObserved && _lastPrestageResult == result) return;
+            _prestageObserved = true;
+            _lastPrestageResult = result;
+            _prestageLastChangeFrame = frame;
+            SnapshotAll("check-build-conditions-prestage-postfix");
+            if (_events.Count > 0) _events[_events.Count - 1].BoolResult = result;
         }
 
         internal void SnapshotAll(string phase)
@@ -146,16 +221,35 @@ namespace FlabOracle
             w.Prop("schema", SchemaId);
             w.Prop("trigger", trigger);
             w.Prop("unityFrame", frame);
+            w.Prop("semanticMatch", true);
+            w.Prop("semanticMismatchReason", (string)null);
+            w.PropNullableInt("monitorStartFrame", _monitorStartFrame >= 0 ? (int?)_monitorStartFrame : null);
+            w.PropNullableInt("monitorLastFrame", _monitorLastFrame >= 0 ? (int?)_monitorLastFrame : null);
+            w.Prop("nonOkObserved", _nonOkObserved);
+            w.PropNullableInt("monitorLastChangeFrame", _monitorLastChangeFrame >= 0 ? (int?)_monitorLastChangeFrame : null);
+            w.Prop("prestageObserved", _prestageObserved);
+            if (_prestageObserved) w.Prop("lastPrestageResult", _lastPrestageResult); else w.Prop("lastPrestageResult", (string)null);
+            w.Prop("toolStage", ReadToolStage());
+            w.Prop("bMeetTech", _tool.bMeetTech);
+            w.Prop("isAreaValid", _tool.isAreaValid);
+            w.Prop("gratBoxCursor", _tool.gratBoxCursor);
+            w.Prop("pasteResult", _tool.result.ToString());
+            WriteGratBoxConditions(w);
             w.Prop("blueprintPath", _blueprintPath);
             w.Prop("blueprintBuildingCount", _blueprint.buildings.Length);
-            w.Prop("areaArraySlot", _areaArraySlot); w.Prop("areaIndex", _area.index);
-            w.Prop("areaWidth", _area.width); w.Prop("areaHeight", _area.height); w.Prop("areaSegments", _area.areaSegments);
+            w.PropNullableInt("prestageLastChangeFrame", _prestageLastChangeFrame >= 0 ? (int?)_prestageLastChangeFrame : null);
+            w.Prop("areaArraySlot", _areaArraySlot);
+            w.Prop("areaIndex", _area.index);
+            w.Prop("areaWidth", _area.width);
+            w.Prop("areaHeight", _area.height);
+            w.Prop("areaSegments", _area.areaSegments);
             w.Prop("bpCursor", _tool.bpCursor);
-            w.Prop("eventLimit", EventLimit); w.Prop("eventsTruncated", _truncated);
+            w.Prop("eventLimit", EventLimit);
+            w.Prop("eventsTruncated", _truncated);
             w.Prop("spherePatchApplied", spherePatchApplied);
             w.Prop("capsulePatchApplied", capsulePatchApplied);
-            w.Prop("sphereHookFiredDuringTargetCheck", _sphereHookFired);
-            w.Prop("capsuleHookFiredDuringTargetCheck", _capsuleHookFired);
+            w.Prop("sphereHookFiredWhileTargetActive", _sphereHookFired);
+            w.Prop("capsuleHookFiredWhileTargetActive", _capsuleHookFired);
             if (checkResult.HasValue) w.Prop("checkBuildConditionsResult", checkResult.Value); else w.Prop("checkBuildConditionsResult", (string)null);
             WriteTarget(w, "splitter", _splitter);
             w.BeginArray("targets");
@@ -195,9 +289,37 @@ namespace FlabOracle
             }
             return true;
         }
-        private Event NewEvent(string phase, Target target) { return new Event { Sequence = ++_sequence, Phase = phase, Target = target }; }
+
+        private int ReadToolStage()
+        {
+            return _tool.controller != null ? _tool.controller.cmd.stage : -1;
+        }
+
+        private Event NewEvent(string phase, Target target)
+        {
+            return new Event { Sequence = ++_sequence, Phase = phase, Target = target, ToolStage = ReadToolStage() };
+        }
         private Target TargetFor(BuildPreview bp) { for (int i = 0; i < 4; i++) if (ReferenceEquals(_targets[i].Preview, bp)) return _targets[i]; return null; }
         private static bool Near(float a, float b) { return a == b; }
+
+        private void WriteGratBoxConditions(JsonWriter w)
+        {
+            w.BeginArray("gratBoxConditions");
+            int count = _tool.bpGratBoxConditionArr == null ? 0 :
+                Math.Min(_tool.gratBoxCursor, _tool.bpGratBoxConditionArr.Length);
+            for (int i = 0; i < count; i++)
+            {
+                IntVector4 value = _tool.bpGratBoxConditionArr[i];
+                w.BeginObject();
+                w.Prop("index", i);
+                w.Prop("x", value.x);
+                w.Prop("y", value.y);
+                w.Prop("z", value.z);
+                w.Prop("w", value.w);
+                w.EndObject();
+            }
+            w.EndArray();
+        }
 
         private static int Find(BlueprintBuilding[] bs, short model, float x, float y, float z)
         {
@@ -264,6 +386,8 @@ namespace FlabOracle
             if (e.Target != null) w.Prop("semantic", e.Target.Semantic);
             if (e.TargetEventOrdinal > 0) w.Prop("targetEventOrdinal", e.TargetEventOrdinal);
             if (e.ArgumentCondition.HasValue) { w.Prop("argumentCondition", e.ArgumentCondition.Value); w.Prop("argumentConditionName", e.ArgumentConditionName); }
+            w.Prop("toolStage", e.ToolStage);
+            if (e.BoolResult.HasValue) w.Prop("boolResult", e.BoolResult.Value);
             if (e.State.HasValue) WriteState(w, "state", e.State.Value);
             if (e.States != null)
             {
@@ -319,8 +443,41 @@ namespace FlabOracle
         }
         private sealed class Event
         {
-            internal int Sequence; internal string Phase; internal Target Target; internal int TargetEventOrdinal; internal int? ArgumentCondition; internal string ArgumentConditionName;
-            internal PreviewState? State; internal PreviewState[] States; internal Query Query;
+            internal int Sequence; internal string Phase; internal Target Target; internal int TargetEventOrdinal; internal int ToolStage; internal int? ArgumentCondition; internal string ArgumentConditionName;
+            internal bool? BoolResult; internal PreviewState? State; internal PreviewState[] States; internal Query Query;
+        }
+
+        private struct MonitorState
+        {
+            private EBuildCondition _condition;
+            private BuildPreview _input;
+            private BuildPreview _output;
+            private BuildPreview _cover;
+            private int _inputObjId, _inputFromSlot, _inputToSlot, _inputOffset;
+            private int _outputObjId, _outputFromSlot, _outputToSlot, _outputOffset;
+
+            internal bool Matches(BuildPreview bp)
+            {
+                return bp != null && _condition == bp.condition &&
+                    ReferenceEquals(_input, bp.input) && ReferenceEquals(_output, bp.output) &&
+                    ReferenceEquals(_cover, bp.coverbp) &&
+                    _inputObjId == bp.inputObjId && _inputFromSlot == bp.inputFromSlot &&
+                    _inputToSlot == bp.inputToSlot && _inputOffset == bp.inputOffset &&
+                    _outputObjId == bp.outputObjId && _outputFromSlot == bp.outputFromSlot &&
+                    _outputToSlot == bp.outputToSlot && _outputOffset == bp.outputOffset;
+            }
+
+            internal static MonitorState Read(BuildPreview bp)
+            {
+                MonitorState s = new MonitorState();
+                s._condition = bp.condition;
+                s._input = bp.input; s._output = bp.output; s._cover = bp.coverbp;
+                s._inputObjId = bp.inputObjId; s._inputFromSlot = bp.inputFromSlot;
+                s._inputToSlot = bp.inputToSlot; s._inputOffset = bp.inputOffset;
+                s._outputObjId = bp.outputObjId; s._outputFromSlot = bp.outputFromSlot;
+                s._outputToSlot = bp.outputToSlot; s._outputOffset = bp.outputOffset;
+                return s;
+            }
         }
 
         private struct PreviewState

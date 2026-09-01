@@ -41,12 +41,12 @@ namespace FlabOracle
             }
         }
 
-        internal static void DumpTargetCapture(TargetCaptureSession capture, bool? checkResult)
+        internal static void DumpTargetCapture(TargetCaptureSession capture, string trigger, bool? checkResult)
         {
             try
             {
                 string json = capture.Serialize(
-                    "createprebuilds-prefix",
+                    trigger,
                     checkResult,
                     Time.frameCount,
                     Oracle.OverlapPatchApplied,
