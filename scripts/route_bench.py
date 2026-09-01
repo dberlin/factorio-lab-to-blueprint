@@ -36,7 +36,7 @@ import hashlib
 import pickle
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -105,6 +105,10 @@ def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None
         deadline: float | None = None,
         blame: dict[tuple[int, int, int], float] | None = None,
         grid: freeform._Grid | None = None,
+        owned_starts: Collection[tuple[int, int, int]] = (),
+        released_starts: Collection[tuple[int, int, int]] = (),
+        forbidden: Collection[tuple[int, int, int]] = (),
+        blocking_owners: Mapping[tuple[int, int, int], int] | None = None,
     ) -> freeform._PathSearchResult:
         nonlocal seen
         want = seen % every == 0 and len(cases) < cap
@@ -122,6 +126,10 @@ def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None
             deadline,
             blame,
             grid,
+            owned_starts,
+            released_starts,
+            forbidden,
+            blocking_owners,
         )
         if want:
             cases.append(
@@ -133,6 +141,12 @@ def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None
                     "goals": set(goals),
                     "pressure": pressure,
                     "bounds": bounds,
+                    "owned_starts": tuple(owned_starts),
+                    "released_starts": tuple(released_starts),
+                    "forbidden": tuple(forbidden),
+                    "blocking_owners": (
+                        None if blocking_owners is None else dict(blocking_owners)
+                    ),
                     "path": out_path,
                 }
             )
@@ -193,10 +207,24 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
         for case in cases:
             canvas = case["canvas"]
             canvas.routing_ports = canvas.routing_ports
-            got.append(freeform._astar(
-                canvas, case["starts"], case["goals"], case["history"],
-                case["pressure"], case["bounds"], budget, None, {}, case["grid"],
-            ))
+            got.append(
+                freeform._astar(
+                    canvas,
+                    case["starts"],
+                    case["goals"],
+                    case["history"],
+                    case["pressure"],
+                    case["bounds"],
+                    budget,
+                    None,
+                    {},
+                    case["grid"],
+                    case.get("owned_starts", ()),
+                    case.get("released_starts", ()),
+                    case.get("forbidden", ()),
+                    case.get("blocking_owners"),
+                )
+            )
         dt = time.perf_counter() - t0
         spent = (1 << 40) - budget["left"]
         if best is None or dt < best[0]:

@@ -105,10 +105,11 @@ class BandPolicySearchEnvelope:
 
     @property
     def boundary_core_height(self) -> int | None:
-        """The fixed band's unrotated latitude boundary, excluding perimeter."""
-        if self.band is None:
-            return None
-        boundary = self.band.rows - 2 * self.perimeter
+        """Largest unrotated latitude boundary allowed by this policy."""
+        band = self.band
+        if band is None:
+            band = max(planet.bands(), key=lambda candidate: candidate.rows)
+        boundary = band.rows - 2 * self.perimeter
         return boundary if boundary > 0 else None
 
     def frame_candidates(

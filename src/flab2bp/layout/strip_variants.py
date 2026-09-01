@@ -13,6 +13,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
+from fractions import Fraction
 from itertools import combinations, product
 from typing import Literal
 
@@ -880,7 +881,11 @@ def _has_exact_two_face_seating(
     return False
 
 
-def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
+def _logical_strip_plans(
+    spec: BuildSpec,
+    *,
+    prefer_shared_proliferation: bool = False,
+) -> tuple[_LogicalStripPlan, ...]:
     """Allocate lane shards, admitting exact two-face output overflow.
 
     The historical planner budgets outputs only on the face below the machine
@@ -963,6 +968,28 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
             if boundary or not destinations:
                 sinks.append((item, "", CargoDomain.UNSPRAYED))
 
+        prefer_shared_inputs = (
+            prefer_shared_proliferation
+            and group.proliferated
+            and len(input_items) >= 3
+        )
+        group_input_rates = tuple(group.inputs.items())
+
+        def input_lane_fits(
+            lane: tuple[str, ...],
+            input_rates: tuple[tuple[str, Fraction], ...] = group_input_rates,
+            machine_count: int = group.count,
+        ) -> bool:
+            total = sum(
+                (
+                    rate * machine_count
+                    for item, rate in input_rates
+                    if item in lane
+                ),
+                spec.belt_items_per_second * 0,
+            )
+            return total <= spec.belt_items_per_second
+
         probe = slots.probe_building(group.item_id, group.yaw)
         columns = len(slots.attachable_columns(probe, -1)) or 1
         flank = False
@@ -974,6 +1001,8 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
                 below_cap,
                 max_per_lane=group.width,
                 columns=columns,
+                prefer_shared=prefer_shared_inputs,
+                lane_fits=input_lane_fits if prefer_shared_inputs else None,
             )
         except ValueError as exc:
             seat = (
@@ -992,6 +1021,8 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
                     max_per_lane=group.width,
                     columns=columns,
                     flank_outputs=True,
+                    prefer_shared=prefer_shared_inputs,
+                    lane_fits=input_lane_fits if prefer_shared_inputs else None,
                 )
             except ValueError as flanked:
                 raise ValueError(f"recipe {group.recipe_id!r}: {flanked}") from None
@@ -1389,10 +1420,17 @@ def _variants(
     return tuple(variants)
 
 
-def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
+def generate_strip_families(
+    spec: BuildSpec,
+    *,
+    prefer_shared_proliferation: bool = False,
+) -> tuple[StripFamily, ...]:
     """Generate deterministic pose-valid variants for every logical lane shard."""
     families: list[StripFamily] = []
-    for plan in _logical_strip_plans(spec):
+    for plan in _logical_strip_plans(
+        spec,
+        prefer_shared_proliferation=prefer_shared_proliferation,
+    ):
         family_id = StripFamilyId(plan.group_key, plan.shard_index)
         building = catalog.building(plan.item_id)
         input_lanes, output_lanes = _logical_lanes(plan)

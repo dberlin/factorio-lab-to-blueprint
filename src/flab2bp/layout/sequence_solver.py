@@ -21,7 +21,9 @@ from typing import Protocol
 from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
-    ATOMIC_COMPLETION_GRACE_S,
+    ATOMIC_COMPLETION_GRACE_S as ATOMIC_COMPLETION_GRACE_S,
+)
+from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     NoValidLayout,
     Placement,
@@ -74,8 +76,8 @@ from flab2bp.layout.freeform import (
     _Unpowerable,
     _Unseatable,
     _width_slack_cap,
-    plan_strips,
 )
+from flab2bp.layout.freeform import plan_strips as plan_strips
 from flab2bp.layout.global_router import GlobalRouteResult, route_global
 from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
@@ -152,7 +154,7 @@ type RefinementHint = tuple[int, tuple[int, int], DecodedPlacement]
 
 _QUALITY_REVISIT_AFTER = 2
 _MAX_SEQUENCE_ISLANDS = 16
-_COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND = 1.0 / 15.0
+_COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND = 32.0 / 375.0
 _COMPACT_SEED_WALL_SHARE = Fraction(1, 3)
 _COMPACT_SEED_DIRECT_MIN_BUDGET_S = 30.0
 _DENSE_SPRAY_MACHINE_THRESHOLD = 90
@@ -567,54 +569,132 @@ class StageAdapters[PreparedT]:
     feedback_origins: Callable[[PreparedT], tuple[tuple[int, int], ...]] | None = None
 
 
+class _MeasuredStageRole(StrEnum):
+    ORDINARY = "ordinary"
+    COMPACT = "compact"
+    FEEDBACK = "feedback"
+    SHARED = "shared"
+    TOPOLOGY = "topology"
+
+
+class _DeferredFeedbackBudget(StrEnum):
+    DISCOVERY = "discovery"
+    DETAILED_DISCOVERY = "detailed-discovery"
+
+
+@dataclass(slots=True)
+class _MeasuredStageHistory:
+    speculative_s: float = 0.0
+    completion_s: float = 0.0
+    completion_observed: bool = False
+
+
 @dataclass(slots=True)
 class _MeasuredStageAdmission:
-    """Reserve the measured search and completion spans of one more stage."""
+    """Reserve role-local measured search and authoritative completion spans."""
 
     deadline: float
     monotonic: Callable[[], float] = time.monotonic
-    dearest_speculative_s: float = 0.0
-    dearest_completion_s: float = 0.0
+    _histories: dict[_MeasuredStageRole, _MeasuredStageHistory] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
     _active_started: float | None = None
+    _active_role: _MeasuredStageRole | None = None
     _active_completion_s: float = 0.0
+    _active_completion_observed: bool = False
 
-    def try_start(self) -> float | None:
+    def _history(self, role: _MeasuredStageRole) -> _MeasuredStageHistory:
+        if not isinstance(role, _MeasuredStageRole):
+            raise ValueError("measured stage role must be a _MeasuredStageRole")
+        return self._histories.setdefault(role, _MeasuredStageHistory())
+
+    @property
+    def dearest_speculative_s(self) -> float:
+        return self._history(_MeasuredStageRole.ORDINARY).speculative_s
+
+    @property
+    def dearest_completion_s(self) -> float:
+        return self._history(_MeasuredStageRole.ORDINARY).completion_s
+
+    def try_start(
+        self,
+        role: _MeasuredStageRole = _MeasuredStageRole.ORDINARY,
+    ) -> float | None:
+        history = self._history(role)
         now = self.monotonic()
         remaining = self.deadline - now
-        required = self.dearest_speculative_s + self.dearest_completion_s
+        required = history.speculative_s + history.completion_s
         if remaining <= 0.0 or (required > 0.0 and remaining <= required):
             return None
         self._active_started = now
+        self._active_role = role
         self._active_completion_s = 0.0
+        self._active_completion_observed = False
         return now
+
+    def begin_completion(self) -> float:
+        return self.monotonic()
+
+    def finish_completion(self, started: float) -> None:
+        self.record_completion(max(0.0, self.monotonic() - started))
 
     def record_completion(self, elapsed: float) -> None:
         if self._active_started is not None:
+            self._active_completion_observed = True
             self._active_completion_s += max(0.0, elapsed)
 
-    def can_continue(self, started: float) -> bool:
+    def _can_continue(self, started: float, role: _MeasuredStageRole) -> bool:
+        history = self._history(role)
         now = self.monotonic()
         elapsed = max(0.0, now - started)
         completion = min(elapsed, self._active_completion_s)
         required = max(
-            self.dearest_speculative_s,
+            history.speculative_s,
             elapsed - completion,
-        ) + max(self.dearest_completion_s, completion)
+        ) + max(history.completion_s, completion)
         return self.deadline - now > required
 
-    def finish(self, started: float) -> None:
+    def can_continue(
+        self,
+        started: float,
+        role: _MeasuredStageRole = _MeasuredStageRole.ORDINARY,
+    ) -> bool:
+        return self._can_continue(started, role)
+
+    def can_proxy(self, role: _MeasuredStageRole) -> bool:
+        history = self._history(role)
+        if not history.completion_observed:
+            return False
+        if self._active_started is None or self._active_role is not role:
+            return False
+        return self._can_continue(self._active_started, role)
+
+    def finish(
+        self,
+        started: float,
+        role: _MeasuredStageRole = _MeasuredStageRole.ORDINARY,
+    ) -> None:
+        if self._active_started != started or self._active_role is not role:
+            raise ValueError("measured stage finish must match its active role")
         elapsed = max(0.0, self.monotonic() - started)
         completion = min(elapsed, self._active_completion_s)
-        self.dearest_speculative_s = max(
-            self.dearest_speculative_s,
+        history = self._history(role)
+        history.speculative_s = max(
+            history.speculative_s,
             elapsed - completion,
         )
-        self.dearest_completion_s = max(
-            self.dearest_completion_s,
+        history.completion_s = max(
+            history.completion_s,
             completion,
         )
+        if self._active_completion_observed:
+            history.completion_observed = True
         self._active_started = None
+        self._active_role = None
         self._active_completion_s = 0.0
+        self._active_completion_observed = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,6 +745,15 @@ class StageObservation:
         return self.breakdown.energy
 
 
+def _counts_as_scheduled_stage(stage: StageObservation) -> bool:
+    """Return whether an observation consumes one scheduled search stage."""
+    return stage.global_skip_reason not in (
+        "shared-pack",
+        "topology-beam",
+        "projection-feedback",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SequenceSearchResult:
     """Only an exact, detailed-routed, validator-clean incumbent."""
@@ -702,8 +791,6 @@ class _HeightState:
     problem: PlacementProblem
     feedback: FeedbackState
     restarts: list[_RestartState]
-    routing_seed: AnnealState | None = None
-    routing_seed_closed: bool = False
     stages: int = 0
     spent: int = 0
     stranded: int = 1 << 60
@@ -716,6 +803,9 @@ class _HeightState:
     quality_restart: int | None = None
     pending_quality_exit: bool = False
     feedback_restart: int | None = None
+    projection_feedback_pending: bool = False
+    deferred_feedback_budget: _DeferredFeedbackBudget | None = None
+    pending_compact_seed: AnnealState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -794,6 +884,7 @@ class SequenceSolver[PreparedT]:
         deadline_reached: Callable[[], bool] | None = None,
         initial_feedback: Callable[[PlacementProblem], FeedbackState] | None = None,
         initial_states: Mapping[int, AnnealState] | None = None,
+        routing_seed_allowance_cap: int | None = None,
         direct_targets: tuple[DirectInsertTarget, ...] = (),
         direct_targets_for_state: Callable[
             [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
@@ -804,7 +895,6 @@ class SequenceSolver[PreparedT]:
         borrow_first_discovery: bool = False,
         stop_on_stable_exact: bool = False,
         stage_admission: _MeasuredStageAdmission | None = None,
-        routing_seed_allowance_cap: int | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -824,22 +914,24 @@ class SequenceSolver[PreparedT]:
             raise ValueError(
                 "protected follow-up heights must be unique scheduled integers in a tuple"
             )
+        if routing_seed_allowance_cap is not None and (
+            type(routing_seed_allowance_cap) is not int
+            or routing_seed_allowance_cap < 0
+        ):
+            raise ValueError(
+                "routing seed allowance cap must be a non-negative integer or None"
+            )
         if type(borrow_first_discovery) is not bool:
             raise ValueError("borrow-first-discovery mode must be a bool")
         if type(stop_on_stable_exact) is not bool:
             raise ValueError("stable exact stopping mode must be a bool")
-        if routing_seed_allowance_cap is not None and (
-            type(routing_seed_allowance_cap) is not int
-            or routing_seed_allowance_cap <= 0
-        ):
-            raise ValueError("routing-seed allowance cap must be a positive integer")
         self.config = config or SequenceSolverConfig()
         self.adapters = adapters
         self.budget = expansion_budget
         self.deadline_reached = deadline_reached or (lambda: False)
         self.stop_on_stable_exact = stop_on_stable_exact
-        self.stage_admission = stage_admission
         self.routing_seed_allowance_cap = routing_seed_allowance_cap
+        self.stage_admission = stage_admission
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
@@ -874,24 +966,41 @@ class SequenceSolver[PreparedT]:
         self._last_height: int | None = None
 
 
-    def _start_measured_stage(self) -> tuple[bool, float]:
+    def _start_measured_stage(
+        self,
+        role: _MeasuredStageRole,
+    ) -> tuple[bool, float]:
         admission = self.stage_admission
         if admission is None:
             return True, 0.0
-        started = admission.try_start()
+        started = admission.try_start(role)
         return started is not None, 0.0 if started is None else started
 
-
-
-    def _finish_measured_stage(self, started: float) -> None:
+    def _finish_measured_stage(
+        self,
+        started: float,
+        role: _MeasuredStageRole,
+    ) -> None:
         if self.stage_admission is not None:
-            self.stage_admission.finish(started)
+            self.stage_admission.finish(started, role)
 
-    def _measured_stage_can_continue(self, started: float) -> bool:
+    def _measured_stage_can_continue(
+        self,
+        started: float,
+        role: _MeasuredStageRole,
+    ) -> bool:
         admission = self.stage_admission
         if admission is None:
             return True
-        return admission.can_continue(started)
+        return admission.can_continue(started, role)
+
+    def _begin_measured_completion(self) -> float | None:
+        admission = self.stage_admission
+        return None if admission is None else admission.begin_completion()
+
+    def _finish_measured_completion(self, started: float | None) -> None:
+        if started is not None and self.stage_admission is not None:
+            self.stage_admission.finish_completion(started)
 
     @property
     def exact_incumbent_reason(self) -> str | None:
@@ -920,6 +1029,7 @@ class SequenceSolver[PreparedT]:
                 "shared-pack",
                 "topology-beam",
                 "topology-refinement",
+                "projection-feedback",
             ):
                 snapshots.append(current)
         return len(snapshots) == 2 and snapshots[-1] is not None and snapshots[-1] == snapshots[-2]
@@ -927,8 +1037,8 @@ class SequenceSolver[PreparedT]:
     def search(self, *, max_stages: int | None = None) -> SequenceSearchResult:
         """Search until its stage cap, deadline, or searchable budget is exhausted."""
         stage_limit = (
-            (1 + (self.config.stages - 1) * self.config.restarts_per_height) * len(self._heights)
-            + sum(height.routing_seed is not None for height in self._heights)
+            (1 + (self.config.stages - 1) * self.config.restarts_per_height)
+            * len(self._heights)
             if max_stages is None
             else max_stages
         )
@@ -937,10 +1047,7 @@ class SequenceSolver[PreparedT]:
 
         termination = "stage-limit"
         while (
-            sum(
-                stage.global_skip_reason not in ("shared-pack", "topology-beam")
-                for stage in self._stage_stats
-            )
+            sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats)
             < stage_limit
         ):
             if (
@@ -955,53 +1062,164 @@ class SequenceSolver[PreparedT]:
             if self.stop_on_stable_exact and self._has_stable_exact_incumbent():
                 termination = "exact-stable"
                 break
-            admitted, measured_stage_started = self._start_measured_stage()
-            if not admitted:
-                termination = "deadline"
-                break
-            seed_height = next(
+            deferred_feedback_height = next(
                 (
                     height
                     for height in self._heights
-                    if height.routing_seed is not None and not height.routing_seed_closed
+                    if height.deferred_feedback_budget is not None
                 ),
                 None,
             )
-            if seed_height is not None:
-                seed_height.routing_seed_closed = True
-                closure_allowance = self.budget.detailed_discovery_allowance(
-                    seed_height.height
+            compact_height = next(
+                (
+                    height
+                    for height in self._heights
+                    if height.pending_compact_seed is not None
+                ),
+                None,
+            )
+            measured_role = (
+                _MeasuredStageRole.FEEDBACK
+                if deferred_feedback_height is not None
+                else (
+                    _MeasuredStageRole.COMPACT
+                    if compact_height is not None
+                    else _MeasuredStageRole.ORDINARY
                 )
-                seed_allowance = closure_allowance
-                if self.routing_seed_allowance_cap is not None:
-                    seed_allowance = min(
-                        seed_allowance,
-                        self.routing_seed_allowance_cap,
+            )
+            admitted, measured_stage_started = self._start_measured_stage(measured_role)
+            if not admitted:
+                termination = "deadline"
+                break
+            if deferred_feedback_height is not None:
+                height_state = deferred_feedback_height
+                feedback_budget = height_state.deferred_feedback_budget
+                assert feedback_budget is not None
+                height_state.deferred_feedback_budget = None
+                restart = next(
+                    (
+                        candidate
+                        for candidate in height_state.restarts
+                        if candidate.restart == height_state.feedback_restart
+                    ),
+                    None,
+                )
+                if restart is None:
+                    raise ValueError(
+                        "deferred routing feedback must retain its restart"
                     )
-                spent, cancelled = self._route_seed_closure(
-                    seed_height,
-                    seed_allowance,
+                if feedback_budget is _DeferredFeedbackBudget.DETAILED_DISCOVERY:
+                    allowance = self.budget.detailed_discovery_allowance(
+                        height_state.height
+                    )
+                    spent, cancelled = self._run_feedback_closure(
+                        height_state,
+                        restart,
+                        0,
+                        closure_allowance=allowance,
+                    )
+                    self.budget.settle_detailed_discovery(
+                        height_state.height,
+                        spent,
+                    )
+                else:
+                    allowance = self.budget.discovery_allowance(height_state.height)
+                    spent, cancelled = self._run_feedback_closure(
+                        height_state,
+                        restart,
+                        allowance,
+                        closure_allowance=None,
+                    )
+                    self.budget.settle_discovery(height_state.height, spent)
+                self._finish_measured_stage(
+                    measured_stage_started,
+                    _MeasuredStageRole.FEEDBACK,
                 )
-                seed_stages = seed_height.stages
+                self._last_height = height_state.height
+                if cancelled:
+                    termination = "cancelled"
+                    break
+                if self.deadline_reached():
+                    termination = "deadline"
+                    break
+                continue
+
+            if compact_height is not None:
+                height_state = compact_height
+                compact_seed = height_state.pending_compact_seed
+                assert compact_seed is not None
+                height_state.pending_compact_seed = None
+                detailed_allowance = self.budget.detailed_discovery_allowance(
+                    height_state.height
+                )
+                compact_allowance = (
+                    detailed_allowance
+                    if self.routing_seed_allowance_cap is None
+                    else min(detailed_allowance, self.routing_seed_allowance_cap)
+                )
+                spent, cancelled = self._route_compact_seed_closure(
+                    height_state,
+                    compact_seed,
+                    compact_allowance,
+                )
+                self._consume_compact_seed_stage(height_state)
+                can_close_feedback = self._measured_stage_can_continue(
+                    measured_stage_started,
+                    _MeasuredStageRole.COMPACT,
+                )
                 followup_spent, followup_cancelled = (
                     self._run_pending_projection_feedback(
-                        seed_height,
+                        height_state,
                         0,
                         stage_limit,
                         prior_cancelled=cancelled,
-                        closure_allowance=closure_allowance - spent,
+                        closure_allowance=detailed_allowance - spent,
+                        allow_projection_at_stage_limit=True,
                     )
-                    if self._measured_stage_can_continue(measured_stage_started)
+                    if can_close_feedback
                     else (0, False)
                 )
                 spent += followup_spent
                 cancelled = cancelled or followup_cancelled
-                self._finish_measured_stage(measured_stage_started)
-                if seed_height.stages > seed_stages:
-                    self.budget.settle_detailed_discovery(seed_height.height, spent)
+                feedback_restart = next(
+                    (
+                        restart
+                        for restart in height_state.restarts
+                        if restart.restart == height_state.feedback_restart
+                    ),
+                    None,
+                )
+                defer_feedback = (
+                    not can_close_feedback
+                    and feedback_restart is not None
+                    and feedback_restart.stages < self.config.stages
+                    and not height_state.projection_feedback_pending
+                )
+                if defer_feedback:
+                    height_state.deferred_feedback_budget = (
+                        _DeferredFeedbackBudget.DETAILED_DISCOVERY
+                    )
+                    self.budget.charge_detailed_discovery(
+                        height_state.height,
+                        spent,
+                    )
                 else:
-                    self.budget.charge_detailed_discovery(seed_height.height, spent)
-                self._last_height = seed_height.height
+                    if (
+                        not can_close_feedback
+                        and height_state.feedback_restart is not None
+                        and not height_state.projection_feedback_pending
+                    ):
+                        height_state.feedback_restart = None
+                    self.budget.settle_detailed_discovery(
+                        height_state.height,
+                        spent,
+                    )
+                self._borrow_first_discovery = False
+                self._finish_measured_stage(
+                    measured_stage_started,
+                    _MeasuredStageRole.COMPACT,
+                )
+                self._last_height = height_state.height
                 if cancelled:
                     termination = "cancelled"
                     break
@@ -1023,6 +1241,10 @@ class SequenceSolver[PreparedT]:
                         allowance,
                         closure_allowance=closure_allowance,
                     )
+                    can_close_feedback = self._measured_stage_can_continue(
+                        measured_stage_started,
+                        _MeasuredStageRole.ORDINARY,
+                    )
                     followup_spent, followup_cancelled = (
                         self._run_pending_projection_feedback(
                             height_state,
@@ -1031,18 +1253,35 @@ class SequenceSolver[PreparedT]:
                             prior_cancelled=cancelled,
                             closure_allowance=closure_allowance - spent,
                         )
-                        if self._measured_stage_can_continue(measured_stage_started)
+                        if can_close_feedback
                         else (0, False)
                     )
                     spent += followup_spent
                     cancelled = cancelled or followup_cancelled
-                    self.budget.settle_detailed_discovery(
-                        height_state.height,
-                        spent,
-                    )
+                    if (
+                        not can_close_feedback
+                        and height_state.feedback_restart is not None
+                        and not height_state.projection_feedback_pending
+                    ):
+                        height_state.deferred_feedback_budget = (
+                            _DeferredFeedbackBudget.DETAILED_DISCOVERY
+                        )
+                        self.budget.charge_detailed_discovery(
+                            height_state.height,
+                            spent,
+                        )
+                    else:
+                        self.budget.settle_detailed_discovery(
+                            height_state.height,
+                            spent,
+                        )
                     self._borrow_first_discovery = False
                 else:
                     spent, cancelled = self._run_discovery(height_state, allowance)
+                    can_close_feedback = self._measured_stage_can_continue(
+                        measured_stage_started,
+                        _MeasuredStageRole.ORDINARY,
+                    )
                     followup_spent, followup_cancelled = (
                         self._run_pending_projection_feedback(
                             height_state,
@@ -1050,12 +1289,22 @@ class SequenceSolver[PreparedT]:
                             stage_limit,
                             prior_cancelled=cancelled,
                         )
-                        if self._measured_stage_can_continue(measured_stage_started)
+                        if can_close_feedback
                         else (0, False)
                     )
                     spent += followup_spent
                     cancelled = cancelled or followup_cancelled
-                    self.budget.settle_discovery(height_state.height, spent)
+                    if (
+                        not can_close_feedback
+                        and height_state.feedback_restart is not None
+                        and not height_state.projection_feedback_pending
+                    ):
+                        height_state.deferred_feedback_budget = (
+                            _DeferredFeedbackBudget.DISCOVERY
+                        )
+                        self.budget.charge_discovery(height_state.height, spent)
+                    else:
+                        self.budget.settle_discovery(height_state.height, spent)
             else:
                 if self.budget.shared_left == 0:
                     termination = "budget"
@@ -1081,7 +1330,10 @@ class SequenceSolver[PreparedT]:
                 restart = self._select_restart(height_state)
                 spent, cancelled = self._run_stage(height_state, restart, allowance)
                 self.budget.settle_shared(spent)
-            self._finish_measured_stage(measured_stage_started)
+            self._finish_measured_stage(
+                measured_stage_started,
+                _MeasuredStageRole.ORDINARY,
+            )
             self._last_height = height_state.height
             if cancelled:
                 termination = "cancelled"
@@ -1207,81 +1459,6 @@ class SequenceSolver[PreparedT]:
         height_state.quality_restart = restart.restart
         return restart
 
-    def _route_seed_closure(
-        self,
-        height_state: _HeightState,
-        allowance: int,
-    ) -> tuple[int, bool]:
-        """Score and authoritatively route one raw seed before any annealing."""
-        state = height_state.routing_seed
-        if state is None:
-            raise ValueError("seed closure requires one validated routing seed")
-        problem = height_state.problem
-        context = feedback_cost_context(
-            height_state.feedback,
-            problem,
-            self.direct_targets,
-        )
-        kernel = build_sequence_kernel(problem, context)
-        direct_targets = (
-            self.direct_targets
-            if self.direct_targets_for_state is None
-            else self.direct_targets_for_state(problem, state)
-        )
-        incumbent = kernel.score_state(state, direct_targets=direct_targets)
-        tagged = build_elite_archive((incumbent,), 1)[0]
-        preparation_started = time.perf_counter()
-        prepared = self.adapters.prepare(height_state.height, incumbent.decoded)
-        preparation_time_s = time.perf_counter() - preparation_started
-        selected = _StageCandidate(
-            prepared=prepared,
-            source=None,
-            state=incumbent.state,
-            decoded=incumbent.decoded,
-            key=incumbent.key,
-            breakdown=incumbent.breakdown,
-            archive_categories=tagged.categories,
-            anneal_stages=0,
-            anneal_moves=0,
-            accepted_moves=0,
-            anneal_seeds=(),
-        )
-        detailed_started = time.perf_counter()
-        detailed = self.adapters.detailed_route(prepared, allowance)
-        detailed_route_time_s = time.perf_counter() - detailed_started
-        spent = detailed.routing.expansions
-        _check_spend(spent, allowance)
-        outcome = self._complete_routing_stage(
-            height_state,
-            selected,
-            detailed,
-            spent,
-            observation=_RoutingObservation(
-                restart=height_state.restarts[0],
-                stage_index=0,
-                backend=kernel.backend,
-                continue_search=False,
-            ),
-            global_routes=0,
-            global_overflow=None,
-            global_skip_reason="compact-seed",
-            preparation_time_s=preparation_time_s,
-            global_route_time_s=0.0,
-            detailed_route_time_s=detailed_route_time_s,
-        )
-        restart = height_state.restarts[0]
-        substitution, neighbourhood = _routing_feedback_substitution(
-            detailed.routing,
-            incumbent.state,
-            problem,
-            incumbent.decoded,
-            seed=restart.seed,
-            stage_index=restart.anneal.stage_index,
-        )
-        if neighbourhood and restart.stages < self.config.stages:
-            restart.anneal = substitution
-            height_state.feedback_restart = restart.restart
-        return outcome
 
     def _run_discovery(
         self,
@@ -1299,6 +1476,107 @@ class SequenceSolver[PreparedT]:
             allowance,
             closure_allowance=closure_allowance,
         )
+
+    def _route_compact_seed_closure(
+        self,
+        height_state: _HeightState,
+        state: AnnealState,
+        allowance: int,
+    ) -> tuple[int, bool]:
+        """Detailed-route one validated compact seed before annealing can mutate it."""
+        problem = height_state.problem
+        direct_targets = (
+            self.direct_targets
+            if self.direct_targets_for_state is None
+            else self.direct_targets_for_state(problem, state)
+        )
+        context = feedback_cost_context(
+            height_state.feedback,
+            problem,
+            direct_targets,
+        )
+        kernel = build_sequence_kernel(problem, context)
+        incumbent = kernel.score_state(state, direct_targets=direct_targets)
+        preparation_started = time.perf_counter()
+        prepared = (
+            self.adapters.prepare(height_state.height, incumbent.decoded)
+            if self.adapters.prepare_exact is None
+            else self.adapters.prepare_exact(height_state.height, incumbent.decoded)
+        )
+        preparation_time_s = time.perf_counter() - preparation_started
+        selected = _StageCandidate(
+            prepared=prepared,
+            source=None,
+            state=incumbent.state,
+            decoded=incumbent.decoded,
+            key=incumbent.key,
+            breakdown=incumbent.breakdown,
+            archive_categories=(EliteCategory.BLENDED,),
+            anneal_stages=0,
+            anneal_moves=0,
+            accepted_moves=0,
+            anneal_seeds=(),
+        )
+        measured_detailed_started = self._begin_measured_completion()
+        detailed_started = time.perf_counter()
+        detailed = self.adapters.detailed_route(prepared, allowance)
+        detailed_route_time_s = time.perf_counter() - detailed_started
+        self._finish_measured_completion(measured_detailed_started)
+        spent = detailed.routing.expansions
+        _check_spend(spent, allowance)
+        completed = self._complete_routing_stage(
+            height_state,
+            selected,
+            detailed,
+            spent,
+            observation=_RoutingObservation(
+                restart=height_state.restarts[0],
+                stage_index=0,
+                backend=kernel.backend,
+                continue_search=False,
+            ),
+            global_routes=0,
+            global_overflow=None,
+            global_skip_reason="compact-seed",
+            preparation_time_s=preparation_time_s,
+            global_route_time_s=0.0,
+            detailed_route_time_s=detailed_route_time_s,
+        )
+        height_state.stages += 1
+        height_state.spent += spent
+        if height_state.problem != problem:
+            height_state.stranded = 1 << 60
+            height_state.global_overflow = 1 << 60
+            height_state.estimated_area = 1 << 60
+        else:
+            height_state.stranded = detailed.routing.failed_count
+            height_state.estimated_area = incumbent.decoded.width * height_state.height
+        restart = height_state.restarts[0]
+        if not height_state.projection_feedback_pending:
+            next_anneal, neighbourhood = _routing_feedback_substitution(
+                detailed.routing,
+                incumbent.state,
+                problem,
+                incumbent.decoded,
+                seed=restart.seed,
+                stage_index=restart.anneal.stage_index,
+            )
+            if neighbourhood and restart.stages < self.config.stages:
+                restart.anneal = next_anneal
+                height_state.feedback_restart = restart.restart
+        return completed
+
+    @staticmethod
+    def _consume_compact_seed_stage(height_state: _HeightState) -> None:
+        """Advance every grouped restart past the stage replaced by the seed."""
+        for restart in height_state.restarts:
+            restart.stages += 1
+            restart.anneal = replace(
+                restart.anneal,
+                stage_index=restart.anneal.stage_index + 1,
+            )
+
+
 
     def close_exact_decoded(
         self,
@@ -1380,9 +1658,11 @@ class SequenceSolver[PreparedT]:
         )
         available = self.budget.detailed_discovery_allowance(height)
         allowance = available if allowance_cap is None else min(available, allowance_cap)
+        measured_detailed_started = self._begin_measured_completion()
         detailed_started = time.perf_counter()
         detailed = self.adapters.detailed_route(prepared, allowance)
         detailed_route_time_s = time.perf_counter() - detailed_started
+        self._finish_measured_completion(measured_detailed_started)
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
         self.budget.charge_detailed_discovery(height, spent)
@@ -1414,6 +1694,7 @@ class SequenceSolver[PreparedT]:
         *,
         prior_cancelled: bool,
         closure_allowance: int | None = None,
+        allow_projection_at_stage_limit: bool = False,
     ) -> tuple[int, bool]:
         effective_detailed_allowance = (
             allowance if closure_allowance is None else closure_allowance
@@ -1423,19 +1704,27 @@ class SequenceSolver[PreparedT]:
                 restart
                 for restart in height_state.restarts
                 if restart.restart == height_state.feedback_restart
-                and restart.stages < self.config.stages
+                and (
+                    restart.stages < self.config.stages
+                    or height_state.projection_feedback_pending
+                )
             ),
             None,
         )
         scheduled_stages = sum(
-            stage.global_skip_reason not in ("shared-pack", "topology-beam")
-            for stage in self._stage_stats
+            _counts_as_scheduled_stage(stage) for stage in self._stage_stats
         )
         if (
             prior_cancelled
             or effective_detailed_allowance == 0
             or feedback_restart is None
-            or scheduled_stages >= stage_limit
+            or (
+                scheduled_stages >= stage_limit
+                and not (
+                    allow_projection_at_stage_limit
+                    and height_state.projection_feedback_pending
+                )
+            )
             or self.deadline_reached()
         ):
             return 0, False
@@ -1457,6 +1746,7 @@ class SequenceSolver[PreparedT]:
         """Close one evidence-scoped repair exactly before further annealing."""
         problem = height_state.problem
         state = restart.anneal
+        projection_closure = height_state.projection_feedback_pending
         context = feedback_cost_context(
             height_state.feedback,
             problem,
@@ -1476,7 +1766,11 @@ class SequenceSolver[PreparedT]:
                 final_state=replace(
                     incumbent.state,
                     base_seed=state.base_seed,
-                    stage_index=state.stage_index + 1,
+                    stage_index=(
+                        state.stage_index
+                        if projection_closure
+                        else state.stage_index + 1
+                    ),
                 ),
                 incumbent=incumbent,
                 accepted_moves=0,
@@ -1487,13 +1781,30 @@ class SequenceSolver[PreparedT]:
             move_count=0,
         )
         annealed = (source,)
-        self._persist_annealed_restarts(annealed)
-        return self._route_annealed(
-            height_state,
-            annealed,
-            allowance,
-            closure_allowance=allowance if closure_allowance is None else closure_allowance,
-        )
+        prior_height_stages = height_state.stages
+        if not projection_closure:
+            self._persist_annealed_restarts(annealed)
+        try:
+            routed = self._route_annealed(
+                height_state,
+                annealed,
+                allowance,
+                closure_allowance=(
+                    allowance if closure_allowance is None else closure_allowance
+                ),
+            )
+            if projection_closure:
+                observation = self._stage_stats[-1]
+                self._stage_stats[-1] = replace(
+                    observation,
+                    global_skip_reason="projection-feedback",
+                )
+            return routed
+        finally:
+            if projection_closure:
+                # Exact projection closure gets its own observation but is not
+                # another anneal stage and cannot spend the stage count twice.
+                height_state.stages = prior_height_stages
 
 
     def _run_stage(
@@ -1597,6 +1908,7 @@ class SequenceSolver[PreparedT]:
             if feedback_source is not None:
                 candidate_sources = (feedback_source,)
                 height_state.feedback_restart = None
+                height_state.projection_feedback_pending = False
         source_by_incumbent: dict[int, _AnnealedRestart] = {}
         for source in candidate_sources:
             for tagged in source.result.archive:
@@ -1662,9 +1974,11 @@ class SequenceSolver[PreparedT]:
             accepted_moves=sum(item.result.accepted_moves for item in annealed),
             anneal_seeds=tuple(item.restart.seed for item in annealed),
         )
+        measured_detailed_started = self._begin_measured_completion()
         detailed_started = time.perf_counter()
         detailed = self.adapters.detailed_route(selected.prepared, allowance)
         detailed_route_time_s = time.perf_counter() - detailed_started
+        self._finish_measured_completion(measured_detailed_started)
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
         return self._complete_routing_stage(
@@ -1720,6 +2034,7 @@ class SequenceSolver[PreparedT]:
         proxy_left = 0 if closure_allowance is not None else allowance - detailed_reserve
         prepared_candidates: list[_StageCandidate[PreparedT]] = []
         global_candidates: list[_GlobalCandidate[PreparedT]] = []
+        completion_reserve_stop = False
         for index, (tagged, source) in enumerate(candidates):
             if proxy_left == 0 and prepared_candidates:
                 break
@@ -1742,6 +2057,12 @@ class SequenceSolver[PreparedT]:
             )
             prepared_candidates.append(prepared_candidate)
             if proxy_left == 0:
+                break
+            if (
+                self.stage_admission is not None
+                and not self.stage_admission.can_proxy(_MeasuredStageRole.ORDINARY)
+            ):
+                completion_reserve_stop = True
                 break
 
             remaining_candidates = len(candidates) - index
@@ -1775,9 +2096,13 @@ class SequenceSolver[PreparedT]:
             if global_result.cancelled:
                 break
 
-        if global_candidates:
+        if completion_reserve_stop and not global_candidates:
+            selected = prepared_candidates[0]
+            global_overflow = None
+            global_skip_reason = "completion-reserve"
+        elif global_candidates:
             chosen_global = min(global_candidates, key=_global_priority)
-            selected: _StageCandidate[PreparedT] = chosen_global
+            selected = chosen_global
             selected_result = chosen_global.result
             global_overflow = (
                 selected_result.total_overflow
@@ -1796,9 +2121,11 @@ class SequenceSolver[PreparedT]:
         if available_for_detail < allowance:
             raise ValueError("detailed closure allowance cannot be smaller than proxy allowance")
         detailed_allowance = available_for_detail - spent
+        measured_detailed_started = self._begin_measured_completion()
         detailed_started = time.perf_counter()
         detailed = self.adapters.detailed_route(selected.prepared, detailed_allowance)
         detailed_route_time_s = time.perf_counter() - detailed_started
+        self._finish_measured_completion(measured_detailed_started)
         _check_spend(detailed.routing.expansions, detailed_allowance)
         spent += detailed.routing.expansions
         selected_source = selected.source
@@ -1852,11 +2179,11 @@ class SequenceSolver[PreparedT]:
         validation_time_s = 0.0
         validation_budget = False
         if detailed.routing.status is DetailedRouteStatus.ROUTED and detailed.placement is not None:
+            measured_validation_started = self._begin_measured_completion()
             validation_started = time.perf_counter()
             verdict = self.adapters.validate(detailed.placement)
             validation_time_s = time.perf_counter() - validation_started
-            if self.stage_admission is not None:
-                self.stage_admission.record_completion(validation_time_s)
+            self._finish_measured_completion(measured_validation_started)
             validation_failures = verdict.failed_checks
             projection_failures = verdict.projection_failures
             if verdict.status is DetailedRouteStatus.BUDGET:
@@ -1979,6 +2306,7 @@ class SequenceSolver[PreparedT]:
                 primary_restart.feedback_stagnation = 0
                 height_state.problem = transformed.problem
                 height_state.feedback_restart = primary_restart.restart
+                height_state.projection_feedback_pending = True
                 if transformed.problem != problem:
                     for candidate_restart in height_state.restarts:
                         candidate_restart.archive = ()
@@ -2184,6 +2512,7 @@ class SequenceSolver[PreparedT]:
                     restart.feedback_stagnation = 0
                     if pitch_requirement is not None:
                         height_state.feedback_restart = restart.restart
+                        height_state.projection_feedback_pending = True
                     if topology_changed:
                         for candidate_restart in height_state.restarts:
                             candidate_restart.archive = ()
@@ -2623,7 +2952,7 @@ def _new_height_state(
         problem=problem,
         feedback=feedback_factory(problem),
         restarts=restarts,
-        routing_seed=initial_state,
+        pending_compact_seed=initial_state,
     )
 
 
@@ -2706,7 +3035,7 @@ def _variant_search_inputs(
     variant_tables: list[tuple[StripVariant, ...]] = []
     strip_index = 0
     selected_families = (
-        tuple(generate_strip_families(spec))
+        tuple(generate_strip_families(spec, prefer_shared_proliferation=True))
         if families is None
         else tuple(families)
     )
@@ -3567,6 +3896,7 @@ def _route_detailed_candidate(
             route=True,
             deadline=deadline,
             budget=attempt_budget,
+            prioritize_source_families=True,
         )
     except _Unpowerable:
         expansions = allowance - attempt_budget["left"]
@@ -3639,7 +3969,9 @@ def _production_run(
     planning_started = time.monotonic()
     try:
         planned_strip_len = strip_len
-        families = tuple(generate_strip_families(spec))
+        families = tuple(
+            generate_strip_families(spec, prefer_shared_proliferation=True)
+        )
         try:
             strips = plan_strips(
                 spec,
@@ -4470,7 +4802,6 @@ def _production_run(
     )
     solver = SequenceSolver(
         stage_admission=stage_admission,
-        routing_seed_allowance_cap=max(1, expansion_total // 12),
         heights=heights,
         problem_for_height=problems.__getitem__,
         adapters=StageAdapters(
@@ -4492,6 +4823,7 @@ def _production_run(
         config=config,
         deadline_reached=deadline_reached,
         initial_states=initial_states,
+        routing_seed_allowance_cap=max(1, expansion_total // 12),
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
         stage_boundary_transform=transform_stage,
@@ -4510,7 +4842,7 @@ def _production_run(
     )
     if use_shared_pack and not deadline_reached():
         shared_started = time.monotonic()
-        shared_stage_started = stage_admission.try_start()
+        shared_stage_started = stage_admission.try_start(_MeasuredStageRole.SHARED)
         if shared_stage_started is None:
             use_shared_pack = False
         shared_height_rank = _shared_pack_height_rank(
@@ -4554,7 +4886,7 @@ def _production_run(
             )
             telemetry.shared_pack_candidates = 1
         if shared_stage_started is not None:
-            stage_admission.finish(shared_stage_started)
+            stage_admission.finish(shared_stage_started, _MeasuredStageRole.SHARED)
         telemetry.shared_pack_wall_time_s = time.monotonic() - shared_started
     run_topology_beam = _needs_topology_beam(
         topology_role=use_topology_beam,
@@ -4649,7 +4981,9 @@ def _production_run(
         refinement_attempted = False
         prior_budget_signature: int | None = None
         for topology_index in range(beam.config.max_candidates):
-            topology_stage_started = stage_admission.try_start()
+            topology_stage_started = stage_admission.try_start(
+                _MeasuredStageRole.TOPOLOGY
+            )
             if topology_stage_started is None:
                 break
             candidate = beam.solve_next(
@@ -4664,7 +4998,10 @@ def _production_run(
                 ),
             )
             if candidate is None:
-                stage_admission.finish(topology_stage_started)
+                stage_admission.finish(
+                    topology_stage_started,
+                    _MeasuredStageRole.TOPOLOGY,
+                )
                 break
             close_normal = not tall_topology_role or _is_running_narrowest(
                 candidate.width,
@@ -4679,7 +5016,10 @@ def _production_run(
             if not close_normal:
                 if topology_index + 1 < beam.config.max_candidates:
                     beam.exclude(candidate.signature)
-                stage_admission.finish(topology_stage_started)
+                stage_admission.finish(
+                    topology_stage_started,
+                    _MeasuredStageRole.TOPOLOGY,
+                )
                 continue
             decoded = _topology_close_decoded(candidate, hint)
             closed = solver.close_exact_decoded(
@@ -4753,7 +5093,10 @@ def _production_run(
                     telemetry.topology_beam_candidates += 1
                     if solver._stage_stats[-1].exact_key is not None:
                         stop_topology = True
-            stage_admission.finish(topology_stage_started)
+            stage_admission.finish(
+                topology_stage_started,
+                _MeasuredStageRole.TOPOLOGY,
+            )
             if stop_topology or repeated_budget or broad_budget:
                 break
             if topology_index + 1 < beam.config.max_candidates:

@@ -84,6 +84,7 @@ def _problem(
         reserved=tuple(sorted(reserved)),
         keep_out=frozenset(keep_out),
         guard=frozenset(),
+        port_corridors=(),
         nets=nets,
         core=bounds,
         route_bounds=bounds,

@@ -137,6 +137,7 @@ def install(tally: Tally) -> Callable[[], None]:
         owned_starts: Collection[Cell] = (),
         released_starts: Collection[Cell] = (),
         forbidden: Collection[Cell] = (),
+        blocking_owners: Mapping[Cell, int] | None = None,
     ) -> freeform._PathSearchResult:
         t0 = time.perf_counter()
         out = orig_astar(
@@ -153,6 +154,7 @@ def install(tally: Tally) -> Callable[[], None]:
             owned_starts,
             released_starts,
             forbidden,
+            blocking_owners,
         )
         dt = time.perf_counter() - t0
         tally.add("astar", dt)
@@ -177,6 +179,8 @@ def install(tally: Tally) -> Callable[[], None]:
         budget: dict[str, int] | None = None,
         planned_power_sites: Sequence[tuple[int, int]] | None = None,
         junction_frame_bans: Sequence[frozenset[Cell]] = (),
+        *,
+        prioritize_source_families: bool = False,
     ) -> DetailedRouteResult:
         t0 = time.perf_counter()
         out = orig_route_all(
@@ -189,6 +193,7 @@ def install(tally: Tally) -> Callable[[], None]:
             budget,
             planned_power_sites,
             junction_frame_bans,
+            prioritize_source_families=prioritize_source_families,
         )
         tally.add("route_all", time.perf_counter() - t0)
         tally.passes += 1
@@ -341,6 +346,7 @@ def heights(
         ramped: bool = False,
         deadline: float | None = None,
         budget: dict[str, int] | None = None,
+        staged_static_cache: freeform._StagedStaticCache | None = None,
     ) -> freeform._BuildResult:
         t0 = time.perf_counter()
         row = _HeightRow(
@@ -361,6 +367,7 @@ def heights(
                 ramped=ramped,
                 deadline=deadline,
                 budget=budget,
+                staged_static_cache=staged_static_cache,
             )
         except Exception as exc:  # noqa: BLE001
             row["failed"] = type(exc).__name__

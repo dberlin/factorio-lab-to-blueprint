@@ -2077,20 +2077,27 @@ def test_fixed_band_schedule_cardinality_replaces_only_first_proved_infeasible_h
     assert len(scheduled) == len(ordered)
 
 
-def test_portable_schedule_preservation_is_exact() -> None:
+def test_portable_schedule_reserves_the_tallest_legal_core_boundary() -> None:
     envelope = finalize.band_policy_search_envelope(
         BandPolicy("portable"),
         perimeter=3,
     )
-    ordered = (61, 47, 31, 23, 17)
+    ordered = (184, 115, 92, 143, 69)
 
-    assert (
-        envelope.reserve_boundary_height(
-            ordered,
-            minimum_width_for_height={height: 10_000 for height in ordered},
-        )
-        is ordered
+    scheduled = envelope.reserve_boundary_height(
+        ordered,
+        minimum_width_for_height={
+            184: 380,
+            115: 442,
+            92: 484,
+            143: 488,
+            69: 522,
+        },
     )
+
+    assert envelope.boundary_core_height == 154
+    assert scheduled == (154, 115, 92, 143, 69)
+    assert len(scheduled) == len(ordered)
 
 
 def test_projection_refusal_preserves_order_deduplicates_and_formats_evidence() -> None:
