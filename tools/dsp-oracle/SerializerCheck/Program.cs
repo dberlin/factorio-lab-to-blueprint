@@ -325,6 +325,7 @@ namespace FlabOracle.Check
             BlueprintBuilding primaryEastBuilding = Building(36, 46f, 6f, 1f);
             primaryFeedBuilding.outputObj = primarySplitterBuilding;
             primaryDrawBuilding.inputObj = primarySplitterBuilding;
+            BlueprintBuilding rogueBuilding = Building(36, 10f, 10f, 1f);
 
             BlueprintBuilding[] buildings =
             {
@@ -337,7 +338,8 @@ namespace FlabOracle.Check
                 primarySplitterBuilding,
                 primaryFeedBuilding,
                 primaryDrawBuilding,
-                primaryEastBuilding
+                primaryEastBuilding,
+                rogueBuilding
             };
             for (int i = 0; i < buildings.Length; i++)
             {
@@ -371,25 +373,38 @@ namespace FlabOracle.Check
             primaryDraw.input = primarySplitter;
             primaryWest.output = primaryFeed;
             primaryEast.input = primaryDraw;
+            BuildPreview rogue = Preview(beltDesc, 11, 411);
+            rogue.bpgpuiModelId = -1;
+            rogue.lpos = new Vector3(10f, 20f, 30f);
+            rogue.lpos2 = new Vector3(11f, 21f, 31f);
+            rogue.lrot = new Quaternion(0.1f, 0.2f, 0.3f, 0.9f);
+            rogue.lrot2 = new Quaternion(0.4f, 0.5f, 0.6f, 0.7f);
 
             BuildTool_BlueprintPaste tool = New<BuildTool_BlueprintPaste>();
             tool.blueprint = blueprint;
-            tool.bpPool = new[] { primaryEast, east, primarySplitter, splitter, primaryDraw, draw, primaryWest, west, primaryFeed, feed };
+            tool.bpPool = new[] { primaryEast, east, primarySplitter, splitter, primaryDraw, draw, primaryWest, west, primaryFeed, feed, rogue };
             tool.bpCursor = tool.bpPool.Length;
             tool.blueprintPath = "/tmp/corrected.txt";
 
             TargetCaptureSession session;
             Check("target semantic match", TargetCaptureSession.TryCreate(tool, out session));
+            session.BeginCheckPass();
+            rogue.condition = EBuildCondition.Collide;
+            session.RecordAddError(rogue, EBuildCondition.Collide);
+            Vector3 rogueQueryCenter = rogue.lpos + rogue.lpos.normalized * 0.2f;
+            session.RecordSphere(rogueQueryCenter, 0.23f, new Collider[0], 395264, QueryTriggerInteraction.Collide, 0);
             session.SnapshotAll("check-prefix");
             session.RecordAddError(primaryFeed, EBuildCondition.Collide);
-            string json = session.Serialize("createprebuilds-prefix", true, 700, true, true);
+            string json = session.Serialize("check-build-conditions-postfix", false, 700, true, true);
 
             using JsonDocument doc = JsonDocument.Parse(json);
             JsonElement root = doc.RootElement;
-            Check("target schema", root.GetProperty("schema").GetString() == "flab2bp-model40-belts/2");
+            Check("target schema", root.GetProperty("schema").GetString() == "flab2bp-model40-belts/3");
             Check("target sphere patch status", root.GetProperty("spherePatchApplied").GetBoolean());
             Check("target capsule patch status", root.GetProperty("capsulePatchApplied").GetBoolean());
-            Check("target sphere hook not fabricated", !root.GetProperty("sphereHookFiredWhileTargetActive").GetBoolean());
+            Check("target sphere hook observed", root.GetProperty("sphereHookFiredWhileTargetActive").GetBoolean());
+            Check("false condition pass retained", !root.GetProperty("checkBuildConditionsResult").GetBoolean());
+            Check("pass queries are not truncated", !root.GetProperty("passPhysicsQueriesTruncated").GetBoolean());
             Check("target capsule hook not fabricated", !root.GetProperty("capsuleHookFiredWhileTargetActive").GetBoolean());
             JsonElement groups = root.GetProperty("groups");
             Check("two splitter groups", groups.GetArrayLength() == 2);
@@ -404,6 +419,22 @@ namespace FlabOracle.Check
             Check("feed semantic label", feedJson.GetProperty("semantic").GetString() == "splitter-feed");
             Check("feed blueprint slot", feedJson.GetProperty("blueprintArraySlot").GetInt32() == 7);
             Check("feed active slot", feedJson.GetProperty("final").GetProperty("activeSlot").GetInt32() == 8);
+            JsonElement nonOk = root.GetProperty("nonOkPreviews");
+            Check("non-Ok count metadata", root.GetProperty("nonOkPreviewCount").GetInt32() == 1);
+            Check("non-Ok enumeration is complete", nonOk.GetArrayLength() == 1);
+            Check("non-Ok active slot", nonOk[0].GetProperty("activeSlot").GetInt32() == 10);
+            Check("non-Ok canonical slot", nonOk[0].GetProperty("blueprintArraySlot").GetInt32() == 10);
+            Check("non-Ok blueprint index", nonOk[0].GetProperty("blueprintIndexField").GetInt32() == 10);
+            Check("non-Ok blueprint group", nonOk[0].GetProperty("blueprintGroupOrdinal").GetInt32() == 0);
+            Check("non-Ok fallback mapping source", nonOk[0].GetProperty("mappingSource").GetString() == "active-pool-order");
+            Check("non-Ok local pose", nonOk[0].GetProperty("blueprintLocalOffset").GetArrayLength() == 3);
+            Check("non-Ok world pose", nonOk[0].GetProperty("state").GetProperty("lrot").GetArrayLength() == 4);
+            Check("non-Ok descriptor flags", nonOk[0].GetProperty("descIsBelt").GetBoolean());
+            Check("non-Ok condition", nonOk[0].GetProperty("state").GetProperty("conditionName").GetString() == "Collide");
+            Check("non-Ok AddError argument", nonOk[0].GetProperty("addErrorArguments")[0]
+                .GetProperty("conditionName").GetString() == "Collide");
+            Check("non-Ok nearby query", nonOk[0].GetProperty("nearbyPhysicsQueries").GetArrayLength() == 1);
+            rogue.condition = EBuildCondition.Ok;
             Check("feed output actual slot", feedJson.GetProperty("final").GetProperty("output")
                 .GetProperty("bpPoolSlot").GetInt32() == 2);
             Check("add-error group semantic", root.GetProperty("events")[1].GetProperty("semantic").GetString() == "suspect-y6/splitter-feed");

@@ -453,6 +453,7 @@ namespace FlabOracle
                 return;
             }
             _activeCapture = _pending;
+            _pending.BeginCheckPass();
             _pending.SnapshotAll("check-prefix-before-collision-rescue");
         }
 

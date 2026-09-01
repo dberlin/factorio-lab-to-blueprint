@@ -7,8 +7,10 @@ namespace FlabOracle
 {
     internal sealed class TargetCaptureSession
     {
-        internal const string SchemaId = "flab2bp-model40-belts/2";
+        internal const string SchemaId = "flab2bp-model40-belts/3";
         private const int EventLimit = 128;
+        private const int PassQueryLimit = 4096;
+        private const int PassAddErrorLimit = 16;
         private const int NonOkSettleFrames = 2;
         private const int MonitorWindowFrames = 1800;
         private readonly BuildTool_BlueprintPaste _tool;
@@ -33,6 +35,13 @@ namespace FlabOracle
         private bool _prestageObserved;
         private bool _lastPrestageResult;
         private int _prestageLastChangeFrame = -1;
+        private readonly Dictionary<BuildPreview, PassData> _passData =
+            new Dictionary<BuildPreview, PassData>(BuildPreviewReferenceComparer.Instance);
+        private readonly Dictionary<BuildPreview, int> _activeSlots =
+            new Dictionary<BuildPreview, int>(BuildPreviewReferenceComparer.Instance);
+        private readonly List<Query> _passQueries = new List<Query>(64);
+        private bool _capturingCheckPass;
+        private bool _passQueriesTruncated;
 
         private TargetCaptureSession(BuildTool_BlueprintPaste tool, BlueprintArea area, int areaArraySlot, Group[] groups)
         {
@@ -114,10 +123,30 @@ namespace FlabOracle
             _prestageObserved = false;
             _lastPrestageResult = false;
             _prestageLastChangeFrame = -1;
+            _passData.Clear();
+            _passQueries.Clear();
+            _activeSlots.Clear();
+            _capturingCheckPass = false;
+            _passQueriesTruncated = false;
             for (int i = 0; i < _targets.Length; i++)
             {
                 _targets[i].QueryCount = 0;
                 _targets[i].AddErrorCount = 0;
+            }
+        }
+
+        internal void BeginCheckPass()
+        {
+            _passData.Clear();
+            _passQueries.Clear();
+            _activeSlots.Clear();
+            _passQueriesTruncated = false;
+            _capturingCheckPass = true;
+            int active = Math.Min(Math.Max(_tool.bpCursor, 0), _pool.Length);
+            for (int i = 0; i < active; i++)
+            {
+                BuildPreview bp = _pool[i];
+                if (bp != null && !_activeSlots.ContainsKey(bp)) _activeSlots.Add(bp, i);
             }
         }
 
@@ -188,6 +217,17 @@ namespace FlabOracle
 
         internal void RecordAddError(BuildPreview bp, EBuildCondition argument)
         {
+            if (_capturingCheckPass && bp != null && _activeSlots.ContainsKey(bp))
+            {
+                PassData data;
+                if (!_passData.TryGetValue(bp, out data))
+                {
+                    data = new PassData();
+                    _passData.Add(bp, data);
+                }
+                data.AddArgument(argument, PassAddErrorLimit);
+            }
+
             Target target = TargetFor(bp);
             if (target == null || !Reserve()) return;
             target.AddErrorCount++;
@@ -248,6 +288,10 @@ namespace FlabOracle
             w.Prop("sphereHookFiredWhileTargetActive", _sphereHookFired);
             w.Prop("capsuleHookFiredWhileTargetActive", _capsuleHookFired);
             if (checkResult.HasValue) w.Prop("checkBuildConditionsResult", checkResult.Value); else w.Prop("checkBuildConditionsResult", (string)null);
+            w.Prop("passPhysicsQueryLimit", PassQueryLimit);
+            w.Prop("passPhysicsQueryCount", _passQueries.Count);
+            w.Prop("passPhysicsQueriesTruncated", _passQueriesTruncated);
+            WriteNonOkPreviews(w);
             w.BeginArray("groups");
             for (int i = 0; i < _groups.Length; i++) WriteGroup(w, _groups[i]);
             w.EndArray();
@@ -261,6 +305,19 @@ namespace FlabOracle
         private void RecordQuery(string shape, Vector3 p0, Vector3 p1, float radius, Collider[] results, int mask, QueryTriggerInteraction qti, int result)
         {
             if (mask != 395264 || !Near(radius, 0.23f)) return;
+            Query query = null;
+            if (_capturingCheckPass)
+            {
+                if (_passQueries.Count < PassQueryLimit)
+                {
+                    query = Query.Read(_tool, shape, p0, p1, radius, mask, qti, result, results);
+                    _passQueries.Add(query);
+                }
+                else
+                {
+                    _passQueriesTruncated = true;
+                }
+            }
             for (int i = 0; i < _targets.Length; i++)
             {
                 Target target = _targets[i];
@@ -272,7 +329,8 @@ namespace FlabOracle
                 Event e = NewEvent(shape + "-overlap", target);
                 e.TargetEventOrdinal = target.QueryCount;
                 e.State = PreviewState.Read(_tool, target.Preview);
-                e.Query = Query.Read(_tool, shape, p0, p1, radius, mask, qti, result, results);
+                if (query == null) query = Query.Read(_tool, shape, p0, p1, radius, mask, qti, result, results);
+                e.Query = query;
                 _events.Add(e);
             }
         }
@@ -316,6 +374,115 @@ namespace FlabOracle
                 w.EndObject();
             }
             w.EndArray();
+        }
+
+        private void WriteNonOkPreviews(JsonWriter w)
+        {
+            int active = Math.Min(Math.Max(_tool.bpCursor, 0), _pool.Length);
+            int count = 0;
+            for (int i = 0; i < active; i++)
+            {
+                BuildPreview bp = _pool[i];
+                if (bp != null && bp.condition != EBuildCondition.Ok) count++;
+            }
+            w.Prop("nonOkPreviewCount", count);
+            w.BeginArray("nonOkPreviews");
+            for (int i = 0; i < active; i++)
+            {
+                BuildPreview bp = _pool[i];
+                if (bp == null || bp.condition == EBuildCondition.Ok) continue;
+                WriteNonOkPreview(w, bp, i);
+            }
+            w.EndArray();
+        }
+
+        private void WriteNonOkPreview(JsonWriter w, BuildPreview bp, int activeSlot)
+        {
+            int buildingSlot = -1;
+            int blueprintGroupOrdinal = -1;
+            string mappingSource = null;
+            BlueprintBuilding building = null;
+            int buildingCount = _blueprint.buildings.Length;
+            if (buildingCount > 0)
+            {
+                int mapped;
+                if (bp.bpgpuiModelId > 0)
+                {
+                    mapped = bp.bpgpuiModelId - 1;
+                    mappingSource = "bpgpui-model-id";
+                }
+                else
+                {
+                    mapped = activeSlot;
+                    mappingSource = "active-pool-order";
+                }
+                buildingSlot = mapped % buildingCount;
+                blueprintGroupOrdinal = mapped / buildingCount;
+                if (buildingSlot >= 0 && buildingSlot < buildingCount) building = _blueprint.buildings[buildingSlot];
+            }
+
+            w.BeginObject();
+            w.Prop("referenceIdentity", RuntimeHelpers.GetHashCode(bp));
+            w.Prop("poolSlot", activeSlot);
+            w.Prop("activeSlot", activeSlot);
+            w.Prop("bpgpuiModelId", bp.bpgpuiModelId);
+            w.Prop("mappingSource", mappingSource);
+            w.PropNullableInt("blueprintGroupOrdinal", blueprintGroupOrdinal >= 0 ? (int?)blueprintGroupOrdinal : null);
+            w.PropNullableInt("blueprintArraySlot", buildingSlot >= 0 ? (int?)buildingSlot : null);
+            w.PropNullableInt("blueprintIndexField", building != null ? (int?)building.index : null);
+            w.PropNullableInt("blueprintModelIndex", building != null ? (int?)building.modelIndex : null);
+            w.PropNullableInt("blueprintItemId", building != null ? (int?)building.itemId : null);
+            if (building != null)
+            {
+                w.Prop("blueprintLocalOffset", new Vector3(building.localOffset_x, building.localOffset_y, building.localOffset_z));
+                w.Prop("blueprintYaw", building.yaw);
+            }
+            else
+            {
+                w.Prop("blueprintLocalOffset", (string)null);
+                w.Prop("blueprintYaw", (string)null);
+            }
+            w.PropNullableInt("previewItemId", bp.item != null ? (int?)bp.item.ID : null);
+            w.Prop("hasDesc", bp.desc != null);
+            w.Prop("descModelIndex", bp.desc != null ? bp.desc.modelIndex : -1);
+            w.Prop("descSubId", bp.desc != null ? bp.desc.subId : -1);
+            w.Prop("descIsInserter", bp.desc != null && bp.desc.isInserter);
+            w.Prop("descIsBelt", bp.desc != null && bp.desc.isBelt);
+            w.Prop("descIsSplitter", bp.desc != null && bp.desc.isSplitter);
+            w.Prop("descIsStorage", bp.desc != null && bp.desc.isStorage);
+            w.Prop("descIsAssembler", bp.desc != null && bp.desc.isAssembler);
+            w.Prop("descMultiLevel", bp.desc != null && bp.desc.multiLevel);
+            w.Prop("descAddonType", bp.desc != null ? bp.desc.addonType.ToString() : null);
+            WriteState(w, "state", PreviewState.Read(_tool, bp));
+
+            PassData data;
+            bool hasData = _passData.TryGetValue(bp, out data);
+            w.Prop("addErrorArgumentsTruncated", hasData && data.ArgumentsTruncated);
+            w.BeginArray("addErrorArguments");
+            if (hasData)
+            {
+                for (int i = 0; i < data.Arguments.Count; i++)
+                {
+                    w.BeginObject();
+                    w.Prop("condition", data.Arguments[i].Condition);
+                    w.Prop("conditionName", data.Arguments[i].ConditionName);
+                    w.EndObject();
+                }
+            }
+            w.EndArray();
+
+            Vector3 expected = bp.lpos + bp.lpos.normalized * 0.2f;
+            w.BeginArray("nearbyPhysicsQueries");
+            for (int i = 0; i < _passQueries.Count; i++)
+            {
+                Query query = _passQueries[i];
+                float distance = query.Shape == "sphere"
+                    ? Vector3.Distance(expected, query.P0)
+                    : SegmentDistance(expected, query.P0, query.P1);
+                if (distance <= 0.025f) WriteQueryElement(w, query);
+            }
+            w.EndArray();
+            w.EndObject();
         }
 
         private static bool TryCreateGroup(
@@ -460,7 +627,7 @@ namespace FlabOracle
         {
             w.Prop("referenceIdentity", s.Identity); w.PropNullableInt("bpPoolSlot", s.PoolSlot); w.PropNullableInt("activeSlot", s.ActiveSlot);
             w.Prop("bpgpuiModelId", s.ModelId); w.Prop("previewIndex", s.PreviewIndex); w.Prop("condition", s.Condition); w.Prop("conditionName", s.ConditionName);
-            w.Prop("lpos", s.Lpos); w.Prop("lpos2", s.Lpos2); w.Prop("isBelt", s.IsBelt); w.Prop("isSplitter", s.IsSplitter); w.Prop("multiLevel", s.MultiLevel); w.Prop("addonType", s.AddonType);
+            w.Prop("lpos", s.Lpos); w.Prop("lpos2", s.Lpos2); w.Prop("lrot", s.Lrot); w.Prop("lrot2", s.Lrot2); w.Prop("isBelt", s.IsBelt); w.Prop("isSplitter", s.IsSplitter); w.Prop("multiLevel", s.MultiLevel); w.Prop("addonType", s.AddonType);
             w.Prop("inputObjId", s.InputObjId); w.Prop("inputFromSlot", s.InputFromSlot); w.Prop("inputToSlot", s.InputToSlot); w.Prop("inputOffset", s.InputOffset);
             w.Prop("outputObjId", s.OutputObjId); w.Prop("outputFromSlot", s.OutputFromSlot); w.Prop("outputToSlot", s.OutputToSlot); w.Prop("outputOffset", s.OutputOffset);
             WritePointer(w, "input", s.Input); WritePointer(w, "output", s.Output); WritePointer(w, "coverbp", s.Cover);
@@ -476,7 +643,21 @@ namespace FlabOracle
 
         private static void WriteQuery(JsonWriter w, Query q)
         {
-            w.BeginObject("query"); w.Prop("shape", q.Shape); w.Prop("point0", q.P0); w.Prop("point1", q.P1); w.Prop("center", (q.P0 + q.P1) * 0.5f);
+            w.BeginObject("query");
+            WriteQueryFields(w, q);
+            w.EndObject();
+        }
+
+        private static void WriteQueryElement(JsonWriter w, Query q)
+        {
+            w.BeginObject();
+            WriteQueryFields(w, q);
+            w.EndObject();
+        }
+
+        private static void WriteQueryFields(JsonWriter w, Query q)
+        {
+            w.Prop("shape", q.Shape); w.Prop("point0", q.P0); w.Prop("point1", q.P1); w.Prop("center", (q.P0 + q.P1) * 0.5f);
             w.Prop("radius", q.Radius); w.Prop("layerMask", q.Mask); w.Prop("queryTriggerInteraction", q.Qti); w.Prop("returnedCount", q.Returned);
             w.Prop("capturedCount", q.Colliders.Length); w.Prop("collidersTruncated", q.Returned > q.Colliders.Length); w.BeginArray("colliders");
             for (int i = 0; i < q.Colliders.Length; i++)
@@ -487,7 +668,41 @@ namespace FlabOracle
                 if (c.Preview.HasValue) WriteState(w, "buildPreview", c.Preview.Value); else w.Prop("buildPreview", (string)null);
                 w.Prop("hasColliderData", c.HasColliderData); w.Prop("colliderDataObjId", c.ObjId); w.Prop("colliderDataObjType", c.ObjType); w.Prop("colliderDataUsage", c.Usage); w.Prop("colliderDataShape", c.ColliderShape); w.EndObject();
             }
-            w.EndArray(); w.EndObject();
+            w.EndArray();
+        }
+        private sealed class BuildPreviewReferenceComparer : IEqualityComparer<BuildPreview>
+        {
+            internal static readonly BuildPreviewReferenceComparer Instance = new BuildPreviewReferenceComparer();
+            public bool Equals(BuildPreview x, BuildPreview y) { return ReferenceEquals(x, y); }
+            public int GetHashCode(BuildPreview obj) { return RuntimeHelpers.GetHashCode(obj); }
+        }
+
+
+        private sealed class PassData
+        {
+            internal readonly List<ConditionArgument> Arguments = new List<ConditionArgument>(2);
+            internal bool ArgumentsTruncated;
+
+            internal void AddArgument(EBuildCondition condition, int limit)
+            {
+                if (Arguments.Count >= limit)
+                {
+                    ArgumentsTruncated = true;
+                    return;
+                }
+                Arguments.Add(new ConditionArgument((int)condition, condition.ToString()));
+            }
+        }
+
+        private struct ConditionArgument
+        {
+            internal int Condition;
+            internal string ConditionName;
+            internal ConditionArgument(int condition, string conditionName)
+            {
+                Condition = condition;
+                ConditionName = conditionName;
+            }
         }
 
         private sealed class Group
@@ -558,14 +773,14 @@ namespace FlabOracle
         private struct PreviewState
         {
             internal int Identity, ModelId, PreviewIndex, Condition; internal int? PoolSlot, ActiveSlot; internal string ConditionName, AddonType;
-            internal Vector3 Lpos, Lpos2; internal bool IsBelt, IsSplitter, MultiLevel;
+            internal Vector3 Lpos, Lpos2; internal Quaternion Lrot, Lrot2; internal bool IsBelt, IsSplitter, MultiLevel;
             internal int InputObjId, InputFromSlot, InputToSlot, InputOffset, OutputObjId, OutputFromSlot, OutputToSlot, OutputOffset;
             internal PreviewPointer Input, Output, Cover;
             internal static PreviewState Read(BuildTool_BlueprintPaste tool, BuildPreview bp)
             {
                 PreviewState s = new PreviewState(); if (bp == null) return s;
                 s.Identity = RuntimeHelpers.GetHashCode(bp); s.PoolSlot = Slot(tool, bp, false); s.ActiveSlot = Slot(tool, bp, true); s.ModelId = bp.bpgpuiModelId; s.PreviewIndex = bp.previewIndex;
-                s.Condition = (int)bp.condition; s.ConditionName = bp.condition.ToString(); s.Lpos = bp.lpos; s.Lpos2 = bp.lpos2;
+                s.Condition = (int)bp.condition; s.ConditionName = bp.condition.ToString(); s.Lpos = bp.lpos; s.Lpos2 = bp.lpos2; s.Lrot = bp.lrot; s.Lrot2 = bp.lrot2;
                 s.IsBelt = bp.desc != null && bp.desc.isBelt; s.IsSplitter = bp.desc != null && bp.desc.isSplitter; s.MultiLevel = bp.desc != null && bp.desc.multiLevel; s.AddonType = bp.desc != null ? bp.desc.addonType.ToString() : null;
                 s.InputObjId = bp.inputObjId; s.InputFromSlot = bp.inputFromSlot; s.InputToSlot = bp.inputToSlot; s.InputOffset = bp.inputOffset;
                 s.OutputObjId = bp.outputObjId; s.OutputFromSlot = bp.outputFromSlot; s.OutputToSlot = bp.outputToSlot; s.OutputOffset = bp.outputOffset;

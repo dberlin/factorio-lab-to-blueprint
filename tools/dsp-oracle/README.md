@@ -26,7 +26,7 @@ changes a condition.
 
 The zip is a Thunderstore package, so **r2modman** installs it directly:
 
-> Settings → Import local mod → pick `flab2bp_oracle-1.1.2.zip`
+> Settings → Import local mod → pick `flab2bp_oracle-1.1.3.zip`
 
 r2modman reads `manifest.json` from the archive root and drops `FlabOracle.dll`
 into the profile's `BepInEx/plugins/`. Nothing else to do; it appears in the mod
@@ -41,7 +41,7 @@ be if any other mod is installed there.
 
 ```sh
 mkdir -p "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
-unzip -oj /path/to/flab2bp_oracle-1.1.2.zip FlabOracle.dll \
+unzip -oj /path/to/flab2bp_oracle-1.1.3.zip FlabOracle.dll \
   -d "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
 ```
 
@@ -91,17 +91,21 @@ propagation are complete, whether that method returns true or false. A false
 remain bounded fallbacks if the full check is not reached. The same loaded
 blueprint object is deduplicated after the file is written.
 
-The target file groups the y2 control and y6 suspect separately. It includes
-both splitters and all eight adjacent belts in condition/pointer timeline
-snapshots, while Physics query events remain belt-specific. Blueprint-array
-slots, live `bpPool`/active slots, reference identities, `previewIndex`, every
-connection slot, input/output/`coverbp` pointers, exact sphere/capsule arguments,
-and returned collider/`BuildPreviewModel` identities are retained. Root-level
-prestage, tool-stage, raw grat-box, patch-applied, and target-active-hook-fired
-metadata distinguish an invalid stage-0 placement or unavailable wrapper from a
-real zero-collider result. The capture is independent of `DumpOnPaste`;
-disabling the generic two-file paste dump does not disable this one-shot
-diagnostic.
+The target file keeps the y2 and y6 groups as controls, then enumerates **every**
+active non-Ok `bpPool` preview in `nonOkPreviews`; this array is decisive when
+the failing records are outside those controls. Each entry maps back to the
+canonical blueprint slot/index (using the positive `bpgpuiModelId`, or the
+game's active-pool order after overlap handling clears that id), and includes
+item/model/descriptor flags, blueprint-local pose, world preview poses,
+condition, connection fields, input/output/`coverbp` identities and conditions,
+all `AddErrorMessage` arguments, and nearby captured Physics queries.
+
+Control timeline snapshots still include both splitters and all eight adjacent
+belts. Root-level prestage, tool-stage, raw grat-box, patch-applied, query
+truncation, and target-active-hook-fired metadata distinguish an unavailable
+wrapper from a real zero-collider result. The capture is independent of
+`DumpOnPaste`; disabling the generic two-file paste dump does not disable this
+one-shot diagnostic.
 
 Generic files are `BepInEx/flab2bp-oracle/dump-00001.json`,
 `dump-00002.json`, … The counter continues from the highest number already in
@@ -232,7 +236,7 @@ These are stated because the plugin cannot be end-to-end tested outside the game
 
 ```sh
 cd tools/dsp-oracle
-./build-zip.sh          # -> dist/flab2bp_oracle-1.1.2.zip
+./build-zip.sh          # -> dist/flab2bp_oracle-1.1.3.zip
 ```
 
 Requires the .NET SDK and the game's managed assemblies (referenced by
