@@ -3351,7 +3351,7 @@ def _pack_model(
         return True
 
     def _cluster_no_good_is_live(no_good: ClusterRelationNoGood) -> bool:
-        """The same two rejections, read through a RELATIVE no-good.
+        """ONE rejection, and it is not the one :func:`_no_good_is_live` makes.
 
         A cluster no-good names offsets rather than origins, so it never names
         an absolute position on its own.  What it does fix is where the ANCHOR
@@ -3360,13 +3360,20 @@ def _pack_model(
         different anchors therefore contradict the relation outright, and no
         placement of the strips still free can complete it -- the constraint is
         dead weight whether or not the anchor itself is one of the pinned ones.
+        That, and only that, is what this skips.
 
-        This is exact for the pinned part of the problem: it rejects only when
-        two pins already disagree, so a relation that any free strip could still
-        walk into stays live.
+        There is deliberately NO "every named strip is pinned" rejection here,
+        which is where this differs from its sibling.  That rejection exists so
+        an exact-pack no-good cannot forbid a WIDTH for no geometric reason, and
+        the reason does not carry over: :func:`_add_cluster_relation_no_good`
+        never touches ``w_var``.  Its relation variables are differences of
+        content origins, so a fully pinned cluster whose pins AGREE with the
+        forbidden offsets is not a degenerate constraint -- it is the statement
+        that this pack already sits in the relative placement Phase B proved
+        unroutable, and CP-SAT should say INFEASIBLE.  "This window cannot
+        repair the incumbent" is the truthful answer; silently dropping the cut
+        would hand back the arrangement the proof rejected.
         """
-        if all(index in fixed_at for index in no_good.strips):
-            return False
         implied: tuple[int, int] | None = None
         for index, delta in zip(no_good.strips, no_good.deltas, strict=True):
             current = fixed_at.get(index)
