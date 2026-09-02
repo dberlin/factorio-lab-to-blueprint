@@ -67,6 +67,7 @@ from flab2bp.layout.sequence_pair import (
     build_elite_archive,
     decode_sequence_pair,
     decode_state,
+    derive_stage_seed,
     enable_variant_stage_boundary,
     split_stage_boundary,
 )
@@ -6886,3 +6887,118 @@ def test_legacy_finalizer_crossing_deadline_returns_incomplete_budget(
     assert verdict.placement is None
     assert verdict.failed_checks == ()
     assert verdict.projection_failures == ()
+
+
+def _never_certifying_solver(
+    *,
+    heights: tuple[int, ...],
+    deadline_reached: Callable[[], bool],
+) -> SequenceSolver[object]:
+    """A solver whose detailed route always strands one net, so no incumbent appears."""
+    base = PlacementProblem(
+        sizes=((4, 3), (4, 3)),
+        nets=((0, 1),),
+        outline_height=heights[0],
+        area_lower_bound=24,
+    )
+    problems = {height: replace(base, outline_height=height) for height in heights}
+    routing = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                net_id=NetId(0, 1, "iron-ore", NetRole.INTERNAL, 0),
+                kind=RouteFailureKind.CONGESTION_WALL,
+                wall=((1, 1, 0),),
+                blocking_nets=(),
+                expansions=1,
+            ),
+        ),
+        iterations=1,
+        expansions=1,
+    )
+    adapters = StageAdapters[object](
+        prepare=lambda height, decoded: object(),
+        global_route=lambda prepared, feedback, allowance: _global(),
+        detailed_route=lambda prepared, allowance: DetailedStageResult(routing, None),
+        validate=lambda placement: ValidationVerdict(False, ("stranded",), None),
+    )
+    return SequenceSolver[object](
+        heights=heights,
+        problem_for_height=problems.__getitem__,
+        adapters=adapters,
+        expansion_budget=ExpansionBudget(total=10_000),
+        config=SequenceSolverConfig.test(),
+        deadline_reached=deadline_reached,
+    )
+
+
+def test_search_without_continuation_stops_at_the_derived_stage_limit() -> None:
+    solver = _never_certifying_solver(heights=(12, 16), deadline_reached=lambda: False)
+    with pytest.raises(NoValidLayout) as excinfo:
+        solver.search()
+    assert "no scheduled stage produced an exact layout" in str(excinfo.value)
+
+
+def test_search_appends_feasibility_restarts_until_the_deadline() -> None:
+    ticks = iter(range(400))
+    solver = _never_certifying_solver(
+        heights=(12, 16),
+        deadline_reached=lambda: next(ticks, 400) >= 40,
+    )
+    with pytest.raises(NoValidLayout) as excinfo:
+        solver.search(feasibility_continuation=True)
+    assert "deadline exhausted before finding an exact layout" in str(excinfo.value)
+    assert len(solver._heights[0].restarts) > SequenceSolverConfig.test().restarts_per_height
+
+
+def test_explicit_max_stages_remains_a_hard_cap_under_the_default_keyword() -> None:
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    with pytest.raises(NoValidLayout):
+        solver.search(max_stages=1)
+    assert len(solver._heights[0].restarts) == SequenceSolverConfig.test().restarts_per_height
+
+
+def test_appended_restart_seeds_derive_from_seed_height_order_and_ordinal() -> None:
+    config = SequenceSolverConfig.test()
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    assert solver._append_feasibility_restarts()
+    height_state = solver._heights[0]
+    added = height_state.restarts[-1]
+    assert added.restart == config.restarts_per_height
+    assert added.seed == derive_stage_seed(
+        derive_stage_seed(config.seed, height_state.order), added.restart
+    )
+    assert added.stages == 0
+
+
+def test_feasibility_exhaustion_has_its_own_refusal_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sequence_solver_module, "C_FEASIBILITY_RESTART_BATCHES", 1)
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    with pytest.raises(NoValidLayout) as excinfo:
+        solver.search(feasibility_continuation=True)
+    assert "feasibility continuation exhausted its restart budget" in str(excinfo.value)
+
+
+def test_feasibility_continuation_is_reproducible_across_identical_runs() -> None:
+    def run() -> tuple[list[tuple[int, int, int]], str]:
+        solver = _never_certifying_solver(
+            heights=(12, 16),
+            deadline_reached=lambda: False,
+        )
+        with pytest.raises(NoValidLayout) as excinfo:
+            solver.search(feasibility_continuation=True)
+        appended = [
+            (height.order, restart.restart, restart.seed)
+            for height in solver._heights
+            for restart in height.restarts
+        ]
+        return appended, str(excinfo.value)
+
+    first, first_reason = run()
+    second, second_reason = run()
+    assert first == second
+    assert first_reason == second_reason
+    assert len(first) > 2 * SequenceSolverConfig.test().restarts_per_height

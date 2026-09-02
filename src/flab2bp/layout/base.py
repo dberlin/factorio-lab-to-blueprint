@@ -240,6 +240,7 @@ class PlacementStats(TypedDict, total=False):
     expansions: float
     fallback_reason: float
     fallback_used: float
+    feasibility_restart_batches: float
     feedback_cells: float
     feedback_decays: float
     feedback_nets: float

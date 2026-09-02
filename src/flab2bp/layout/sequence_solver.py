@@ -187,6 +187,12 @@ _MID_NO_SPRAY_COMPACT_MAX_MACHINES = 70
 _MID_NO_SPRAY_COMPACT_MIN_STRIPS = 10
 _MID_NO_SPRAY_COMPACT_MAX_STRIPS = 15
 
+#: How many feasibility-restart batches one production search may append when
+#: its derived stage schedule ends with no exact incumbent and clock remains.
+#: Bounded so a pathological cell cannot spin: the wall deadline, the measured
+#: stage admission, and the expansion ledger are still the binding stops.
+C_FEASIBILITY_RESTART_BATCHES = 8
+
 
 @dataclass(frozen=True, slots=True)
 class SequenceSolverConfig:
@@ -766,6 +772,9 @@ class SequenceSearchResult:
     exact_archive_categories: tuple[EliteCategory, ...]
     stages: tuple[StageObservation, ...]
     termination: str
+    #: Continuation batches appended after the derived schedule ended without an
+    #: exact incumbent.  Observational only; nothing branches on it.
+    feasibility_restart_batches: int = 0
 
     @property
     def exact_energy(self) -> SearchEnergy:
@@ -1035,8 +1044,21 @@ class SequenceSolver[PreparedT]:
                 snapshots.append(current)
         return len(snapshots) == 2 and snapshots[-1] is not None and snapshots[-1] == snapshots[-2]
 
-    def search(self, *, max_stages: int | None = None) -> SequenceSearchResult:
-        """Search until its stage cap, deadline, or searchable budget is exhausted."""
+    def search(
+        self,
+        *,
+        max_stages: int | None = None,
+        feasibility_continuation: bool = False,
+    ) -> SequenceSearchResult:
+        """Search until its stage cap, deadline, or searchable budget is exhausted.
+
+        ``feasibility_continuation`` is the production path.  When the derived
+        schedule ends with no exact incumbent and the clock, the admission, and
+        the ledger all still allow work, one deterministic restart is appended
+        per height and the schedule grows.  An explicit ``max_stages`` keeps the
+        default and stays a hard cap, because tests and diagnostic probes need
+        one.
+        """
         stage_limit = (
             (1 + (self.config.stages - 1) * self.config.restarts_per_height)
             * len(self._heights)
@@ -1045,12 +1067,34 @@ class SequenceSolver[PreparedT]:
         )
         if type(stage_limit) is not int or stage_limit < 0:
             raise ValueError("maximum stages must be a non-negative integer")
+        if type(feasibility_continuation) is not bool:
+            raise ValueError("feasibility continuation mode must be a bool")
 
         termination = "stage-limit"
-        while (
-            sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats)
-            < stage_limit
-        ):
+        feasibility_restart_batches = 0
+        while True:
+            if (
+                sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats)
+                >= stage_limit
+            ):
+                if (
+                    not feasibility_continuation
+                    or self._incumbent is not None
+                    or feasibility_restart_batches >= C_FEASIBILITY_RESTART_BATCHES
+                    or self.budget.shared_left == 0
+                    or self.deadline_reached()
+                    or not self._append_feasibility_restarts()
+                ):
+                    if feasibility_continuation and self._incumbent is None:
+                        termination = (
+                            "deadline"
+                            if self.deadline_reached()
+                            else "feasibility-exhausted"
+                        )
+                    break
+                feasibility_restart_batches += 1
+                stage_limit += len(self._heights)
+                continue
             if (
                 self._incumbent is not None
                 and self._incumbent.exact_key[0] == self._area_lower_bound
@@ -1350,6 +1394,10 @@ class SequenceSolver[PreparedT]:
                 "candidates": "all scheduled candidates were exhausted",
                 "cancelled": "routing was cancelled before detailed emission",
                 "stage-limit": "no scheduled stage produced an exact layout",
+                "feasibility-exhausted": (
+                    "feasibility continuation exhausted its restart budget "
+                    "before an exact layout"
+                ),
             }[termination]
             validation_checks = tuple(
                 dict.fromkeys(
@@ -1390,6 +1438,7 @@ class SequenceSolver[PreparedT]:
             exact_archive_categories=incumbent.archive_categories,
             stages=tuple(self._stage_stats),
             termination=termination,
+            feasibility_restart_batches=feasibility_restart_batches,
         )
 
     def _select_height(self, eligible: Sequence[_HeightState]) -> _HeightState:
@@ -1426,6 +1475,41 @@ class SequenceSolver[PreparedT]:
             (restart for restart in height_state.restarts if restart.stages < self.config.stages),
             key=lambda restart: (restart.stages, restart.restart),
         )
+
+    def _append_feasibility_restarts(self) -> bool:
+        """Append one deterministic feasibility restart to every height.
+
+        The seed is a pure function of ``(config.seed, height order, restart
+        ordinal)`` -- the same derivation :func:`_new_height_state` uses -- so a
+        continuation never depends on the order stages happened to complete in.
+        The starting state is the best archived incumbent for that height, which
+        is what makes this a continuation rather than a cold restart; a height
+        with no archive falls back to a fresh anneal seed.
+        """
+        appended = False
+        for height_state in self._heights:
+            ordinal = len(height_state.restarts)
+            seed = derive_stage_seed(
+                derive_stage_seed(self.config.seed, height_state.order),
+                ordinal,
+            )
+            best: AnnealIncumbent | None = None
+            best_key: QualityArchiveKey | None = None
+            for restart in height_state.restarts:
+                for tagged in restart.archive:
+                    key = quality_archive_key(tagged.incumbent)
+                    if best_key is None or key < best_key:
+                        best, best_key = tagged.incumbent, key
+            anneal = (
+                AnnealState.initial(height_state.problem.size, seed)
+                if best is None
+                else replace(best.state, base_seed=seed, stage_index=0)
+            )
+            height_state.restarts.append(
+                _RestartState(restart=ordinal, seed=seed, anneal=anneal)
+            )
+            appended = True
+        return appended
 
     def _select_quality_restart(self, height_state: _HeightState) -> _RestartState | None:
         legal: list[tuple[_RestartState, AnnealIncumbent]] = []
@@ -5202,7 +5286,12 @@ def _decoded_pack(
 
 
 class _SearchSolver(Protocol):
-    def search(self, *, max_stages: int | None = None) -> SequenceSearchResult: ...
+    def search(
+        self,
+        *,
+        max_stages: int | None = None,
+        feasibility_continuation: bool = False,
+    ) -> SequenceSearchResult: ...
 
 
 class _SolverFactory(Protocol):
@@ -5267,7 +5356,7 @@ class SequencePairLayout:
             )
             try:
                 placement = finalize.finalize_placement(
-                    solver.search().placement,
+                    solver.search(feasibility_continuation=True).placement,
                     self.band_policy,
                 )
             except finalize.ProjectionRefusal as exc:
@@ -5319,7 +5408,10 @@ class SequencePairLayout:
                 ),
             )
             try:
-                result = run.solver.search(max_stages=run.max_search_stages)
+                result = run.solver.search(
+                    max_stages=run.max_search_stages,
+                    feasibility_continuation=True,
+                )
             except NoValidLayout as exc:
                 raise NoValidLayout(
                     exc.reason,
@@ -5479,6 +5571,7 @@ def _with_observational_stats(
             "search_energy": breakdown.energy.scalar,
             "power": float(power),
             "termination": result.termination,
+            "feasibility_restart_batches": float(result.feasibility_restart_batches),
             "termination_cause": result.termination,
             "validation_clean": 1.0,
             "validation_status": "clean",
