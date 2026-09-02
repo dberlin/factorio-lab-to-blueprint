@@ -14,6 +14,7 @@ import random
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import replace
+from fractions import Fraction
 from fractions import Fraction as F
 from pathlib import Path
 
@@ -15569,6 +15570,37 @@ def test_prepared_junction_ban_reuses_complete_geometry_offsets_per_attempt(
 
     assert calls == 1
     assert ban == frozenset({(1, 5, 2), (19, 5, 2)})
+
+
+def test_cancellable_junction_ban_offsets_are_shared_process_wide(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import flab2bp.layout.freeform as freeform_module
+
+    freeform_module._JUNCTION_BAN_OFFSET_CACHE.clear()
+    freeform_module._junction_ban_offsets.cache_clear()
+    probes: list[tuple[int, int, int]] = []
+    original = freeform_module._junction_site_is_clear
+
+    def counting(buildings: Sequence[PlacedBuilding], x: int, y: int, level: int) -> bool:
+        probes.append((x, y, level))
+        return original(buildings, x, y, level)
+
+    monkeypatch.setattr(freeform_module, "_junction_site_is_clear", counting)
+    smelter_id = catalog.item_id("arc-smelter")
+    smelter = catalog.building(smelter_id)
+    key = (smelter_id, smelter.model_index, smelter.width, smelter.height, 0.0, Fraction(0))
+
+    first = freeform_module._cancellable_junction_ban_offsets(*key, lambda: False)
+    probed_once = len(probes)
+    assert probed_once > 0
+
+    second = freeform_module._cancellable_junction_ban_offsets(*key, lambda: False)
+    third = freeform_module._junction_ban_offsets(*key)
+
+    assert second == first
+    assert third == first
+    assert len(probes) == probed_once, "a second attempt re-derived offsets already proved"
 
 
 def test_projected_coater_supply_is_checked_during_preparation(

@@ -3861,6 +3861,15 @@ def _junction_site_is_clear(
     )
 
 
+JunctionOffsetKey = tuple[int, int, int, int, float, Fraction]
+
+#: Relative Splitter bans per immutable obstacle pose, shared by every attempt
+#: and both computation paths in this process.  An offset set is a pure
+#: function of its key, so a value proved once under a deadline is exactly
+#: the value the uncancellable path would return.
+_JUNCTION_BAN_OFFSET_CACHE: dict[JunctionOffsetKey, frozenset[Cell]] = {}
+
+
 @lru_cache(maxsize=256)
 def _junction_ban_offsets(
     item_id: int,
@@ -3871,6 +3880,10 @@ def _junction_ban_offsets(
     z: Fraction,
 ) -> frozenset[Cell]:
     """Exact relative Splitter bans for one immutable obstacle pose."""
+    key: JunctionOffsetKey = (item_id, model_index, width, height, yaw, z)
+    cached = _JUNCTION_BAN_OFFSET_CACHE.get(key)
+    if cached is not None:
+        return cached
     obstacle = PlacedBuilding(
         item_id=item_id,
         model_index=model_index,
@@ -3889,7 +3902,7 @@ def _junction_ban_offsets(
     radius = math.ceil((splitter_span + obstacle_span) / (2.0 * colliders.GRID_ARC)) + 2
     centre_x = (width - 1) / 2.0
     centre_y = (height - 1) / 2.0
-    return frozenset(
+    banned = frozenset(
         (x, y, level)
         for x in range(
             math.floor(centre_x - radius),
@@ -3902,6 +3915,8 @@ def _junction_ban_offsets(
         for level in range(LEVELS)
         if not _junction_site_is_clear((obstacle,), x, y, level)
     )
+    _JUNCTION_BAN_OFFSET_CACHE[key] = banned
+    return banned
 
 
 def _cancellable_junction_ban_offsets(
@@ -3914,6 +3929,10 @@ def _cancellable_junction_ban_offsets(
     cancelled: Callable[[], bool],
 ) -> frozenset[Cell]:
     """Compute one uncached complete offset set while polling its caller."""
+    key: JunctionOffsetKey = (item_id, model_index, width, height, yaw, z)
+    cached = _JUNCTION_BAN_OFFSET_CACHE.get(key)
+    if cached is not None:
+        return cached
     obstacle = PlacedBuilding(
         item_id=item_id,
         model_index=model_index,
@@ -3952,7 +3971,9 @@ def _cancellable_junction_ban_offsets(
                     banned.add((x, y, level))
     if cancelled():
         raise _PreparationDeadline
-    return frozenset(banned)
+    result = frozenset(banned)
+    _JUNCTION_BAN_OFFSET_CACHE[key] = result
+    return result
 
 
 def _prepared_junction_ban(
