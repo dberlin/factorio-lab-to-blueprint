@@ -95,6 +95,7 @@ def test_json_profile_emits_one_bounded_machine_readable_record(
         },
         "prepare_calls_s": [2.0, 0.5],
         "route_backend": route_kernel.selected_backend(),
+        "last_mile_stats": {},
     }
     assert selected_policies == [CandidatePolicy.OUTPUT_PRODUCTS]
 

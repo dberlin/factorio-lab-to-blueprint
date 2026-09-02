@@ -41,6 +41,7 @@ from flab2bp.layout import (  # noqa: E402
     finalize,
     freeform,
     global_router,
+    last_mile,
     route_kernel,
     sequence_solver,
     strip_variants,
@@ -102,8 +103,37 @@ def _spec(url_id: str, candidate_policy: CandidatePolicy) -> BuildSpec:
 
 PHASES = (
     "plan_strips", "strip_families", "prepare", "place_coaters", "coater_frame_bans",
-    "junction_ban", "power_plan", "static_risks", "relaxed_search", "finalize", "validate",
+    "junction_ban", "power_plan", "static_risks", "relaxed_search", "last_mile",
+    "finalize", "validate",
 )
+
+
+_LAST_MILE_KEYS = (
+    "last_mile_invocations",
+    "last_mile_solved",
+    "last_mile_proved",
+    "last_mile_bounded",
+    "last_mile_commit_rejected",
+    "last_mile_restore_mismatch",
+    "last_mile_relation_skipped_siblings",
+    "last_mile_nodes",
+    "last_mile_expansions",
+    "last_mile_seconds",
+    "last_mile_relation_strips",
+)
+
+
+def _last_mile_row(stats: Mapping[str, object]) -> dict[str, float]:
+    """The last-mile counters, if this run produced any.
+
+    `scripts/audit.py` rows carry no `stats` object, so this is the ONLY path
+    by which these numbers reach a gate record.  An empty dict here means the
+    run never entered the pass, which is a fact worth printing rather than a
+    zero worth inventing.
+    """
+    return {
+        key: float(str(stats[key])) for key in _LAST_MILE_KEYS if key in stats
+    }
 
 
 class Tally:
@@ -139,6 +169,7 @@ def install(tally: Tally) -> Callable[[], None]:
     orig_landmarks = freeform._Grid.build_landmarks
     orig_reserve = freeform._reserve_port_access
     orig_merge = freeform._merge_frontier
+    orig_last_mile = last_mile.solve_cluster
 
     def astar(
         canvas: freeform._Canvas,
@@ -306,6 +337,16 @@ def install(tally: Tally) -> Callable[[], None]:
         tally.add("merge_frontier", time.perf_counter() - t0)
         return out
 
+    def timed_last_mile(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        t0 = time.perf_counter()
+        try:
+            return orig_last_mile(problem, environment)
+        finally:
+            tally.add("last_mile", time.perf_counter() - t0)
+
     def timed(key: str, sites: Sequence[tuple[object, str]]) -> Callable[[], None]:
         """Patch every ``(module, attribute)`` binding site with one shared shim.
 
@@ -373,6 +414,7 @@ def install(tally: Tally) -> Callable[[], None]:
     type.__setattr__(freeform._Grid, "build_landmarks", landmarks)
     freeform._reserve_port_access = reserve
     freeform._merge_frontier = merge
+    last_mile.solve_cluster = timed_last_mile
 
     def restore() -> None:
         freeform._astar = orig_astar
@@ -383,6 +425,7 @@ def install(tally: Tally) -> Callable[[], None]:
         type.__setattr__(freeform._Grid, "build_landmarks", orig_landmarks)
         freeform._reserve_port_access = orig_reserve
         freeform._merge_frontier = orig_merge
+        last_mile.solve_cluster = orig_last_mile
         for undo in phase_undo:
             undo()
 
@@ -508,10 +551,11 @@ def main() -> int:
         prof = cProfile.Profile() if args.cprofile else None
         t0 = time.perf_counter()
         verdict = "OK"
+        placement = None
         try:
             if prof is not None:
                 prof.enable()
-            _strategy(args.strategy)(workers=args.workers).lay_out(
+            placement = _strategy(args.strategy)(workers=args.workers).lay_out(
                 spec, time_budget_s=args.budget
             )
         except NoValidLayout as exc:
@@ -547,6 +591,9 @@ def main() -> int:
                 },
                 "prepare_calls_s": list(tally.prepare_calls),
                 "route_backend": route_kernel.selected_backend(),
+                "last_mile_stats": (
+                    {} if placement is None else _last_mile_row(placement.stats)
+                ),
             }, separators=(",", ":"), sort_keys=True))
             continue
 

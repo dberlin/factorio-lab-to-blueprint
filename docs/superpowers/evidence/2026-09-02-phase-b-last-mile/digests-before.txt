@@ -1,0 +1,12 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+  round 1: 0.387s  912,831 expansions  0.424 us/exp
+  round 2: 0.365s  912,831 expansions  0.400 us/exp
+  round 3: 0.411s  912,831 expansions  0.450 us/exp
+BEST 0.365s  912,831 expansions  0.400 us/exp  digest f4200322f44ef584
+captured digest f4200322f44ef584   replay digest f4200322f44ef584   MATCH
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+  round 1: 0.083s  150,821 expansions  0.548 us/exp
+  round 2: 0.081s  150,821 expansions  0.536 us/exp
+  round 3: 0.081s  150,821 expansions  0.535 us/exp
+BEST 0.081s  150,821 expansions  0.535 us/exp  digest 0b6c1cb650fedecd
+captured digest 0b6c1cb650fedecd   replay digest 0b6c1cb650fedecd   MATCH

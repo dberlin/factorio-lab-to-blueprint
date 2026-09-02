@@ -41,6 +41,7 @@ class Verdict:
     area_ratio: float
     p95_seconds: float
     reasons: tuple[str, ...] = field(default_factory=tuple)
+    notes: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def passed(self) -> bool:
@@ -66,24 +67,39 @@ def compare(
     noise_area: float,
     p95_seconds: float,
     expect_cells: int | None = None,
+    regressions_only: bool = False,
+    require_clean: frozenset[str] = frozenset(),
 ) -> Verdict:
     base_by_key = {_key(row): row for row in baseline}
     candidate_rows = list(candidate)
     candidate_keys = {_key(row) for row in candidate_rows}
     counts: dict[str, int] = {}
     reasons: list[str] = []
+    notes: list[str] = []
     log_ratios: list[float] = []
     seconds: list[float] = []
+    required_seen: set[str] = set()
     for row in candidate_rows:
         status = str(row["status"])
         counts[status] = counts.get(status, 0) + 1
         seconds.append(float(str(row["seconds"])))
-        if status != "CLEAN":
-            reasons.append(
-                f"{status}: {row['strategy']} {row['url_id']}/{row['spec_label']}: {row['detail']}"
-            )
-            continue
+        label = f"{row['strategy']} {row['url_id']}/{row['spec_label']}: {row['detail']}"
+        name = f"{row['strategy']}/{row['url_id']}/{row['spec_label']}"
+        required_seen.add(name)
         base = base_by_key.get(_key(row))
+        if status != "CLEAN":
+            if name in require_clean:
+                reasons.append(f"NOT CLEAN: {label}")
+            elif not regressions_only or status in {"INVALID", "CRASH"}:
+                # INVALID and CRASH are never "carried over": the gate demands
+                # zero of each outright, and a phase that corrupts a round
+                # would show up here first.
+                reasons.append(f"{status}: {label}")
+            elif base is not None and str(base["status"]) == "CLEAN":
+                reasons.append(f"REGRESSION: {label}")
+            else:
+                notes.append(f"CARRIED: {label}")
+            continue
         if base is None or str(base["status"]) != "CLEAN":
             continue
         base_area = float(str(base["area"]))
@@ -92,8 +108,12 @@ def compare(
             log_ratios.append(math.log(cand_area / base_area))
     for key in sorted(base_by_key.keys() - candidate_keys):
         strategy, url_id, _index = key
-        label = base_by_key[key]["spec_label"]
-        reasons.append(f"MISSING: {strategy} {url_id}/{label}")
+        missing_label = base_by_key[key]["spec_label"]
+        reasons.append(f"MISSING: {strategy} {url_id}/{missing_label}")
+    for name in sorted(require_clean - required_seen):
+        # A required cell the candidate never attempted cannot be CLEAN; this
+        # also catches a mistyped --require-clean name.
+        reasons.append(f"MISSING (required): {name}")
     if expect_cells is not None and len(candidate_rows) != expect_cells:
         reasons.append(
             f"candidate has {len(candidate_rows)} rows, expected {expect_cells}"
@@ -113,6 +133,7 @@ def compare(
         area_ratio=ratio,
         p95_seconds=p95,
         reasons=tuple(reasons),
+        notes=tuple(notes),
     )
 
 
@@ -136,6 +157,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=72,
         help="rows the candidate must hold; 0 disables the count guard (default: 72)",
     )
+    ap.add_argument("--regressions-only", action="store_true")
+    ap.add_argument("--require-clean", action="append", default=[])
     args = ap.parse_args(argv)
     verdict = compare(
         _read(args.baseline),
@@ -143,6 +166,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         noise_area=args.noise_area,
         p95_seconds=args.p95_seconds,
         expect_cells=args.expect_cells or None,
+        regressions_only=args.regressions_only,
+        require_clean=frozenset(args.require_clean),
     )
     print(
         f"clean {verdict.candidate_clean}  refused {verdict.candidate_refused}  "
@@ -152,6 +177,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     for reason in verdict.reasons:
         print(f"  FAIL {reason}")
+    for note in verdict.notes:
+        print(f"  note {note}")
     print("PASS" if verdict.passed else "FAIL")
     return 0 if verdict.passed else 1
 

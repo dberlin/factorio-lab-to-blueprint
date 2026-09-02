@@ -1,0 +1,6 @@
+"https://factoriolab.github.io/dsp/list?o=energy-matrix*60&ibe=conveyor-belt-2&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+Item,Items,Inputs,Outputs,Targets,Belts,Belt,Recipe,Machines,Machine,Modules,Power
+energy-matrix,=60,"energetic-graphite:1,hydrogen:1","energy-matrix:1","",=1/12,conveyor-belt-2,energy-matrix,=6,matrix-lab,"1 ",=2880
+energetic-graphite,=120,"coal:1","energetic-graphite:1","energy-matrix:1",=1/6,conveyor-belt-2,energetic-graphite,=4,arc-smelter,"1 ",=1440
+coal,=240,,"coal:1","energetic-graphite:1",=1/3,conveyor-belt-2,coal-vein,=8,mining-machine,,
+hydrogen,=120,,"hydrogen:1","energy-matrix:1",=1/6,conveyor-belt-2,gas-giant-hydrogen,=25/96,orbital-collector,,

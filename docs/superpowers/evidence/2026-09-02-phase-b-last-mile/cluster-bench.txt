@@ -1,0 +1,85 @@
+# Ruling V fix round -- cluster replay bench, RE-CAPTURED
+# captured and replayed 2026-09-02 after the Ruling V fixes (A, B2, C).
+# The digests below are NEW BY DESIGN: `_round_state` no longer scores an
+# order-only reservation difference as a mismatch (A), and `build_cluster` now
+# keeps one net per un-tappable source lane (B2), which changes which nets the
+# `universe-matrix` clusters contain.  The two ROUTE-case digests are unchanged
+# and still MATCH (bottom of this file).
+# load average at capture:
+ 15:55:11 up 17 days, 21:41,  9 users,  load average: 2.58, 3.03, 3.87
+ 15:56:16 up 17 days, 21:42,  9 users,  load average: 3.21, 3.13, 3.85
+
+## capture, both cells: --budget 30 --cap 32, workers=1, BandPolicy("portable")
+captured 5 cluster searches -> cluster-cases-universe-matrix-output-products.pkl
+    (37.8 MB); bounded=2, proved=3; bounds none=3, budget=2
+captured 6 cluster searches -> cluster-cases-quantum-chip-all-products.pkl
+    (12.3 MB); proved=4, solved=2; bounds none=6
+
+## the cluster problems themselves (universe-matrix / output-products)
+run=1 nets=(15, 21, 41) stranded=(41,) same_source_dropped=0 bounded/budget
+run=1 nets=(15, 21, 41) stranded=(41,) same_source_dropped=0 bounded/budget
+run=1 nets=(4,)         stranded=(4,)  same_source_dropped=1 proved
+run=1 nets=(4,)         stranded=(4,)  same_source_dropped=1 proved
+run=1 nets=(36,)        stranded=(36,) same_source_dropped=1 proved
+# (36, 37) and (4, 70) were size-2 clusters before this round.  In each pair the
+# second net is an ACCUSER sharing the seed's source lane, and `_can_junction`
+# is False at that lane -- (172, 18, 0) for (36, 37).  Releasing both offered
+# both the same direct access cells, CBS handed each a different one, and the
+# committer refused the pair with `junction-collider`.
+
+## replay --check, universe-matrix / output-products
+  round 1: 2.181s  125 nodes
+  round 2: 2.134s  125 nodes
+  round 3: 2.156s  125 nodes
+BEST 2.134s  5 clusters  (run1=5 run2=0, skipped 0 wall-bounded)  sizes 1-3  truncated 0  bounded=2  proved=3  solved=0  digest e04df120a11ae2ba
+captured digest e04df120a11ae2ba   replay digest e04df120a11ae2ba   MATCH
+  (scope: the CBS search only -- `offers` is a stub and the commit path is not captured)
+  exit 0
+
+## replay --check, quantum-chip / all-products
+  round 1: 0.015s  10 nodes
+  round 2: 0.014s  10 nodes
+  round 3: 0.014s  10 nodes
+BEST 0.014s  6 clusters  (run1=6 run2=0, skipped 0 wall-bounded)  sizes 2-2  truncated 0  bounded=0  proved=4  solved=2  digest 92db9a472fc14fa3
+captured digest 92db9a472fc14fa3   replay digest 92db9a472fc14fa3   MATCH
+  (scope: the CBS search only -- `offers` is a stub and the commit path is not captured)
+  exit 0
+# `quantum-chip`'s digest is UNCHANGED from Task 9 (92db9a472fc14fa3): no net
+# there shares an un-tappable source lane, so B2 moved nothing, and A only
+# changes the restore verdict, which is outside the digest.
+
+## PASS-LEVEL counters, one instrumented 30 s run per cell
+universe-matrix output-products: invocations=5 solved=0 proved=3 bounded=2
+    commit_rejected=0 restore_mismatch=0 relation_skipped_siblings=3
+    same_source_dropped=3 nodes=125 expansions=4,052,918 seconds=1.403
+quantum-chip all-products:       invocations=6 solved=0 proved=4 bounded=2
+    commit_rejected=2 restore_mismatch=0 relation_skipped_siblings=4
+    same_source_dropped=0 nodes=14  expansions=13,969  seconds=0.019
+
+Task 9 measured, for comparison:
+universe-matrix: solved=0 proved=0 bounded=5 commit_rejected=1 restore_mismatch=2
+quantum-chip:    solved=0 proved=4 bounded=2 commit_rejected=2 restore_mismatch=0
+
+Read: on `universe-matrix` the two withdrawn proofs came back and a third
+arrived, the commit rejection is gone, and `restore_mismatch` is 0.  On
+`quantum-chip` nothing moved: its two commit rejections are the B1 defect,
+which this round STOPPED under Ruling V (D) -- see the task report.  Pass-level
+`solved` is still 0 on both cells, and run 2 still never fires: every PROVED
+cluster on both cells has a `src_group` or `dst_group` sibling, so
+`_cluster_is_sibling_free` turns it away (3 and 4 skips).
+
+## observed cluster-search wall seconds (B_MIN_SECONDS input, NOT re-applied)
+ 15:56:54 up 17 days, 21:42,  9 users,  load average: 2.86, 3.05, 3.79
+cluster-cases-universe-matrix-output-products.pkl: n=5 max=0.988s mean=0.307s
+cluster-cases-quantum-chip-all-products.pkl: n=6 max=0.003s mean=0.002s
+min deadline_remaining at capture: 2.504s (universe-matrix), 3.246s (quantum-chip)
+
+B_MIN_SECONDS stays 1.82 per Ruling V; the idle re-measure belongs to the gate.
+These seconds were taken at load ~3, lower than Task 9's ~5, and the max moved
+UP (0.909 -> 0.988) rather than down, so load is not the dominant term here.
+
+## route-case digests, re-run after these changes -- both still MATCH
+BEST 0.364s  912,831 expansions  0.399 us/exp  digest f4200322f44ef584
+captured digest f4200322f44ef584   replay digest f4200322f44ef584   MATCH   exit 0
+BEST 0.081s  150,821 expansions  0.539 us/exp  digest 0b6c1cb650fedecd
+captured digest 0b6c1cb650fedecd   replay digest 0b6c1cb650fedecd   MATCH   exit 0

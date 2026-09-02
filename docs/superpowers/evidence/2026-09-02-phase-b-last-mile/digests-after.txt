@@ -1,0 +1,22 @@
+  round 1: 0.368s  912,831 expansions  0.403 us/exp
+  round 2: 0.359s  912,831 expansions  0.393 us/exp
+  round 3: 0.377s  912,831 expansions  0.413 us/exp
+BEST 0.359s  912,831 expansions  0.393 us/exp  digest f4200322f44ef584
+captured digest f4200322f44ef584   replay digest f4200322f44ef584   MATCH
+  round 1: 0.155s  150,821 expansions  1.028 us/exp
+  round 2: 0.133s  150,821 expansions  0.883 us/exp
+  round 3: 0.128s  150,821 expansions  0.851 us/exp
+BEST 0.128s  150,821 expansions  0.851 us/exp  digest 0b6c1cb650fedecd
+captured digest 0b6c1cb650fedecd   replay digest 0b6c1cb650fedecd   MATCH
+  round 1: 2.818s  125 nodes
+  round 2: 2.293s  125 nodes
+  round 3: 2.307s  125 nodes
+BEST 2.293s  5 clusters  (run1=5 run2=0, skipped 0 wall-bounded)  sizes 1-3  truncated 0  bounded=2  proved=3  solved=0  digest e04df120a11ae2ba
+captured digest e04df120a11ae2ba   replay digest e04df120a11ae2ba   MATCH
+  (scope: the CBS search only -- `offers` is a stub and the commit path is not captured)
+  round 1: 0.024s  10 nodes
+  round 2: 0.022s  10 nodes
+  round 3: 0.022s  10 nodes
+BEST 0.022s  6 clusters  (run1=6 run2=0, skipped 0 wall-bounded)  sizes 2-2  truncated 0  bounded=0  proved=4  solved=2  digest 92db9a472fc14fa3
+captured digest 92db9a472fc14fa3   replay digest 92db9a472fc14fa3   MATCH
+  (scope: the CBS search only -- `offers` is a stub and the commit path is not captured)

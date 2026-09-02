@@ -1,0 +1,8 @@
+"https://factoriolab.github.io/dsp/list?o=plastic*60&ibe=conveyor-belt-2&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+Item,Items,Surplus,Inputs,Outputs,Targets,Belts,Belt,Recipe,Machines,Machine,Modules,Power
+plastic,=60,,"energetic-graphite:1,refined-oil:1","plastic:1","",=1/12,conveyor-belt-2,plastic,=3,chemical-plant,"1 ",=2160
+energetic-graphite,=60,,"coal:1","energetic-graphite:1","plastic:1",=1/12,conveyor-belt-2,energetic-graphite,=2,arc-smelter,"1 ",=720
+coal,=120,,,"coal:1","energetic-graphite:1",=1/6,conveyor-belt-2,coal-vein,=4,mining-machine,,
+refined-oil,=120,,"crude-oil:1","hydrogen:1,refined-oil:1","plastic:1",=1/6,conveyor-belt-2,plasma-refining,=4,oil-refinery,"1 ",=3840
+crude-oil,=120,,,"crude-oil:1","plasma-refining:1",=1/6,conveyor-belt-2,crude-oil-seep,=2,oil-extractor,,=1680
+hydrogen,=0,=60,,,,=1/12,conveyor-belt-2,,,,,
