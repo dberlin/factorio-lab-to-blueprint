@@ -15420,11 +15420,16 @@ class FreeformLayout:
         def planning_cancelled() -> bool:
             return _expired(deadline)
 
+        from flab2bp.layout.strip_variants import generate_strip_families
+
+        families = tuple(generate_strip_families(spec))
+
         try:
             strips = plan_strips(
                 spec,
                 strip_len=self.strip_len,
                 band_policy=self.band_policy,
+                families=families,
                 cancelled=planning_cancelled,
             )
         except _PreparationDeadline as exc:
@@ -15442,6 +15447,7 @@ class FreeformLayout:
                     spec,
                     strip_len=max(1, spec.machine_count),
                     band_policy=self.band_policy,
+                    families=families,
                     cancelled=planning_cancelled,
                 )
             except _PreparationDeadline as deadline_exc:
@@ -15469,6 +15475,7 @@ class FreeformLayout:
                 strips,
                 strip_len=self.strip_len,
                 band_policy=self.band_policy,
+                families=families,
                 cancelled=planning_cancelled,
             )
         except _PreparationDeadline as exc:

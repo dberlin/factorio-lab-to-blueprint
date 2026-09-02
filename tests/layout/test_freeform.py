@@ -102,6 +102,7 @@ from flab2bp.layout.route_feedback import (
 from flab2bp.layout.strip_variants import (
     CargoDomain,
     ProjectionPitchRequirement,
+    StripFamily,
     StripInstance,
     StripPoseId,
     StripVariant,
@@ -276,6 +277,24 @@ def test_prepared_net_ids_are_stable() -> None:
     b = _prepare_routing_problem(spec, strips, pack, policy=BandPolicy("portable"), power=False)
 
     assert tuple(net.net_id for net in a.nets) == tuple(net.net_id for net in b.nets)
+
+
+def test_lay_out_generates_strip_families_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from flab2bp.layout import strip_variants as strip_variants_module
+
+    spec = two_stage_spec()
+    calls: list[BuildSpec] = []
+    original = generate_strip_families
+
+    def counting(spec_arg: BuildSpec) -> tuple[StripFamily, ...]:
+        calls.append(spec_arg)
+        return tuple(original(spec_arg))
+
+    monkeypatch.setattr(strip_variants_module, "generate_strip_families", counting)
+    layout = FreeformLayout(band_policy=BandPolicy("portable"), workers=1)
+    layout.lay_out(spec, time_budget_s=4.0)
+
+    assert len(calls) == 1
 
 
 def test_prepared_static_access_failure_spends_no_route_budget(
@@ -4854,6 +4873,7 @@ def test_freeform_starts_projection_valid_without_pitch_retry(
         strip_len: int = 6,
         band_policy: BandPolicy = freeform._DEFAULT_BAND_POLICY,
         minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
+        families: Sequence[StripFamily] | None = None,
         minimum_staged_static_clearance: Mapping[
             freeform.StagedStaticClearanceKey,
             int,
@@ -4865,6 +4885,7 @@ def test_freeform_starts_projection_valid_without_pitch_retry(
             strip_len=strip_len,
             band_policy=band_policy,
             minimum_pitch_x=minimum_pitch_x,
+            families=families,
             minimum_staged_static_clearance=minimum_staged_static_clearance,
             cancelled=cancelled,
         )
