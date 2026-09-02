@@ -95,18 +95,22 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
     floor = tiers[0]
     if len(tiers) == 1:
         print(
-            f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s); the URL's "
-            f"technologies unlock nothing faster, so a lane over that rate is refused",
+            f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s); it is "
+            f"the fastest belt this save can build, so a lane over that rate is refused",
             file=out,
         )
     else:
         ceiling = tiers[-1]
         raised = int(build.placement.stats.get("belt_runs_upgraded", 0))
         used = ", ".join(build.placement.stats.get("belt_upgrade_tiers", [])) or "none"
+        if raised == 0:
+            upgrade_note = "no run needed more than the floor"
+        else:
+            upgrade_note = f"{raised} run(s) raised to {used}"
         print(
             f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s) floor, "
             f"{ceiling.item_id} ({float(ceiling.items_per_second)}/s) ceiling; "
-            f"{raised} run(s) raised to {used}",
+            f"{upgrade_note}",
             file=out,
         )
 
