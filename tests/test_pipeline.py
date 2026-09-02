@@ -8,6 +8,7 @@ because by the time there is a return value the answer is "none of them".
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from collections.abc import Callable
 from fractions import Fraction
@@ -16,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from flab2bp import pipeline
-from flab2bp.dsp import codec
+from flab2bp.dsp import catalog, codec
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.url import parse_url
@@ -667,3 +668,56 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     # -- this is what actually proves the refusal happened during exact
     # preparation, the code path 0d2a69b guarded.
     assert preparation_deadline_fires > 0
+
+
+DEUTERON_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJxNzD0LwjAYBOB.k-GmJGKd3uWCuokVFLNaO2gthfqBOry"
+    ".XSrGdHvu4K6TCOet6YQVnLWAG3weOWbP4O2.JybJOxSjqU--ZbKCnya.8pIc3n.hjeKr06GWYPr6KWtEHNHgDq7"
+    "ALbgHG-UFvCIsNCwRSg0b07a9RKXOtTQPce4DLu01vA__&v=11"
+)
+
+
+def _with_belt(monkeypatch: pytest.MonkeyPatch, belt_id: str) -> None:
+    original = pipeline.parse_url  # type: ignore[attr-defined]
+
+    def patched(url: str, **kwargs: object):  # type: ignore[no-untyped-def]
+        return dataclasses.replace(original(url, **kwargs), belt_id=belt_id)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pipeline, "parse_url", patched)
+
+
+@pytest.mark.slow
+def test_a_mk2_url_whose_lanes_need_mk3_builds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reported failure: hydrogen lanes at 14-20/s on a 12/s belt.  With
+    Mk.III researched, those runs are raised and the build validates."""
+    _with_belt(monkeypatch, "conveyor-belt-2")
+    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=30.0)
+    assert build.report.ok
+    assert build.spec.belt_item_id == "conveyor-belt-2"
+    tiers = {b.item_id for b in build.placement.buildings if catalog.is_belt(b.item_id)}
+    assert 2003 in tiers, "some run needed Mk.III"
+    assert 2002 in tiers, "runs within the floor keep the URL's belt"
+    assert build.placement.stats["belt_runs_upgraded"] >= 1
+
+
+@pytest.mark.slow
+def test_without_planetary_logistics_the_same_url_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wanted = [
+        "basic-logistics-system",
+        "improved-logistics-system",
+        "high-efficiency-logistics-system",
+    ]
+    original = pipeline.parse_url  # type: ignore[attr-defined]
+
+    def patched(url: str, **kwargs: object):  # type: ignore[no-untyped-def]
+        return dataclasses.replace(
+            original(url, **kwargs),  # type: ignore[arg-type]
+            belt_id="conveyor-belt-2",
+            researched_technology_ids=set(wanted),
+        )
+
+    monkeypatch.setattr(pipeline, "parse_url", patched)
+    with pytest.raises(pipeline.NoValidLayout, match="flow.belt_capacity"):  # type: ignore[attr-defined]
+        pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=30.0)

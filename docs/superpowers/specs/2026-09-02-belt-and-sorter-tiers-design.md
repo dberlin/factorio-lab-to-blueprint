@@ -1,6 +1,6 @@
 # Belt and sorter tiers where necessary
 
-Date: 2026-09-02. Status: design, awaiting review.
+Date: 2026-09-02. Status: implemented on branch belt-and-sorter-tiers; gate evidence under docs/superpowers/evidence/2026-09-02-belt-and-sorter-tiers/
 
 ## 1. Problem
 
