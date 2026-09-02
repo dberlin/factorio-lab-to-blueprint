@@ -5081,9 +5081,19 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
     assert ctx.spec is not None
     for ridx, per_item in sorted(_run_demand(ctx).items()):
         run = ctx.runs[ridx]
-        capacity = cat.BELT_RATE.get(run.tier_item_id)
+        # A run can be mixed after the finalizer's compaction merges two runs
+        # whose tiles were retiered differently, so the run's capacity is the
+        # SLOWEST tile in it -- that tile is what actually throttles the lane.
+        rates = [
+            r
+            for i in run.indices
+            if (r := cat.BELT_RATE.get(ctx.placement.buildings[i].item_id)) is not None
+        ]
+        if not rates:
+            continue
+        capacity = min(rates)
         required = sum(per_item.values(), Fraction(0))
-        if capacity is None or required <= capacity:
+        if required <= capacity:
             continue
         breakdown = {
             (k or "unattributed"): str(v)
@@ -5147,12 +5157,17 @@ def _sorter_capacity(ctx: Context) -> Iterable[Finding]:
 
 @check("belt.tier_allowed", needs_spec=True)
 def _belt_tier_allowed(ctx: Context) -> Iterable[Finding]:
-    """Every belt is one the save can build: the URL's belt or a researched upgrade.
+    """Every belt tile is one the save can build: the URL's belt or a researched upgrade.
 
     The floor is FactorioLab's choice and the ceiling is the technology set,
     both carried on the spec; a tile outside that set pastes in the game and
     then cannot be built by the player.  Below the floor is reported too --
     nothing emits a slower belt on purpose, so one is a defect.
+
+    Judged per tile rather than per run: the finalizer's compaction can merge
+    two runs after retiering, leaving one run with tiles at different tiers,
+    so a run-level check could miss a disallowed tile hiding behind an
+    allowed head.
     """
     assert ctx.spec is not None
     allowed = {
@@ -5161,16 +5176,16 @@ def _belt_tier_allowed(ctx: Context) -> Iterable[Finding]:
         if (numeric := cat.get_item_id(tier.item_id)) is not None
     }
     names = [tier.item_id for tier in ctx.spec.belt_tiers]
-    for ridx, run in enumerate(ctx.runs):
-        if run.tier_item_id in allowed:
+    for i, b in ctx.of_kind(Kind.BELT):
+        if b.item_id in allowed:
             continue
         yield Finding(
             "belt.tier_allowed",
             Severity.ERROR,
-            f"belt run {ridx} is tier {run.tier_item_id}, which this save cannot "
+            f"belt tile {i} is tier {b.item_id}, which this save cannot "
             f"build; allowed: {', '.join(names)}",
-            run.indices,
-            {"run": ridx, "tier": run.tier_item_id, "allowed": names},
+            (i,),
+            {"tile": i, "run": ctx.run_of.get(i), "tier": b.item_id, "allowed": names},
         )
 
 

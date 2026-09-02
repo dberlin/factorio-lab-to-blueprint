@@ -2719,6 +2719,20 @@ def test_flow_belt_capacity_clean_within_the_tier() -> None:
     assert not fired(r, "flow.belt_capacity")
 
 
+def test_flow_belt_capacity_uses_the_slowest_tile_in_a_mixed_run() -> None:
+    # A run can end up with a Mk.III head and a Mk.II tail once compaction
+    # merges two runs that were retiered differently; capacity must be judged
+    # by the slowest tile, not the head's, or an overloaded tail goes uncaught.
+    p = place(
+        belt(2, 0, item_id=2003, out=1),  # Mk.III, 30/s
+        belt(3, 0, item_id=2002),  # Mk.II, 12/s
+        machine(4, 0, recipe_id=6),
+        sorter(3, 0, 4, 0, inp=1, out=2, item_id=PILE),
+    )
+    r = validate(p, hungry_spec(Fraction(20)), ids=TWO_INPUT_IDS)
+    assert fired(r, "flow.belt_capacity")
+
+
 def test_flow_sorter_capacity_fires_beyond_the_sorter_rate() -> None:
     # Sorter Mk.III sustains 6/s at one tile; this machine wants 20/s
     r = validate(fed_machine(), hungry_spec(Fraction(20)), ids=TWO_INPUT_IDS)
@@ -5131,6 +5145,20 @@ def test_belt_tier_allowed_clean_inside_the_researched_set() -> None:
 def test_belt_tier_allowed_fires_below_the_floor_too() -> None:
     p = place(
         belt(3, 0, item_id=2001), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
+    r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
+    assert fired(r, "belt.tier_allowed")
+
+
+def test_belt_tier_allowed_fires_on_a_disallowed_tile_in_an_otherwise_allowed_run() -> None:
+    # An allowed head must not hide a disallowed tail: retiering plus the
+    # finalizer's compaction can leave one run mixed, so the check must judge
+    # every tile rather than trusting the run's first tile.
+    p = place(
+        belt(2, 0, item_id=2003, out=1),  # allowed upgrade
+        belt(3, 0, item_id=2001),  # below the floor -- disallowed
+        machine(4, 0, recipe_id=6),
+        sorter(3, 0, 4, 0, inp=1, out=2),
     )
     r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
     assert fired(r, "belt.tier_allowed")
