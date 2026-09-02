@@ -7053,8 +7053,11 @@ def _unit_cluster_no_good(
 def _unit_cluster_model(
     fixed_at: dict[int, tuple[int, int]],
     deltas: tuple[tuple[int, int], ...] = ((0, 0), (2, 0), (4, 0)),
+    *,
+    strips: list[Strip] | None = None,
+    with_no_good: bool = True,
 ) -> freeform._PackModel:
-    strips = _three_unit_strips()
+    strips = _three_unit_strips() if strips is None else strips
     height = 6
     built = freeform._pack_model(
         strips,
@@ -7062,17 +7065,48 @@ def _unit_cluster_model(
         width_bound=8,
         direct_candidates={},
         fixed_at=fixed_at,
-        cluster_relation_no_goods=(_unit_cluster_no_good(strips, height, deltas),),
+        cluster_relation_no_goods=(
+            (_unit_cluster_no_good(strips, height, deltas),) if with_no_good else ()
+        ),
     )
     assert built is not None
     return built
 
 
-def test_a_cluster_no_good_naming_only_pinned_strips_is_skipped() -> None:
-    """Every named strip pinned: the relation's only free variable is `w_var`."""
+def _is_infeasible(built: freeform._PackModel) -> bool:
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    return bool(solver.Solve(built.model) == cp_model.INFEASIBLE)
+
+
+def test_a_cluster_no_good_naming_only_pinned_strips_is_modelled_and_decides() -> None:
+    """Every named strip pinned INTO the forbidden offsets: the cut STAYS.
+
+    This is where a cluster no-good parts company with an exact-pack one.  The
+    exact-pack guard drops a fully pinned no-good because its only free variable
+    would be `w_var`, and forbidding a width for no geometric reason is not what
+    the evidence proved.  `_add_cluster_relation_no_good` never touches `w_var`:
+    its relation variables are differences of content origins, fully determined
+    by these pins.  So the cut is not degenerate here -- it says this pack IS the
+    relative placement Phase B proved unroutable, and the honest answer is
+    INFEASIBLE: this window cannot repair the incumbent.
+
+    The `with_no_good=False` build is the control.  Without the cut the same pins
+    solve, so the refusal is the no-good talking and not the geometry.
+    """
     built = _unit_cluster_model({0: (0, 0), 1: (2, 0), 2: (4, 0)})
-    assert built.skipped_no_goods == 1
-    assert "cluster_ng" not in str(built.model.Proto())
+    assert built.skipped_no_goods == 0
+    assert "cluster_ng" in str(built.model.Proto())
+    assert _is_infeasible(built)
+    control = _unit_cluster_model({0: (0, 0), 1: (2, 0), 2: (4, 0)}, with_no_good=False)
+    assert not _is_infeasible(control)
+
+
+def test_a_cluster_no_good_pinned_at_a_translation_of_itself_still_decides() -> None:
+    """The relation is relative, so sliding the whole cluster does not escape it."""
+    built = _unit_cluster_model({0: (1, 0), 1: (3, 0), 2: (5, 0)})
+    assert built.skipped_no_goods == 0
+    assert _is_infeasible(built)
 
 
 def test_a_cluster_no_good_a_pinned_anchor_contradicts_is_skipped() -> None:
@@ -7098,6 +7132,30 @@ def test_a_cluster_no_good_two_pinned_non_anchor_strips_contradict_is_skipped() 
 def test_a_cluster_no_good_two_pinned_strips_agree_on_is_kept() -> None:
     """The mirror: the pinned pair matches the relation, so the anchor still decides."""
     built = _unit_cluster_model({1: (2, 0), 2: (4, 0)})
+    assert built.skipped_no_goods == 0
+    assert "cluster_ng" in str(built.model.Proto())
+
+
+def test_a_cluster_no_good_guard_reads_content_origins_not_box_origins() -> None:
+    """`fixed_at`, `deltas` and the modelled relation are all in CONTENT space.
+
+    Two channels of DIFFERENT widths, so a guard that compared box origins
+    against content deltas could not have the mismatch cancel: it would read the
+    implied anchors as (-1, 0) and (-2, 0), call them a contradiction, and drop a
+    cut that is live.  In content space both pins imply (0, 0) and the cut stays.
+
+    Strip 1 sits at box (2, 0) with a one-wide channel and strip 2 at box (4, 2)
+    with a two-wide one, which is content (3, 0) and (6, 2) -- exactly the
+    offsets the relation names from a free anchor at the origin.
+    """
+    base = _three_unit_strips()
+    strips = [base[0], replace(base[1], west_channel=1), replace(base[2], west_channel=2)]
+    assert [freeform._box(strip) for strip in strips] == [(2, 6), (3, 2), (4, 4)]
+    built = _unit_cluster_model(
+        {1: (3, 0), 2: (6, 2)},
+        ((0, 0), (3, 0), (6, 2)),
+        strips=strips,
+    )
     assert built.skipped_no_goods == 0
     assert "cluster_ng" in str(built.model.Proto())
 
