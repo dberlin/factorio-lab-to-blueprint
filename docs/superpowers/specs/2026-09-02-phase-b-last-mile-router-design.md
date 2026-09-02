@@ -1,6 +1,6 @@
 # Phase B: Complete Last-Mile Router With Real No-Goods
 
-**Status:** Approved design; implementation not started
+**Status:** Executed 2026-09-02 on branch `phase-b-last-mile` (725c34e..11c6a9c); corpus gate FAILED: 65/72 CLEAN at 30 s in all three candidate rounds against a 64/65/65 baseline (target 67), both required cells still REFUSED, no regression, INVALID 0, CRASH 0, paired area ratio 1.0068, wall p95 31.6 s / 31.8 s over the 31 s threshold (see `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/gate.md`). Three items are OPEN and deferred: (1) a CBS solution the commit preflight refuses because non-cluster nets keep stale hints at stake time (`last_mile_commit_rejected = 2` on `quantum-chip/all-products`); the rollback is complete so no state is poisoned, but the only known fix, refreshing those hints at stake time with hints added to `_round_state`, is unbounded; (2) run 2 is corpus-inert: the sibling gate turned away 100% of run-1 proofs on both target cells, so `ClusterRelationNoGood` has unit coverage only and §5.2's follow-up trigger has fired; (3) §5.2 follow-up option 2 (unstake only non-cluster, non-sibling nets) is the recorded next step and was not attempted.
 **Predecessor:** `docs/superpowers/specs/2026-09-01-evaluation-throughput-design.md` (Phase A, merged at `b3c990a`)
 **Successors:** Phase C (ALNS placement with a CP-SAT window repair), Phase D (portfolio racing)
 
@@ -54,8 +54,11 @@ Phase B adds:
    itself performs at the top of each round (`freeform.py:8342`-`8343`) —
    temporarily clears the cluster nets' five routing-derived rejection sets,
    and re-runs CBS. That environment is buildings, keep-outs, the routing box,
-   reserved corridors as `_reserve_port_access` prepared them, permanent guards
-   and junction bans, and nothing else. A tree that closes there yields a new
+   permanent guards and junction bans, and nothing else: every port corridor is
+   retired as if its role had been served, `planned_taps` starts EMPTY, and
+   `_can_junction`'s one check that tightens as that table shrinks is exempted
+   for the duration of the run (§5.2, the loosest-world rule). A tree that
+   closes there yields a new
    `ClusterRelationNoGood` naming the cluster's strip instances and their
    relative placement. Freeform's `_pack` (`freeform.py:3179`) forbids that
    relative placement with `add_forbidden_assignments`, exactly as
