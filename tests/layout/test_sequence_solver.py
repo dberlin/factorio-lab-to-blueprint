@@ -6889,20 +6889,8 @@ def test_legacy_finalizer_crossing_deadline_returns_incomplete_budget(
     assert verdict.projection_failures == ()
 
 
-def _never_certifying_solver(
-    *,
-    heights: tuple[int, ...],
-    deadline_reached: Callable[[], bool],
-) -> SequenceSolver[object]:
-    """A solver whose detailed route always strands one net, so no incumbent appears."""
-    base = PlacementProblem(
-        sizes=((4, 3), (4, 3)),
-        nets=((0, 1),),
-        outline_height=heights[0],
-        area_lower_bound=24,
-    )
-    problems = {height: replace(base, outline_height=height) for height in heights}
-    routing = DetailedRouteResult(
+def _stranded_routing(expansions: int) -> DetailedRouteResult:
+    return DetailedRouteResult(
         status=DetailedRouteStatus.STRANDED,
         routed=(),
         failures=(
@@ -6911,26 +6899,81 @@ def _never_certifying_solver(
                 kind=RouteFailureKind.CONGESTION_WALL,
                 wall=((1, 1, 0),),
                 blocking_nets=(),
-                expansions=1,
+                expansions=expansions,
             ),
         ),
         iterations=1,
-        expansions=1,
+        expansions=expansions,
     )
+
+
+def _staged_solver(
+    *,
+    heights: tuple[int, ...],
+    deadline_reached: Callable[[], bool],
+    total_expansions: int = 10_000,
+    clean_after: int | None = None,
+    spend_allowance: bool = False,
+) -> SequenceSolver[object]:
+    """A solver that strands one net until its ``clean_after``-th detailed route.
+
+    ``clean_after=None`` never certifies at all.  ``spend_allowance`` makes every
+    detailed route report its whole allowance as spent, which is how a test
+    drives the expansion ledger to zero without touching the clock.
+    """
+    base = PlacementProblem(
+        sizes=((4, 3), (4, 3)),
+        nets=((0, 1),),
+        outline_height=heights[0],
+        area_lower_bound=24,
+    )
+    problems = {height: replace(base, outline_height=height) for height in heights}
+    exact = _placement(area=20, belt_tiles=4)
+    routed = DetailedRouteResult(
+        status=DetailedRouteStatus.ROUTED,
+        routed=(),
+        failures=(),
+        iterations=1,
+        expansions=0,
+    )
+    detailed_calls = 0
+
+    def detailed_route(prepared: object, allowance: int) -> DetailedStageResult:
+        del prepared
+        nonlocal detailed_calls
+        detailed_calls += 1
+        if clean_after is not None and detailed_calls > clean_after:
+            return DetailedStageResult(routed, exact)
+        return DetailedStageResult(_stranded_routing(allowance if spend_allowance else 1), None)
+
+    def validate(placement: Placement) -> ValidationVerdict:
+        if placement.stats.get("validator_clean") == 1.0:
+            return ValidationVerdict(True, (), placement)
+        return ValidationVerdict(False, ("stranded",), None)
+
     adapters = StageAdapters[object](
         prepare=lambda height, decoded: object(),
         global_route=lambda prepared, feedback, allowance: _global(),
-        detailed_route=lambda prepared, allowance: DetailedStageResult(routing, None),
-        validate=lambda placement: ValidationVerdict(False, ("stranded",), None),
+        detailed_route=detailed_route,
+        validate=validate,
     )
     return SequenceSolver[object](
         heights=heights,
         problem_for_height=problems.__getitem__,
         adapters=adapters,
-        expansion_budget=ExpansionBudget(total=10_000),
+        expansion_budget=ExpansionBudget(total=total_expansions),
         config=SequenceSolverConfig.test(),
         deadline_reached=deadline_reached,
     )
+
+
+def _never_certifying_solver(
+    *,
+    heights: tuple[int, ...],
+    deadline_reached: Callable[[], bool],
+) -> SequenceSolver[object]:
+    """A solver whose detailed route always strands one net, so no incumbent appears."""
+    return _staged_solver(heights=heights, deadline_reached=deadline_reached)
 
 
 def test_search_without_continuation_stops_at_the_derived_stage_limit() -> None:
@@ -7002,3 +7045,132 @@ def test_feasibility_continuation_is_reproducible_across_identical_runs() -> Non
     assert first == second
     assert first_reason == second_reason
     assert len(first) > 2 * SequenceSolverConfig.test().restarts_per_height
+
+
+def test_feasibility_continuation_stops_at_its_own_batch_bound() -> None:
+    """`C_FEASIBILITY_RESTART_BATCHES` is the stop, not the ledger and not the clock.
+
+    The budget is large enough that `shared_left` never reaches zero and the
+    deadline predicate only fires after 500 checks -- an 8-batch run makes 49 --
+    so the only thing that can end this search is the batch bound itself.  Drop
+    the bound and the search runs on to that backstop and reports "deadline"
+    instead.
+    """
+    assert sequence_solver_module.C_FEASIBILITY_RESTART_BATCHES == 8
+    ticks = iter(range(10_000))
+    solver = _staged_solver(
+        heights=(12, 16),
+        deadline_reached=lambda: next(ticks, 10_000) >= 500,
+        total_expansions=10_000_000,
+    )
+
+    with pytest.raises(NoValidLayout) as excinfo:
+        solver.search(feasibility_continuation=True)
+
+    assert "feasibility continuation exhausted its restart budget" in str(excinfo.value)
+    assert "after 8 batches" in str(excinfo.value)
+    assert solver.budget.shared_left > 0
+    for height_state in solver._heights:
+        appended = len(height_state.restarts) - SequenceSolverConfig.test().restarts_per_height
+        assert appended == sequence_solver_module.C_FEASIBILITY_RESTART_BATCHES
+
+
+def test_expansion_budget_exhaustion_keeps_its_own_refusal_under_continuation() -> None:
+    """A continuation that runs out of ledger is a budget refusal, not a batch one.
+
+    `max_stages=1` puts the stage limit exactly one stage away, so the
+    continuation branch is what observes the drained ledger -- not the
+    `shared_left == 0` check further down the loop body.  The branch must
+    attribute that to the expansion budget and append nothing.
+    """
+    solver = _staged_solver(
+        heights=(12,),
+        deadline_reached=lambda: False,
+        total_expansions=40,
+        spend_allowance=True,
+    )
+
+    with pytest.raises(NoValidLayout) as excinfo:
+        solver.search(max_stages=1, feasibility_continuation=True)
+
+    assert "expansion budget exhausted before finding an exact layout" in str(excinfo.value)
+    assert "feasibility continuation" not in str(excinfo.value)
+    assert solver.budget.shared_left == 0
+    assert len(solver._heights[0].restarts) == SequenceSolverConfig.test().restarts_per_height
+
+
+def test_continuation_certifies_a_layout_the_scheduled_stages_could_not_reach() -> None:
+    """The end-to-end appending path: clean only after more stages than are scheduled.
+
+    `SequenceSolverConfig.test()` schedules a stage limit of 2 for one height.
+    The adapter certifies on its fifth detailed route, so the derived schedule
+    cannot reach it and the bare search refuses -- while the continuation
+    appends restarts until it does.
+    """
+    bare = _staged_solver(heights=(12,), deadline_reached=lambda: False, clean_after=4)
+    with pytest.raises(NoValidLayout, match="no scheduled stage produced an exact layout"):
+        bare.search()
+
+    continued = _staged_solver(heights=(12,), deadline_reached=lambda: False, clean_after=4)
+    result = continued.search(feasibility_continuation=True)
+
+    assert result.feasibility_restart_batches >= 1
+    assert result.placement.stats["validator_clean"] == 1.0
+    assert len(continued._heights[0].restarts) > SequenceSolverConfig.test().restarts_per_height
+
+
+def test_lay_out_solver_factory_branch_asks_the_solver_to_continue() -> None:
+    captured: dict[str, object] = {}
+
+    class _Solver:
+        def search(self, **kwargs: object) -> Never:
+            captured.update(kwargs)
+            raise RuntimeError("captured search keywords")
+
+    def factory(
+        spec: BuildSpec,
+        *,
+        time_budget_s: float,
+        power: bool,
+        strip_len: int,
+        config: SequenceSolverConfig,
+    ) -> _Solver:
+        del spec, time_budget_s, power, strip_len, config
+        return _Solver()
+
+    with pytest.raises(RuntimeError, match="captured search keywords"):
+        SequencePairLayout(
+            band_policy=_PORTABLE_BAND_POLICY,
+            solver_factory=factory,
+        ).lay_out(two_stage_spec(), time_budget_s=2.0)
+
+    assert captured["feasibility_continuation"] is True
+
+
+def test_lay_out_production_branch_asks_the_solver_to_continue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Solver:
+        def search(self, **kwargs: object) -> Never:
+            captured.update(kwargs)
+            raise RuntimeError("captured search keywords")
+
+    class _Run:
+        solver = _Solver()
+        max_search_stages = 2
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_production_run",
+        lambda *_args, **_kwargs: _Run(),
+    )
+
+    with pytest.raises(RuntimeError, match="captured search keywords"):
+        SequencePairLayout(band_policy=_PORTABLE_BAND_POLICY).lay_out(
+            two_stage_spec(), time_budget_s=2.0
+        )
+
+    assert captured["max_stages"] == 2
+    assert captured["feasibility_continuation"] is True
