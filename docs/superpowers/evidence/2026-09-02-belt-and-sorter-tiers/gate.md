@@ -71,3 +71,20 @@ but it is reported here as a defect per the gate's own rule -- CLEAN-in-baseline
 in-candidate is never explained away -- rather than waved off. It is not re-run to see whether it
 clears on a second try, since the gate's rule is to report the cell's detail, not to keep sampling
 until the unwanted result goes away.
+
+## Controller ruling on the regressed cell
+
+The cell was re-run three times on each tree with the same audit settings
+(`--budget 30 --only universe-matrix --candidate-policy output-products --strategy sequence-pair`),
+on the same loaded box (other agents' test suites running; `vmstat` showed ~7 runnable, 97% idle,
+I/O-bound). Evidence: `rerun-baseline-umop.jsonl` and `rerun-candidate-umop.jsonl`.
+
+| tree | run 1 | run 2 | run 3 |
+| --- | --- | --- | --- |
+| baseline `725c34e` | REFUSED 27.2 s | CLEAN 29.2 s | REFUSED 26.0 s |
+| candidate `2dd2c98` | REFUSED 25.9 s | REFUSED 26.5 s | CLEAN 29.7 s |
+
+Both trees clear the cell one time in three, both at the deadline's edge. The cell straddles the
+30 s budget under load on master as well; the branch did not cost it. Ruling: not a regression
+attributable to this branch, and not fixed here. It joins the seven refusing cells as a candidate
+for the reliability program (Phases B to D), which owns deadline-bound sequence-pair cells.
