@@ -92,6 +92,7 @@ from flab2bp.layout.base import (
     PlacementCompletion,
     ProjectionFailureRecord,
 )
+from flab2bp.layout.belt_tiers import retier_belts
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.route_feedback import (
     Cell,
@@ -14096,6 +14097,7 @@ def _build_prepared(
             "direct_inserts": float(prepared.direct_inserts),
         },
     )
+    placement = retier_belts(placement, spec)
     return _BuildResult(
         placement=placement,
         routing=routing,
