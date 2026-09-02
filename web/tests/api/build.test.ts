@@ -10,7 +10,7 @@ import {
   runBuild,
   submitBuild,
 } from '../../src/api/build';
-import { A_BLUEPRINT, aJob, aResult, restoreFetch, serving } from '../support/build';
+import { aJob, anAttempt, aResult, restoreFetch, serving } from '../support/build';
 
 afterEach(restoreFetch);
 
@@ -156,21 +156,22 @@ test('response strategies are limited to active explicit web choices', async () 
 test('sequence-pair is accepted as an explicit response strategy', async () => {
   const result = aResult({
     strategy: 'sequence-pair',
-    attempts: [
-      {
-        candidate: 'no-proliferator',
-        strategy: 'sequence-pair',
-        area: 575,
-        ok: true,
-        errors: 0,
-        chosen: true,
-        blueprint: A_BLUEPRINT,
-      },
-    ],
+    attempts: [anAttempt({ strategy: 'sequence-pair' })],
   });
   serving({ status: 200, body: aJob({ result }) });
   const job = await pollBuild('x');
   expect(job.result?.strategy).toBe('sequence-pair');
+});
+
+test('an attempt without its own detail is rejected rather than half-described', async () => {
+  // The report follows the SELECTED attempt; an attempt missing its detail
+  // would silently fall back to describing the winner, which is the bug this
+  // schema tightened to prevent.
+  const bare: Record<string, unknown> = { ...anAttempt() };
+  delete bare.detail;
+  const result: unknown = { ...aResult(), attempts: [bare] };
+  serving({ status: 200, body: { ...aJob(), result } });
+  await expect(pollBuild('x')).rejects.toThrow();
 });
 
 test('runBuild polls until the job settles and reports every snapshot', async () => {

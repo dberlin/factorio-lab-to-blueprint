@@ -6,7 +6,7 @@
  * the same way a real response would.
  */
 import { readFileSync } from 'node:fs';
-import type { BuildResult, Job } from '../../src/api/build';
+import type { Attempt, AttemptDetail, BuildResult, Job } from '../../src/api/build';
 
 /**
  * A real DSP blueprint string, so a test that hands one to the renderer is
@@ -23,9 +23,39 @@ export const B_BLUEPRINT = readFileSync(
   'utf8',
 ).trim();
 
+export function anAttemptDetail(overrides: Partial<AttemptDetail> = {}): AttemptDetail {
+  return {
+    machines: 9,
+    buildings: 42,
+    primary_band: 160,
+    certified_bands: [160, 200],
+    title: 'electromagnetic-matrix 60/min',
+    outputs: { 'electromagnetic-matrix': { exact: '1', per_minute: 60 } },
+    external_inputs: { 'magnetic-coil': { exact: '5/6', per_minute: 50 } },
+    input_markers: 1,
+    unmarked_inputs: [],
+    report: { ok: true, checks_run: ['power'], skipped: [], errors: [], warnings: [] },
+    ...overrides,
+  };
+}
+
+export function anAttempt(overrides: Partial<Attempt> = {}): Attempt {
+  return {
+    candidate: 'no-proliferator',
+    strategy: 'freeform',
+    area: 575,
+    ok: true,
+    errors: 0,
+    chosen: true,
+    blueprint: A_BLUEPRINT,
+    detail: anAttemptDetail(),
+    ...overrides,
+  };
+}
+
 export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
   const blueprint = overrides.blueprint === undefined ? A_BLUEPRINT : overrides.blueprint;
-  return {
+  const base: Omit<BuildResult, 'attempts'> = {
     blueprint,
     valid: true,
     strategy: 'freeform',
@@ -40,24 +70,36 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
     outputs: { 'electromagnetic-matrix': { exact: '1', per_minute: 60 } },
     external_inputs: { 'magnetic-coil': { exact: '5/6', per_minute: 50 } },
     input_markers: 1,
-    unmarked_inputs: [],
+    unmarked_inputs: [] as string[],
     flow_pinned: false,
-    flow_findings: [],
+    flow_findings: [] as string[],
     belt_rules: { max_z: 26.55, lab_level: 9, vertical_construction: true, from_url: false },
-    refused: [],
+    refused: [] as BuildResult['refused'],
     report: { ok: true, checks_run: ['power'], skipped: [], errors: [], warnings: [] },
+  };
+  const merged: Omit<BuildResult, 'attempts'> = { ...base, ...overrides };
+  // The top level describes the chosen attempt, so the fixture keeps them
+  // equal — exactly what `flab2bp.web.payload.describe` emits.
+  return {
+    ...merged,
     attempts: [
-      {
-        candidate: 'no-proliferator',
-        strategy: 'freeform',
-        area: 575,
-        ok: true,
-        errors: 0,
-        chosen: true,
+      anAttempt({
         blueprint,
-      },
+        area: merged.area,
+        detail: anAttemptDetail({
+          machines: merged.machines,
+          buildings: merged.buildings,
+          primary_band: merged.primary_band,
+          certified_bands: merged.certified_bands,
+          title: merged.title,
+          outputs: merged.outputs,
+          external_inputs: merged.external_inputs,
+          input_markers: merged.input_markers,
+          unmarked_inputs: merged.unmarked_inputs,
+          report: merged.report,
+        }),
+      }),
     ],
-    ...overrides,
   };
 }
 
