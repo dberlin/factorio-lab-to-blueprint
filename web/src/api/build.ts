@@ -75,6 +75,14 @@ const Report = z.object({
   warnings: z.array(Finding),
 });
 
+/** The floor FactorioLab chose, the ceiling the save allows, and what was raised. */
+const BeltTiers = z.object({
+  floor: z.string(),
+  ceiling: z.string(),
+  runs_upgraded: z.number(),
+  upgrade_tiers: z.array(z.string()),
+});
+
 /**
  * One candidate's own facts. The report panel describes the SELECTED attempt,
  * so every attempt carries its own boundary — what it belts in, what it makes,
@@ -90,6 +98,7 @@ const AttemptDetail = z.object({
   external_inputs: z.record(z.string(), Rate),
   input_markers: z.number(),
   unmarked_inputs: z.array(z.string()),
+  belt_tiers: BeltTiers,
   report: Report,
 });
 
@@ -133,6 +142,7 @@ const BuildResult = z.object({
   flow_pinned: z.boolean(),
   flow_findings: z.array(z.string()),
   belt_rules: BeltRules.nullable(),
+  belt_tiers: BeltTiers,
   refused: z.array(AttemptFailure),
   report: Report,
   attempts: z.array(Attempt),

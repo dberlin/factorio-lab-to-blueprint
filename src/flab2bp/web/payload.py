@@ -24,7 +24,8 @@ from fractions import Fraction
 
 from flab2bp import pipeline
 from flab2bp.layout import markers, validate
-from flab2bp.layout.base import LayoutAttemptFailure, ProjectionFailureRecord
+from flab2bp.layout.base import LayoutAttemptFailure, Placement, ProjectionFailureRecord
+from flab2bp.spec import BuildSpec
 
 #: Recursive JSON values, with no escape hatch for non-serialisable objects.
 type JsonScalar = None | bool | int | float | str
@@ -72,6 +73,18 @@ def _report_block(report: validate.Report) -> Json:
     }
 
 
+def _belt_tiers(spec: BuildSpec, placement: Placement) -> Json:
+    """The floor FactorioLab chose, the ceiling the save allows, and what was raised."""
+    tiers = spec.belt_tiers
+    upgraded = placement.stats.get("belt_upgrade_tiers", [])
+    return {
+        "floor": tiers[0].item_id,
+        "ceiling": tiers[-1].item_id,
+        "runs_upgraded": int(placement.stats.get("belt_runs_upgraded", 0)),
+        "upgrade_tiers": _array(sorted(upgraded)),
+    }
+
+
 def _attempt_detail(attempt: pipeline.Attempt) -> Json:
     """One attempt's own facts: what IT belts in, makes, and costs.
 
@@ -95,6 +108,7 @@ def _attempt_detail(attempt: pipeline.Attempt) -> Json:
         "external_inputs": _rates(dict(spec.external_inputs)),
         "input_markers": int(attempt.placement.stats.get("input_markers", 0)),
         "unmarked_inputs": _array(sorted(unmarked)),
+        "belt_tiers": _belt_tiers(spec, attempt.placement),
         "report": _report_block(attempt.report),
     }
 
@@ -185,6 +199,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "flow_pinned": build.flow_pinned,
         "flow_findings": _array(build.flow_findings),
         "belt_rules": belt,
+        "belt_tiers": _belt_tiers(build.spec, build.placement),
         # Refusals travel with a successful build too: "sequence-pair refused
         # this candidate" is invisible in `attempts`, and silence there reads
         # as "it simply was not the best", which is a much more reassuring

@@ -91,6 +91,25 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
                 file=out,
             )
 
+    tiers = build.spec.belt_tiers
+    floor = tiers[0]
+    if len(tiers) == 1:
+        print(
+            f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s); the URL's "
+            f"technologies unlock nothing faster, so a lane over that rate is refused",
+            file=out,
+        )
+    else:
+        ceiling = tiers[-1]
+        raised = int(build.placement.stats.get("belt_runs_upgraded", 0))
+        used = ", ".join(build.placement.stats.get("belt_upgrade_tiers", [])) or "none"
+        print(
+            f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s) floor, "
+            f"{ceiling.item_id} ({float(ceiling.items_per_second)}/s) ceiling; "
+            f"{raised} run(s) raised to {used}",
+            file=out,
+        )
+
     if build.refused:
         # A strategy that produced NO layout is invisible in `attempts`, so say
         # so. Silence here would read as "that combination was simply not the
