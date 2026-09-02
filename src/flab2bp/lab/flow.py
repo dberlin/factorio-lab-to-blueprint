@@ -77,9 +77,10 @@ FactorioLab did not choose".  That is the existing, well-understood lever --
 authoritative, "the state of FactorioLab's UI, not a delta" -- so pinning
 introduces no new concept in the rate solver, and nothing changes at all for a
 build that supplies no flow file.  An item whose only chosen producer is
-mining-flagged still falls out as an external input for the reason it always
-did: ``_buildable_producers`` cuts the 22 mining recipes because extraction
-happens outside the blueprint.
+mining-flagged still falls out as an external input: the pin leaves exactly
+FactorioLab's extraction recipes enabled, the rate solver prices those as
+supply columns (``solve._extraction_producers``) and never builds one, so
+their supply arrives on a belt.
 
 There is no fallback.  Absent, malformed, for the wrong URL, or naming a recipe
 we cannot build: this module raises.  Silently re-deriving the selection is the

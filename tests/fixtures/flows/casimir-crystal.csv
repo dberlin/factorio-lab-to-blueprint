@@ -1,0 +1,12 @@
+"https://factoriolab.github.io/dsp/list?o=casimir-crystal*60&ibe=conveyor-belt-3&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+Item,Items,Inputs,Outputs,Targets,Belts,Belt,Recipe,Machines,Machine,Modules,Power
+casimir-crystal,=60,"graphene:1,hydrogen:1,titanium-crystal:1","casimir-crystal:1","",=1/30,conveyor-belt-3,casimir-crystal,=4,assembling-machine-2,"1 ",=2160
+graphene,=120,"energetic-graphite:1,sulfuric-acid:1","graphene:1","casimir-crystal:1",=1/15,conveyor-belt-3,graphene,=3,chemical-plant,"1 ",=2160
+energetic-graphite,=180,"coal:1","energetic-graphite:1","graphene:1",=0.1,conveyor-belt-3,energetic-graphite,=6,arc-smelter,"1 ",=2160
+coal,=360,,"coal:1","energetic-graphite:1",=0.2,conveyor-belt-3,coal-vein,=12,mining-machine,,
+sulfuric-acid,=60,,"sulfuric-acid:1","graphene:1",=1/30,conveyor-belt-3,sulphuric-acid-vein,=1.2,water-pump,,=369.6
+titanium-crystal,=60,"organic-crystal:1,titanium-ingot:1","titanium-crystal:1","casimir-crystal:1",=1/30,conveyor-belt-3,titanium-crystal,=4,assembling-machine-2,"1 ",=2160
+titanium-ingot,=180,"titanium-ore:1","titanium-ingot:1","titanium-crystal:1",=0.1,conveyor-belt-3,titanium-ingot,=6,arc-smelter,"1 ",=2160
+titanium-ore,=360,,"titanium-ore:1","titanium-ingot:1",=0.2,conveyor-belt-3,titanium-vein,=12,mining-machine,,
+organic-crystal,=60,,"organic-crystal:1","titanium-crystal:1",=1/30,conveyor-belt-3,organic-crystal-vein,=2,mining-machine,,
+hydrogen,=720,,"hydrogen:1","casimir-crystal:1",=0.4,conveyor-belt-3,gas-giant-hydrogen,=25/16,orbital-collector,,

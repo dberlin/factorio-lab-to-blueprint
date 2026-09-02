@@ -3,7 +3,9 @@
 Each candidate fixes one proliferator mode per recipe before solving. That
 removes mode-activation binaries and leaves a small fixed-charge MILP over craft
 rates and integer physical machine counts. The URL's recipe, machine, footprint,
-and surplus costs are applied with FactorioLab's exact coefficient semantics.
+and surplus costs are applied with FactorioLab's exact coefficient semantics,
+including every enabled extraction recipe as an ordinary priced column
+competing with crafting rather than a structural cut.
 
 Every rate leaving the solver is recovered by an exact Rational LP inside the
 bought capacities. Machines may idle, so upstream demand follows exact craft
@@ -24,7 +26,7 @@ from __future__ import annotations
 import warnings
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from fractions import Fraction
 from types import MappingProxyType
 from typing import cast
@@ -188,10 +190,20 @@ def _objective_coefficients(
             per_machine = output_rate * recipe.cost * factor_cost
         else:
             per_machine = machine_cost
-            # FactorioLab treats footprint cost as an on/off multiplier: any
-            # nonzero value multiplies machine cost by tile area.
-            if footprint_cost:
-                per_machine *= column.footprint_area
+            # FactorioLab's ``adjustCosts`` multiplies the machine cost by the
+            # machine's tile area only when the DATASET declares
+            # ``machine.size`` and the footprint cost is nonzero.  The DSP
+            # dataset declares no size for any of its 52 machines, so every
+            # DSP machine -- collider, chemical plant or orbital collector --
+            # costs exactly ``costs.machine``.  Weighting crafting columns by
+            # our own catalog footprint instead made five colliders dearer than
+            # 31 deuterium collectors and belted deuterium in where FactorioLab
+            # crafts it from collected hydrogen; that changed the blueprint's
+            # inputs.  Area is the LAYOUT stage's concern and the geometric
+            # lower bound's, not the recipe choice's.
+            size = data.machine(column.machine_item_id).size
+            if footprint_cost and size is not None:
+                per_machine *= size[0] * size[1]
 
         surplus_per_craft = surplus_cost * sum(
             (
@@ -359,6 +371,47 @@ def _buildable_producers(
     )
 
 
+def _extraction_producers(
+    data: Dataset, item_id: str, excluded: frozenset[str]
+) -> tuple[Recipe, ...]:
+    """Enabled mining-flagged recipes for ``item_id``: extra priced LP columns.
+
+    FactorioLab's ``adjustCosts`` (``src/state/adjustment.ts``) prices every
+    enabled recipe rather than cutting extraction from the graph: a recipe
+    with a declared ``cost`` (veins 100-200, ocean/orbital collectors 1) is
+    priced at its output rate times that cost times the cost factor (default
+    1); a recipe with no declared cost is priced at the machine cost (default
+    1), times footprint tiles when the footprint cost is nonzero. The
+    production LP then minimises over whichever mix of crafting and
+    extraction columns is globally cheapest -- not the cheapest single
+    recipe, since the crafting alternative also drags in its own upstream
+    machines and their costs.
+
+    That is why ``_resolve_chain`` treats an item with an entry here as an
+    ordinary internal item with *extra* producers, rather than cutting it to
+    an external the way ``_buildable_producers`` cuts mining recipes from
+    crafting: the LP needs both routes as columns before it can choose. It is
+    also why the choice is not uniform per item -- in one captured flow,
+    ``graphene-advanced`` (fire ice plus a hydrogen coproduct from an
+    ``ice-giant`` collector, priced around 0.18/unit) still beats crafting
+    particle containers from coal and sulfuric acid veins priced at
+    100-200/unit, while hydrogen for deuterium fuel rods is instead collected
+    directly from ``ice-giant-hydrogen`` / ``gas-giant-hydrogen`` rather than
+    made via ``graphene-advanced``: each is simply the cheaper total route for
+    its own request. A structural "extraction is always a free input" rule
+    cannot tell these apart; only pricing can.
+
+    The player's exclusion set is the lever in both directions: turning every
+    extraction recipe for an item off removes those columns and leaves only
+    the crafting routes.
+    """
+    return tuple(
+        recipe
+        for recipe in data.recipes_producing(item_id)
+        if recipe.is_mining and recipe.id not in excluded
+    )
+
+
 def target_producer_ids(data: Dataset, request: LabRequest) -> frozenset[str]:
     """Recipes that may directly produce a requested final output."""
     excluded = _excluded_recipes(data, request)
@@ -380,11 +433,29 @@ def _resolve_chain(
     """Walk the recipe graph from the targets.
 
     Returns the producing recipes for each internal item, plus the set of items
-    that must be belted in because nothing here can make them. With a positive
-    surplus cost, FactorioLab traverses recipes that either produce or consume
-    each visited item and follows both their inputs and outputs. That wider
-    closure lets downstream recipes consume coproduct surplus.
+    that must be belted in.  An item is belted in when the URL supplies it (an
+    Input objective) or when nothing here can make it.  Otherwise it stays
+    internal, with its crafting recipes and (unless it is a requested output)
+    its enabled extraction recipes (``_extraction_producers``) BOTH offered as
+    producers: the production LP prices every one of them and picks whichever
+    mix is globally cheapest, exactly as FactorioLab's ``adjustCosts`` does. A
+    requested output never gets an extraction option -- an Output objective
+    asks for the item to be MADE, and a blueprint of zero machines satisfies
+    nobody -- so it is always crafted.  Known over-reach: that removes the
+    extraction option for the item's INTERNAL demand too, so an Output
+    objective on an item the chain also consumes (sulfuric acid alongside
+    graphene) crafts the consumed share as well, where FactorioLab would
+    extract it; forcing only the objective quantity to be crafted needs an
+    extra LP row and is not done yet. Extraction recipes
+    contribute no further edges to the walk: they have no inputs.
+
+    With a positive surplus cost, FactorioLab traverses recipes that either
+    produce or consume each visited item and follows both their inputs and
+    outputs. That wider closure lets downstream recipes consume coproduct
+    surplus.
     """
+    targets = tuple(targets)
+    requested = frozenset(targets)
     io_recipes: dict[str, list[Recipe]] = {}
     if include_consumers:
         for recipe in data.recipes:
@@ -415,14 +486,16 @@ def _resolve_chain(
             external.add(item_id)
             continue
 
-        options = _buildable_producers(data, item_id, excluded)
+        crafting = _buildable_producers(data, item_id, excluded)
+        extraction = () if item_id in requested else _extraction_producers(data, item_id, excluded)
+        options = crafting + extraction
         if options:
             producers[item_id] = options
         else:
             external.add(item_id)
 
         matches: Iterable[Recipe] = (
-            io_recipes.get(item_id, ()) if include_consumers else options
+            io_recipes.get(item_id, ()) if include_consumers else crafting
         )
         for recipe in matches:
             for ingredient in recipe.inputs:
@@ -435,6 +508,24 @@ def _resolve_chain(
     return producers, external
 
 
+@dataclass(frozen=True, slots=True)
+class _ExtractionColumn(AdjustedRecipe):
+    """An enabled extraction recipe, priced like FactorioLab but never built.
+
+    Mining, pumping, and orbital collection happen outside the blueprint (see
+    ``Recipe.is_mining``), so an extraction column never turns into a
+    ``SolvedGroup`` and its ``footprint_area`` is 0 regardless of what the
+    catalog reports for its machine -- charging tile area for a vein or a
+    collector would be meaningless, since nothing is ever placed for one.
+    Identify these columns everywhere with ``isinstance(column,
+    _ExtractionColumn)``.
+    """
+
+    @property
+    def footprint_area(self) -> int:
+        return 0
+
+
 def _columns(
     data: Dataset,
     producers: Mapping[str, tuple[Recipe, ...]],
@@ -444,7 +535,13 @@ def _columns(
     fixed_modes: Mapping[str, ProliferatorMode] | None = None,
     mode_policy: ProliferatorMode | None = ProliferatorMode.NONE,
 ) -> list[AdjustedRecipe]:
-    """Build one deterministic mode column per reachable recipe."""
+    """Build one deterministic mode column per reachable recipe.
+
+    An extraction recipe (``recipe.is_mining``) is never proliferated and
+    never takes a flow-pinned mode -- FactorioLab does not spray a vein or a
+    collector -- so it skips the mode-selection machinery entirely and comes
+    back as an ``_ExtractionColumn`` adjusted under ``ProliferatorMode.NONE``.
+    """
     if fixed_modes is not None and proliferable is not None:
         raise ValueError("fixed_modes cannot be combined with proliferable")
     if fixed_modes is None and mode_policy is None:
@@ -454,6 +551,12 @@ def _columns(
     columns: list[AdjustedRecipe] = []
     for recipe in recipes.values():
         machine_id = select_machine(data, recipe, request.machine_rank_ids)
+        if recipe.is_mining:
+            adjusted = adjust(data, recipe, machine_id, ProliferatorMode.NONE, tier)
+            columns.append(
+                _ExtractionColumn(**{f.name: getattr(adjusted, f.name) for f in fields(adjusted)})
+            )
+            continue
         available = available_modes(data, recipe, tier)
         if fixed_modes is not None:
             mode = fixed_modes.get(recipe.id, ProliferatorMode.NONE)
@@ -520,7 +623,13 @@ def _run_milp(
     objective: _ObjectiveCoefficients | None = None,
     time_limit_s: float,
 ) -> tuple[list[float], list[float]]:
-    """Solve the fixed-charge oracle for craft rates and integer machine counts."""
+    """Solve the fixed-charge oracle for craft rates and integer machine counts.
+
+    Extraction columns get a continuous machine variable
+    instead of an integer one: FactorioLab never rounds a vein or a collector
+    to a whole machine count, and this file never builds one, so there is no
+    fixed charge to round for.
+    """
     model = pywraplp.Solver.CreateSolver("SCIP")
     if model is None:  # pragma: no cover - SCIP ships with ortools
         raise InfeasibleError("no MILP solver is available")
@@ -528,7 +637,12 @@ def _run_milp(
     objective = objective or _default_objective(columns)
 
     crafts = [model.NumVar(0.0, model.infinity(), f"x{i}") for i in range(len(columns))]
-    machines = [model.IntVar(0, _MAX_MACHINES, f"n{i}") for i in range(len(columns))]
+    machines = [
+        model.NumVar(0.0, model.infinity(), f"n{i}")
+        if isinstance(column, _ExtractionColumn)
+        else model.IntVar(0, _MAX_MACHINES, f"n{i}")
+        for i, column in enumerate(columns)
+    ]
     # A group's craft rate may never exceed what its machines can sustain.
     for craft, machine, column in zip(crafts, machines, columns, strict=True):
         model.Add(craft - float(column.crafts_per_second) * machine <= 0)
@@ -626,7 +740,7 @@ def _solve_exact_lp(
     active: Sequence[int],
     internal_items: Sequence[str],
     demand: Mapping[str, Fraction],
-    machine_caps: Sequence[int] | None = None,
+    machine_caps: Sequence[int | None] | None = None,
     minimum_rates: Mapping[int, Fraction] | None = None,
     objective: _ObjectiveCoefficients | None = None,
 ) -> list[Fraction]:
@@ -664,6 +778,10 @@ def _solve_exact_lp(
         for position, (index, machines) in enumerate(
             zip(active, machine_caps, strict=True)
         ):
+            if machines is None:
+                # Extraction columns are never capped: they never buy integer
+                # machines, so there is nothing to cap.
+                continue
             row = [_rational(Fraction())] * len(active)
             row[position] = _rational(Fraction(1))
             matrix.append(row)
@@ -699,9 +817,28 @@ def _exact_rates(
     demand: Mapping[str, Fraction],
     objective: _ObjectiveCoefficients | None = None,
 ) -> list[Fraction]:
-    """Recover exact rates inside the fixed-charge MILP's bought capacities."""
-    active = [index for index, machines in enumerate(raw_machines) if round(machines) > 0]
-    caps = [round(raw_machines[index]) for index in active]
+    """Recover exact rates inside the fixed-charge MILP's bought capacities.
+
+    Extraction columns get a continuous machine variable in ``_run_milp``, so
+    their raw value is never an integer machine count to
+    round: one is active iff its raw value clears the solver's support
+    tolerance, and it carries no machine cap -- FactorioLab never rounds
+    extraction and this file never builds it. Crafting columns keep the
+    integer-rounded activity and cap they always had.
+    """
+    active = [
+        index
+        for index, machines in enumerate(raw_machines)
+        if (
+            machines > _LP_SUPPORT_ABS_TOLERANCE
+            if isinstance(columns[index], _ExtractionColumn)
+            else round(machines) > 0
+        )
+    ]
+    caps: list[int | None] = [
+        None if isinstance(columns[index], _ExtractionColumn) else round(raw_machines[index])
+        for index in active
+    ]
     if not active:
         return [Fraction()] * len(columns)
     return _solve_exact_lp(
@@ -820,7 +957,9 @@ def solve(
         fixed_modes,
         None if fixed_modes is not None else mode_policy,
     )
-    if not columns:
+    if not any(not isinstance(column, _ExtractionColumn) for column in columns):
+        # Extraction alone is not a factory: at least one crafting column must
+        # reach the requested item, or there is nothing here to build.
         raise InfeasibleError("no buildable recipes reach the requested item")
     objective = _objective_coefficients(data, request, columns)
     balance_items = (
@@ -897,9 +1036,17 @@ def solve(
             Fraction(),
         )
 
+    # Extraction columns never become a SolvedGroup -- mining, pumping, and
+    # orbital collection all happen outside the blueprint -- so their output
+    # is accumulated separately and never counted as "produced" below.
     groups: list[SolvedGroup] = []
+    extracted: dict[str, Fraction] = {}
     for column, craft_rate in zip(columns, crafts, strict=True):
         if craft_rate <= 0:
+            continue
+        if isinstance(column, _ExtractionColumn):
+            for item_id, per_craft in column.outputs_per_craft.items():
+                extracted[item_id] = extracted.get(item_id, Fraction(0)) + per_craft * craft_rate
             continue
         exact = craft_rate / column.crafts_per_second
         count = -((-exact.numerator) // exact.denominator)  # ceil, exactly
@@ -932,9 +1079,10 @@ def solve(
             consumed[item_id] = consumed.get(item_id, Fraction(0)) + rate
 
     # Continuous rates are exact at this boundary. Revalidate both invariants
-    # after ceiling rather than trusting either LP implementation: every group
-    # fits inside its bought capacity and every internally produced item closes
-    # its balance including target demand.
+    # after ceiling rather than trusting either LP implementation: every
+    # crafting group fits inside its bought capacity, and every internally
+    # produced item closes its balance including target demand -- crafted
+    # plus extracted supply against consumption plus what was requested.
     for group in groups:
         capacity = group.machines * group.adjusted.crafts_per_second
         if group.crafts_per_second > capacity:
@@ -944,18 +1092,34 @@ def solve(
             )
     for item_id in balance_items:
         required = consumed.get(item_id, Fraction()) + targets.get(item_id, Fraction())
-        available = produced.get(item_id, Fraction())
+        available = produced.get(item_id, Fraction()) + extracted.get(item_id, Fraction())
         if available < required:
             raise InfeasibleError(
                 f"the exact rate solve leaves {item_id} short: "
                 f"produces {available}, requires {required}"
             )
 
+    # Every crafting group's input that crafting alone does not cover is a
+    # belt-in input: either the item is genuinely external (no producer here,
+    # or a declared Input objective) or it is an enabled extraction recipe's
+    # output, which never becomes a SolvedGroup either -- its chosen supply
+    # arrives on a belt exactly as a raw ore's does. If neither covers the
+    # shortfall, something upstream is broken: the balance check above should
+    # already have caught it, so this is a defensive invariant, not a normal
+    # path.
     external_inputs: dict[str, Fraction] = {}
     for item_id, rate in consumed.items():
         shortfall = rate - produced.get(item_id, Fraction(0))
-        if shortfall > 0 and (item_id in external or item_id not in produced):
-            external_inputs[item_id] = shortfall
+        if shortfall <= 0:
+            continue
+        available_extracted = extracted.get(item_id, Fraction(0))
+        if available_extracted < shortfall and item_id not in external:
+            raise InfeasibleError(
+                f"the exact rate solve leaves {item_id} short by "
+                f"{shortfall - available_extracted} after crafting and "
+                "extraction, and it is not a declared external input"
+            )
+        external_inputs[item_id] = shortfall
 
     proliferator_total = sum((g.proliferator_rate for g in groups), Fraction(0))
     proliferator_item = tier.sprayed_item_id

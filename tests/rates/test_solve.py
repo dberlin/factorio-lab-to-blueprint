@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import warnings
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from fractions import Fraction
 from typing import Protocol, TypeGuard
 
@@ -90,6 +91,14 @@ CONTINUOUS_ROUTE_URL = (
     "tHnfLqJod7jckTrbSB0xmwcgvv38e4EmfLlD8zsy4icXorVKIVhlRrDLoVA2lQc7ZJww4AatoS20h"
     "wbXFan1tELqPW2s1onZ5Uvv7c4YXwAUJfU_&v=11"
 )
+#: Re-derived under extraction pricing (design). Previously 25 recipes
+#: including ``organic-crystal`` and ``plastic``: the structural cut treated
+#: organic crystal's vein as automatically external only when NO crafting
+#: recipe existed, so it was crafted from plastic and other inputs. Priced,
+#: FactorioLab's own cheap vein wins instead, and plastic -- which nothing
+#: else in this chain needs -- drops out entirely rather than becoming a
+#: belt-in input.  ``organic-crystal`` itself still shows up, now as a
+#: belt-in (``external_inputs``) rather than a machine.
 CONTINUOUS_ROUTE_RECIPES = frozenset(
     {
         "casimir-crystal",
@@ -107,10 +116,8 @@ CONTINUOUS_ROUTE_RECIPES = frozenset(
         "magnet",
         "magnetic-coil",
         "microcrystalline-component",
-        "organic-crystal",
         "particle-container",
         "plane-filter",
-        "plastic",
         "processor",
         "quantum-chip",
         "space-warper-advanced",
@@ -478,7 +485,12 @@ def test_factoriolab_costs_weight_machine_footprint_and_surplus(
     )
     column = columns[index]
 
-    assert coefficients.machine[index] == 100 * column.footprint_area
+    # cma=100 and cfp=100, but ``adjustCosts`` applies the footprint factor
+    # only to a machine whose dataset entry declares a ``size``, and no DSP
+    # machine does -- so the footprint cost is inert here and the machine
+    # cost is exactly ``costs.machine``, never our catalog footprint.
+    assert data.machine(column.machine_item_id).size is None
+    assert coefficients.machine[index] == 100
     net_items = sum(
         (
             column.outputs_per_craft.get(item_id, Fraction())
@@ -528,8 +540,17 @@ def test_derivation_ignores_solver_float_noise(data: Dataset) -> None:
     genuinely returns, ``3.9999999997`` for 4 -- must not move the derived rates
     at all.  A derivation that reads magnitudes out of the solver fails this;
     one that reads only ``round(n)`` and propagates demand exactly cannot.
+
+    EXAMPLE_URL's ore now resolves to extraction columns:
+    ``solve(...).groups`` never includes them (they are never a ``SolvedGroup``),
+    so the raw machine value this test hands ``_exact_rates`` for each of them
+    is set directly to ``1.0`` rather than read off ``counts`` -- any positive
+    value works, since an extraction column is uncapped and merely needs to
+    clear the support tolerance, and the exact LP needs their ore supply
+    present or it has nothing to balance the crafting chain against.  The
+    noise/fuzz perturbation and its assertions stay on the crafting counts.
     """
-    from flab2bp.rates.solve import _columns, _exact_rates, _resolve_chain
+    from flab2bp.rates.solve import _columns, _exact_rates, _ExtractionColumn, _resolve_chain
 
     request = parse_url(EXAMPLE_URL)
     targets = target_rates(data, request)
@@ -539,11 +560,16 @@ def test_derivation_ignores_solver_float_noise(data: Dataset) -> None:
     columns = _columns(data, producers, request, ProliferatorTier.NONE, None, None)
 
     counts = {g.recipe_id: g.machines for g in solve(data, request).groups}
-    clean = [float(counts.get(column.recipe_id, 0)) for column in columns]
+    clean = [
+        1.0 if isinstance(column, _ExtractionColumn) else float(counts.get(column.recipe_id, 0))
+        for column in columns
+    ]
     # Perturb well beyond float noise but strictly inside the rounding
     # interval, so `round(n)` is unmoved while every *magnitude* shifts.  A
     # derivation reading magnitudes out of the solver changes its answer here;
-    # one reading only the rounded count cannot.
+    # one reading only the rounded count cannot.  Extraction entries stay
+    # comfortably positive under either perturbation, since they carry no cap
+    # to round against.
     noisy = [n - 0.3 if n else 0.0 for n in clean]
     fuzzed = [n + 0.4 if n else 0.0 for n in clean]
 
@@ -800,6 +826,15 @@ def test_explicit_continuous_path_recovers_exact_rates_then_ceils_capacity(
 def test_explicit_continuous_path_uses_the_expected_fractional_route(
     data: Dataset,
 ) -> None:
+    """Re-derived under extraction pricing (design): 23 machines, not 25.
+
+    FactorioLab's own flow for this URL runs ``space-warper-advanced`` (the
+    gravity-matrix route) and ``graphene-advanced``, both still here.  The
+    machine count fell from 25 to 23 and the footprint from 391 to 321 tiles
+    because ``organic-crystal`` is now belted in from its vein rather than
+    crafted from plastic, dropping both recipes (and everything plastic alone
+    fed) out of the structure entirely -- see ``CONTINUOUS_ROUTE_RECIPES``.
+    """
     solution = solve(
         data,
         parse_url(CONTINUOUS_ROUTE_URL),
@@ -808,15 +843,16 @@ def test_explicit_continuous_path_uses_the_expected_fractional_route(
     )
     recipes = {group.recipe_id for group in solution.groups}
     assert recipes == CONTINUOUS_ROUTE_RECIPES
-    assert len(solution.groups) == 25
-    assert solution.machine_count == 25
-    assert solution.total_area == 391
+    assert len(solution.groups) == 23
+    assert solution.machine_count == 23
+    assert solution.total_area == 321
     assert solution.outputs["space-warper"] == Fraction(1, 60)
     assert {group.mode for group in solution.groups} == {ProliferatorMode.NONE}
     assert all(
         group.crafts_per_second <= group.machines * group.adjusted.crafts_per_second
         for group in solution.groups
     )
+    assert "organic-crystal" in solution.external_inputs
 
 
 def test_unrecoverable_continuous_pass_falls_back_to_fixed_charge(
@@ -1005,3 +1041,165 @@ def test_no_exclusion_set_means_the_mods_defaults(data: Dataset) -> None:
     )
     assert bare.excluded_recipe_ids is None
     assert _excluded_recipes(data, bare) == frozenset(data.default_recipe_excluded)
+
+
+# --- what FactorioLab extracts, we belt in ----------------------------------
+
+
+#: A reported URL: deuteron fuel rods with a hand-picked exclusion set that
+#: turns OFF the gas-giant collectors and fire-ice veins but leaves
+#: ``ice-giant-hydrogen`` and ``graphene-advanced`` ON.  FactorioLab's own flow
+#: for it runs ``ice-giant-hydrogen`` x16.7 and ``sulphuric-acid-vein`` x2.4 and
+#: belts hydrogen and sulfuric acid in; it never touches fire ice.
+COLLECTOR_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJxNzD0LwjAYBOB.k-GmJGKd3uWCuokVFLNaO2gthfqBOry."
+    "XSrGdHvu4K6TCOet6YQVnLWAG3weOWbP4O2.JybJOxSjqU--ZbKCnya.8pIc3n.hjeKr06GWYPr6KWtEHNHgDq7ALbgHG-"
+    "UFvCIsNCwRSg0b07a9RKXOtTQPce4DLu01vA__&v=11"
+)
+
+GRAPHENE_CORPUS_URL = (
+    "https://factoriolab.github.io/dsp/list?o=graphene*60&ibe=conveyor-belt-2"
+    "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+)
+
+
+def test_an_item_with_an_enabled_extraction_recipe_is_belted_in(data: Dataset) -> None:
+    """Hydrogen has a collector recipe the player left on, so it is an input.
+
+    The old rule made an item internal whenever ANY non-mining recipe could
+    produce it, so hydrogen was crafted through ``graphene-advanced`` -- 80
+    chemical plants eating 80 fire ice/s to make 40 hydrogen/s, with 80
+    graphene/s falling out as surplus -- and sulfuric acid through stone, water
+    and refined oil.  FactorioLab's flow for this URL does neither: with
+    ``ice-giant-hydrogen`` and ``sulphuric-acid-vein`` enabled, both items are
+    collected outside and arrive on a belt.  This is the outcome of pricing,
+    not a rule that an extractable item is never crafted: on the space-warper
+    URL below hydrogen has enabled collectors and part of it is still made as
+    ``graphene-advanced``'s coproduct, because that route is cheaper overall.
+    """
+    request = parse_url(COLLECTOR_URL)
+    assert request.excluded_recipe_ids is not None
+    assert "ice-giant-hydrogen" not in request.excluded_recipe_ids
+    assert "graphene-advanced" not in request.excluded_recipe_ids
+
+    plan = solve(data, request)
+
+    assert {g.recipe_id: g.machines for g in plan.groups} == {
+        "deuterium": 10,
+        "deuteron-fuel-rod": 12,
+        "titanium-alloy": 3,
+    }
+    assert plan.external_inputs["hydrogen"] == Fraction(40)
+    assert plan.external_inputs["sulfuric-acid"] == Fraction(2)
+    assert not {"fire-ice", "stone", "water"} & set(plan.external_inputs)
+    assert "graphene" not in plan.surplus
+
+
+def test_the_graphene_corpus_url_belts_in_sulfuric_acid(data: Dataset) -> None:
+    """A URL with no exclusion set sits on the mod's defaults, and those leave
+    ``sulphuric-acid-vein`` on.  FactorioLab's flow: graphene x1.5, energetic
+    graphite x3, coal 180/min and sulfuric acid 30/min in -- no refinery, no
+    stone, no water."""
+    plan = solve(data, parse_url(GRAPHENE_CORPUS_URL))
+
+    assert {g.recipe_id: g.machines for g in plan.groups} == {
+        "energetic-graphite": 3,
+        "graphene": 2,
+    }
+    assert dict(plan.external_inputs) == {
+        "coal": Fraction(3),
+        "sulfuric-acid": Fraction(1, 2),
+    }
+
+
+def test_excluding_every_extraction_recipe_restores_the_crafted_route(
+    data: Dataset,
+) -> None:
+    """The exclusion set is the player's lever, in both directions.
+
+    Turn off the last collector that makes hydrogen and the only way left is
+    to craft it, so the fire-ice route the player enabled is what gets built.
+    """
+    request = parse_url(COLLECTOR_URL)
+    assert request.excluded_recipe_ids is not None
+    request = replace(
+        request,
+        excluded_recipe_ids=set(request.excluded_recipe_ids) | {"ice-giant-hydrogen", "ice-giant"},
+    )
+
+    plan = solve(data, request)
+
+    assert "graphene-advanced" in {g.recipe_id for g in plan.groups}
+    assert "hydrogen" not in plan.external_inputs
+    assert plan.external_inputs["fire-ice"] > 0
+
+
+def test_a_requested_output_is_built_even_when_it_could_be_collected(
+    data: Dataset,
+) -> None:
+    """The rule applies to intermediates, not to what the player asked for.
+
+    An Output objective on hydrogen is a request to MAKE hydrogen; a blueprint
+    of zero machines would satisfy nobody, so the crafting route stands.
+    """
+    hydrogen = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=hydrogen*60&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+    )
+    plan = solve(data, hydrogen)
+
+    assert {g.recipe_id for g in plan.groups} == {"plasma-refining"}
+    assert plan.outputs["hydrogen"] == Fraction(1)
+
+
+def test_extraction_prices_pick_factoriolabs_graphene_route(data: Dataset) -> None:
+    """Pricing, not a structural cut, is what picks the crafted route here.
+
+    CONTINUOUS_ROUTE_URL's exclusion set leaves ``ice-giant``,
+    ``ice-giant-hydrogen``, ``graphene-advanced``, and ``sulphuric-acid-vein``
+    all enabled -- both an extraction route and a crafting route are on the
+    table for graphene. FactorioLab's own flow for this URL runs
+    ``graphene-advanced`` (fed by fire ice and a hydrogen coproduct from
+    ``ice-giant``) rather than ``graphene`` (energetic graphite plus sulfuric
+    acid): the cheap ``ice-giant`` route undercuts building a sulfuric acid
+    vein AND everything sulfuric acid would otherwise drag in. Fire ice and
+    hydrogen are never crafted in this dataset, so whichever amount
+    ``graphene-advanced`` needs of them shows up as a belt-in input, exactly
+    like an ore.
+    """
+    plan = solve(data, parse_url(CONTINUOUS_ROUTE_URL))
+
+    recipe_ids = {g.recipe_id for g in plan.groups}
+    assert "graphene-advanced" in recipe_ids
+    assert "graphene" not in recipe_ids
+    assert {"fire-ice", "hydrogen"} <= set(plan.external_inputs)
+    assert "sulfuric-acid" not in plan.external_inputs
+
+
+def test_deuterium_is_crafted_from_collected_hydrogen_as_factoriolab_does(
+    data: Dataset,
+) -> None:
+    """A DSP crafting machine costs exactly ``costs.machine`` in FactorioLab.
+
+    ``adjustCosts`` multiplies the machine cost by ``machine.size`` only when
+    the dataset declares a size, and the DSP dataset declares none for any of
+    its 52 machines.  So five colliders plus 2.6 hydrogen collectors (cost
+    about 7.6) beat 31 deuterium collectors (cost 31), and FactorioLab's flow
+    for this URL crafts deuterium from collected hydrogen: ``deuterium`` x5,
+    ``gas-giant-hydrogen`` x2.6, hydrogen 1200/min in, no deuterium input.
+    Weighting crafting machines by our catalog footprint instead flipped that
+    and belted deuterium in, changing the blueprint's inputs.
+    """
+    plan = solve(
+        data,
+        parse_url(
+            "https://factoriolab.github.io/dsp/list?o=deuteron-fuel-rod*60"
+            "&ibe=conveyor-belt-2"
+            "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+        ),
+    )
+
+    machines = {g.recipe_id: g.machines for g in plan.groups}
+    assert machines["deuterium"] == 5
+    assert plan.external_inputs["hydrogen"] == Fraction(20)
+    assert "deuterium" not in plan.external_inputs

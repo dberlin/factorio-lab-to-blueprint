@@ -567,18 +567,21 @@ class TestRealCapture:
         """The motivating defect, on a real export of a real corpus URL.
 
         FactorioLab belts sulfuric acid in (`sulphuric-acid-vein`, a mining
-        recipe). Our unpinned solve instead BUILDS it, which drags in stone,
-        water and crude oil -- inputs the player's flow does not contain. That
-        is the reported bug, and pinning removes it.
+        recipe). Extraction pricing, not the flow pin, is what makes the
+        unpinned solve agree: `sulphuric-acid-vein` prices out cheaper than
+        crafting the acid and dragging in stone, water, and crude oil, so the
+        derived solve already belts coal and sulfuric acid in without any
+        pin. Pinning to the captured flow is now a guard against regressing
+        back to that structural drift, not the fix that produces this result.
         """
         derived = solve(data, parse_url(REAL_URL))
-        assert {"stone", "water", "crude-oil"} <= set(derived.external_inputs)
-
-        pinned = solve(data, pin_request(parse_url(REAL_URL), data, flow))
-        assert dict(pinned.external_inputs) == {
+        assert dict(derived.external_inputs) == {
             "coal": Fraction(3),
             "sulfuric-acid": Fraction(1, 2),
         }
+
+        pinned = solve(data, pin_request(parse_url(REAL_URL), data, flow))
+        assert dict(pinned.external_inputs) == dict(derived.external_inputs)
         assert unsupplied_inputs(flow, data, pinned.external_inputs) == ()
 
     def test_the_exact_cross_check_agrees(
