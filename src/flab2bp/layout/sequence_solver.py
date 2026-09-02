@@ -71,7 +71,6 @@ from flab2bp.layout.freeform import (
     _projection_strip_pair,
     _staged_static_clearance_keys,
     _staged_static_preclearance_proved,
-    _StagedStaticCache,
     _strip_geometry_signature,
     _Unpowerable,
     _Unseatable,
@@ -4273,7 +4272,9 @@ def _production_run(
         tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
         dict[tuple[int, int], _DirectCandidate],
     ] = {}
-    staged_static_cache = _StagedStaticCache()
+    from flab2bp.layout import geometry_memo
+
+    staged_static_cache = geometry_memo.for_spec(spec)
 
     def selected_strips(
         problem: PlacementProblem,

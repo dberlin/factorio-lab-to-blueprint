@@ -110,6 +110,7 @@ from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
 
 if TYPE_CHECKING:
+    from flab2bp.layout.geometry_memo import MemoStats
     from flab2bp.layout.strip_variants import (
         LaneAttachmentPlan,
         LanePlan,
@@ -10808,6 +10809,26 @@ class _StagedStaticCache:
     broad_phase_hits: int = 0
     exact_static_queries: int = 0
 
+    def stats(self) -> MemoStats:
+        from flab2bp.layout.geometry_memo import MemoStats as _MemoStats
+
+        return _MemoStats(
+            tables={
+                "frames": len(self.frames),
+                "cleanup_bounds": len(self.cleanup_bounds),
+                "materialized": len(self.materialized),
+                "materialized_bases": len(self.materialized_bases),
+                "clean_contexts": len(self.clean_contexts),
+                "coater_supply_failures": len(self.coater_supply_failures),
+                "boxes": len(self.boxes),
+                "placed": len(self.placed),
+                "junction_offsets": len(self.junction_offsets),
+            },
+            broad_phase_queries=self.broad_phase_queries,
+            broad_phase_hits=self.broad_phase_hits,
+            exact_static_queries=self.exact_static_queries,
+        )
+
 
 def _prospective_static_broad_phase(
     index: _ProjectedObstacleIndex,
@@ -15939,7 +15960,9 @@ class FreeformLayout:
         dearest_candidate_s = 0.0
         started_at: float | None = None
         candidate_index = 0
-        staged_static_cache = _StagedStaticCache()
+        from flab2bp.layout import geometry_memo
+
+        staged_static_cache = geometry_memo.for_spec(spec)
         projection_envelope = finalize.band_policy_search_envelope(
             self.band_policy,
             perimeter=_ENTRY_RING,

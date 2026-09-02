@@ -23,7 +23,7 @@ import pytest
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import flow_from_text, pin_request
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import freeform
+from flab2bp.layout import freeform, geometry_memo
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.rates.candidates import build_candidates
@@ -114,6 +114,7 @@ def _reset_junction_ban_offset_cache() -> None:
     """
     freeform._JUNCTION_BAN_OFFSET_CACHE.clear()
     freeform._junction_ban_offsets.cache_clear()
+    geometry_memo.clear()
 
 
 @pytest.fixture(autouse=True)
