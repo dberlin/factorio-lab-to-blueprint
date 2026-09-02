@@ -20,7 +20,7 @@ from flab2bp.dsp import codec
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import finalize, validate
+from flab2bp.layout import finalize, freeform, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     AreaFrame,
@@ -612,15 +612,45 @@ class TestFlowText:
             )
 
 @pytest.mark.slow
-def test_all_products_sequence_pair_honours_the_exact_layout_deadline() -> None:
+def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Counts real firings of freeform._PreparationDeadline -- the cancellation
+    # 0d2a69b added inside exact sequence preparation (_prepare_routing_problem,
+    # _power_plan, _prospective_static_failure, _place_coaters). A subclass, not
+    # a bare stand-in: sequence_solver.py caught the original class by its own
+    # `from ... import _PreparationDeadline` binding at import time, so patching
+    # only `freeform._PreparationDeadline` -- where every `raise
+    # _PreparationDeadline` in that module resolves the name -- still lands in
+    # that `except` via isinstance, with no need to touch sequence_solver's copy.
+    preparation_deadline_fires = 0
+
+    class _CountingPreparationDeadline(freeform._PreparationDeadline):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            nonlocal preparation_deadline_fires
+            preparation_deadline_fires += 1
+
+    monkeypatch.setattr(freeform, "_PreparationDeadline", _CountingPreparationDeadline)
+
     started = time.monotonic()
 
+    # Measured 2026-09-01: since commit 8161392 sped up preparation, this build
+    # now *succeeds* at time_budget_s=10.0 (~10.3s wall) instead of exhausting
+    # the deadline. 1.5s is small enough that exact preparation is still
+    # reliably cancelled mid-flight (verified: NoValidLayout, 3/3 runs).
+    budget = 1.5
     with pytest.raises(NoValidLayout, match="deadline exhausted"):
         pipeline.build(
             DEADLINE_REGRESSION_URL,
             strategy="sequence-pair",
             candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
-            time_budget_s=10.0,
+            time_budget_s=budget,
         )
 
-    assert time.monotonic() - started < 12.5
+    assert time.monotonic() - started < budget + 2.5
+    # Without this, a deadline hit anywhere else (e.g. before the search loop
+    # ever reached a candidate) would also raise "deadline exhausted" and pass
+    # -- this is what actually proves the refusal happened during exact
+    # preparation, the code path 0d2a69b guarded.
+    assert preparation_deadline_fires > 0
