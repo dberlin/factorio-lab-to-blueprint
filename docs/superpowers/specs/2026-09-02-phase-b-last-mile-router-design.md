@@ -479,9 +479,13 @@ one share.
      saw (see the loosest-world rule below). Every port's corridors are
      retired as if its role had been served, and `grid.occ` is given back only
      for the cells the release actually freed.
-   - run 1's `planned_taps` is restored after the sweep, because
-     `_can_junction` refuses a `canvas.guard` cell unless `planned_taps`
-     already holds it.
+   - `planned_taps` starts EMPTY for run 2, so only the cluster's own taps
+     accumulate (every realizable world contains those), and `_can_junction`'s
+     one check that tightens as the table shrinks — the refusal of a
+     `canvas.guard` cell the table does not already hold — is exempted for the
+     duration of run 2 (`relaxed_junctions`). Its other three tap checks
+     tighten as the table grows, so the empty table is loose-or-equal there.
+     Run 1's table is put back afterwards.
 
    What remains is buildings, `canvas.solid`, `canvas.keep_out`,
    `canvas.belt_ban`, the routing box, permanent guards, and
@@ -519,11 +523,14 @@ give that on its own, and the counter-example is the port corridors: `_stake` �
 `_restore_unserved_roles` puts it back and `grid.block`s the two cells, and
 `_Canvas.free` refuses any reserved cell that is not the searching net's own —
 so a corridor a staked non-cluster net had retired is FREE in run 1 and RESERVED
-again in run 2. `planned_taps` is the same shape of defect: `_can_junction`
-refuses a `canvas.guard` cell unless `planned_taps` already holds it, and
-unstaking empties the table. Run 2 therefore unstakes every net, retires EVERY
-port corridor of every port as if its role had been served, and puts run 1's
-`planned_taps` back before it searches. Under that world — and only under it —
+again in run 2. `planned_taps` cuts both ways: three of `_can_junction`'s tap
+checks refuse MORE as the table grows (frame-ban scan, two taps closing a cell,
+collider scan), while the fourth refuses a `canvas.guard` cell unless the table
+already holds it, so neither an emptied table nor run 1's table is loose in all
+four. Run 2 therefore unstakes every net, retires EVERY port corridor of every
+port as if its role had been served, starts with an empty `planned_taps`, and
+bypasses the guard-cell refusal while it searches. Under that world — and only
+under it —
 truncating the cluster at `B_MAX_CLUSTER` removes still more nets from run 2's
 problem, so if run 2's problem is infeasible, so is the full problem at that
 relative placement. Run 1 has the opposite polarity — its untruncated remainder
