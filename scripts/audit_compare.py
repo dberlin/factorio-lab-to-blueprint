@@ -3,10 +3,19 @@
     uv run python scripts/audit_compare.py BASELINE.jsonl CANDIDATE.jsonl
 
 A cell is ``(strategy, url_id, spec_index)``.  The verdict passes only when
-the candidate has zero REFUSED / INVALID / CRASH rows, its p95 wall per cell
-is at or under ``--p95-seconds``, and the geometric mean area ratio over cells
-clean in BOTH files is at most ``1 + noise_area``.  ``--noise-area`` defaults
-to the 1.3% same-arm median measured in ``docs/BACKLOG.md``.
+the candidate covers every cell the baseline has, holds the expected number of
+rows, has zero REFUSED / INVALID / CRASH rows, its p95 wall per cell is at or
+under ``--p95-seconds``, and the geometric mean area ratio over cells clean in
+BOTH files is at most ``1 + noise_area``.  ``--noise-area`` defaults to the
+1.3% same-arm median measured in ``docs/BACKLOG.md``.
+
+A CELL THE CANDIDATE NEVER RAN IS A FAILURE, not an absence of evidence.  The
+comparison used to walk the candidate alone, so a run that died a third of the
+way through -- or a file truncated in transit -- presented its surviving rows,
+found nothing to disagree with, and printed PASS.  That is the one verdict this
+script must never give for work it did not see: the whole point of the gate is
+that all 72 cells were tried.  ``--expect-cells`` guards the same property from
+the other side, for the case where the baseline is short too.
 """
 
 from __future__ import annotations
@@ -56,13 +65,16 @@ def compare(
     *,
     noise_area: float,
     p95_seconds: float,
+    expect_cells: int | None = None,
 ) -> Verdict:
     base_by_key = {_key(row): row for row in baseline}
+    candidate_rows = list(candidate)
+    candidate_keys = {_key(row) for row in candidate_rows}
     counts: dict[str, int] = {}
     reasons: list[str] = []
     log_ratios: list[float] = []
     seconds: list[float] = []
-    for row in candidate:
+    for row in candidate_rows:
         status = str(row["status"])
         counts[status] = counts.get(status, 0) + 1
         seconds.append(float(str(row["seconds"])))
@@ -78,6 +90,14 @@ def compare(
         cand_area = float(str(row["area"]))
         if base_area > 0 and cand_area > 0:
             log_ratios.append(math.log(cand_area / base_area))
+    for key in sorted(base_by_key.keys() - candidate_keys):
+        strategy, url_id, _index = key
+        label = base_by_key[key]["spec_label"]
+        reasons.append(f"MISSING: {strategy} {url_id}/{label}")
+    if expect_cells is not None and len(candidate_rows) != expect_cells:
+        reasons.append(
+            f"candidate has {len(candidate_rows)} rows, expected {expect_cells}"
+        )
     ratio = math.exp(sum(log_ratios) / len(log_ratios)) if log_ratios else 1.0
     p95 = _p95(seconds)
     if ratio > 1.0 + noise_area:
@@ -110,12 +130,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("candidate", type=Path)
     ap.add_argument("--noise-area", type=float, default=0.013)
     ap.add_argument("--p95-seconds", type=float, default=30.0)
+    ap.add_argument(
+        "--expect-cells",
+        type=int,
+        default=72,
+        help="rows the candidate must hold; 0 disables the count guard (default: 72)",
+    )
     args = ap.parse_args(argv)
     verdict = compare(
         _read(args.baseline),
         _read(args.candidate),
         noise_area=args.noise_area,
         p95_seconds=args.p95_seconds,
+        expect_cells=args.expect_cells or None,
     )
     print(
         f"clean {verdict.candidate_clean}  refused {verdict.candidate_refused}  "
