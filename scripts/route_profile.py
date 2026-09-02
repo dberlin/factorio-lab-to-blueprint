@@ -41,6 +41,7 @@ from flab2bp.layout import (  # noqa: E402
     finalize,
     freeform,
     global_router,
+    route_kernel,
     sequence_solver,
     strip_variants,
     validate,
@@ -545,6 +546,7 @@ def main() -> int:
                     if key in tally.t
                 },
                 "prepare_calls_s": list(tally.prepare_calls),
+                "route_backend": route_kernel.selected_backend(),
             }, separators=(",", ":"), sort_keys=True))
             continue
 

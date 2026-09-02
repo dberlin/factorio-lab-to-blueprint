@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from flab2bp.layout import freeform, sequence_solver, strip_variants
+from flab2bp.layout import freeform, route_kernel, sequence_solver, strip_variants
 from flab2bp.layout.route_feedback import DetailedRouteResult, DetailedRouteStatus
 from flab2bp.rates import CandidatePolicy
 from scripts import route_profile
@@ -94,6 +94,7 @@ def test_json_profile_emits_one_bounded_machine_readable_record(
             "plan_strips": {"s": 0.5, "n": 1},
         },
         "prepare_calls_s": [2.0, 0.5],
+        "route_backend": route_kernel.selected_backend(),
     }
     assert selected_policies == [CandidatePolicy.OUTPUT_PRODUCTS]
 

@@ -18,7 +18,7 @@ from itertools import islice
 from types import MappingProxyType
 from typing import Protocol
 
-from flab2bp.layout import finalize, validate
+from flab2bp.layout import finalize, route_kernel, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S as ATOMIC_COMPLETION_GRACE_S,
@@ -5351,6 +5351,7 @@ def _with_observational_stats(
     stats.update(
         {
             "backend": "sequence-pair",
+            "route_backend": route_kernel.selected_backend(),
             "accelerator": accelerator,
             "seed": config.seed,
             "seeds": float(len(anneal_seeds)),

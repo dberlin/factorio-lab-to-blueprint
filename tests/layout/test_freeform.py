@@ -16052,3 +16052,12 @@ def test_post_feedback_replan_deadline_is_a_typed_preparation_refusal(
         )
 
     assert isinstance(caught.value.__cause__, freeform._PreparationDeadline)
+
+
+def test_freeform_placement_records_route_backend() -> None:
+    from flab2bp.layout import route_kernel
+
+    placement = FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
+        two_stage_spec(), time_budget_s=4.0
+    )
+    assert placement.stats["route_backend"] == route_kernel.selected_backend()

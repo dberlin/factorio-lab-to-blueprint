@@ -13,7 +13,7 @@ import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_solver as sequence_solver_module
 import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog, rules
-from flab2bp.layout import finalize, slots, validate
+from flab2bp.layout import finalize, route_kernel, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     AreaFrame,
@@ -5367,6 +5367,7 @@ def test_sequence_backend_returns_only_certified_powered_placements(
     ).errors
     backend: object = placement.stats["backend"]
     assert backend == "sequence-pair"
+    assert placement.stats["route_backend"] == route_kernel.selected_backend()
     assert placement.stats["detailed_routes"] >= 1.0
     assert placement.stats["direct_candidates"] == 1.0
     assert 0.0 <= placement.stats["direct_inserts"] <= 1.0

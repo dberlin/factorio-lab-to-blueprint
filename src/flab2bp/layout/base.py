@@ -290,6 +290,7 @@ class PlacementStats(TypedDict, total=False):
     restarts: float
     riser_columns: float
     risers: float
+    route_backend: str
     route_failures: float
     routed: float
     rows: float

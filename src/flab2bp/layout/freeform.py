@@ -15714,6 +15714,8 @@ class FreeformLayout:
                     budget_s=time_budget_s,
                 ) from exc
             if best is not None:
+                from flab2bp.layout import route_kernel
+                best.stats["route_backend"] = route_kernel.selected_backend()
                 return best
 
         deadline_expired = _expired(deadline)
