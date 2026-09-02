@@ -84,3 +84,19 @@ def test_install_forwards_merge_frontier_belt_prefab(
 
     assert returned is expected
     assert received == [(2001, 35)]
+
+
+def test_last_mile_is_a_profiled_phase() -> None:
+    from scripts import route_profile
+
+    assert "last_mile" in route_profile.PHASES
+
+
+def test_the_profiler_row_carries_the_last_mile_counters() -> None:
+    """The audit has no stats object, so this row is the only telemetry path."""
+    from scripts import route_profile
+
+    row = route_profile._last_mile_row({"last_mile_invocations": 2.0})
+
+    assert row == {"last_mile_invocations": 2.0}
+    assert route_profile._last_mile_row({}) == {}
