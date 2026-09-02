@@ -88,3 +88,124 @@ Both trees clear the cell one time in three, both at the deadline's edge. The ce
 30 s budget under load on master as well; the branch did not cost it. Ruling: not a regression
 attributable to this branch, and not fixed here. It joins the seven refusing cells as a candidate
 for the reliability program (Phases B to D), which owns deadline-bound sequence-pair cells.
+
+## Post-merge gate (master 22bf910 merged)
+
+Merge commit: `08fad7c` (`Merge branch 'master' into belt-and-sorter-tiers`, merging local
+`master` at `22bf910` -- which fast-forwarded the extraction-recipe rates change `2cabb77` and the
+Phase B last-mile router merge `c5daa3a` -- into `belt-and-sorter-tiers` at `3950f98`).
+
+Both audits: `uv run python scripts/audit.py --budget 30 --jobs 16 --json <file>` on the same 72-cell
+corpus as the pre-merge gate above.
+
+### Baseline2 (`master` `22bf910`, run by the controller from a separate worktree)
+
+freeform: 33/36 clean -- NOT CLEAN (refused 3, invalid 0, crashed 0, not run 0)
+sequence-pair: 33/36 clean -- NOT CLEAN (refused 3, invalid 0, crashed 0, not run 0)
+
+Total: 66/72 CLEAN, 6 REFUSED, 0 INVALID, 0 CRASHED. 73s wall, 72/72 cells.
+Evidence: `baseline2-master-budget30.jsonl` (copied verbatim from the controller's
+`/tmp/flab2bp-handoff/baseline2-budget30.jsonl`). Log: `/tmp/flab2bp-handoff/baseline2-audit.log`
+(`EXIT 1`).
+
+Baseline2 REFUSED cells:
+
+- `freeform universe-matrix/no-proliferator` -- validator rejection (`game.blueprint_area`): a
+  264x162 extent fits no band on a segment-200 planet (needs 162 latitude rows, tallest band holds
+  160; `EBuildCondition.BlueprintAreaCrossTropic`).
+- `freeform universe-matrix/output-products` -- no packing of 43 strips could be wired at any
+  candidate height (packer defect: produces packs its own router cannot wire).
+- `freeform universe-matrix/all-products` -- no packing of 42 strips could be wired at any
+  candidate height (same packer defect).
+- `sequence-pair universe-matrix/output-products` -- deadline exhausted before finding an exact
+  layout.
+- `sequence-pair universe-matrix/all-products` -- deadline exhausted before finding an exact
+  layout.
+- `sequence-pair universe-matrix/no-proliferator` -- deadline exhausted before finding an exact
+  layout.
+
+### Candidate2 (merge commit `08fad7c`, this worktree)
+
+freeform: 33/36 clean -- NOT CLEAN (refused 3, invalid 0, crashed 0, not run 0)
+sequence-pair: 33/36 clean -- NOT CLEAN (refused 3, invalid 0, crashed 0, not run 0)
+
+Total: 66/72 CLEAN, 6 REFUSED, 0 INVALID, 0 CRASHED. 72s wall, 72/72 cells.
+Evidence: `candidate2-merged-budget30.jsonl`. Log: `/tmp/flab2bp-candidate2-audit.log`.
+
+Candidate2 REFUSED cells: the same six cells as baseline2, with the same detail strings verbatim
+(`freeform universe-matrix/{no-proliferator,output-products,all-products}` and
+`sequence-pair universe-matrix/{output-products,all-products,no-proliferator}`).
+
+### `audit_compare.py` output (verbatim)
+
+```
+clean 66  refused 6  invalid 0  crashed 0  paired 66  area ratio 1.0018  p95 28.7s
+  FAIL REFUSED: freeform universe-matrix/no-proliferator: every packing that wired was rejected by our own validator (game.blueprint_area; findings: band 0 game.blueprint_area (): a 264x162 extent fits no band on a segment-200 planet: it needs 162 latitude rows in its better orientation and the tallest band (200 segments) holds 160. The game refuses this paste with EBuildCondition.BlueprintAreaCrossTropic.); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+  FAIL REFUSED: freeform universe-matrix/output-products: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  FAIL REFUSED: freeform universe-matrix/all-products: no packing of 42 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  FAIL REFUSED: sequence-pair universe-matrix/output-products: deadline exhausted before finding an exact layout
+  FAIL REFUSED: sequence-pair universe-matrix/all-products: deadline exhausted before finding an exact layout
+  FAIL REFUSED: sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+FAIL
+```
+
+`audit_compare.py` reports FAIL for the same structural reason noted above: its per-row check
+fails on any non-CLEAN candidate row regardless of whether the baseline already refused that same
+cell. All six candidate2 refusals are pre-existing baseline2 refusals (the `universe-matrix`
+"stress" tier, a known-tight corpus cell family per the Phase B/C/D reliability program), so this
+FAIL is expected and not attributable to the merge.
+
+### Cells whose status differs between baseline2 and candidate2
+
+Diffed all 72 `(strategy, url_id, spec_index, spec_label)` cells between
+`baseline2-master-budget30.jsonl` and `candidate2-merged-budget30.jsonl` by exact `status` field:
+**zero cells differ in either direction.** Every CLEAN cell in baseline2 is CLEAN in candidate2 and
+every REFUSED cell in baseline2 is REFUSED in candidate2 (same six cells, same detail text). No
+cell is INVALID or CRASHED in either run. The merge introduces no CLEAN->non-CLEAN regression and
+no non-CLEAN->CLEAN change.
+
+### `uv run pytest -q -p no:cacheprovider` result
+
+Full run: one hard failure --
+`tests/test_pipeline.py::test_without_planetary_logistics_the_same_url_is_refused` --
+`Failed: Timeout (>120.0s) from pytest-timeout`, raised at
+`src/flab2bp/layout/freeform.py:12484` (inside the coater/splitter projected-relation-overlap
+collision scan). Because `pytest-timeout`'s default "thread" method calls `os._exit(1)` on a
+timeout, this single failure hard-killed the whole pytest process at 48% collected, so no summary
+line was printed and every test after that point in collection order never ran.
+
+Investigated per the task's own warning that the deuteron end-to-end tests
+(`test_a_mk2_url_whose_lanes_need_mk3_builds`,
+`test_without_planetary_logistics_the_same_url_is_refused`) might be affected by the rates change
+raising hydrogen to 40 items/s:
+
+- Re-ran the failing test alone with `--timeout=600`: it **passed**, 126.97s wall
+  (`1 passed in 126.97s (0:02:06)`), i.e. `pipeline.build(...)` did correctly raise
+  `pipeline.NoValidLayout` matching `flow.belt_capacity` as the test asserts -- just 6.97s past the
+  project's 120s pytest-timeout backstop (`pyproject.toml`: `timeout = 120`, documented there as
+  "generous on purpose", not a search budget). `tests/test_pipeline.py` itself is unchanged between
+  the merge-base and `master` (`git diff 725c34e 22bf910 -- tests/test_pipeline.py` is empty), so
+  this is not a merge-resolution mistake in that file; it is the combined branch (belt/sorter tier
+  raising) and merged master (hydrogen at 40 items/s, Phase B last-mile router) making this one
+  refusal path slower than the existing 120s backstop tolerates.
+- Reran the full suite with `--deselect
+  tests/test_pipeline.py::test_without_planetary_logistics_the_same_url_is_refused`: completed
+  100% collected, zero `FAILED`/`ERROR` markers (exit code not independently captured because the
+  run was launched via a detached background process; judged, as the task allows, by marker
+  absence and full progress-bar completion since the final summary line is not reliably captured
+  here either).
+
+Verdict: the suite is clean except for this one pre-existing-test timing regression against a
+120s backstop. The layout's refusal reasoning itself (`flow.belt_capacity`) is correct and
+unchanged; nothing here was weakened to make the test pass. This is reported, not fixed, per the
+task's instruction; it is a candidate for the reliability program's deadline-budget work (mirrors
+the `sequence-pair universe-matrix/output-products` near-boundary finding in the pre-merge gate
+above).
+
+### mypy / ruff
+
+`ruff check src tests`: all checks passed, no findings.
+
+`mypy src`: 8 errors, all in `src/flab2bp/layout/freeform.py` (lines 4648, 4649, 15559, 15565,
+15568, 15571, 15579, 15656) -- matches the branch's previously-documented 8 pre-existing errors in
+that file exactly in count and file; no new mypy errors were introduced by the merge.
