@@ -639,6 +639,19 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     # now *succeeds* at time_budget_s=10.0 (~10.3s wall) instead of exhausting
     # the deadline. 1.5s is small enough that exact preparation is still
     # reliably cancelled mid-flight (verified: NoValidLayout, 3/3 runs).
+    #
+    # THE CEILING IS 2.0s, MEASURED: at 2.0 the solver sometimes SUCCEEDS on
+    # this URL, so the budget has to stay strictly below it or the test is
+    # flaky rather than wrong. The mechanism is deliberately a real cell that
+    # exhausts inside exact preparation rather than a mechanised clock,
+    # because what is under test is that the preparation path itself honours
+    # the deadline -- a faked clock would prove that the fake fired.
+    #
+    # So this budget is a moving target by design: the next preparation
+    # speedup that makes 1.5s enough to finish will fail here with
+    # `DID NOT RAISE NoValidLayout`. That failure is the test working. Lower
+    # the budget until the refusal is reliable again (and re-measure the
+    # ceiling), rather than relaxing the assertion.
     budget = 1.5
     with pytest.raises(NoValidLayout, match="deadline exhausted"):
         pipeline.build(
