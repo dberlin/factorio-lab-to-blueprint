@@ -10758,7 +10758,13 @@ class _ProjectedObstacleIndex:
 
 @dataclass(slots=True)
 class _StagedStaticCache:
-    """Attempt-local memoization of pure finalizer projection inputs."""
+    """Spec-scoped memoization of pure finalizer projection inputs.
+
+    Handed out by ``geometry_memo.for_spec`` and shared across every
+    candidate and strategy for the same spec, so every entry must be a pure
+    function of its key alone -- never of attempt state (search order,
+    budget remaining, which candidate is running).
+    """
 
     frames: dict[
         tuple[
@@ -10922,7 +10928,7 @@ def _cached_junction_projection_frames(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[_JunctionProjectionFrame, ...]:
-    """Return exact reachable frames once per attempt-local geometry signature."""
+    """Return exact reachable frames once per spec-scoped geometry signature."""
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
     key = (occupied, limit, policy)

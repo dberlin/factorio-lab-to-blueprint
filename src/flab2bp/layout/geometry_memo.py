@@ -12,6 +12,7 @@ cannot be recycled while its cache is live.
 
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from typing import NamedTuple
 
@@ -21,6 +22,13 @@ from flab2bp.spec import BuildSpec
 MEMO_SPECS_RETAINED = 4
 
 _REGISTRY: OrderedDict[int, tuple[BuildSpec, _StagedStaticCache]] = OrderedDict()
+#: Guards every read and write of ``_REGISTRY``. Builds run on a
+#: ``ThreadPoolExecutor`` (``--workers`` in the web server), and each job
+#: constructs its own spec, so caches are never shared between threads --
+#: only this registry's bookkeeping is. Without the lock, one thread's
+#: ``get`` -> ``move_to_end`` is not atomic with another thread's insert and
+#: eviction, and a key can vanish between the two, raising ``KeyError``.
+_LOCK = threading.Lock()
 
 
 class MemoStats(NamedTuple):
@@ -33,15 +41,16 @@ class MemoStats(NamedTuple):
 def for_spec(spec: BuildSpec) -> _StagedStaticCache:
     """Return the process-wide cache for ``spec``, creating and bounding it."""
     key = id(spec)
-    entry = _REGISTRY.get(key)
-    if entry is not None:
-        _REGISTRY.move_to_end(key)
-        return entry[1]
-    cache = _StagedStaticCache()
-    _REGISTRY[key] = (spec, cache)
-    while len(_REGISTRY) > MEMO_SPECS_RETAINED:
-        _REGISTRY.popitem(last=False)
-    return cache
+    with _LOCK:
+        entry = _REGISTRY.get(key)
+        if entry is not None:
+            _REGISTRY.move_to_end(key)
+            return entry[1]
+        cache = _StagedStaticCache()
+        _REGISTRY[key] = (spec, cache)
+        while len(_REGISTRY) > MEMO_SPECS_RETAINED:
+            _REGISTRY.popitem(last=False)
+        return cache
 
 
 def stats_for_spec(spec: BuildSpec) -> MemoStats:
@@ -49,4 +58,5 @@ def stats_for_spec(spec: BuildSpec) -> MemoStats:
 
 
 def clear() -> None:
-    _REGISTRY.clear()
+    with _LOCK:
+        _REGISTRY.clear()

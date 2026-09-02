@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -69,3 +70,24 @@ def test_shared_cache_does_not_change_the_prepared_problem(
     assert warm_second == cold
     stats = geometry_memo.stats_for_spec(spec)
     assert sum(stats.tables.values()) > 0
+
+
+def test_for_spec_is_thread_safe_under_concurrent_eviction() -> None:
+    """Regression for the unlocked get/move_to_end/evict race.
+
+    A `--workers N` build (`src/flab2bp/web/jobs.py`) calls `for_spec` from
+    several threads at once, each with its own spec object. With more
+    distinct specs in flight than `MEMO_SPECS_RETAINED`, one thread's `get`
+    could previously race another thread's insert-and-evict and raise
+    `KeyError` on `move_to_end`. This drives many more calls than distinct
+    specs, from several threads, and asserts nothing blows up.
+    """
+    geometry_memo.clear()
+    specs = [two_stage_spec() for _ in range(2 * geometry_memo.MEMO_SPECS_RETAINED)]
+    calls = [specs[i % len(specs)] for i in range(300)]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(geometry_memo.for_spec, calls))
+
+    assert len(results) == len(calls)
+    assert all(isinstance(cache, _StagedStaticCache) for cache in results)
