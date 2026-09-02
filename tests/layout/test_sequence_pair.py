@@ -37,6 +37,7 @@ from flab2bp.layout.sequence_pair import (
     AnnealState,
     DecodedPlacement,
     DirectInsertTarget,
+    EncodedPlacement,
     EnergyBreakdown,
     GapProfile,
     MoveKind,
@@ -45,6 +46,7 @@ from flab2bp.layout.sequence_pair import (
     PlacementProblem,
     SearchEnergy,
     SequencePair,
+    _topological_order,
     align_direct_inserts,
     anneal_stage,
     apply_move,
@@ -54,6 +56,7 @@ from flab2bp.layout.sequence_pair import (
     decode_state,
     derive_stage_seed,
     enable_variant_stage_boundary,
+    encode_placement,
     merge_stage_boundary,
     repair_neighbourhood,
     split_stage_boundary,
@@ -2317,3 +2320,227 @@ def test_lns_repair_is_deterministic_for_seed_and_weights() -> None:
         seed=91,
         strip_weights={2: 8.0, 3: 4.0, 4: 2.0, 5: 1.0},
     )
+
+
+def _shelf_placement(
+    rng: random.Random,
+) -> tuple[tuple[tuple[int, int], ...], tuple[int, ...], tuple[int, ...], int]:
+    """A random multi-row shelf packing: non-overlapping, with real vertical relations.
+
+    A single-row generator would exercise only the horizontal half of the
+    encoder, which is exactly the half that was never wrong.
+    """
+    sizes: list[tuple[int, int]] = []
+    xs: list[int] = []
+    ys: list[int] = []
+    row_y = 0
+    for _row in range(rng.randrange(2, 4)):
+        row_height = rng.randrange(2, 5)
+        cursor = 0
+        for _column in range(rng.randrange(1, 4)):
+            width = rng.randrange(2, 7)
+            sizes.append((width, rng.randrange(1, row_height + 1)))
+            xs.append(cursor)
+            ys.append(row_y)
+            cursor += width + rng.randrange(0, 3)
+        row_y += row_height + rng.randrange(0, 3)
+    return tuple(sizes), tuple(xs), tuple(ys), row_y + 4
+
+
+#: Hand-built non-overlapping placements: sizes, x, y, outline height.
+_HAND_BUILT_PLACEMENTS: tuple[
+    tuple[tuple[tuple[int, int], ...], tuple[int, ...], tuple[int, ...], int], ...
+] = (
+    (((4, 3), (5, 3), (4, 3)), (0, 4, 9), (0, 0, 0), 6),
+    (((4, 3), (4, 2), (4, 3)), (0, 0, 0), (0, 3, 5), 12),
+    (((2, 2), (2, 2)), (0, 5), (0, 0), 4),
+    (((3, 2), (2, 3), (2, 2)), (0, 3, 0), (0, 0, 2), 8),
+    (((3, 2), (3, 2), (3, 2), (3, 2)), (0, 3, 0, 3), (0, 0, 2, 2), 6),
+    (((2, 2), (2, 2), (2, 2)), (0, 0, 4), (0, 4, 1), 10),
+)
+
+
+def _decoded_boxes(
+    encoded: EncodedPlacement, sizes: tuple[tuple[int, int], ...]
+) -> tuple[tuple[int, int, int, int], ...]:
+    return tuple(
+        (
+            encoded.decoded.x[index],
+            encoded.decoded.y[index],
+            encoded.decoded.x[index] + sizes[index][0],
+            encoded.decoded.y[index] + sizes[index][1],
+        )
+        for index in range(len(sizes))
+    )
+
+
+def _assert_disjoint(boxes: tuple[tuple[int, int, int, int], ...]) -> None:
+    for first in range(len(boxes)):
+        for second in range(first + 1, len(boxes)):
+            a, b = boxes[first], boxes[second]
+            assert a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1], (a, b)
+
+
+def test_encode_is_exact_for_a_tight_row() -> None:
+    """Every pair horizontal with separation zero: the compaction is the input."""
+    sizes = ((4, 3), (5, 3), (4, 3))
+    encoded = encode_placement(sizes, (0, 4, 9), (0, 0, 0), outline_height=6)
+    assert encoded.exact
+    assert encoded.decoded.x == (0, 4, 9)
+    assert encoded.decoded.y == (0, 0, 0)
+
+
+def test_encode_is_exact_for_a_tight_column() -> None:
+    """Every pair vertical with separation zero: the compaction is the input.
+
+    This is the case revision 1 got backwards -- an inverted vertical direction
+    decodes this column upside down and fails `decoded <= input`.
+    """
+    sizes = ((4, 3), (4, 2), (4, 3))
+    encoded = encode_placement(sizes, (0, 0, 0), (0, 3, 5), outline_height=12)
+    assert encoded.exact
+    assert encoded.decoded.x == (0, 0, 0)
+    assert encoded.decoded.y == (0, 3, 5)
+
+
+def test_encode_is_never_wider_or_taller_than_its_input() -> None:
+    """The ONE guaranteed property.  Exactness is not promised; this is."""
+    rng = random.Random(20260902)
+    for _trial in range(80):
+        sizes, xs, ys, outline = _shelf_placement(rng)
+        encoded = encode_placement(sizes, xs, ys, outline_height=outline)
+        for index in range(len(sizes)):
+            assert encoded.decoded.x[index] <= xs[index], (sizes, xs, ys, index)
+            assert encoded.decoded.y[index] <= ys[index], (sizes, xs, ys, index)
+        assert encoded.decoded.width <= max(
+            xs[i] + sizes[i][0] for i in range(len(sizes))
+        )
+        assert encoded.decoded.used_height <= max(
+            ys[i] + sizes[i][1] for i in range(len(sizes))
+        )
+
+
+def test_encode_produces_vertical_relations_on_a_multi_row_placement() -> None:
+    """Guard on the generator itself: a fixture with no vertical pair proves nothing."""
+    rng = random.Random(20260902)
+    saw_vertical = False
+    for _trial in range(80):
+        sizes, xs, ys, outline = _shelf_placement(rng)
+        encoded = encode_placement(sizes, xs, ys, outline_height=outline)
+        negative_position = {
+            strip: position for position, strip in enumerate(encoded.pair.negative)
+        }
+        for first_position, first in enumerate(encoded.pair.positive):
+            for second in encoded.pair.positive[first_position + 1 :]:
+                if negative_position[first] > negative_position[second]:
+                    saw_vertical = True
+    assert saw_vertical
+
+
+def test_encode_never_overlaps() -> None:
+    rng = random.Random(1789)
+    for _trial in range(80):
+        sizes, xs, ys, outline = _shelf_placement(rng)
+        encoded = encode_placement(sizes, xs, ys, outline_height=outline)
+        boxes = [
+            (
+                encoded.decoded.x[i],
+                encoded.decoded.y[i],
+                encoded.decoded.x[i] + sizes[i][0],
+                encoded.decoded.y[i] + sizes[i][1],
+            )
+            for i in range(len(sizes))
+        ]
+        for i in range(len(sizes)):
+            for j in range(i + 1, len(sizes)):
+                a, b = boxes[i], boxes[j]
+                assert a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1]
+
+
+def test_encode_is_replayable_for_the_same_placement() -> None:
+    sizes = ((4, 3), (5, 3), (4, 4))
+    first = encode_placement(sizes, (0, 6, 12), (0, 4, 0), outline_height=12)
+    second = encode_placement(sizes, (0, 6, 12), (0, 4, 0), outline_height=12)
+    assert first.pair == second.pair
+    assert first.gaps == second.gaps
+
+
+def test_encode_rejects_an_overlapping_placement() -> None:
+    with pytest.raises(ValueError):
+        encode_placement(((4, 3), (4, 3)), (0, 1), (0, 1), outline_height=6)
+
+
+def test_encode_handles_a_placement_no_per_pair_axis_rule_can_express() -> None:
+    """Three strips whose relations are cyclic unless the free pair is settled globally.
+
+    B and C overlap in ``x`` so B is above C; A and C overlap in ``x`` so C is
+    above A.  A and B are disjoint on both axes, and any rule that reads only
+    that pair's own coordinates may call A west of B, which closes the cycle
+    A -> B -> C -> A and makes the relation set unrepresentable.  Only "B above
+    A" is consistent, and the topological sort is what finds it.
+    """
+    sizes = ((2, 1), (1, 1), (10, 1))
+    encoded = encode_placement(sizes, (1, 4, 0), (0, 2, 1), outline_height=8)
+
+    assert encoded.pair == SequencePair((1, 2, 0), (0, 2, 1))
+    _assert_disjoint(_decoded_boxes(encoded, sizes))
+    assert encoded.decoded.x == (0, 0, 0)
+    assert encoded.decoded.y == (0, 2, 1)
+
+
+def test_encode_reports_exactness_honestly_on_hand_built_placements() -> None:
+    """The round trip: exact means the decode IS the input; inexact still decodes legally.
+
+    Exactness is not promised, so the honest contract is checked in both
+    directions -- ``exact`` implies coordinate equality, and an inexact encoding
+    still yields a non-overlapping compaction no further out than the input.
+    """
+    saw_exact = False
+    saw_inexact = False
+    for sizes, xs, ys, outline in _HAND_BUILT_PLACEMENTS:
+        encoded = encode_placement(sizes, xs, ys, outline_height=outline)
+        _assert_disjoint(_decoded_boxes(encoded, sizes))
+        for index in range(len(sizes)):
+            assert encoded.decoded.x[index] <= xs[index], (sizes, xs, ys, index)
+            assert encoded.decoded.y[index] <= ys[index], (sizes, xs, ys, index)
+        if encoded.exact:
+            saw_exact = True
+            assert encoded.decoded.x == xs
+            assert encoded.decoded.y == ys
+        else:
+            saw_inexact = True
+            assert (encoded.decoded.x, encoded.decoded.y) != (xs, ys)
+        assert encoded.gaps == GapProfile.zero(len(sizes))
+        assert encoded.decoded == decode_sequence_pair(
+            encoded.pair, encoded.gaps, sizes, outline_height=outline
+        )
+    assert saw_exact
+    assert saw_inexact
+
+
+def test_encoded_placement_is_frozen() -> None:
+    encoded = encode_placement(((2, 2),), (0,), (0,), outline_height=4)
+    assert isinstance(encoded, EncodedPlacement)
+    assert encoded.pair == SequencePair((0,), (0,))
+    with pytest.raises(FrozenInstanceError):
+        encoded.exact = False  # type: ignore[misc]
+
+
+def test_topological_order_breaks_ties_by_index_and_re_sorts_the_ready_set() -> None:
+    """The ready set is a total order, so the sweep has exactly one answer.
+
+    Node 3 is ready from the start and node 1 only becomes ready once node 0 is
+    popped, and the two share a rank.  Appending without re-sorting yields
+    ``(0, 2, 3, 1)``; re-sorting on a rank alone also yields ``(0, 2, 3, 1)``,
+    because a stable sort keeps the arrival order.  Only a re-sort whose key
+    ends in the index puts node 1 first.
+    """
+    successors: list[set[int]] = [{1}, set(), set(), set()]
+    rank = (0, 5, 1, 5)
+
+    assert _topological_order(successors, key=lambda index: (rank[index], index)) == (0, 2, 1, 3)
+
+
+def test_topological_order_rejects_a_cycle() -> None:
+    with pytest.raises(ValueError):
+        _topological_order([{1}, {0}], key=lambda index: (index,))

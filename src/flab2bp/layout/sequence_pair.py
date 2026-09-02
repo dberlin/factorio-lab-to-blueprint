@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import random
 from bisect import bisect_left
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -913,6 +913,166 @@ def decode_state(problem: PlacementProblem, state: AnnealState) -> DecodedPlacem
         direct=decoded.direct,
         variant_indices=state.variant_indices,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class EncodedPlacement:
+    """A sequence pair for one concrete placement, and what it decodes back to.
+
+    ``exact`` is ``False`` when the input carried slack the encoding does not
+    express: the emitted gaps are zero, and :func:`decode_sequence_pair` then
+    returns the compaction of the constraint graph.  Exactness is NOT promised.
+    It holds when the input already *is* the compaction of the relations the
+    encoder emits -- an abutting row, an abutting column, a tight grid -- and
+    fails as soon as any pair has slack on the axis that relates it, because
+    the compaction closes that slack and closing it can free a third strip.
+    Consumers must read the flag; they must never assume the decode reproduces
+    the input.
+
+    What IS promised: the compaction is never wider and never taller.  Every
+    relation the encoder emits is an inequality the input already satisfies --
+    that is how the relation was chosen -- so the input is a feasible point of
+    the emitted system, and the longest-path sweep returns the
+    componentwise-minimum feasible point.  Hence ``decoded.x[i] <= x[i]`` and
+    ``decoded.y[i] <= y[i]`` for every strip.  What it CAN change is a
+    direct-insert offset, because a strip moved; score the decoded placement
+    before accepting it.
+    """
+
+    pair: SequencePair
+    gaps: GapProfile
+    decoded: DecodedPlacement
+    exact: bool
+
+
+def encode_placement(
+    sizes: tuple[tuple[int, int], ...],
+    x: tuple[int, ...],
+    y: tuple[int, ...],
+    *,
+    outline_height: int,
+) -> EncodedPlacement:
+    """Return a sequence pair whose decode compacts one concrete placement.
+
+    This is the inverse of :func:`decode_sequence_pair`'s relation
+    construction, and the vertical direction is read off
+    :func:`_earliest_coordinates`, not off a variable's name.  That sweep
+    treats ``successors[s]`` as the strips that come AFTER ``s``, so
+    ``vertical[second].append(first)`` -- what the decoder writes when
+    ``first`` precedes ``second`` in the positive permutation and follows it in
+    the negative -- means ``y_first >= y_second + h_second``: **first is ABOVE
+    second**, where "above" is the larger ``y``.  Encoding the opposite
+    relation produces placements that decode upside down.  So:
+
+    * ``i`` before ``j`` in BOTH permutations  ==  i is west of j
+    * ``i`` before ``j`` in positive, after in negative  ==  i is ABOVE j
+
+    **The relation for a pair cannot be chosen pair by pair.**  Picking one
+    axis per pair from that pair's own coordinates -- the tighter separation,
+    the looser one, or a fixed axis preference -- yields relation sets no two
+    permutations can express, because the implied precedences run in a cycle.
+    A tight example: A at ``(1, 0)`` sized ``(2, 1)``, B at ``(4, 2)`` sized
+    ``(1, 1)``, C at ``(0, 1)`` sized ``(10, 1)``.  B and C overlap in ``x``,
+    so B is above C; A and C overlap in ``x``, so C is above A; and any rule
+    that then calls A west of B closes the cycle A -> B -> C -> A.  The pair
+    A, B is the only one with a choice, and only "B above A" is consistent.
+
+    So the encoder records only the precedences the geometry FORCES and lets a
+    topological sort settle the rest:
+
+    * ``j`` strictly west of ``i`` forces ``j`` before ``i`` in both.
+    * ``j`` strictly above ``i`` forces ``j`` before ``i`` in the positive
+      permutation; ``j`` strictly below ``i`` forces it in the negative.
+
+    Hence the positive successors of ``i`` are every ``j`` that is neither west
+    of nor above ``i``, and the negative successors every ``j`` that is neither
+    west of nor below ``i``.  A pair disjoint on both axes lands in exactly one
+    of the two graphs, so one permutation pins it and the other is free -- and
+    both of the free permutation's outcomes name a relation the placement
+    already satisfies, which is what makes the result feasible for the input.
+    The ready-set keys ``(x, -y, index)`` and ``(x, y, index)`` follow the two
+    permutations' own directions (west-or-higher first, west-or-lower first)
+    and are total, so encoding the same placement twice gives the same pair.
+
+    Both graphs are acyclic on every placement measured, but that is not
+    proven here, so :func:`_topological_order` raises rather than returning a
+    partial order; callers count the failure and keep the placement they had.
+    """
+    _validate_sizes(sizes)
+    size = len(sizes)
+    if len(x) != size or len(y) != size:
+        raise ValueError("encoded coordinates must cover every rectangle")
+    if any(type(value) is not int or value < 0 for value in (*x, *y)):
+        raise ValueError("encoded coordinates must be non-negative integers")
+    _validate_positive_integer(outline_height, "outline height")
+
+    #: ``positive[a]`` holds every ``b`` that may not precede ``a`` in `positive`.
+    positive_successors: list[set[int]] = [set() for _ in range(size)]
+    #: ``negative[a]`` holds every ``b`` that may not precede ``a`` in `negative`.
+    negative_successors: list[set[int]] = [set() for _ in range(size)]
+    for first in range(size):
+        first_width, first_height = sizes[first]
+        for second in range(size):
+            if first == second:
+                continue
+            second_width, second_height = sizes[second]
+            second_west = x[second] + second_width <= x[first]
+            second_east = x[first] + first_width <= x[second]
+            second_below = y[second] + second_height <= y[first]
+            second_above = y[first] + first_height <= y[second]
+            if first < second and not (second_west or second_east or second_below or second_above):
+                raise ValueError("encoded placement must not overlap")
+            if not second_west and not second_above:
+                positive_successors[first].add(second)
+            if not second_west and not second_below:
+                negative_successors[first].add(second)
+
+    positive = _topological_order(
+        positive_successors,
+        key=lambda index: (x[index], -y[index], index),
+    )
+    negative = _topological_order(
+        negative_successors,
+        key=lambda index: (x[index], y[index], index),
+    )
+    pair = SequencePair(positive, negative)
+    gaps = GapProfile.zero(size)
+    decoded = decode_sequence_pair(pair, gaps, sizes, outline_height=outline_height)
+    return EncodedPlacement(
+        pair=pair,
+        gaps=gaps,
+        decoded=decoded,
+        exact=decoded.x == tuple(x) and decoded.y == tuple(y),
+    )
+
+
+def _topological_order(
+    successors: Sequence[set[int]],
+    *,
+    key: Callable[[int], tuple[int, ...]],
+) -> tuple[int, ...]:
+    """Kahn's algorithm with a total ready-set order, so the result is unique."""
+    size = len(successors)
+    indegree = [0] * size
+    for sources in successors:
+        for destination in sources:
+            indegree[destination] += 1
+    ready = sorted((index for index in range(size) if indegree[index] == 0), key=key)
+    order: list[int] = []
+    while ready:
+        node = ready.pop(0)
+        order.append(node)
+        added = False
+        for destination in sorted(successors[node]):
+            indegree[destination] -= 1
+            if indegree[destination] == 0:
+                ready.append(destination)
+                added = True
+        if added:
+            ready.sort(key=key)
+    if len(order) != size:
+        raise ValueError("encoded placement relations must be acyclic")
+    return tuple(order)
 
 
 def align_direct_inserts(
