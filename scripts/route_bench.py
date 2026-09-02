@@ -90,12 +90,19 @@ def _snapshot(
     return shot_canvas, shot_grid, dict(history)
 
 
-def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None:
+def capture(
+    url_id: str,
+    budget: float,
+    every: int,
+    cap: int,
+    out: Path,
+    policy: CandidatePolicy = CandidatePolicy.NO_PROLIFERATOR,
+) -> None:
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
     spec = build_candidates(
         load_vendored(),
         parse_url(entry.url),
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        candidate_policies=(policy,),
     ).candidates[0]
 
     orig = freeform._astar
@@ -257,7 +264,7 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
     return 0
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--capture")
     ap.add_argument("--budget", type=float, default=4.0)
@@ -267,10 +274,21 @@ def main() -> int:
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--landmarks", type=int)
+    ap.add_argument(
+        "--policy",
+        type=CandidatePolicy,
+        choices=tuple(CandidatePolicy),
+        default=CandidatePolicy.NO_PROLIFERATOR,
+    )
+    return ap
+
+
+def main() -> int:
+    ap = build_parser()
     args = ap.parse_args()
     if args.capture:
-        out = args.cases or Path(f"/tmp/route-cases-{args.capture}.pkl")
-        capture(args.capture, args.budget, args.every, args.cap, out)
+        out = args.cases or Path(f"/tmp/route-cases-{args.capture}-{args.policy.value}.pkl")
+        capture(args.capture, args.budget, args.every, args.cap, out, args.policy)
         return 0
     if not args.cases:
         ap.error("--cases or --capture required")
