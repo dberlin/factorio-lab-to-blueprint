@@ -1621,7 +1621,17 @@ def test_unreachable_elevated_port_returns_structured_failure_without_route() ->
     assert result.failures[0].source == (0, 0, 0)
     assert result.failures[0].destination == (6, 0, 1)
     assert tuple(canvas.buildings) == before
-    assert not result.exhaustive, "bounded rip-up/reroute is not a completeness proof"
+    # The rip-up/reroute rounds alone are not a completeness proof, but the
+    # destination has no free neighbour cell at all -- east, north and south
+    # are walled and west is off the canvas -- so the last-mile cluster
+    # search (real, not mocked here) closes its tree over this one net and
+    # PROVES it unroutable.  That real proof is exactly what Task 5 wires
+    # into `exhaustive`; before that wiring this assertion read the other
+    # way because nothing carried the proof this far.
+    assert result.exhaustive, (
+        "the destination port is walled in on every side -- last-mile's "
+        "cluster search proves the net unroutable"
+    )
 
 
 def test_external_route_world_collision_commits_no_prefix(
@@ -3425,6 +3435,164 @@ def test_unproved_and_budget_failures_do_not_exclude_geometry(
     attempt = _proof_attempt(routing, strips)
 
     assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None)
+
+
+def _boundary_input_fixture(
+    sealed: bool = False,
+) -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
+    """One external input net reaching the core from the entry ring.
+
+    The canvas is pinned to a single row (``limit``'s y-range is one cell) so
+    the only way in is the straight west run; the north, south and east
+    directions `_straight_to_edge` would otherwise try are refused by the
+    limit itself. ``sealed`` walls the cell of that run nearest the port, so
+    the straight fast path AND the dynamic-access fallback (the port's only
+    other free neighbour cells are also outside the limit) both fail.
+    """
+    belt_id = catalog.item_id("conveyor-belt-1")
+    core = (0, 0, 0, 0)
+    canvas = _Canvas(limit=(-3, 0, 0, 0))
+    port_index = canvas.add(
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=catalog.building(belt_id).model_index,
+            x=0,
+            y=0,
+            carries_item="ore",
+        )
+    )
+    if sealed:
+        canvas.blocked[-1, 0, 0] = -1
+    net = _Net(
+        src=None,
+        dst=_Port(port_index, 0, 0, 0, 0),
+        item="ore",
+        net_id=NetId(None, 0, "ore", NetRole.EXTERNAL, 0),
+        boundary_goals=((-3, 0, 0),),
+    )
+    return canvas, [net], core
+
+
+def test_a_clean_boundary_routing_is_marked_exhaustive() -> None:
+    import flab2bp.layout.freeform as freeform_module
+
+    canvas, nets, core = _boundary_input_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform_module._route_external_inputs(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        core,
+    )
+
+    assert result.status is DetailedRouteStatus.ROUTED
+    assert result.exhaustive is True
+
+
+def test_a_boundary_routing_with_failures_is_not_exhaustive() -> None:
+    import flab2bp.layout.freeform as freeform_module
+
+    canvas, nets, core = _boundary_input_fixture(sealed=True)
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform_module._route_external_inputs(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        core,
+    )
+
+    assert result.failures
+    assert result.exhaustive is False
+
+
+def test_a_proved_cluster_marks_the_routing_exhaustive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import flab2bp.layout.freeform as freeform_module
+    from flab2bp.layout import last_mile as last_mile_module
+
+    def always_proved(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> last_mile_module.ClusterResult:
+        return last_mile_module.ClusterResult(
+            last_mile_module.ClusterOutcome.PROVED, {}, 3, 10, 0.0
+        )
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", always_proved)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform_module._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert result.status is DetailedRouteStatus.STRANDED
+    assert result.exhaustive is True
+    assert result.last_mile is not None
+    assert result.last_mile.proved == 1
+
+
+def test_a_budget_failure_never_becomes_a_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PROVED cluster plus a BUDGET-kind failure is still not exhaustive.
+
+    The pass must actually RUN for this to mean anything: a budget so small
+    that `_last_mile` returns at its `budget["left"] <= 0` guard would make the
+    test pass without ever reaching `always_proved`.  `calls` is the assertion
+    that it did.
+
+    ``40`` was picked by sweeping the fixture's real (unmocked) `_astar`
+    search: below ~20 the round's own search for `blocker` exhausts the
+    budget before `_last_mile` ever runs, and above ~60 the round settles
+    (`stale` trips the RRR early-stop) before enough is spent to leave
+    `budget["left"] <= 0` for `_finish`.  20 through 60 all work; 40 sits in
+    the middle of that window.  Twenty thousand -- workable on some fixture
+    shapes -- is comfortably inside the "settles without spending it"
+    region for this one, which is exactly the failure this docstring's
+    second branch describes.
+    """
+    import flab2bp.layout.freeform as freeform_module
+    from flab2bp.layout import last_mile as last_mile_module
+
+    calls: list[object] = []
+
+    def always_proved(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> last_mile_module.ClusterResult:
+        calls.append(problem)
+        return last_mile_module.ClusterResult(
+            last_mile_module.ClusterOutcome.PROVED, {}, 1, 0, 0.0
+        )
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", always_proved)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform_module._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+        budget={"left": 40},
+    )
+
+    assert calls, "the last-mile pass never ran; raise the budget"
+    assert any(
+        failure.kind is RouteFailureKind.BUDGET for failure in result.failures
+    ) or result.status is DetailedRouteStatus.BUDGET
+    assert result.exhaustive is False
 
 
 def _sweep_after_first_routing(

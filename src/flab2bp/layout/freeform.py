@@ -7160,6 +7160,11 @@ def _route_all(
         budget = {"left": _ROUTING_BUDGET}
     fewest_failed = len(nets) + 1
     stale = 0
+    #: The round `best_paths` was captured from, or ``-1`` before any round
+    #: has.  Compared against `proved_round` at the final `_finish` call so a
+    #: last-mile proof closed over an earlier round's stranded set can never
+    #: be claimed exhaustive for an incumbent it never examined.
+    best_round = -1
     #: The BEST round's paths, not the last round's.
     #:
     #: What gets committed used to be whichever round the loop happened to stop
@@ -9123,6 +9128,7 @@ def _route_all(
             # mutated in place by the rip-up and by the repair, so keeping the
             # reference would make "the best round" mean "the last one".
             fewest_failed, stale, best_paths = failed, 0, dict(paths)
+            best_round = it
             best_failures = dict(round_failures)
             best_source_hints = {
                 index: hint for index, hint in source_hint.items() if index in best_paths
@@ -9148,6 +9154,7 @@ def _route_all(
         best_sink_hints,
         best_path_taps,
         budget_exhausted=budget["left"] <= 0,
+        exhaustive_claim=proved_round >= 0 and proved_round == best_round,
     )
 
 
@@ -10814,6 +10821,11 @@ def _route_boundary_nets(
         failures=tuple(failures),
         iterations=0,
         expansions=expansions,
+        # A result with no failure has nothing left unproved.  This is the same
+        # vacuous claim `_build_prepared` already makes for `empty_routing`, and
+        # `_build_prepared` conjoins all four sub-routings, so without it an
+        # internal proof could never reach `_proof_scoped_no_goods`.
+        exhaustive=not failures,
     )
 
 
