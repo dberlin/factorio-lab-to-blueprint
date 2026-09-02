@@ -72,10 +72,14 @@ smarter search until evaluation is cheap.
 
 ## 3. Goals
 
-- One candidate preparation on `universe-matrix` at or under 1.0 s, measured by
-  the profiler added in this design.
-- One routing pass on the same cell at or under 0.2 s for the A* share.
-- Corpus gate: `scripts/audit.py --budget 30 --jobs 16`, both strategies, three
+- Directional targets, not gates (amended 2026-09-02: both were calibrated
+  from one cProfile run on one cell and the execution stopped on them once,
+  wrongly): one candidate preparation on `universe-matrix` near 1.0 s, and
+  the A* share of one routing pass near 0.2 s, measured by the profiler added
+  in this design. Measured at the end of execution: first-candidate
+  preparation 1.9 to 4.6 s, later candidates 0.5 to 1.6 s through the shared
+  memo; A* per candidate run 7.06 s to 1.56 s.
+- Corpus gate (the only acceptance gate): `scripts/audit.py --budget 30 --jobs 16`, both strategies, three
   interleaved paired rounds against the committed baseline: 72/72 CLEAN in
   every round, INVALID 0, CRASH 0, wall p95 per cell at or under 30 s, and
   paired area over cells clean in both arms no worse than the baseline beyond
@@ -121,6 +125,16 @@ Four exact changes, in the order the profile ranks them:
    member and the stack is materialized only when some projection state
    passes it. The rejected pairs produced no ban before; they still produce
    none.
+   **Outcome (2026-09-02): implemented, exact, and not shipped.** A
+   same-process A/B on the plastic cell's recorded calls cut
+   `materialize_frame_building` calls by 20 percent and was 2.6 percent
+   slower in wall time. A cProfile of the function shows its cost is its own
+   nested-loop bookkeeping (2.25 s tottime on plastic), `dataclasses.replace`
+   (111k to 172k calls, the largest single line on `universe-matrix`), and
+   `colliders.obb_overlap` (307k calls); materialization itself is about
+   1 us per call. The attribution in this item is falsified; the next lever
+   for this phase is replacing `dataclasses.replace` in the per-state pose
+   construction and batching `obb_overlap`, not skipping materialization.
 2. **Junction ban offsets** (1.5 s). The cancellable offset computation
    stores only into an attempt-local dict while the uncancellable one uses a
    process-wide LRU. Both consult and fill one process-wide dict keyed by
@@ -234,8 +248,9 @@ parity runs. Placement stats carry `route_backend`.
   same expansion checkpoints as today and writes back the shared budget with
   the same off-by-one rules.
 - If the extension fails to import, the Python path runs and every test and
-  the audit still pass; only the profiler numbers differ. CI builds the
-  extension so parity tests always exercise it.
+  the audit still pass; only the profiler numbers differ. This repository has
+  no CI, so the parity tests fail rather than skip when the extension is not
+  built, and skip only under an explicit `FLAB2BP_ROUTE_KERNEL=python`.
 - Memo eviction cannot change a result, only cost; a full table is a
   performance observation reported by `stats()`, never a failure.
 
@@ -301,6 +316,15 @@ note and will be specified separately after this design's gate passes.
 - Preparation may have a long tail this design does not name. The profiler is
   built first so the tail is measured before it is guessed at.
 - The reach prefilter's exactness argument rests on every member of a
-  splitter stack sharing one materialized x and y. The parity test compares
-  the filtered and unfiltered scans on a spec with coaters, and the corpus
-  parity script covers the rest.
+  splitter stack sharing one materialized x and y. The argument held (verified
+  on three coater-bearing fixtures) but the change did not ship: it was not a
+  speedup. See section 5.2 item 1.
+- Outcome of the corpus gate on 2026-09-02: 65/72 CLEAN in three rounds
+  against a 63/72 baseline on the same master, INVALID 0, CRASH 0, area
+  within noise, p95 wall 30.4 to 30.7 s. The gate failed on coverage. Two of
+  the seven refusals are budget-independent (a validator rejection on
+  `universe-matrix/no-proliferator` under freeform, the stage cap on
+  `graphene/output-products` under sequence-pair); one overshoots the 30 s
+  budget by 5 to 10 s (`quantum-chip/no-proliferator` under sequence-pair),
+  which is a cancellation gap; the remaining four are exact-preparation and
+  packing deadlines on the two largest specs.
