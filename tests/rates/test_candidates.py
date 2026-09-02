@@ -495,6 +495,7 @@ def test_candidates_carry_the_researched_belt_and_sorter_tiers() -> None:
 
     data = load_vendored()
     specs = build_candidates(data, parse_url(EXAMPLE_URL)).candidates
+    assert specs
     for spec in specs:
         assert spec.belt_item_id == "conveyor-belt-2"
         assert [tier.item_id for tier in spec.belt_upgrades] == ["conveyor-belt-3"]
