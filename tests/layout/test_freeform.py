@@ -59,6 +59,7 @@ from flab2bp.layout.freeform import (
     _dests,
     _direct_column_deltas,
     _direct_net_candidates,
+    _DirectCandidate,
     _emit_strip,
     _greedy_pack,
     _Grid,
@@ -6646,6 +6647,67 @@ def test_a_translated_cluster_relation_is_still_forbidden() -> None:
     origins = [packed.at[index] for index in range(len(strips))]
     delta = (origins[2][0] - origins[0][0], origins[2][1] - origins[0][1])
     assert delta != (2, 0)
+
+
+def _plastic_pack_inputs() -> tuple[
+    list[Strip], int, int, Mapping[tuple[int, int], _DirectCandidate]
+]:
+    spec = plastic_spec()
+    strips = freeform.plan_strips(spec, strip_len=6)
+    height = freeform._candidate_heights(strips)[0]
+    candidates = freeform._direct_candidate_snapshot(strips, spec, enabled=True).candidates
+    bound = max(8, 2 * sum(freeform._box(strip)[0] for strip in strips))
+    return strips, height, bound, candidates
+
+
+def test_pack_model_with_no_pinned_strips_is_the_model_pack_built_before_the_split() -> None:
+    """The split must not change one byte of the production model.
+
+    The baseline was captured from `_pack` BEFORE the refactor and is tracked at
+    `tests/layout/data/plastic_pack_model.pbtxt`.  Regenerating it is a separate,
+    reviewed commit: this file is the only record of the pre-split model.
+
+    Stability: the proto text is deterministic only for the ortools version that
+    captured it (serialization and presolve annotations can shift between
+    versions), and only while every collection that feeds model construction
+    iterates in insertion order (lists, dicts, and int/tuple-keyed sets are
+    fine; a set of strings is not, because string hashing is per-process).
+    If this test fails right after an ortools upgrade, regenerate the capture
+    on the new version in its own commit and say so; if it fails on the same
+    version, a set-of-strings iteration has crept into the model build.
+    """
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    built = freeform._pack_model(
+        strips,
+        height=height,
+        width_bound=bound,
+        direct_candidates=candidates,
+    )
+    assert built is not None
+    assert built.skipped_no_goods == 0
+    baseline = (Path(__file__).parent / "data" / "plastic_pack_model.pbtxt").read_text()
+    assert str(built.model.Proto()) == baseline
+
+
+def test_pack_model_counts_match_its_inputs() -> None:
+    """A second fence that survives a deliberate model change, unlike the snapshot."""
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    built = freeform._pack_model(
+        strips,
+        height=height,
+        width_bound=bound,
+        direct_candidates=candidates,
+    )
+    assert built is not None
+    assert len(built.xs) == len(strips)
+    assert len(built.ys) == len(strips)
+    assert len(built.direct_vars) == len(candidates)
+    proto = built.model.Proto()
+    assert sum(1 for c in proto.constraints if c.has_no_overlap_2d()) == 1
+    # One abs-equality pair per net, plus the feedback terms (none here).
+    assert sum(1 for c in proto.constraints if c.has_lin_max()) == 2 * len(
+        freeform._nets_between(list(strips))
+    )
 
 
 def _brute_junction_projection_frames(

@@ -1,0 +1,310 @@
+variables {
+  name: "W"
+  domain: 38
+  domain: 126
+}
+variables {
+  name: "x0"
+  domain: 0
+  domain: 116
+}
+variables {
+  name: "y0"
+  domain: 0
+  domain: 7
+}
+variables {
+  name: "x1"
+  domain: 0
+  domain: 101
+}
+variables {
+  name: "y1"
+  domain: 0
+  domain: 6
+}
+variables {
+  name: "x2"
+  domain: 0
+  domain: 98
+}
+variables {
+  name: "y2"
+  domain: 0
+  domain: 4
+}
+variables {
+  name: "dx0_2"
+  domain: 0
+  domain: 126
+}
+variables {
+  name: "dy0_2"
+  domain: 0
+  domain: 13
+}
+variables {
+  name: "dx1_2"
+  domain: 0
+  domain: 126
+}
+variables {
+  name: "dy1_2"
+  domain: 0
+  domain: 13
+}
+constraints {
+  name: "xi0"
+  interval {
+    start {
+      vars: 1
+      coeffs: 1
+    }
+    end {
+      vars: 1
+      coeffs: 1
+      offset: 10
+    }
+    size {
+      offset: 10
+    }
+  }
+}
+constraints {
+  name: "yi0"
+  interval {
+    start {
+      vars: 2
+      coeffs: 1
+    }
+    end {
+      vars: 2
+      coeffs: 1
+      offset: 6
+    }
+    size {
+      offset: 6
+    }
+  }
+}
+constraints {
+  linear {
+    vars: 0
+    vars: 1
+    coeffs: -1
+    coeffs: 1
+    domain: -9223372036854775808
+    domain: -10
+  }
+}
+constraints {
+  name: "xi1"
+  interval {
+    start {
+      vars: 3
+      coeffs: 1
+    }
+    end {
+      vars: 3
+      coeffs: 1
+      offset: 25
+    }
+    size {
+      offset: 25
+    }
+  }
+}
+constraints {
+  name: "yi1"
+  interval {
+    start {
+      vars: 4
+      coeffs: 1
+    }
+    end {
+      vars: 4
+      coeffs: 1
+      offset: 7
+    }
+    size {
+      offset: 7
+    }
+  }
+}
+constraints {
+  linear {
+    vars: 0
+    vars: 3
+    coeffs: -1
+    coeffs: 1
+    domain: -9223372036854775808
+    domain: -25
+  }
+}
+constraints {
+  name: "xi2"
+  interval {
+    start {
+      vars: 5
+      coeffs: 1
+    }
+    end {
+      vars: 5
+      coeffs: 1
+      offset: 28
+    }
+    size {
+      offset: 28
+    }
+  }
+}
+constraints {
+  name: "yi2"
+  interval {
+    start {
+      vars: 6
+      coeffs: 1
+    }
+    end {
+      vars: 6
+      coeffs: 1
+      offset: 9
+    }
+    size {
+      offset: 9
+    }
+  }
+}
+constraints {
+  linear {
+    vars: 0
+    vars: 5
+    coeffs: -1
+    coeffs: 1
+    domain: -9223372036854775808
+    domain: -28
+  }
+}
+constraints {
+  no_overlap_2d {
+    x_intervals: 0
+    x_intervals: 3
+    x_intervals: 6
+    y_intervals: 1
+    y_intervals: 4
+    y_intervals: 7
+  }
+}
+constraints {
+  lin_max {
+    target {
+      vars: 7
+      coeffs: 1
+    }
+    exprs {
+      vars: 1
+      vars: 5
+      coeffs: 1
+      coeffs: -1
+    }
+    exprs {
+      vars: 1
+      vars: 5
+      coeffs: -1
+      coeffs: 1
+    }
+  }
+}
+constraints {
+  lin_max {
+    target {
+      vars: 8
+      coeffs: 1
+    }
+    exprs {
+      vars: 2
+      vars: 6
+      coeffs: 1
+      coeffs: -1
+    }
+    exprs {
+      vars: 2
+      vars: 6
+      coeffs: -1
+      coeffs: 1
+    }
+  }
+}
+constraints {
+  linear {
+    vars: 7
+    vars: 8
+    coeffs: 1
+    coeffs: 1
+    domain: 6
+    domain: 9223372036854775807
+  }
+}
+constraints {
+  lin_max {
+    target {
+      vars: 9
+      coeffs: 1
+    }
+    exprs {
+      vars: 3
+      vars: 5
+      coeffs: 1
+      coeffs: -1
+    }
+    exprs {
+      vars: 3
+      vars: 5
+      coeffs: -1
+      coeffs: 1
+    }
+  }
+}
+constraints {
+  lin_max {
+    target {
+      vars: 10
+      coeffs: 1
+    }
+    exprs {
+      vars: 4
+      vars: 6
+      coeffs: 1
+      coeffs: -1
+    }
+    exprs {
+      vars: 4
+      vars: 6
+      coeffs: -1
+      coeffs: 1
+    }
+  }
+}
+constraints {
+  linear {
+    vars: 9
+    vars: 10
+    coeffs: 1
+    coeffs: 1
+    domain: 7
+    domain: 9223372036854775807
+  }
+}
+objective {
+  vars: 0
+  vars: 7
+  vars: 8
+  vars: 9
+  vars: 10
+  scaling_factor: 1
+  coeffs: 557
+  coeffs: 1
+  coeffs: 1
+  coeffs: 1
+  coeffs: 1
+}
