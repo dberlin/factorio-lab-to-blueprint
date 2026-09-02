@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -116,6 +116,136 @@ class NetFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class LastMileReport:
+    """What the bounded last-mile cluster search did in one routing pass."""
+
+    invocations: int
+    solved: int
+    proved: int
+    bounded: int
+    #: A CBS solution the commit preflight refused, or whose rollback ran.
+    commit_rejected: int
+    #: Run 1 closed but a cluster net had a sibling, so run 2 was not run.
+    #: See the spec's 5.2: unstaking a sibling can DISCONNECT a net, and a
+    #: closed tree over a disconnected net is a false proof.
+    relation_skipped_siblings: int
+    #: Times the round could not be restored exactly.  Never an exception: an
+    #: `AssertionError` here becomes a CRASH row and fails the corpus gate on a
+    #: condition the gate exists to measure.
+    restore_mismatch: int
+    nodes: int
+    expansions: int
+    seconds: float
+    #: Ascending strip instances of a cluster proved unroutable in the relaxed
+    #: environment, empty when no relation proof was established.
+    relation_strips: tuple[int, ...] = ()
+    relation_evidence: str = ""
+    #: Nets a cluster left OUT because they share an un-tappable source lane
+    #: with a net it kept.  Only one net can ever leave such a lane directly,
+    #: so offering the same access cells to both produced solutions the
+    #: committer refused with `junction-collider`.  Defaulted, and NOT one of
+    #: the eleven flattened `PlacementStats` keys: it is a diagnosis of the
+    #: pass, not a corpus counter.
+    same_source_dropped: int = 0
+
+    def __post_init__(self) -> None:
+        if self.relation_strips and len(self.relation_strips) < 2:
+            raise ValueError("a relation proof needs at least two strip instances")
+        if tuple(sorted(self.relation_strips)) != self.relation_strips:
+            raise ValueError("relation strips must be ascending")
+
+
+@dataclass(frozen=True, slots=True)
+class ClusterRelationNoGood:
+    """One relative placement of strip instances proved unroutable.
+
+    The proof behind it is a CBS tree that closed with every OTHER belt in the
+    pack unstaked and the cluster's routing-derived rejection sets emptied, so
+    it is a statement about the strips and not about one routing: any packing
+    that repeats these relative offsets refuses again.  ``outline`` and
+    ``height`` scope it to the strip plan that produced it, the same guard
+    :class:`ExactPackNoGood` carries.
+
+    ``evidence`` is one blob rather than one string per net: what a reader
+    needs is which cluster this was and that both runs closed, and a per-net
+    tuple only makes the equality key noisier.
+    """
+
+    height: int
+    outline: tuple[tuple[int, int], ...]
+    strips: tuple[int, ...]
+    deltas: tuple[tuple[int, int], ...]
+    evidence: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.height <= 0:
+            raise ValueError("cluster relation height must be positive")
+        if len(self.strips) < 2:
+            raise ValueError("a cluster relation needs at least two strips")
+        if any(strip < 0 for strip in self.strips):
+            raise ValueError("cluster relation strips must be non-negative indices")
+        if tuple(sorted(self.strips)) != self.strips:
+            raise ValueError("cluster relation strips must be ascending")
+        if len(self.deltas) != len(self.strips):
+            raise ValueError("a cluster relation needs one delta per strip")
+        if self.deltas[0] != (0, 0):
+            raise ValueError("the anchor strip's delta must be the origin")
+        if not self.evidence:
+            raise ValueError("a cluster relation no-good requires evidence")
+
+
+def combine_last_mile_reports(
+    reports: Iterable[LastMileReport | None],
+) -> LastMileReport | None:
+    """One report for a build that routed in several stages.
+
+    A prepared build routes external inputs, early outputs, the interior and
+    late outputs as four separate passes, and EACH runs a last-mile pass of its
+    own.  Reporting one of them makes every corpus counter under-read by
+    however much the other three did, which is the opposite of what the
+    counters exist for.
+
+    The counters are all additive and are summed.  ``relation_strips`` and
+    ``relation_evidence`` are NOT: they name one specific proof over one
+    specific cluster, so the first non-empty value of each is carried whole.
+    Concatenating them would manufacture a claim no single run ever made.
+
+    Returns ``None`` when no stage reported anything, so a caller that never
+    ran the pass is distinguishable from one that ran it and found nothing.
+    """
+    present = [report for report in reports if report is not None]
+    if not present:
+        return None
+    return LastMileReport(
+        invocations=sum(report.invocations for report in present),
+        solved=sum(report.solved for report in present),
+        proved=sum(report.proved for report in present),
+        bounded=sum(report.bounded for report in present),
+        commit_rejected=sum(report.commit_rejected for report in present),
+        relation_skipped_siblings=sum(
+            report.relation_skipped_siblings for report in present
+        ),
+        restore_mismatch=sum(report.restore_mismatch for report in present),
+        nodes=sum(report.nodes for report in present),
+        expansions=sum(report.expansions for report in present),
+        seconds=sum(report.seconds for report in present),
+        relation_strips=next(
+            (report.relation_strips for report in present if report.relation_strips),
+            (),
+        ),
+        relation_evidence=next(
+            (
+                report.relation_evidence
+                for report in present
+                if report.relation_evidence
+            ),
+            "",
+        ),
+        same_source_dropped=sum(report.same_source_dropped for report in present),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class DetailedRouteResult:
     status: DetailedRouteStatus
     routed: tuple[NetId, ...]
@@ -123,6 +253,7 @@ class DetailedRouteResult:
     iterations: int
     expansions: int
     exhaustive: bool = False
+    last_mile: LastMileReport | None = None
 
     def __post_init__(self) -> None:
         if type(self.exhaustive) is not bool:

@@ -1,6 +1,6 @@
 # Phase B: Complete Last-Mile Router With Real No-Goods
 
-**Status:** Approved design; implementation not started
+**Status:** Executed 2026-09-02 on branch `phase-b-last-mile` (725c34e..11c6a9c); corpus gate FAILED: 65/72 CLEAN at 30 s in all three candidate rounds against a 64/65/65 baseline (target 67), both required cells still REFUSED, no regression, INVALID 0, CRASH 0, paired area ratio 1.0068, wall p95 31.6 s / 31.8 s over the 31 s threshold (see `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/gate.md`). Three items are OPEN and deferred: (1) a CBS solution the commit preflight refuses because non-cluster nets keep stale hints at stake time (`last_mile_commit_rejected = 2` on `quantum-chip/all-products`); the rollback is complete so no state is poisoned, but the only known fix, refreshing those hints at stake time with hints added to `_round_state`, is unbounded; (2) run 2 is corpus-inert: the sibling gate turned away 100% of run-1 proofs on both target cells, so `ClusterRelationNoGood` has unit coverage only and §5.2's follow-up trigger has fired; (3) §5.2 follow-up option 2 (unstake only non-cluster, non-sibling nets) is the recorded next step and was not attempted.
 **Predecessor:** `docs/superpowers/specs/2026-09-01-evaluation-throughput-design.md` (Phase A, merged at `b3c990a`)
 **Successors:** Phase C (ALNS placement with a CP-SAT window repair), Phase D (portfolio racing)
 
@@ -54,8 +54,11 @@ Phase B adds:
    itself performs at the top of each round (`freeform.py:8342`-`8343`) —
    temporarily clears the cluster nets' five routing-derived rejection sets,
    and re-runs CBS. That environment is buildings, keep-outs, the routing box,
-   reserved corridors as `_reserve_port_access` prepared them, permanent guards
-   and junction bans, and nothing else. A tree that closes there yields a new
+   permanent guards and junction bans, and nothing else: every port corridor is
+   retired as if its role had been served, `planned_taps` starts EMPTY, and
+   `_can_junction`'s one check that tightens as that table shrinks is exempted
+   for the duration of the run (§5.2, the loosest-world rule). A tree that
+   closes there yields a new
    `ClusterRelationNoGood` naming the cluster's strip instances and their
    relative placement. Freeform's `_pack` (`freeform.py:3179`) forbids that
    relative placement with `add_forbidden_assignments`, exactly as
@@ -473,19 +476,25 @@ one share.
      — are saved and emptied for the cluster's nets, and restored afterwards.
      Without this the "relaxed" environment still carries routing-derived
      exclusions and is not a relaxation at all.
-   - `grid.reserved` needs no separate handling, but not because it is
-     constant: `_retire_served_roles` filters it and `_restore_unserved_roles`
-     rebuilds it (`freeform.py:7606`-`7610`, `:7624`-`7632`). The full sweep is
-     what makes it right. `_restore_unserved_roles` skips a role only while
-     some *other* member of it is still in `paths` (`:7618`); once every net is
-     unstaked no member remains, so every retired role is restored and
-     `grid.reserved` returns to its post-`_reserve_port_access` content.
+   - the reservation tables are then EMPTIED, not merely swept: the full
+     unstake restores every retired corridor to `canvas.reserved`,
+     `canvas.port_corridors` and `grid.reserved`, which is TIGHTER than run 1
+     saw (see the loosest-world rule below). Every port's corridors are
+     retired as if its role had been served, and `grid.occ` is given back only
+     for the cells the release actually freed.
+   - `planned_taps` starts EMPTY for run 2, so only the cluster's own taps
+     accumulate (every realizable world contains those), and `_can_junction`'s
+     one check that tightens as the table shrinks — the refusal of a
+     `canvas.guard` cell the table does not already hold — is exempted for the
+     duration of run 2 (`relaxed_junctions`). Its other three tap checks
+     tighten as the table grows, so the empty table is loose-or-equal there.
+     Run 1's table is put back afterwards.
 
    What remains is buildings, `canvas.solid`, `canvas.keep_out`,
-   `canvas.belt_ban`, the routing box, reserved corridors as
-   `_reserve_port_access` prepared them, permanent guards, and
-   `junction_frame_bans`. Nothing derived from this pack's routing survives.
-   The same `_cluster_search` closure is reused unchanged.
+   `canvas.belt_ban`, the routing box, permanent guards, and
+   `junction_frame_bans`. Nothing derived from this pack's routing survives,
+   and nothing the reservation plan holds does either. The same
+   `_cluster_search` closure is reused unchanged.
 
 **Why sibling-free, and why "fewer nets is easier" is false here.** `_ends`
 calls `_merge_frontier(canvas, paths, siblings, …)` on both the source and the
@@ -500,15 +509,36 @@ would become a *region* exclusion in both packers and travel to Phases C and D
 — the worst failure mode this design has. Restricting run 2 to clusters whose
 nets have no siblings at all removes the mechanism rather than bounding it: with
 `src_group[i]` and `dst_group[i]` empty, `_merge_frontier` had nothing to offer
-that net in the first place, so unstaking cannot take anything away from it.
+that net in the first place, so unstaking cannot take anything away from it. So
+the gate is load-bearing for the loosest-world rule below and not merely
+pessimism: `needs_junction` and `_merge_frontier` both read `paths`, and run 2's
+empty `paths` is TIGHTER than a world in which the siblings are routed, which
+is exactly the thing a region exclusion may not be built on.
 
-Under that condition run 2's soundness argument holds and is why the relation
-no-good may exclude a region rather than a point: every net removed is a pure
-obstacle for the cluster, truncating the cluster at `B_MAX_CLUSTER` removes
-still more nets from run 2's problem, so if run 2's problem is infeasible, so is
-the full problem at that relative placement. Run 1 has the opposite polarity —
-its untruncated remainder is *fixed obstacle*, which makes the problem harder —
-so run 1's closure supports only the point exclusion (§5.4).
+**The loosest-world rule.** A relation no-good excludes a REGION, so it is
+sound only if run 2's world is at least as loose, cell for cell, as every world
+the packer could realise for the cluster's nets at that arrangement. Looser than
+needed is safe — it only weakens the cut; TIGHTER is unsound, because run 2 then
+forbids a placement some realizable world allows. "Remove every net" does not
+give that on its own, and the counter-example is the port corridors: `_stake` →
+`_retire_served_roles` deletes a served port's corridor from `canvas.reserved`,
+`canvas.port_corridors` and `grid.reserved`, `_unstake` →
+`_restore_unserved_roles` puts it back and `grid.block`s the two cells, and
+`_Canvas.free` refuses any reserved cell that is not the searching net's own —
+so a corridor a staked non-cluster net had retired is FREE in run 1 and RESERVED
+again in run 2. `planned_taps` cuts both ways: three of `_can_junction`'s tap
+checks refuse MORE as the table grows (frame-ban scan, two taps closing a cell,
+collider scan), while the fourth refuses a `canvas.guard` cell unless the table
+already holds it, so neither an emptied table nor run 1's table is loose in all
+four. Run 2 therefore unstakes every net, retires EVERY port corridor of every
+port as if its role had been served, starts with an empty `planned_taps`, and
+bypasses the guard-cell refusal while it searches. Under that world — and only
+under it —
+truncating the cluster at `B_MAX_CLUSTER` removes still more nets from run 2's
+problem, so if run 2's problem is infeasible, so is the full problem at that
+relative placement. Run 1 has the opposite polarity — its untruncated remainder
+is *fixed obstacle*, which makes the problem harder — so run 1's closure
+supports only the point exclusion (§5.4).
 
 **Two follow-ups, gated on the measured skip count.** If
 `last_mile_relation_skipped_siblings` dominates `last_mile_proved` on the

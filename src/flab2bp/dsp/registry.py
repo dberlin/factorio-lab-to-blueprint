@@ -1077,4 +1077,11 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         30.0,
         "CP-SAT time limit in seconds; not degrees",
     ),
+    # NOTE: `flab2bp.layout.last_mile:<module> 0.35` (B_MIN_SECONDS, excused as
+    # "not SORTER_END_EXTENSION geometry") was deleted when Task 9 measured the
+    # floor above 1 s (1.98 ships), which coincides with nothing and needs no
+    # exception.  A
+    # lint exception that matches no site is reported STALE by
+    # `provenance.stale_lint_exceptions`; if the floor is ever re-measured back
+    # to 0.35 the entry has to come back with it.
 )

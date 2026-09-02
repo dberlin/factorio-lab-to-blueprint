@@ -1,0 +1,23 @@
+"https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAUBdG.2WKqbFCsXnMXtRMjJLitGkRiCEQUbd63i2C0OwwzmM5hMB2ZzQuIH7.-XlAWXzaUvyMTpyxNvhxaUxjbp23JnOi4ow2q0R51riu6kVae1qTK0y70.WjZ5UuvwsNifAOtdSVD&v=11"
+Item,Items,Inputs,Outputs,Targets,Belts,Belt,Recipe,Machines,Machine,Modules,Power
+space-warper,=1,"graviton-lens:1","space-warper:1","",=1/720,conveyor-belt-2,space-warper,=1/6,assembling-machine-2,"1 ",=105
+graviton-lens,=1,"diamond:1,strange-matter:1","graviton-lens:1","space-warper:1",=1/720,conveyor-belt-2,graviton-lens,=0.1,assembling-machine-2,"1 ",=70.2
+strange-matter,=1,"deuterium:1,iron-ingot:0.01,particle-container:1","strange-matter:1","graviton-lens:1",=1/720,conveyor-belt-2,strange-matter,=2/15,miniature-particle-collider,"1 ",=1704
+particle-container,=2,"copper-ingot:0.016,electromagnetic-turbine:1,graphene:1","particle-container:1","strange-matter:1",=1/360,conveyor-belt-2,particle-container,=2/15,assembling-machine-2,"1 ",=87.6
+electromagnetic-turbine,=4,"electric-motor:1,magnetic-coil:0.5","electromagnetic-turbine:1","particle-container:1",=1/180,conveyor-belt-2,electromagnetic-turbine,=2/15,assembling-machine-2,"1 ",=87.6
+electric-motor,=8,"gear:1,iron-ingot:0.08,magnetic-coil:0.5","electric-motor:1","electromagnetic-turbine:1",=1/90,conveyor-belt-2,electric-motor,=4/15,assembling-machine-2,"1 ",=157.2
+gear,=8,"iron-ingot:0.04","gear:1","electric-motor:1",=1/90,conveyor-belt-2,gear,=2/15,assembling-machine-2,"1 ",=87.6
+graphene,=4,"fire-ice:1","graphene:1,hydrogen:0.1","particle-container:1",=1/180,conveyor-belt-2,graphene-advanced,=1/15,chemical-plant,"1 ",=70.4
+fire-ice,=4,,"fire-ice:1,hydrogen:3/35","graphene-advanced:1",=1/180,conveyor-belt-2,ice-giant,=1/84,orbital-collector,,
+deuterium,=10,"hydrogen:1","deuterium:1","strange-matter:1",=1/72,conveyor-belt-2,deuterium,=1/12,miniature-particle-collider,"1 ",=1110
+hydrogen,=20,,"hydrogen:57/70","deuterium:1",=1/36,conveyor-belt-2,ice-giant-hydrogen,=19/168,orbital-collector,,
+diamond,=4,"energetic-graphite:1","diamond:1","graviton-lens:1",=1/180,conveyor-belt-2,diamond,=2/15,arc-smelter,"1 ",=58.4
+energetic-graphite,=4,"coal:1","energetic-graphite:1","diamond:1",=1/180,conveyor-belt-2,energetic-graphite,=2/15,arc-smelter,"1 ",=58.4
+coal,=8,,"coal:1","energetic-graphite:1",=1/90,conveyor-belt-2,coal-vein,=4/15,mining-machine,,
+magnetic-coil,=16,"copper-ingot:0.032,magnet:0.16","magnetic-coil:1","electromagnetic-turbine:0.5,electric-motor:0.5",=1/45,conveyor-belt-2,magnetic-coil,=2/15,assembling-machine-2,"1 ",=87.6
+magnet,=100,,,"magnetic-coil:0.16",=5/36,conveyor-belt-2,,,,,
+iron-ingot,=200,,,"strange-matter:0.01,electric-motor:0.08,gear:0.04",=5/18,conveyor-belt-2,,,,,
+copper-ingot,=250,,,"particle-container:0.016,magnetic-coil:0.032",=25/72,conveyor-belt-2,,,,,
+refined-oil,=100,,,,=5/36,conveyor-belt-2,,,,,
+high-purity-silicon,=450,,,,=0.625,conveyor-belt-2,,,,,
+titanium-ingot,=450,,,,=0.625,conveyor-belt-2,,,,,

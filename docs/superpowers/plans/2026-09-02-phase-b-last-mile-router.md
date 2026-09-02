@@ -1,5 +1,7 @@
 # Phase B Last-Mile Router Implementation Plan
 
+**Status:** Executed 2026-09-02, commits 725c34e..11c6a9c on `phase-b-last-mile`. All eleven tasks landed and were reviewed; the corpus gate FAILED (65/72 vs a 64/65/65 baseline, target 67; both required cells still REFUSED; wall p95 31.6 s / 31.8 s over the 31 s threshold). Gate record: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/gate.md`. Open and deferred: the commit-preflight rejection from stale non-cluster hints, run 2 being corpus-inert behind the sibling gate, and spec §5.2 follow-up option 2. See the spec's status line.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the one or two nets that stay unrouted after rip-up-and-reroute on the largest corpus cells into either a routed pack or a proved no-good, so that freeform `quantum-chip/all-products` and freeform `universe-matrix/output-products` become CLEAN at a 30-second budget with no cell regressing.
@@ -36,7 +38,7 @@
 - Corpus gate: `scripts/audit.py --budget 30 --jobs 16`, both strategies, three rounds against this plan's Task 1 baselines; freeform `quantum-chip/all-products` and freeform `universe-matrix/output-products` CLEAN in every round; no cell CLEAN in the baseline non-CLEAN in a candidate round; INVALID 0; CRASH 0; paired area ratio at most `1 + 0.013`; wall p95 per cell at or under **31 s**. Target 67/72 or better; record whatever it is.
 - Wall p95 is Phase D's problem, not this phase's. The Phase A round files already sit above 30 s (p95 30.53 s, 30.67 s, 30.37 s), so the threshold is the worst of those rounded up: `--p95-seconds 31`. The gate record carries the line "wall p95 inherited from Phase A, owned by Phase D".
 - `scripts/audit.py` rows carry no `stats` object. The `last_mile_*` counters reach the gate record only through `scripts/route_profile.py --json` on the two target cells. Never read `row["stats"]` from an audit JSONL: it yields zeros and reads as "the pass never ran".
-- Known test facts carried over from Phase A: `tests/layout/test_freeform.py::TestDirectInsertion::test_the_sweep_prefers_area_over_direct_insertion` fails deterministically under `FLAB2BP_ROUTE_KERNEL=python` and passes under Cython; `tests/test_pipeline.py::test_all_products_sequence_pair_honours_the_exact_layout_deadline` runs at a 1.5 s budget and trips DID NOT RAISE when preparation gets faster.
+- Known test facts carried over from Phase A: the two wall-clock tests `TestDirectInsertion::test_the_sweep_prefers_area_over_direct_insertion` (0.5 s) and `TestTheTimeBudgetIsAWall::test_magnetic_ring_repeated_one_second_calls_complete` (1.0 s) in `tests/layout/test_freeform.py` were removed from the tree during Phase B (Ruling S) because they flake under load and cost every implementer reruns; restoring them with a deterministic or scaled budget is a follow-up. `tests/test_pipeline.py::test_all_products_sequence_pair_honours_the_exact_layout_deadline` runs at a 1.5 s budget and trips DID NOT RAISE when preparation gets faster.
 - Commit messages: imperative, sentence case, no trailing period, e.g. `feat(layout): add a bounded conflict-based last-mile router`.
 - A step whose measurement misses its stated goal is not committed as if it passed: record the numbers and report.
 - **Task ordering notes.** (a) The brief suggested the stranded-state capture in Task 1. Its only sound hook is `last_mile.CAPTURE`, which does not exist until Task 2, so Task 1 delivers the baselines, the `--policy` flag and the pre-change replay digests, and Task 9 delivers `--stranded`. (b) Integration and the commit path are one task (Task 4): the `offers` capability and the staking code have no reader until the commit path exists, so splitting them would ship dead code in a green commit. (c) The relation no-good is two tasks (6 and 7): the CP-SAT modelling is independently reviewable and testable without the relaxed run that produces its input.
@@ -2768,7 +2770,7 @@ uv run python scripts/route_bench.py --cases "$d/route-cases-universe-matrix-out
 uv run python scripts/route_bench.py --cases "$d/route-cases-quantum-chip-all-products.pkl" --rounds 3 --check
 ```
 
-Expected: both `MATCH`. The relaxed run unstakes and re-stakes the whole pack, so this is the step that catches a restore that silently moved a belt.
+Expected: both `MATCH` — but read it for what it is: `scripts/route_bench.py` replays captured `_astar` calls and never enters `_route_all`, `_last_mile` or `solve_cluster`, so a MATCH says the low-level search is unchanged and says NOTHING about the relaxed run or the unstake/re-stake sweep. Corpus evidence for run 2 waits for Task 9's capture hook.
 
 - [ ] **Step 7: Full suite, lint, type-check, commit**
 

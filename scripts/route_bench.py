@@ -39,14 +39,14 @@ import time
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from flab2bp.bench.corpus import URL_CORPUS  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
-from flab2bp.layout import freeform  # noqa: E402
+from flab2bp.layout import freeform, last_mile  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import NoValidLayout  # noqa: E402
 from flab2bp.rates import CandidatePolicy, build_candidates  # noqa: E402
@@ -90,12 +90,19 @@ def _snapshot(
     return shot_canvas, shot_grid, dict(history)
 
 
-def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None:
+def capture(
+    url_id: str,
+    budget: float,
+    every: int,
+    cap: int,
+    out: Path,
+    policy: CandidatePolicy = CandidatePolicy.NO_PROLIFERATOR,
+) -> None:
     entry = next(e for e in URL_CORPUS if e.url_id == url_id)
     spec = build_candidates(
         load_vendored(),
         parse_url(entry.url),
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        candidate_policies=(policy,),
     ).candidates[0]
 
     orig = freeform._astar
@@ -178,6 +185,98 @@ def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None
           f"{sum(1 for n in lens if n)} found, "
           f"{sum(lens):,} path cells")
 
+def capture_clusters(
+    url_id: str,
+    budget: float,
+    cap: int,
+    out: Path,
+    policy: CandidatePolicy = CandidatePolicy.NO_PROLIFERATOR,
+) -> None:
+    """Snapshot every last-mile invocation of one real cell run.
+
+    The hook is `last_mile.CAPTURE` rather than `_astar`, because the stranded
+    state Phase B cares about only exists at the moment `_route_all` would give
+    up, and that is the one call that sees it.
+    """
+    entry = next(e for e in URL_CORPUS if e.url_id == url_id)
+    spec = build_candidates(
+        load_vendored(),
+        parse_url(entry.url),
+        candidate_policies=(policy,),
+    ).candidates[0]
+
+    cases: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+
+    def sink(shot: last_mile.ClusterCapture) -> None:
+        if len(cases) + len(pending) >= cap:
+            return
+        canvas = cast(freeform._Canvas, shot.canvas)
+        grid = cast(freeform._Grid, shot.grid)
+        shot_canvas, shot_grid, shot_hist = _snapshot(canvas, grid, dict(shot.history))
+        pending.append(
+            {
+                "kind": "cluster",
+                "run": shot.run,
+                "canvas": shot_canvas,
+                "grid": shot_grid,
+                "history": shot_hist,
+                "problem": shot.problem,
+                "ends": {
+                    index: (list(starts), set(goals), ports)
+                    for index, (starts, goals, ports) in shot.ends.items()
+                },
+                "pressure": shot.pressure,
+                "bounds": shot.bounds,
+                "budget_left": shot.budget_left,
+                "budget_floor": shot.budget_floor,
+                "deadline_remaining": shot.deadline_remaining,
+                "owned_starts": dict(shot.owned_starts),
+                "rejected": dict(shot.rejected),
+                "blocking_owners": dict(shot.blocking_owners),
+            }
+        )
+
+    orig_solve = last_mile.solve_cluster
+
+    def spy(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        result = orig_solve(problem, environment)
+        # `CAPTURE` fires before the solve, so the pending shot is this one's.
+        while pending:
+            shot = pending.pop(0)
+            shot["result"] = result
+            cases.append(shot)
+        return result
+
+    last_mile.CAPTURE = sink
+    last_mile.solve_cluster = spy
+    try:
+        freeform.FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            workers=1,
+        ).lay_out(spec, time_budget_s=budget)
+    except NoValidLayout:
+        pass
+    finally:
+        last_mile.CAPTURE = None
+        last_mile.solve_cluster = orig_solve
+    out.write_bytes(pickle.dumps(cases, protocol=5))
+    outcomes = [case["result"].outcome.value for case in cases]
+    bounds_hit = [case["result"].bound.value for case in cases]
+    print(
+        f"captured {len(cases)} cluster searches -> {out} "
+        f"({out.stat().st_size / 1e6:.1f} MB); "
+        + ", ".join(f"{value}={outcomes.count(value)}" for value in sorted(set(outcomes)))
+        + "; bounds "
+        + ", ".join(
+            f"{value or 'none'}={bounds_hit.count(value)}"
+            for value in sorted(set(bounds_hit))
+        )
+    )
+
 
 def digest(paths: Iterable[Any]) -> str:
     hasher = hashlib.sha256()
@@ -257,7 +356,7 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
     return 0
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--capture")
     ap.add_argument("--budget", type=float, default=4.0)
@@ -267,10 +366,25 @@ def main() -> int:
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--landmarks", type=int)
+    ap.add_argument("--stranded", action="store_true")
+    ap.add_argument(
+        "--policy",
+        type=CandidatePolicy,
+        choices=tuple(CandidatePolicy),
+        default=CandidatePolicy.NO_PROLIFERATOR,
+    )
+    return ap
+
+
+def main() -> int:
+    ap = build_parser()
     args = ap.parse_args()
     if args.capture:
-        out = args.cases or Path(f"/tmp/route-cases-{args.capture}.pkl")
-        capture(args.capture, args.budget, args.every, args.cap, out)
+        out = args.cases or Path(f"/tmp/route-cases-{args.capture}-{args.policy.value}.pkl")
+        if args.stranded:
+            capture_clusters(args.capture, args.budget, args.cap, out, args.policy)
+        else:
+            capture(args.capture, args.budget, args.every, args.cap, out, args.policy)
         return 0
     if not args.cases:
         ap.error("--cases or --capture required")

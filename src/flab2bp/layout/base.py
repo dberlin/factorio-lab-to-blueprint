@@ -263,6 +263,17 @@ class PlacementStats(TypedDict, total=False):
     islands_refused: float
     islands_requested: float
     junctions: float
+    last_mile_bounded: float
+    last_mile_commit_rejected: float
+    last_mile_expansions: float
+    last_mile_invocations: float
+    last_mile_nodes: float
+    last_mile_proved: float
+    last_mile_relation_skipped_siblings: float
+    last_mile_relation_strips: float
+    last_mile_restore_mismatch: float
+    last_mile_seconds: float
+    last_mile_solved: float
     lns_invocations: float
     lns_max_size: float
     lns_total_size: float
