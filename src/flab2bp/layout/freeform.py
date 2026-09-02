@@ -312,6 +312,10 @@ _COMMIT_REPAIR_PASSES = 3
 #: portfolio.  Pin this structural size and larger so the seed actually names a
 #: reproducible candidate, independent of audit job allocation.
 _DETERMINISTIC_PACK_STRIPS = 15
+#: The smallest cluster that describes a RELATIVE placement.  One strip has no
+#: relation to forbid, so a relaxed proof over it excludes nothing; `_pack`'s
+#: cluster cut anchors on the first strip and constrains the rest against it.
+_RELATION_STRIP_PAIR = 2
 #: Fixed CP-SAT work for reproducible large-pack incumbents.  A wall-clock
 #: cutoff still raced at one worker: the authoritative fifteen-strip cell
 #: alternated between a clean width-48 packing and a width-47 packing whose
@@ -8568,9 +8572,85 @@ def _route_all(
         last_mile_counts["expansions"] += result.expansions
         last_mile_seconds += result.seconds
 
+    def _cluster_is_sibling_free(problem: last_mile.ClusterProblem) -> bool:
+        """Whether unstaking the pack can take nothing away from this cluster.
+
+        `_ends` offers merge points onto SIBLING paths, and for a walled-in
+        lane that is the only way in.  A net with no siblings had no merge
+        frontier to lose, so for such a cluster -- and only such a cluster --
+        "every other net removed" is a relaxation rather than a mutilation.
+        """
+        return not any(
+            src_group.get(index, ()) or dst_group.get(index, ())
+            for index in problem.nets
+        )
+
+    def _relaxed_cluster_result(
+        problem: last_mile.ClusterProblem,
+    ) -> last_mile.ClusterResult | None:
+        """Re-run CBS with the whole pack unstaked; see the Phase B spec 5.2.
+
+        Callers MUST have checked `_cluster_is_sibling_free` first.
+
+        The relaxation argument needs every routing-derived constraint gone
+        too: four of the five per-net rejection sets are read inside `_ends`
+        and the fifth, `rejected_path_cells`, is the search's `forbidden`
+        argument.  All five are saved, emptied for the cluster's nets, and put
+        back afterwards.
+
+        `grid.reserved` needs no separate handling, and not because it is
+        constant -- `_retire_served_roles` filters it and
+        `_restore_unserved_roles` rebuilds it.  The FULL sweep is what makes
+        it right: `_restore_unserved_roles` skips a role only while another
+        member of it is still in `paths`, and once every net is unstaked no
+        member remains.
+        """
+        if budget["left"] <= 0 or _expired(deadline):
+            return None
+        rejections = (
+            rejected_starts,
+            rejected_goals,
+            rejected_path_cells,
+            rejected_source_hints,
+            rejected_sink_hints,
+        )
+        saved = [
+            {index: set(table[index]) for index in problem.nets if index in table}
+            for table in rejections
+        ]
+        every = list(paths)
+        held_all = {
+            index: (
+                source_hint.get(index),
+                sink_hint.get(index),
+                path_tap.get(index),
+            )
+            for index in every
+        }
+        staked = {index: paths[index] for index in every}
+        before_all = _round_state()
+        try:
+            for table in rejections:
+                for index in problem.nets:
+                    table[index].clear()
+            for index in every:
+                _unstake(index)
+            _capture(2, problem)
+            return last_mile.solve_cluster(problem, _cluster_environment())
+        finally:
+            # The SAME verified restore run 1 uses, so run 2 cannot skip the
+            # check that run 1 must pass.  Its return value is read by the
+            # caller through `restore_mismatch`.
+            _restore_staked(every, staked, held_all, before_all)
+            for table, snapshot in zip(rejections, saved, strict=True):
+                for index, cells in snapshot.items():
+                    table[index].clear()
+                    table[index].update(cells)
+
     def _last_mile(round_stranded: list[int], round_index: int) -> list[int]:
         """Search the conflict cluster once per pass; see the Phase B spec 5.6."""
         nonlocal last_mile_done, last_mile_floor, proved_round
+        nonlocal relation_strips, relation_evidence
         if (
             last_mile_done
             or not round_stranded
@@ -8682,6 +8762,41 @@ def _route_all(
             proved_round = round_index
             proved_stranded.clear()
             proved_stranded.update(round_stranded)
+            if not _cluster_is_sibling_free(problem):
+                last_mile_counts["relation_skipped_siblings"] += 1
+            else:
+                mismatches = last_mile_counts["restore_mismatch"]
+                relaxed = _relaxed_cluster_result(problem)
+                if relaxed is not None:
+                    _tally(relaxed)
+                    if last_mile_counts["restore_mismatch"] != mismatches:
+                        # Run 2 did not put the round back.  The incumbent the
+                        # run-1 claim describes is no longer known to be the
+                        # incumbent that was proved, so BOTH claims go.
+                        last_mile_counts["proved"] -= 1
+                        last_mile_counts["bounded"] += 1
+                        proved_round = -1
+                        proved_stranded.clear()
+                    elif relaxed.outcome is last_mile.ClusterOutcome.PROVED:
+                        instances = last_mile.cluster_strips(
+                            problem,
+                            {
+                                index: (
+                                    _net_id(index).source_strip,
+                                    _net_id(index).destination_strip,
+                                )
+                                for index in problem.nets
+                            },
+                        )
+                        # A cluster on one strip has no relative placement to
+                        # forbid, and `LastMileReport` refuses to carry it.
+                        if len(instances) >= _RELATION_STRIP_PAIR:
+                            relation_strips = instances
+                            relation_evidence = (
+                                f"cluster: nets={tuple(problem.nets)!r} "
+                                f"truncated={problem.truncated} "
+                                f"sibling_closed={problem.sibling_closed}"
+                            )
         else:
             last_mile_counts["bounded"] += 1
         return round_stranded
@@ -14070,7 +14185,11 @@ def _seed_admission_preserves_best_band(
 def _proof_scoped_no_goods(
     attempt: PackAttempt,
     strips: list[Strip],
-) -> tuple[tuple[_DirectRelationNoGood, ...], ExactPackNoGood | None]:
+) -> tuple[
+    tuple[_DirectRelationNoGood, ...],
+    ExactPackNoGood | None,
+    tuple[ClusterRelationNoGood, ...],
+]:
     """Derive only relation or assignment exclusions proved by this attempt."""
     if not attempt.direct_candidates.matches(strips):
         raise ValueError("direct candidate evidence belongs to a different strip plan")
@@ -14105,7 +14224,7 @@ def _proof_scoped_no_goods(
             )
 
     if local:
-        return tuple(local), None
+        return tuple(local), None, ()
 
     routing = attempt.routing
     if (
@@ -14114,7 +14233,7 @@ def _proof_scoped_no_goods(
         or not routing.failures
         or any(failure.kind is RouteFailureKind.BUDGET for failure in routing.failures)
     ):
-        return (), None
+        return (), None, ()
 
     evidence = tuple(
         finalize.ProjectionFailure(
@@ -14129,6 +14248,22 @@ def _proof_scoped_no_goods(
         )
         for failure in routing.failures
     )
+    # The relaxed cluster run's own proof, which the router could only hand
+    # back through the routing report.  It is a REGION exclusion where the
+    # exact no-good beside it is a point one, so it is built from the same
+    # origins and stands or falls with the same attempt.
+    report = routing.last_mile
+    cluster_no_good = (
+        None
+        if report is None or not report.relation_strips
+        else last_mile.relation_no_good(
+            strips=report.relation_strips,
+            origins=attempt.origins,
+            outline=attempt.outline,
+            height=attempt.height,
+            evidence=report.relation_evidence,
+        )
+    )
     return (
         (),
         ExactPackNoGood(
@@ -14138,6 +14273,7 @@ def _proof_scoped_no_goods(
             origins=attempt.origins,
             evidence=evidence,
         ),
+        () if cluster_no_good is None else (cluster_no_good,),
     )
 
 
@@ -16477,6 +16613,8 @@ class FreeformLayout:
         staged_static_exact_retries: set[tuple[int, int]] = set()
         direct_relation_no_goods: list[_DirectRelationNoGood] = []
         direct_relation_no_good_keys: set[_DirectRelationNoGood] = set()
+        cluster_relation_no_goods: list[ClusterRelationNoGood] = []
+        cluster_relation_no_good_keys: set[ClusterRelationNoGood] = set()
         feedback_by_height: dict[int, FeedbackState] = {}
         compact_width_by_height: dict[int, int] = {}
         # This sweep's own share, never more than the CALL has left. A sweep
@@ -16576,6 +16714,8 @@ class FreeformLayout:
             compact_width_by_height.clear()
             direct_relation_no_goods.clear()
             direct_relation_no_good_keys.clear()
+            cluster_relation_no_goods.clear()
+            cluster_relation_no_good_keys.clear()
 
         while candidate_index < len(candidate_packs):
             height, arrangement, projection_retry = candidate_packs[candidate_index]
@@ -16770,6 +16910,7 @@ class FreeformLayout:
                 projection_no_goods=tuple(projection_no_goods),
                 exact_pack_no_goods=exact_pack_no_goods,
                 direct_relation_no_goods=tuple(direct_relation_no_goods),
+                cluster_relation_no_goods=tuple(cluster_relation_no_goods),
                 feedback=feedback,
                 stop_when_seed_admissible=(
                     candidate_index == 1
@@ -17065,7 +17206,7 @@ class FreeformLayout:
             if failed:
                 retain_attempt()
             if failed:
-                local_no_goods, exact_no_good = _proof_scoped_no_goods(
+                local_no_goods, exact_no_good, cluster_no_goods = _proof_scoped_no_goods(
                     attempt,
                     strips,
                 )
@@ -17075,6 +17216,12 @@ class FreeformLayout:
                         continue
                     direct_relation_no_good_keys.add(relation_no_good)
                     direct_relation_no_goods.append(relation_no_good)
+                    learned = True
+                for cluster_no_good in cluster_no_goods:
+                    if cluster_no_good in cluster_relation_no_good_keys:
+                        continue
+                    cluster_relation_no_good_keys.add(cluster_no_good)
+                    cluster_relation_no_goods.append(cluster_no_good)
                     learned = True
                 if exact_no_good is not None and exact_no_good_state.remember(exact_no_good):
                     learned = True

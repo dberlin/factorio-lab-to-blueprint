@@ -1756,7 +1756,7 @@ def test_external_route_order_control_is_non_exhaustive_and_emits_no_no_good(
     spec = two_stage_spec()
     strips = plan_strips(spec)
     attempt = _proof_attempt(failed, strips)
-    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None)
+    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None, ())
 
 
 def test_elevated_external_port_bypasses_ground_fast_path_and_routes_a_ramp(
@@ -3278,7 +3278,7 @@ def test_static_access_without_an_independent_relation_proof_is_evidence_only() 
         strips,
     )
 
-    local, exact = freeform._proof_scoped_no_goods(attempt, strips)
+    local, exact, _clusters = freeform._proof_scoped_no_goods(attempt, strips)
 
     assert local == ()
     assert exact is None
@@ -3321,7 +3321,7 @@ def test_static_access_structurally_impossible_direct_creates_only_local_no_good
         promised_direct=frozenset({direct}),
     )
 
-    local, exact = freeform._proof_scoped_no_goods(attempt, strips)
+    local, exact, _clusters = freeform._proof_scoped_no_goods(attempt, strips)
 
     assert len(local) == 1
     assert local[0].direct_id == direct
@@ -3352,7 +3352,7 @@ def test_retained_direct_candidates_preserve_legal_relation_parity() -> None:
         promised_direct=frozenset({direct}),
     )
 
-    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None)
+    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None, ())
 
 
 def test_retained_direct_candidates_reject_a_different_strip_plan() -> None:
@@ -3379,7 +3379,7 @@ def test_exhaustive_non_budget_failure_creates_full_assignment_no_good() -> None
         strips,
     )
 
-    local, exact = freeform._proof_scoped_no_goods(attempt, strips)
+    local, exact, _clusters = freeform._proof_scoped_no_goods(attempt, strips)
 
     assert local == ()
     assert exact is not None
@@ -3389,6 +3389,71 @@ def test_exhaustive_non_budget_failure_creates_full_assignment_no_good() -> None
     assert exact.origins == attempt.origins
     assert exact.evidence
     assert all(failure.check == "route.exhaustive" for failure in exact.evidence)
+
+
+def _stranded_attempt_with_relation(
+    strips: list[Strip],
+    *,
+    relation: tuple[int, ...],
+) -> freeform.PackAttempt:
+    """An exhaustive STRANDED attempt whose report names ``relation``'s strips.
+
+    The relation rides on the routing's `LastMileReport` because that is the
+    only channel from the router back to the sweep: the round that ran the two
+    cluster searches is long gone by the time `_proof_scoped_no_goods` reads
+    the attempt.
+    """
+    routing = _routing_failures(RouteFailureKind.CONGESTION_WALL, exhaustive=True)
+    return _proof_attempt(
+        replace(
+            routing,
+            last_mile=LastMileReport(
+                invocations=1,
+                solved=0,
+                proved=1,
+                bounded=0,
+                commit_rejected=0,
+                relation_skipped_siblings=0,
+                restore_mismatch=0,
+                nodes=1,
+                expansions=0,
+                seconds=0.0,
+                relation_strips=relation,
+                relation_evidence="cluster",
+            ),
+        ),
+        strips,
+    )
+
+
+def test_proof_scoped_no_goods_forwards_a_cluster_relation() -> None:
+    strips = plan_strips(two_stage_spec())
+    attempt = _stranded_attempt_with_relation(strips, relation=(0, 1))
+
+    _relations, exact, clusters = freeform._proof_scoped_no_goods(attempt, strips)
+
+    assert exact is not None
+    assert len(clusters) == 1
+    assert clusters[0].strips == (0, 1)
+    assert clusters[0].height == attempt.height
+    assert clusters[0].outline == attempt.outline
+    # The deltas come from the attempt's own origins, which is the only place
+    # the relative placement the proof describes is recorded.
+    anchor = attempt.origins[0]
+    assert clusters[0].deltas == (
+        (0, 0),
+        (attempt.origins[1][0] - anchor[0], attempt.origins[1][1] - anchor[1]),
+    )
+
+
+def test_proof_scoped_no_goods_returns_no_relation_without_one() -> None:
+    strips = plan_strips(two_stage_spec())
+    attempt = _stranded_attempt_with_relation(strips, relation=())
+
+    _relations, exact, clusters = freeform._proof_scoped_no_goods(attempt, strips)
+
+    assert exact is not None
+    assert clusters == ()
 
 
 @pytest.mark.parametrize(
@@ -3411,7 +3476,7 @@ def test_unproved_and_budget_failures_do_not_exclude_geometry(
     strips = plan_strips(spec)
     attempt = _proof_attempt(routing, strips)
 
-    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None)
+    assert freeform._proof_scoped_no_goods(attempt, strips) == ((), None, ())
 
 
 def _boundary_input_fixture(
@@ -5866,7 +5931,7 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     monkeypatch.setattr(
         freeform,
         "_proof_scoped_no_goods",
-        lambda *_args, **_kwargs: ((old_pitch_cut,), None),
+        lambda *_args, **_kwargs: ((old_pitch_cut,), None, ()),
     )
     monkeypatch.setattr(
         freeform,
@@ -17083,3 +17148,326 @@ def test_two_sub_routing_last_mile_reports_sum() -> None:
         relation_strips=(1, 2),
         relation_evidence="the relaxed cluster closed",
     )
+
+
+def _two_strip_stranded_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
+    """`_one_stranded_net_fixture` under the name the relaxed run needs it by.
+
+    Two properties make it the relaxed run's fixture, and the base fixture
+    already has both.  Its ``NetId``s name four distinct strip instances, so
+    `cluster_strips` returns at least the two a relation needs; and its nets
+    carry DIFFERENT items, so the `src_group` / `dst_group` keys -- which
+    begin with ``(item, cargo_domain, ...)`` -- cannot collide and every net
+    is sibling-free.  Both are asserted here rather than assumed, so a change
+    to the base fixture reads as "this fixture stopped being the relaxed run's
+    fixture" instead of as an unexplained relaxed-run failure.
+    """
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    assert len({net.item for net in nets}) == len(nets)
+    identifiers = [net.net_id for net in nets]
+    assert len({identifier.source_strip for identifier in identifiers if identifier}) > 1
+    return canvas, nets, bounds
+
+
+def _sibling_stranded_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
+    """`_two_strip_stranded_fixture`'s pocket with both nets on ONE source lane.
+
+    Same walls, same stranded net, one difference: both nets carry the same
+    item and leave from the same lane tile, so `same_src` keys them together
+    and `src_group` is non-empty for both.  That is exactly the condition the
+    relaxed run's gate refuses.
+    """
+    canvas = _Canvas()
+    bounds = (-6, -6, 6, 6)
+    canvas.limit = bounds
+    item = "target"
+    source_belt = canvas.add(_belt(0, 1, item=item))
+    source = _Port(source_belt, 0, 1, 0, 0)
+    blocker_belt = canvas.add(_belt(1, -1, item=item))
+    failed_belt = canvas.add(_belt(0, 3, item=item))
+    blocker = _Net(
+        src=source,
+        dst=_Port(blocker_belt, 1, -1, 1, 1),
+        item=item,
+        net_id=NetId(0, 1, item, NetRole.INTERNAL, 0),
+    )
+    failed = _Net(
+        src=source,
+        dst=_Port(failed_belt, 0, 3, 0, 0),
+        item=item,
+        net_id=NetId(2, 3, item, NetRole.INTERNAL, 1),
+    )
+    _last_mile_block(
+        canvas,
+        {
+            (-1, -2),
+            (1, -2),
+            (0, -3),
+            (2, -1),
+            (1, 0),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (1, 1),
+            (0, 2),
+        },
+    )
+    return canvas, [blocker, failed], bounds
+
+
+def _always_proved(
+    problem: last_mile.ClusterProblem,
+    environment: last_mile.ClusterEnvironment,
+) -> last_mile.ClusterResult:
+    return last_mile.ClusterResult(last_mile.ClusterOutcome.PROVED, {}, 1, 0, 0.0)
+
+
+def test_a_relaxed_run_that_closes_records_the_cluster_strips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both runs close, so the report names the cluster's strip instances."""
+    monkeypatch.setattr(last_mile, "solve_cluster", _always_proved)
+    canvas, nets, bounds = _two_strip_stranded_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert result.last_mile is not None
+    assert result.last_mile.proved == 1
+    assert result.last_mile.relation_skipped_siblings == 0
+    assert result.last_mile.restore_mismatch == 0
+    assert len(result.last_mile.relation_strips) >= 2
+    assert result.last_mile.relation_evidence
+
+
+def test_a_cluster_with_a_sibling_never_runs_the_relaxed_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The soundness gate: unstaking a sibling can DISCONNECT a net.
+
+    `_ends` offers merge points onto sibling paths and, for a walled-in lane,
+    that is the only way in.  So a cluster holding any net with a sibling must
+    never reach run 2, or run 2 would prove a net unroutable that it had
+    itself cut off.
+    """
+    calls: list[object] = []
+
+    def counting(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        calls.append(problem)
+        return _always_proved(problem, environment)
+
+    monkeypatch.setattr(last_mile, "solve_cluster", counting)
+    canvas, nets, bounds = _sibling_stranded_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert len(calls) == 1, "run 2 must not start for a cluster with a sibling"
+    assert result.last_mile is not None
+    assert result.last_mile.proved == 1
+    assert result.last_mile.relation_skipped_siblings == 1
+    assert result.last_mile.relation_strips == ()
+
+
+def test_a_skipped_relaxed_run_leaves_the_strict_claim_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate withholds a RELATION, never the run-1 `exhaustive` claim.
+
+    The sibling cluster's strict run closed, so the routing it returns is
+    still proved exhaustive; only the region exclusion is withheld.  Read
+    against the sibling-free fixture, whose relaxed run DOES run, so the
+    claim is shown to be independent of run 2 rather than accidentally equal
+    to it.
+    """
+    monkeypatch.setattr(last_mile, "solve_cluster", _always_proved)
+    sibling_canvas, sibling_nets, sibling_bounds = _sibling_stranded_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    skipped = freeform._route_all(
+        sibling_canvas,
+        sibling_nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        sibling_bounds,
+    )
+    canvas, nets, bounds = _two_strip_stranded_fixture()
+    relaxed = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert skipped.status is DetailedRouteStatus.STRANDED
+    assert relaxed.status is DetailedRouteStatus.STRANDED
+    assert skipped.exhaustive is True
+    assert relaxed.exhaustive is True
+    assert skipped.last_mile is not None and relaxed.last_mile is not None
+    assert skipped.last_mile.relation_strips == ()
+    assert relaxed.last_mile.relation_strips
+
+
+def test_a_bounded_relaxed_run_records_no_relation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run 1 proves, run 2 does not close, so there is no relation to forbid."""
+    outcomes = [
+        last_mile.ClusterOutcome.PROVED,
+        last_mile.ClusterOutcome.BOUNDED,
+    ]
+
+    def scripted(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        outcome = outcomes.pop(0)
+        return last_mile.ClusterResult(
+            outcome,
+            {},
+            1,
+            0,
+            0.0,
+            bound=(
+                last_mile.ClusterBound.NONE
+                if outcome is last_mile.ClusterOutcome.PROVED
+                else last_mile.ClusterBound.NODES
+            ),
+        )
+
+    monkeypatch.setattr(last_mile, "solve_cluster", scripted)
+    canvas, nets, bounds = _two_strip_stranded_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert outcomes == []
+    assert result.last_mile is not None
+    assert result.last_mile.proved == 1
+    assert result.last_mile.relation_strips == ()
+    # A BOUNDED run 2 is a run that decided nothing, so run 1's claim stands.
+    assert result.exhaustive is True
+
+
+def test_a_bounded_strict_run_never_reaches_the_relaxed_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run 2's premise is run 1's closure, so a bound must end the pass.
+
+    A relaxed environment that closes says nothing on its own: it is a
+    STRICTLY easier problem, so its closure is only evidence about the round
+    when the round's own problem closed first.  Scripting PROVED for the
+    second call makes the assertion about the gate rather than about the stub
+    -- if run 2 ran, the relation would appear.
+    """
+    outcomes = [
+        last_mile.ClusterOutcome.BOUNDED,
+        last_mile.ClusterOutcome.PROVED,
+    ]
+
+    def scripted(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        outcome = outcomes.pop(0)
+        return last_mile.ClusterResult(
+            outcome,
+            {},
+            1,
+            0,
+            0.0,
+            bound=(
+                last_mile.ClusterBound.NONE
+                if outcome is last_mile.ClusterOutcome.PROVED
+                else last_mile.ClusterBound.NODES
+            ),
+        )
+
+    monkeypatch.setattr(last_mile, "solve_cluster", scripted)
+    canvas, nets, bounds = _two_strip_stranded_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert outcomes == [last_mile.ClusterOutcome.PROVED], "run 2 must not start"
+    assert result.last_mile is not None
+    assert result.last_mile.bounded == 1
+    assert result.last_mile.proved == 0
+    assert result.last_mile.relation_strips == ()
+    assert result.exhaustive is False
+
+
+def test_a_relaxed_run_that_loses_the_round_withdraws_both_claims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restore mismatch after run 2 takes the relation AND the proof.
+
+    Run 2 unstakes the WHOLE pack, so it is the run that can lose the round.
+    When it does, the incumbent the run-1 claim describes is no longer known
+    to be the incumbent that was proved, and the claim goes with the relation.
+
+    `test_a_relaxed_run_that_closes_records_the_cluster_strips` is the control:
+    the same fixture and the same PROVED/PROVED script, without the planted
+    mutation, keeps `restore_mismatch` at zero and does emit the relation.
+    """
+    canvas, nets, bounds = _two_strip_stranded_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    calls: list[object] = []
+    #: Inside the fixture's bounds and outside its pocket, so nothing else in
+    #: the round owns it and the guard cannot be released by accident.
+    orphan_guard = (5, 5, 0)
+
+    def scripted(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        calls.append(problem)
+        if len(calls) == 2:
+            # Run 2 leaves the round different from how it found it, which is
+            # the one condition `_restore_staked` exists to catch.
+            canvas.guard.add(orphan_guard)
+        return _always_proved(problem, environment)
+
+    monkeypatch.setattr(last_mile, "solve_cluster", scripted)
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert len(calls) == 2
+    assert result.last_mile is not None
+    assert result.last_mile.restore_mismatch == 1
+    assert result.last_mile.proved == 0
+    assert result.last_mile.bounded == 1
+    assert result.last_mile.relation_strips == ()
+    assert result.exhaustive is False
