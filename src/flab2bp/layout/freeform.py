@@ -14819,7 +14819,11 @@ def _build_prepared(
             "repair_iterations": float(routing.iterations),
             "belt_tiles": float(sum(1 for b in canvas.buildings if catalog.is_belt(b.item_id))),
             "direct_inserts": float(prepared.direct_inserts),
-            **_last_mile_stats(internal_routing.last_mile),
+            # Combined across the four sub-routings, not just the interior
+            # one: each of them runs a last-mile pass of its own, and reading
+            # one makes every counter under-read by whatever the other three
+            # did.  Identical today because only `_route_all` reports.
+            **_last_mile_stats(routing.last_mile),
         },
     )
     return _BuildResult(
