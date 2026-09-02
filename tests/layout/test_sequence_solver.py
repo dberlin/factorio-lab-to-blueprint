@@ -4448,6 +4448,24 @@ def test_a_cluster_relation_matches_a_state_that_repeats_it() -> None:
     assert sequence_solver_module._projection_feedback_matches(
         problem, state, pack, no_good, signatures
     )
+    assert not sequence_solver_module._projection_feedback_matches(
+        problem,
+        state,
+        pack,
+        replace(no_good, height=pack.height + 1),
+        signatures,
+    )
+    perturbed_outline = (
+        no_good.outline[0],
+        (no_good.outline[1][0] + 1, no_good.outline[1][1]),
+    )
+    assert not sequence_solver_module._projection_feedback_matches(
+        problem,
+        state,
+        pack,
+        replace(no_good, outline=perturbed_outline),
+        signatures,
+    )
 
 
 def test_a_cluster_relation_stops_matching_once_a_strip_moves() -> None:
@@ -4613,15 +4631,17 @@ def _recorded_stage_update(
 def test_transform_stage_turns_a_routing_relation_into_stage_feedback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The wiring, with a projection failure present so precedence is exercised.
+    """A routing-proved cluster relation reaches the stage repairer.
 
     `transform_stage` only reaches the branch this task extends when
     `select_feedback_variant` is true and `detailed.placement` is not None, so
-    both are supplied here.  The projection failure is one that does NOT map
+    both are supplied here.  The projection failure supplied here does NOT map
     to a strip pair, so the `for failure in projection_failures:` loop leaves
     `projection_relation_feedback` as `None` and the cluster relation is what
-    reaches the repairer.  Before this task's ordering fix, an assignment made
-    BEFORE that loop would have been discarded by it.
+    reaches the repairer.  The sibling test,
+    `test_a_projection_failure_takes_precedence_over_a_cluster_relation`,
+    covers the other half: a mapped `geom.collide` failure wins precedence
+    over the cluster relation.
     """
     harness = _stage_harness_with_two_strips()
     seen = _recorded_stage_update(monkeypatch)
@@ -4647,14 +4667,16 @@ def test_transform_stage_turns_a_routing_relation_into_stage_feedback(
 def test_a_projection_failure_takes_precedence_over_a_cluster_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A geom.collide pair is a static refusal and outranks a routing relation."""
+    """A geom.collide pair is a static refusal and outranks a routing relation.
+
+    No monkeypatch on `finalize.independent_projection_pair`: the real check
+    runs against the harness's synthetic buildings and does not prove
+    independence, so `_projection_no_good` falls back to `ExactPackNoGood` --
+    still not a `ClusterRelationNoGood`, which is the only thing this test
+    needs to show.
+    """
     harness = _stage_harness_with_two_strips()
     seen = _recorded_stage_update(monkeypatch)
-    monkeypatch.setattr(
-        finalize,
-        "independent_projection_pair",
-        lambda pair, _policy, **_kwargs: None,
-    )
 
     update = harness.transform_stage(
         harness.height,
@@ -4669,6 +4691,7 @@ def test_a_projection_failure_takes_precedence_over_a_cluster_relation(
 
     assert update is not None
     assert seen and not isinstance(seen[0], ClusterRelationNoGood)
+    assert isinstance(seen[0], freeform_module.ExactPackNoGood)
 
 
 def test_projection_pitch_feedback_single_restart_routes_padded_variant() -> None:
