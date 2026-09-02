@@ -33,6 +33,15 @@ def _environment(case: dict[str, Any], budget: dict[str, int]) -> last_mile.Clus
     grid = case["grid"]
 
     floor = case["budget_floor"]
+    # REPLAY THE CAPTURED DEADLINE, as a fresh absolute one.  `_astar` cuts a
+    # search short when the deadline passes, and that cut is NOT
+    # `ClusterBound.WALL` -- the only bound `_replayable` skips -- so a replay
+    # with `deadline=None` would take a different branch and report DIFFER for
+    # something the search never did.  The capture stores the seconds that were
+    # LEFT, which is the only part of a wall clock that means anything in
+    # another process; it is re-anchored here at replay start.
+    remaining = case["deadline_remaining"]
+    deadline = None if remaining is None else time.monotonic() + float(remaining)
 
     def search(index: int, constraints: frozenset[tuple[int, int, int]]) -> Any:
         starts, goals, routing_ports = case["ends"][index]
@@ -58,7 +67,7 @@ def _environment(case: dict[str, Any], budget: dict[str, int]) -> last_mile.Clus
             case["pressure"],
             case["bounds"],
             private,
-            None,
+            deadline,
             {},
             grid,
             # THE SAME SIDE INPUTS THE LIVE SEARCH HAD.  An owned start is a
@@ -145,6 +154,14 @@ def bench(path: Path, rounds: int, check: bool) -> int:
         same = digest(got)
         print(f"captured digest {want}   replay digest {same}   "
               f"{'MATCH' if want == same else 'DIFFER'}")
+        # Say what a MATCH is worth.  `offers` is a stub here and the commit
+        # path (`_stake` + `commit_once`) is outside the capture entirely, so
+        # this proves the SEARCH is unchanged and says nothing about whether
+        # the pass would stake and link the result.
+        print(
+            "  (scope: the CBS search only -- `offers` is a stub and the commit "
+            "path is not captured)"
+        )
         return 0 if want == same else 1
     return 0
 
