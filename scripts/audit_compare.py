@@ -78,12 +78,14 @@ def compare(
     notes: list[str] = []
     log_ratios: list[float] = []
     seconds: list[float] = []
+    required_seen: set[str] = set()
     for row in candidate_rows:
         status = str(row["status"])
         counts[status] = counts.get(status, 0) + 1
         seconds.append(float(str(row["seconds"])))
         label = f"{row['strategy']} {row['url_id']}/{row['spec_label']}: {row['detail']}"
         name = f"{row['strategy']}/{row['url_id']}/{row['spec_label']}"
+        required_seen.add(name)
         base = base_by_key.get(_key(row))
         if status != "CLEAN":
             if name in require_clean:
@@ -108,6 +110,10 @@ def compare(
         strategy, url_id, _index = key
         missing_label = base_by_key[key]["spec_label"]
         reasons.append(f"MISSING: {strategy} {url_id}/{missing_label}")
+    for name in sorted(require_clean - required_seen):
+        # A required cell the candidate never attempted cannot be CLEAN; this
+        # also catches a mistyped --require-clean name.
+        reasons.append(f"MISSING (required): {name}")
     if expect_cells is not None and len(candidate_rows) != expect_cells:
         reasons.append(
             f"candidate has {len(candidate_rows)} rows, expected {expect_cells}"

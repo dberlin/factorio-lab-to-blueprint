@@ -232,6 +232,27 @@ def test_a_required_cell_that_stays_refused_fails() -> None:
     assert any(reason.startswith("NOT CLEAN:") for reason in verdict.reasons)
 
 
+def test_a_required_cell_absent_from_both_runs_fails() -> None:
+    """A mistyped or dropped required cell must not pass by never being attempted."""
+    baseline = [_row("freeform", "graphene", 0, "graphene/a", "CLEAN", 100.0, 1.0)]
+    candidate = [_row("freeform", "graphene", 0, "graphene/a", "CLEAN", 100.0, 1.0)]
+
+    verdict = audit_compare.compare(
+        baseline,
+        candidate,
+        noise_area=0.013,
+        p95_seconds=30.0,
+        expect_cells=1,
+        regressions_only=True,
+        require_clean=frozenset({"freeform/quantum-chip/quantum-chip/all-products"}),
+    )
+
+    assert verdict.passed is False
+    assert verdict.reasons == (
+        "MISSING (required): freeform/quantum-chip/quantum-chip/all-products",
+    )
+
+
 def test_the_default_mode_is_unchanged() -> None:
     baseline = [_row("freeform", "graphene", 0, "graphene/a", "CLEAN", 100.0, 1.0)]
     candidate = [_row("freeform", "graphene", 0, "graphene/a", "REFUSED", 0.0, 4.0)]
