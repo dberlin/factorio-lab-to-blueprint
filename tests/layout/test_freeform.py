@@ -233,16 +233,38 @@ def plastic_spec() -> BuildSpec:
 
 
 def captured_output_products_spec() -> BuildSpec:
-    """The reported 17-strip casimir-crystal/output-products refusal."""
+    """The reported 17-strip casimir-crystal/output-products refusal.
+
+    The refusal was reported against a 75-machine spec that crafted hydrogen
+    (39 refineries), organic crystal and sulfuric acid.  The rate solver now
+    prices extraction the way FactorioLab does and belts those three in from
+    collectors and veins, which shrinks the corpus URL to 21 machines and 5
+    strips -- a different problem.  Turning those four extraction recipes off
+    (a choice the player can make in FactorioLab's UI) reproduces the original
+    spec exactly: the same nine recipe groups, 75 machines, 17 strips.
+    """
+    from dataclasses import replace
+
     from flab2bp.bench.corpus import URL_CORPUS
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
     from flab2bp.rates.candidates import CandidatePolicy, build_candidates
 
+    data = load_vendored()
     entry = next(candidate for candidate in URL_CORPUS if candidate.url_id == "casimir-crystal")
-    return build_candidates(
-        load_vendored(),
+    request = replace(
         parse_url(entry.url),
+        excluded_recipe_ids=set(data.default_recipe_excluded)
+        | {
+            "gas-giant-hydrogen",
+            "ice-giant-hydrogen",
+            "organic-crystal-vein",
+            "sulphuric-acid-vein",
+        },
+    )
+    return build_candidates(
+        data,
+        request,
         candidate_policies=(CandidatePolicy.OUTPUT_PRODUCTS,),
     ).candidates[0]
 

@@ -288,7 +288,7 @@ class TestPin:
         plan = solve(data, parse_url(GRAPHENE_URL))
         chosen = {g.recipe_id for g in plan.groups}
         assert "graphene" in chosen and "graphene-advanced" not in chosen
-        assert set(plan.external_inputs) == {"coal", "crude-oil", "stone", "water"}
+        assert set(plan.external_inputs) == {"coal", "sulfuric-acid"}
 
     def test_pinning_moves_the_boundary(self, pristine: FlowSelection, data: Dataset) -> None:
         """The whole point: FactorioLab's choice changes what gets belted in.

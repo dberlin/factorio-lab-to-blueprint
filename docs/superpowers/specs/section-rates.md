@@ -472,9 +472,9 @@ picks products-vs-speed per recipe at that tier.
 
 ---
 
-## 5. The raw-input cut line
+## 5. Raw inputs: extraction is priced, never built
 
-**Use the `mining` recipe flag.** Verified: exactly 22 recipes carry `flags: ["mining"]`,
+**Use the `mining` recipe flag to identify extraction.** Verified: exactly 22 recipes carry `flags: ["mining"]`,
 and they are precisely the extraction set — all `mining-machine`/`advanced-mining-machine`
 veins, `ocean` and `sulphuric-acid-vein` (water-pump), `crude-oil-seep` (oil-extractor),
 and the six `orbital-collector` gas-giant recipes.
@@ -485,13 +485,39 @@ matching plus `totalRecipe` plus vein-input detection). `totalRecipe` is a prope
 `water-pump`, and `orbital-collector` entirely.
 
 ```python
-def is_external_source(recipe) -> bool:
+def is_extraction(recipe) -> bool:   # priced as a supply column, never built
     return 'mining' in recipe.flags
 ```
 
-An item is **external** (arrives on an input belt) iff every recipe that produces it is
-either mining-flagged, excluded, or technology-flagged. Concretely for the example chain:
-`iron-ore`, `copper-ore`, `coal`. Proliferator is always forced external (§4).
+The flag is NOT a cut line that makes an item external by itself; what makes an item
+external is the LP choosing its extraction column, as described next.
+
+An item is **external** (arrives on an input belt) when the URL supplies it (an Input
+objective), when no recipe here can make it, or when the production LP prices its supply in
+from extraction rather than crafting. Every enabled mining-flagged recipe is priced as an
+ordinary LP column using FactorioLab's `adjustCosts`: a declared `cost` (veins 100-200,
+`ocean` 1) prices it at output rate times that cost times the cost factor; an undeclared cost
+(the six orbital-collector recipes) prices it at the machine cost. Crafting columns are priced
+the same way: `costs.machine`, multiplied by `machine.size` area only when the dataset declares
+one — and no DSP machine does, so for this dataset every machine, crafting or extraction,
+costs exactly `costs.machine`. Weighting crafting machines by our own catalog footprint is
+NOT FactorioLab's objective and flipped a boundary (five colliders lost to 31 deuterium
+collectors, so deuterium was belted in where FactorioLab crafts it from collected hydrogen);
+area belongs to the layout stage and the geometric lower bound, not to recipe choice.
+That column then competes against crafting columns for the same
+item, and the LP picks whichever mix is globally cheapest — not the cheapest single recipe,
+since a crafting alternative also drags in its own upstream machines and their costs.
+Extraction is never built — it gets no `SolvedGroup`, no footprint, no integer machine count
+— so its chosen supply arrives on a belt exactly like a raw ore's. This is not a per-item
+structural rule: in one captured flow, `graphene-advanced` (fire ice plus a hydrogen
+coproduct from an `ice-giant` collector, priced around 0.18/unit) still beats crafting from
+coal and sulfuric acid veins priced at 100-200/unit, while hydrogen for deuterium fuel rods
+is instead collected directly from a gas/ice-giant collector rather than made via
+`graphene-advanced` — each is simply the cheaper total route for its own request. A requested
+output is always crafted: an Output objective asks for the item to be MADE, and a blueprint
+of zero machines satisfies nobody. Concretely for the example chain: `iron-ore`, `copper-ore`,
+`coal`; for the graphene chain, `sulfuric-acid` via `sulphuric-acid-vein`. Proliferator is
+always forced external (§4).
 
 Also treated as external: items in `iex`, and items with no producing recipe at all.
 
@@ -548,7 +574,8 @@ class BuildSpec:
     belt_speed: Fraction                      # items/s capacity of one belt lane
     surplus: Mapping[str, Fraction]           # unavoidable byproducts, items/s
     dataset_version: str
-    lower_bound_area: Fraction                # LP relaxation, for bake-off scoring
+    lower_bound_area: Fraction                # LP relaxation, for bake-off scoring; loose,
+                                              # since extraction columns count 0 area
 
     # --- proliferation / geometry contract (see §4.0) ---
     spray_lanes: tuple[SprayLane, ...]

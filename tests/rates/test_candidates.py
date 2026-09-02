@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from fractions import Fraction
 from typing import cast
 
@@ -46,7 +47,23 @@ BROKE_URL = (
 def test_coproduct_hydrogen_is_internally_balanced_by_buffered_recipe(
     data: Dataset,
 ) -> None:
-    specs = build_candidates(data, parse_url(BROKE_URL)).candidates
+    """The coproduct-buffer proof machinery, not FactorioLab's own choice.
+
+    Under extraction pricing (design), FactorioLab belts most of this flow's
+    hydrogen in from `ice-giant-hydrogen` and `ice-giant` rather than crafting
+    it, so the unpinned solve alone would never exercise `graphene-advanced`'s
+    hydrogen coproduct as an internal buffer. This test is about that proof
+    machinery, not about reproducing FactorioLab's own collector choice, so
+    both remaining hydrogen collectors are excluded here to force hydrogen to
+    be crafted -- the same lever a player has in the URL's own exclusion set.
+    """
+    request = parse_url(BROKE_URL)
+    assert request.excluded_recipe_ids is not None
+    request = replace(
+        request,
+        excluded_recipe_ids=set(request.excluded_recipe_ids) | {"ice-giant-hydrogen", "ice-giant"},
+    )
+    specs = build_candidates(data, request).candidates
 
     for spec in specs:
         advanced = next(group for group in spec.groups if group.recipe_id == "graphene-advanced")
@@ -230,12 +247,29 @@ def test_no_proliferator_candidate_is_unproliferated(candidates: BuildSpecSet) -
 # --- invariants every candidate must hold ---------------------------------
 
 def test_diagnosed_url_has_exact_fixed_policy_counts_and_rates(data: Dataset) -> None:
+    """The MILP takes FactorioLab's route for this URL, at FactorioLab's cost.
+
+    FactorioLab's captured flow for this space-warper URL runs
+    `space-warper-advanced` (one gravity matrix makes ten warpers) fed by the
+    quantum-chip / casimir tree, with graphene from `graphene-advanced` on
+    fire ice from an `ice-giant` collector.  Our recipe set is now identical
+    to that flow's except `proliferator-1`/`proliferator-2`, which FactorioLab
+    crafts and we belt in by design (spec section 4).
+
+    Two earlier states of this golden were both artefacts of a wrong cost:
+    13 machines / 215 tiles on the plain `space-warper` route, first because
+    hydrogen was crafted through `graphene-advanced`, then because crafting
+    machines were priced by our catalog footprint rather than FactorioLab's
+    flat `costs.machine`, which made the 23-machine advanced route look dear.
+    With the faithful cost the advanced route wins in every policy, and
+    nothing is over-produced: `surplus_outputs` is empty.
+    """
     specs = build_candidates(data, parse_url(DIAGNOSED_URL)).candidates
 
     assert {spec.label: spec.machine_count for spec in specs} == {
-        "no-proliferator": 13,
-        "all-products": 13,
-        "output-products": 13,
+        "no-proliferator": 23,
+        "all-products": 23,
+        "output-products": 23,
     }
     assert {
         spec.label: sum(
@@ -244,16 +278,18 @@ def test_diagnosed_url_has_exact_fixed_policy_counts_and_rates(data: Dataset) ->
         )
         for spec in specs
     } == {
-        "no-proliferator": 215,
-        "all-products": 215,
-        "output-products": 215,
+        "no-proliferator": 321,
+        "all-products": 285,
+        "output-products": 321,
     }
+    assert all("space-warper-advanced" in {g.recipe_id for g in spec.groups} for spec in specs)
     assert all(dict(spec.outputs) == {"space-warper": Fraction(1, 60)} for spec in specs)
     assert {spec.label: dict(spec.surplus_outputs) for spec in specs} == {
-        "no-proliferator": {"graphene": Fraction(3, 5)},
-        "all-products": {"graphene": Fraction(1375, 3888)},
-        "output-products": {"graphene": Fraction(1, 2)},
+        "no-proliferator": {},
+        "all-products": {},
+        "output-products": {},
     }
+    assert all("graphene-advanced" in {g.recipe_id for g in spec.groups} for spec in specs)
 
 
 def test_every_proliferated_recipe_declares_its_internal_edges(
