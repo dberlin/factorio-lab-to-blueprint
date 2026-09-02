@@ -6256,17 +6256,29 @@ def _astar(
     # cells of pad -- so they are indexable by construction.  Checked anyway,
     # because an index that silently lands in the wrong column is exactly the
     # kind of fault that reads green.
+    #
+    # THE TEST IS `span` MINUS THE TWO-CELL PAD, not `span` itself, and the
+    # margin is the point rather than the containment.  A ramp travels two
+    # cells and both loops index `cur +- 2 * xstep +- 2 * LEVELS +- 1` with no
+    # bounds check of their own -- see :class:`_Grid` on why the pad exists.  A
+    # cell sitting IN the pad is inside `span` and still one whose neighbour
+    # arithmetic leaves the array: the compiled loop would write `best[si]`
+    # past its buffer or read `flags[cur - 2 * xstep]` below zero, which the
+    # Python loop merely wrapped around silently.  Nothing reaches here with
+    # such a cell today, so this refuses no grid any test or corpus produces
+    # and moves no digest; it makes the kernel's precondition the wrapper's
+    # job to enforce rather than an invariant held at a distance.
     flat = grid if grid is not None and grid.box == box else None
     if flat is not None:
         sx0, sy0, sx1, sy1 = flat.span
         for cx, cy, clvl in starts:
-            if not (sx0 <= cx <= sx1 and sy0 <= cy <= sy1 and 0 <= clvl < LEVELS):
+            if not (sx0 + 2 <= cx <= sx1 - 2 and sy0 + 2 <= cy <= sy1 - 2 and 0 <= clvl < LEVELS):
                 flat = None
                 break
     if flat is not None:
         sx0, sy0, sx1, sy1 = flat.span
         for cx, cy, clvl in goal_list:
-            if not (sx0 <= cx <= sx1 and sy0 <= cy <= sy1 and 0 <= clvl < LEVELS):
+            if not (sx0 + 2 <= cx <= sx1 - 2 and sy0 + 2 <= cy <= sy1 - 2 and 0 <= clvl < LEVELS):
                 flat = None
                 break
     if flat is None:

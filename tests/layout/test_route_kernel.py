@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Collection, Mapping
 from typing import Any
 
@@ -73,6 +74,23 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
     return cases
 
 
+def _require_both_backends() -> Callable[..., object]:
+    """The compiled loop, or skip -- but only when it was switched OFF on purpose.
+
+    A comparison of the two backends needs both, and ``FLAB2BP_ROUTE_KERNEL=python``
+    is a deliberate request for one.  Anything else missing the extension is a
+    build that did not happen, which must fail rather than quietly skip: a parity
+    test that reports "skipped" when the thing it compares against is absent is a
+    parity test that never runs.
+    """
+    if os.environ.get("FLAB2BP_ROUTE_KERNEL") == "python":
+        pytest.skip("FLAB2BP_ROUTE_KERNEL=python switches the compiled backend off")
+    assert route_kernel.compiled_available()
+    compiled = route_kernel._compiled_astar
+    assert compiled is not None
+    return compiled
+
+
 def _replay(case: Case, budget: dict[str, int] | None = None) -> _PathSearchResult:
     return freeform_module._astar(
         case["canvas"], case["starts"], case["goals"], case["history"], case["pressure"],
@@ -86,7 +104,7 @@ def _replay(case: Case, budget: dict[str, int] | None = None) -> _PathSearchResu
 def test_compiled_astar_matches_python_on_real_searches(
     make_spec: Callable[[], BuildSpec], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert route_kernel.compiled_available()
+    _require_both_backends()
     cases = _capture_searches(make_spec(), budget_s=4.0)
     assert cases
 
@@ -103,24 +121,53 @@ def test_compiled_astar_matches_python_on_real_searches(
 
 
 def test_compiled_astar_honours_expansion_cap_and_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both backends must agree on the two exits the parity replay cannot reach.
+
+    ``test_compiled_astar_matches_python_on_real_searches`` replays with
+    ``left = 1 << 40`` and no deadline, so no captured case ever leaves through a
+    budget or cap path -- and those are the exits carrying the deliberate +1
+    asymmetry (``start_left - expansions + 1`` when the cap or the deadline
+    stopped the search, ``start_left - expansions`` when the budget ran out).
+    Getting that wrong in one backend changes how many nodes every later net in
+    a routing pass may spend, so it is compared here rather than assumed.
+    """
+    compiled = _require_both_backends()
     cases = _capture_searches(two_stage_spec(), budget_s=2.0)
     found = [case for case in cases if _replay(case).expansions >= 3]
     assert found
     case = found[0]
 
-    tiny = {"left": 3}
-    result = _replay(case, tiny)
-    assert result.path is None
-    assert result.kind is RouteFailureKind.BUDGET
-    assert result.expansions == 3
-    assert tiny["left"] == 0
+    def under(
+        backend: Callable[..., object] | None,
+        budget: dict[str, int],
+        max_expansions: int | None = None,
+    ) -> _PathSearchResult:
+        with monkeypatch.context() as forced:
+            forced.setattr(route_kernel, "_compiled_astar", backend)
+            if max_expansions is not None:
+                forced.setattr(freeform_module, "_MAX_EXPANSIONS", max_expansions)
+            return _replay(case, budget)
 
-    monkeypatch.setattr(freeform_module, "_MAX_EXPANSIONS", 2)
-    capped = {"left": 1 << 40}
-    result = _replay(case, capped)
-    assert result.kind is RouteFailureKind.BUDGET
-    assert result.expansions == 3  # cap + 1, exactly as the Python loop counts it
-    assert capped["left"] == (1 << 40) - 2
+    # The shared budget runs out: charged for the expansion that hit the wall.
+    cython_budget, python_budget = {"left": 3}, {"left": 3}
+    from_cython = under(compiled, cython_budget)
+    from_python = under(None, python_budget)
+    assert from_cython == from_python
+    assert cython_budget == python_budget
+    assert from_cython.path is None
+    assert from_cython.kind is RouteFailureKind.BUDGET
+    assert from_cython.expansions == 3
+    assert cython_budget["left"] == 0
+
+    # The expansion cap fires first: charged one FEWER than it expanded.
+    cython_cap, python_cap = {"left": 1 << 40}, {"left": 1 << 40}
+    from_cython = under(compiled, cython_cap, max_expansions=2)
+    from_python = under(None, python_cap, max_expansions=2)
+    assert from_cython == from_python
+    assert cython_cap == python_cap
+    assert from_cython.kind is RouteFailureKind.BUDGET
+    assert from_cython.expansions == 3  # cap + 1, exactly as the Python loop counts it
+    assert cython_cap["left"] == (1 << 40) - 2
 
 
 def test_backend_falls_back_when_extension_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:

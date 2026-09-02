@@ -175,6 +175,25 @@ def astar_flat(
     object deadline,
     object expired,
 ):
+    """Expand from ``starts`` until a goal, a budget, or an empty heap.
+
+    Returns ``(path, expansions, kind, settled, budget_left)``.  ``kind`` is 0
+    when a goal was popped -- ``path`` is then the cell indices oldest first,
+    with each ramp's intermediate run cell spliced in after the cell it serves
+    -- 1 when the expansion cap, the deadline or the shared budget stopped the
+    search, and 2 when the heap emptied, which is the one ending that proves
+    the pocket is sealed and the only one that fills ``settled`` (every cell
+    with a finite cost, in index order).  ``path`` is None and ``settled``
+    empty for every kind that does not name them.
+
+    ``budget_left`` reproduces the Python loop's write-back exactly, including
+    its deliberate asymmetry: the cap and deadline exits return
+    ``start_left - expansions + 1`` because the budget was charged for an
+    expansion only AFTER those two had let it through, while exhausting the
+    budget, finding a goal and sealing all return ``start_left - expansions``.
+    The caller stores it verbatim; getting the +1 wrong changes how many nodes
+    every later net in the pass is allowed to spend.
+    """
     cdef Py_ssize_t size = flags.shape[0]
     cdef long long columns = size // levels
     cdef bint negotiating = hist.shape[0] > 0
@@ -204,22 +223,33 @@ def astar_flat(
     cdef long long moves[4][4]
     cdef long long ramp_steps[2]
 
-    if band_count > 0 and band_count * columns > alt_flat.shape[0]:
-        # `boundscheck=False` would read past the buffer rather than complain.
-        raise ValueError("alt_flat is smaller than band_count landmark fields")
+    # EXACTLY `band_count` fields, not "at least".  `alt` and `alt_flat` are
+    # written together and a buffer of the wrong length in either direction
+    # means they have come apart -- too long is a stale `alt_flat` left behind
+    # by a shorter `alt`, and every dial this reads after that belongs to the
+    # wrong landmark.  `boundscheck=False` would neither catch that nor the
+    # too-short case, which reads past the buffer outright.
+    if band_count > 0 and band_count * columns != alt_flat.shape[0]:
+        raise ValueError(
+            "alt_flat holds a different number of landmark fields than band_count"
+        )
+    # The `try` opens on the FIRST allocation so a MemoryError on any later one
+    # still frees what came before it.  Every pointer is NULL-initialised above
+    # and `free(NULL)` is a no-op, so the `finally` can free unconditionally.
     if band_count > 0:
         band_index = <long long*> malloc(band_count * sizeof(long long))
-        band_lo = <long long*> malloc(band_count * sizeof(long long))
-        band_hi = <long long*> malloc(band_count * sizeof(long long))
-        if band_index == NULL or band_lo == NULL or band_hi == NULL:
-            raise MemoryError()
-    best = <double*> malloc(size * sizeof(double))
-    prev = <long long*> malloc(size * sizeof(long long))
-    via = <long long*> malloc(size * sizeof(long long))
-    hcache = <double*> malloc(columns * sizeof(double))
-    if best == NULL or prev == NULL or via == NULL or hcache == NULL:
-        raise MemoryError()
     try:
+        if band_count > 0:
+            band_lo = <long long*> malloc(band_count * sizeof(long long))
+            band_hi = <long long*> malloc(band_count * sizeof(long long))
+            if band_index == NULL or band_lo == NULL or band_hi == NULL:
+                raise MemoryError()
+        best = <double*> malloc(size * sizeof(double))
+        prev = <long long*> malloc(size * sizeof(long long))
+        via = <long long*> malloc(size * sizeof(long long))
+        hcache = <double*> malloc(columns * sizeof(double))
+        if best == NULL or prev == NULL or via == NULL or hcache == NULL:
+            raise MemoryError()
         # Landmark bands: the goals occupy [lo, hi] on each landmark's dial; a
         # landmark that cannot reach every goal is DROPPED, as in Python.
         for b in range(band_count):
@@ -392,7 +422,6 @@ def astar_flat(
         free(prev)
         free(via)
         free(hcache)
-        if band_index != NULL:
-            free(band_index)
-            free(band_lo)
-            free(band_hi)
+        free(band_index)
+        free(band_lo)
+        free(band_hi)
