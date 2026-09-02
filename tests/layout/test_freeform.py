@@ -279,22 +279,116 @@ def test_prepared_net_ids_are_stable() -> None:
     assert tuple(net.net_id for net in a.nets) == tuple(net.net_id for net in b.nets)
 
 
-def test_lay_out_generates_strip_families_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every ``plan_strips``/``_coarsen_saturated_strip_plan`` call inside
+    ``lay_out`` must receive the SAME families tuple ``lay_out`` generated --
+    including the coarsest-legal retry (only reached when the first attempt
+    raises) and the saturated-strip coarsening pass (only reached once the
+    strip count is large enough).  ``two_stage_spec`` alone never drives
+    either of those branches, so the coarsening threshold is forced open and
+    the first ``plan_strips`` call is forced to fail once, so a dropped
+    ``families=`` keyword at any of the three call sites has somewhere to
+    hide from and this test still finds it.
+    """
     from flab2bp.layout import strip_variants as strip_variants_module
 
     spec = two_stage_spec()
-    calls: list[BuildSpec] = []
-    original = generate_strip_families
 
-    def counting(spec_arg: BuildSpec) -> tuple[StripFamily, ...]:
-        calls.append(spec_arg)
-        return tuple(original(spec_arg))
+    # Force the saturated-strip coarsening branch to fire regardless of how
+    # few strips this small fixture produces.
+    monkeypatch.setattr(freeform, "_COARSE_STRIP_THRESHOLD", 0)
 
-    monkeypatch.setattr(strip_variants_module, "generate_strip_families", counting)
+    generated: list[tuple[StripFamily, ...]] = []
+    original_generate = generate_strip_families
+
+    def counting_generate(spec_arg: BuildSpec) -> tuple[StripFamily, ...]:
+        result = tuple(original_generate(spec_arg))
+        generated.append(result)
+        return result
+
+    monkeypatch.setattr(strip_variants_module, "generate_strip_families", counting_generate)
+
+    plan_strips_families: list[Sequence[StripFamily] | None] = []
+    original_plan_strips = freeform.plan_strips
+    forced_failure = True
+
+    def recording_plan_strips(
+        spec_arg: BuildSpec,
+        *,
+        strip_len: int = 6,
+        band_policy: BandPolicy = freeform._DEFAULT_BAND_POLICY,
+        minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
+        families: Sequence[StripFamily] | None = None,
+        minimum_staged_static_clearance: Mapping[
+            freeform.StagedStaticClearanceKey,
+            int,
+        ] = freeform._NO_STAGED_STATIC_CLEARANCE,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> list[Strip]:
+        nonlocal forced_failure
+        plan_strips_families.append(families)
+        if forced_failure:
+            forced_failure = False
+            # Drives `lay_out` into its coarsest-legal retry branch.
+            raise ValueError("forced for test coverage of the retry call site")
+        return original_plan_strips(
+            spec_arg,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            minimum_pitch_x=minimum_pitch_x,
+            families=families,
+            minimum_staged_static_clearance=minimum_staged_static_clearance,
+            cancelled=cancelled,
+        )
+
+    monkeypatch.setattr(freeform, "plan_strips", recording_plan_strips)
+
+    coarsen_families: list[Sequence[StripFamily] | None] = []
+    original_coarsen = freeform._coarsen_saturated_strip_plan
+
+    def recording_coarsen(
+        spec_arg: BuildSpec,
+        strips: list[Strip],
+        *,
+        strip_len: int,
+        band_policy: BandPolicy = freeform._DEFAULT_BAND_POLICY,
+        minimum_pitch_x: Mapping[StripPoseId, int] = freeform._NO_PITCH_REQUIREMENTS,
+        families: Sequence[StripFamily] | None = None,
+        minimum_staged_static_clearance: Mapping[
+            freeform.StagedStaticClearanceKey,
+            int,
+        ] = freeform._NO_STAGED_STATIC_CLEARANCE,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[list[Strip], int]:
+        coarsen_families.append(families)
+        return original_coarsen(
+            spec_arg,
+            strips,
+            strip_len=strip_len,
+            band_policy=band_policy,
+            minimum_pitch_x=minimum_pitch_x,
+            families=families,
+            minimum_staged_static_clearance=minimum_staged_static_clearance,
+            cancelled=cancelled,
+        )
+
+    monkeypatch.setattr(freeform, "_coarsen_saturated_strip_plan", recording_coarsen)
+
     layout = FreeformLayout(band_policy=BandPolicy("portable"), workers=1)
     layout.lay_out(spec, time_budget_s=4.0)
 
-    assert len(calls) == 1
+    # The initial attempt (forced to fail), the coarsest-legal retry, and the
+    # coarsening pass's own internal `plan_strips` call all ran.
+    assert len(plan_strips_families) == 3
+    assert len(coarsen_families) == 1
+    # `generate_strip_families` ran exactly once, in `lay_out` itself: every
+    # downstream call received a families tuple and never regenerated one.
+    assert len(generated) == 1
+    every_families = (*plan_strips_families, *coarsen_families)
+    assert all(families is not None for families in every_families)
+    assert all(families is generated[0] for families in every_families)
 
 
 def test_prepared_static_access_failure_spends_no_route_budget(
