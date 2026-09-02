@@ -40,6 +40,7 @@ class _RawMachine(_RawModel):
     modules: int | None = None
     total_recipe: bool = Field(False, alias="totalRecipe")
     fuel_categories: list[str] | None = Field(None, alias="fuelCategories")
+    size: list[int] | None = None
 
 
 class _RawModule(_RawModel):
@@ -212,9 +213,18 @@ class Machine:
     modules: int | None = None
     total_recipe: bool = False
     fuel_categories: tuple[str, ...] = ()
+    #: FactorioLab's ``machine.size`` (width, height) in tiles, used by its
+    #: ``adjustCosts`` to scale the machine cost.  No DSP machine declares one,
+    #: so for this dataset every machine costs exactly ``costs.machine``.
+    size: tuple[int, int] | None = None
 
     @classmethod
     def parse(cls, raw: _RawMachine) -> Machine:
+        size: tuple[int, int] | None = None
+        if raw.size is not None:
+            if len(raw.size) != 2:
+                raise ValueError(f"machine size must be [width, height], got {raw.size!r}")
+            size = (raw.size[0], raw.size[1])
         return cls(
             speed=_frac(raw.speed),
             usage=_frac(raw.usage),
@@ -224,6 +234,7 @@ class Machine:
             modules=raw.modules,
             total_recipe=raw.total_recipe,
             fuel_categories=_tuple(raw.fuel_categories),
+            size=size,
         )
 
 
