@@ -1006,9 +1006,9 @@ def encode_placement(
         raise ValueError("encoded coordinates must be non-negative integers")
     _validate_positive_integer(outline_height, "outline height")
 
-    #: ``positive[a]`` holds every ``b`` that may not precede ``a`` in `positive`.
+    #: ``positive_successors[a]`` holds every ``b`` that must follow ``a`` in `positive`.
     positive_successors: list[set[int]] = [set() for _ in range(size)]
-    #: ``negative[a]`` holds every ``b`` that may not precede ``a`` in `negative`.
+    #: ``negative_successors[a]`` holds every ``b`` that must follow ``a`` in `negative`.
     negative_successors: list[set[int]] = [set() for _ in range(size)]
     for first in range(size):
         first_width, first_height = sizes[first]
@@ -1051,7 +1051,12 @@ def _topological_order(
     *,
     key: Callable[[int], tuple[int, ...]],
 ) -> tuple[int, ...]:
-    """Kahn's algorithm with a total ready-set order, so the result is unique."""
+    """Kahn's algorithm with a total ready-set order, so the result is unique.
+
+    ``key`` must be injective for the result to be reproducible; ending it in
+    the node's own index is enough.  Raises when the graph has a cycle rather
+    than returning the prefix it managed to order.
+    """
     size = len(successors)
     indegree = [0] * size
     for sources in successors:
