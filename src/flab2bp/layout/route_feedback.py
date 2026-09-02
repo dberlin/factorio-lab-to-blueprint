@@ -175,6 +175,8 @@ class ClusterRelationNoGood:
             raise ValueError("cluster relation height must be positive")
         if len(self.strips) < 2:
             raise ValueError("a cluster relation needs at least two strips")
+        if any(strip < 0 for strip in self.strips):
+            raise ValueError("cluster relation strips must be non-negative indices")
         if tuple(sorted(self.strips)) != self.strips:
             raise ValueError("cluster relation strips must be ascending")
         if len(self.deltas) != len(self.strips):
