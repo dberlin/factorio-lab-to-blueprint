@@ -691,7 +691,16 @@ def test_a_mk2_url_whose_lanes_need_mk3_builds(monkeypatch: pytest.MonkeyPatch) 
     """The reported failure: hydrogen lanes at 14-20/s on a 12/s belt.  With
     Mk.III researched, those runs are raised and the build validates."""
     _with_belt(monkeypatch, "conveyor-belt-2")
-    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=45.0)
+    # One policy keeps this test under a single 45 s budget and pytest-timeout's
+    # 120 s backstop; the tier logic under test is policy-independent.
+    # NO_PROLIFERATOR is picked (not OUTPUT_PRODUCTS) because it is the only
+    # policy that lays this candidate out at all within budget here.
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        time_budget_s=45.0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
     assert build.report.ok
     assert build.spec.belt_item_id == "conveyor-belt-2"
     tiers = {b.item_id for b in build.placement.buildings if catalog.is_belt(b.item_id)}
@@ -723,5 +732,14 @@ def test_without_planetary_logistics_the_same_url_is_refused(
         )
 
     monkeypatch.setattr(pipeline, "parse_url", patched)
+    # One policy keeps this test under a single 45 s budget and pytest-timeout's
+    # 120 s backstop; the tier logic under test is policy-independent.
+    # NO_PROLIFERATOR still exhausts its budget refusing this candidate and
+    # still reports a flow.belt_capacity failure, matching the assertion below.
     with pytest.raises(pipeline.NoValidLayout, match="flow.belt_capacity"):  # type: ignore[attr-defined]
-        pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=45.0)
+        pipeline.build(
+            DEUTERON_URL,
+            strategy="sequence-pair",
+            time_budget_s=45.0,
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        )
