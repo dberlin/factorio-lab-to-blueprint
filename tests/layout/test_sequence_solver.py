@@ -53,6 +53,7 @@ from flab2bp.layout.route_feedback import (
     select_split_candidate,
 )
 from flab2bp.layout.sequence_alns import (
+    REWARD_RANKS,
     DestroyOperator,
     OperatorContext,
     OperatorSession,
@@ -1390,17 +1391,21 @@ def test_local_exact_pack_credits_an_unusable_window_as_unapplied() -> None:
     assert session.applied == 0
 
 
-def test_local_exact_pack_without_an_adapter_falls_through_to_the_sequence_reinsert() -> None:
-    """No adapter is not a skip: the arm runs the reinsert repair and is credited.
+def test_local_exact_pack_without_an_adapter_is_skipped_and_charged_a_zero_reward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An arm with no implementation did not run, so no other arm may run for it.
 
-    Task 5 must therefore not arm LOCAL_EXACT_PACK before a window adapter is
-    wired, or the ledger will pay the window arm for the reinsert's work.
+    Falling through to `repair_neighbourhood` would pay the window arm for the
+    reinsert's work, which is exactly the credit the selector is built on.
     """
     problem, state, decoded, routing = _applied_substitution_fixture()
-    legacy_state, legacy_neighbourhood = sequence_solver_module._routing_feedback_substitution(
-        routing, state, problem, decoded, seed=state.base_seed, stage_index=0
-    )
     session = _window_arms()
+
+    def _forbidden(*_args: object, **_kwargs: object) -> Never:
+        raise AssertionError("the reinsert repair must not run for an unwired arm")
+
+    monkeypatch.setattr(sequence_solver_module, "repair_neighbourhood", _forbidden)
 
     repaired, neighbourhood = _run_alns(
         (problem, state, decoded, routing),
@@ -1408,9 +1413,19 @@ def test_local_exact_pack_without_an_adapter_falls_through_to_the_sequence_reins
         adapters=sequence_solver_module._RepairAdapters(),
     )
 
-    assert neighbourhood == legacy_neighbourhood
-    assert repaired.pair == legacy_state.pair
+    assert neighbourhood == frozenset()
+    assert repaired.pair == state.pair
+    assert repaired.gaps == state.gaps
     assert session.choices[0].repair is RepairOperator.LOCAL_EXACT_PACK
+    assert session.pending is None
+    assert session.applied == 0
+
+    arm = RepairOperator.LOCAL_EXACT_PACK.value
+    credit = session.credit
+    assert credit[f"count:{arm}"] == 1.0
+    assert all(credit[f"reward:{arm}:{rank}"] == 0.0 for rank in range(REWARD_RANKS))
+    # No other arm was touched: the reinsert arm is not even in this session.
+    assert f"count:{RepairOperator.SEQUENCE_REINSERT.value}" not in credit
 
 
 def test_geometric_near_miss_substitutes_feedback_candidate_before_next_height() -> None:
