@@ -94,10 +94,12 @@ from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
+    LastMileReport,
     NetFailure,
     NetId,
     NetRole,
     RouteFailureKind,
+    combine_last_mile_reports,
 )
 from flab2bp.layout.strip_variants import (
     CargoDomain,
@@ -11085,18 +11087,23 @@ class TestABranchLeavesFromItsOwnSource:
 
 
 class TestDetailedRoutingDiagnostics:
-    @pytest.fixture(autouse=True)
+    @pytest.fixture
     def _without_the_last_mile_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Pin the bounded cluster search off for this class.
+        """Pin the bounded cluster search off for ONE test that scripts `_astar`.
 
-        Every test here models ONE routing round exactly: it scripts `_astar`
+        Opt-in rather than autouse, and that distinction is the point.  The
+        tests wearing it model exactly ONE routing round: each scripts `_astar`
         with a finite sequence, or counts the searches the round and its
         crossing repair make, or asserts on the observations one search
         recorded.  The last-mile pass is a second stage that runs AFTER that
-        round and makes `_astar` calls of its own, so leaving it on would make
-        each of those scripts wrong for a reason that has nothing to do with
-        what the test is about.  The pass has its own tests beside
-        `_joint_only_fixture`.
+        round and makes `_astar` calls of its own, so leaving it on makes those
+        scripts wrong for a reason that has nothing to do with what they
+        assert.
+
+        Every other test in this class routes for real and must keep meeting
+        the whole router, the pass included -- `test_a_dynamically_sealed_port
+        _names_its_blocking_net` is precisely the end-to-end stranded assertion
+        a blanket pin would have quietly stopped exercising.
         """
         monkeypatch.setattr(last_mile, "B_MAX_STRANDED", 0)
 
@@ -11226,6 +11233,7 @@ class TestDetailedRoutingDiagnostics:
         assert failure.blocking_nets == (blocker_id,)
         assert failure.expansions == 1
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_repair_search_cap_is_budget_unknown_without_shared_exhaustion(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -11296,6 +11304,7 @@ class TestDetailedRoutingDiagnostics:
         assert failure.wall == ()
         assert failure.blocking_nets == ()
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_displaced_net_search_cap_is_budget_unknown_after_crossing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -11574,6 +11583,7 @@ class TestDetailedRoutingDiagnostics:
         assert result.wall == ()
         assert blame == {}
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_occupied_destination_docks_name_their_blocking_net(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -11630,6 +11640,7 @@ class TestDetailedRoutingDiagnostics:
         assert set(failure.wall) == set(destination_docks)
         assert failure.blocking_nets == (blocker_id,)
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_occupied_source_docks_name_their_blocking_net(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -11904,6 +11915,7 @@ class TestDetailedRoutingDiagnostics:
         assert committed_hints[0] == {1: (1, 1, 0)}
         assert committed_hints[1] == {0: (2, 1, 0)}
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_source_splitter_head_is_withheld_from_later_destination_merges(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -12043,6 +12055,7 @@ class TestDetailedRoutingDiagnostics:
         assert unlinked == ()
         assert any(building.item_id == catalog.SPLITTER_ID for building in canvas.buildings)
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_zero_start_fanout_failure_names_the_sibling_that_consumed_it(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -12109,6 +12122,7 @@ class TestDetailedRoutingDiagnostics:
         assert failure.blocking_endpoints == (((0, 0, 0), (4, -2, 0)),)
 
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_first_fanout_route_bounds_future_tap_keepout_detours(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -12271,6 +12285,7 @@ class TestDetailedRoutingDiagnostics:
         assert result.failed_count == 0
         assert any(building.item_id == catalog.SPLITTER_ID for building in canvas.buildings)
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_blocking_owners_are_snapshotted_when_the_search_fails(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -12310,6 +12325,7 @@ class TestDetailedRoutingDiagnostics:
         failure = next(f for f in result.failures if f.net_id == failed_id)
         assert failure.blocking_nets == (original_id,)
 
+    @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_mixed_internal_and_proliferator_owners_have_total_order(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -16201,10 +16217,13 @@ def test_a_pack_with_no_stranded_net_never_runs_the_cluster_search(
         return original(problem, environment)  # type: ignore[arg-type]
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", counting)
-    FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
+    placement = FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
         plastic_spec(), time_budget_s=8.0
     )
 
+    # A pack that never routed would satisfy "the search never ran" for the
+    # wrong reason, so the premise is asserted alongside the claim.
+    assert placement is not None
     assert calls == []
 
 
@@ -16406,3 +16425,243 @@ def test_a_cluster_solution_rejected_at_commit_is_rolled_back(
     assert result.last_mile.solved == 0
     assert result.last_mile.commit_rejected == 1
     assert result.last_mile.bounded == 1
+
+
+def test_a_short_cluster_solution_degrades_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A SOLVED result missing a net is a broken solver, not a CRASH row.
+
+    `ClusterResult` cannot check "one path per cluster net" -- it does not carry
+    the net list -- so the committer is the last place that can, and a
+    `KeyError` there would fail the corpus gate rather than report from it.
+    """
+    from flab2bp.layout import last_mile as last_mile_module
+
+    def short(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> object:
+        return last_mile_module.ClusterResult(
+            outcome=last_mile_module.ClusterOutcome.SOLVED,
+            paths={problem.nets[0]: ((0, 0, 0),)},
+            nodes=1,
+            expansions=0,
+            seconds=0.0,
+        )
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", short)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert result.status is not DetailedRouteStatus.ROUTED
+    assert result.last_mile is not None
+    assert result.last_mile.solved == 0
+    assert result.last_mile.commit_rejected == 1
+    assert result.last_mile.bounded == 1
+    assert result.last_mile.restore_mismatch == 0
+
+
+def _last_mile_outcome(result: DetailedRouteResult) -> tuple[object, ...]:
+    """The part of a routing an entry gate must leave exactly as it found it."""
+    return (
+        result.status,
+        result.routed,
+        tuple((failure.net_id, failure.kind) for failure in result.failures),
+    )
+
+
+def _last_mile_route(
+    *,
+    pinned_off: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    deadline: float | None = None,
+    budget: dict[str, int] | None = None,
+    never_expired: bool = False,
+) -> DetailedRouteResult:
+    """One `_route_all` over a fresh stranded fixture, pass on or pinned off."""
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    with monkeypatch.context() as context:
+        if pinned_off:
+            context.setattr(last_mile, "B_MAX_STRANDED", 0)
+        if never_expired:
+            context.setattr(freeform, "_expired", lambda _deadline: False)
+        return freeform._route_all(
+            canvas,
+            nets,
+            belt_id,
+            catalog.building(belt_id).model_index,
+            bounds,
+            deadline,
+            budget,
+        )
+
+
+def test_an_exhausted_expansion_budget_never_reaches_the_cluster_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pass with nothing left to spend cannot start a search that spends."""
+    reference = _last_mile_route(
+        pinned_off=True, monkeypatch=monkeypatch, budget={"left": 0}
+    )
+    result = _last_mile_route(
+        pinned_off=False, monkeypatch=monkeypatch, budget={"left": 0}
+    )
+    # The control: the SAME fixture with a budget runs the pass, so the zero
+    # above is this gate and not the fixture declining to strand anything.
+    control = _last_mile_route(pinned_off=False, monkeypatch=monkeypatch)
+
+    assert control.last_mile is not None and control.last_mile.invocations == 1
+    assert result.last_mile is not None
+    assert result.last_mile.invocations == 0
+    assert _last_mile_outcome(result) == _last_mile_outcome(reference)
+
+
+def test_an_expired_deadline_never_reaches_the_cluster_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expiry ends the pass, whichever of the two checks gets there first.
+
+    The round's own expiry check returns before the insertion point, and
+    `_last_mile`'s guard refuses on the same condition behind it.  The promise
+    both make is the one asserted here: no search, and the routing a caller
+    already had.
+    """
+    expired = time.monotonic() - 1.0
+    reference = _last_mile_route(
+        pinned_off=True, monkeypatch=monkeypatch, deadline=expired
+    )
+    result = _last_mile_route(pinned_off=False, monkeypatch=monkeypatch, deadline=expired)
+    # The control: the same deadline, far enough out to be affordable.
+    control = _last_mile_route(
+        pinned_off=False, monkeypatch=monkeypatch, deadline=time.monotonic() + 60.0
+    )
+
+    assert control.last_mile is not None and control.last_mile.invocations == 1
+    assert result.last_mile is not None
+    assert result.last_mile.invocations == 0
+    assert _last_mile_outcome(result) == _last_mile_outcome(reference)
+
+
+def test_a_wall_too_short_for_the_pass_never_reaches_the_cluster_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`B_MIN_SECONDS` refuses to START what it cannot afford to finish.
+
+    Expiry is pinned off so this can only be the wall-clock floor: the deadline
+    is `time.monotonic()` itself, which is never in the past by more than the
+    round's own duration and is always nearer than `B_MIN_SECONDS`.
+    """
+    reference = _last_mile_route(
+        pinned_off=True,
+        monkeypatch=monkeypatch,
+        deadline=time.monotonic(),
+        never_expired=True,
+    )
+    result = _last_mile_route(
+        pinned_off=False,
+        monkeypatch=monkeypatch,
+        deadline=time.monotonic(),
+        never_expired=True,
+    )
+    # The control: expiry still pinned off, wall still the only variable.
+    control = _last_mile_route(
+        pinned_off=False,
+        monkeypatch=monkeypatch,
+        deadline=time.monotonic() + 60.0,
+        never_expired=True,
+    )
+
+    assert last_mile.B_MIN_SECONDS > 0.0
+    assert control.last_mile is not None and control.last_mile.invocations == 1
+    assert result.last_mile is not None
+    assert result.last_mile.invocations == 0
+    assert _last_mile_outcome(result) == _last_mile_outcome(reference)
+
+
+def test_a_cluster_search_that_drains_its_allowance_is_only_a_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The private cap is a real cap, and a capped search decides nothing.
+
+    Shrinking `B_LOW_LEVEL_EXPANSIONS` puts the allowance one expansion above
+    the floor, so the cap drains INSIDE `_cluster_search` rather than at
+    `solve_cluster`'s entry bound check -- which is the path that has to end as
+    BOUNDED rather than as a closed tree.  `LastMileReport` does not carry the
+    `ClusterBound`, so the drain is evidenced by the expansions the pass spent.
+    """
+    monkeypatch.setattr(last_mile, "B_LOW_LEVEL_EXPANSIONS", 1)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert result.status is DetailedRouteStatus.STRANDED
+    assert result.exhaustive is False
+    assert result.last_mile is not None
+    assert result.last_mile.invocations == 1
+    assert result.last_mile.bounded == 1
+    assert result.last_mile.solved == 0
+    assert result.last_mile.proved == 0
+    assert result.last_mile.expansions >= 1
+    assert result.last_mile.restore_mismatch == 0
+
+
+def test_two_sub_routing_last_mile_reports_sum() -> None:
+    """A build routes in four stages; its report is all four, not one of them."""
+    external = LastMileReport(
+        invocations=1,
+        solved=1,
+        proved=0,
+        bounded=0,
+        commit_rejected=0,
+        relation_skipped_siblings=0,
+        restore_mismatch=0,
+        nodes=3,
+        expansions=5,
+        seconds=0.25,
+    )
+    internal = LastMileReport(
+        invocations=2,
+        solved=0,
+        proved=1,
+        bounded=1,
+        commit_rejected=1,
+        relation_skipped_siblings=1,
+        restore_mismatch=1,
+        nodes=4,
+        expansions=7,
+        seconds=0.5,
+        relation_strips=(1, 2),
+        relation_evidence="the relaxed cluster closed",
+    )
+
+    assert combine_last_mile_reports((None, external, internal)) == LastMileReport(
+        invocations=3,
+        solved=1,
+        proved=1,
+        bounded=1,
+        commit_rejected=1,
+        relation_skipped_siblings=1,
+        restore_mismatch=1,
+        nodes=7,
+        expansions=12,
+        seconds=0.75,
+        relation_strips=(1, 2),
+        relation_evidence="the relaxed cluster closed",
+    )
