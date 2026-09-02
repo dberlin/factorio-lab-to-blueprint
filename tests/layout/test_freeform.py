@@ -17099,6 +17099,78 @@ def test_only_one_stranded_net_of_a_blocked_source_lane_joins_the_cluster(
     assert result.last_mile.same_source_dropped == 1
 
 
+def test_a_seed_the_cluster_dropped_is_still_a_failure_after_a_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A solved AND committed cluster does not route the seed it left out.
+
+    The thinning keeps one net per un-tappable source lane; the other seed is
+    not in the problem at all, so nothing searched it and nothing staked it.
+    Were the pass to report an EMPTY stranded set for that round, the caller
+    would read the pack as finished while a net has no path at all -- so
+    ``_last_mile`` returns the seeds it left out even on its success path.
+    """
+    from flab2bp.layout import last_mile as last_mile_module
+
+    canvas, nets, bounds = _shared_blocked_source_fixture()
+    seen: list[last_mile_module.ClusterProblem] = []
+
+    def solving(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> object:
+        seen.append(problem)
+        return last_mile_module.ClusterResult(
+            outcome=last_mile_module.ClusterOutcome.SOLVED,
+            # One cell, on the source tile itself: a path that opens no
+            # corridor, so the rounds that follow cannot route net 1 by tapping
+            # what this one staked and the assertion below stays about the drop.
+            paths={index: ((0, 0, 0),) for index in problem.nets},
+            nodes=1,
+            expansions=0,
+            seconds=0.0,
+        )
+
+    original = freeform._commit_paths
+
+    def accepting(
+        for_canvas: _Canvas,
+        for_nets: list[_Net],
+        for_paths: Mapping[int, Sequence[Cell]],
+        *args: object,
+        **kwargs: object,
+    ) -> tuple[int, ...]:
+        # Only the cluster's own commit carries net 0 -- the greedy round
+        # strands both nets and has nothing to link -- so this accepts exactly
+        # the commit whose success the assertions are about.
+        if 0 in for_paths:
+            return ()
+        return original(for_canvas, for_nets, for_paths, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", solving)
+    monkeypatch.setattr(freeform, "_commit_paths", accepting)
+    belt_id = catalog.item_id("conveyor-belt-1")
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    # The premise: the cluster really did drop a seed and really did solve and
+    # commit.  Without it "not ROUTED" would pass for a round that never got
+    # past the search.
+    assert len(seen) == 1
+    assert seen[0].nets == (0,)
+    assert result.last_mile is not None
+    assert result.last_mile.solved == 1
+    assert result.last_mile.commit_rejected == 0
+    assert result.last_mile.same_source_dropped == 1
+    # The claim: net 1 was never in the problem, so the pack is not routed.
+    assert result.status is not DetailedRouteStatus.ROUTED
+
+
 def test_a_cluster_solution_rejected_at_commit_is_rolled_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
