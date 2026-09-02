@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -146,6 +146,56 @@ class LastMileReport:
             raise ValueError("a relation proof needs at least two strip instances")
         if tuple(sorted(self.relation_strips)) != self.relation_strips:
             raise ValueError("relation strips must be ascending")
+
+
+def combine_last_mile_reports(
+    reports: Iterable[LastMileReport | None],
+) -> LastMileReport | None:
+    """One report for a build that routed in several stages.
+
+    A prepared build routes external inputs, early outputs, the interior and
+    late outputs as four separate passes, and EACH runs a last-mile pass of its
+    own.  Reporting one of them makes every corpus counter under-read by
+    however much the other three did, which is the opposite of what the
+    counters exist for.
+
+    The counters are all additive and are summed.  ``relation_strips`` and
+    ``relation_evidence`` are NOT: they name one specific proof over one
+    specific cluster, so the first non-empty value of each is carried whole.
+    Concatenating them would manufacture a claim no single run ever made.
+
+    Returns ``None`` when no stage reported anything, so a caller that never
+    ran the pass is distinguishable from one that ran it and found nothing.
+    """
+    present = [report for report in reports if report is not None]
+    if not present:
+        return None
+    return LastMileReport(
+        invocations=sum(report.invocations for report in present),
+        solved=sum(report.solved for report in present),
+        proved=sum(report.proved for report in present),
+        bounded=sum(report.bounded for report in present),
+        commit_rejected=sum(report.commit_rejected for report in present),
+        relation_skipped_siblings=sum(
+            report.relation_skipped_siblings for report in present
+        ),
+        restore_mismatch=sum(report.restore_mismatch for report in present),
+        nodes=sum(report.nodes for report in present),
+        expansions=sum(report.expansions for report in present),
+        seconds=sum(report.seconds for report in present),
+        relation_strips=next(
+            (report.relation_strips for report in present if report.relation_strips),
+            (),
+        ),
+        relation_evidence=next(
+            (
+                report.relation_evidence
+                for report in present
+                if report.relation_evidence
+            ),
+            "",
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)

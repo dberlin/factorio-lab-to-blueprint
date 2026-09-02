@@ -104,6 +104,7 @@ from flab2bp.layout.route_feedback import (
     NetId,
     NetRole,
     RouteFailureKind,
+    combine_last_mile_reports,
     update_feedback,
 )
 from flab2bp.layout.sequence_pair import DirectInsertTarget
@@ -8580,14 +8581,26 @@ def _route_all(
             # exactly the defect `_ends`' own docstring names.  Going through
             # `environment.offers` rather than the closure keeps the field a
             # live part of the contract the bench's stub also implements.
-            for index in problem.nets:
-                path = result.paths[index]
-                _stake(
-                    index,
-                    path,
-                    hints=_selected_hints(path, environment.offers(index)),
-                )
-            unlinked_now, _details_now = commit_once()
+            #
+            # A SOLVED result must carry a path for EVERY cluster net.
+            # `solve_cluster` gates its return on exactly that, and
+            # `ClusterResult` cannot re-check it because it does not carry the
+            # net list -- so the one place that can is here, where the list is.
+            # A short mapping is a broken solver rather than a fact about the
+            # grid, and it degrades the way a refused commit does: nothing to
+            # keep and nothing to claim.  A `KeyError` here would instead be a
+            # CRASH row, which is a failure of the gate rather than a reading
+            # from it.
+            unlinked_now: tuple[int, ...] = problem.nets
+            if all(index in result.paths for index in problem.nets):
+                for index in problem.nets:
+                    path = result.paths[index]
+                    _stake(
+                        index,
+                        path,
+                        hints=_selected_hints(path, environment.offers(index)),
+                    )
+                unlinked_now, _details_now = commit_once()
             if not unlinked_now:
                 last_mile_counts["solved"] += 1
                 return []
@@ -14320,7 +14333,14 @@ def _build_prepared(
             and internal_routing.exhaustive
             and late_output_routing.exhaustive
         ),
-        last_mile=internal_routing.last_mile,
+        last_mile=combine_last_mile_reports(
+            (
+                external_routing.last_mile,
+                early_output_routing.last_mile,
+                internal_routing.last_mile,
+                late_output_routing.last_mile,
+            )
+        ),
     )
     if routing.status is DetailedRouteStatus.BUDGET:
         return _BuildResult(
