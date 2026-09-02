@@ -90,6 +90,7 @@ from flab2bp.layout.base import (
     PlacedBuilding,
     Placement,
     PlacementCompletion,
+    PlacementStats,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.finalize import ProjectionNoGood
@@ -14782,6 +14783,7 @@ def _build_prepared(
             "repair_iterations": float(routing.iterations),
             "belt_tiles": float(sum(1 for b in canvas.buildings if catalog.is_belt(b.item_id))),
             "direct_inserts": float(prepared.direct_inserts),
+            **_last_mile_stats(internal_routing.last_mile),
         },
     )
     return _BuildResult(
@@ -14792,6 +14794,37 @@ def _build_prepared(
         promised_direct=prepared.promised_direct,
         realized_direct=prepared.realized_direct,
     )
+
+
+def _last_mile_stats(report: LastMileReport | None) -> PlacementStats:
+    """Flatten the last-mile report so both strategies report it identically."""
+    if report is None:
+        return {
+            "last_mile_invocations": 0.0,
+            "last_mile_solved": 0.0,
+            "last_mile_proved": 0.0,
+            "last_mile_bounded": 0.0,
+            "last_mile_commit_rejected": 0.0,
+            "last_mile_restore_mismatch": 0.0,
+            "last_mile_relation_skipped_siblings": 0.0,
+            "last_mile_nodes": 0.0,
+            "last_mile_expansions": 0.0,
+            "last_mile_seconds": 0.0,
+            "last_mile_relation_strips": 0.0,
+        }
+    return {
+        "last_mile_invocations": float(report.invocations),
+        "last_mile_solved": float(report.solved),
+        "last_mile_proved": float(report.proved),
+        "last_mile_bounded": float(report.bounded),
+        "last_mile_commit_rejected": float(report.commit_rejected),
+        "last_mile_restore_mismatch": float(report.restore_mismatch),
+        "last_mile_relation_skipped_siblings": float(report.relation_skipped_siblings),
+        "last_mile_nodes": float(report.nodes),
+        "last_mile_expansions": float(report.expansions),
+        "last_mile_seconds": report.seconds,
+        "last_mile_relation_strips": float(len(report.relation_strips)),
+    }
 
 
 def _bridge(

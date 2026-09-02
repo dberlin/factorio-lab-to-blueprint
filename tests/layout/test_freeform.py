@@ -16846,6 +16846,64 @@ def test_the_cluster_search_runs_at_most_once_per_routing_pass(
     assert len(seen) == 1
 
 
+def test_placement_stats_count_the_last_mile_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not merely that the key exists: that the monkeypatched outcome is counted."""
+    from flab2bp.layout import last_mile as last_mile_module
+
+    def always_bounded(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> last_mile_module.ClusterResult:
+        return last_mile_module.ClusterResult(
+            last_mile_module.ClusterOutcome.BOUNDED,
+            {},
+            7,
+            11,
+            0.25,
+            bound=last_mile_module.ClusterBound.NODES,
+        )
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", always_bounded)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    routing = freeform_module._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    stats = freeform_module._last_mile_stats(routing.last_mile)
+
+    assert stats["last_mile_invocations"] == 1.0
+    assert stats["last_mile_bounded"] == 1.0
+    assert stats["last_mile_solved"] == 0.0
+    assert stats["last_mile_nodes"] == 7.0
+    assert stats["last_mile_expansions"] == 11.0
+
+
+def test_placement_stats_default_to_zero_without_a_report() -> None:
+    stats = freeform_module._last_mile_stats(None)
+
+    assert stats["last_mile_invocations"] == 0.0
+    assert set(stats) == {
+        "last_mile_invocations",
+        "last_mile_solved",
+        "last_mile_proved",
+        "last_mile_bounded",
+        "last_mile_commit_rejected",
+        "last_mile_restore_mismatch",
+        "last_mile_relation_skipped_siblings",
+        "last_mile_nodes",
+        "last_mile_expansions",
+        "last_mile_seconds",
+        "last_mile_relation_strips",
+    }
+
+
 def test_a_cluster_solution_is_staked_and_routes_the_pack() -> None:
     """A joint solution the greedy round could not find finishes the pack."""
     canvas, nets, bounds = _joint_only_fixture()
