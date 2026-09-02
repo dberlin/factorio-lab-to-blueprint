@@ -104,6 +104,7 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
     combine_last_mile_reports,
 )
+from flab2bp.layout.sequence_pair import SequencePair
 from flab2bp.layout.strip_variants import (
     CargoDomain,
     ProjectionPitchRequirement,
@@ -7158,6 +7159,169 @@ def test_a_cluster_no_good_guard_reads_content_origins_not_box_origins() -> None
     )
     assert built.skipped_no_goods == 0
     assert "cluster_ng" in str(built.model.Proto())
+
+
+def _channelled_row_pack() -> tuple[freeform._Pack, list[Strip], int]:
+    """A hand-built pack: three boxes abutting in one west-to-east row.
+
+    The three west channels are 0, 1 and 2, so the box origins differ from the
+    content origins by a DIFFERENT amount per strip.  An adapter that forgot to
+    subtract a channel, or that subtracted the wrong strip's, cannot have the
+    error cancel here -- which it would if every channel were the same width,
+    as it is on every strip `plastic_spec` produces.
+
+    Boxes are (2, 6), (3, 2) and (4, 4) at box x 0, 2 and 5, so the row is 9
+    wide and 6 tall and no two boxes overlap.  Every pair overlaps in y, so the
+    only relation the geometry allows any of them is "west of", which pins the
+    sequence pair to the identity in both permutations.
+    """
+    base = _three_unit_strips()
+    strips = [base[0], replace(base[1], west_channel=1), replace(base[2], west_channel=2)]
+    assert [freeform._box(strip) for strip in strips] == [(2, 6), (3, 2), (4, 4)]
+    pack = freeform._Pack(
+        at={0: (0, 0), 1: (3, 0), 2: (7, 0)},
+        width=9,
+        height=6,
+        status="OPTIMAL",
+    )
+    return pack, strips, 6
+
+
+def test_window_candidate_cost_charges_the_window_plus_the_measured_remainder() -> None:
+    assert freeform._window_candidate_seconds(
+        dearest_candidate_s=6.0, dearest_pack_s=2.0
+    ) == freeform.C_WINDOW_SECONDS + 4.0
+    assert (
+        freeform._window_candidate_seconds(dearest_candidate_s=1.0, dearest_pack_s=4.0)
+        == freeform.C_WINDOW_SECONDS
+    )
+
+
+def test_window_candidate_cost_is_monotone_and_never_below_the_window() -> None:
+    """The charge grows with the remainder, shrinks with the pack, and has a floor.
+
+    A window always pays for the bounded solve, so `C_WINDOW_SECONDS` is a hard
+    floor no measurement can undercut; above it the charge is the measured cost
+    of everything a full candidate does after packing, which rises with the
+    dearest candidate and falls with the dearest pack.  Nothing here reads a
+    clock: the same two measurements always give the same charge.
+    """
+    grid = (0.0, 0.5, 1.0, 2.0, 7.5, 130.0)
+    for pack_s in grid:
+        charges = [
+            freeform._window_candidate_seconds(
+                dearest_candidate_s=candidate_s, dearest_pack_s=pack_s
+            )
+            for candidate_s in grid
+        ]
+        assert all(charge >= freeform.C_WINDOW_SECONDS for charge in charges)
+        assert charges == sorted(charges)
+    for candidate_s in grid:
+        charges = [
+            freeform._window_candidate_seconds(
+                dearest_candidate_s=candidate_s, dearest_pack_s=pack_s
+            )
+            for pack_s in grid
+        ]
+        assert charges == sorted(charges, reverse=True)
+
+
+def test_decoded_from_pack_views_a_pack_as_a_decoded_placement() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    pack = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert pack is not None
+    decoded = freeform._decoded_from_pack(pack, strips, height)
+    assert len(decoded.x) == len(strips)
+    assert decoded.width == pack.width
+    for index, strip in enumerate(strips):
+        assert decoded.x[index] == pack.at[index][0] - strip.west_channel
+        assert decoded.y[index] == pack.at[index][1]
+    assert decoded.used_height == max(
+        decoded.y[index] + freeform._box(strip)[1] for index, strip in enumerate(strips)
+    )
+
+
+def test_decoded_from_pack_subtracts_each_strips_own_west_channel() -> None:
+    """Content origins in, box origins out, one channel per strip."""
+    pack, strips, height = _channelled_row_pack()
+    decoded = freeform._decoded_from_pack(pack, strips, height)
+    assert decoded.x == (0, 2, 5)
+    assert decoded.y == (0, 0, 0)
+    assert decoded.width == 9
+    assert decoded.used_height == 6
+    assert decoded.x_windows == ((0, 0), (2, 2), (5, 5))
+    assert decoded.y_windows == ((0, 0), (0, 0), (0, 0))
+    assert decoded.gap_area == 0
+
+
+def test_pack_relation_problem_carries_the_packs_sizes_and_nets() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    pack = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert pack is not None
+    problem = freeform._pack_relation_problem(pack, strips, height)
+    assert problem.sizes == tuple(freeform._box(strip) for strip in strips)
+    assert problem.nets == tuple(freeform._nets_between(list(strips)))
+    assert problem.outline_height == height
+    assert problem.logical_net_ids == ()
+
+
+def test_pack_relation_problem_keeps_each_strip_in_its_own_slot() -> None:
+    """Three distinct sizes, so a mis-indexed or reordered strip cannot hide."""
+    pack, strips, height = _channelled_row_pack()
+    problem = freeform._pack_relation_problem(pack, strips, height)
+    assert problem.sizes == ((2, 6), (3, 2), (4, 4))
+    assert problem.nets == ((0, 2),)
+    assert problem.outline_height == 6
+    assert problem.area_lower_bound == 2 * 6 + 3 * 2 + 4 * 4
+    assert problem.logical_net_ids == ()
+    assert problem.instance_ids == ()
+    assert problem.variant_tables == ()
+
+
+def test_pack_relation_pair_decodes_back_to_the_packs_relations() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    pack = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert pack is not None
+    pair = freeform._pack_relation_pair(pack, strips, height)
+    pair.validate(len(strips))
+    assert sorted(pair.positive) == list(range(len(strips)))
+    assert sorted(pair.negative) == list(range(len(strips)))
+
+
+def test_pack_relation_pair_reads_a_row_as_three_west_of_relations() -> None:
+    """A row whose only available relation is "west of" pins the pair exactly.
+
+    Every pair of boxes overlaps in y, so no vertical relation is expressible
+    and both permutations must be the west-to-east order.  Feeding the encoder
+    the coordinates in the wrong order -- y as x -- stacks all three boxes in
+    one column and the encoder rejects the overlap instead.
+    """
+    pack, strips, height = _channelled_row_pack()
+    assert freeform._pack_relation_pair(pack, strips, height) == SequencePair((0, 1, 2), (0, 1, 2))
 
 
 def _brute_junction_projection_frames(

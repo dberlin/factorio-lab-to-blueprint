@@ -109,7 +109,13 @@ from flab2bp.layout.route_feedback import (
     combine_last_mile_reports,
     update_feedback,
 )
-from flab2bp.layout.sequence_pair import DirectInsertTarget
+from flab2bp.layout.sequence_pair import (
+    DecodedPlacement,
+    DirectInsertTarget,
+    PlacementProblem,
+    SequencePair,
+    encode_placement,
+)
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
@@ -3881,6 +3887,78 @@ def _pack_window(
     # A function of `arrangement` and nothing else -- see `_pack`.
     solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
     return _pack_result(built, solver, strips, direct_candidates, height, None)
+
+
+def _decoded_from_pack(pack: _Pack, strips: Sequence[Strip], height: int) -> DecodedPlacement:
+    """View one packed assignment as a decoded placement for the destroy operators.
+
+    `_Pack.at` holds CONTENT origins and a decoded placement holds BOX origins,
+    so the west channel comes back off -- each strip's own, because channels
+    differ from strip to strip and a single shared subtraction would move two
+    thirds of a pack.  The coordinate windows are degenerate (each equals its
+    coordinate) because a packed assignment has no slack left to describe:
+    nothing downstream of a destroy operator reads them.
+
+    `height` is the outline the pack was solved at.  It is carried for symmetry
+    with the other two adapters and deliberately not used to clamp anything: a
+    decoded placement reports the height its own boxes reach, not the one it was
+    allowed.
+    """
+    sizes = [_box(strip) for strip in strips]
+    xs = tuple(pack.at[index][0] - strips[index].west_channel for index in range(len(strips)))
+    ys = tuple(pack.at[index][1] for index in range(len(strips)))
+    return DecodedPlacement(
+        x=xs,
+        y=ys,
+        width=pack.width,
+        used_height=max((ys[index] + sizes[index][1] for index in range(len(strips))), default=0),
+        x_windows=tuple((value, value) for value in xs),
+        y_windows=tuple((value, value) for value in ys),
+        gap_area=0,
+    )
+
+
+def _pack_relation_problem(pack: _Pack, strips: Sequence[Strip], height: int) -> PlacementProblem:
+    """A placement problem carrying this pack's sizes and nets, for operator reuse.
+
+    ``logical_net_ids`` is left empty on purpose.  No shipped destroy operator
+    reads it, and `_nets_between` returns bare strip-index pairs with no item
+    identity, so filling it would mean synthesizing `LogicalNetId`s nothing
+    consumes.  The operator that would need them (RELATED_CARGO) is a follow-up,
+    and populating this field belongs to that operator's task.
+
+    `pack` is taken for the signature the spec declares and for the day an
+    adapter needs the assignment; the problem itself is a property of the strips
+    and the outline, not of where this particular solve put them.
+    """
+    sizes = tuple(_box(strip) for strip in strips)
+    return PlacementProblem(
+        sizes=sizes,
+        nets=tuple(_nets_between(list(strips))),
+        outline_height=height,
+        area_lower_bound=sum(width * box_height for width, box_height in sizes),
+    )
+
+
+def _pack_relation_pair(pack: _Pack, strips: Sequence[Strip], height: int) -> SequencePair:
+    """The sequence pair this pack encodes to, for the sequence-neighbour operator.
+
+    Its gaps are zero by construction, so `select_lns_neighbourhood`'s
+    gap-rectangle branch never fires on a freeform pack: the neighbourhood there
+    is failure endpoints plus sequence neighbours only.
+
+    Only the pair is returned, and only the pair is safe to use: `encode_placement`
+    reports `exact=False` on most placements with slack, so its decode is a
+    compaction of this pack and not this pack.  A caller that wants coordinates
+    wants `_decoded_from_pack`, or must score the encoder's decode itself.
+    """
+    decoded = _decoded_from_pack(pack, strips, height)
+    return encode_placement(
+        tuple(_box(strip) for strip in strips),
+        decoded.x,
+        decoded.y,
+        outline_height=height,
+    ).pair
 
 
 def _pack(
@@ -18069,6 +18147,23 @@ def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -
     if soft - now < candidate_s:
         return False
     return deadline is None or deadline - now >= candidate_s
+
+
+def _window_candidate_seconds(*, dearest_candidate_s: float, dearest_pack_s: float) -> float:
+    """What one windowed retry costs, measured rather than tuned.
+
+    A full retry is charged the dearest completed candidate, pack included.  A
+    window replaces the pack with a bounded solve and leaves everything after it
+    -- preparation, routing, power, finalize, validate -- exactly where it was,
+    so its charge is that bounded solve plus the measured remainder.  Like
+    `_room_for_another`'s `candidate_s`, this is a measurement: a fixed constant
+    cannot span a corpus running from one to 955 machines.
+
+    No clock is read here.  The charge is a pure function of two measurements
+    the sweep already keeps, and `_room_for_another` is the one that compares it
+    against the wall.
+    """
+    return C_WINDOW_SECONDS + max(0.0, dearest_candidate_s - dearest_pack_s)
 
 
 def _height_seed(strips: list[Strip]) -> int:
