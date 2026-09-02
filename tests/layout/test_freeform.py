@@ -16089,3 +16089,44 @@ def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> No
         freeform._check_shared_lane_capacity(
             group, (("copper-ingot", "iron-ingot"),), 1, floor_only
         )
+
+
+def test_pick_sorter_never_leaves_the_allowed_tiers() -> None:
+    tier, _ = freeform._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013))
+    assert tier == 2013, "the fastest ALLOWED tier, not the Pile Sorter"
+    tier, _ = freeform._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013, 2014))
+    assert tier == 2014
+    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers=(2012, 2013))
+    assert tier == 2012, "the cheapest allowed tier that carries the rate"
+
+
+def test_sorter_tiers_for_spec_maps_ids_and_keeps_catalog_order() -> None:
+    spec = single_recipe_spec().model_copy(update={"sorter_item_ids": ("sorter-2", "sorter-1")})
+    assert freeform._sorter_tiers_for(spec) == (2011, 2012)
+    assert freeform._sorter_tiers_for(single_recipe_spec()) == catalog.SORTER_TIERS
+
+
+def test_prepared_problem_hands_the_spec_sorter_tiers_to_the_workspace() -> None:
+    """A spec that allows only Mk.I and Mk.II sorters must be routed with only
+    those, so the workspace canvas has to know."""
+    # The smallest real one: every field has a default except the geometry
+    # tuples, which may be empty.
+    prepared = freeform._PreparedRoutingProblem(
+        building_templates=(),
+        blocked=(),
+        solid=frozenset(),
+        reserved=(),
+        port_corridors=(),
+        keep_out=frozenset(),
+        guard=frozenset(),
+        nets=(),
+        core=(0, 0, 0, 0),
+        route_bounds=(0, 0, 0, 0),
+        limit=None,
+        power_sites=(),
+        sorters=0,
+        coaters=0,
+        direct_inserts=0,
+        sorter_tiers=(2011, 2012),
+    )
+    assert prepared.new_workspace().canvas.sorter_tiers == (2011, 2012)
