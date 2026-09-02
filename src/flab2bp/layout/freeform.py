@@ -1864,7 +1864,7 @@ def _check_shared_lane_capacity(
     Exact ``Fraction`` throughout: a float here would let a lane that lands
     precisely on the tier's limit read as over capacity, or worse, the reverse.
     """
-    cap = spec.belt_items_per_second
+    cap = spec.lane_capacity
     for lane in lanes:
         if len(lane) < 2:
             continue
@@ -1876,7 +1876,7 @@ def _check_shared_lane_capacity(
             raise ValueError(
                 f"recipe {g.recipe_id!r}: lane carrying {list(lane)} needs "
                 f"{total} items/s across {machines} machine(s), over the "
-                f"{cap}/s a {spec.belt_item_id} sustains; these ingredients "
+                f"{cap}/s the fastest belt this save can build sustains; these ingredients "
                 f"cannot share a belt at this rate"
             )
 

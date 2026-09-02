@@ -112,7 +112,7 @@ from flab2bp.layout.strip_variants import (
     projection_pitch_requirement,
     strip_pose_id,
 )
-from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
+from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode
 
 type SpecFactory = Callable[[], BuildSpec]
 
@@ -16061,3 +16061,31 @@ def test_freeform_placement_records_route_backend() -> None:
         two_stage_spec(), time_budget_s=4.0
     )
     assert placement.stats["route_backend"] == route_kernel.selected_backend()
+
+
+def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> None:
+    """Two ingredients at 8/s each cannot share a 12/s floor belt, but the
+    save can build a 30/s belt and the retier pass will give the lane one."""
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": F(8), "iron-ingot": F(8)},
+                outputs_per_machine={"magnetic-coil": F(1)},
+            ),
+        ),
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        belt_upgrades=(BeltTier(item_id="conveyor-belt-3", items_per_second=F(30)),),
+    )
+    group = next(iter(freeform._adapt(spec).values()))
+    freeform._check_shared_lane_capacity(group, (("copper-ingot", "iron-ingot"),), 1, spec)
+
+    floor_only = spec.model_copy(update={"belt_upgrades": ()})
+    group = next(iter(freeform._adapt(floor_only).values()))
+    with pytest.raises(ValueError, match="cannot share a belt"):
+        freeform._check_shared_lane_capacity(
+            group, (("copper-ingot", "iron-ingot"),), 1, floor_only
+        )
