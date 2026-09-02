@@ -17,6 +17,7 @@ from flab2bp.layout.route_feedback import (
 from flab2bp.layout.sequence_alns import (
     C_CONTEXT_FRACTION_STEPS,
     C_DUCB_DISCOUNT,
+    C_DUCB_EXPLORATION,
     C_MAX_DESTROY_STRIPS,
     C_MIN_DESTROY_STRIPS,
     REWARD_RANKS,
@@ -113,6 +114,37 @@ def test_only_the_shipped_operators_are_ever_selected() -> None:
         session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
 
 
+def test_band_boundary_is_a_shipped_arm_whose_dispatch_task_6_must_add() -> None:
+    """TASK 6 MUST FLIP THIS TEST when it adds the BAND_BOUNDARY branch.
+
+    BAND_BOUNDARY ships (plan line 16, spec section 5.3) so the selector offers
+    it as the second arm from the very first pair of selections -- but its
+    dispatch branch does not exist yet.  Until Task 6 lands, any caller wiring
+    this session into the solver MUST restrict its destroy arms, or the second
+    selection of every run raises.  This test is that contract, in both halves:
+    when Task 6 adds the branch, delete the `pytest.raises` and assert the real
+    strips instead; leave the selection half alone.
+    """
+    session = OperatorSession()
+    session.observe(session.select(_context()), (0.0,) * REWARD_RANKS, applied=True)
+    assert session.select(_context()).destroy is DestroyOperator.BAND_BOUNDARY
+
+    problem = _problem()
+    state = AnnealState.initial(problem.size, 7)
+    decoded = decode_state(problem, state)
+    with pytest.raises(NotImplementedError, match="SHIPPED arm"):
+        destroy_strips(
+            DestroyOperator.BAND_BOUNDARY,
+            scale=4,
+            result=_routing(),
+            pair=state.pair,
+            gaps=state.gaps,
+            problem=problem,
+            decoded=decoded,
+            band_target_width=decoded.width,
+        )
+
+
 def test_a_follow_up_destroy_operator_has_no_dispatch_branch() -> None:
     problem = _problem()
     state = AnnealState.initial(problem.size, 7)
@@ -171,7 +203,7 @@ def test_rank_zero_outranks_every_later_rank() -> None:
     assert session.select(_context()).destroy is DestroyOperator.FAILED_ENDPOINTS
 
 
-def test_the_exploration_bonus_only_breaks_a_tie_on_every_mean() -> None:
+def test_the_less_played_arm_wins_when_every_mean_is_tied_at_zero() -> None:
     session = OperatorSession()
     for _ in range(len(SHIPPED_DESTROY)):
         choice = session.select(_context())
@@ -180,6 +212,61 @@ def test_the_exploration_bonus_only_breaks_a_tie_on_every_mean() -> None:
     first = session.select(_context())
     session.observe(first, (0.0,) * REWARD_RANKS, applied=True)
     assert session.select(_context()).destroy is not first.destroy
+
+
+def test_a_tie_on_every_nonzero_mean_is_broken_by_the_exploration_bonus() -> None:
+    """The bonus decides when, and only when, every mean is equal.
+
+    The zero-mean case above cannot tell a working bonus from a dead one that
+    falls through to declaration order, because there the less-played arm is
+    also the first-declared one.  Here the winner is the SECOND-declared arm, so
+    only the bonus can have chosen it.
+    """
+    session = OperatorSession()
+    for _ in range(3):
+        choice = session.select(_context())
+        session.observe(choice, (0.0, 1.0, 0.0, 0.0, 0.0), applied=True)
+    # Every arm has been credited the same reward, so every mean is exactly 1.0,
+    # but BAND_BOUNDARY has been played once against FAILED_ENDPOINTS' twice.
+    assert math.isclose(session.credit["reward:failed-endpoints:1"], 1.81, rel_tol=1e-12)
+    assert math.isclose(session.credit["reward:band-boundary:1"], 0.9, rel_tol=1e-12)
+    assert session.select(_context()).destroy is DestroyOperator.BAND_BOUNDARY
+
+
+def test_the_exploration_bonus_never_outvotes_even_the_last_mean() -> None:
+    """A difference on rank 4 beats a bonus, which is the whole lexicographic point."""
+    session = OperatorSession()
+    first = session.select(_context())
+    session.observe(first, (0.0,) * REWARD_RANKS, applied=True)
+    second = session.select(_context())
+    session.observe(second, (0.0, 0.0, 0.0, 0.0, 1.0), applied=True)
+    # `first` is now the less-played arm and so carries the larger bonus, but
+    # `second` leads on the lowest-priority mean; the mean still wins.
+    assert session.credit[f"count:{first.destroy.value}"] < session.credit[
+        f"count:{second.destroy.value}"
+    ]
+    assert session.select(_context()).destroy is second.destroy
+
+
+def test_the_selector_constants_are_pinned_at_their_reviewed_values() -> None:
+    """Literals on purpose: a review approved these exact numbers.
+
+    The exploration coefficient is a positive scale factor on the FINAL
+    lexicographic component, so any positive value orders the arms identically
+    and no selection test can distinguish 0.5 from 0.001.  Pinning the literal
+    is therefore the only way a silent retune goes red.
+    """
+    assert C_DUCB_DISCOUNT == 0.9
+    assert C_DUCB_EXPLORATION == 0.5
+
+
+def test_a_zero_exploration_coefficient_collapses_to_declaration_order() -> None:
+    """What the bonus buys, stated as behaviour: without it, ties never rotate."""
+    session = OperatorSession(exploration=0.0)
+    for _ in range(len(SHIPPED_DESTROY)):
+        choice = session.select(_context())
+        session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
+    assert session.select(_context()).destroy is DestroyOperator.FAILED_ENDPOINTS
 
 
 def test_selection_is_deterministic_for_the_same_observation_sequence() -> None:
@@ -203,10 +290,27 @@ def test_discounting_decays_every_arm_on_every_observation() -> None:
     played = session.select(_context())
     for _ in range(4):
         session.observe(played, (0.0,) * REWARD_RANKS, applied=True)
-    expected = sum(C_DUCB_DISCOUNT**index for index in range(4))
+    # 1 + 0.9 + 0.81 + 0.729, written out rather than derived from the module, so
+    # that retuning the discount has to come here and change the number.
     assert math.isclose(
-        session.credit[f"count:{played.destroy.value}"], expected, rel_tol=1e-12
+        session.credit[f"count:{played.destroy.value}"], 3.439, rel_tol=1e-12
     )
+
+
+def test_discounting_decays_the_reward_sums_and_not_only_the_counts() -> None:
+    """A decayed count over an undecayed sum would inflate every stale mean."""
+    session = OperatorSession()
+    first = session.select(_context())
+    session.observe(first, (0.0, 1.0, 0.0, 0.0, 0.0), applied=True)
+    second = session.select(_context())
+    session.observe(second, (0.0, 4.0, 0.0, 0.0, 0.0), applied=True)
+    # One observation has passed since the first arm was credited, so both its
+    # count and its rank-1 sum carry exactly one discount.
+    assert math.isclose(session.credit["count:failed-endpoints"], 0.9, rel_tol=1e-12)
+    assert math.isclose(session.credit["reward:failed-endpoints:1"], 0.9, rel_tol=1e-12)
+    # The arm credited last carries none.
+    assert math.isclose(session.credit["count:band-boundary"], 1.0, rel_tol=1e-12)
+    assert math.isclose(session.credit["reward:band-boundary:1"], 4.0, rel_tol=1e-12)
 
 
 def test_local_exact_pack_is_not_offered_without_room_for_a_window() -> None:
@@ -252,6 +356,22 @@ def test_reward_is_the_lexicographic_improvement_with_no_time_divisor() -> None:
     # The outcome record carries no seconds at all, so there is nothing a clock
     # could perturb; `observe` takes them separately, for telemetry only.
     assert "routing_seconds" not in OperatorOutcome.__dataclass_fields__
+
+
+def test_rank_zero_credits_the_edge_into_clean_and_not_staying_clean() -> None:
+    """Rank 0 pays for BECOMING valid, so a clean incumbent cannot farm it.
+
+    Without the `not before.validator_clean` half of the trigger, every operator
+    applied to an already-clean placement would score a perfect rank 0 and the
+    selector would stop discriminating the moment the search first went clean.
+    """
+    already_clean = _metrics(validator_clean=True)
+    stays_clean = _metrics(validator_clean=True, failed_nets=1)
+    assert reward_vector(_outcome(already_clean, stays_clean))[0] == 0.0
+    # The improvement below rank 0 is still credited normally.
+    assert reward_vector(_outcome(already_clean, stays_clean))[1] == 3.0
+    # The same `after`, reached from a dirty `before`, IS the edge.
+    assert reward_vector(_outcome(_metrics(), stays_clean))[0] == 1.0
 
 
 def test_a_clean_placement_outranks_every_other_improvement() -> None:
@@ -333,6 +453,52 @@ def test_failed_endpoints_destroy_matches_the_existing_lns_neighbourhood() -> No
         )
         == expected
     )
+
+
+def test_the_scale_cap_keeps_the_highest_ranked_strips_and_drops_the_tail() -> None:
+    """Capping is a head slice of the operator's own ranking, never a tail one.
+
+    `FAILED_ENDPOINTS` ranks by sorted strip index, so the head is the low
+    indices.  Task 6's `BAND_BOUNDARY` will rank by overflow contribution, where
+    keeping the tail would drop the worst offender and keep the mildest -- the
+    exact inversion of the operator, and invisible unless a test names the set.
+    """
+    problem = _problem()
+    state = AnnealState.initial(problem.size, 7)
+    decoded = decode_state(problem, state)
+
+    def destroy(scale: int) -> frozenset[int]:
+        return destroy_strips(
+            DestroyOperator.FAILED_ENDPOINTS,
+            scale=scale,
+            result=_routing(),
+            pair=state.pair,
+            gaps=state.gaps,
+            problem=problem,
+            decoded=decoded,
+            band_target_width=decoded.width,
+        )
+
+    assert destroy(problem.size) == frozenset({0, 1, 2, 3})
+    assert destroy(2) == frozenset({0, 1})
+    assert destroy(3) == frozenset({0, 1, 2})
+
+
+def test_destroy_refuses_a_scale_below_one() -> None:
+    problem = _problem()
+    state = AnnealState.initial(problem.size, 7)
+    decoded = decode_state(problem, state)
+    with pytest.raises(ValueError, match="positive integer"):
+        destroy_strips(
+            DestroyOperator.FAILED_ENDPOINTS,
+            scale=0,
+            result=_routing(),
+            pair=state.pair,
+            gaps=state.gaps,
+            problem=problem,
+            decoded=decoded,
+            band_target_width=decoded.width,
+        )
 
 
 def test_destroy_respects_its_scale_cap() -> None:
