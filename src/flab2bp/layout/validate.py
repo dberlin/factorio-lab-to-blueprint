@@ -5639,6 +5639,26 @@ def id_map(spec: BuildSpec) -> IdMap:
     return IdMap(recipes=recipes, items=items)
 
 
+def belt_run_demands(
+    placement: Placement, spec: BuildSpec
+) -> tuple[tuple[BeltRun, ...], dict[int, dict[str | None, Fraction]]]:
+    """Each belt run and the items/second it must carry, by item.
+
+    The same runs ``_build_runs`` chains and the same demand ``_run_demand``
+    computes for ``flow.belt_capacity`` -- exposed so the belt-tier pass in
+    ``layout/belt_tiers.py`` and the judge can never disagree about what a run
+    carries.  Runs no checks.  When a machine cannot be resolved to a spec
+    group the demand is empty: the flow is unknowable, and
+    ``machine.group_resolved`` reports the placement anyway.
+    """
+    ctx = _context(
+        placement, spec, id_map(spec), 256, cat.DEFAULT_MAX_BELT_Z, True
+    )
+    if ctx.unresolved_machines():
+        return ctx.runs, {}
+    return ctx.runs, _run_demand(ctx)
+
+
 def certify(placement: Placement, spec: BuildSpec, *, expect_power: bool) -> Report:
     """Judge a strategy's own output, so it cannot return something broken.
 
