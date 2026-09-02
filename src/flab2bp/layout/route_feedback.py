@@ -140,11 +140,11 @@ class LastMileReport:
     #: environment, empty when no relation proof was established.
     relation_strips: tuple[int, ...] = ()
     relation_evidence: str = ""
-    #: Stranded nets a cluster left OUT because they share an un-tappable source
-    #: lane with a net it kept.  Only one net can ever leave such a lane
-    #: directly, so offering the same access cells to both produced solutions
-    #: the committer refused with `junction-collider`.  Defaulted, and NOT one
-    #: of the eleven flattened `PlacementStats` keys: it is a diagnosis of the
+    #: Nets a cluster left OUT because they share an un-tappable source lane
+    #: with a net it kept.  Only one net can ever leave such a lane directly,
+    #: so offering the same access cells to both produced solutions the
+    #: committer refused with `junction-collider`.  Defaulted, and NOT one of
+    #: the eleven flattened `PlacementStats` keys: it is a diagnosis of the
     #: pass, not a corpus counter.
     same_source_dropped: int = 0
 
