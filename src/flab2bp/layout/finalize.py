@@ -180,6 +180,50 @@ def band_policy_search_envelope(
     )
     return BandPolicySearchEnvelope(policy, perimeter, band)
 
+
+#: Largest core width :func:`band_target_width` accepts.  The corpus peaks near
+#: 1334 on `universe-matrix`, so anything past this is a programming error and
+#: is raised rather than silently clamped -- a clamp would return a "target"
+#: that is not the widest fitting core, which is exactly the number callers act
+#: on.
+C_BAND_SCAN_MAX = 4096
+
+
+def band_target_width(
+    envelope: BandPolicySearchEnvelope,
+    *,
+    height: int,
+    width: int,
+) -> int:
+    """Return the widest core at ``height`` this policy's bands still accept.
+
+    This is the quantity behind the `no legal DSP latitude band/orientation
+    accepts the final placement` refusals: a placement whose extent exceeds it
+    cannot be finalized at that height no matter how it routes.  A width that
+    already fits is returned unchanged.
+
+    ``frame_candidates`` is monotone in width at a fixed height -- a wider core
+    needs a strictly larger frame -- which
+    ``test_frame_candidates_are_monotone_in_width_at_a_fixed_height`` asserts,
+    so one binary search answers the question.
+    """
+    if type(height) is not int or height <= 0:
+        raise ValueError("band target height must be a positive integer")
+    if type(width) is not int or width <= 0:
+        raise ValueError("band target width must be a positive integer")
+    if width > C_BAND_SCAN_MAX:
+        raise ValueError(f"band target width must not exceed {C_BAND_SCAN_MAX}")
+    if envelope.frame_candidates(width, height):
+        return width
+    low, high = 0, width
+    while low + 1 < high:
+        middle = (low + high) // 2
+        if envelope.frame_candidates(middle, height):
+            low = middle
+        else:
+            high = middle
+    return max(1, low)
+
 @dataclass(frozen=True, slots=True)
 class _ProjectionInvariants:
     tested: tuple[tuple[int, colliders.Placed], ...]
