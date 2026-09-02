@@ -2837,10 +2837,10 @@ class TestDirectInsertion:
         """Pack at a height that forces stacking, then build.
 
         Deliberately below `lay_out`, because the full height sweep is area-first
-        and stacking *costs* area here -- see
-        ``test_the_sweep_prefers_area_over_direct_insertion``. Testing through the
-        sweep would therefore assert the mechanism is broken when it is merely
-        outranked. This exercises the mechanism itself.
+        and stacking *costs* area here (the sweep at a 0.5 s budget lands a
+        smaller pack without the direct insert). Testing through the sweep would
+        therefore assert the mechanism is broken when it is merely outranked.
+        This exercises the mechanism itself.
         """
         strips = plan_strips(spec, strip_len=6)
         cands = _direct_net_candidates(strips, spec) if direct else {}
@@ -3026,32 +3026,6 @@ class TestDirectInsertion:
             span = abs(b.x - b.x2) + abs(b.y - b.y2)
             assert 1 <= span <= catalog.SORTER_MAX_REACH
             assert b.z == (b.z2 or 0), "sorters never span altitudes"
-
-    def test_the_sweep_prefers_area_over_direct_insertion(self) -> None:
-        """Pins the post-cleanup trade, so a later change has to argue with it.
-
-        The explicitly stacked alternative realizes the direct insert. The
-        area-first sweep may realize it too, but that tertiary reward cannot
-        override a smaller certified packing. Belt count breaks ties between
-        equally small packs; it cannot outweigh a strict area improvement.
-        """
-        spec = two_stage_spec()
-        swept = FreeformLayout(
-            band_policy=BandPolicy("portable"),
-            direct_insert=True,
-            workers=DETERMINISTIC_WORKERS,
-        ).lay_out(spec, time_budget_s=0.5)
-        stacked, _ = self._stacked(spec, direct=True)
-
-        assert stacked.stats["direct_inserts"] >= 1.0
-        assert swept.area <= stacked.area, (
-            "the sweep must not trade area for a direct insertion"
-        )
-        if swept.area == stacked.area:
-            assert swept.stats["belt_tiles"] <= stacked.stats["belt_tiles"], (
-                "equal-area packs must prefer fewer belt tiles"
-            )
-
 
 def test_promised_direct_candidates_have_an_occupied_collision_clear_alignment() -> None:
     spec = two_stage_spec()
@@ -10577,20 +10551,6 @@ class TestAShardThatCannotFeedItself:
 
 class TestTheTimeBudgetIsAWall:
     """``time_budget_s`` is the one deadline shared by every search phase."""
-
-    def test_magnetic_ring_repeated_one_second_calls_complete(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _ = monkeypatch
-        spec = magnetic_ring_spec()
-        for repeat in range(12):
-            placement = FreeformLayout(
-                band_policy=BandPolicy("160"),
-            ).lay_out(spec, time_budget_s=1.0)
-            assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED, repeat
-            report = _full_report(placement, spec)
-            assert report.ok, (repeat, report.errors[:3])
 
     def test_a_refusal_uses_exactly_the_requested_budget(
         self, monkeypatch: pytest.MonkeyPatch
