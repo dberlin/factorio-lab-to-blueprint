@@ -8528,10 +8528,44 @@ def _route_all(
     def _capture(run: int, problem: last_mile.ClusterProblem) -> None:
         """Hand a developer-tool hook everything needed to replay this run.
 
-        Called AFTER the unstake that builds each run's environment, so what
+        Called AFTER the unstake that builds each run's environment -- the
+        cluster release for run 1, the whole-pack sweep for run 2 -- so what
         the bench snapshots is the grid the search will actually see.
         """
-        return None
+        hook = last_mile.CAPTURE
+        if hook is None:
+            return
+        ends: dict[int, tuple[list[Cell], set[Cell], frozenset[Cell]]] = {}
+        for index in problem.nets:
+            starts, goals, _offers = _ends(index)
+            ends[index] = (list(starts), set(goals), canvas.routing_ports)
+            canvas.routing_ports = frozenset()
+        hook(
+            last_mile.ClusterCapture(
+                run=run,
+                canvas=canvas,
+                grid=grid,
+                history=history,
+                pressure=pressure,
+                bounds=bounds,
+                problem=problem,
+                ends=ends,
+                budget_left=budget["left"],
+                budget_floor=last_mile_floor,
+                deadline_remaining=(
+                    None if deadline is None else deadline - time.monotonic()
+                ),
+                owned_starts={
+                    index: frozenset(owned_source_starts.get(index, ()))
+                    for index in problem.nets
+                },
+                rejected={
+                    index: frozenset(rejected_path_cells.get(index, ()))
+                    for index in problem.nets
+                },
+                blocking_owners=dict(owner),
+            )
+        )
 
     def _round_state() -> tuple[object, ...]:
         """Everything the pass borrows, in a form two snapshots can compare.

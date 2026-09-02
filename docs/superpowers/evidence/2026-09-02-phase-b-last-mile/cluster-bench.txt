@@ -1,0 +1,30 @@
+# Task 9 -- cluster replay bench and the wall floor
+# captured and replayed 2026-09-02; load average at measurement:
+ 14:41:43 up 17 days, 20:27, 10 users,  load average: 5.05, 4.90, 5.05
+
+## replay --check, universe-matrix / output-products
+  round 1: 2.249s  131 nodes
+  round 2: 2.342s  131 nodes
+  round 3: 2.266s  131 nodes
+BEST 2.249s  5 clusters  (run1=5 run2=0, skipped 0 wall-bounded)  sizes 2-3  truncated 0  bounded=2  proved=2  solved=1  digest 60cbbcd2e2e9047c
+captured digest 60cbbcd2e2e9047c   replay digest 60cbbcd2e2e9047c   MATCH
+  exit 0
+
+## replay --check, quantum-chip / all-products
+  round 1: 0.015s  10 nodes
+  round 2: 0.015s  10 nodes
+  round 3: 0.014s  10 nodes
+BEST 0.014s  6 clusters  (run1=6 run2=0, skipped 0 wall-bounded)  sizes 2-2  truncated 0  bounded=0  proved=4  solved=2  digest 92db9a472fc14fa3
+captured digest 92db9a472fc14fa3   replay digest 92db9a472fc14fa3   MATCH
+  exit 0
+
+## observed cluster-search wall seconds (B_MIN_SECONDS input)
+ 14:42:01 up 17 days, 20:28, 10 users,  load average: 4.18, 4.71, 4.98
+cluster-cases-universe-matrix-output-products.pkl: n=5 max=0.909s mean=0.288s
+cluster-cases-quantum-chip-all-products.pkl: n=6 max=0.004s mean=0.003s
+
+UNDER LOAD 5.05 -- 1-minute load average was above 4 for the whole of this
+measurement (a concurrent agent was running the test suite on this box), so
+the seconds above are an UPPER bound on an idle machine's; re-measure at the
+gate.  Decision rule: B_MIN_SECONDS = max(0.35, 2 x 0.909) rounded up = 1.82,
+applied to src/flab2bp/layout/last_mile.py in this task.

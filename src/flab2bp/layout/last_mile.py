@@ -64,8 +64,13 @@ B_CBS_EXPANSION_SHARE = 0.25
 #: Bound on the number of low-level A* expansions one CBS run may spend.
 B_LOW_LEVEL_EXPANSIONS = 50_000
 
-#: Remaining wall seconds below which the pass declines to start.
-B_MIN_SECONDS = 0.35
+#: Remaining wall seconds below which the pass declines to start.  MEASURED,
+#: not guessed: ``scripts/last_mile_bench.py``'s two corpus captures put the
+#: slowest observed cluster search at 0.909 s (``universe-matrix``,
+#: ``output-products``), so twice that, rounded up, is the margin a pass needs
+#: to finish what it starts rather than be cut by the deadline mid-tree.  See
+#: ``docs/superpowers/evidence/2026-09-02-phase-b-last-mile/cluster-bench.txt``.
+B_MIN_SECONDS = 1.82
 
 #: Cost charged for a cluster net with no path, so nodes that lost a net sort
 #: after nodes that kept one without special-casing the heap.
@@ -449,3 +454,37 @@ def relation_no_good(
         deltas=deltas,
         evidence=(evidence,),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ClusterCapture:
+    """Everything a replay needs to re-run one live cluster search."""
+
+    run: int                       # 1 environment run, 2 relaxed run
+    canvas: object                 # freeform._Canvas, opaque here
+    grid: object                   # freeform._Grid, opaque here
+    history: Mapping[Cell, float]
+    pressure: float
+    bounds: tuple[int, int, int, int]
+    problem: ClusterProblem
+    ends: Mapping[int, tuple[list[Cell], set[Cell], frozenset[Cell]]]
+    budget_left: int
+    budget_floor: int
+    deadline_remaining: float | None
+    #: The REST of what the caller's ``search`` hands its A*, per net.  A
+    #: replay that omits these is not the same search: an owned start is a
+    #: junction-guard cell the low level makes PASSABLE, so dropping it moves
+    #: the path, and a rejected-commit cell is subtracted from the same flags.
+    owned_starts: Mapping[int, frozenset[Cell]]
+    rejected: Mapping[int, frozenset[Cell]]
+    #: Cell ownership, for the blame wall a refused search reports.  It steers
+    #: no path, but it is an input the live search had and the replay would
+    #: otherwise fabricate.
+    blocking_owners: Mapping[Cell, int]
+
+
+#: Developer-tool hook.  ``None`` in production; ``scripts/route_bench.py``
+#: sets it for the length of one capture run.  A module-level callback rather
+#: than a parameter because the alternative is threading a bench-only argument
+#: through ``lay_out``, ``_sweep``, ``_build`` and ``_build_prepared``.
+CAPTURE: Callable[[ClusterCapture], None] | None = None
