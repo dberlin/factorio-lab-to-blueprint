@@ -562,55 +562,56 @@ and `first` the destination, which means `y_first >= y_second + h_second` — **
 spec had that backwards, and an encoder built on the inverted reading violated
 `decoded <= input` on every one of twenty test placements.
 
-The encoder therefore works with an `above` relation, where `above[a]` holds every `b` with
-`y_a >= y_b + h_b`:
+The encoder works with two geometric relations, "west" (`x_i + w_i <= x_j` gives `i` west of
+`j`) and "above" (`y_j + h_j <= y_i` gives `i` above `j`), and **it cannot choose a relation pair
+by pair.** Any rule that reads only one pair's own coordinates (the tighter separation, the looser
+one, or a fixed axis preference) produces relation sets no sequence pair can express, because the
+implied precedences run in a cycle. Two minimal non-overlapping counterexamples close both
+directions. `A=(1,0)` sized `(2,1)`, `B=(4,2)` sized `(1,1)`, `C=(0,1)` sized `(10,1)`: A/C and
+B/C overlap in `x`, forcing "C above A" and "B above C"; A/B is the only pair with a choice and its
+two separations are equal, so every horizontal-preferring rule closes A -> B -> C -> A, and only
+"B above A" is consistent. `i=(0,0)`, `j=(3,1)`, `k=(6,2)`, all sized `(2,2)`: i/j and j/k overlap
+in `y`, forcing "i west j" and "j west k"; i/k is disjoint on both axes with vertical separation 0
+against horizontal 4, so every vertical-preferring rule closes i -> j -> k -> i, and only "i west
+k" is consistent. Run against this plan's own shelf generator at seed `20260902`, the tighter-axis
+rule this spec originally prescribed leaves the positive graph cyclic on 30 of 80 placements and
+the negative graph on 38 of 80.
 
-1. For every pair `(i, j)`, compute the two separations
-   `h = max(x_i - (x_j + w_j), x_j - (x_i + w_i))` and
-   `v = max(y_i - (y_j + h_j), y_j - (y_i + h_i))`; each is `>= 0` exactly when the projections on
-   that axis are disjoint. At least one is `>= 0` for a non-overlapping placement (otherwise the
-   encoder raises). Assign exactly one relation: **the axis with the smaller non-negative
-   separation** — horizontal when `0 <= h <= v` or `v < 0`, vertical when `0 <= v < h` or `h < 0`.
-   The tighter relation is the one that pins the two boxes closest to where they already are, so
-   choosing it preserves the placement's binding constraints; choosing the looser axis discards a
-   tight relation and lets the compaction slide a box past its real neighbour. The rule is
-   deterministic and symmetric in the pair, and the direction follows from the coordinates.
-2. Record the relation: west (`x_i + w_i <= x_j` gives `i` west of `j`) or above
-   (`y_j + h_j <= y_i` gives `i` above `j`).
-3. Positive permutation: a deterministic Kahn topological sort of the graph with an edge `i -> j`
-   whenever `i` is west of `j` **or `i` is above `j`**, the ready set ordered by `(x_i, y_i, i)`.
-4. Negative permutation: the same sort of the graph with an edge `i -> j` whenever `i` is west of
-   `j` **or `j` is above `i`**, the ready set ordered by `(x_i, -y_i, i)`.
-5. Gaps: `GapProfile.zero(len(sizes))`.
-6. Decode the result and compare: `EncodedPlacement(pair, gaps, decoded, exact)` where
-   `exact = decoded.x == x and decoded.y == y`.
+The encoder therefore records only the precedences the geometry **forces** and lets two
+topological sorts settle the rest: `j` strictly west of `i` forces `j` before `i` in both
+permutations; `j` strictly above `i` forces `j` before `i` in the positive permutation only; `j`
+strictly below `i` forces `j` before `i` in the negative permutation only. Equivalently, the
+positive successors of `i` are every `j` that is neither west of nor above `i`, and the negative
+successors every `j` that is neither west of nor below `i`. A pair overlapping on one axis is
+pinned by these in both permutations; a pair disjoint on both axes is pinned in exactly one
+permutation and left free in the other, and **both** outcomes of the free permutation name a
+relation the input already satisfies ("i west j" one way, "i above j" the other). Each permutation
+is a deterministic Kahn sort over a totally ordered ready set, keys `(x_i, -y_i, i)` for the
+positive and `(x_i, y_i, i)` for the negative, so the same placement always encodes to the same
+pair. Gaps are `GapProfile.zero(len(sizes))`; the pair is then decoded and compared, giving
+`EncodedPlacement(pair, gaps, decoded, exact)` with `exact = decoded.x == x and decoded.y == y`.
 
-Both edge kinds strictly increase a coordinate (a west edge needs `x_i + w_i <= x_j` with `w_i > 0`;
-an above edge, read as the decoder reads it, needs `y_j + h_j <= y_i` with `h_j > 0`), so both
-graphs are acyclic and the sorts succeed. "West" puts `i` before `j` in both permutations, which
-decode reads as horizontal; "above" puts `i` before `j` in positive and after in negative, which
-decode reads as `vertical[j].append(i)`, i.e. `y_i >= y_j + h_j`. The relation set is reproduced
-exactly.
-
-**The decode is a compaction, and it provably cannot exceed the input.** Every relation the encoder
-emits is an inequality the *input* placement already satisfies — that is how the relation was
-chosen. So the input coordinates are a feasible point of the constraint system the emitted pair
+**The decode is a compaction, and it provably cannot exceed the input.** Every relation the
+emitted pair implies, forced or settled by a sort, is an inequality the *input* placement already
+satisfies, so the input coordinates are a feasible point of the constraint system the emitted pair
 defines. With zero gaps, `_earliest_coordinates` computes the componentwise-minimum feasible point
-of that system: the longest-path values are a lower bound on every feasible assignment and are
-themselves feasible. Hence `decoded.x[i] <= x[i]` and `decoded.y[i] <= y[i]` for every `i`, and
+of that system. Hence `decoded.x[i] <= x[i]` and `decoded.y[i] <= y[i]` for every `i`, and
 therefore `decoded.width <= max(x[i] + w_i)` and `decoded.used_height <= max(y[i] + h_i)`: **never
-wider, never taller.** `_MAX_GAP` plays no part in this argument, because the emitted gaps are zero;
-the cap only means the encoder has no way to *deliberately* reinstate slack, which is a design
-choice rather than a limitation to work around.
+wider, never taller.** `_MAX_GAP` plays no part in this argument, because the emitted gaps are
+zero.
 
-**"Never wider, never taller" is the only guarantee. An exact round trip is not promised.** A
-placement is reproduced exactly only when every pair's chosen relation is *tight* — separation zero
-on the chosen axis — because a pair whose relation has slack lets the compaction close that slack,
-and closing it on one pair can free a third box that no surviving relation holds up. Measured on the
-plan's own twenty-seed fixture with the direction corrected: 4 of 20 exact under the "looser axis"
-rule and 9 of 20 under the tighter-axis rule adopted here. Both are `decoded <= input` on all
-twenty. So the tighter-axis rule is chosen because it preserves more tight relations, not because
-it makes the round trip exact.
+**"Never wider, never taller" is the only guarantee. An exact round trip is not promised, and is
+rare.** Exactness holds only when the input already *is* that compaction (an abutting row, an
+abutting column, a tight grid), because a pair with slack on the axis that relates it lets the
+compaction close that slack, and closing it can free a third strip that no surviving relation holds
+up. Measured on the shipped construction: 59 of 4000 shelf placements and 0 of 4000 scattered
+placements round-trip exactly, with zero componentwise violations in either set. Acyclicity of the
+two forced graphs is not proven in general: an exhaustive sweep over abstract relation types with
+difference-constraint realizability shows no realizable chordless cycle of length 3 through 6 in
+either graph, and none of any length appeared in 3.3 million random non-overlapping placements, but
+`_topological_order` still raises `ValueError` rather than returning a partial order. That raise,
+and an overlapping input, are caught at the operator boundary, counted in `alns_encode_errors`, and
+become `applied=False`. Treat it as a real if unobserved control path, not as a bug detector.
 
 The contract this phase adopts is therefore **`decoded` is the candidate, not the input.** What the
 compaction can lose is a direct-insert alignment the window solve bought, because moving a strip
@@ -618,8 +619,8 @@ changes `origin_delta`, and — less often — a relation the router's failure e
 are handled where they must be: the decoded placement is scored by `sequence_pair.score_candidate`
 and realigned before acceptance, so what is evaluated is what would be built, and the real router
 then decides whether it was worth it. A non-exact re-encode is counted in telemetry
-(`alns_encode_inexact`); a `ValueError` (an overlapping input, or a cyclic relation graph, which a
-non-overlapping placement cannot produce) is caught at the operator boundary, counted as
+(`alns_encode_inexact`); a `ValueError` (an overlapping input, or a cyclic relation graph, which has never
+been produced but is not proven impossible) is caught at the operator boundary, counted as
 `alns_encode_errors`, and becomes `applied=False`.
 
 Because the round trip is not exact, `_RepairAdapters.window_pack` returns the whole
@@ -1113,10 +1114,10 @@ misses its stated number is recorded with the number and reported.
    a direct insert the window solve bought. The mitigation is that the decoded placement is
    re-scored and realigned before acceptance, that non-exact re-encodes are counted, and that the
    real router decides.
-3. **Exactness is not guaranteed, so a repair can be silently diluted.** Measured on the twenty-seed
-   fixture: 9 of 20 placements round-trip exactly under the tighter-axis rule, 4 of 20 under the
-   looser one. In the 11 inexact cases the compaction moved at least one strip, which means a window
-   solve's specific answer is only partly what the search continues from. That is acceptable because
+3. **Exactness is not guaranteed, so a repair can be silently diluted.** Measured on the shipped
+   encoder: 59 of 4000 shelf placements and 0 of 4000 scattered ones round-trip exactly. Nearly
+   every re-encode is a compaction that moved at least one strip, which means a window solve's
+   specific answer is only partly what the search continues from. That is acceptable because
    the compaction is never worse on area or band fit and is evaluated by the real router — but it
    caps how surgical `LOCAL_EXACT_PACK` can be in sequence-pair, and it is the first thing to
    examine if the gate shows windows accepted but no cell moving. The fix, if needed, is a
