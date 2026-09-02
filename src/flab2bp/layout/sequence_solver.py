@@ -18,7 +18,7 @@ from itertools import islice
 from types import MappingProxyType
 from typing import Protocol
 
-from flab2bp.layout import finalize, route_kernel, validate
+from flab2bp.layout import finalize, last_mile, route_kernel, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S as ATOMIC_COMPLETION_GRACE_S,
@@ -79,9 +79,11 @@ from flab2bp.layout.freeform import (
 from flab2bp.layout.freeform import plan_strips as plan_strips
 from flab2bp.layout.global_router import GlobalRouteResult, route_global
 from flab2bp.layout.route_feedback import (
+    ClusterRelationNoGood,
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
+    LastMileReport,
     LogicalNetId,
     NetRole,
     RouteFailureKind,
@@ -2723,7 +2725,9 @@ def _lns_neighbourhood(
     )
 
 
-type _ProjectionPackNoGood = finalize.ProjectionNoGood | ExactPackNoGood
+type _ProjectionPackNoGood = (
+    finalize.ProjectionNoGood | ExactPackNoGood | ClusterRelationNoGood
+)
 
 
 def _projection_feedback_matches(
@@ -2734,6 +2738,22 @@ def _projection_feedback_matches(
     geometry_signatures: tuple[finalize.ProjectionGeometrySignature, ...],
 ) -> bool:
     """Return whether one decoded state repeats the retained exact evidence."""
+    if isinstance(no_good, ClusterRelationNoGood):
+        if (
+            pack.height != no_good.height
+            or problem.selected_sizes(state.variant_indices) != no_good.outline
+            or any(strip >= problem.size for strip in no_good.strips)
+        ):
+            return False
+        anchor = pack.at[no_good.strips[0]]
+        return all(
+            (
+                pack.at[strip][0] - anchor[0],
+                pack.at[strip][1] - anchor[1],
+            )
+            == delta
+            for strip, delta in zip(no_good.strips, no_good.deltas, strict=True)
+        )
     if isinstance(no_good, finalize.ProjectionNoGood):
         return (
             pack.width == no_good.pack_width
@@ -2796,7 +2816,10 @@ def _projection_feedback_stage_update(
     if not try_relation_update:
         return StageBoundaryUpdate(problem, state)
 
-    if isinstance(no_good, finalize.ProjectionNoGood):
+    if isinstance(no_good, ClusterRelationNoGood):
+        anchor = no_good.strips[0]
+        pairs = iter(tuple((anchor, strip) for strip in no_good.strips[1:]))
+    elif isinstance(no_good, finalize.ProjectionNoGood):
         pairs = iter(((no_good.left_strip, no_good.right_strip),))
     elif no_good.projection_pair is not None:
         pair = no_good.projection_pair
@@ -4733,6 +4756,24 @@ def _production_run(
                         relation_no_good,
                     )
                     break
+                if projection_relation_feedback is None:
+                    report: LastMileReport | None = detailed.routing.last_mile
+                    if report is not None and report.relation_strips:
+                        cluster_no_good = last_mile.relation_no_good(
+                            strips=report.relation_strips,
+                            origins=tuple(
+                                pack.at[index] for index in range(len(selected))
+                            ),
+                            outline=problem.selected_sizes(state.variant_indices),
+                            height=pack.height,
+                            evidence=report.relation_evidence,
+                        )
+                        if cluster_no_good is not None:
+                            projection_relation_feedback = (
+                                problem,
+                                projection_failures,
+                                cluster_no_good,
+                            )
         if projection_feedback is not None:
             feedback_problem, feedback_failures, strip, padded = projection_feedback
             if feedback_problem == problem and feedback_failures == projection_failures:

@@ -40,9 +40,11 @@ from flab2bp.layout.freeform import (
 )
 from flab2bp.layout.global_router import GlobalRouteResult
 from flab2bp.layout.route_feedback import (
+    ClusterRelationNoGood,
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
+    LastMileReport,
     NetFailure,
     NetId,
     NetRole,
@@ -75,6 +77,7 @@ from flab2bp.layout.sequence_solver import (
     SequenceSolver,
     SequenceSolverConfig,
     StageAdapters,
+    StageBoundaryTransform,
     ValidationVerdict,
     _decoded_pack,
     _placement_nets,
@@ -4399,6 +4402,273 @@ def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
     )
     assert expired is None
     assert decoded == 3
+
+
+def _two_strip_stage() -> tuple[
+    PlacementProblem,
+    AnnealState,
+    freeform_module._Pack,
+    tuple[finalize.ProjectionGeometrySignature, ...],
+    tuple[int, ...],
+]:
+    """Build a two-strip problem, state, its decoded pack, and signatures."""
+    problem = PlacementProblem(
+        sizes=((2, 2), (2, 2)),
+        nets=(),
+        outline_height=8,
+        area_lower_bound=8,
+    )
+    state = AnnealState(
+        pair=SequencePair((0, 1), (0, 1)),
+        gaps=GapProfile.zero(2),
+        base_seed=11,
+        variant_indices=(0, 0),
+    )
+    channels = (1, 1)
+    pack = _decoded_pack(
+        problem.outline_height,
+        decode_state(problem, state),
+        west_channels=channels,
+    )
+    signatures = (("variant-a",), ("variant-b",))
+    return problem, state, pack, signatures, channels
+
+
+def test_a_cluster_relation_matches_a_state_that_repeats_it() -> None:
+    problem, state, pack, signatures, _channels = _two_strip_stage()
+    origins = tuple(pack.at[index] for index in range(problem.size))
+    no_good = ClusterRelationNoGood(
+        height=pack.height,
+        outline=problem.selected_sizes(state.variant_indices),
+        strips=(0, 1),
+        deltas=((0, 0), (origins[1][0] - origins[0][0], origins[1][1] - origins[0][1])),
+        evidence=("cluster",),
+    )
+
+    assert sequence_solver_module._projection_feedback_matches(
+        problem, state, pack, no_good, signatures
+    )
+
+
+def test_a_cluster_relation_stops_matching_once_a_strip_moves() -> None:
+    problem, state, pack, signatures, _channels = _two_strip_stage()
+    no_good = ClusterRelationNoGood(
+        height=pack.height,
+        outline=problem.selected_sizes(state.variant_indices),
+        strips=(0, 1),
+        deltas=((0, 0), (999, 999)),
+        evidence=("cluster",),
+    )
+
+    assert not sequence_solver_module._projection_feedback_matches(
+        problem, state, pack, no_good, signatures
+    )
+
+
+def test_the_stage_boundary_moves_off_a_matching_cluster_relation() -> None:
+    problem, state, pack, signatures, channels = _two_strip_stage()
+    origins = tuple(pack.at[index] for index in range(problem.size))
+    no_good = ClusterRelationNoGood(
+        height=pack.height,
+        outline=problem.selected_sizes(state.variant_indices),
+        strips=(0, 1),
+        deltas=((0, 0), (origins[1][0] - origins[0][0], origins[1][1] - origins[0][1])),
+        evidence=("cluster",),
+    )
+
+    update = sequence_solver_module._projection_feedback_stage_update(
+        problem,
+        state,
+        no_good,
+        west_channels=channels,
+        geometry_signatures=signatures,
+        deadline=None,
+        try_relation_update=True,
+    )
+
+    assert update is not None
+    assert update.state != state
+
+
+def _last_mile_relation_report() -> LastMileReport:
+    return LastMileReport(
+        invocations=1,
+        solved=0,
+        proved=1,
+        bounded=0,
+        commit_rejected=0,
+        restore_mismatch=0,
+        relation_skipped_siblings=0,
+        nodes=3,
+        expansions=10,
+        seconds=0.01,
+        relation_strips=(0, 1),
+        relation_evidence="cluster: nets=(0, 1)",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _StageHarness:
+    """The `transform_stage` closure `_production_run` builds, plus its inputs."""
+
+    transform_stage: StageBoundaryTransform
+    height: int
+    problem: PlacementProblem
+    state: AnnealState
+    feedback: FeedbackState
+    placement: Placement
+    collide_failure: finalize.ProjectionFailure
+
+    def detailed_with(self, *, last_mile: LastMileReport | None = None) -> DetailedStageResult:
+        routing = replace(_routing(DetailedRouteStatus.ROUTED), last_mile=last_mile)
+        return DetailedStageResult(routing=routing, placement=self.placement)
+
+
+def _stage_harness_with_two_strips() -> _StageHarness:
+    """Extract the real `transform_stage` closure over a two-strip problem."""
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=_PORTABLE_BAND_POLICY,
+        time_budget_s=2.0,
+        power=False,
+        strip_len=4,
+        config=SequenceSolverConfig.test(),
+    )
+    transform = run.solver.stage_boundary_transform
+    assert transform is not None
+    height = 12
+    problem = PlacementProblem(
+        sizes=((3, 3), (3, 3)),
+        nets=(),
+        outline_height=height,
+        area_lower_bound=18,
+    )
+    state = AnnealState(
+        pair=SequencePair((0, 1), (0, 1)),
+        gaps=GapProfile.zero(2),
+        base_seed=5,
+        variant_indices=(0, 0),
+    )
+    placement = Placement(
+        buildings=(
+            PlacedBuilding(
+                item_id=1,
+                model_index=1,
+                x=0,
+                y=0,
+                width=3,
+                height=3,
+                owner_strip=0,
+            ),
+            PlacedBuilding(
+                item_id=1,
+                model_index=1,
+                x=10,
+                y=0,
+                width=3,
+                height=3,
+                owner_strip=1,
+            ),
+        )
+    )
+    collide_failure = finalize.ProjectionFailure(
+        check="geom.collide",
+        buildings=(0, 1),
+        detail="build colliders intersect",
+        band=0,
+    )
+    return _StageHarness(
+        transform_stage=transform,
+        height=height,
+        problem=problem,
+        state=state,
+        feedback=FeedbackState.empty((height, height)),
+        placement=placement,
+        collide_failure=collide_failure,
+    )
+
+
+def _recorded_stage_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[object]:
+    """Record which no-good the stage boundary was handed."""
+    seen: list[object] = []
+    original = sequence_solver_module._projection_feedback_stage_update
+
+    def recording(
+        problem: object,
+        state: object,
+        no_good: object,
+        **kwargs: object,
+    ) -> object:
+        seen.append(no_good)
+        return original(problem, state, no_good, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        sequence_solver_module, "_projection_feedback_stage_update", recording
+    )
+    return seen
+
+
+def test_transform_stage_turns_a_routing_relation_into_stage_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wiring, with a projection failure present so precedence is exercised.
+
+    `transform_stage` only reaches the branch this task extends when
+    `select_feedback_variant` is true and `detailed.placement` is not None, so
+    both are supplied here.  The projection failure is one that does NOT map
+    to a strip pair, so the `for failure in projection_failures:` loop leaves
+    `projection_relation_feedback` as `None` and the cluster relation is what
+    reaches the repairer.  Before this task's ordering fix, an assignment made
+    BEFORE that loop would have been discarded by it.
+    """
+    harness = _stage_harness_with_two_strips()
+    seen = _recorded_stage_update(monkeypatch)
+    unmapped = finalize.ProjectionFailure(
+        check="geom.band", buildings=(), detail="not a collide pair", band=0
+    )
+
+    update = harness.transform_stage(
+        harness.height,
+        harness.problem,
+        harness.state,
+        harness.feedback,
+        harness.detailed_with(last_mile=_last_mile_relation_report()),
+        0,
+        (unmapped,),
+        True,
+    )
+
+    assert update is not None
+    assert seen and isinstance(seen[0], ClusterRelationNoGood)
+
+
+def test_a_projection_failure_takes_precedence_over_a_cluster_relation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A geom.collide pair is a static refusal and outranks a routing relation."""
+    harness = _stage_harness_with_two_strips()
+    seen = _recorded_stage_update(monkeypatch)
+    monkeypatch.setattr(
+        finalize,
+        "independent_projection_pair",
+        lambda pair, _policy, **_kwargs: None,
+    )
+
+    update = harness.transform_stage(
+        harness.height,
+        harness.problem,
+        harness.state,
+        harness.feedback,
+        harness.detailed_with(last_mile=_last_mile_relation_report()),
+        0,
+        (harness.collide_failure,),
+        True,
+    )
+
+    assert update is not None
+    assert seen and not isinstance(seen[0], ClusterRelationNoGood)
 
 
 def test_projection_pitch_feedback_single_restart_routes_padded_variant() -> None:
