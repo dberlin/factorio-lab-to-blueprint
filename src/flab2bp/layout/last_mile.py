@@ -243,6 +243,16 @@ class ClusterResult:
     def __post_init__(self) -> None:
         if self.outcome is not ClusterOutcome.SOLVED and self.paths:
             raise ValueError("only a solved cluster carries paths")
+        if self.outcome is ClusterOutcome.SOLVED and not self.paths:
+            raise ValueError("a solved cluster carries a path for every net")
+        # The result does not carry the cluster's net list, so "one path per
+        # net" is not checkable here; :func:`solve_cluster` gates the SOLVED
+        # return on ``len(paths) == len(problem.nets)``, which is where the net
+        # list exists.  What IS checkable here is that no entry is a placeholder:
+        # an empty tuple is not a route, so a mapping carrying one would make the
+        # count above agree while a net still had nowhere to go.
+        if any(not path for path in self.paths.values()):
+            raise ValueError("a cluster path is a real, non-empty run of cells")
         if (self.bound is ClusterBound.NONE) is (self.outcome is ClusterOutcome.BOUNDED):
             raise ValueError("a bounded run names its bound and no other does")
 
