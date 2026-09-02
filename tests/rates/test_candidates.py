@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 
-from flab2bp.lab.data import load_dataset
+from flab2bp.lab.data import load_dataset, load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
@@ -488,3 +488,16 @@ def test_an_explicit_tier_still_overrides_the_url(data: Dataset) -> None:
     ).candidates
     sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
     assert sprayed == {"proliferator-3"}, sprayed
+
+
+def test_candidates_carry_the_researched_belt_and_sorter_tiers() -> None:
+    from fractions import Fraction
+
+    data = load_vendored()
+    specs = build_candidates(data, parse_url(EXAMPLE_URL)).candidates
+    for spec in specs:
+        assert spec.belt_item_id == "conveyor-belt-2"
+        assert [tier.item_id for tier in spec.belt_upgrades] == ["conveyor-belt-3"]
+        assert spec.belt_upgrades[0].items_per_second == Fraction(30)
+        assert spec.lane_capacity == Fraction(30)
+        assert spec.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
