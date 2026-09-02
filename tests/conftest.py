@@ -23,6 +23,7 @@ import pytest
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import flow_from_text, pin_request
 from flab2bp.lab.url import parse_url
+from flab2bp.layout import freeform
 from flab2bp.layout.base import NoValidLayout, Placement
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.rates.candidates import build_candidates
@@ -100,11 +101,31 @@ def _install_memo(cls: type[_Layout]) -> None:
 _install_memo(FreeformLayout)
 
 
+def _reset_junction_ban_offset_cache() -> None:
+    """Drop every offset a test may have proved under a patched dependency.
+
+    ``_JUNCTION_BAN_OFFSET_CACHE`` and ``_junction_ban_offsets``'s ``lru_cache``
+    are process-lifetime memos keyed on obstacle pose alone; they do not know
+    when ``_junction_site_is_clear`` (or any other dependency) has been
+    monkeypatched for the duration of one test.  A test that patches it could
+    otherwise read a stale answer proved by an earlier, unpatched call for the
+    same pose -- or leave a real answer behind for a later test to patch
+    around unknowingly.
+    """
+    freeform._JUNCTION_BAN_OFFSET_CACHE.clear()
+    freeform._junction_ban_offsets.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _layout_memo_policy(request: pytest.FixtureRequest) -> Iterator[None]:
     global _enabled
-    _enabled = "monkeypatch" not in request.fixturenames
+    uses_monkeypatch = "monkeypatch" in request.fixturenames
+    _enabled = not uses_monkeypatch
+    if uses_monkeypatch:
+        _reset_junction_ban_offset_cache()
     try:
         yield
     finally:
         _enabled = True
+        if uses_monkeypatch:
+            _reset_junction_ban_offset_cache()

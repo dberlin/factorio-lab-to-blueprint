@@ -14,7 +14,6 @@ import random
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import replace
-from fractions import Fraction
 from fractions import Fraction as F
 from pathlib import Path
 
@@ -15577,8 +15576,9 @@ def test_cancellable_junction_ban_offsets_are_shared_process_wide(
 ) -> None:
     import flab2bp.layout.freeform as freeform_module
 
-    freeform_module._JUNCTION_BAN_OFFSET_CACHE.clear()
-    freeform_module._junction_ban_offsets.cache_clear()
+    # conftest.py's autouse `_layout_memo_policy` fixture clears
+    # `_JUNCTION_BAN_OFFSET_CACHE` and `_junction_ban_offsets`'s `lru_cache`
+    # before any test that requests `monkeypatch`, so this test starts cold.
     probes: list[tuple[int, int, int]] = []
     original = freeform_module._junction_site_is_clear
 
@@ -15589,7 +15589,7 @@ def test_cancellable_junction_ban_offsets_are_shared_process_wide(
     monkeypatch.setattr(freeform_module, "_junction_site_is_clear", counting)
     smelter_id = catalog.item_id("arc-smelter")
     smelter = catalog.building(smelter_id)
-    key = (smelter_id, smelter.model_index, smelter.width, smelter.height, 0.0, Fraction(0))
+    key = (smelter_id, smelter.model_index, smelter.width, smelter.height, 0.0, F(0))
 
     first = freeform_module._cancellable_junction_ban_offsets(*key, lambda: False)
     probed_once = len(probes)
