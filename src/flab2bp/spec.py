@@ -240,7 +240,9 @@ class BuildSpec(_Frozen):
     @property
     def lane_capacity(self) -> Fraction:
         """Items/second the fastest allowed belt sustains: the planner's bound."""
-        return self.belt_tiers[-1].items_per_second
+        if self.belt_upgrades:
+            return self.belt_upgrades[-1].items_per_second
+        return self.belt_items_per_second
 
 
 class BuildSpecSet(_Frozen):
