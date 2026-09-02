@@ -17246,6 +17246,94 @@ def test_a_relaxed_run_that_closes_records_the_cluster_strips(
     assert result.last_mile.relation_evidence
 
 
+def _served_corridor_stranded_fixture() -> tuple[
+    _Canvas, list[_Net], tuple[int, int, int, int]
+]:
+    """`_two_strip_stranded_fixture` plus a net that ROUTES and stays outside.
+
+    The extra net sits far from the walled pocket, so it owns none of the
+    stranded net's wall cells and never joins the cluster.  It routes, so it
+    stays staked through the whole last-mile pass, so `_retire_served_roles`
+    has handed its two port corridors back to the grid -- which is the state
+    run 2 must preserve, and the state unstaking the pack silently undid.
+    """
+    canvas, nets, bounds = _two_strip_stranded_fixture()
+    nets.append(
+        _last_mile_belt_net(
+            canvas,
+            (4, 4),
+            (5, 5),
+            NetId(4, 5, "spare", NetRole.INTERNAL, 0),
+        )
+    )
+    return canvas, nets, bounds
+
+
+def test_the_relaxed_run_never_re_reserves_a_served_nets_corridor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run 2's world must be at least as LOOSE as run 1's, cell for cell.
+
+    `_stake` -> `_retire_served_roles` deletes a served port's corridor from
+    `canvas.reserved`, and `_unstake` -> `_restore_unserved_roles` puts it
+    back.  `_Canvas.free` refuses any reserved cell that is not the searching
+    net's own, so a corridor a staked NON-cluster net had retired is free to a
+    cluster net in run 1 and reserved again in run 2 -- run 2 tighter than run
+    1, and a closure there could forbid a relative placement that a realizable
+    world (that net served, its corridor retired) allows.  A relation no-good
+    excludes a whole region, so that is unsound rather than merely pessimistic.
+
+    The premise is asserted alongside the claim: without a corridor actually
+    retired before run 2 starts, the subset below holds for free.
+    """
+    canvas, nets, bounds = _served_corridor_stranded_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    # Every corridor the reservation plan holds, read off an untouched copy of
+    # the same fixture -- the live canvas has already been routed by the time
+    # anything can look at it.
+    plan_canvas, plan_nets, _plan_bounds = _served_corridor_stranded_fixture()
+    freeform._reserve_port_access(plan_canvas, plan_nets)
+    every_corridor = frozenset(plan_canvas.reserved)
+    seen: list[tuple[frozenset[Cell], frozenset[Cell]]] = []
+
+    def probing(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        seen.append(
+            (
+                frozenset(canvas.reserved),
+                frozenset(cell for cell in every_corridor if canvas.free(cell)),
+            )
+        )
+        return _always_proved(problem, environment)
+
+    monkeypatch.setattr(last_mile, "solve_cluster", probing)
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert len(seen) == 2
+    (run_one_reserved, run_one_free), (run_two_reserved, run_two_free) = seen
+    retired = every_corridor - run_one_reserved
+    assert retired, "the fixture must retire a corridor before run 2 starts"
+    assert run_two_reserved <= run_one_reserved
+    assert run_one_free <= run_two_free
+    assert retired <= run_two_free
+    assert result.last_mile is not None
+    # `_round_state` compares `canvas.reserved`, `canvas.port_corridors` and
+    # `grid.reserved`, so a zero mismatch IS the "put back exactly" check.  It
+    # has to be read here rather than off the canvas: `_link_reserved_cells`
+    # empties `canvas.reserved` when the pass finishes.
+    assert result.last_mile.restore_mismatch == 0
+    assert result.last_mile.proved == 1
+    assert result.last_mile.relation_strips
+
+
 def test_a_cluster_with_a_sibling_never_runs_the_relaxed_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
