@@ -93,7 +93,12 @@ def logistics_tiers_for_request(
         for item in dataset.items
         if item.belt is not None
         and item.id in unlocked
-        and item.belt.speed >= floor_speed
+        # Strictly faster than the floor: a belt at the SAME speed is not an
+        # "upgrade".  `_to_build_spec` would list it in `belt_upgrades`
+        # anyway, and `BuildSpec._tiers_are_ordered` requires each upgrade to
+        # be strictly faster than the one before, so admitting a same-speed
+        # belt here would crash there instead of harmlessly deduplicating.
+        and item.belt.speed > floor_speed
     }
     belts.add(floor_id)
     belt_item_ids = tuple(sorted(belts, key=lambda item_id: (dataset.belt_speed(item_id), item_id)))

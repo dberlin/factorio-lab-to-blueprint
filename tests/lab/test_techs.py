@@ -139,6 +139,32 @@ def test_the_floor_is_present_even_when_unresearched() -> None:
     assert tiers.belt_item_ids == ("conveyor-belt-3",)
 
 
+def test_a_belt_at_the_floors_exact_speed_is_not_listed_as_an_upgrade() -> None:
+    """``>`` not ``>=``: a second belt at the floor's own speed must never be
+    admitted as an upgrade.  If it were, `_to_build_spec` would list it in
+    `belt_upgrades` right next to the floor and `BuildSpec._tiers_are_ordered`
+    would reject the spec, since two tiers of equal speed are not "strictly
+    faster than the one before"."""
+    data = load_vendored()
+    floor_item = next(item for item in data.items if item.id == "conveyor-belt-1")
+    twin = replace(floor_item, id="conveyor-belt-1-twin", name="Conveyor Belt Twin")
+    items = tuple(
+        replace(
+            item,
+            technology=replace(
+                item.technology, recipe_unlock=(*item.technology.recipe_unlock, twin.id)
+            ),
+        )
+        if item.id == "basic-logistics-system" and item.technology is not None
+        else item
+        for item in data.items
+    )
+    data = replace(data, items=(*items, twin))
+    request = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert twin.id not in tiers.belt_item_ids
+
+
 def test_an_empty_technology_set_falls_back_to_sorter_one() -> None:
     data = load_vendored()
     # `_url_with_techs([])` produces a `tre=` that decodes to `None` (no
