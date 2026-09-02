@@ -13384,7 +13384,10 @@ def _prepare_routing_problem(
         raise _PreparationDeadline
 
     return _PreparedRoutingProblem(
-        building_templates=tuple(deepcopy(canvas.buildings)),
+        # `PlacedBuilding` is frozen; the tuple is a fresh container and every
+        # workspace copies the container again.  Deep-copying 300 frozen
+        # dataclasses per candidate cost 0.38 s on `universe-matrix`.
+        building_templates=tuple(canvas.buildings),
         blocked=tuple(sorted(canvas.blocked.items())),
         solid=frozenset(canvas.solid),
         reserved=tuple(sorted(canvas.reserved.items())),

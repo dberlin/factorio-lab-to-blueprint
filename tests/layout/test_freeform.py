@@ -278,6 +278,38 @@ def test_prepared_net_ids_are_stable() -> None:
 
     assert tuple(net.net_id for net in a.nets) == tuple(net.net_id for net in b.nets)
 
+def test_prepare_routing_problem_does_not_deepcopy_buildings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import copy
+
+    import flab2bp.layout.freeform as freeform_module
+
+    assert PlacedBuilding.__dataclass_params__.frozen
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, _height_seed(strips))
+    copied: list[type] = []
+    original = copy.deepcopy
+
+    def spy(value: object, memo: dict[int, object] | None = None) -> object:
+        copied.append(type(value))
+        return original(value, memo)
+
+    monkeypatch.setattr(copy, "deepcopy", spy)
+    if hasattr(freeform_module, "deepcopy"):
+        monkeypatch.setattr(freeform_module, "deepcopy", spy)
+    prepared = _prepare_routing_problem(
+        spec, strips, pack, policy=BandPolicy("portable"), power=False
+    )
+
+    assert list not in copied
+    first = prepared.new_workspace()
+    second = prepared.new_workspace()
+    assert first.buildings is not second.buildings
+    assert first.buildings == second.buildings
+
+
 
 def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
     monkeypatch: pytest.MonkeyPatch,
