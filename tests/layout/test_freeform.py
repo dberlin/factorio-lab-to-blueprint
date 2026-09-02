@@ -6710,6 +6710,398 @@ def test_pack_model_counts_match_its_inputs() -> None:
     )
 
 
+def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
+    """The window model IS `_pack` with some domains collapsed; with none
+    collapsed and no seed on either side, it must return the same assignment."""
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    full = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert full is not None
+    windowed = freeform._pack_window(
+        strips,
+        height=height,
+        width_bound=bound,
+        direct_candidates=candidates,
+        window=frozenset(range(len(strips))),
+        fixed_at={},
+        seed=None,
+        time_budget_s=5.0,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+    )
+    assert windowed is not None
+    assert windowed.width == full.width
+    assert windowed.at == full.at
+    assert windowed.direct == full.direct
+
+
+def test_pack_window_leaves_every_pinned_strip_where_it_was() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    seed = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert seed is not None
+    window = frozenset({0})
+    fixed = {index: origin for index, origin in seed.at.items() if index not in window}
+    windowed = freeform._pack_window(
+        strips,
+        height=height,
+        width_bound=seed.width,
+        direct_candidates=candidates,
+        window=window,
+        fixed_at=fixed,
+        seed=seed,
+    )
+    assert windowed is not None
+    for index, origin in fixed.items():
+        assert windowed.at[index] == origin
+    assert windowed.width <= seed.width
+
+
+def test_pack_window_never_widens_past_its_bound() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    seed = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert seed is not None
+    free = min(3, len(strips))
+    windowed = freeform._pack_window(
+        strips,
+        height=height,
+        width_bound=seed.width,
+        direct_candidates=candidates,
+        window=frozenset(range(free)),
+        fixed_at={index: origin for index, origin in seed.at.items() if index >= free},
+        seed=seed,
+    )
+    assert windowed is None or windowed.width <= seed.width
+
+
+def test_pack_window_keeps_pins_the_free_model_would_have_broken() -> None:
+    """The decisive pin test: an arrangement the unpinned solve would never pick.
+
+    `_three_unit_strips` packs to width 4 when nothing is pinned.  Pinning strips
+    1 and 2 into a width-8 arrangement leaves the window one legal answer -- keep
+    them and slot strip 0 into the free column -- so a window that quietly
+    dropped its pins would come back at width 4 with both of them moved.
+    """
+    strips = _three_unit_strips()
+    fixed = {1: (4, 0), 2: (6, 2)}
+    windowed = freeform._pack_window(
+        strips,
+        height=6,
+        width_bound=8,
+        direct_candidates={},
+        window=frozenset({0}),
+        fixed_at=fixed,
+    )
+    assert windowed is not None
+    assert windowed.at[1] == (4, 0)
+    assert windowed.at[2] == (6, 2)
+    assert windowed.width == 8
+
+
+def test_pack_window_pins_one_worker_and_a_deterministic_work_bound() -> None:
+    """Both solver parameters are load-bearing and neither is observable in a result.
+
+    A window runs beside a packer that already saturates the box, so it takes one
+    worker; and its answer must not depend on wall time except through the wall
+    limit firing as a hard deadline, so it takes a deterministic-work bound too.
+    Asserted on the parameters rather than on a clock: the wall-clock tests in
+    this file were removed for flaking under load.
+    """
+    strips = _three_unit_strips()
+    seen: list[cp_model.CpSolver] = []
+
+    def _capture(
+        built: freeform._PackModel,
+        solver: cp_model.CpSolver,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        seen.append(solver)
+        return None
+
+    original = freeform._pack_result
+    try:
+        freeform._pack_result = _capture  # type: ignore[assignment]
+        for budget, work in ((4.0, 0.25), (0.1, 0.5)):
+            freeform._pack_window(
+                strips,
+                height=6,
+                width_bound=8,
+                direct_candidates={},
+                window=frozenset({0}),
+                fixed_at={1: (4, 0), 2: (6, 2)},
+                time_budget_s=budget,
+                deterministic_work=work,
+            )
+    finally:
+        freeform._pack_result = original  # type: ignore[assignment]
+
+    assert len(seen) == 2
+    for solver, budget, expected in ((seen[0], 4.0, 0.25), (seen[1], 0.1, 0.1)):
+        parameters = solver.parameters
+        assert parameters.num_search_workers == freeform.C_WINDOW_WORKERS == 1
+        assert parameters.max_time_in_seconds == budget
+        # The TIGHTER of the two: a long wall budget cannot buy unbounded work,
+        # and a short one is not allowed to be overrun by the work bound either.
+        assert parameters.max_deterministic_time == expected
+
+
+def _pinned_exact_no_good(
+    strips: list[Strip],
+    height: int,
+    pack: freeform._Pack,
+) -> freeform.ExactPackNoGood:
+    return freeform.ExactPackNoGood(
+        height=height,
+        outline=tuple(freeform._box(strip) for strip in strips),
+        width=pack.width,
+        origins=tuple(pack.at[index] for index in range(len(strips))),
+        evidence=(
+            finalize.ProjectionFailure(check="test.pinned", buildings=(), detail="", band=0),
+        ),
+    )
+
+
+def test_pack_model_skips_an_exact_no_good_with_no_free_strip() -> None:
+    """Every strip pinned: the no-good's only free variable would be `w_var`.
+
+    Written against `_pack_model` and not `_pack_window`, because `_pack_window`
+    forbids an empty window -- and an empty window is exactly the case that makes
+    the no-good degenerate.
+    """
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    seed = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert seed is not None
+    built = freeform._pack_model(
+        strips,
+        height=height,
+        width_bound=seed.width,
+        direct_candidates=candidates,
+        fixed_at=dict(seed.at),
+        exact_pack_no_goods=(_pinned_exact_no_good(strips, height, seed),),
+    )
+    assert built is not None
+    assert built.skipped_no_goods == 1
+
+
+def test_pack_model_skips_an_unapplicable_width_target() -> None:
+    """A target the pinned strips already exceed is dropped and counted."""
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    seed = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert seed is not None
+    built = freeform._pack_model(
+        strips,
+        height=height,
+        width_bound=seed.width,
+        direct_candidates=candidates,
+        fixed_at={index: origin for index, origin in seed.at.items() if index != 0},
+        width_target=1,
+    )
+    assert built is not None
+    assert built.skipped_no_goods == 1
+
+
+def test_pack_window_keeps_a_no_good_that_still_has_a_free_strip() -> None:
+    """The mirror case: strip 0 is free, so the no-good is live and must be added."""
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    seed = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert seed is not None
+    skipped: list[int] = []
+    windowed = freeform._pack_window(
+        strips,
+        height=height,
+        width_bound=seed.width,
+        direct_candidates=candidates,
+        window=frozenset({0}),
+        fixed_at={index: origin for index, origin in seed.at.items() if index != 0},
+        seed=seed,
+        exact_pack_no_goods=(_pinned_exact_no_good(strips, height, seed),),
+        on_skipped=skipped.append,
+    )
+    assert skipped == []
+    # The forbidden assignment is the seed's, so the solve must move strip 0 or
+    # find nothing at all -- it must not hand back the pack it was told to reject.
+    assert windowed is None or windowed.at[0] != seed.at[0]
+
+
+def test_pack_window_reports_a_skip_through_on_skipped() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    seed = freeform._pack(
+        strips,
+        height=height,
+        width_bound=bound,
+        time_budget_s=5.0,
+        direct_candidates=candidates,
+        workers=1,
+        deterministic=True,
+    )
+    assert seed is not None
+    skipped: list[int] = []
+    freeform._pack_window(
+        strips,
+        height=height,
+        width_bound=seed.width,
+        direct_candidates=candidates,
+        window=frozenset({0}),
+        fixed_at={index: origin for index, origin in seed.at.items() if index != 0},
+        seed=seed,
+        width_target=1,
+        on_skipped=skipped.append,
+    )
+    assert skipped == [1]
+
+
+def test_pack_window_refuses_an_empty_window() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    with pytest.raises(ValueError, match="at least one strip"):
+        freeform._pack_window(
+            strips,
+            height=height,
+            width_bound=bound,
+            direct_candidates=candidates,
+            window=frozenset(),
+            fixed_at={index: (0, 0) for index in range(len(strips))},
+        )
+
+
+def test_pack_window_refuses_a_strip_that_is_both_free_and_pinned() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    with pytest.raises(ValueError, match="must not also be pinned"):
+        freeform._pack_window(
+            strips,
+            height=height,
+            width_bound=bound,
+            direct_candidates=candidates,
+            window=frozenset({0}),
+            fixed_at={index: (0, 0) for index in range(len(strips))},
+        )
+
+
+def test_pack_window_refuses_a_partition_that_misses_a_strip() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    with pytest.raises(ValueError, match="cover every strip"):
+        freeform._pack_window(
+            strips,
+            height=height,
+            width_bound=bound,
+            direct_candidates=candidates,
+            window=frozenset({0}),
+            fixed_at={},
+        )
+
+
+def _unit_cluster_no_good(
+    strips: list[Strip],
+    height: int,
+    deltas: tuple[tuple[int, int], ...],
+) -> ClusterRelationNoGood:
+    """A three-strip relation over `_three_unit_strips`, in scope for `height`."""
+    return ClusterRelationNoGood(
+        height=height,
+        outline=tuple(freeform_module._box(strip) for strip in strips),
+        strips=(0, 1, 2),
+        deltas=deltas,
+        evidence=("route.exhaustive",),
+    )
+
+
+def _unit_cluster_model(
+    fixed_at: dict[int, tuple[int, int]],
+    deltas: tuple[tuple[int, int], ...] = ((0, 0), (2, 0), (4, 0)),
+) -> freeform._PackModel:
+    strips = _three_unit_strips()
+    height = 6
+    built = freeform._pack_model(
+        strips,
+        height=height,
+        width_bound=8,
+        direct_candidates={},
+        fixed_at=fixed_at,
+        cluster_relation_no_goods=(_unit_cluster_no_good(strips, height, deltas),),
+    )
+    assert built is not None
+    return built
+
+
+def test_a_cluster_no_good_naming_only_pinned_strips_is_skipped() -> None:
+    """Every named strip pinned: the relation's only free variable is `w_var`."""
+    built = _unit_cluster_model({0: (0, 0), 1: (2, 0), 2: (4, 0)})
+    assert built.skipped_no_goods == 1
+    assert "cluster_ng" not in str(built.model.Proto())
+
+
+def test_a_cluster_no_good_a_pinned_anchor_contradicts_is_skipped() -> None:
+    """The anchor and one other strip are pinned at a different relative offset."""
+    built = _unit_cluster_model({0: (0, 0), 1: (3, 0)})
+    assert built.skipped_no_goods == 1
+    assert "cluster_ng" not in str(built.model.Proto())
+
+
+def test_a_cluster_no_good_two_pinned_non_anchor_strips_contradict_is_skipped() -> None:
+    """The anchor is FREE and the relation is still decidable.
+
+    Strips 1 and 2 are pinned two apart in y where the relation wants them two
+    apart in x, so no placement of the free anchor can complete it.  A guard that
+    only looks at the anchor calls this live and adds a constraint that cannot
+    bite -- which is the incompleteness this test exists to forbid.
+    """
+    built = _unit_cluster_model({1: (2, 0), 2: (2, 2)})
+    assert built.skipped_no_goods == 1
+    assert "cluster_ng" not in str(built.model.Proto())
+
+
+def test_a_cluster_no_good_two_pinned_strips_agree_on_is_kept() -> None:
+    """The mirror: the pinned pair matches the relation, so the anchor still decides."""
+    built = _unit_cluster_model({1: (2, 0), 2: (4, 0)})
+    assert built.skipped_no_goods == 0
+    assert "cluster_ng" in str(built.model.Proto())
+
+
 def _brute_junction_projection_frames(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
