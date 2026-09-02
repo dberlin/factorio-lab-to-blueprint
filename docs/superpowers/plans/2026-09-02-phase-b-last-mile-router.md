@@ -1,5 +1,7 @@
 # Phase B Last-Mile Router Implementation Plan
 
+**Status:** Executed 2026-09-02, commits 725c34e..11c6a9c on `phase-b-last-mile`. All eleven tasks landed and were reviewed; the corpus gate FAILED (65/72 vs a 64/65/65 baseline, target 67; both required cells still REFUSED; wall p95 31.6 s / 31.8 s over the 31 s threshold). Gate record: `docs/superpowers/evidence/2026-09-02-phase-b-last-mile/gate.md`. Open and deferred: the commit-preflight rejection from stale non-cluster hints, run 2 being corpus-inert behind the sibling gate, and spec §5.2 follow-up option 2. See the spec's status line.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the one or two nets that stay unrouted after rip-up-and-reroute on the largest corpus cells into either a routed pack or a proved no-good, so that freeform `quantum-chip/all-products` and freeform `universe-matrix/output-products` become CLEAN at a 30-second budget with no cell regressing.

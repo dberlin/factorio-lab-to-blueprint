@@ -17194,8 +17194,12 @@ def test_a_cluster_solution_rejected_at_commit_is_rolled_back(
     ) -> tuple[int, ...]:
         if 1 in commit_paths:
             return (1,)
-        return original(  # type: ignore[arg-type]
-            commit_canvas, commit_nets, commit_paths, *args, **kwargs
+        return original(
+            commit_canvas,  # type: ignore[arg-type]
+            commit_nets,  # type: ignore[arg-type]
+            commit_paths,  # type: ignore[arg-type]
+            *args,  # type: ignore[arg-type]
+            **kwargs,  # type: ignore[arg-type]
         )
 
     monkeypatch.setattr(freeform, "_commit_paths", refusing)
@@ -17661,8 +17665,12 @@ def _capture_can_junction(
     ) -> set[Cell]:
         if junctionable is not None:
             captured.append(junctionable)
-        return original(  # type: ignore[arg-type]
-            merge_canvas, merge_paths, siblings, junctionable, **kwargs
+        return original(
+            merge_canvas,
+            merge_paths,
+            siblings,
+            junctionable,
+            **kwargs,  # type: ignore[arg-type]
         )
 
     monkeypatch.setattr(freeform, "_merge_frontier", capturing)
