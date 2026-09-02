@@ -49,7 +49,15 @@ from flab2bp.layout.route_feedback import (
     NetId,
     NetRole,
     RouteFailureKind,
+    select_lns_neighbourhood,
     select_split_candidate,
+)
+from flab2bp.layout.sequence_alns import (
+    DestroyOperator,
+    OperatorContext,
+    OperatorSession,
+    RepairOperator,
+    metrics_from_evaluation,
 )
 from flab2bp.layout.sequence_pair import (
     AnnealIncumbent,
@@ -57,6 +65,7 @@ from flab2bp.layout.sequence_pair import (
     DecodedPlacement,
     DirectInsertTarget,
     EliteCategory,
+    EncodedPlacement,
     GapProfile,
     PlacementKey,
     PlacementProblem,
@@ -1034,6 +1043,374 @@ def test_owned_geometric_failures_remain_local_feedback_above_three_nets() -> No
     assert neighbourhood
     assert len(neighbourhood) < problem.size
     assert repaired.stage_index == 0
+
+def _substitution_fixture() -> tuple[
+    PlacementProblem, AnnealState, DecodedPlacement, DetailedRouteResult
+]:
+    problem = PlacementProblem(
+        sizes=((4, 3), (4, 3), (4, 3), (4, 3)),
+        nets=((0, 1), (1, 2), (2, 3)),
+        outline_height=12,
+        area_lower_bound=48,
+    )
+    state = AnnealState.initial(problem.size, 11)
+    decoded = decode_state(problem, state)
+    routing = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                net_id=NetId(0, 1, "iron-ore", NetRole.INTERNAL, 0),
+                kind=RouteFailureKind.CONGESTION_WALL,
+                wall=((2, 2, 0),),
+                blocking_nets=(NetId(2, 3, "copper-ore", NetRole.INTERNAL, 1),),
+                expansions=5,
+            ),
+        ),
+        iterations=1,
+        expansions=5,
+    )
+    return problem, state, decoded, routing
+
+
+def _applied_substitution_fixture() -> tuple[
+    PlacementProblem, AnnealState, DecodedPlacement, DetailedRouteResult
+]:
+    """A fixture whose destroy set is a proper subset, so a repair actually runs.
+
+    ``_substitution_fixture``'s neighbourhood is the whole four-strip problem, so
+    every path through it stops at the "never the whole problem" guard and can
+    never distinguish one repair arm from another.
+    """
+    problem = PlacementProblem(((1, 1),) * 10, (), 10, 10)
+    state = AnnealState.initial(problem.size, 7)
+    decoded = decode_state(problem, state)
+    routing = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=tuple(
+            NetFailure(
+                net_id=NetId(0, 1, f"item-{ordinal}", NetRole.INTERNAL, ordinal),
+                kind=RouteFailureKind.DYNAMIC_ACCESS,
+                wall=(),
+                blocking_nets=(NetId(1, 0, f"blocker-{ordinal}", NetRole.INTERNAL, ordinal),),
+                expansions=0,
+            )
+            for ordinal in range(4)
+        ),
+        iterations=1,
+        expansions=0,
+    )
+    return problem, state, decoded, routing
+
+
+def _run_alns(
+    fixture: tuple[PlacementProblem, AnnealState, DecodedPlacement, DetailedRouteResult],
+    *,
+    session: OperatorSession,
+    adapters: sequence_solver_module._RepairAdapters,
+    cap_scale: bool = False,
+) -> tuple[AnnealState, frozenset[int]]:
+    problem, state, decoded, routing = fixture
+    feedback = FeedbackState.empty((decoded.width, problem.outline_height))
+    return sequence_solver_module._alns_substitution(
+        routing,
+        state,
+        problem,
+        decoded,
+        seed=state.base_seed,
+        stage_index=0,
+        session=session,
+        context=OperatorContext(
+            strip_count=problem.size, stagnation=0, remaining_fraction=10
+        ),
+        metrics=metrics_from_evaluation(
+            routing,
+            decoded,
+            feedback,
+            outline_height=problem.outline_height,
+            band_target_width=decoded.width,
+            validator_clean=False,
+        ),
+        routing_seconds=0.5,
+        band_target_width=decoded.width,
+        adapters=adapters,
+        cap_scale=cap_scale,
+    )
+
+
+def _call_alns(
+    *,
+    session: OperatorSession,
+    adapters: sequence_solver_module._RepairAdapters,
+) -> tuple[AnnealState, frozenset[int]]:
+    return _run_alns(_substitution_fixture(), session=session, adapters=adapters)
+
+
+def _legacy_arms() -> OperatorSession:
+    return OperatorSession(
+        destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+        repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
+    )
+
+
+def _window_arms() -> OperatorSession:
+    return OperatorSession(
+        destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+        repair_arms=(RepairOperator.LOCAL_EXACT_PACK,),
+    )
+
+
+def test_alns_substitution_matches_the_legacy_rule_for_the_legacy_arms() -> None:
+    """With FAILED_ENDPOINTS + SEQUENCE_REINSERT the selector is the old rule."""
+    problem, state, decoded, routing = _substitution_fixture()
+    legacy_state, legacy_neighbourhood = sequence_solver_module._routing_feedback_substitution(
+        routing, state, problem, decoded, seed=11, stage_index=0
+    )
+    alns_state, alns_neighbourhood = _call_alns(
+        session=_legacy_arms(),
+        adapters=sequence_solver_module._RepairAdapters(),
+    )
+    assert alns_neighbourhood == legacy_neighbourhood
+    assert alns_state.pair == legacy_state.pair
+    assert alns_state.gaps == legacy_state.gaps
+
+
+def test_alns_substitution_matches_the_legacy_rule_when_a_repair_actually_runs() -> None:
+    """The equivalence must hold where the neighbourhood is a proper subset."""
+    problem, state, decoded, routing = _applied_substitution_fixture()
+    legacy_state, legacy_neighbourhood = sequence_solver_module._routing_feedback_substitution(
+        routing, state, problem, decoded, seed=state.base_seed, stage_index=0
+    )
+    assert legacy_neighbourhood
+    assert len(legacy_neighbourhood) < problem.size
+
+    alns_state, alns_neighbourhood = _run_alns(
+        (problem, state, decoded, routing),
+        session=_legacy_arms(),
+        adapters=sequence_solver_module._RepairAdapters(),
+    )
+    assert alns_neighbourhood == legacy_neighbourhood
+    assert alns_state.pair == legacy_state.pair
+    assert alns_state.gaps == legacy_state.gaps
+    assert alns_state.pair != state.pair
+
+
+def test_alns_substitution_is_deterministic_for_identical_inputs() -> None:
+    fixture = _applied_substitution_fixture()
+    first_state, first_neighbourhood = _run_alns(
+        fixture, session=_legacy_arms(), adapters=sequence_solver_module._RepairAdapters()
+    )
+    second_state, second_neighbourhood = _run_alns(
+        fixture, session=_legacy_arms(), adapters=sequence_solver_module._RepairAdapters()
+    )
+    assert first_neighbourhood == second_neighbourhood
+    assert first_state.pair == second_state.pair
+    assert first_state.gaps == second_state.gaps
+    assert first_state.variant_indices == second_state.variant_indices
+
+
+def test_alns_substitution_ignores_budget_only_failures() -> None:
+    problem = PlacementProblem(
+        sizes=((4, 3), (4, 3)), nets=((0, 1),), outline_height=12, area_lower_bound=24
+    )
+    state = AnnealState.initial(problem.size, 3)
+    decoded = decode_state(problem, state)
+    routing = DetailedRouteResult(
+        status=DetailedRouteStatus.BUDGET,
+        routed=(),
+        failures=(
+            NetFailure(
+                net_id=NetId(0, 1, "iron-ore", NetRole.INTERNAL, 0),
+                kind=RouteFailureKind.BUDGET,
+                wall=(),
+                blocking_nets=(),
+                expansions=9,
+            ),
+        ),
+        iterations=1,
+        expansions=9,
+    )
+    session = OperatorSession()
+    result_state, neighbourhood = sequence_solver_module._alns_substitution(
+        routing,
+        state,
+        problem,
+        decoded,
+        seed=3,
+        stage_index=0,
+        session=session,
+        context=OperatorContext(strip_count=2, stagnation=0, remaining_fraction=10),
+        metrics=metrics_from_evaluation(
+            routing,
+            decoded,
+            FeedbackState.empty((decoded.width, problem.outline_height)),
+            outline_height=problem.outline_height,
+            band_target_width=decoded.width,
+            validator_clean=False,
+        ),
+        routing_seconds=0.1,
+        band_target_width=decoded.width,
+        adapters=sequence_solver_module._RepairAdapters(),
+    )
+    assert neighbourhood == frozenset()
+    assert result_state.pair == state.pair
+    assert session.choices == ()
+
+
+def test_alns_substitution_credits_an_empty_destroy_set_immediately() -> None:
+    """A choice that ran nothing must not be charged the NEXT evaluation's result."""
+    session = _legacy_arms()
+    problem = PlacementProblem(
+        sizes=((4, 3), (4, 3)), nets=((0, 1),), outline_height=12, area_lower_bound=24
+    )
+    state = AnnealState.initial(problem.size, 3)
+    decoded = decode_state(problem, state)
+    routing = DetailedRouteResult(
+        status=DetailedRouteStatus.STRANDED,
+        routed=(),
+        failures=(
+            NetFailure(
+                net_id=NetId(0, 1, "iron-ore", NetRole.INTERNAL, 0),
+                kind=RouteFailureKind.CONGESTION_WALL,
+                wall=((1, 1, 0),),
+                blocking_nets=(),
+                expansions=2,
+            ),
+        ),
+        iterations=1,
+        expansions=2,
+    )
+    sequence_solver_module._alns_substitution(
+        routing,
+        state,
+        problem,
+        decoded,
+        seed=3,
+        stage_index=0,
+        session=session,
+        context=OperatorContext(strip_count=2, stagnation=0, remaining_fraction=10),
+        metrics=metrics_from_evaluation(
+            routing,
+            decoded,
+            FeedbackState.empty((decoded.width, problem.outline_height)),
+            outline_height=problem.outline_height,
+            band_target_width=decoded.width,
+            validator_clean=False,
+        ),
+        routing_seconds=0.1,
+        band_target_width=decoded.width,
+        adapters=sequence_solver_module._RepairAdapters(),
+    )
+    # The neighbourhood is the whole two-strip problem, so nothing was applied.
+    assert session.choices
+    assert session.pending is None
+    assert session.applied == 0
+
+
+def test_alns_substitution_uses_the_full_neighbourhood_until_the_scale_is_capped() -> None:
+    """`cap_scale=False` must reproduce the legacy destroy set exactly."""
+    problem, state, decoded, routing = _substitution_fixture()
+    _repaired, neighbourhood = _call_alns(
+        session=_legacy_arms(),
+        adapters=sequence_solver_module._RepairAdapters(),
+    )
+    expected = select_lns_neighbourhood(
+        routing, state.pair, state.gaps, problem, decoded, stagnation=0, grow_after=2
+    )
+    assert neighbourhood == expected or (
+        problem.size > 1 and len(expected) == problem.size and neighbourhood == frozenset()
+    )
+
+
+def test_the_uncapped_destroy_set_is_wider_than_the_capped_one() -> None:
+    """`cap_scale=True` hands `destroy_strips` the choice's scale, not the size."""
+    fixture = _applied_substitution_fixture()
+    _uncapped_state, uncapped = _run_alns(
+        fixture, session=_legacy_arms(), adapters=sequence_solver_module._RepairAdapters()
+    )
+    _capped_state, capped = _run_alns(
+        fixture,
+        session=_legacy_arms(),
+        adapters=sequence_solver_module._RepairAdapters(),
+        cap_scale=True,
+    )
+    assert uncapped == frozenset({0, 1, 2, 3, 4, 7, 9})
+    assert capped == frozenset({0, 1})
+
+
+def test_local_exact_pack_takes_the_encoding_the_window_adapter_measured() -> None:
+    problem, state, decoded, routing = _applied_substitution_fixture()
+    packed = SequencePair(
+        positive=tuple(reversed(range(problem.size))), negative=tuple(range(problem.size))
+    )
+    seen: list[frozenset[int]] = []
+
+    def _window_pack(
+        neighbourhood: frozenset[int],
+        pack_problem: PlacementProblem,
+        pack_state: AnnealState,
+        pack_decoded: DecodedPlacement,
+    ) -> EncodedPlacement | None:
+        seen.append(neighbourhood)
+        assert pack_problem is problem
+        assert pack_state is state
+        assert pack_decoded is decoded
+        return EncodedPlacement(
+            pair=packed, gaps=GapProfile.zero(pack_problem.size), decoded=pack_decoded, exact=True
+        )
+
+    repaired, neighbourhood = _run_alns(
+        (problem, state, decoded, routing),
+        session=_window_arms(),
+        adapters=sequence_solver_module._RepairAdapters(window_pack=_window_pack),
+    )
+
+    assert seen == [neighbourhood]
+    assert neighbourhood == frozenset({0, 1, 2, 3, 4, 7, 9})
+    assert repaired.pair == packed
+    assert repaired.gaps == GapProfile.zero(problem.size)
+    assert repaired.variant_indices == state.variant_indices
+
+
+def test_local_exact_pack_credits_an_unusable_window_as_unapplied() -> None:
+    problem, state, decoded, routing = _applied_substitution_fixture()
+    session = _window_arms()
+
+    repaired, neighbourhood = _run_alns(
+        (problem, state, decoded, routing),
+        session=session,
+        adapters=sequence_solver_module._RepairAdapters(window_pack=lambda *_args: None),
+    )
+
+    assert neighbourhood == frozenset()
+    assert repaired.pair == state.pair
+    assert repaired.gaps == state.gaps
+    assert session.pending is None
+    assert session.applied == 0
+
+
+def test_local_exact_pack_without_an_adapter_falls_through_to_the_sequence_reinsert() -> None:
+    """No adapter is not a skip: the arm runs the reinsert repair and is credited.
+
+    Task 5 must therefore not arm LOCAL_EXACT_PACK before a window adapter is
+    wired, or the ledger will pay the window arm for the reinsert's work.
+    """
+    problem, state, decoded, routing = _applied_substitution_fixture()
+    legacy_state, legacy_neighbourhood = sequence_solver_module._routing_feedback_substitution(
+        routing, state, problem, decoded, seed=state.base_seed, stage_index=0
+    )
+    session = _window_arms()
+
+    repaired, neighbourhood = _run_alns(
+        (problem, state, decoded, routing),
+        session=session,
+        adapters=sequence_solver_module._RepairAdapters(),
+    )
+
+    assert neighbourhood == legacy_neighbourhood
+    assert repaired.pair == legacy_state.pair
+    assert session.choices[0].repair is RepairOperator.LOCAL_EXACT_PACK
 
 
 def test_geometric_near_miss_substitutes_feedback_candidate_before_next_height() -> None:
