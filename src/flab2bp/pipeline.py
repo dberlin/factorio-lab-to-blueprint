@@ -268,6 +268,10 @@ class Attempt:
 
     candidate: str
     strategy: str
+    #: The spec this attempt was laid out from.  The web payload reports each
+    #: attempt's own boundary -- machines, belt-in, outputs -- and without the
+    #: spec only the winner's would survive to JSON.
+    spec: BuildSpec
     placement: Placement
     report: validate.Report
     blueprint: str
@@ -643,6 +647,7 @@ def build(
                 Attempt(
                     spec.label,
                     sname,
+                    spec,
                     labelled,
                     report,
                     blueprint,

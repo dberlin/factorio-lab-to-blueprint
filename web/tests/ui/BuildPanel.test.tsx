@@ -3,7 +3,16 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { BlueprintProvider, useBlueprint } from '../../src/state/BlueprintProvider';
 import { BuildPanel } from '../../src/ui/BuildPanel';
 import { parseBlueprint } from '../../src/format';
-import { A_BLUEPRINT, B_BLUEPRINT, aJob, aResult, restoreFetch, serving } from '../support/build';
+import {
+  A_BLUEPRINT,
+  B_BLUEPRINT,
+  aJob,
+  anAttempt,
+  anAttemptDetail,
+  aResult,
+  restoreFetch,
+  serving,
+} from '../support/build';
 import { realCatalog } from '../support/catalog';
 
 afterEach(restoreFetch);
@@ -35,25 +44,27 @@ function candidateResult(chosenBlueprint = A_BLUEPRINT, alternativeBlueprint = B
   return {
     ...aResult({ blueprint: chosenBlueprint }),
     attempts: [
-      {
-        candidate: 'no-proliferator',
-        strategy: 'freeform',
-        area: 575,
-        ok: true,
-        errors: 0,
-        chosen: true,
-        blueprint: chosenBlueprint,
-      },
-      {
+      anAttempt({ blueprint: chosenBlueprint }),
+      anAttempt({
         candidate: 'all-products',
         strategy: 'sequence-pair',
         area: 640,
-        ok: true,
-        errors: 0,
         chosen: false,
         blueprint: alternativeBlueprint,
-      },
-      {
+        detail: anAttemptDetail({
+          machines: 13,
+          buildings: 51,
+          primary_band: 200,
+          certified_bands: [200],
+          title: 'electromagnetic-matrix 60/min (all products)',
+          external_inputs: {
+            'magnetic-coil': { exact: '5/6', per_minute: 50 },
+            'proliferator-mk-iii': { exact: '1', per_minute: 60 },
+          },
+          input_markers: 2,
+        }),
+      }),
+      anAttempt({
         candidate: 'output-products',
         strategy: 'freeform',
         area: 490,
@@ -61,7 +72,7 @@ function candidateResult(chosenBlueprint = A_BLUEPRINT, alternativeBlueprint = B
         errors: 1,
         chosen: false,
         blueprint: null,
-      },
+      }),
     ],
   };
 }
@@ -244,6 +255,17 @@ test('candidate rows select the blueprint string, viewer model, and copy source'
     'data-blueprint-title',
     parseBlueprint(B_BLUEPRINT).header.shortDesc,
   );
+  // The report above the table follows the selection too, not just the string.
+  expect(screen.getByTestId('report-title')).toHaveTextContent('(all products)');
+  expect(screen.getByTestId('blueprint-title')).toHaveTextContent(
+    'electromagnetic-matrix 60/min (all products)',
+  );
+  expect(screen.getByText('Showing').nextElementSibling).toHaveTextContent(
+    'sequence-pair / all-products',
+  );
+  expect(screen.getByText('Machines').nextElementSibling).toHaveTextContent('13');
+  expect(screen.getByText('Area').nextElementSibling).toHaveTextContent('640 tiles');
+  expect(screen.getByText('Belt in').nextElementSibling).toHaveTextContent('proliferator-mk-iii');
   fireEvent.click(screen.getByRole('button', { name: 'Copy blueprint string' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument());
   expect(copied).toEqual([B_BLUEPRINT]);
@@ -327,16 +349,13 @@ test('a new result resets selection to its best available candidate', async () =
       strategy: 'sequence-pair',
     }),
     attempts: [
-      {
+      anAttempt({
         candidate: 'output-products',
         strategy: 'sequence-pair',
         area: 420,
-        ok: true,
-        errors: 0,
-        chosen: true,
         blueprint: A_BLUEPRINT,
-      },
-      {
+      }),
+      anAttempt({
         candidate: 'no-proliferator',
         strategy: 'freeform',
         area: 460,
@@ -344,7 +363,7 @@ test('a new result resets selection to its best available candidate', async () =
         errors: 1,
         chosen: false,
         blueprint: null,
-      },
+      }),
     ],
   };
   serving(

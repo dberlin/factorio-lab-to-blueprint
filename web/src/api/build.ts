@@ -67,6 +67,32 @@ export const AttemptFailure = z.object({
   projection_failures: z.array(ProjectionFailure),
 });
 
+const Report = z.object({
+  ok: z.boolean(),
+  checks_run: z.array(z.string()),
+  skipped: z.array(z.string()),
+  errors: z.array(Finding),
+  warnings: z.array(Finding),
+});
+
+/**
+ * One candidate's own facts. The report panel describes the SELECTED attempt,
+ * so every attempt carries its own boundary — what it belts in, what it makes,
+ * what it costs — rather than inheriting the winner's.
+ */
+const AttemptDetail = z.object({
+  machines: z.number(),
+  buildings: z.number(),
+  primary_band: z.number(),
+  certified_bands: z.array(z.number()),
+  title: z.string(),
+  outputs: z.record(z.string(), Rate),
+  external_inputs: z.record(z.string(), Rate),
+  input_markers: z.number(),
+  unmarked_inputs: z.array(z.string()),
+  report: Report,
+});
+
 const Attempt = z.object({
   candidate: z.string(),
   strategy: ExplicitStrategy,
@@ -76,6 +102,7 @@ const Attempt = z.object({
   chosen: z.boolean(),
   /** Withheld for an invalid attempt unless allow_invalid was requested. */
   blueprint: z.string().nullable(),
+  detail: AttemptDetail,
 });
 
 /** How high a belt may go here, and whether that was read or assumed. */
@@ -107,13 +134,7 @@ const BuildResult = z.object({
   flow_findings: z.array(z.string()),
   belt_rules: BeltRules.nullable(),
   refused: z.array(AttemptFailure),
-  report: z.object({
-    ok: z.boolean(),
-    checks_run: z.array(z.string()),
-    skipped: z.array(z.string()),
-    errors: z.array(Finding),
-    warnings: z.array(Finding),
-  }),
+  report: Report,
   attempts: z.array(Attempt),
 });
 
@@ -161,6 +182,7 @@ export type BuildResult = z.infer<typeof BuildResult>;
 export type Refusal = z.infer<typeof Refusal>;
 export type Attempt = z.infer<typeof Attempt>;
 export type ProjectionFailure = z.infer<typeof ProjectionFailure>;
+export type AttemptDetail = z.infer<typeof AttemptDetail>;
 export type AttemptFailure = z.infer<typeof AttemptFailure>;
 
 export const BuildOptions = z

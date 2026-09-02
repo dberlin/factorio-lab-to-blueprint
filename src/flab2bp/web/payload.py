@@ -23,7 +23,7 @@ from collections.abc import Iterable, Sequence
 from fractions import Fraction
 
 from flab2bp import pipeline
-from flab2bp.layout import markers
+from flab2bp.layout import markers, validate
 from flab2bp.layout.base import LayoutAttemptFailure, ProjectionFailureRecord
 
 #: Recursive JSON values, with no escape hatch for non-serialisable objects.
@@ -53,6 +53,50 @@ def _rates(values: dict[str, Fraction]) -> Json:
     for item, rate in sorted(values.items()):
         result[item] = _rate(rate)
     return result
+
+
+def _report_block(report: validate.Report) -> Json:
+    """A validation report as JSON, identical shape for the winner and losers."""
+    return {
+        "ok": report.ok,
+        "checks_run": _array(report.checks_run),
+        "skipped": _array(report.skipped),
+        "errors": [
+            {"check": finding.check, "message": finding.message}
+            for finding in report.errors
+        ],
+        "warnings": [
+            {"check": finding.check, "message": finding.message}
+            for finding in report.warnings
+        ],
+    }
+
+
+def _attempt_detail(attempt: pipeline.Attempt) -> Json:
+    """One attempt's own facts: what IT belts in, makes, and costs.
+
+    The candidate table lets a player view a losing attempt, and the report
+    above it must follow that selection rather than keep describing the
+    winner -- an ``all-products`` selection next to a ``no-proliferator``
+    winner differs in machines, in belt-in, and in markers.
+    """
+    frame = attempt.placement.frame
+    if frame is None:
+        raise ValueError("successful build placement has no area frame")
+    spec = attempt.spec
+    unmarked = markers.unmarked_external_inputs(attempt.placement, spec)
+    return {
+        "machines": spec.machine_count,
+        "buildings": len(attempt.placement.buildings),
+        "primary_band": frame.primary_band,
+        "certified_bands": _array(frame.certified_bands),
+        "title": attempt.placement.short_desc,
+        "outputs": _rates(dict(spec.outputs)),
+        "external_inputs": _rates(dict(spec.external_inputs)),
+        "input_markers": int(attempt.placement.stats.get("input_markers", 0)),
+        "unmarked_inputs": _array(sorted(unmarked)),
+        "report": _report_block(attempt.report),
+    }
 
 def projection_failure(failure: ProjectionFailureRecord) -> Json:
     """One exact projection refusal without flattening its evidence."""
@@ -105,14 +149,6 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
             "from_url": rules.from_url,
         }
 
-    errors: list[JsonValue] = [
-        {"check": finding.check, "message": finding.message}
-        for finding in build.report.errors
-    ]
-    warnings: list[JsonValue] = [
-        {"check": finding.check, "message": finding.message}
-        for finding in build.report.warnings
-    ]
     attempts: list[JsonValue] = [
         {
             "candidate": attempt.candidate,
@@ -125,6 +161,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
                 and attempt.strategy == build.strategy
             ),
             "blueprint": attempt.blueprint if (attempt.ok or allow_invalid) else None,
+            "detail": _attempt_detail(attempt),
         }
         for attempt in sorted(build.attempts, key=lambda item: (not item.ok, item.area))
     ]
@@ -153,13 +190,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         # as "it simply was not the best", which is a much more reassuring
         # claim than the truth.
         "refused": _array(attempt_failure(attempt) for attempt in build.refused),
-        "report": {
-            "ok": build.report.ok,
-            "checks_run": _array(build.report.checks_run),
-            "skipped": _array(build.report.skipped),
-            "errors": errors,
-            "warnings": warnings,
-        },
+        "report": _report_block(build.report),
         "attempts": attempts,
     }
 

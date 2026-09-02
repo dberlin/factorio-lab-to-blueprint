@@ -139,6 +139,84 @@ def test_an_invalid_build_withholds_the_string(small_build: pipeline.Build) -> N
     assert describe(broken, allow_invalid=True)["blueprint"] == small_build.blueprint
 
 
+def test_each_attempt_carries_its_own_detail(small_build: pipeline.Build) -> None:
+    """The candidate table selects what the report describes, so every attempt
+    carries its own boundary facts rather than inheriting the winner's."""
+    sprayed = small_build.spec.model_copy(
+        update={
+            "external_inputs": {
+                **small_build.spec.external_inputs,
+                "proliferator-mk-iii": Fraction(1),
+            }
+        }
+    )
+    retitled = dataclasses.replace(
+        small_build.attempts[0].placement,
+        short_desc="electromagnetic-matrix 60/min (all products)",
+        stats={**small_build.attempts[0].placement.stats, "input_markers": 0},
+    )
+    other = dataclasses.replace(
+        small_build.attempts[0],
+        candidate="all-products",
+        spec=sprayed,
+        placement=retitled,
+    )
+    multi = dataclasses.replace(small_build, attempts=(*small_build.attempts, other))
+
+    body = describe(multi)
+    listed = body["attempts"]
+    assert isinstance(listed, list)
+    winner, loser = listed
+    assert isinstance(winner, dict) and isinstance(loser, dict)
+    winner_detail = winner["detail"]
+    loser_detail = loser["detail"]
+    assert isinstance(winner_detail, dict) and isinstance(loser_detail, dict)
+
+    # The winner's detail is exactly what the top level has always said.
+    for field in (
+        "machines",
+        "buildings",
+        "primary_band",
+        "certified_bands",
+        "title",
+        "outputs",
+        "external_inputs",
+        "input_markers",
+        "unmarked_inputs",
+        "report",
+    ):
+        assert winner_detail[field] == body[field]
+
+    # The loser's differs where the candidate differs: belt-in, markers, title.
+    loser_inputs = loser_detail["external_inputs"]
+    assert isinstance(loser_inputs, dict)
+    assert "proliferator-mk-iii" in loser_inputs
+    assert loser_inputs != body["external_inputs"]
+    loser_unmarked = loser_detail["unmarked_inputs"]
+    assert isinstance(loser_unmarked, list)
+    assert "proliferator-mk-iii" in loser_unmarked
+    assert loser_detail["title"] == "electromagnetic-matrix 60/min (all products)"
+    assert loser_detail["input_markers"] == 0
+
+
+def test_an_attempt_without_a_frame_is_a_payload_error(
+    small_build: pipeline.Build,
+) -> None:
+    """An attempt with no band evidence is refused, like the chosen one is."""
+    unframed = dataclasses.replace(
+        small_build.attempts[0],
+        placement=dataclasses.replace(
+            small_build.attempts[0].placement,
+            frame=None,
+            completion=None,
+        ),
+    )
+    built = dataclasses.replace(small_build, attempts=(unframed,))
+
+    with pytest.raises(ValueError, match="area frame"):
+        describe(built)
+
+
 def test_a_refusal_keeps_structured_projection_records_inside_attempt_boundaries() -> None:
     first = ProjectionFailureRecord(
         band=160,
