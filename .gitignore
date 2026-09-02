@@ -14,8 +14,10 @@ wheels/
 # Generated blueprints -- output, not source.
 /out/
 
-# Serena's local index.
-/.serena/
+# Serena's local index and memories stay local, but the project definition is
+# tracked so every git worktree is its own Serena project at its own path.
+/.serena/*
+!/.serena/project.yml
 
 # Agent worktrees the harness creates. They are real git checkouts, so a stray
 # `git add -A` stages them as embedded repositories.
