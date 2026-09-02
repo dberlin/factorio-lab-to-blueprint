@@ -4015,8 +4015,9 @@ Beside `commit_stage` in `_production_run` (`:4791`), where `strips`, `band_poli
                 outline_height=problem.outline_height,
             )
         except ValueError:
-            # An overlapping or cyclic result cannot happen for a pack CP-SAT
-            # returned, so this is a bug detector, not a control path.
+            # An overlapping result cannot happen for a pack CP-SAT returned; a
+            # cyclic relation graph has never been produced but is not proven
+            # impossible. Either way the choice is dropped, not repaired.
             telemetry.alns_encode_errors += 1
             return None
         if not encoded.exact:
