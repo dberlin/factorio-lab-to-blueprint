@@ -28,7 +28,20 @@ __all__ = ["retier_belts"]
 
 
 def retier_belts(placement: Placement, spec: BuildSpec) -> Placement:
-    """Return ``placement`` with every belt run on the cheapest tier that fits."""
+    """Return ``placement`` with every belt run on the cheapest tier that fits.
+
+    Precondition: every tile of a run must already carry the floor tier. That
+    holds at this function's single call site -- immediately after emission in
+    ``freeform._build_prepared``, before any compaction has had a chance to
+    merge runs -- but is NOT re-checked here. If it is ever called on a
+    placement where a run is already mixed, the run's demand is measured
+    correctly (`belt_run_demands` does not care about tiers) but every tile in
+    it is set to the same chosen tier, silently erasing whatever tier
+    difference existed.  The validator's `belt.tier_allowed` and
+    `flow.belt_capacity` checks do not depend on this invariant -- they judge
+    each tile and each tile's own rate, respectively -- so a violation here
+    would not be masked by them.
+    """
     tiers = [
         (catalog.get_item_id(tier.item_id), tier.item_id, tier.items_per_second)
         for tier in spec.belt_tiers
