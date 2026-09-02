@@ -5919,6 +5919,48 @@ class _PathSearchResult:
     expansions: int
 
 
+def _kernel_margin_holds(
+    grid: _Grid,
+    cells: Sequence[tuple[int, int, int]],
+) -> bool:
+    """Whether the compiled A* loop's index preconditions hold on ``grid``.
+
+    THE TEST IS ``span`` MINUS THE TWO-CELL PAD, not ``span`` itself, and the
+    margin is the point rather than the containment.  A ramp travels two cells
+    and the loop indexes ``cur +- 2 * xstep +- 2 * LEVELS +- 1`` with no bounds
+    check of its own -- see :class:`_Grid` on why the pad exists.  A cell
+    sitting IN the pad is inside ``span`` and still one whose neighbour
+    arithmetic leaves the array: the compiled loop would write ``best[si]``
+    past its buffer or read ``flags[cur - 2 * xstep]`` below zero, which the
+    Python loop merely wrapped around silently.
+
+    Two facts together cover every index the kernel touches.  ``box`` two cells
+    inside ``span`` covers the reached cells, because :func:`_routing_flags`
+    only ever clears bytes of ``occ`` and ``occ`` is 1 only inside ``box``, so
+    every cell the loop expands after passing ``flags[...]`` is inside the
+    margin.  The explicit sweep covers the seeds and the goals, which are
+    tested against ``goal_flag`` and pushed without a ``flags`` test.
+
+    A grid that fails this DOES NOT lose its landmarks: the search falls
+    through to :func:`_astar_python_loop`, which is memory-safe on any input
+    and gives the same answer on the same grid.  Degrading the backend and
+    degrading the grid are not the same thing -- rebuilding the grid would drop
+    the landmark fields and move the expansion counts of BOTH backends.
+    Nothing reaches here with such a cell today, because ``canvas.limit`` is
+    set by the time anything routes and ``canvas.free`` refuses anything
+    outside it, so this changes no digest; it makes the kernel's precondition
+    the wrapper's job to enforce rather than an invariant held at a distance.
+    """
+    gx0, gy0, gx1, gy1 = grid.span
+    lo_x, lo_y, hi_x, hi_y = grid.box
+    if not (gx0 + 2 <= lo_x and hi_x <= gx1 - 2 and gy0 + 2 <= lo_y and hi_y <= gy1 - 2):
+        return False
+    for cx, cy, clvl in cells:
+        if not (gx0 + 2 <= cx <= gx1 - 2 and gy0 + 2 <= cy <= gy1 - 2 and 0 <= clvl < LEVELS):
+            return False
+    return True
+
+
 def _astar_python_loop(
     flags: bytearray,
     hist: Sequence[float] | None,
@@ -6257,28 +6299,24 @@ def _astar(
     # because an index that silently lands in the wrong column is exactly the
     # kind of fault that reads green.
     #
-    # THE TEST IS `span` MINUS THE TWO-CELL PAD, not `span` itself, and the
-    # margin is the point rather than the containment.  A ramp travels two
-    # cells and both loops index `cur +- 2 * xstep +- 2 * LEVELS +- 1` with no
-    # bounds check of their own -- see :class:`_Grid` on why the pad exists.  A
-    # cell sitting IN the pad is inside `span` and still one whose neighbour
-    # arithmetic leaves the array: the compiled loop would write `best[si]`
-    # past its buffer or read `flags[cur - 2 * xstep]` below zero, which the
-    # Python loop merely wrapped around silently.  Nothing reaches here with
-    # such a cell today, so this refuses no grid any test or corpus produces
-    # and moves no digest; it makes the kernel's precondition the wrapper's
-    # job to enforce rather than an invariant held at a distance.
+    # THIS TEST IS CONTAINMENT IN `span`, and it decides GRID REUSE ONLY.  The
+    # compiled loop needs a stronger property -- two cells of margin, see
+    # :func:`_kernel_margin_holds` -- but reuse is the wrong lever for it: a
+    # rebuilt grid is a landmark-free grid, so refusing reuse here would weaken
+    # the heuristic and move the expansion counts of both backends, including
+    # the Python one, which must stay byte-identical to the pre-kernel router.
+    # The margin decides which loop runs, and nothing else.
     flat = grid if grid is not None and grid.box == box else None
     if flat is not None:
         sx0, sy0, sx1, sy1 = flat.span
         for cx, cy, clvl in starts:
-            if not (sx0 + 2 <= cx <= sx1 - 2 and sy0 + 2 <= cy <= sy1 - 2 and 0 <= clvl < LEVELS):
+            if not (sx0 <= cx <= sx1 and sy0 <= cy <= sy1 and 0 <= clvl < LEVELS):
                 flat = None
                 break
     if flat is not None:
         sx0, sy0, sx1, sy1 = flat.span
         for cx, cy, clvl in goal_list:
-            if not (sx0 + 2 <= cx <= sx1 - 2 and sy0 + 2 <= cy <= sy1 - 2 and 0 <= clvl < LEVELS):
+            if not (sx0 <= cx <= sx1 and sy0 <= cy <= sy1 and 0 <= clvl < LEVELS):
                 flat = None
                 break
     if flat is None:
@@ -6462,7 +6500,9 @@ def _astar(
 
     path_indices: Sequence[int] | None
     settled: Sequence[int]
-    if route_kernel._compiled_astar is not None:
+    if route_kernel._compiled_astar is not None and _kernel_margin_holds(
+        flat, (*starts, *goal_list)
+    ):
         # The compiled loop takes the heuristic apart rather than calling back
         # into `h`: which of the three plain terms applies, the deduplicated
         # goal columns the exact term needs, the bounding box the weak term

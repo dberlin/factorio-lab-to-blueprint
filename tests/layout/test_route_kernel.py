@@ -170,6 +170,74 @@ def test_compiled_astar_honours_expansion_cap_and_budget(monkeypatch: pytest.Mon
     assert cython_cap["left"] == (1 << 40) - 2
 
 
+def test_a_start_in_the_pad_degrades_the_backend_and_keeps_the_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pad margin picks the LOOP; it must never cost the caller its grid.
+
+    Rebuilding the grid to dodge the kernel's precondition would hand back a
+    landmark-free grid, which is a weaker heuristic and a different expansion
+    count -- under the Python backend too, where the router must stay
+    byte-identical to the pre-kernel one.  So a cell inside the pad falls
+    through to the Python loop ON THE SAME GRID, exactly as
+    ``global_router._kernel_bounds_hold`` does for the relaxed search.
+    """
+    compiled = _require_both_backends()
+
+    box = (0, 0, 8, 8)
+    canvas = freeform_module._Canvas()
+    # `span` is `box` plus exactly the two-cell pad, so a cell on the span's
+    # outer edge is inside `span` and two short of the margin.
+    grid = freeform_module._make_grid(canvas, box, (-2, -2, 10, 10), {})
+
+    took_python: list[str] = []
+    took_kernel: list[str] = []
+    rebuilt: list[str] = []
+    original_loop = freeform_module._astar_python_loop
+    original_make = freeform_module._make_grid
+
+    def spy_loop(*args: Any, **kwargs: Any) -> Any:
+        took_python.append("called")
+        return original_loop(*args, **kwargs)
+
+    def spy_kernel(*args: Any, **kwargs: Any) -> Any:
+        took_kernel.append("called")
+        return compiled(*args, **kwargs)
+
+    def spy_make(*args: Any, **kwargs: Any) -> Any:
+        rebuilt.append("called")
+        return original_make(*args, **kwargs)
+
+    monkeypatch.setattr(freeform_module, "_astar_python_loop", spy_loop)
+    monkeypatch.setattr(freeform_module, "_make_grid", spy_make)
+    monkeypatch.setattr(route_kernel, "_compiled_astar", spy_kernel)
+
+    def search(cell: Cell) -> None:
+        # Goal == start, so this terminates on the first pop and the assertion
+        # is about which loop ran rather than about what it found.
+        freeform_module._astar(
+            canvas, [cell], {cell}, {}, 1.0, box, {"left": 1 << 20}, grid=grid
+        )
+
+    in_the_pad = (-2, 4, 0)
+    assert not freeform_module._kernel_margin_holds(grid, [in_the_pad])
+    search(in_the_pad)
+    assert took_python == ["called"]
+    assert took_kernel == []
+    assert rebuilt == []  # the caller's grid, landmark fields and all, was kept
+
+    # Control: the same grid, a cell clear of the pad, and the kernel runs --
+    # so the assertion above is about the margin and not about a kernel that
+    # was never going to be reached.
+    took_python.clear()
+    clear_of_the_pad = (2, 4, 0)
+    assert freeform_module._kernel_margin_holds(grid, [clear_of_the_pad])
+    search(clear_of_the_pad)
+    assert took_kernel == ["called"]
+    assert took_python == []
+    assert rebuilt == []
+
+
 def test_backend_falls_back_when_extension_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(route_kernel, "_compiled_astar", None)
     assert not route_kernel.compiled_available()
