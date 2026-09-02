@@ -19,14 +19,15 @@ nothing in ``lab``, so the direction is the one that was already there.
 
 from __future__ import annotations
 
+from fractions import Fraction
 from functools import lru_cache
 
 from flab2bp.dsp import catalog
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.schema import Dataset
-from flab2bp.lab.url import parse_url
+from flab2bp.lab.url import LabRequest, parse_url
 
-__all__ = ["belt_rules_for_url"]
+__all__ = ["belt_rules_for_url", "logistics_tiers_for_request"]
 
 def _belt_rules(url: str, dataset: Dataset) -> catalog.BeltAltitudeRules:
     return catalog.belt_rules_for_technologies(
@@ -60,3 +61,56 @@ def belt_rules_for_url(
     if dataset is None:
         return _vendored_belt_rules_for_url(url)
     return _belt_rules(url, dataset)
+
+
+def logistics_tiers_for_request(
+    request: LabRequest, dataset: Dataset
+) -> catalog.LogisticsTiers:
+    """The belts and sorters this request's save can build.
+
+    Data-driven: a belt or sorter is buildable when some researched
+    technology item lists it in ``recipe_unlock``.  ``None`` for the
+    researched set means every technology, as :func:`belt_rules_for_url`
+    documents.  The request's own belt is always included, researched or not,
+    because FactorioLab chose it and FactorioLab's choice is authoritative.
+
+    A save whose explicit technology set unlocks no sorter at all gets
+    ``("sorter-1",)``: it cannot build belts either, and refusing every build
+    over it would help nobody.
+    """
+    technology_items = [item for item in dataset.items if item.technology is not None]
+    researched = request.researched_technology_ids
+    unlocked: set[str] = set()
+    for item in technology_items:
+        assert item.technology is not None
+        if researched is None or item.id in researched:
+            unlocked.update(item.technology.recipe_unlock)
+
+    floor_id = request.belt_id or "conveyor-belt-1"
+    floor_speed = dataset.belt_speed(floor_id)
+    belts = {
+        item.id
+        for item in dataset.items
+        if item.belt is not None
+        and item.id in unlocked
+        and item.belt.speed >= floor_speed
+    }
+    belts.add(floor_id)
+    belt_item_ids = tuple(sorted(belts, key=lambda item_id: (dataset.belt_speed(item_id), item_id)))
+
+    sorter_rates: dict[str, Fraction] = {}
+    for item in dataset.items:
+        numeric = catalog.get_item_id(item.id)
+        if numeric in catalog.SORTER_RATE_AT_1 and item.id in unlocked:
+            sorter_rates[item.id] = catalog.SORTER_RATE_AT_1[numeric]
+    sorter_item_ids = tuple(
+        sorted(sorter_rates, key=lambda item_id: (sorter_rates[item_id], item_id))
+    )
+    if not sorter_item_ids:
+        sorter_item_ids = ("sorter-1",)
+
+    return catalog.LogisticsTiers(
+        belt_item_ids=belt_item_ids,
+        sorter_item_ids=sorter_item_ids,
+        from_url=researched is not None,
+    )
