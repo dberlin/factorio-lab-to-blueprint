@@ -369,7 +369,7 @@ export function BuildPanel() {
                   names the PRODUCT — `space-warper 10/min (max prolif)` — not
                   the candidate that happened to win. */}
               <strong className="bp-title" data-testid="blueprint-title">
-                {job.result.title}
+                {selectedAttempt?.detail.title ?? job.result.title}
               </strong>
               {/* The string itself is 10kB of base64 and there is nothing to
                   read in it. It stays in the DOM for tests and for anyone who

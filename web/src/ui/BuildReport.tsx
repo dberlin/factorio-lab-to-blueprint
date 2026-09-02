@@ -10,6 +10,7 @@
  */
 import type {
   Attempt,
+  AttemptDetail,
   AttemptFailure,
   BuildResult,
   ProjectionFailure,
@@ -74,7 +75,27 @@ export function BuildReportPanel({
   selectedAttempt: Attempt | null;
   onSelectAttempt(attempt: Attempt): void;
 }) {
-  const inputs = Object.keys(result.external_inputs);
+  // The panel describes the SELECTED candidate, and falls back to the winner
+  // only when nothing is selectable — an invalid build withholds every string,
+  // and its report is still the thing to show. Build-global facts (flow
+  // provenance, belt rules, refusals) stay on `result` regardless.
+  const shown: AttemptDetail = selectedAttempt?.detail ?? {
+    machines: result.machines,
+    buildings: result.buildings,
+    primary_band: result.primary_band,
+    certified_bands: result.certified_bands,
+    title: result.title,
+    outputs: result.outputs,
+    external_inputs: result.external_inputs,
+    input_markers: result.input_markers,
+    unmarked_inputs: result.unmarked_inputs,
+    report: result.report,
+  };
+  const strategy = selectedAttempt?.strategy ?? result.strategy;
+  const candidate = selectedAttempt?.candidate ?? result.candidate;
+  const area = selectedAttempt?.area ?? result.area;
+  const viewingLoser = selectedAttempt !== null && !selectedAttempt.chosen;
+  const inputs = Object.keys(shown.external_inputs);
   const belt = result.belt_rules;
 
   return (
@@ -83,32 +104,32 @@ export function BuildReportPanel({
           the PRODUCT and the rate — `space-warper 10/min (max prolif)` — so it
           is the heading; which strategy and candidate produced it is how, not
           what, and sits under it. */}
-      <h2 data-testid="report-title">{result.title}</h2>
+      <h2 data-testid="report-title">{shown.title}</h2>
       <dl>
-        <dt>Won with</dt>
+        <dt>{viewingLoser ? 'Showing' : 'Won with'}</dt>
         <dd>
-          {result.strategy} / {result.candidate}
+          {strategy} / {candidate}
         </dd>
         <dt>Machines</dt>
-        <dd>{result.machines}</dd>
+        <dd>{shown.machines}</dd>
         <dt>Area</dt>
-        <dd>{result.area} tiles</dd>
+        <dd>{area} tiles</dd>
         <dt>primary_band</dt>
-        <dd>{result.primary_band}</dd>
+        <dd>{shown.primary_band}</dd>
         <dt>certified_bands</dt>
-        <dd>{result.certified_bands.join(', ')}</dd>
+        <dd>{shown.certified_bands.join(', ')}</dd>
         <dt>Buildings</dt>
-        <dd>{result.buildings}</dd>
+        <dd>{shown.buildings}</dd>
         <dt>Makes</dt>
         <dd>
-          {Object.entries(result.outputs)
+          {Object.entries(shown.outputs)
             .map(([item, rate]) => `${item} ${round(rate.per_minute)}/min`)
             .join(', ') || 'nothing declared'}
         </dd>
         <dt>Belt in</dt>
         <dd>
           {inputs.length > 0 ? inputs.join(', ') : 'nothing'}
-          {inputs.length > 0 && ` (${result.input_markers} marked with icons)`}
+          {inputs.length > 0 && ` (${shown.input_markers} marked with icons)`}
         </dd>
         {elapsedS !== undefined && (
           <>
@@ -118,11 +139,11 @@ export function BuildReportPanel({
         )}
       </dl>
 
-      {result.unmarked_inputs.length > 0 && (
+      {shown.unmarked_inputs.length > 0 && (
         // Say it here rather than let someone find it while staring at an
         // unlabelled belt in game.
         <p className="warn">
-          No icon placed for {result.unmarked_inputs.join(', ')} — those input belts are unlabelled.
+          No icon placed for {shown.unmarked_inputs.join(', ')} — those input belts are unlabelled.
         </p>
       )}
 
@@ -176,9 +197,9 @@ export function BuildReportPanel({
         </>
       )}
 
-      {result.report.skipped.length > 0 && (
+      {shown.report.skipped.length > 0 && (
         <p className="note">
-          {result.report.skipped.length} check(s) could not run: {result.report.skipped.join(', ')}
+          {shown.report.skipped.length} check(s) could not run: {shown.report.skipped.join(', ')}
         </p>
       )}
 
@@ -186,14 +207,14 @@ export function BuildReportPanel({
           act on -- a belt run past its ceiling, an input arriving on two
           separate lanes. The build is valid and the string is emitted, so
           nothing else on this page would ever mention them. */}
-      {result.report.warnings.length > 0 && (
+      {shown.report.warnings.length > 0 && (
         <div className="warn" data-testid="validation-warnings">
           <p>
-            <strong>{result.report.warnings.length} warning(s).</strong> The blueprint is valid and
+            <strong>{shown.report.warnings.length} warning(s).</strong> The blueprint is valid and
             will run; these are things to look at before you paste it.
           </p>
           <ul className="reasons">
-            {result.report.warnings.map((finding) => (
+            {shown.report.warnings.map((finding) => (
               <li key={`${finding.check}:${finding.message}`}>
                 {finding.check}: {finding.message}
               </li>
@@ -202,15 +223,15 @@ export function BuildReportPanel({
         </div>
       )}
 
-      {result.report.errors.length > 0 && (
+      {shown.report.errors.length > 0 && (
         <div className="error" data-testid="validation-errors">
           <p>
-            <strong>{result.report.errors.length} validation error(s).</strong> This blueprint would
+            <strong>{shown.report.errors.length} validation error(s).</strong> This blueprint would
             paste cleanly and then not run, which is worse than not having one — so the string is
             withheld unless you ask for it.
           </p>
           <ul className="reasons">
-            {result.report.errors.map((finding) => (
+            {shown.report.errors.map((finding) => (
               <li key={`${finding.check}:${finding.message}`}>
                 {finding.check}: {finding.message}
               </li>

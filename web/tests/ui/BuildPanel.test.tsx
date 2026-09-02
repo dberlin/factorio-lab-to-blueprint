@@ -255,6 +255,17 @@ test('candidate rows select the blueprint string, viewer model, and copy source'
     'data-blueprint-title',
     parseBlueprint(B_BLUEPRINT).header.shortDesc,
   );
+  // The report above the table follows the selection too, not just the string.
+  expect(screen.getByTestId('report-title')).toHaveTextContent('(all products)');
+  expect(screen.getByTestId('blueprint-title')).toHaveTextContent(
+    'electromagnetic-matrix 60/min (all products)',
+  );
+  expect(screen.getByText('Showing').nextElementSibling).toHaveTextContent(
+    'sequence-pair / all-products',
+  );
+  expect(screen.getByText('Machines').nextElementSibling).toHaveTextContent('13');
+  expect(screen.getByText('Area').nextElementSibling).toHaveTextContent('640 tiles');
+  expect(screen.getByText('Belt in').nextElementSibling).toHaveTextContent('proliferator-mk-iii');
   fireEvent.click(screen.getByRole('button', { name: 'Copy blueprint string' }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument());
   expect(copied).toEqual([B_BLUEPRINT]);
