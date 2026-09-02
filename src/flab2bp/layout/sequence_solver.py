@@ -95,6 +95,14 @@ from flab2bp.layout.route_feedback import (
     select_split_candidate,
     update_feedback,
 )
+from flab2bp.layout.sequence_alns import (
+    REWARD_RANKS,
+    OperatorContext,
+    OperatorMetrics,
+    OperatorSession,
+    RepairOperator,
+    destroy_strips,
+)
 from flab2bp.layout.sequence_kernel import BackendName, build_sequence_kernel
 from flab2bp.layout.sequence_pair import (
     TOPOLOGY_MOVE_KINDS,
@@ -105,6 +113,7 @@ from flab2bp.layout.sequence_pair import (
     DecodedPlacement,
     DirectInsertTarget,
     EliteCategory,
+    EncodedPlacement,
     EnergyBreakdown,
     GapProfile,
     PlacementKey,
@@ -2813,6 +2822,130 @@ def _lns_neighbourhood(
         selected_state.gaps,
         problem,
         decoded,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _RepairAdapters:
+    """Run-scoped callables a repair operator needs but this module cannot own."""
+
+    #: Repair a decoded placement with a bounded CP-SAT window and hand back the
+    #: WHOLE encoding -- pair, gaps and the decoded compaction; ``None`` when the
+    #: window is unaffordable, infeasible, or returns the incumbent unchanged.
+    #: The encoding rather than the placement, because the round trip is not
+    #: exact: re-encoding the compaction here could yield a second, different
+    #: pair.  Wired in a later task; until then this is ``None`` and a
+    #: LOCAL_EXACT_PACK choice falls through to the SEQUENCE_REINSERT repair, so
+    #: the arm must not be opened before an adapter exists -- the ledger would
+    #: pay the window arm for the reinsert's work.
+    window_pack: (
+        Callable[
+            [frozenset[int], PlacementProblem, AnnealState, DecodedPlacement],
+            EncodedPlacement | None,
+        ]
+        | None
+    ) = None
+
+
+def _alns_substitution(
+    detailed: DetailedRouteResult,
+    selected_state: AnnealState,
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    *,
+    seed: int,
+    stage_index: int,
+    session: OperatorSession,
+    context: OperatorContext,
+    metrics: OperatorMetrics,
+    routing_seconds: float,
+    band_target_width: int,
+    adapters: _RepairAdapters,
+    cap_scale: bool = False,
+) -> tuple[AnnealState, frozenset[int]]:
+    """Replace a failed candidate with the local repair the selector chose.
+
+    Same contract as :func:`_routing_feedback_substitution`, which stays in this
+    module as the implementation behind the FAILED_ENDPOINTS + SEQUENCE_REINSERT
+    pairing: geometric failures only (never BUDGET), never the whole problem,
+    and the unchanged state when there is nothing to repair.
+    """
+    unchanged = AnnealState(
+        pair=selected_state.pair,
+        gaps=selected_state.gaps,
+        base_seed=seed,
+        stage_index=stage_index,
+        variant_indices=selected_state.variant_indices,
+    )
+    if not any(
+        failure.kind
+        in {
+            RouteFailureKind.STATIC_ACCESS,
+            RouteFailureKind.DYNAMIC_ACCESS,
+            RouteFailureKind.SEALED_POCKET,
+            RouteFailureKind.CONGESTION_WALL,
+            RouteFailureKind.COMMIT_LINK,
+        }
+        for failure in detailed.failures
+    ):
+        return unchanged, frozenset()
+
+    choice = session.observe_and_select(metrics, context, routing_seconds=routing_seconds)
+    neighbourhood = destroy_strips(
+        choice.destroy,
+        # ``cap_scale`` is False until the portfolio opens.  The legacy rule
+        # destroyed the whole neighbourhood `select_lns_neighbourhood` returned,
+        # so capping it here would be a behaviour change smuggled into a wiring
+        # commit; Task 7 turns it on beside the arms that need it.
+        scale=choice.scale if cap_scale else problem.size,
+        result=detailed,
+        pair=selected_state.pair,
+        gaps=selected_state.gaps,
+        problem=problem,
+        decoded=decoded,
+        band_target_width=band_target_width,
+    )
+    if not neighbourhood or (problem.size > 1 and len(neighbourhood) == problem.size):
+        # Credit it now, as unapplied.  Leaving it pending would charge the next
+        # evaluation's outcome to a choice that never ran.
+        session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+        return unchanged, frozenset()
+
+    if choice.repair is RepairOperator.LOCAL_EXACT_PACK and adapters.window_pack is not None:
+        encoded = adapters.window_pack(neighbourhood, problem, selected_state, decoded)
+        if encoded is None:
+            session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+            return unchanged, frozenset()
+        # The adapter already encoded its result; re-encoding the compaction here
+        # could produce a second, different pair, because the round trip is not
+        # exact.  Use the one that was measured.
+        return (
+            AnnealState(
+                pair=encoded.pair,
+                gaps=encoded.gaps,
+                base_seed=seed,
+                stage_index=stage_index,
+                variant_indices=selected_state.variant_indices,
+            ),
+            neighbourhood,
+        )
+
+    repaired = repair_neighbourhood(
+        selected_state.pair,
+        selected_state.gaps,
+        neighbourhood,
+        seed=derive_stage_seed(seed, stage_index + 1),
+        variant_indices=selected_state.variant_indices,
+    )
+    return (
+        AnnealState(
+            pair=repaired.pair,
+            gaps=repaired.gaps,
+            base_seed=seed,
+            stage_index=stage_index,
+            variant_indices=repaired.variant_indices,
+        ),
+        neighbourhood,
     )
 
 
