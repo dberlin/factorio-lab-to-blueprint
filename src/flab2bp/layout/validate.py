@@ -5145,6 +5145,57 @@ def _sorter_capacity(ctx: Context) -> Iterable[Finding]:
         )
 
 
+@check("belt.tier_allowed", needs_spec=True)
+def _belt_tier_allowed(ctx: Context) -> Iterable[Finding]:
+    """Every belt is one the save can build: the URL's belt or a researched upgrade.
+
+    The floor is FactorioLab's choice and the ceiling is the technology set,
+    both carried on the spec; a tile outside that set pastes in the game and
+    then cannot be built by the player.  Below the floor is reported too --
+    nothing emits a slower belt on purpose, so one is a defect.
+    """
+    assert ctx.spec is not None
+    allowed = {
+        numeric
+        for tier in ctx.spec.belt_tiers
+        if (numeric := cat.get_item_id(tier.item_id)) is not None
+    }
+    names = [tier.item_id for tier in ctx.spec.belt_tiers]
+    for ridx, run in enumerate(ctx.runs):
+        if run.tier_item_id in allowed:
+            continue
+        yield Finding(
+            "belt.tier_allowed",
+            Severity.ERROR,
+            f"belt run {ridx} is tier {run.tier_item_id}, which this save cannot "
+            f"build; allowed: {', '.join(names)}",
+            run.indices,
+            {"run": ridx, "tier": run.tier_item_id, "allowed": names},
+        )
+
+
+@check("sorter.tier_allowed", needs_spec=True)
+def _sorter_tier_allowed(ctx: Context) -> Iterable[Finding]:
+    """Every sorter is a tier the save has researched."""
+    assert ctx.spec is not None
+    allowed = {
+        numeric
+        for item_id in ctx.spec.sorter_item_ids
+        if (numeric := cat.get_item_id(item_id)) is not None
+    }
+    for i, s in ctx.of_kind(Kind.SORTER):
+        if s.item_id in allowed:
+            continue
+        yield Finding(
+            "sorter.tier_allowed",
+            Severity.ERROR,
+            f"sorter {i} is tier {s.item_id}, which this save cannot build; "
+            f"allowed: {', '.join(ctx.spec.sorter_item_ids)}",
+            (i,),
+            {"sorter": i, "tier": s.item_id, "allowed": list(ctx.spec.sorter_item_ids)},
+        )
+
+
 def _sorter_demand(
     ctx: Context, index: int, items: Mapping[int, str | None] | None = None
 ) -> Fraction | None:

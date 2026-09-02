@@ -5086,3 +5086,67 @@ def test_internal_seeds_counts_a_port_dock_on_both_sides() -> None:
     drains, seeds = _internal_seeds(ctx)
     assert seeds == {ctx.run_of[1]}
     assert drains == {ctx.run_of[3]}
+
+
+# --- researched tiers -------------------------------------------------------
+
+
+def _tiered_spec(*upgrades: str) -> BuildSpec:
+    from flab2bp.spec import BeltTier
+
+    speeds = {"conveyor-belt-3": Fraction(30)}
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(1)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+        belt_upgrades=tuple(BeltTier(item_id=u, items_per_second=speeds[u]) for u in upgrades),
+        sorter_item_ids=("sorter-1", "sorter-2", "sorter-3"),
+    )
+
+
+def test_belt_tier_allowed_fires_on_a_belt_the_save_cannot_build() -> None:
+    p = place(
+        belt(3, 0, item_id=2003), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
+    r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
+    assert fired(r, "belt.tier_allowed")
+
+
+def test_belt_tier_allowed_clean_inside_the_researched_set() -> None:
+    p = place(
+        belt(3, 0, item_id=2003), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
+    r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
+    assert not fired(r, "belt.tier_allowed")
+
+
+def test_belt_tier_allowed_fires_below_the_floor_too() -> None:
+    p = place(
+        belt(3, 0, item_id=2001), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
+    r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
+    assert fired(r, "belt.tier_allowed")
+
+
+def test_sorter_tier_allowed_fires_on_a_pile_sorter_the_save_cannot_build() -> None:
+    p = place(
+        belt(3, 0), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1, item_id=PILE)
+    )
+    r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
+    assert fired(r, "sorter.tier_allowed")
+
+
+def test_sorter_tier_allowed_clean_inside_the_researched_set() -> None:
+    p = place(
+        belt(3, 0), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1, item_id=SORTER3)
+    )
+    r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
+    assert not fired(r, "sorter.tier_allowed")
