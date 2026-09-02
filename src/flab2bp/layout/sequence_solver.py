@@ -1077,20 +1077,26 @@ class SequenceSolver[PreparedT]:
                 sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats)
                 >= stage_limit
             ):
-                if (
-                    not feasibility_continuation
-                    or self._incumbent is not None
-                    or feasibility_restart_batches >= C_FEASIBILITY_RESTART_BATCHES
-                    or self.budget.shared_left == 0
-                    or self.deadline_reached()
-                    or not self._append_feasibility_restarts()
-                ):
-                    if feasibility_continuation and self._incumbent is None:
-                        termination = (
-                            "deadline"
-                            if self.deadline_reached()
-                            else "feasibility-exhausted"
-                        )
+                # Each stop keeps its own attribution: a continuation that runs
+                # out of clock or of ledger is a deadline or a budget refusal,
+                # exactly as it would have been without the continuation.  Only
+                # the batch bound is "feasibility-exhausted".
+                if not feasibility_continuation or self._incumbent is not None:
+                    break
+                if self.deadline_reached():
+                    termination = "deadline"
+                    break
+                if self.budget.shared_left == 0:
+                    termination = "budget"
+                    break
+                if feasibility_restart_batches >= C_FEASIBILITY_RESTART_BATCHES:
+                    termination = "feasibility-exhausted"
+                    break
+                # Unreachable while every solver has at least one height (the
+                # constructor rejects an empty tuple), and kept so the appender
+                # stays free to decline a height in a later task.
+                if not self._append_feasibility_restarts():
+                    termination = "feasibility-exhausted"
                     break
                 feasibility_restart_batches += 1
                 stage_limit += len(self._heights)
@@ -1396,6 +1402,7 @@ class SequenceSolver[PreparedT]:
                 "stage-limit": "no scheduled stage produced an exact layout",
                 "feasibility-exhausted": (
                     "feasibility continuation exhausted its restart budget "
+                    f"after {feasibility_restart_batches} batches "
                     "before an exact layout"
                 ),
             }[termination]

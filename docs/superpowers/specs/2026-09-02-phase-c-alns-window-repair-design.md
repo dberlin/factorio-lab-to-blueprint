@@ -206,6 +206,10 @@ if sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats) >= stag
     continue
 ```
 
+Each batch adds exactly one stage per height, so the continuation buys at most
+`C_FEASIBILITY_RESTART_BATCHES` extra stages per height, not a search that runs to the deadline;
+Phase C's gate evidence decides whether the bound moves.
+
 Everything else in the loop body is unchanged, so admission (`_start_measured_stage`), the
 expansion ledger (`self.budget.shared_left`), and `deadline_reached()` keep their existing places
 as the real stopping rules.
