@@ -7533,6 +7533,12 @@ def _route_all(
     #: admissible only when the power plan covers every physical member: model
     #: 40 can place a member one tile beyond the logical routing cell.
     junction_ok: dict[Cell, bool] = {}
+    #: True only while the relaxed cluster run is searching.  It relaxes ONE
+    #: refusal below -- the conditional-guard one -- because that refusal reads
+    #: `planned_taps`, and run 2 has to start with an empty tap table (see
+    #: `_relaxed_cluster_result`).  Set and cleared in that closure's
+    #: `try`/`finally`, so it cannot survive the run even on an exception.
+    relaxed_junctions = False
 
     def _can_junction(x: int, y: int, level: int) -> bool:
         cell = (x, y, level)
@@ -7556,7 +7562,15 @@ def _route_all(
         # A conditional guard is the exact geometry a previously selected tap
         # needs against later paths and later Splitters. Reusing the same tap is
         # allowed up to the Splitter's remaining two branch ports.
-        if cell in canvas.guard and not planned_here:
+        #
+        # The relaxed cluster run is exempt, and only here.  Unstaking the pack
+        # leaves `canvas.guard == permanent_guard` and `planned_taps` empty, so
+        # this refusal would turn away every permanent-guard cell -- including
+        # ones a realizable world DOES tap -- making run 2 tighter than a world
+        # it is supposed to bound.  Run 2 treats every cell as already tapped
+        # for this one check; the two checks that read `planned_taps` around it
+        # stay as they are, now over the cluster's own taps alone.
+        if cell in canvas.guard and not planned_here and not relaxed_junctions:
             return False
         nearby = [
             stack_member
@@ -8527,10 +8541,11 @@ def _route_all(
         it.  A role that came back in the wrong order, or not at all, is
         precisely the silent corruption this comparison exists to catch.
 
-        THREE tables are deliberately EXEMPT: `_ends` overwrites
-        `source_access_walls`, `source_access_blockers` and
-        `owned_source_starts` for whichever net it is called on, so the last
-        cluster search to run leaves its own values behind.  They are
+        FOUR tables are deliberately EXEMPT: `_ends` overwrites
+        `source_access_walls`, `destination_access_walls`,
+        `source_access_blockers` and `owned_source_starts` for whichever net it
+        is called on, so the last cluster search to run leaves its own values
+        behind.  They are
         derived-and-overwritten rather than borrowed -- every reader gets them
         from the `_ends` call that produced them, and the only consumer that
         outlives a search is `round_failures`, which is built before
@@ -8629,6 +8644,12 @@ def _route_all(
         # release actually FREES -- a corridor nobody ever served was never
         # `grid.block`ed, so re-blocking it on the way out would hand the round
         # back tighter than it was lent.
+        #
+        # `canvas.free` also consults `canvas.limit`, which is CONSTANT inside
+        # one pass: it is a plain field with no setter, and the only two writes
+        # in the module (`_prepare_routing_problem`, `_place_coaters`) both run
+        # before `_route_all` is entered, so the filter cannot see a different
+        # extent from the one that retired the corridor.
         opened = tuple(
             cell
             for cell in release.reserved
@@ -8667,10 +8688,14 @@ def _route_all(
           guard or owner survives.
         - Every port corridor is retired (`_open_every_corridor`), because
           unstaking RE-RESERVES the corridors staked nets had retired.
-        - Run 1's `planned_taps` is put back after the sweep.  `_can_junction`
-          refuses a `canvas.guard` cell unless `planned_taps` already holds it,
-          so a permanently guarded tap that run 1 could branch from would be
-          refused to run 2 with the table emptied.
+        - `planned_taps` starts EMPTY and only the cluster's own taps
+          accumulate, because those are the only taps every realizable world
+          has.  Run 1's table is saved and put back afterwards.  Three of
+          `_can_junction`'s four uses of that table get TIGHTER as it grows --
+          the frame-ban scan, the `len(planned_here) >= 2` cap and the
+          collider scan -- so keeping run 1's taps would over-constrain run 2.
+          The fourth use, the conditional-guard refusal, gets tighter as the
+          table SHRINKS, so `relaxed_junctions` exempts run 2 from that one.
 
         The relaxation also needs every routing-derived constraint gone: four
         of the five per-net rejection sets are read inside `_ends` and the
@@ -8681,6 +8706,7 @@ def _route_all(
         `_restore_staked` re-stakes, so the `_round_state()` comparison sees
         the round it was handed.
         """
+        nonlocal relaxed_junctions
         if budget["left"] <= 0 or _expired(deadline):
             return None
         rejections = (
@@ -8704,12 +8730,10 @@ def _route_all(
             for index in every
         }
         staked = {index: paths[index] for index in every}
-        # Run 1's own table: the staked taps MINUS the cluster's, which is
-        # exactly what run 1's `_can_junction` read.
-        run_one_taps = {
-            cell: members - set(problem.nets)
-            for cell, members in planned_taps.items()
-        }
+        # Saved so the round gets its own table back whatever run 2 does to it;
+        # `_restore_staked` rebuilds the same content from the paths, and this
+        # is the belt to that braces.
+        taps_before = {cell: set(members) for cell, members in planned_taps.items()}
         before_all = _round_state()
         release: _CorridorRelease | None = None
         try:
@@ -8719,10 +8743,10 @@ def _route_all(
             for index in every:
                 _unstake(index)
             release = _open_every_corridor()
+            # Empty, not run 1's: the cluster's own taps are the only ones
+            # every realizable world has, and they accumulate as CBS stakes.
             planned_taps.clear()
-            planned_taps.update(
-                {cell: members for cell, members in run_one_taps.items() if members}
-            )
+            relaxed_junctions = True
             _capture(2, problem)
             return last_mile.solve_cluster(problem, _cluster_environment())
         finally:
@@ -8731,7 +8755,9 @@ def _route_all(
             # restore does.  Then the SAME verified restore run 1 uses, so run
             # 2 cannot skip the check that run 1 must pass; its return value is
             # read by the caller through `restore_mismatch`.
+            relaxed_junctions = False
             planned_taps.clear()
+            planned_taps.update(taps_before)
             if release is not None:
                 _close_every_corridor(release)
             _restore_staked(every, staked, held_all, before_all)

@@ -502,7 +502,11 @@ would become a *region* exclusion in both packers and travel to Phases C and D
 — the worst failure mode this design has. Restricting run 2 to clusters whose
 nets have no siblings at all removes the mechanism rather than bounding it: with
 `src_group[i]` and `dst_group[i]` empty, `_merge_frontier` had nothing to offer
-that net in the first place, so unstaking cannot take anything away from it.
+that net in the first place, so unstaking cannot take anything away from it. So
+the gate is load-bearing for the loosest-world rule below and not merely
+pessimism: `needs_junction` and `_merge_frontier` both read `paths`, and run 2's
+empty `paths` is TIGHTER than a world in which the siblings are routed, which
+is exactly the thing a region exclusion may not be built on.
 
 **The loosest-world rule.** A relation no-good excludes a REGION, so it is
 sound only if run 2's world is at least as loose, cell for cell, as every world

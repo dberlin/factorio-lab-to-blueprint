@@ -17334,6 +17334,180 @@ def test_the_relaxed_run_never_re_reserves_a_served_nets_corridor(
     assert result.last_mile.relation_strips
 
 
+def _capture_can_junction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[Callable[[int, int, int], bool]]:
+    """Hand the test `_route_all`'s own `_can_junction`, live.
+
+    It is a closure, so the only way to hold one is to intercept somewhere it
+    is passed by value, and `_ends` hands it to `_merge_frontier` on every
+    endpoint query.  A live handle is what lets one probe ask the same
+    question inside run 1, inside run 2, and after the pass.
+    """
+    captured: list[Callable[[int, int, int], bool]] = []
+    original = freeform._merge_frontier
+
+    def capturing(
+        merge_canvas: _Canvas,
+        merge_paths: Mapping[int, Sequence[Cell]],
+        siblings: tuple[int, ...],
+        junctionable: Callable[[int, int, int], bool] | None = None,
+        **kwargs: object,
+    ) -> set[Cell]:
+        if junctionable is not None:
+            captured.append(junctionable)
+        return original(  # type: ignore[arg-type]
+            merge_canvas, merge_paths, siblings, junctionable, **kwargs
+        )
+
+    monkeypatch.setattr(freeform, "_merge_frontier", capturing)
+    return captured
+
+
+def _tapped_spare_stranded_fixture() -> tuple[
+    _Canvas, list[_Net], tuple[int, int, int, int]
+]:
+    """`_two_strip_stranded_fixture` plus a SIBLING PAIR that plants a tap.
+
+    The pair shares one source lane far from the walled pocket, so the second
+    of them branches off the first's committed path -- which is what puts an
+    entry in `planned_taps` -- and neither ever joins the cluster.  The
+    cluster is still sibling-free, so run 2 still runs.
+    """
+    canvas, nets, bounds = _two_strip_stranded_fixture()
+    item = "spare"
+    source = _Port(canvas.add(_belt(4, 4, item=item)), 4, 4, 4, 4)
+    first = canvas.add(_belt(6, 4, item=item))
+    second = canvas.add(_belt(6, 6, item=item))
+    nets.append(
+        _Net(
+            src=source,
+            dst=_Port(first, 6, 4, 6, 4),
+            item=item,
+            net_id=NetId(4, 5, item, NetRole.INTERNAL, 0),
+        )
+    )
+    nets.append(
+        _Net(
+            src=source,
+            dst=_Port(second, 6, 6, 6, 6),
+            item=item,
+            net_id=NetId(4, 6, item, NetRole.INTERNAL, 1),
+        )
+    )
+    return canvas, nets, bounds
+
+
+def test_the_relaxed_run_starts_with_no_planned_taps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run 2's tap table holds only the cluster's own taps, so it starts empty.
+
+    Three of `_can_junction`'s four reads of `planned_taps` get TIGHTER as the
+    table grows -- the frame-ban scan, the `len(planned_here) >= 2` cap and
+    the collider scan over nearby taps -- so carrying a staked net's taps into
+    run 2 would forbid junctions a realizable world allows.  Only the cluster's
+    own taps belong there, and those accumulate as CBS stakes.
+
+    The probe isolates the table: it keeps only cells that run 1 refused while
+    `junction_is_clear` said yes and while the cell was NOT in `canvas.guard`.
+    That rules out the geometric refusal and the conditional-guard refusal, so
+    what is left can only be one of the three reads above.
+    """
+    captured = _capture_can_junction(monkeypatch)
+    canvas, nets, bounds = _tapped_spare_stranded_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    #: Around the sibling pair's lane, where the tap lands.
+    window = [(x, y, 0) for x in range(2, 9) for y in range(2, 9)]
+    seen: list[dict[Cell, tuple[bool, bool, bool]]] = []
+
+    def probing(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        can_junction = captured[-1]
+        seen.append(
+            {
+                cell: (
+                    can_junction(*cell),
+                    canvas.junction_is_clear(*cell),
+                    cell in canvas.guard,
+                )
+                for cell in window
+            }
+        )
+        return _always_proved(problem, environment)
+
+    monkeypatch.setattr(last_mile, "solve_cluster", probing)
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert len(seen) == 2
+    run_one, run_two = seen
+    tap_refused = [
+        cell
+        for cell in window
+        if not run_one[cell][0] and run_one[cell][1] and not run_one[cell][2]
+    ]
+    assert tap_refused, "the fixture must plant a tap that refuses a junction"
+    assert all(run_two[cell][0] for cell in tap_refused)
+    assert result.last_mile is not None
+    assert result.last_mile.proved == 1
+    assert result.last_mile.restore_mismatch == 0
+
+
+def test_a_permanent_guard_cell_is_junctionable_only_during_the_relaxed_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fourth read of `planned_taps` goes the other way, so run 2 is exempt.
+
+    `_can_junction` refuses a `canvas.guard` cell unless `planned_taps`
+    already holds it.  Unstaking the pack leaves `canvas.guard` equal to
+    `permanent_guard` and the tap table empty, so that refusal would turn away
+    EVERY permanent-guard cell -- including ones a realizable world does tap --
+    which makes run 2 tighter than the world it is supposed to bound.  A
+    relaxed-mode flag exempts run 2 from this one check, and the flag must not
+    outlive the run: the third probe is what says it did not.
+    """
+    captured = _capture_can_junction(monkeypatch)
+    canvas, nets, bounds = _two_strip_stranded_fixture()
+    #: Open ground, far from every belt in the fixture, so the only thing that
+    #: can refuse it is the guard.
+    guarded = (3, 3, 0)
+    canvas.guard.add(guarded)
+    belt_id = catalog.item_id("conveyor-belt-1")
+    seen: list[bool] = []
+
+    def probing(
+        problem: last_mile.ClusterProblem,
+        environment: last_mile.ClusterEnvironment,
+    ) -> last_mile.ClusterResult:
+        seen.append(captured[-1](*guarded))
+        return _always_proved(problem, environment)
+
+    monkeypatch.setattr(last_mile, "solve_cluster", probing)
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert canvas.junction_is_clear(*guarded), "the premise: nothing else refuses it"
+    assert seen == [False, True]
+    assert captured[-1](*guarded) is False, "the flag outlived the relaxed run"
+    assert result.last_mile is not None
+    assert result.last_mile.proved == 1
+    assert result.last_mile.restore_mismatch == 0
+    assert result.last_mile.relation_strips
+
+
 def test_a_cluster_with_a_sibling_never_runs_the_relaxed_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
