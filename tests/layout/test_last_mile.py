@@ -1,6 +1,8 @@
 # tests/layout/test_last_mile.py
 from __future__ import annotations
 
+from dataclasses import replace
+
 import flab2bp.layout.freeform as freeform_module
 from flab2bp.layout import last_mile
 from flab2bp.layout.freeform import _astar, _Canvas, _PathSearchResult
@@ -197,6 +199,29 @@ _CROSSING_ENDS: dict[int, tuple[list[Cell], set[Cell]]] = {
 }
 
 
+def _gap_canvas() -> tuple[_Canvas, tuple[int, int, int, int]]:
+    """A wall at x=2 with ONE opening, at ``(2, 1, 0)``.
+
+    Both nets must cross the wall and only one of them can hold the opening, so
+    the cluster is infeasible and a closed tree is the honest answer.
+    """
+    bounds = (0, 0, 4, 2)
+    canvas = _Canvas(limit=bounds)
+    for y in range(3):
+        for level in range(freeform_module.LEVELS):
+            if (y, level) == (1, 0):
+                continue
+            canvas.blocked[2, y, level] = 0
+    return canvas, bounds
+
+
+#: The two nets of `_gap_canvas`: one along row 0, one along row 2.
+_GAP_ENDS: dict[int, tuple[list[Cell], set[Cell]]] = {
+    0: ([(0, 0, 0)], {(4, 0, 0)}),
+    1: ([(0, 2, 0)], {(4, 2, 0)}),
+}
+
+
 def test_two_crossing_nets_are_solved_jointly() -> None:
     canvas, bounds = _crossing_canvas()
     problem = last_mile.ClusterProblem(
@@ -211,26 +236,21 @@ def test_two_crossing_nets_are_solved_jointly() -> None:
     assert set(result.paths) == {0, 1}
     assert not set(result.paths[0]) & set(result.paths[1])
     assert result.nodes <= last_mile.B_MAX_CBS_NODES
+    # The root pair CROSSES, so the root node cannot be the answer: a fixture
+    # whose nets stopped conflicting would make this test vacuous.
+    assert result.nodes >= 2
 
 
 def test_a_gap_that_cannot_hold_two_nets_is_proved_infeasible() -> None:
     """Both nets must cross x=2, and the only opening is one cell on level 0."""
-    bounds = (0, 0, 4, 2)
-    canvas = _Canvas(limit=bounds)
-    for y in range(3):
-        for level in range(freeform_module.LEVELS):
-            if (y, level) == (1, 0):
-                continue
-            canvas.blocked[2, y, level] = 0
+    canvas, bounds = _gap_canvas()
     problem = last_mile.ClusterProblem(
         nets=(0, 1), stranded=(0, 1), truncated=False, sibling_closed=True
     )
-    ends = {
-        0: ([(0, 0, 0)], {(4, 0, 0)}),
-        1: ([(0, 2, 0)], {(4, 2, 0)}),
-    }
 
-    result = last_mile.solve_cluster(problem, _grid_environment(canvas, bounds, ends))
+    result = last_mile.solve_cluster(
+        problem, _grid_environment(canvas, bounds, _GAP_ENDS)
+    )
 
     assert result.outcome is last_mile.ClusterOutcome.PROVED
     assert result.paths == {}
@@ -238,24 +258,14 @@ def test_a_gap_that_cannot_hold_two_nets_is_proved_infeasible() -> None:
 
 
 def test_a_node_bound_reports_bounded_and_never_proved() -> None:
-    bounds = (0, 0, 4, 2)
-    canvas = _Canvas(limit=bounds)
-    for y in range(3):
-        for level in range(freeform_module.LEVELS):
-            if (y, level) == (1, 0):
-                continue
-            canvas.blocked[2, y, level] = 0
+    canvas, bounds = _gap_canvas()
     problem = last_mile.ClusterProblem(
         nets=(0, 1), stranded=(0, 1), truncated=False, sibling_closed=True
     )
-    ends = {
-        0: ([(0, 0, 0)], {(4, 0, 0)}),
-        1: ([(0, 2, 0)], {(4, 2, 0)}),
-    }
 
     result = last_mile.solve_cluster(
         problem,
-        _grid_environment(canvas, bounds, ends, max_nodes=1),
+        _grid_environment(canvas, bounds, _GAP_ENDS, max_nodes=1),
     )
 
     assert result.outcome is last_mile.ClusterOutcome.BOUNDED
@@ -264,58 +274,118 @@ def test_a_node_bound_reports_bounded_and_never_proved() -> None:
 
 
 def test_a_cut_low_level_search_is_never_a_proof() -> None:
-    """H1: a tree that empties only because a search was capped proves nothing."""
+    """H1: a tree that empties only because a search was capped proves nothing.
+
+    The grid is the infeasible one-gap cluster, which closes as PROVED when
+    every search concludes honestly.  The cut is planted on the SECOND net's
+    FIRST constrained re-plan, so both root searches still reach real
+    conclusions and only the in-tree check can catch it: without that check
+    the capped child is priced as "this net has no path", the tree empties,
+    and the run claims a proof it did not earn.
+    """
+    canvas, bounds = _gap_canvas()
     problem = last_mile.ClusterProblem(
         nets=(0, 1), stranded=(0, 1), truncated=False, sibling_closed=True
     )
+    environment = _grid_environment(canvas, bounds, _GAP_ENDS)
+    planned = environment.search
     cut = _PathSearchResult(None, RouteFailureKind.BUDGET, (), 0)
+    replans = 0
 
     def search(index: int, constraints: frozenset[Cell]) -> _PathSearchResult:
-        return cut
+        nonlocal replans
+        if index == 1 and constraints:
+            replans += 1
+            if replans == 1:
+                return cut
+        return planned(index, constraints)
 
-    environment = last_mile.ClusterEnvironment(
-        search=search,
-        offers=_offers_stub,
-        budget_left=lambda: 1 << 30,
-        budget_floor=0,
-        expired=lambda: False,
-    )
-
-    result = last_mile.solve_cluster(problem, environment)
+    result = last_mile.solve_cluster(problem, replace(environment, search=search))
 
     assert result.outcome is last_mile.ClusterOutcome.BOUNDED
     assert result.bound is last_mile.ClusterBound.BUDGET
     assert result.paths == {}
+    # The cut landed INSIDE the tree, after the root pair was expanded.
+    assert result.nodes >= 1
 
 
 def test_an_exhausted_expansion_floor_reports_bounded() -> None:
+    """The floor is checked BETWEEN nodes, not only on the way in."""
     canvas, bounds = _crossing_canvas()
     problem = last_mile.ClusterProblem(
         nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
     )
-    environment = _grid_environment(
-        canvas, bounds, _CROSSING_ENDS, budget={"left": 0}
-    )
+    budget = {"left": 1 << 30}
+    environment = _grid_environment(canvas, bounds, _CROSSING_ENDS, budget=budget)
+    planned = environment.search
+    replans = 0
 
-    result = last_mile.solve_cluster(problem, environment)
+    def draining(index: int, constraints: frozenset[Cell]) -> _PathSearchResult:
+        nonlocal replans
+        found = planned(index, constraints)
+        if constraints:
+            replans += 1
+            if replans == 2:
+                # The root pair and the first node's two children are paid for;
+                # the pass has nothing left for the node now on the heap.
+                budget["left"] = 0
+        return found
+
+    result = last_mile.solve_cluster(problem, replace(environment, search=draining))
 
     assert result.outcome is last_mile.ClusterOutcome.BOUNDED
     assert result.bound is last_mile.ClusterBound.BUDGET
+    assert result.paths == {}
+    assert result.nodes >= 1
 
 
-def test_constraints_keep_a_net_off_the_cell_it_was_split_on() -> None:
+def test_a_budget_already_at_the_floor_never_starts() -> None:
     canvas, bounds = _crossing_canvas()
     problem = last_mile.ClusterProblem(
         nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
     )
 
     result = last_mile.solve_cluster(
-        problem, _grid_environment(canvas, bounds, _CROSSING_ENDS)
+        problem,
+        _grid_environment(canvas, bounds, _CROSSING_ENDS, budget={"left": 0}),
     )
 
+    assert result.outcome is last_mile.ClusterOutcome.BOUNDED
+    assert result.bound is last_mile.ClusterBound.BUDGET
+    assert result.nodes == 0
+
+
+def test_constraints_keep_a_net_off_the_cell_it_was_split_on() -> None:
+    """A winning path came from a constrained re-plan and honours it exactly."""
+    canvas, bounds = _crossing_canvas()
+    problem = last_mile.ClusterProblem(
+        nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
+    )
+    environment = _grid_environment(canvas, bounds, _CROSSING_ENDS)
+    planned = environment.search
+    replans: list[tuple[int, frozenset[Cell], tuple[Cell, ...] | None]] = []
+
+    def recording(index: int, constraints: frozenset[Cell]) -> _PathSearchResult:
+        found = planned(index, constraints)
+        if constraints:
+            replans.append((index, constraints, found.path))
+        return found
+
+    result = last_mile.solve_cluster(problem, replace(environment, search=recording))
+
     assert result.outcome is last_mile.ClusterOutcome.SOLVED
-    crossing = (2, 2, 0)
-    assert sum(crossing in path for path in result.paths.values()) <= 1
+    assert replans, "two crossing nets must force at least one split"
+    winners = [
+        (index, constraints)
+        for index, constraints, path in replans
+        if path is not None and result.paths[index] == path
+    ]
+    assert winners, "the answer must come from a constrained re-plan, not the root"
+    for index, constraints in winners:
+        for cell in constraints:
+            assert result.paths[index].count(cell) == 0, (
+                f"net {index} was split off {cell} and still stands on it"
+            )
 
 
 def test_the_same_cluster_solves_identically_twice() -> None:
