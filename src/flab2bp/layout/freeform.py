@@ -3353,19 +3353,29 @@ def _pack_model(
     def _cluster_no_good_is_live(no_good: ClusterRelationNoGood) -> bool:
         """The same two rejections, read through a RELATIVE no-good.
 
-        A cluster no-good names offsets rather than origins, so the second test
-        of :func:`_no_good_is_live` only becomes decidable once the anchor is
-        pinned: only then does a delta name an absolute content origin.
+        A cluster no-good names offsets rather than origins, so it never names
+        an absolute position on its own.  What it does fix is where the ANCHOR
+        would have to sit for any one strip to satisfy it: subtract that strip's
+        delta from its pinned content origin.  Two pinned strips that imply
+        different anchors therefore contradict the relation outright, and no
+        placement of the strips still free can complete it -- the constraint is
+        dead weight whether or not the anchor itself is one of the pinned ones.
+
+        This is exact for the pinned part of the problem: it rejects only when
+        two pins already disagree, so a relation that any free strip could still
+        walk into stays live.
         """
         if all(index in fixed_at for index in no_good.strips):
             return False
-        anchor = fixed_at.get(no_good.strips[0])
-        if anchor is None:
-            return True
+        implied: tuple[int, int] | None = None
         for index, delta in zip(no_good.strips, no_good.deltas, strict=True):
             current = fixed_at.get(index)
-            if current is not None and current != (anchor[0] + delta[0], anchor[1] + delta[1]):
+            if current is None:
+                continue
+            anchor = (current[0] - delta[0], current[1] - delta[1])
+            if implied is not None and anchor != implied:
                 return False
+            implied = anchor
         return True
 
     for exact_no_good in exact_pack_no_goods:
@@ -3790,6 +3800,80 @@ def _pack_result(
             if solver.Value(di)
         ),
     )
+
+
+def _pack_window(
+    strips: list[Strip],
+    *,
+    height: int,
+    width_bound: int,
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
+    window: frozenset[int],
+    fixed_at: Mapping[int, tuple[int, int]],
+    seed: _Pack | None = None,
+    width_target: int | None = None,
+    arrangement: int = 0,
+    projection_no_goods: tuple[ProjectionNoGood, ...] = (),
+    exact_pack_no_goods: tuple[ExactPackNoGood, ...] = (),
+    direct_relation_no_goods: tuple[_DirectRelationNoGood, ...] = (),
+    cluster_relation_no_goods: tuple[ClusterRelationNoGood, ...] = (),
+    feedback: FeedbackState | None = None,
+    time_budget_s: float = C_WINDOW_SECONDS,
+    deterministic_work: float = C_WINDOW_DETERMINISTIC_WORK,
+    on_skipped: Callable[[int], None] | None = None,
+) -> _Pack | None:
+    """Re-solve `_pack`'s formulation for ``window`` with everything else pinned.
+
+    This is a sub-model, not a re-solve: every strip, constraint, no-good and
+    objective term of the full model is present, and only the pinned strips'
+    domains are collapsed.  `test_pack_window_over_every_strip_reproduces_the_full_pack`
+    pins that claim by asking for the whole problem as the window, with no seed
+    on either side, and comparing against `_pack`.
+
+    ``width_bound`` is the incumbent's width, so a window may NARROW the block
+    and can never widen it.
+
+    Returns ``None`` only when the sub-model is infeasible or the solve returns
+    no incumbent.  An assignment identical to the seed's is returned as-is: the
+    caller decides what that means, because "the window found nothing better" is
+    a signal, not an error.
+    """
+    if not window:
+        raise ValueError("a repair window must name at least one strip")
+    if any(index in fixed_at for index in window):
+        raise ValueError("window strips must not also be pinned")
+    if set(fixed_at) | window != set(range(len(strips))):
+        raise ValueError("window and pinned strips must cover every strip")
+    if time_budget_s <= 0:
+        return None
+    built = _pack_model(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        direct_candidates=direct_candidates,
+        fixed_at=fixed_at,
+        width_target=width_target,
+        projection_no_goods=projection_no_goods,
+        exact_pack_no_goods=exact_pack_no_goods,
+        direct_relation_no_goods=direct_relation_no_goods,
+        cluster_relation_no_goods=cluster_relation_no_goods,
+        feedback=feedback,
+        seed=seed,
+    )
+    if built is None:
+        return None
+    if on_skipped is not None and built.skipped_no_goods:
+        on_skipped(built.skipped_no_goods)
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = time_budget_s
+    # One worker and a deterministic-work bound, always: a window runs BESIDE a
+    # packer that already saturates the box, and its result must not depend on
+    # wall time except through the wall limit above firing as a hard deadline.
+    solver.parameters.num_search_workers = C_WINDOW_WORKERS
+    solver.parameters.max_deterministic_time = min(time_budget_s, deterministic_work)
+    # A function of `arrangement` and nothing else -- see `_pack`.
+    solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
+    return _pack_result(built, solver, strips, direct_candidates, height, None)
 
 
 def _pack(
