@@ -238,6 +238,127 @@ def test_an_empty_stranded_list_is_refused() -> None:
         raise AssertionError("an empty cluster must be refused")
 
 
+def test_accusers_pulled_in_together_are_thinned_against_each_other() -> None:
+    """Two accusers of ONE round share the lane just as a seed and an accuser do.
+
+    The seeds are thinned as they are walked, but a frontier round used to admit
+    its whole candidate list before shutting anything out, so two accusers on
+    one un-tappable lane both got seats and the committer would refuse the pair
+    with ``junction-collider`` exactly as it did for ``(36, 37)``.
+    """
+    problem = last_mile.build_cluster(
+        [0],
+        walls={0: ((5, 5, 0), (5, 6, 0))},
+        blockers={0: ()},
+        owner={(5, 5, 0): 1, (5, 6, 0): 2},
+        paths={1: ((5, 5, 0),), 2: ((5, 6, 0),)},
+        endpoints=_endpoints(3),
+        # 1 and 2 accuse net 0 in the SAME round and share one blocked lane.
+        src_group={1: (2,), 2: (1,)},
+        dst_group={},
+        source_junctionable=lambda index: index == 0,
+    )
+
+    assert problem.nets == (0, 1)
+    assert problem.stranded == (0,)
+    assert problem.same_source_dropped == 1
+
+
+def test_a_junctionable_lane_member_keeps_its_seat_beside_a_blocked_one() -> None:
+    """The predicate is per NET, so lane siblings may disagree about it.
+
+    ``src_group`` is keyed by the lane (``source.y``, ``source.x0``, ``source.z``)
+    and deliberately not by ``source.x``, so two nets on one belt can sit at
+    different tiles and only one of them may be over a usable splitter site.
+    The one that is keeps its seat: it does not need the lane's direct access
+    cells, so it takes nothing from its sibling.
+    """
+    problem = last_mile.build_cluster(
+        [3, 5],
+        walls={3: (), 5: ()},
+        blockers={3: (), 5: ()},
+        owner={},
+        paths={},
+        endpoints=_endpoints(6),
+        src_group={3: (5,), 5: (3,)},
+        dst_group={},
+        source_junctionable=lambda index: index == 3,
+    )
+
+    assert problem.nets == (3, 5)
+    assert problem.same_source_dropped == 0
+
+
+def test_the_blocked_lane_member_does_not_shut_out_a_junctionable_sibling() -> None:
+    """The mirror of the case above: the blocked member is the LOWER ordinal.
+
+    A rule that shut out "every other net on the lane" as each member was
+    admitted made the answer depend on which member happened to be walked
+    first, and here it dropped the sibling that never wanted the lane's direct
+    access cells at all.
+    """
+    problem = last_mile.build_cluster(
+        [3, 5],
+        walls={3: (), 5: ()},
+        blockers={3: (), 5: ()},
+        owner={},
+        paths={},
+        endpoints=_endpoints(6),
+        src_group={3: (5,), 5: (3,)},
+        dst_group={},
+        source_junctionable=lambda index: index == 5,
+    )
+
+    assert problem.nets == (3, 5)
+    assert problem.same_source_dropped == 0
+
+
+def test_one_lane_keeps_every_junctionable_member_and_one_blocked_one() -> None:
+    """The whole rule on one lane: all of the tappable, the lowest of the rest.
+
+    Nets 2 and 4 both need the lane's direct access cells and only one of them
+    can have them; net 6 sits over a usable splitter site and needs none.
+    """
+    problem = last_mile.build_cluster(
+        [2, 4, 6],
+        walls={2: (), 4: (), 6: ()},
+        blockers={2: (), 4: (), 6: ()},
+        owner={},
+        paths={},
+        endpoints=_endpoints(7),
+        src_group={2: (4, 6), 4: (2, 6), 6: (2, 4)},
+        dst_group={},
+        source_junctionable=lambda index: index == 6,
+    )
+
+    assert problem.nets == (2, 6)
+    assert problem.stranded == (2, 6)
+    assert problem.same_source_dropped == 1
+
+
+def test_the_thinning_does_not_depend_on_the_order_the_seeds_arrive() -> None:
+    """The same seeds in any order give the same cluster, seeds and count."""
+    answers = [
+        last_mile.build_cluster(
+            order,
+            walls=dict.fromkeys((2, 4, 6, 7), ()),
+            blockers=dict.fromkeys((2, 4, 6, 7), ()),
+            owner={},
+            paths={},
+            endpoints=_endpoints(8),
+            src_group={2: (4, 6), 4: (2, 6), 6: (2, 4), 7: ()},
+            dst_group={},
+            source_junctionable=lambda index: index == 6,
+        )
+        for order in ([2, 4, 6, 7], [7, 6, 4, 2], [6, 2, 7, 4])
+    ]
+
+    assert [
+        (answer.nets, answer.stranded, answer.same_source_dropped)
+        for answer in answers
+    ] == [((2, 6, 7), (2, 6, 7), 1)] * 3
+
+
 def _offers_stub(_index: int) -> last_mile._Offers:
     return ({}, {}, {})
 

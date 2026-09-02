@@ -150,21 +150,53 @@ def _distance_to_stranded(
     return best
 
 
-def _blocked_source_siblings(
-    index: int,
+def _source_lane(index: int, src_group: Mapping[int, tuple[int, ...]]) -> frozenset[int]:
+    """The identity of the source lane ``index`` sits on.
+
+    ``src_group`` names a net's lane SIBLINGS rather than the lane, and the
+    router keys it by ``(item, cargo domain, source.y, source.x0, source.z)`` --
+    deliberately not by ``source.x``, because two nets can tap one belt at
+    different tiles.  The membership set is therefore the lane's name.
+    """
+    return frozenset((index, *src_group.get(index, ())))
+
+
+def _admit_same_source(
+    candidates: Sequence[int],
     *,
     src_group: Mapping[int, tuple[int, ...]],
     source_junctionable: Callable[[int], bool] | None,
-) -> set[int]:
-    """The nets ``index`` shuts out of the cluster by taking its source lane.
+    lane_seat_taken: set[frozenset[int]],
+) -> tuple[list[int], set[int]]:
+    """Thin one batch of cluster candidates down to what their lanes admit.
 
-    Empty unless the caller supplied a junctionability predicate AND this net's
-    own lane refuses a splitter, in which case every OTHER net on that lane is
-    shut out: only one of them can leave it directly.
+    The rule, per source lane: KEEP every member whose OWN source site takes a
+    splitter -- it leaves through a junction and asks the lane for nothing --
+    plus AT MOST ONE member whose site does not, and that one is the lowest
+    ordinal, because a lane with no splitter site can be left directly by one
+    net and no more.  Junctionability is a property of the net's own site, not
+    of the lane, so lane siblings genuinely disagree about it and a rule phrased
+    as "the admitted net shuts out its siblings" gave order-dependent answers.
+
+    ``lane_seat_taken`` carries the lanes whose single direct-exit seat is
+    already spoken for by an EARLIER batch (the seeds are one batch, then each
+    frontier round is another), and this call adds the lanes it fills.  The
+    returned admissions keep the caller's ordering, which the frontier's
+    distance ordering and truncation depend on.
     """
-    if source_junctionable is None or source_junctionable(index):
-        return set()
-    return {sibling for sibling in src_group.get(index, ()) if sibling != index}
+    if source_junctionable is None:
+        return list(candidates), set()
+    contenders: dict[frozenset[int], list[int]] = {}
+    for index in candidates:
+        if not source_junctionable(index):
+            contenders.setdefault(_source_lane(index, src_group), []).append(index)
+    refused: set[int] = set()
+    for lane, members in contenders.items():
+        keeper = None if lane in lane_seat_taken else min(members)
+        refused.update(index for index in members if index != keeper)
+        if keeper is not None:
+            lane_seat_taken.add(lane)
+    return [index for index in candidates if index not in refused], refused
 
 
 def build_cluster(
@@ -182,7 +214,7 @@ def build_cluster(
 ) -> ClusterProblem:
     """Close the stranded nets over their accusers, bounded by ``max_cluster``.
 
-    ``source_junctionable(index)`` answers "can this net's own source lane take
+    ``source_junctionable(index)`` answers "can THIS net's own source site take
     a splitter", and omitting it keeps the caller's older behaviour exactly.
     It exists because a cluster is built out of nets the caller has UNSTAKED,
     and unstaking is what makes two nets on one source lane look independent.
@@ -196,30 +228,30 @@ def build_cluster(
     at ``(172, 18, 0)``, ``_can_junction`` False there, both nets offered
     ``[(172, 19, 0), (173, 18, 0)]``, commit refused.
 
-    So one net per such lane enters the problem and the rest stay OUTSIDE it --
-    staked exactly as they are, or stranded exactly as they are, simply not
-    among the nets the search may move -- counted in
-    :attr:`ClusterProblem.same_source_dropped`.  It applies to BOTH ways in:
-    the stranded seeds, taken in ascending order so the survivor is the lowest
-    ordinal, and the accusers pulled in afterwards, which is where the measured
-    pair actually collided (net 36 was the seed and net 37 its accuser).
+    So per source lane the problem keeps every member whose own site takes a
+    splitter plus at most one member whose site does not -- the lowest ordinal
+    of those -- and the rest stay OUTSIDE the problem, staked exactly as they
+    are or stranded exactly as they are, simply not among the nets the search
+    may move, counted in :attr:`ClusterProblem.same_source_dropped`.  See
+    :func:`_admit_same_source`.  The rule is applied to the stranded seeds as
+    one batch and to each frontier round of accusers as another -- BOTH ways in
+    matter, and against each other as well as within themselves: the measured
+    pair was a seed and its accuser (net 36 was the seed, net 37 the owner of
+    its wall), while two accusers of one round share a lane the same way.
     """
     seeds_in = tuple(sorted(dict.fromkeys(stranded)))
     if not seeds_in:
         raise ValueError("a cluster needs at least one stranded net")
-    shut_out: set[int] = set()
-    refused: set[int] = set()
-    seeds_kept: list[int] = []
-    for index in seeds_in:
-        if index in shut_out:
-            refused.add(index)
-            continue
-        seeds_kept.append(index)
-        shut_out |= _blocked_source_siblings(
-            index,
-            src_group=src_group,
-            source_junctionable=source_junctionable,
-        )
+    lane_seat_taken: set[frozenset[int]] = set()
+    seeds_kept, refused = _admit_same_source(
+        seeds_in,
+        src_group=src_group,
+        source_junctionable=source_junctionable,
+        lane_seat_taken=lane_seat_taken,
+    )
+    # Every lane hands out its one seat to its lowest-ordinal blocked member, so
+    # the lowest seed overall -- the first the caller listed once sorted -- is
+    # always kept and the problem is never seedless.
     seeds = tuple(seeds_kept)
     members = set(seeds)
     cluster = list(seeds)
@@ -235,13 +267,7 @@ def build_cluster(
             for holder in blockers.get(index, ()):
                 if holder not in members:
                     candidates.add(holder)
-        refused |= candidates & shut_out
-        candidates -= shut_out
         if not candidates:
-            break
-        room = max_cluster - len(cluster)
-        if room <= 0:
-            truncated = True
             break
         ordered = sorted(
             candidates,
@@ -250,17 +276,26 @@ def build_cluster(
                 candidate,
             ),
         )
+        # Thin BEFORE the room check, exactly as the older shut-out filter did:
+        # a net no lane will admit must not consume a seat the cap is counting.
+        ordered, round_refused = _admit_same_source(
+            ordered,
+            src_group=src_group,
+            source_junctionable=source_junctionable,
+            lane_seat_taken=lane_seat_taken,
+        )
+        refused |= round_refused
+        if not ordered:
+            break
+        room = max_cluster - len(cluster)
+        if room <= 0:
+            truncated = True
+            break
         if len(ordered) > room:
             truncated = True
             ordered = ordered[:room]
         cluster.extend(ordered)
         members.update(ordered)
-        for index in ordered:
-            shut_out |= _blocked_source_siblings(
-                index,
-                src_group=src_group,
-                source_junctionable=source_junctionable,
-            )
         frontier = ordered
     cluster.sort()
     sibling_closed = all(
