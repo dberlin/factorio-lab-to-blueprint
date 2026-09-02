@@ -66,7 +66,7 @@ import time
 from array import array
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence, Set
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence, Set
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -3225,46 +3225,70 @@ def _feedback_objective_score(
     return score
 
 
-def _pack(
+#: Wall limit of one fix-and-reoptimize window solve.  A window is affordable
+#: exactly because it is not a full pack: the full solve on the largest cells
+#: gets `share * _PACK_SHARE / len(heights)` and is followed by a 1.9-4.6 s
+#: preparation, so a repair that costs more than a second buys nothing.
+C_WINDOW_SECONDS = 1.0
+#: Deterministic work bound for a window solve.  A full pack of fifteen or more
+#: strips gets `_DETERMINISTIC_PACK_WORK` and is expected to stop at its first
+#: incumbent from a shelf warm start; a window has at most twelve free strips
+#: but no such guarantee, and is expected to close a small model, so it gets
+#: twenty-five times that allowance.  On an idle box this is the limit that
+#: fires; under `--jobs 16` the wall limit above fires first.
+C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK
+#: One CP-SAT worker per window.  `pyproject.toml` records that a single solve
+#: already runs at ~700% CPU; a window must not race the packer for cores.
+C_WINDOW_WORKERS = 1
+#: Margin a window solve keeps between itself and the run deadline.
+C_WINDOW_DEADLINE_SAFETY_SECONDS = 0.05
+
+
+@dataclass(frozen=True, slots=True)
+class _PackModel:
+    """One built packing model and the handles a caller needs to read it back."""
+
+    model: cp_model.CpModel
+    w_var: cp_model.IntVar
+    xs: list[cp_model.IntVar]
+    ys: list[cp_model.IntVar]
+    direct_vars: dict[tuple[int, int], cp_model.IntVar]
+    sizes: list[tuple[int, int]]
+    #: No-goods dropped because a pinned strip contradicted them or because they
+    #: named no free strip.  Adding either would constrain the sub-model for a
+    #: reason outside the window.
+    skipped_no_goods: int
+
+
+def _pack_model(
     strips: list[Strip],
     *,
     height: int,
     width_bound: int,
-    time_budget_s: float,
     direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
-    workers: int,
-    deterministic: bool = False,
-    seed: _Pack | None = None,
-    arrangement: int = 0,
+    fixed_at: Mapping[int, tuple[int, int]] = MappingProxyType({}),
+    width_target: int | None = None,
     projection_no_goods: tuple[ProjectionNoGood, ...] = (),
     exact_pack_no_goods: tuple[ExactPackNoGood, ...] = (),
     direct_relation_no_goods: tuple[_DirectRelationNoGood, ...] = (),
     cluster_relation_no_goods: tuple[ClusterRelationNoGood, ...] = (),
     feedback: FeedbackState | None = None,
-    stop_when_seed_admissible: bool = False,
-) -> _Pack | None:
-    """Minimise width at a fixed height with CP-SAT.
+    seed: _Pack | None = None,
+) -> _PackModel | None:
+    """Build the packing model, optionally with some strips pinned in place.
 
-    Height is swept outside rather than multiplied inside: ``W * H`` is a product
-    of two variables, whose CP-SAT relaxation is weak enough that the search
-    flounders.  Several easy solves beat one hard one.
-
-    ``seed`` is a shelf packing at this same height -- feasible by construction,
-    so it does two things no heuristic guess could.  It hints every ``x``/``y``,
-    which gives the search an incumbent immediately instead of after it finds
-    one; and its width is a proven upper bound on ``w_var``, which cuts the
-    domain the bound has to climb through.  This is the construction that used
-    to be the fallback, put to the one use it is genuinely good for.
-
-    ``arrangement`` asks for a DIFFERENT optimum of the SAME model.  Nothing
-    about the model changes -- not the objective, not a cut, not the warm start
-    -- only which of many equally wide packings CP-SAT walks to.  ``0`` is the
-    constant this always used, so a caller that does not ask gets exactly the
-    solve it used to get.  See :meth:`FreeformLayout._sweep` for why a second
-    arrangement is worth a solve.
+    ``fixed_at`` maps a strip index to its CONTENT origin -- the same convention
+    ``_Pack.at`` uses -- and pins that strip by giving its ``x``/``y`` variables a
+    singleton domain.  A singleton domain rather than a constant expression is
+    deliberate: every constraint below is then written by the SAME code for a
+    pinned strip as for a free one, so the window model is provably the full
+    model with fewer degrees of freedom rather than a second formulation that
+    has to be kept in step.  With ``fixed_at`` empty this is exactly the model
+    ``_pack`` has always built.
     """
     model = cp_model.CpModel()
     n = len(strips)
+    skipped = 0
     if n == 0:
         return None
 
@@ -3289,8 +3313,17 @@ def _pack(
 
     xs, ys, x_iv, y_iv = [], [], [], []
     for i, (w, h) in enumerate(sizes):
-        x = model.new_int_var(0, max(0, width_bound - w), f"x{i}")
-        y = model.new_int_var(0, max(0, height - h), f"y{i}")
+        pinned = fixed_at.get(i)
+        if pinned is None:
+            x = model.new_int_var(0, max(0, width_bound - w), f"x{i}")
+            y = model.new_int_var(0, max(0, height - h), f"y{i}")
+        else:
+            bx = pinned[0] - strips[i].west_channel
+            by = pinned[1]
+            if not (0 <= bx <= max(0, width_bound - w)) or not (0 <= by <= max(0, height - h)):
+                return None  # the pin is outside this outline; nothing to repair here
+            x = model.new_int_var(bx, bx, f"x{i}")
+            y = model.new_int_var(by, by, f"y{i}")
         xs.append(x)
         ys.append(y)
         x_iv.append(model.new_fixed_size_interval_var(x, w, f"xi{i}"))
@@ -3299,13 +3332,55 @@ def _pack(
 
     model.add_no_overlap_2d(x_iv, y_iv)
 
+    def _no_good_is_live(named: Iterable[int], origins: Iterable[tuple[int, int]]) -> bool:
+        """Is this no-good worth adding to a model with pinned strips?
+
+        No, twice over.  If a pinned strip already sits somewhere else, the
+        forbidden tuple is unreachable and the constraint is dead weight.  If
+        every strip it names is pinned, its only free variable is ``w_var`` and
+        it would forbid a WIDTH for no geometric reason.
+        """
+        named = tuple(named)
+        origins = tuple(origins)
+        if all(index in fixed_at for index in named):
+            return False
+        for index, origin in zip(named, origins, strict=True):
+            current = fixed_at.get(index)
+            if current is not None and current != origin:
+                return False
+        return True
+
+    def _cluster_no_good_is_live(no_good: ClusterRelationNoGood) -> bool:
+        """The same two rejections, read through a RELATIVE no-good.
+
+        A cluster no-good names offsets rather than origins, so the second test
+        of :func:`_no_good_is_live` only becomes decidable once the anchor is
+        pinned: only then does a delta name an absolute content origin.
+        """
+        if all(index in fixed_at for index in no_good.strips):
+            return False
+        anchor = fixed_at.get(no_good.strips[0])
+        if anchor is None:
+            return True
+        for index, delta in zip(no_good.strips, no_good.deltas, strict=True):
+            current = fixed_at.get(index)
+            if current is not None and current != (anchor[0] + delta[0], anchor[1] + delta[1]):
+                return False
+        return True
+
     for exact_no_good in exact_pack_no_goods:
         if exact_no_good.height != height or exact_no_good.outline != tuple(sizes):
+            continue
+        if not _no_good_is_live(range(n), exact_no_good.origins):
+            skipped += 1
             continue
         _add_exact_pack_no_good(model, w_var, xs, ys, strips, exact_no_good)
 
     for cluster_index, cluster_no_good in enumerate(cluster_relation_no_goods):
         if cluster_no_good.height != height or cluster_no_good.outline != tuple(sizes):
+            continue
+        if not _cluster_no_good_is_live(cluster_no_good):
+            skipped += 1
             continue
         _add_cluster_relation_no_good(
             model,
@@ -3326,6 +3401,12 @@ def _pack(
         ):
             raise ValueError("projection no-good must name two distinct packed strips")
         if projection_no_good.pack_height != height:
+            continue
+        if not _no_good_is_live(
+            (projection_no_good.left_strip, projection_no_good.right_strip),
+            (projection_no_good.left_origin, projection_no_good.right_origin),
+        ):
+            skipped += 1
             continue
         _add_projection_no_good(model, w_var, xs, ys, strips, projection_no_good)
 
@@ -3402,6 +3483,8 @@ def _pack(
     # the search burns itself on permutations that differ by nothing.
     for i in range(n):
         for j in range(i + 1, n):
+            if i in fixed_at or j in fixed_at:
+                continue
             a, b = strips[i], strips[j]
             if (a.group_key, a.machines, a.in_lanes, a.out_lanes) == (
                 b.group_key,
@@ -3487,6 +3570,9 @@ def _pack(
             or candidate.item != direct.item
             or candidate.cargo_domain is not direct.cargo_domain
         ):
+            continue
+        if pair[0] in fixed_at and pair[1] in fixed_at:
+            skipped += 1
             continue
         relation_x = model.new_int_var(
             -width_bound,
@@ -3632,7 +3718,7 @@ def _pack(
         if feedback is None:
             model.add(w_var <= min(seed.width, width_bound))
         for i, (hx, hy) in seed.at.items():
-            if i >= n:
+            if i >= n or i in fixed_at:
                 continue
             w, h = sizes[i]
             # `seed.at` is a CONTENT origin and `xs` is a BOX origin, so the
@@ -3648,7 +3734,115 @@ def _pack(
             )
             model.add_hint(ys[i], min(max(hy, 0), max(0, height - h)))
 
-    if time_budget_s <= 0:
+    if width_target is not None:
+        if all(
+            fixed_at[index][0] - strips[index].west_channel + sizes[index][0] <= width_target
+            for index in fixed_at
+        ):
+            model.add(w_var <= width_target)
+        else:
+            # A pinned strip already reaches past the target, so the bound cannot
+            # be added without making the sub-model infeasible for a reason
+            # outside the window.  Count it: a target that never applies is a
+            # repair aimed at nothing, and the gate must be able to see that.
+            skipped += 1
+
+    return _PackModel(
+        model=model,
+        w_var=w_var,
+        xs=xs,
+        ys=ys,
+        direct_vars=direct_vars,
+        sizes=sizes,
+        skipped_no_goods=skipped,
+    )
+
+
+def _pack_result(
+    built: _PackModel,
+    solver: cp_model.CpSolver,
+    strips: Sequence[Strip],
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
+    height: int,
+    admission: cp_model.CpSolverSolutionCallback | None,
+) -> _Pack | None:
+    """Solve one built model and read its assignment back as a `_Pack`."""
+    status = solver.Solve(built.model, admission)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None
+    return _Pack(
+        at={
+            i: (solver.Value(built.xs[i]) + strips[i].west_channel, solver.Value(built.ys[i]))
+            for i in range(len(strips))
+        },
+        width=solver.Value(built.w_var),
+        height=height,
+        status=solver.StatusName(status),
+        hit_budget=status == cp_model.FEASIBLE,
+        direct=frozenset(
+            DirectInsertId(
+                i,
+                j,
+                direct_candidates[i, j].item,
+                direct_candidates[i, j].cargo_domain,
+            )
+            for (i, j), di in built.direct_vars.items()
+            if solver.Value(di)
+        ),
+    )
+
+
+def _pack(
+    strips: list[Strip],
+    *,
+    height: int,
+    width_bound: int,
+    time_budget_s: float,
+    direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
+    workers: int,
+    deterministic: bool = False,
+    seed: _Pack | None = None,
+    arrangement: int = 0,
+    projection_no_goods: tuple[ProjectionNoGood, ...] = (),
+    exact_pack_no_goods: tuple[ExactPackNoGood, ...] = (),
+    direct_relation_no_goods: tuple[_DirectRelationNoGood, ...] = (),
+    cluster_relation_no_goods: tuple[ClusterRelationNoGood, ...] = (),
+    feedback: FeedbackState | None = None,
+    stop_when_seed_admissible: bool = False,
+) -> _Pack | None:
+    """Minimise width at a fixed height with CP-SAT.
+
+    Height is swept outside rather than multiplied inside: ``W * H`` is a product
+    of two variables, whose CP-SAT relaxation is weak enough that the search
+    flounders.  Several easy solves beat one hard one.
+
+    ``seed`` is a shelf packing at this same height -- feasible by construction,
+    so it does two things no heuristic guess could.  It hints every ``x``/``y``,
+    which gives the search an incumbent immediately instead of after it finds
+    one; and its width is a proven upper bound on ``w_var``, which cuts the
+    domain the bound has to climb through.  This is the construction that used
+    to be the fallback, put to the one use it is genuinely good for.
+
+    ``arrangement`` asks for a DIFFERENT optimum of the SAME model.  Nothing
+    about the model changes -- not the objective, not a cut, not the warm start
+    -- only which of many equally wide packings CP-SAT walks to.  ``0`` is the
+    constant this always used, so a caller that does not ask gets exactly the
+    solve it used to get.  See :meth:`FreeformLayout._sweep` for why a second
+    arrangement is worth a solve.
+    """
+    built = _pack_model(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        direct_candidates=direct_candidates,
+        projection_no_goods=projection_no_goods,
+        exact_pack_no_goods=exact_pack_no_goods,
+        direct_relation_no_goods=direct_relation_no_goods,
+        cluster_relation_no_goods=cluster_relation_no_goods,
+        feedback=feedback,
+        seed=seed,
+    )
+    if built is None or time_budget_s <= 0:
         return None
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_budget_s
@@ -3669,6 +3863,10 @@ def _pack(
     # bake-off is comparing samples rather than strategies.
     solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
 
+    # Bound outside the callback: a closure over `built` would carry its
+    # `| None` into the class body, where the narrowing above does not reach.
+    w_var = built.w_var
+
     class SeedAdmission(cp_model.CpSolverSolutionCallback):
         """End this solve once its exact incumbent admits the routed seed."""
 
@@ -3678,28 +3876,7 @@ def _pack(
                 self.StopSearch()
 
     admission = SeedAdmission() if stop_when_seed_admissible and seed is not None else None
-    status = solver.Solve(model, admission)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None
-    return _Pack(
-        at={
-            i: (solver.Value(xs[i]) + strips[i].west_channel, solver.Value(ys[i])) for i in range(n)
-        },
-        width=solver.Value(w_var),
-        height=height,
-        status=solver.StatusName(status),
-        hit_budget=status == cp_model.FEASIBLE,
-        direct=frozenset(
-            DirectInsertId(
-                i,
-                j,
-                direct_candidates[i, j].item,
-                direct_candidates[i, j].cargo_domain,
-            )
-            for (i, j), di in direct_vars.items()
-            if solver.Value(di)
-        ),
-    )
+    return _pack_result(built, solver, strips, direct_candidates, height, admission)
 
 
 # --- emission --------------------------------------------------------------
