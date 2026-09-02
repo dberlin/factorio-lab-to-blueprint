@@ -1622,8 +1622,8 @@ def test_unreachable_elevated_port_returns_structured_failure_without_route() ->
     assert result.failures[0].destination == (6, 0, 1)
     assert tuple(canvas.buildings) == before
     # The rip-up/reroute rounds alone are not a completeness proof, but the
-    # destination has no free neighbour cell at all -- west (5,0,1), north
-    # (6,-1,1) and south (6,1,1) are walled and east (7,0,1) is off the
+    # destination has no free neighbour cell at all -- west (5,0,1), south
+    # (6,-1,1) and north (6,1,1) are walled and east (7,0,1) is off the
     # canvas (`limit`'s max_x is 6) -- so the last-mile cluster search
     # (real, not mocked here) closes its tree over this one net and PROVES
     # it unroutable.  That real proof is exactly what Task 5 wires into
@@ -3600,7 +3600,7 @@ def test_a_bounded_cluster_search_is_not_exhaustive(
     assert result.last_mile.proved == 0
 
 
-def test_a_proof_from_an_earlier_round_is_not_exhaustive_for_a_later_incumbent(
+def test_a_proof_from_a_later_round_is_not_exhaustive_for_an_earlier_incumbent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`proved_round == best_round` must be checked, not just `proved_round >= 0`.
