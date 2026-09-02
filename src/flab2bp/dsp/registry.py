@@ -1077,11 +1077,10 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         30.0,
         "CP-SAT time limit in seconds; not degrees",
     ),
-    LintException(
-        "flab2bp.layout.last_mile",
-        "<module>",
-        0.35,
-        "B_MIN_SECONDS: minimum remaining wall-clock budget to start a cluster "
-        "search; not SORTER_END_EXTENSION geometry",
-    ),
+    # NOTE: `flab2bp.layout.last_mile:<module> 0.35` (B_MIN_SECONDS, excused as
+    # "not SORTER_END_EXTENSION geometry") was deleted when Task 9 measured the
+    # floor at 1.82, which coincides with nothing and needs no exception.  A
+    # lint exception that matches no site is reported STALE by
+    # `provenance.stale_lint_exceptions`; if the floor is ever re-measured back
+    # to 0.35 the entry has to come back with it.
 )
