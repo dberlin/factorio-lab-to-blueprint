@@ -148,6 +148,43 @@ class LastMileReport:
             raise ValueError("relation strips must be ascending")
 
 
+@dataclass(frozen=True, slots=True)
+class ClusterRelationNoGood:
+    """One relative placement of strip instances proved unroutable.
+
+    The proof behind it is a CBS tree that closed with every OTHER belt in the
+    pack unstaked and the cluster's routing-derived rejection sets emptied, so
+    it is a statement about the strips and not about one routing: any packing
+    that repeats these relative offsets refuses again.  ``outline`` and
+    ``height`` scope it to the strip plan that produced it, the same guard
+    :class:`ExactPackNoGood` carries.
+
+    ``evidence`` is one blob rather than one string per net: what a reader
+    needs is which cluster this was and that both runs closed, and a per-net
+    tuple only makes the equality key noisier.
+    """
+
+    height: int
+    outline: tuple[tuple[int, int], ...]
+    strips: tuple[int, ...]
+    deltas: tuple[tuple[int, int], ...]
+    evidence: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.height <= 0:
+            raise ValueError("cluster relation height must be positive")
+        if len(self.strips) < 2:
+            raise ValueError("a cluster relation needs at least two strips")
+        if tuple(sorted(self.strips)) != self.strips:
+            raise ValueError("cluster relation strips must be ascending")
+        if len(self.deltas) != len(self.strips):
+            raise ValueError("a cluster relation needs one delta per strip")
+        if self.deltas[0] != (0, 0):
+            raise ValueError("the anchor strip's delta must be the origin")
+        if not self.evidence:
+            raise ValueError("a cluster relation no-good requires evidence")
+
+
 def combine_last_mile_reports(
     reports: Iterable[LastMileReport | None],
 ) -> LastMileReport | None:

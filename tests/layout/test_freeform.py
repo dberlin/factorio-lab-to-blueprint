@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 from ortools.sat.python import cp_model
 
+import flab2bp.layout.freeform as freeform_module
 from flab2bp.dsp import catalog, codec, colliders, planet, rules, splitter_ports
 from flab2bp.layout import finalize, freeform, junction, last_mile, slots, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
@@ -91,6 +92,7 @@ from flab2bp.layout.freeform import (
 )
 from flab2bp.layout.route_feedback import (
     Cell,
+    ClusterRelationNoGood,
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
@@ -6385,6 +6387,149 @@ def test_staged_static_exact_pack_no_good_forbids_only_the_full_assignment() -> 
         no_good.width,
         no_good.origins,
     )
+
+
+def _three_unit_strips() -> list[Strip]:
+    """Three minimal packing strips, sized so one pair's cheapest relation is forced.
+
+    Hand-built rather than run through ``plan_strips``: the cluster-relation
+    no-good tests below need something CP-SAT can place at a small width and
+    height, and a real recipe's strip is far too wide for that.  Distinct
+    ``group_key``s keep the symmetry-breaking cut in ``_pack`` from adding its
+    own ordering between the strips.
+
+    Strip 0 alone is as tall as the pack (height 6), so it owns a column by
+    itself; strips 1 and 2 together are exactly as tall, so the cheapest width
+    stacks them into the other column -- any wider arrangement costs more area
+    and loses.  A net from strip 0 to strip 2 then breaks the tie between
+    stacking orders in favour of the one with the smaller half-perimeter, which
+    is strip 2 directly beside strip 0.  That gives one predictable minimum-width
+    packing -- strip 0 at the origin, strip 2 offset by exactly its own width --
+    for the no-good tests to forbid and then prove absent.
+    """
+    anchor = Strip(
+        group_key="unit0",
+        recipe_id="unit0",
+        item_id=0,
+        model_index=0,
+        cargo_domain=CargoDomain.UNSPRAYED,
+        machines=1,
+        mw=1,
+        mh=1,
+        yaw=0.0,
+        pw=1,
+        ph=1,
+        in_above=(),
+        out_lanes=(("item", "unit2", CargoDomain.UNSPRAYED),),
+        in_below=(),
+        lane_plan=None,
+        attachment_plan=(),
+        box_height=5,
+        west_channel=0,
+    )
+    filler = Strip(
+        group_key="unit1",
+        recipe_id="unit1",
+        item_id=0,
+        model_index=0,
+        cargo_domain=CargoDomain.UNSPRAYED,
+        machines=1,
+        mw=1,
+        mh=1,
+        yaw=0.0,
+        pw=1,
+        ph=1,
+        in_above=(),
+        out_lanes=(),
+        in_below=(),
+        lane_plan=None,
+        attachment_plan=(),
+        box_height=1,
+        west_channel=0,
+    )
+    neighbour = replace(filler, group_key="unit2", recipe_id="unit2", box_height=3)
+    return [anchor, filler, neighbour]
+
+
+def test_a_cluster_relation_no_good_forbids_only_that_relative_placement() -> None:
+    """Every translation of the recorded relation is out; a shift is back in."""
+    strips = _three_unit_strips()
+    height = 6
+    no_good = ClusterRelationNoGood(
+        height=height,
+        outline=tuple(freeform_module._box(strip) for strip in strips),
+        strips=(0, 2),
+        deltas=((0, 0), (2, 0)),
+        evidence=("route.exhaustive",),
+    )
+
+    forbidden = freeform_module._pack(
+        strips,
+        height=height,
+        width_bound=4,
+        time_budget_s=1.0,
+        direct_candidates={},
+        workers=1,
+        deterministic=True,
+        cluster_relation_no_goods=(no_good,),
+    )
+
+    assert forbidden is not None
+    origins = [forbidden.at[index] for index in range(len(strips))]
+    assert (origins[2][0] - origins[0][0], origins[2][1] - origins[0][1]) != (2, 0)
+
+
+def test_a_cluster_relation_no_good_for_another_outline_is_ignored() -> None:
+    strips = _three_unit_strips()
+    no_good = ClusterRelationNoGood(
+        height=6,
+        outline=((99, 99),),
+        strips=(0, 2),
+        deltas=((0, 0), (2, 0)),
+        evidence=("route.exhaustive",),
+    )
+
+    packed = freeform_module._pack(
+        strips,
+        height=6,
+        width_bound=4,
+        time_budget_s=1.0,
+        direct_candidates={},
+        workers=1,
+        deterministic=True,
+        cluster_relation_no_goods=(no_good,),
+    )
+
+    assert packed is not None
+
+
+def test_a_translated_cluster_relation_is_still_forbidden() -> None:
+    """The constraint is over relative offsets, so sliding the pair cannot escape it."""
+    strips = _three_unit_strips()
+    outline = tuple(freeform_module._box(strip) for strip in strips)
+    no_good = ClusterRelationNoGood(
+        height=6,
+        outline=outline,
+        strips=(0, 2),
+        deltas=((0, 0), (2, 0)),
+        evidence=("route.exhaustive",),
+    )
+
+    packed = freeform_module._pack(
+        strips,
+        height=6,
+        width_bound=8,
+        time_budget_s=1.0,
+        direct_candidates={},
+        workers=1,
+        deterministic=True,
+        cluster_relation_no_goods=(no_good,),
+    )
+
+    assert packed is not None
+    origins = [packed.at[index] for index in range(len(strips))]
+    delta = (origins[2][0] - origins[0][0], origins[2][1] - origins[0][1])
+    assert delta != (2, 0)
 
 
 def _brute_junction_projection_frames(
