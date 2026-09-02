@@ -26,3 +26,26 @@ def astar_flat(
     expansions; exit kind 0 found / 1 budget / 2 sealed;
     settled cell indices in index order when sealed, else empty;
     budget_left after the same write-back rules as the Python loop)."""
+
+def relaxed_search_flat(
+    flags: bytearray,
+    present: array[float],
+    history: array[float],
+    weight: float,
+    transitions_target: array[int],
+    transitions_via: array[int],
+    transitions_cost: array[float],
+    starts: array[int],
+    goals: array[int],
+    goal_xy: array[int],
+    gh: int,
+    levels: int,
+    budget: int,
+    cancelled: Callable[[], bool] | None,
+) -> tuple[array[int] | None, int, bool, bool]:
+    """(path indices with via cells spliced, oldest first, or None;
+    expansions; whether the budget stopped the search; whether it was
+    cancelled).  ``present`` is dense and pre-multiplied by ``_PRESENT_COST``;
+    ``history`` is dense or zero-length; the three transition buffers hold, per
+    level, a count slot followed by that level's entries; ``goals`` is sorted
+    and ``goal_xy`` holds its local (x, y) pairs in the same order."""

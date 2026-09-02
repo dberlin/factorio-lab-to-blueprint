@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import os
+import random
 from collections.abc import Iterable
 from dataclasses import replace
 
@@ -647,3 +649,63 @@ def test_zero_overflow_proxy_cannot_be_certified_as_a_placement() -> None:
             spec.BuildSpec(groups=()),
             expect_power=False,
         )
+
+
+def test_compiled_relaxed_search_matches_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    from flab2bp.layout import route_kernel
+
+    # Skip only when the compiled backend was switched off ON PURPOSE.  Any
+    # other absence is a build that did not happen, and a parity test that
+    # reports "skipped" when the thing it compares against is missing is a
+    # parity test that never runs.
+    if os.environ.get("FLAB2BP_ROUTE_KERNEL") == "python":
+        pytest.skip("FLAB2BP_ROUTE_KERNEL=python switches the compiled backend off")
+    assert route_kernel.compiled_available()
+    assert route_kernel._compiled_relaxed is not None
+    rng = random.Random(7)
+    for trial in range(20):
+        width = rng.randint(6, 18)
+        height = rng.randint(4, 12)
+        bounds = (0, 0, width - 1, height - 1)
+        blocked = {
+            (rng.randrange(width), rng.randrange(height), rng.randrange(LEVELS))
+            for _ in range(rng.randint(0, width * height // 3))
+        }
+        a = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+        b = NetId(2, 3, "copper", NetRole.INTERNAL, 1)
+        # A third net ACROSS the other two, so the ledger's present cost is
+        # really sampled: two parallel rows never contend, and a congestion
+        # term that is zero everywhere makes the whole `_congestion` helper --
+        # weight, present and history alike -- invisible to this comparison.
+        c = NetId(4, 5, "stone", NetRole.INTERNAL, 2)
+        problem = _problem(
+            (
+                (a, (0, 1), (width - 1, 1), (), (), ()),
+                (b, (0, height - 2), (width - 1, height - 2), (), (), ()),
+                (c, (width // 2, 0), (width // 2, height - 1), (), (), ()),
+            ),
+            bounds=bounds,
+            blocked=sorted(blocked),
+        )
+        # Over ARBITRARY cells rather than the blocked ones: history on a cell
+        # the search can never enter is history the search never reads.
+        history = (
+            {
+                (rng.randrange(width), rng.randrange(height), rng.randrange(LEVELS)): rng.random()
+                for _ in range(rng.randint(0, width * height // 2))
+            }
+            if trial % 2
+            else {}
+        )
+        feedback = _feedback(problem, history)
+        # `_feedback` leaves every net weight at the default, which pins the
+        # kernel's `weight` at 1.0 and would let a dropped multiplier pass.
+        if trial % 3 == 0:
+            feedback = replace(feedback, net_weight={a: 0.5, b: 2.25, c: 1.75})
+
+        compiled_result = route_global_once(problem, feedback, 5000)
+        monkeypatch.setattr(route_kernel, "_compiled_relaxed", None)
+        python_result = route_global_once(problem, feedback, 5000)
+        monkeypatch.undo()
+
+        assert compiled_result == python_result, f"trial {trial}"

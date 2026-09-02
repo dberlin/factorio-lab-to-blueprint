@@ -36,6 +36,16 @@ def _choose() -> BackendName:
 _backend: BackendName = _choose()
 _compiled_astar: Callable[..., object] | None = _candidates.get(_backend)
 
+#: The relaxed global search shares the one Cython extension with the A* loop
+#: above, so a forced ``python`` backend disables both.
+_compiled_relaxed: Callable[..., object] | None
+try:
+    from flab2bp.layout._route_kernel import relaxed_search_flat as _compiled_relaxed
+except ImportError:
+    _compiled_relaxed = None
+if _backend == "python":
+    _compiled_relaxed = None
+
 
 def compiled_available() -> bool:
     return _compiled_astar is not None
