@@ -8573,8 +8573,22 @@ def _route_all(
 
         `grid.reserved` is in here because it is NOT constant across a pass:
         `_retire_served_roles` filters it and `_restore_unserved_roles` rebuilds
-        it.  A role that came back in the wrong order, or not at all, is
-        precisely the silent corruption this comparison exists to catch.
+        it.  A role that came back not at all is precisely the silent corruption
+        this comparison exists to catch.
+
+        It is compared SORTED, and that is not laziness.  The two writers
+        disagree about order by construction: `_restore_unserved_roles`
+        canonicalises the WHOLE tuple with `sorted`, while
+        `_retire_served_roles` only filters it, order-preserving.  A pass whose
+        entry tuple is unsorted -- it is built from `canvas.reserved` in port
+        CONSTRUCTION order, not index order -- therefore fails an ordered
+        comparison after a perfectly correct restore, because any restore
+        sorts the tuple and no re-retire can un-sort it.  Order is not
+        observable either: the tuple's only consumer in this router is
+        `_routing_flags`, which iterates it writing `flags[at] = 0`, and
+        `_open/_close_every_corridor` save and restore it verbatim.  Comparing
+        it ordered reported a mismatch for a difference no reader can see, and
+        cost `universe-matrix/output-products` both of its cluster proofs.
 
         FOUR tables are deliberately EXEMPT: `_ends` overwrites
         `source_access_walls`, `destination_access_walls`,
@@ -8591,7 +8605,7 @@ def _route_all(
             dict(paths),
             dict(owner),
             bytes(grid.occ),
-            tuple(grid.reserved),
+            tuple(sorted(grid.reserved)),
             set(canvas.guard),
             {cell for cell, holder in canvas.blocked.items() if holder == _TENTATIVE},
             dict(path_tap),

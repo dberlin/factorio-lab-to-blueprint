@@ -16923,6 +16923,98 @@ def test_a_cluster_solution_is_staked_and_routes_the_pack() -> None:
     assert result.last_mile.solved == 1
     assert result.last_mile.commit_rejected == 0
 
+def test_an_unsorted_reservation_tuple_is_not_a_restore_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An order-only difference in ``grid.reserved`` is not corruption.
+
+    ``grid.reserved`` is built from ``canvas.reserved`` in port CONSTRUCTION
+    order, which is not index order.  ``_restore_unserved_roles`` rebuilds the
+    whole tuple with ``sorted`` while ``_retire_served_roles`` only filters it,
+    so ANY cluster release that restores a role canonicalises the order and no
+    correct re-stake can put it back.  Compared ordered, a perfectly good
+    restore is scored a mismatch -- which withdrew both of
+    ``universe-matrix/output-products``' cluster proofs and stopped run 2 from
+    ever firing there.
+
+    ``_route_all`` re-stakes every reservation itself, so the unsortedness is
+    planted where the router actually builds it: one extra corridor, for a port
+    no net in this fixture serves, entered access-first so its two cells sit in
+    DESCENDING grid-index order.  Nothing serves that key, so nothing retires
+    it and nothing restores it -- it is still in that order when the cluster
+    release restores the BLOCKER's role and sorts the whole tuple around it.
+    Its two cells sit outside the walled pocket the two nets route in, so the
+    pack routes exactly as it does without them.
+    """
+    from flab2bp.layout import last_mile as last_mile_module
+
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    original_reserve = freeform._reserve_port_access
+    spectator = (5, 5, 0)
+
+    def reserve_with_a_spectator(
+        reserve_canvas: _Canvas,
+        reserve_nets: Sequence[_Net],
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        original_reserve(reserve_canvas, reserve_nets, *args, **kwargs)  # type: ignore[arg-type]
+        reserve_canvas.port_corridors[spectator] = (
+            freeform.PortAccessCorridor(access=(5, 5, 0), exit=(5, 4, 0)),
+        )
+        reserve_canvas.reserved[(5, 5, 0)] = spectator
+        reserve_canvas.reserved[(5, 4, 0)] = spectator
+
+    monkeypatch.setattr(freeform, "_reserve_port_access", reserve_with_a_spectator)
+
+    def always_proved(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> last_mile_module.ClusterResult:
+        return last_mile_module.ClusterResult(
+            last_mile_module.ClusterOutcome.PROVED,
+            {},
+            3,
+            10,
+            0.0,
+        )
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", always_proved)
+    # The tuple has to be read where the pass RECEIVES it: by the time a
+    # cluster search runs, the release has already canonicalised it.
+    entered: list[tuple[int, ...]] = []
+    entered_pairs: list[tuple[tuple[int, Cell], ...]] = []
+    original_make_grid = freeform._make_grid
+
+    def watching_make_grid(*args: object, **kwargs: object) -> _Grid:
+        grid = original_make_grid(*args, **kwargs)  # type: ignore[arg-type]
+        entered.append(tuple(at for at, _port in grid.reserved))
+        entered_pairs.append(tuple(grid.reserved))
+        return grid
+
+    monkeypatch.setattr(freeform, "_make_grid", watching_make_grid)
+    belt_id = catalog.item_id("conveyor-belt-1")
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    # The premise: the tuple the pass was handed really is out of index order,
+    # two cells of one corridor in reverse.  Without this the assertions below
+    # would pass for a fixture that never exercised the defect.
+    assert entered and list(entered[0]) != sorted(entered[0])
+    assert [at for at, port in entered_pairs[0] if port == spectator] == sorted(
+        (at for at, port in entered_pairs[0] if port == spectator),
+        reverse=True,
+    )
+    assert result.last_mile is not None
+    assert result.last_mile.invocations == 1
+    assert result.last_mile.restore_mismatch == 0
+    assert result.last_mile.proved == 1
+
 
 def test_a_cluster_solution_rejected_at_commit_is_rolled_back(
     monkeypatch: pytest.MonkeyPatch,
