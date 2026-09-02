@@ -97,9 +97,10 @@ class ClusterProblem:
     stranded: tuple[int, ...]
     truncated: bool
     sibling_closed: bool
-    #: Stranded nets left OUT of the cluster because they share a source lane
-    #: with a kept net and that lane's splitter site is unusable, so at most one
-    #: of them can ever leave it directly.  See :func:`build_cluster`.
+    #: Nets left OUT of the cluster -- seeds and accusers alike -- because they
+    #: share a source lane with a kept net and that lane's splitter site is
+    #: unusable, so at most one of them can ever leave it directly.  See
+    #: :func:`build_cluster`.
     same_source_dropped: int = 0
 
     def __post_init__(self) -> None:
@@ -149,32 +150,21 @@ def _distance_to_stranded(
     return best
 
 
-def _one_net_per_blocked_source(
-    seeds: tuple[int, ...],
+def _blocked_source_siblings(
+    index: int,
     *,
     src_group: Mapping[int, tuple[int, ...]],
     source_junctionable: Callable[[int], bool] | None,
-) -> tuple[tuple[int, ...], int]:
-    """Thin the seeds to one net per un-tappable source lane; see build_cluster.
+) -> set[int]:
+    """The nets ``index`` shuts out of the cluster by taking its source lane.
 
-    Ascending order makes the survivor the lowest ordinal of its lane, which is
-    the only property the caller needs from the choice: it has to be the same
-    one on every run over the same round.
+    Empty unless the caller supplied a junctionability predicate AND this net's
+    own lane refuses a splitter, in which case every OTHER net on that lane is
+    shut out: only one of them can leave it directly.
     """
-    if source_junctionable is None:
-        return seeds, 0
-    blocked: set[int] = set()
-    kept: list[int] = []
-    for index in seeds:
-        if index in blocked:
-            continue
-        kept.append(index)
-        if source_junctionable(index):
-            continue
-        blocked.update(
-            sibling for sibling in src_group.get(index, ()) if sibling != index
-        )
-    return tuple(kept), len(seeds) - len(kept)
+    if source_junctionable is None or source_junctionable(index):
+        return set()
+    return {sibling for sibling in src_group.get(index, ()) if sibling != index}
 
 
 def build_cluster(
@@ -195,32 +185,42 @@ def build_cluster(
     ``source_junctionable(index)`` answers "can this net's own source lane take
     a splitter", and omitting it keeps the caller's older behaviour exactly.
     It exists because a cluster is built out of nets the caller has UNSTAKED,
-    and unstaking is what makes two stranded nets on one source lane look
-    independent.  ``_ends`` offers a net the lane's direct access cells only
-    when no sibling has taken the lane yet; with both siblings released, both
-    are offered the SAME cells, CBS hands each a different one, calls the two
-    routings disjoint -- and the committer then refuses the second with
+    and unstaking is what makes two nets on one source lane look independent.
+    ``_ends`` offers a net the lane's direct access cells only when no sibling
+    has taken the lane yet; with both siblings released, both are offered the
+    SAME cells, CBS hands each a different one, calls the two routings
+    disjoint -- and the committer then refuses the second with
     ``junction-collider``, because a lane whose splitter site is blocked can be
     left directly by ONE net and no more.  Measured on
     ``universe-matrix/output-products``, cluster ``(36, 37)``: one shared source
     at ``(172, 18, 0)``, ``_can_junction`` False there, both nets offered
     ``[(172, 19, 0), (173, 18, 0)]``, commit refused.
 
-    So at most one stranded net per such lane enters the problem, chosen by
-    lowest ordinal for determinism.  The rest stay OUTSIDE it -- still stranded,
-    staked as nothing, simply not among the nets the search may move -- and are
-    counted in :attr:`ClusterProblem.same_source_dropped`.  This only shrinks
-    the set of nets the search may move, so a proof it returns still bounds the
-    world the packer can realise.
+    So one net per such lane enters the problem and the rest stay OUTSIDE it --
+    staked exactly as they are, or stranded exactly as they are, simply not
+    among the nets the search may move -- counted in
+    :attr:`ClusterProblem.same_source_dropped`.  It applies to BOTH ways in:
+    the stranded seeds, taken in ascending order so the survivor is the lowest
+    ordinal, and the accusers pulled in afterwards, which is where the measured
+    pair actually collided (net 36 was the seed and net 37 its accuser).
     """
-    seeds = tuple(sorted(dict.fromkeys(stranded)))
-    if not seeds:
+    seeds_in = tuple(sorted(dict.fromkeys(stranded)))
+    if not seeds_in:
         raise ValueError("a cluster needs at least one stranded net")
-    seeds, same_source_dropped = _one_net_per_blocked_source(
-        seeds,
-        src_group=src_group,
-        source_junctionable=source_junctionable,
-    )
+    shut_out: set[int] = set()
+    refused: set[int] = set()
+    seeds_kept: list[int] = []
+    for index in seeds_in:
+        if index in shut_out:
+            refused.add(index)
+            continue
+        seeds_kept.append(index)
+        shut_out |= _blocked_source_siblings(
+            index,
+            src_group=src_group,
+            source_junctionable=source_junctionable,
+        )
+    seeds = tuple(seeds_kept)
     members = set(seeds)
     cluster = list(seeds)
     truncated = False
@@ -235,6 +235,8 @@ def build_cluster(
             for holder in blockers.get(index, ()):
                 if holder not in members:
                     candidates.add(holder)
+        refused |= candidates & shut_out
+        candidates -= shut_out
         if not candidates:
             break
         room = max_cluster - len(cluster)
@@ -253,6 +255,12 @@ def build_cluster(
             ordered = ordered[:room]
         cluster.extend(ordered)
         members.update(ordered)
+        for index in ordered:
+            shut_out |= _blocked_source_siblings(
+                index,
+                src_group=src_group,
+                source_junctionable=source_junctionable,
+            )
         frontier = ordered
     cluster.sort()
     sibling_closed = all(
@@ -265,7 +273,7 @@ def build_cluster(
         stranded=seeds,
         truncated=truncated,
         sibling_closed=sibling_closed,
-        same_source_dropped=same_source_dropped,
+        same_source_dropped=len(refused - members),
     )
 
 

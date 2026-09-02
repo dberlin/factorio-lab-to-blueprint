@@ -152,6 +152,33 @@ def test_one_stranded_net_per_un_tappable_source_enters_the_cluster() -> None:
     assert problem.same_source_dropped == 1
 
 
+def test_an_accuser_on_the_seed_s_blocked_source_lane_is_not_admitted() -> None:
+    """The measured collision was seed-vs-ACCUSER, not seed-vs-seed.
+
+    ``universe-matrix/output-products`` captured cluster ``(36, 37)`` with
+    ``stranded=(36,)``: net 37 was pulled in as the owner of 36's wall, not as a
+    second stranded net.  Releasing it offered it the same direct access cells
+    as 36 on a lane that fits one splitter and no splitter, and the committer
+    refused the pair with ``junction-collider``.  A thinning that only looked at
+    the seeds would have left that cluster exactly as it was.
+    """
+    problem = last_mile.build_cluster(
+        [0],
+        walls={0: ((5, 5, 0),)},
+        blockers={0: ()},
+        owner={(5, 5, 0): 1},
+        paths={1: ((5, 5, 0),)},
+        endpoints=_endpoints(2),
+        src_group={0: (1,), 1: (0,)},
+        dst_group={},
+        source_junctionable=lambda _index: False,
+    )
+
+    assert problem.nets == (0,)
+    assert problem.stranded == (0,)
+    assert problem.same_source_dropped == 1
+
+
 def test_siblings_on_a_tappable_source_all_keep_their_seats() -> None:
     """The drop is about the SPLITTER SITE, not about sharing a lane.
 
