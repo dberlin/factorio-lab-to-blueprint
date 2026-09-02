@@ -287,7 +287,14 @@ def destroy_strips(
 
     An operator whose evidence is absent returns an empty set; the caller
     credits that as an unapplied choice rather than retrying it forever.
+
+    ``scale`` is validated here and not only on :class:`OperatorChoice` because
+    a zero or negative cap would silently return an empty (or, for a negative
+    value, a reversed-slice) destroy set, which reads downstream as "this
+    operator had no evidence" -- a wrong answer rather than a refusal.
     """
+    if type(scale) is not int or scale < 1:
+        raise ValueError("destroy scale must be a positive integer")
     if operator is DestroyOperator.FAILED_ENDPOINTS:
         return _capped(
             sorted(
@@ -302,6 +309,12 @@ def destroy_strips(
                 )
             ),
             scale=scale,
+        )
+    if operator is DestroyOperator.BAND_BOUNDARY:
+        raise NotImplementedError(
+            "destroy operator band-boundary is a SHIPPED arm whose dispatch branch"
+            " is added in a later task; until then a caller must restrict its"
+            " destroy arms so this operator is never selected in production"
         )
     raise NotImplementedError(
         f"destroy operator {operator.value} is a follow-up with no dispatch branch"
