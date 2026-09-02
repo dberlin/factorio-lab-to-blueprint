@@ -512,6 +512,11 @@ def relaxed_search_flat(
     * ``transitions_via`` names a cell one step from the source at the source's
       own level, and a ramp's target level is already inside ``[0, levels)``.
 
+    The three transition buffers hold, per level, a count slot followed by that
+    level's entries, and ONLY ``transitions_target`` carries the count: the slot
+    is padding in ``transitions_via`` and ``transitions_cost``, never read, and
+    a zero there is not a flat step's via.
+
     Everything checkable in O(size-independent) time -- the buffer lengths
     agreeing with each other, the level table covering exactly ``levels``
     levels without running off its end, and the start and goal indices lying

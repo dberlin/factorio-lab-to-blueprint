@@ -47,5 +47,7 @@ def relaxed_search_flat(
     expansions; whether the budget stopped the search; whether it was
     cancelled).  ``present`` is dense and pre-multiplied by ``_PRESENT_COST``;
     ``history`` is dense or zero-length; the three transition buffers hold, per
-    level, a count slot followed by that level's entries; ``goals`` is sorted
-    and ``goal_xy`` holds its local (x, y) pairs in the same order."""
+    level, a count slot followed by that level's entries, and only
+    ``transitions_target`` carries the count -- the slot is padding in the
+    other two; ``goals`` is sorted and ``goal_xy`` holds its local (x, y) pairs
+    in the same order."""

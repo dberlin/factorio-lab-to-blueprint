@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 import random
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 
 import pytest
@@ -661,7 +661,22 @@ def test_compiled_relaxed_search_matches_python(monkeypatch: pytest.MonkeyPatch)
     if os.environ.get("FLAB2BP_ROUTE_KERNEL") == "python":
         pytest.skip("FLAB2BP_ROUTE_KERNEL=python switches the compiled backend off")
     assert route_kernel.compiled_available()
-    assert route_kernel._compiled_relaxed is not None
+    # THE SPY IS THE POINT, not a nicety.  Comparing two `route_global_once`
+    # calls proves nothing on its own: if `_kernel_bounds_hold` ever started
+    # refusing these grids -- a span, box or pad change is all it would take --
+    # both sides would run the Python loop, this assertion would still pass,
+    # and the speedup would be gone with no test to say so.  `route_bench`
+    # replays `_astar` only, so nothing else covers the relaxed loop.
+    real_kernel = route_kernel._compiled_relaxed
+    assert real_kernel is not None
+    compiled_kernel: Callable[..., object] = real_kernel
+    calls = 0
+
+    def counting_kernel(*args: object) -> object:
+        nonlocal calls
+        calls += 1
+        return compiled_kernel(*args)
+
     rng = random.Random(7)
     for trial in range(20):
         width = rng.randint(6, 18)
@@ -703,9 +718,12 @@ def test_compiled_relaxed_search_matches_python(monkeypatch: pytest.MonkeyPatch)
         if trial % 3 == 0:
             feedback = replace(feedback, net_weight={a: 0.5, b: 2.25, c: 1.75})
 
+        calls = 0
+        monkeypatch.setattr(route_kernel, "_compiled_relaxed", counting_kernel)
         compiled_result = route_global_once(problem, feedback, 5000)
         monkeypatch.setattr(route_kernel, "_compiled_relaxed", None)
         python_result = route_global_once(problem, feedback, 5000)
         monkeypatch.undo()
 
+        assert calls, f"trial {trial}: the compiled relaxed loop was never reached"
         assert compiled_result == python_result, f"trial {trial}"

@@ -533,7 +533,9 @@ def _search_relaxed(
         # congestion term densified (already multiplied by `_PRESENT_COST`, so
         # the kernel's `weight * (present + historical)` is the same double),
         # the per-level transition table flattened behind a count slot, and the
-        # goal columns the heuristic scans.
+        # goal columns the heuristic scans.  `transitions_target` is the buffer
+        # that CARRIES the per-level count; the other two hold padding in that
+        # slot, so a zero there is padding rather than a flat step's via.
         present = array("d", bytes(8 * grid.size))
         for index in ledger.units:
             present[index] = _PRESENT_COST * ledger.present_cost(index, compatible)
@@ -542,7 +544,7 @@ def _search_relaxed(
         costs = array("d")
         for level_transitions in transitions:
             targets.append(len(level_transitions))
-            vias.append(len(level_transitions))
+            vias.append(0)
             costs.append(0.0)
             for target_offset, via_offset, _dx, _dy, base_cost in level_transitions:
                 targets.append(target_offset)
