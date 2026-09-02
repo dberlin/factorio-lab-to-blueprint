@@ -422,3 +422,45 @@ def test_paths_on_different_levels_over_one_column_do_not_conflict() -> None:
 
     assert conflict is None
     assert shared == (0, 1, (2, 0, 0))
+
+
+def test_relation_no_good_records_offsets_from_the_anchor() -> None:
+    no_good = last_mile.relation_no_good(
+        strips=(1, 3),
+        origins=((0, 0), (10, 4), (0, 0), (22, 9)),
+        outline=((2, 2), (3, 3), (2, 2), (4, 4)),
+        height=20,
+        evidence="cluster: nets=(4, 7)",
+    )
+
+    assert no_good is not None
+    assert no_good.strips == (1, 3)
+    assert no_good.deltas == ((0, 0), (12, 5))
+    assert no_good.height == 20
+    assert no_good.evidence == ("cluster: nets=(4, 7)",)
+
+
+def test_relation_no_good_needs_two_strip_instances() -> None:
+    assert (
+        last_mile.relation_no_good(
+            strips=(2,),
+            origins=((0, 0), (1, 1), (2, 2)),
+            outline=((1, 1), (1, 1), (1, 1)),
+            height=4,
+            evidence="x",
+        )
+        is None
+    )
+
+
+def test_relation_no_good_drops_a_strip_outside_the_pack() -> None:
+    no_good = last_mile.relation_no_good(
+        strips=(0, 1, 99),
+        origins=((0, 0), (5, 0)),
+        outline=((1, 1), (1, 1)),
+        height=3,
+        evidence="x",
+    )
+
+    assert no_good is not None
+    assert no_good.strips == (0, 1)

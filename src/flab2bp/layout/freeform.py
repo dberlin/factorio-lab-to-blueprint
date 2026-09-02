@@ -95,6 +95,7 @@ from flab2bp.layout.base import (
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.route_feedback import (
     Cell,
+    ClusterRelationNoGood,
     DetailedRouteResult,
     DetailedRouteStatus,
     FeedbackState,
@@ -3061,6 +3062,47 @@ def _add_exact_pack_no_good(
     model.add_forbidden_assignments(variables, [tuple(values)])
 
 
+def _add_cluster_relation_no_good(
+    model: cp_model.CpModel,
+    xs: Sequence[cp_model.IntVar],
+    ys: Sequence[cp_model.IntVar],
+    strips: Sequence[Strip],
+    height: int,
+    width_bound: int,
+    index: int,
+    no_good: ClusterRelationNoGood,
+) -> None:
+    """Forbid one RELATIVE placement: at least one cluster strip must move.
+
+    Unlike :func:`_add_exact_pack_no_good`, which removes a single point, this
+    removes every translation of the proved relation -- which is exactly what
+    the proof supports, because the CBS run behind it removed every other belt
+    and so said nothing about where the cluster sits, only how its strips sit
+    relative to one another.
+    """
+    anchor = no_good.strips[0]
+    if any(strip >= len(strips) for strip in no_good.strips):
+        return
+    variables: list[cp_model.IntVar] = []
+    values: list[int] = []
+    for position, strip_index in enumerate(no_good.strips[1:], start=1):
+        relation_x = model.new_int_var(
+            -width_bound,
+            width_bound,
+            f"cluster_ng{index}_dx{position}",
+        )
+        relation_y = model.new_int_var(-height, height, f"cluster_ng{index}_dy{position}")
+        model.add(
+            relation_x
+            == (xs[strip_index] + strips[strip_index].west_channel)
+            - (xs[anchor] + strips[anchor].west_channel)
+        )
+        model.add(relation_y == ys[strip_index] - ys[anchor])
+        variables.extend((relation_x, relation_y))
+        values.extend(no_good.deltas[position])
+    model.add_forbidden_assignments(variables, [tuple(values)])
+
+
 def _add_projection_no_good(
     model: cp_model.CpModel,
     width: cp_model.IntVar,
@@ -3192,6 +3234,7 @@ def _pack(
     projection_no_goods: tuple[ProjectionNoGood, ...] = (),
     exact_pack_no_goods: tuple[ExactPackNoGood, ...] = (),
     direct_relation_no_goods: tuple[_DirectRelationNoGood, ...] = (),
+    cluster_relation_no_goods: tuple[ClusterRelationNoGood, ...] = (),
     feedback: FeedbackState | None = None,
     stop_when_seed_admissible: bool = False,
 ) -> _Pack | None:
@@ -3255,6 +3298,20 @@ def _pack(
         if exact_no_good.height != height or exact_no_good.outline != tuple(sizes):
             continue
         _add_exact_pack_no_good(model, w_var, xs, ys, strips, exact_no_good)
+
+    for cluster_index, cluster_no_good in enumerate(cluster_relation_no_goods):
+        if cluster_no_good.height != height or cluster_no_good.outline != tuple(sizes):
+            continue
+        _add_cluster_relation_no_good(
+            model,
+            xs,
+            ys,
+            strips,
+            height,
+            width_bound,
+            cluster_index,
+            cluster_no_good,
+        )
 
     for projection_no_good in projection_no_goods:
         if (

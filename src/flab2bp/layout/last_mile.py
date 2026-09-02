@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from flab2bp.layout.route_feedback import RouteFailureKind
+from flab2bp.layout.route_feedback import ClusterRelationNoGood, RouteFailureKind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from flab2bp.layout.freeform import _PathSearchResult
@@ -423,3 +423,29 @@ def solve_cluster(
                 ),
             )
     return done(ClusterOutcome.PROVED, {}, nodes)
+
+
+def relation_no_good(
+    *,
+    strips: Sequence[int],
+    origins: Sequence[tuple[int, int]],
+    outline: tuple[tuple[int, int], ...],
+    height: int,
+    evidence: str,
+) -> ClusterRelationNoGood | None:
+    """Record the cluster strips' relative placement, or nothing to record."""
+    chosen = tuple(sorted({strip for strip in strips if 0 <= strip < len(origins)}))
+    if len(chosen) < 2:
+        return None
+    anchor = origins[chosen[0]]
+    deltas = tuple(
+        (origins[strip][0] - anchor[0], origins[strip][1] - anchor[1])
+        for strip in chosen
+    )
+    return ClusterRelationNoGood(
+        height=height,
+        outline=tuple(outline),
+        strips=chosen,
+        deltas=deltas,
+        evidence=(evidence,),
+    )
