@@ -136,7 +136,7 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             compact_seed_base_seed=request.compact_seed_base_seed,
             compact_seed_config=request.compact_seed_config,
         )
-        result = run.solver.search()
+        result = run.solver.search(feasibility_continuation=True)
         placement = _with_observational_stats(result, run, request.power, config)
     except NoValidLayout as exc:
         return _SequenceIslandOutcome.refused(

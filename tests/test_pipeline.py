@@ -566,6 +566,44 @@ GRAPHENE_URL = (
 GRAPHENE_FLOW = Path(__file__).parent / "fixtures" / "flow_graphene_real_capture.csv"
 
 
+@pytest.mark.slow
+def test_graphene_output_products_sequence_pair_reports_its_continuation_batches() -> None:
+    """A cell that certifies inside its stage schedule appends no restart batch.
+
+    This test was planned as ``>= 1.0``: before Phase C the fast-path stage cap
+    (``_search_stage_cap`` returns 2 for this spec -- 6 machines, under
+    ``_TOPOLOGY_BEAM_MIN_STRIPS``, two spray lanes) ended the search with clock
+    left and the cell refused with "no scheduled stage produced an exact
+    layout".  Master 22bf910's recipe-pricing change fixed the cell before the
+    continuation landed, so the spec now certifies an exact incumbent inside its
+    scheduled stages -- measured 2026-09-02: ``termination='stage-limit'``,
+    ``anneal_stages=4``, ``area=420``, 0.45 s of placement.
+
+    ``lay_out`` still passes ``feasibility_continuation=True``, so the branch is
+    reached at the stage limit and declines to append because an exact incumbent
+    already exists.  ``0.0`` is that decision, recorded.  What this pins is that
+    the continuation does not disturb a cell that was already clean, and that
+    the stat reaches ``PlacementStats`` at all.
+    """
+    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.rates.candidates import build_candidates
+
+    entry = next(candidate for candidate in URL_CORPUS if candidate.url_id == "graphene")
+    built = build_candidates(
+        load_vendored(),
+        parse_url(entry.url),
+        candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+    )
+    spec = next(
+        candidate for candidate in built.candidates if candidate.label == "output-products"
+    )
+    placement = SequencePairLayout(band_policy=BandPolicy("portable")).lay_out(
+        spec, time_budget_s=30.0
+    )
+    assert placement.stats["area"] > 0.0
+    assert placement.stats["feasibility_restart_batches"] == 0.0
+
+
 class TestFlowText:
     """``flow_text`` exists because the web front ends have no file to name.
 

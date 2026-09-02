@@ -3229,8 +3229,9 @@ def test_sequence_pair_uses_shared_planet_finalization(
             self,
             *,
             max_stages: int | None = None,
+            feasibility_continuation: bool = False,
         ) -> SequenceSearchResult:
-            del max_stages
+            del max_stages, feasibility_continuation
             return cast(SequenceSearchResult, SimpleNamespace(placement=raw))
 
     def factory(*_args: object, **_kwargs: object) -> _Solver:

@@ -468,7 +468,8 @@ def test_island_reuses_authoritative_search_validation_after_soft_deadline(
     placement = _placement(area=20, belt_tiles=4)
 
     class Solver:
-        def search(self) -> object:
+        def search(self, *, feasibility_continuation: bool = False) -> object:
+            del feasibility_continuation
             return object()
 
     class Run:
