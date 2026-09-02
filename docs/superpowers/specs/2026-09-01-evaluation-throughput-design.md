@@ -1,6 +1,6 @@
 # Evaluation Throughput Design
 
-**Status:** Approved design; implementation not started
+**Status:** Executed and merged 2026-09-02 (b3c990a); corpus gate 65/72 at 30 s vs 63/72 baseline, failed on coverage (see sections 3, 5.2, and 11)
 **Companion:** `docs/superpowers/specs/2026-09-01-zero-refusal-reliability-design.md`
 
 ## 1. Decision
