@@ -116,6 +116,39 @@ class NetFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class LastMileReport:
+    """What the bounded last-mile cluster search did in one routing pass."""
+
+    invocations: int
+    solved: int
+    proved: int
+    bounded: int
+    #: A CBS solution the commit preflight refused, or whose rollback ran.
+    commit_rejected: int
+    #: Run 1 closed but a cluster net had a sibling, so run 2 was not run.
+    #: See the spec's 5.2: unstaking a sibling can DISCONNECT a net, and a
+    #: closed tree over a disconnected net is a false proof.
+    relation_skipped_siblings: int
+    #: Times the round could not be restored exactly.  Never an exception: an
+    #: `AssertionError` here becomes a CRASH row and fails the corpus gate on a
+    #: condition the gate exists to measure.
+    restore_mismatch: int
+    nodes: int
+    expansions: int
+    seconds: float
+    #: Ascending strip instances of a cluster proved unroutable in the relaxed
+    #: environment, empty when no relation proof was established.
+    relation_strips: tuple[int, ...] = ()
+    relation_evidence: str = ""
+
+    def __post_init__(self) -> None:
+        if self.relation_strips and len(self.relation_strips) < 2:
+            raise ValueError("a relation proof needs at least two strip instances")
+        if tuple(sorted(self.relation_strips)) != self.relation_strips:
+            raise ValueError("relation strips must be ascending")
+
+
+@dataclass(frozen=True, slots=True)
 class DetailedRouteResult:
     status: DetailedRouteStatus
     routed: tuple[NetId, ...]
@@ -123,6 +156,7 @@ class DetailedRouteResult:
     iterations: int
     expansions: int
     exhaustive: bool = False
+    last_mile: LastMileReport | None = None
 
     def __post_init__(self) -> None:
         if type(self.exhaustive) is not bool:
