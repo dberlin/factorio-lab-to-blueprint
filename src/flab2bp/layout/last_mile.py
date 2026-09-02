@@ -66,11 +66,13 @@ B_LOW_LEVEL_EXPANSIONS = 50_000
 
 #: Remaining wall seconds below which the pass declines to start.  MEASURED,
 #: not guessed: ``scripts/last_mile_bench.py``'s two corpus captures put the
-#: slowest observed cluster search at 0.909 s (``universe-matrix``,
+#: slowest observed cluster search at 0.988 s (``universe-matrix``,
 #: ``output-products``), so twice that, rounded up, is the margin a pass needs
 #: to finish what it starts rather than be cut by the deadline mid-tree.  See
 #: ``docs/superpowers/evidence/2026-09-02-phase-b-last-mile/cluster-bench.txt``.
-B_MIN_SECONDS = 1.82
+#: Task 9 derived 1.82 from a 0.909 s max; the Ruling V re-capture moved the max
+#: up to 0.988 s, and the gate re-derives the floor from the final capture.
+B_MIN_SECONDS = 1.98
 
 #: Cost charged for a cluster net with no path, so nodes that lost a net sort
 #: after nodes that kept one without special-casing the heap.
