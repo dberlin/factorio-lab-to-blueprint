@@ -12,7 +12,7 @@ from typing import cast
 import pytest
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
-from flab2bp.layout import finalize
+from flab2bp.layout import finalize, freeform
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from tests.layout.test_freeform import two_stage_spec
@@ -3550,3 +3550,52 @@ def test_search_first_refusal_matches_real_exhaustive_ordered_evidence(
         finalize.finalize_placement(placement, policy)
 
     assert search_first.value.failures == exhaustive.value.failures
+
+
+def test_frame_candidates_are_monotone_in_width_at_a_fixed_height() -> None:
+    """Once a core width fits a band, every narrower core at that height fits too.
+
+    `band_target_width` is a binary search only if this holds.  It is a property
+    of `_frame_candidates_for_extent`, not an axiom, so it is asserted rather
+    than assumed.
+    """
+    envelope = finalize.band_policy_search_envelope(
+        BandPolicy.parse("portable"), perimeter=freeform._ENTRY_RING
+    )
+    for height in (40, 131):
+        fitting_seen = False
+        for width in range(600, 0, -1):
+            fits = bool(envelope.frame_candidates(width, height))
+            if fits:
+                fitting_seen = True
+            elif fitting_seen:
+                raise AssertionError(
+                    f"non-monotone at height={height}: width {width} does not fit "
+                    f"but a wider core did"
+                )
+        assert fitting_seen, f"no width from 1 to 600 fits at height={height}"
+
+
+def _portable_envelope() -> finalize.BandPolicySearchEnvelope:
+    return finalize.band_policy_search_envelope(
+        BandPolicy.parse("portable"), perimeter=freeform._ENTRY_RING
+    )
+
+
+def test_band_target_width_returns_the_widest_core_a_band_accepts() -> None:
+    envelope = _portable_envelope()
+    height = 131
+    fitting = finalize.band_target_width(envelope, height=height, width=4000)
+    assert envelope.frame_candidates(fitting, height)
+    assert not envelope.frame_candidates(fitting + 1, height)
+
+
+def test_band_target_width_returns_the_input_when_it_already_fits() -> None:
+    assert finalize.band_target_width(_portable_envelope(), height=40, width=20) == 20
+
+
+def test_band_target_width_rejects_an_implausible_core() -> None:
+    with pytest.raises(ValueError):
+        finalize.band_target_width(
+            _portable_envelope(), height=40, width=finalize.C_BAND_SCAN_MAX + 1
+        )

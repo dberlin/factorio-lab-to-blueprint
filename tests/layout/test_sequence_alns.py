@@ -114,16 +114,14 @@ def test_only_the_shipped_operators_are_ever_selected() -> None:
         session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
 
 
-def test_band_boundary_is_a_shipped_arm_whose_dispatch_task_6_must_add() -> None:
-    """TASK 6 MUST FLIP THIS TEST when it adds the BAND_BOUNDARY branch.
+def test_band_boundary_is_a_shipped_arm_the_selector_can_dispatch() -> None:
+    """BAND_BOUNDARY is offered as the second arm AND has a dispatch branch.
 
     BAND_BOUNDARY ships (plan line 16, spec section 5.3) so the selector offers
-    it as the second arm from the very first pair of selections -- but its
-    dispatch branch does not exist yet.  Until Task 6 lands, any caller wiring
-    this session into the solver MUST restrict its destroy arms, or the second
-    selection of every run raises.  This test is that contract, in both halves:
-    when Task 6 adds the branch, delete the `pytest.raises` and assert the real
-    strips instead; leave the selection half alone.
+    it as the second arm from the very first pair of selections.  This test is
+    the contract in both halves: the selection, and a dispatch that answers with
+    strips rather than raising.  A placement that fits its band and its outline
+    is not the operator's evidence, so the answer there is the empty set.
     """
     session = OperatorSession()
     session.observe(session.select(_context()), (0.0,) * REWARD_RANKS, applied=True)
@@ -132,7 +130,7 @@ def test_band_boundary_is_a_shipped_arm_whose_dispatch_task_6_must_add() -> None
     problem = _problem()
     state = AnnealState.initial(problem.size, 7)
     decoded = decode_state(problem, state)
-    with pytest.raises(NotImplementedError, match="SHIPPED arm"):
+    assert (
         destroy_strips(
             DestroyOperator.BAND_BOUNDARY,
             scale=4,
@@ -143,6 +141,8 @@ def test_band_boundary_is_a_shipped_arm_whose_dispatch_task_6_must_add() -> None
             decoded=decoded,
             band_target_width=decoded.width,
         )
+        == frozenset()
+    )
 
 
 def test_a_follow_up_destroy_operator_has_no_dispatch_branch() -> None:
@@ -561,3 +561,99 @@ def test_operator_tally_names_both_ledgers() -> None:
         assert kind in {"destroy", "repair"}
         assert name
         assert count.isdigit()
+
+
+# --- band boundary -----------------------------------------------------------
+
+
+def _band_destroy(*, band_target_width: int, scale: int = 4) -> frozenset[int]:
+    problem = _problem()
+    state = AnnealState.initial(problem.size, 7)
+    decoded = decode_state(problem, state)
+    return destroy_strips(
+        DestroyOperator.BAND_BOUNDARY,
+        scale=scale,
+        result=_routing(),
+        pair=state.pair,
+        gaps=state.gaps,
+        problem=problem,
+        decoded=decoded,
+        band_target_width=band_target_width,
+    )
+
+
+def test_band_boundary_is_empty_when_the_placement_already_fits() -> None:
+    problem = _problem()
+    decoded = decode_state(problem, AnnealState.initial(problem.size, 7))
+    assert _band_destroy(band_target_width=decoded.width + 10) == frozenset()
+
+
+def test_band_boundary_selects_the_strips_past_the_target_width() -> None:
+    problem = _problem()
+    decoded = decode_state(problem, AnnealState.initial(problem.size, 7))
+    target = max(1, decoded.width - 1)
+    selected = _band_destroy(band_target_width=target)
+    assert selected
+    assert all(decoded.x[strip] + problem.sizes[strip][0] > target for strip in selected)
+
+
+def test_band_boundary_falls_back_to_the_widest_edges_when_nothing_exceeds() -> None:
+    problem = _problem()
+    # Target equals the width, so no strip exceeds it; an outline overflow is
+    # what makes the operator applicable, and this fixture has none, so the
+    # operator is empty.  Force the overflow branch with a tiny outline.
+    tight = PlacementProblem(
+        sizes=problem.sizes,
+        nets=problem.nets,
+        outline_height=1,
+        area_lower_bound=problem.area_lower_bound,
+    )
+    tight_state = AnnealState.initial(tight.size, 7)
+    tight_decoded = decode_state(tight, tight_state)
+    selected = destroy_strips(
+        DestroyOperator.BAND_BOUNDARY,
+        scale=2,
+        result=_routing(),
+        pair=tight_state.pair,
+        gaps=tight_state.gaps,
+        problem=tight,
+        decoded=tight_decoded,
+        band_target_width=tight_decoded.width,
+    )
+    assert 0 < len(selected) <= 2
+
+
+def test_band_boundary_excludes_a_strip_that_ends_exactly_on_the_target() -> None:
+    """"Exceeds" is strict: a right edge that lands on the target is inside it."""
+    problem = _problem()
+    decoded = decode_state(problem, AnnealState.initial(problem.size, 7))
+    edges = [decoded.x[strip] + problem.sizes[strip][0] for strip in range(problem.size)]
+    target = min(edges)
+    # The fixture must straddle the boundary or the assertion below is vacuous.
+    assert max(edges) > target
+    selected = _band_destroy(band_target_width=target)
+    assert selected == frozenset(
+        strip for strip in range(problem.size) if edges[strip] > target
+    )
+
+
+def test_band_boundary_keeps_the_worst_offenders_when_it_is_capped() -> None:
+    """A small `scale` must keep the strips that own the overflow, not the mildest."""
+    problem = _problem()
+    decoded = decode_state(problem, AnnealState.initial(problem.size, 7))
+    worst_two = {
+        strip
+        for _edge, strip in sorted(
+            (-(decoded.x[strip] + problem.sizes[strip][0]), strip)
+            for strip in range(problem.size)
+        )[:2]
+    }
+    selected = _band_destroy(band_target_width=1, scale=2)
+    assert len(selected) == 2
+    assert selected == worst_two
+
+
+def test_band_boundary_refuses_a_scale_below_one() -> None:
+    """The scale guard runs before dispatch, so the new branch inherits it."""
+    with pytest.raises(ValueError, match="positive integer"):
+        _band_destroy(band_target_width=1, scale=0)

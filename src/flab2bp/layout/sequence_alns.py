@@ -272,6 +272,42 @@ def _capped(strips: Iterable[int], *, scale: int) -> frozenset[int]:
     return frozenset(list(strips)[:scale])
 
 
+def _band_boundary(
+    problem: PlacementProblem,
+    decoded: DecodedPlacement,
+    *,
+    band_target_width: int,
+) -> list[int]:
+    """Strips ranked by how much they push the extent past what a band accepts.
+
+    This is the operator the "fits no latitude band" refusals name: the failure
+    is that the finished extent has no legal frame, and the strips that own the
+    extent are exactly the ones whose right edge reaches beyond the target.
+
+    A RANKED list, not a set, because `_capped` truncates in the order it is
+    given: the worst offender must survive a small `scale`, and index order
+    would keep the mildest instead.  Ties on the edge fall to index order so the
+    result is deterministic.
+    """
+    if band_target_width >= decoded.width and decoded.used_height <= problem.outline_height:
+        return []
+    ranked = sorted(
+        range(problem.size),
+        key=lambda strip: (
+            -(decoded.x[strip] + problem.sizes[strip][0]),
+            strip,
+        ),
+    )
+    over = [
+        strip
+        for strip in ranked
+        if decoded.x[strip] + problem.sizes[strip][0] > band_target_width
+    ]
+    # Nothing over the width but the outline still overflows: the extent problem
+    # is vertical, and the widest strips are still the ones with room to move.
+    return over or ranked
+
+
 def destroy_strips(
     operator: DestroyOperator,
     *,
@@ -311,10 +347,9 @@ def destroy_strips(
             scale=scale,
         )
     if operator is DestroyOperator.BAND_BOUNDARY:
-        raise NotImplementedError(
-            "destroy operator band-boundary is a SHIPPED arm whose dispatch branch"
-            " is added in a later task; until then a caller must restrict its"
-            " destroy arms so this operator is never selected in production"
+        return _capped(
+            _band_boundary(problem, decoded, band_target_width=band_target_width),
+            scale=scale,
         )
     raise NotImplementedError(
         f"destroy operator {operator.value} is a follow-up with no dispatch branch"
