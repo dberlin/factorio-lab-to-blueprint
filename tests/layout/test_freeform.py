@@ -21,7 +21,7 @@ import pytest
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules, splitter_ports
-from flab2bp.layout import finalize, freeform, junction, slots, validate
+from flab2bp.layout import finalize, freeform, junction, last_mile, slots, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
@@ -11085,6 +11085,21 @@ class TestABranchLeavesFromItsOwnSource:
 
 
 class TestDetailedRoutingDiagnostics:
+    @pytest.fixture(autouse=True)
+    def _without_the_last_mile_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pin the bounded cluster search off for this class.
+
+        Every test here models ONE routing round exactly: it scripts `_astar`
+        with a finite sequence, or counts the searches the round and its
+        crossing repair make, or asserts on the observations one search
+        recorded.  The last-mile pass is a second stage that runs AFTER that
+        round and makes `_astar` calls of its own, so leaving it on would make
+        each of those scripts wrong for a reason that has nothing to do with
+        what the test is about.  The pass has its own tests beside
+        `_joint_only_fixture`.
+        """
+        monkeypatch.setattr(last_mile, "B_MAX_STRANDED", 0)
+
     @staticmethod
     def _net(
         canvas: _Canvas,
@@ -16061,3 +16076,333 @@ def test_freeform_placement_records_route_backend() -> None:
         two_stage_spec(), time_budget_s=4.0
     )
     assert placement.stats["route_backend"] == route_kernel.selected_backend()
+
+
+def _last_mile_belt_net(
+    canvas: _Canvas,
+    src: tuple[int, int],
+    dst: tuple[int, int],
+    net_id: NetId,
+) -> _Net:
+    """One belt-to-belt net with stable identity, as ``TestRepair`` builds them."""
+    src_belt = canvas.add(_belt(*src, item=net_id.item))
+    dst_belt = canvas.add(_belt(*dst, item=net_id.item))
+    return _Net(
+        src=_Port(src_belt, *src, src[0], src[0]),
+        dst=_Port(dst_belt, *dst, dst[0], dst[0]),
+        item=net_id.item,
+        net_id=net_id,
+    )
+
+
+def _last_mile_block(canvas: _Canvas, cells: Collection[tuple[int, int]]) -> None:
+    for x, y in cells:
+        canvas.solid.add((x, y))
+        for level in range(LEVELS):
+            canvas.blocked[x, y, level] = 0
+
+
+def _one_stranded_net_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
+    """Two nets in a walled pocket where the second destination is unreachable."""
+    canvas = _Canvas()
+    bounds = (-6, -6, 6, 6)
+    canvas.limit = bounds
+    blocker_id = NetId(0, 1, "blocker", NetRole.INTERNAL, 0)
+    failed_id = NetId(2, 3, "target", NetRole.INTERNAL, 0)
+    blocker = _last_mile_belt_net(canvas, (0, -2), (1, -1), blocker_id)
+    failed = _last_mile_belt_net(canvas, (0, 1), (0, 3), failed_id)
+    _last_mile_block(
+        canvas,
+        {
+            (-1, -2),
+            (1, -2),
+            (0, -3),
+            (2, -1),
+            (1, 0),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (1, 1),
+            (0, 2),
+        },
+    )
+    return canvas, [blocker, failed], bounds
+
+
+def _joint_only_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
+    """Two nets the greedy round and its crossing repair cannot both place.
+
+    Net 0 (``blocker``) and net 1 (``target``) both run west to east across one
+    box.  Net 0 is routed first and takes the straight row-3 corridor, which
+    seals net 1's only way past the ``(5, 1)`` wall.  The crossing repair then
+    picks net 1's CHEAPEST crossing path -- the row-5 loop between the ``x = 4``
+    and ``x = 6`` rungs, two crossings rather than three -- and that path leaves
+    net 0 nowhere to go, so the transaction rolls back.  A joint search finds
+    the pair the sequence cannot: net 1 through row 3 at ``x = 4..6`` while net
+    0 detours over row 5 through the ``x = 3`` and ``x = 7`` rungs.
+    """
+    canvas = _Canvas()
+    bounds = (0, 0, 9, 5)
+    canvas.limit = bounds
+    blocker_id = NetId(0, 1, "blocker", NetRole.INTERNAL, 0)
+    target_id = NetId(2, 3, "target", NetRole.INTERNAL, 0)
+    blocker = _last_mile_belt_net(canvas, (0, 3), (9, 3), blocker_id)
+    target = _last_mile_belt_net(canvas, (0, 1), (9, 1), target_id)
+    open_cells = (
+        ({(x, 1) for x in range(1, 9)} - {(5, 1)})
+        | {(4, 2), (6, 2)}
+        | {(x, 3) for x in range(1, 9)}
+        | {(3, 4), (4, 4), (6, 4), (7, 4)}
+        | {(x, 5) for x in range(3, 8)}
+    )
+    ports = {(0, 1), (9, 1), (0, 3), (9, 3)}
+    _last_mile_block(
+        canvas,
+        {
+            (x, y)
+            for x in range(bounds[0], bounds[2] + 1)
+            for y in range(bounds[1], bounds[3] + 1)
+            if (x, y) not in open_cells and (x, y) not in ports
+        },
+    )
+    # The corridors are a plane figure and the argument above is a plane
+    # argument: an elevated detour over a settled belt would make both routes
+    # available at once and the pack would never strand.
+    for x in range(bounds[0], bounds[2] + 1):
+        for y in range(bounds[1], bounds[3] + 1):
+            for level in range(1, LEVELS):
+                canvas.blocked[x, y, level] = 0
+    return canvas, [blocker, target], bounds
+
+
+def _bounded_result() -> object:
+    from flab2bp.layout import last_mile as last_mile_module
+
+    return last_mile_module.ClusterResult(
+        outcome=last_mile_module.ClusterOutcome.BOUNDED,
+        paths={},
+        nodes=0,
+        expansions=0,
+        seconds=0.0,
+        bound=last_mile_module.ClusterBound.NODES,
+    )
+
+
+def test_a_pack_with_no_stranded_net_never_runs_the_cluster_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flab2bp.layout import last_mile as last_mile_module
+
+    calls: list[object] = []
+    original = last_mile_module.solve_cluster
+
+    def counting(problem: object, environment: object) -> object:
+        calls.append(problem)
+        return original(problem, environment)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", counting)
+    FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
+        plastic_spec(), time_budget_s=8.0
+    )
+
+    assert calls == []
+
+
+def test_a_bounded_cluster_search_restores_the_round_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A BOUNDED outcome must leave every piece of round state byte-equal."""
+    from flab2bp.layout import last_mile as last_mile_module
+
+    def always_bounded(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> object:
+        return _bounded_result()
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", always_bounded)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert result.status is DetailedRouteStatus.STRANDED
+    assert result.exhaustive is False
+    assert result.last_mile is not None
+    assert result.last_mile.invocations == 1
+    assert result.last_mile.bounded == 1
+    assert result.last_mile.restore_mismatch == 0
+
+
+def test_a_hostile_cluster_solution_never_raises_and_never_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pass absorbs a bad solution: no exception, no ROUTED, a counter moves.
+
+    A CRASH row fails the corpus gate, so the restore check must degrade rather
+    than assert.  This drives the two ways a solution can go wrong at once --
+    the committer refuses it, or the rollback does not reproduce the round --
+    and requires only that exactly one of the two counters records it.
+    """
+    from flab2bp.layout import last_mile as last_mile_module
+
+    def hostile(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> object:
+        # Claim every cluster net lands on the same single cell: disjointness
+        # is violated, the committer cannot link it, and the rollback has to
+        # put the round back from a state CBS would never have produced.
+        cell = (0, 0, 0)
+        return last_mile_module.ClusterResult(
+            outcome=last_mile_module.ClusterOutcome.SOLVED,
+            paths={index: (cell,) for index in problem.nets},
+            nodes=1,
+            expansions=0,
+            seconds=0.0,
+        )
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", hostile)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert result.status is not DetailedRouteStatus.ROUTED
+    assert result.exhaustive is False
+    assert result.last_mile is not None
+    assert result.last_mile.solved == 0
+    # The committer refuses the overlapping paths, so this is exact.  The
+    # rollback that follows may or may not reproduce the round from a state CBS
+    # would never have produced; either way it must not raise, and at most one
+    # mismatch can be recorded because the pass runs once.
+    assert result.last_mile.commit_rejected == 1
+    assert result.last_mile.restore_mismatch <= 1
+
+
+def test_too_many_stranded_nets_never_reach_the_cluster_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flab2bp.layout import last_mile as last_mile_module
+
+    seen: list[object] = []
+
+    def counting(problem: object, environment: object) -> object:
+        seen.append(problem)
+        return _bounded_result()
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", counting)
+    monkeypatch.setattr(last_mile_module, "B_MAX_STRANDED", 0)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert seen == []
+
+
+def test_the_cluster_search_runs_at_most_once_per_routing_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flab2bp.layout import last_mile as last_mile_module
+
+    seen: list[last_mile_module.ClusterProblem] = []
+
+    def always_bounded(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> object:
+        seen.append(problem)
+        return _bounded_result()
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", always_bounded)
+    canvas, nets, bounds = _one_stranded_net_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert len(seen) == 1
+
+
+def test_a_cluster_solution_is_staked_and_routes_the_pack() -> None:
+    """A joint solution the greedy round could not find finishes the pack."""
+    canvas, nets, bounds = _joint_only_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert result.status is DetailedRouteStatus.ROUTED
+    assert result.failures == ()
+    assert result.last_mile is not None
+    assert result.last_mile.solved == 1
+    assert result.last_mile.commit_rejected == 0
+
+
+def test_a_cluster_solution_rejected_at_commit_is_rolled_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A commit-link rejection is not a proof and must not keep the paths.
+
+    The ROUND's own ``commit_once()`` runs BEFORE the last-mile pass, so a stub
+    that refused "the first call" would refuse the wrong one.  Refuse instead on
+    the call whose ``paths`` argument contains the net that only a cluster
+    solution can wire -- index 1 in this fixture.
+    """
+    canvas, nets, bounds = _joint_only_fixture()
+    belt_id = catalog.item_id("conveyor-belt-1")
+    original = freeform._commit_paths
+
+    def refusing(
+        commit_canvas: object,
+        commit_nets: object,
+        commit_paths: dict[int, object],
+        *args: object,
+        **kwargs: object,
+    ) -> tuple[int, ...]:
+        if 1 in commit_paths:
+            return (1,)
+        return original(  # type: ignore[arg-type]
+            commit_canvas, commit_nets, commit_paths, *args, **kwargs
+        )
+
+    monkeypatch.setattr(freeform, "_commit_paths", refusing)
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    assert result.status is not DetailedRouteStatus.ROUTED
+    assert result.exhaustive is False
+    assert result.last_mile is not None
+    assert result.last_mile.solved == 0
+    assert result.last_mile.commit_rejected == 1
+    assert result.last_mile.bounded == 1
