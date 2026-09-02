@@ -6479,28 +6479,57 @@ def test_a_cluster_relation_no_good_forbids_only_that_relative_placement() -> No
     assert (origins[2][0] - origins[0][0], origins[2][1] - origins[0][1]) != (2, 0)
 
 
-def test_a_cluster_relation_no_good_for_another_outline_is_ignored() -> None:
+def test_a_cluster_relation_no_good_for_another_scope_is_ignored() -> None:
+    """A no-good proved at another outline or height must not cut this pack.
+
+    The baseline pack lands strip 2 at delta (2, 0) from strip 0, the
+    arrangement the no-good names; only an in-scope no-good may move it.
+    """
     strips = _three_unit_strips()
-    no_good = ClusterRelationNoGood(
+    outline = tuple(freeform_module._box(strip) for strip in strips)
+    other_outline = ClusterRelationNoGood(
         height=6,
         outline=((99, 99),),
         strips=(0, 2),
         deltas=((0, 0), (2, 0)),
         evidence=("route.exhaustive",),
     )
-
-    packed = freeform_module._pack(
-        strips,
-        height=6,
-        width_bound=4,
-        time_budget_s=1.0,
-        direct_candidates={},
-        workers=1,
-        deterministic=True,
-        cluster_relation_no_goods=(no_good,),
+    other_height = ClusterRelationNoGood(
+        height=7,
+        outline=outline,
+        strips=(0, 2),
+        deltas=((0, 0), (2, 0)),
+        evidence=("route.exhaustive",),
     )
 
-    assert packed is not None
+    for no_good in (other_outline, other_height):
+        packed = freeform_module._pack(
+            strips,
+            height=6,
+            width_bound=4,
+            time_budget_s=1.0,
+            direct_candidates={},
+            workers=1,
+            deterministic=True,
+            cluster_relation_no_goods=(no_good,),
+        )
+
+        assert packed is not None
+        origins = [packed.at[index] for index in range(len(strips))]
+        delta = (origins[2][0] - origins[0][0], origins[2][1] - origins[0][1])
+        assert delta == (2, 0), (no_good.height, no_good.outline)
+
+
+def test_a_cluster_relation_no_good_rejects_negative_strip_indices() -> None:
+    """A negative index would alias from the end of the strip list in `_pack`."""
+    with pytest.raises(ValueError, match="non-negative"):
+        ClusterRelationNoGood(
+            height=6,
+            outline=((1, 1),),
+            strips=(-1, 2),
+            deltas=((0, 0), (2, 0)),
+            evidence=("route.exhaustive",),
+        )
 
 
 def test_a_translated_cluster_relation_is_still_forbidden() -> None:
