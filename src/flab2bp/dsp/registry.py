@@ -1077,4 +1077,11 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         30.0,
         "CP-SAT time limit in seconds; not degrees",
     ),
+    LintException(
+        "flab2bp.layout.last_mile",
+        "<module>",
+        0.35,
+        "B_MIN_SECONDS: minimum remaining wall-clock budget to start a cluster "
+        "search; not SORTER_END_EXTENSION geometry",
+    ),
 )
