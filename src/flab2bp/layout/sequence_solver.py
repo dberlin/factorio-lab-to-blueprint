@@ -2835,9 +2835,9 @@ class _RepairAdapters:
     #: The encoding rather than the placement, because the round trip is not
     #: exact: re-encoding the compaction here could yield a second, different
     #: pair.  Wired in a later task; until then this is ``None`` and a
-    #: LOCAL_EXACT_PACK choice falls through to the SEQUENCE_REINSERT repair, so
-    #: the arm must not be opened before an adapter exists -- the ledger would
-    #: pay the window arm for the reinsert's work.
+    #: LOCAL_EXACT_PACK choice is SKIPPED -- credited a count and a zero reward
+    #: and returned unchanged -- rather than being served by another arm's
+    #: repair, which would pay the window arm for the reinsert's work.
     window_pack: (
         Callable[
             [frozenset[int], PlacementProblem, AnnealState, DecodedPlacement],
@@ -2891,6 +2891,13 @@ def _alns_substitution(
         return unchanged, frozenset()
 
     choice = session.observe_and_select(metrics, context, routing_seconds=routing_seconds)
+    if choice.repair is RepairOperator.LOCAL_EXACT_PACK and adapters.window_pack is None:
+        # The arm has no implementation in this run, so it did not run.  Charge
+        # it a count and a zero reward -- the same accounting an evidence-less
+        # destroy operator gets -- and stop BEFORE the destroy, so no other arm
+        # does this arm's work and is credited to it.
+        session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+        return unchanged, frozenset()
     neighbourhood = destroy_strips(
         choice.destroy,
         # ``cap_scale`` is False until the portfolio opens.  The legacy rule
