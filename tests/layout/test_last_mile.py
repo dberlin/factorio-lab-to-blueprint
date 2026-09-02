@@ -124,6 +124,75 @@ def test_cluster_strips_are_ascending_and_drop_missing_owners() -> None:
     assert strips == (1, 3)
 
 
+def test_one_stranded_net_per_un_tappable_source_enters_the_cluster() -> None:
+    """Siblings on a lane no splitter fits keep exactly one seat, the lowest.
+
+    Both nets are released before the search, so ``_ends`` offers each the same
+    direct access cells as though it were the first to leave the lane.  CBS then
+    hands each a different one and calls them disjoint -- and the committer
+    refuses the second with ``junction-collider``, because that lane can be left
+    directly by one net and no more.  ``universe-matrix/output-products``
+    cluster ``(36, 37)``, source ``(172, 18, 0)``.
+    """
+    problem = last_mile.build_cluster(
+        [3, 5, 7],
+        walls={3: (), 5: (), 7: ()},
+        blockers={3: (), 5: (), 7: ()},
+        owner={},
+        paths={},
+        endpoints=_endpoints(8),
+        # 3 and 5 share a blocked lane; 7 has a lane of its own.
+        src_group={3: (5,), 5: (3,), 7: ()},
+        dst_group={},
+        source_junctionable=lambda index: index == 7,
+    )
+
+    assert problem.nets == (3, 7)
+    assert problem.stranded == (3, 7)
+    assert problem.same_source_dropped == 1
+
+
+def test_siblings_on_a_tappable_source_all_keep_their_seats() -> None:
+    """The drop is about the SPLITTER SITE, not about sharing a lane.
+
+    A lane whose junction site is usable can hand a second branch to a second
+    net, which is the ordinary case and the one the whole merge machinery
+    exists for.  Without this, "share a source" alone would gut every cluster
+    on a producer lane.
+    """
+    problem = last_mile.build_cluster(
+        [3, 5],
+        walls={3: (), 5: ()},
+        blockers={3: (), 5: ()},
+        owner={},
+        paths={},
+        endpoints=_endpoints(6),
+        src_group={3: (5,), 5: (3,)},
+        dst_group={},
+        source_junctionable=lambda _index: True,
+    )
+
+    assert problem.nets == (3, 5)
+    assert problem.same_source_dropped == 0
+
+
+def test_without_a_junction_predicate_the_cluster_is_unchanged() -> None:
+    """The parameter is optional and its absence is today's behaviour exactly."""
+    problem = last_mile.build_cluster(
+        [3, 5],
+        walls={3: (), 5: ()},
+        blockers={3: (), 5: ()},
+        owner={},
+        paths={},
+        endpoints=_endpoints(6),
+        src_group={3: (5,), 5: (3,)},
+        dst_group={},
+    )
+
+    assert problem.nets == (3, 5)
+    assert problem.same_source_dropped == 0
+
+
 def test_an_empty_stranded_list_is_refused() -> None:
     try:
         last_mile.build_cluster(

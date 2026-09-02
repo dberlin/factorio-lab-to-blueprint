@@ -8429,6 +8429,7 @@ def _route_all(
         "commit_rejected": 0,
         "restore_mismatch": 0,
         "relation_skipped_siblings": 0,
+        "same_source_dropped": 0,
         "nodes": 0,
         "expansions": 0,
     }
@@ -8452,6 +8453,7 @@ def _route_all(
             commit_rejected=last_mile_counts["commit_rejected"],
             restore_mismatch=last_mile_counts["restore_mismatch"],
             relation_skipped_siblings=last_mile_counts["relation_skipped_siblings"],
+            same_source_dropped=last_mile_counts["same_source_dropped"],
             nodes=last_mile_counts["nodes"],
             expansions=last_mile_counts["expansions"],
             seconds=last_mile_seconds,
@@ -8525,6 +8527,17 @@ def _route_all(
             budget_floor=last_mile_floor,
             expired=lambda: _expired(deadline),
         )
+
+    def _source_is_junctionable(index: int) -> bool:
+        """Whether this net's own source lane could take a splitter.
+
+        `build_cluster` needs it because a cluster is built out of UNSTAKED
+        nets, and unstaking is exactly what makes two stranded nets on one
+        source lane look independent of each other.  A net with no source port
+        has no lane to share, so it never constrains a sibling.
+        """
+        source = nets[index].src
+        return source is None or _can_junction(source.x, source.y, source.z)
 
     def _capture(run: int, problem: last_mile.ClusterProblem) -> None:
         """Hand a developer-tool hook everything needed to replay this run.
@@ -8906,7 +8919,16 @@ def _route_all(
             },
             src_group=src_group,
             dst_group=dst_group,
+            source_junctionable=_source_is_junctionable,
         )
+        last_mile_counts["same_source_dropped"] += problem.same_source_dropped
+        # A stranded net the cluster refused is still stranded when the cluster
+        # is solved and committed: it was never in the problem, so nothing
+        # routed it.  Reporting an empty round for it would tell the caller the
+        # pack is finished when one net has no path at all.
+        left_out = [
+            index for index in round_stranded if index not in set(problem.stranded)
+        ]
         # `paths` is insertion-ordered and only `_stake` writes it, so
         # `list(paths)` IS the stake order -- which the restore has to replay,
         # because `_claim_junction_guard` computes its `excused` set from the
@@ -8960,7 +8982,7 @@ def _route_all(
                 unlinked_now, _details_now = commit_once()
             if not unlinked_now:
                 last_mile_counts["solved"] += 1
-                return []
+                return left_out
             # A commit-link rejection is exact static evidence about buildings,
             # not a routing proof.  Put the round back and report a bound.
             for index in problem.nets:

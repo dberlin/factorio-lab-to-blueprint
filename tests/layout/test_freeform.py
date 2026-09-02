@@ -17016,6 +17016,89 @@ def test_an_unsorted_reservation_tuple_is_not_a_restore_mismatch(
     assert result.last_mile.proved == 1
 
 
+def _shared_blocked_source_fixture() -> tuple[
+    _Canvas, list[_Net], tuple[int, int, int, int]
+]:
+    """Two nets on ONE source lane whose splitter site is banned, both walled in.
+
+    The ``universe-matrix/output-products`` shape reduced to its bones: cluster
+    ``(36, 37)`` was two stranded nets sharing the source belt at
+    ``(172, 18, 0)``, where ``_can_junction`` is permanently False.  At most one
+    net may ever leave such a lane directly.
+    """
+    canvas = _Canvas()
+    bounds = (-6, -6, 6, 6)
+    canvas.limit = bounds
+    item = "target"
+    source_belt = canvas.add(_belt(0, 0, item=item))
+    first_belt = canvas.add(_belt(0, 3, item=item))
+    second_belt = canvas.add(_belt(2, 3, item=item))
+    source = _Port(source_belt, 0, 0, 0, 0)
+    first = _Net(
+        src=source,
+        dst=_Port(first_belt, 0, 3, 0, 0),
+        item=item,
+        net_id=NetId(0, 1, item, NetRole.INTERNAL, 0),
+    )
+    second = _Net(
+        src=source,
+        dst=_Port(second_belt, 2, 3, 2, 2),
+        item=item,
+        net_id=NetId(0, 2, item, NetRole.INTERNAL, 0),
+    )
+    # Wall the lane in, so both nets strand for the same reason and the round
+    # reaches the last-mile pass with two seeds.
+    _last_mile_block(canvas, {(-1, 0), (1, 0), (0, -1), (0, 1)})
+    # And ban the splitter site, which is what makes the two seats one seat.
+    canvas.junction_ban.add((0, 0, 0))
+    return canvas, [first, second], bounds
+
+
+def test_only_one_stranded_net_of_a_blocked_source_lane_joins_the_cluster(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two seeds on an un-tappable lane become one, and the drop is counted.
+
+    Both nets were unstaked before the search, which is exactly what makes
+    ``_ends`` offer each of them the lane's direct access cells as though it
+    were the first to leave -- the hazard ``_ends``' own docstring names.  CBS
+    then produces a routing the committer must refuse with
+    ``junction-collider``.  Keeping one seat is the bounded fix: it only
+    shrinks the set of nets the search may move.
+    """
+    from flab2bp.layout import last_mile as last_mile_module
+
+    canvas, nets, bounds = _shared_blocked_source_fixture()
+    seen: list[last_mile_module.ClusterProblem] = []
+
+    def watching(
+        problem: last_mile_module.ClusterProblem,
+        environment: last_mile_module.ClusterEnvironment,
+    ) -> last_mile_module.ClusterResult:
+        seen.append(problem)
+        return _bounded_result()  # type: ignore[return-value]
+
+    monkeypatch.setattr(last_mile_module, "solve_cluster", watching)
+    belt_id = catalog.item_id("conveyor-belt-1")
+    result = freeform._route_all(
+        canvas,
+        nets,
+        belt_id,
+        catalog.building(belt_id).model_index,
+        bounds,
+    )
+
+    # The premise: both nets really did strand, and they really are siblings on
+    # one source lane.  Without it the counter could read 1 for a round that
+    # never had two seeds to thin.
+    assert result.status is DetailedRouteStatus.STRANDED
+    assert len(seen) == 1
+    assert seen[0].stranded == (0,)
+    assert seen[0].same_source_dropped == 1
+    assert result.last_mile is not None
+    assert result.last_mile.same_source_dropped == 1
+
+
 def test_a_cluster_solution_rejected_at_commit_is_rolled_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
