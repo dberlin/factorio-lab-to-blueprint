@@ -8526,6 +8526,16 @@ def _route_all(
         `_retire_served_roles` filters it and `_restore_unserved_roles` rebuilds
         it.  A role that came back in the wrong order, or not at all, is
         precisely the silent corruption this comparison exists to catch.
+
+        THREE tables are deliberately EXEMPT: `_ends` overwrites
+        `source_access_walls`, `source_access_blockers` and
+        `owned_source_starts` for whichever net it is called on, so the last
+        cluster search to run leaves its own values behind.  They are
+        derived-and-overwritten rather than borrowed -- every reader gets them
+        from the `_ends` call that produced them, and the only consumer that
+        outlives a search is `round_failures`, which is built before
+        `_last_mile` is ever reached.  Comparing them would report a mismatch
+        for a difference no later reader can observe.
         """
         return (
             dict(paths),
@@ -8585,25 +8595,91 @@ def _route_all(
             for index in problem.nets
         )
 
+    def _open_every_corridor() -> _CorridorRelease:
+        """Retire EVERY port's corridor, as if every role had been served.
+
+        Unstaking the pack is not enough to make run 2's world loose.
+        `_stake` -> `_retire_served_roles` DELETES a served port's corridor
+        from `canvas.reserved`, `canvas.port_corridors` and `grid.reserved`,
+        and `_unstake` -> `_restore_unserved_roles` puts it all back and
+        `grid.block`s the two cells.  `_Canvas.free` refuses any reserved cell
+        that is not the searching net's own, so a corridor a staked non-cluster
+        net had retired is FREE to a cluster net in run 1 and RESERVED again in
+        run 2 -- run 2 would be TIGHTER than run 1 in exactly those cells, and
+        a closure there could forbid a placement a realizable world allows.
+
+        Retirement is per served role and this has no served paths to choose
+        corridors from, so it retires every corridor of every port at once,
+        which is the loosest the reservation tables can be.
+        """
+        release = _CorridorRelease(
+            reserved=dict(canvas.reserved),
+            corridors=dict(canvas.port_corridors),
+            grid_reserved=tuple(grid.reserved),
+            opened=(),
+        )
+        canvas.reserved.clear()
+        canvas.port_corridors.clear()
+        grid.reserved = ()
+        # Two guards, and the second one is the whole correctness of the
+        # inverse.  `cell not in owner and canvas.free(cell)` is what
+        # `_retire_served_roles` uses, for the same reason: a reserved cell can
+        # also be blocked by a path or a guard, and that blocking is not this
+        # release's to undo.  `occ != base` then keeps only the cells this
+        # release actually FREES -- a corridor nobody ever served was never
+        # `grid.block`ed, so re-blocking it on the way out would hand the round
+        # back tighter than it was lent.
+        opened = tuple(
+            cell
+            for cell in release.reserved
+            if cell not in owner
+            and canvas.free(cell)
+            and grid.occ[grid.index(cell)] != grid.base[grid.index(cell)]
+        )
+        for cell in opened:
+            grid.restore(cell)
+        return replace(release, opened=opened)
+
+    def _close_every_corridor(release: _CorridorRelease) -> None:
+        """Undo `_open_every_corridor`, exactly and in the inverse order."""
+        for cell in release.opened:
+            grid.block(cell)
+        canvas.reserved.clear()
+        canvas.reserved.update(release.reserved)
+        canvas.port_corridors.clear()
+        canvas.port_corridors.update(release.corridors)
+        grid.reserved = release.grid_reserved
+
     def _relaxed_cluster_result(
         problem: last_mile.ClusterProblem,
     ) -> last_mile.ClusterResult | None:
-        """Re-run CBS with the whole pack unstaked; see the Phase B spec 5.2.
+        """Re-run CBS in the LOOSEST world the cluster can face; see spec 5.2.
 
         Callers MUST have checked `_cluster_is_sibling_free` first.
 
-        The relaxation argument needs every routing-derived constraint gone
-        too: four of the five per-net rejection sets are read inside `_ends`
-        and the fifth, `rejected_path_cells`, is the search's `forbidden`
-        argument.  All five are saved, emptied for the cluster's nets, and put
-        back afterwards.
+        A relation no-good excludes a whole region, so it is sound only if run
+        2's world is at least as loose as every world the packer could realise
+        for these nets at this arrangement.  Looser than needed only weakens
+        the cut; TIGHTER makes it forbid placements that work.  Three things
+        are loosened, and each was a way for run 2 to come out tighter:
 
-        `grid.reserved` needs no separate handling, and not because it is
-        constant -- `_retire_served_roles` filters it and
-        `_restore_unserved_roles` rebuilds it.  The FULL sweep is what makes
-        it right: `_restore_unserved_roles` skips a role only while another
-        member of it is still in `paths`, and once every net is unstaked no
-        member remains.
+        - Every net is unstaked, so no path, `_TENTATIVE` cell, conditional
+          guard or owner survives.
+        - Every port corridor is retired (`_open_every_corridor`), because
+          unstaking RE-RESERVES the corridors staked nets had retired.
+        - Run 1's `planned_taps` is put back after the sweep.  `_can_junction`
+          refuses a `canvas.guard` cell unless `planned_taps` already holds it,
+          so a permanently guarded tap that run 1 could branch from would be
+          refused to run 2 with the table emptied.
+
+        The relaxation also needs every routing-derived constraint gone: four
+        of the five per-net rejection sets are read inside `_ends` and the
+        fifth, `rejected_path_cells`, is the search's `forbidden` argument.
+        All five are saved, emptied for the cluster's nets, and put back.
+
+        Everything taken away is restored in the `finally` before
+        `_restore_staked` re-stakes, so the `_round_state()` comparison sees
+        the round it was handed.
         """
         if budget["left"] <= 0 or _expired(deadline):
             return None
@@ -8628,29 +8704,93 @@ def _route_all(
             for index in every
         }
         staked = {index: paths[index] for index in every}
+        # Run 1's own table: the staked taps MINUS the cluster's, which is
+        # exactly what run 1's `_can_junction` read.
+        run_one_taps = {
+            cell: members - set(problem.nets)
+            for cell, members in planned_taps.items()
+        }
         before_all = _round_state()
+        release: _CorridorRelease | None = None
         try:
             for table in rejections:
                 for index in problem.nets:
                     table[index].clear()
             for index in every:
                 _unstake(index)
+            release = _open_every_corridor()
+            planned_taps.clear()
+            planned_taps.update(
+                {cell: members for cell, members in run_one_taps.items() if members}
+            )
             _capture(2, problem)
             return last_mile.solve_cluster(problem, _cluster_environment())
         finally:
-            # The SAME verified restore run 1 uses, so run 2 cannot skip the
-            # check that run 1 must pass.  Its return value is read by the
-            # caller through `restore_mismatch`.
+            # Put the world back BEFORE re-staking, so `_stake` rebuilds the
+            # taps and the retirements from the paths exactly as run 1's
+            # restore does.  Then the SAME verified restore run 1 uses, so run
+            # 2 cannot skip the check that run 1 must pass; its return value is
+            # read by the caller through `restore_mismatch`.
+            planned_taps.clear()
+            if release is not None:
+                _close_every_corridor(release)
             _restore_staked(every, staked, held_all, before_all)
             for table, snapshot in zip(rejections, saved, strict=True):
                 for index, cells in snapshot.items():
                     table[index].clear()
                     table[index].update(cells)
 
+    def _record_cluster_relation(problem: last_mile.ClusterProblem) -> None:
+        """Turn a closed run 1 into a relation no-good, or say why not.
+
+        Called ONLY after run 1 closed and the round came back, and it never
+        makes a claim of its own: the four ways out below either leave run 1's
+        proof exactly as it was or, on a lost round, withdraw it.
+        """
+        nonlocal proved_round, relation_strips, relation_evidence
+        if not _cluster_is_sibling_free(problem):
+            last_mile_counts["relation_skipped_siblings"] += 1
+            return
+        mismatches = last_mile_counts["restore_mismatch"]
+        relaxed = _relaxed_cluster_result(problem)
+        if relaxed is None:
+            return
+        _tally(relaxed)
+        if last_mile_counts["restore_mismatch"] != mismatches:
+            # Run 2 did not put the round back.  The incumbent the run-1 claim
+            # describes is no longer known to be the incumbent that was
+            # proved, so BOTH claims go.
+            last_mile_counts["proved"] -= 1
+            last_mile_counts["bounded"] += 1
+            proved_round = -1
+            proved_stranded.clear()
+            return
+        if relaxed.outcome is not last_mile.ClusterOutcome.PROVED:
+            return
+        instances = last_mile.cluster_strips(
+            problem,
+            {
+                index: (
+                    _net_id(index).source_strip,
+                    _net_id(index).destination_strip,
+                )
+                for index in problem.nets
+            },
+        )
+        # A cluster on one strip has no relative placement to forbid, and
+        # `LastMileReport` refuses to carry it.
+        if len(instances) < _RELATION_STRIP_PAIR:
+            return
+        relation_strips = instances
+        relation_evidence = (
+            f"cluster: nets={tuple(problem.nets)!r} "
+            f"truncated={problem.truncated} "
+            f"sibling_closed={problem.sibling_closed}"
+        )
+
     def _last_mile(round_stranded: list[int], round_index: int) -> list[int]:
         """Search the conflict cluster once per pass; see the Phase B spec 5.6."""
         nonlocal last_mile_done, last_mile_floor, proved_round
-        nonlocal relation_strips, relation_evidence
         if (
             last_mile_done
             or not round_stranded
@@ -8762,41 +8902,7 @@ def _route_all(
             proved_round = round_index
             proved_stranded.clear()
             proved_stranded.update(round_stranded)
-            if not _cluster_is_sibling_free(problem):
-                last_mile_counts["relation_skipped_siblings"] += 1
-            else:
-                mismatches = last_mile_counts["restore_mismatch"]
-                relaxed = _relaxed_cluster_result(problem)
-                if relaxed is not None:
-                    _tally(relaxed)
-                    if last_mile_counts["restore_mismatch"] != mismatches:
-                        # Run 2 did not put the round back.  The incumbent the
-                        # run-1 claim describes is no longer known to be the
-                        # incumbent that was proved, so BOTH claims go.
-                        last_mile_counts["proved"] -= 1
-                        last_mile_counts["bounded"] += 1
-                        proved_round = -1
-                        proved_stranded.clear()
-                    elif relaxed.outcome is last_mile.ClusterOutcome.PROVED:
-                        instances = last_mile.cluster_strips(
-                            problem,
-                            {
-                                index: (
-                                    _net_id(index).source_strip,
-                                    _net_id(index).destination_strip,
-                                )
-                                for index in problem.nets
-                            },
-                        )
-                        # A cluster on one strip has no relative placement to
-                        # forbid, and `LastMileReport` refuses to carry it.
-                        if len(instances) >= _RELATION_STRIP_PAIR:
-                            relation_strips = instances
-                            relation_evidence = (
-                                f"cluster: nets={tuple(problem.nets)!r} "
-                                f"truncated={problem.truncated} "
-                                f"sibling_closed={problem.sibling_closed}"
-                            )
+            _record_cluster_relation(problem)
         else:
             last_mile_counts["bounded"] += 1
         return round_stranded
@@ -9336,6 +9442,22 @@ class PortAccessCorridor:
 
     access: Cell
     exit: Cell
+
+
+@dataclass(frozen=True, slots=True)
+class _CorridorRelease:
+    """What the relaxed cluster run took away, so it can put it back exactly.
+
+    ``opened`` is only the cells the release actually handed back to
+    ``grid.occ``; a reserved cell that was blocked for some OTHER reason was
+    left alone and must not be re-blocked, or the restore would tighten the
+    round it is meant to reproduce.
+    """
+
+    reserved: dict[Cell, Cell]
+    corridors: dict[Cell, tuple[PortAccessCorridor, ...]]
+    grid_reserved: tuple[tuple[int, Cell], ...]
+    opened: tuple[Cell, ...]
 
 
 def _retire_port_corridor(

@@ -2768,7 +2768,7 @@ uv run python scripts/route_bench.py --cases "$d/route-cases-universe-matrix-out
 uv run python scripts/route_bench.py --cases "$d/route-cases-quantum-chip-all-products.pkl" --rounds 3 --check
 ```
 
-Expected: both `MATCH`. The relaxed run unstakes and re-stakes the whole pack, so this is the step that catches a restore that silently moved a belt.
+Expected: both `MATCH` — but read it for what it is: `scripts/route_bench.py` replays captured `_astar` calls and never enters `_route_all`, `_last_mile` or `solve_cluster`, so a MATCH says the low-level search is unchanged and says NOTHING about the relaxed run or the unstake/re-stake sweep. Corpus evidence for run 2 waits for Task 9's capture hook.
 
 - [ ] **Step 7: Full suite, lint, type-check, commit**
 
