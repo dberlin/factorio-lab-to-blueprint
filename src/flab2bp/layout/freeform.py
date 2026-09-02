@@ -63,6 +63,7 @@ from __future__ import annotations
 import heapq
 import math
 import time
+from array import array
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence, Set
@@ -73,13 +74,13 @@ from enum import Enum
 from fractions import Fraction
 from functools import cache, lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import numpy as np
 from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
-from flab2bp.layout import finalize, junction, slots, validate
+from flab2bp.layout import finalize, junction, route_kernel, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
@@ -5634,12 +5635,20 @@ class _Grid:
     #: ``(index, port)`` for every reserved cell inside the box.
     reserved: tuple[tuple[int, tuple[int, int, int]], ...]
     #: Congestion history as a flat array, or ``None`` on a round that has none.
-    hist: list[float] | None
+    #: An :class:`array.array` when :meth:`refresh_history` built it, so the
+    #: compiled loop can take a buffer of it without a copy; ``_route_all``'s
+    #: crossing-repair path assigns a plain list, which :func:`_astar` converts
+    #: once per search.
+    hist: array[float] | list[float] | None
     #: Landmark distance fields over the 2D projection, indexed
     #: ``(x - gx0) * gh + (y - gy0)``, with ``-1`` for a column the landmark
     #: cannot reach.  Empty until :meth:`build_landmarks` is called, which only
     #: :func:`_route_all` does -- see :data:`_ALT_LANDMARKS`.
     alt: tuple[list[int], ...] = ()
+    #: ``alt`` concatenated band-major into one buffer, for the compiled loop.
+    #: Kept in step with ``alt`` by :meth:`build_landmarks`, which is the only
+    #: thing that sets either.
+    alt_flat: array[int] = field(default_factory=lambda: array("q"))
 
     def index(self, cell: tuple[int, int, int]) -> int:
         x, y, lvl = cell
@@ -5731,6 +5740,10 @@ class _Grid:
             if best_at < 0:
                 break
         self.alt = tuple(fields)
+        flat = array("q")
+        for field_ in fields:
+            flat.extend(field_)
+        self.alt_flat = flat
 
     def refresh_history(self, history: Mapping[tuple[int, int, int], float]) -> None:
         """Re-flatten ``history``, which changes once per rip-up round."""
@@ -5738,7 +5751,7 @@ class _Grid:
             self.hist = None
             return
         lo_x, lo_y, hi_x, hi_y = self.box
-        flat = [0.0] * self.size
+        flat = array("d", bytes(8 * self.size))
         gx0, gy0, xstep = self.gx0, self.gy0, self.xstep
         for (cx, cy, clvl), used in history.items():
             if lo_x <= cx <= hi_x and lo_y <= cy <= hi_y and 0 <= clvl < LEVELS:
@@ -5904,6 +5917,240 @@ class _PathSearchResult:
     kind: RouteFailureKind | None
     wall: tuple[Cell, ...]
     expansions: int
+
+
+def _astar_python_loop(
+    flags: bytearray,
+    hist: Sequence[float] | None,
+    pressure: float,
+    goal_flag: bytearray,
+    start_indices: Sequence[int],
+    h: Callable[[int], float],
+    size: int,
+    gh: int,
+    xstep: int,
+    budget: dict[str, int] | None,
+    start_left: int,
+    deadline: float | None,
+) -> tuple[list[int] | None, int, int, list[int]]:
+    """The A* expansion loop, in Python.
+
+    Returns ``(path indices oldest first, expansions, kind, settled)``, where
+    ``kind`` is 0 found / 1 budget / 2 sealed and ``settled`` is the reachable
+    pocket in index order -- populated only when the heap emptied, which is the
+    one ending that proves the pocket is sealed.
+
+    This is the reference implementation.  ``_route_kernel.astar_flat`` is a
+    compiled transcription of it, and the two are held to the same replay digest
+    by :mod:`scripts.route_bench`; a change here is a change there.
+    """
+    negotiating = hist is not None
+    if hist is None:
+        hist = []
+
+    # (one-step cell offset, two-step cell offset, one-step column offset,
+    # two-step column offset) -- the ramp's run cell is the plain step's target,
+    # so one pass over the four directions does both, and the column offsets
+    # index `hcache` without re-deriving a column from a cell.  ``dx`` and
+    # ``dy`` are NOT carried: nothing in the loop wants them since `h` began
+    # taking a column, and unpacking two dead names four times per expansion is
+    # 5.6M unpackings in a `quantum-chip` pass.
+    ystep = LEVELS
+    moves = tuple(
+        (
+            dx * xstep + dy * ystep,
+            2 * (dx * xstep + dy * ystep),
+            dx * gh + dy,
+            2 * (dx * gh + dy),
+        )
+        for dx, dy in _STEPS
+    )
+
+    expansions = 0
+    heappush = heapq.heappush
+    heappop = heapq.heappop
+    inf = math.inf
+    level_toll = _LEVEL_TOLL
+    ramp_table = _RAMPS
+
+    # ONE COUNTER AND ONE COMPARE PER EXPANSION, where there were three guards
+    # and two dict operations.
+    #
+    # The cap, the deadline check and the shared budget all fire at expansion
+    # counts that are known in advance, so the soonest of the three is computed
+    # once and re-derived only when it is reached.  `budget` is read into a
+    # local and written back at every exit, because a `budget["left"] -= 1` is a
+    # hash, a lookup and a store on the hottest line in this router -- 1.25M of
+    # them in one `quantum-chip` routing pass.
+    #
+    # It is the same arithmetic, not an approximation of it.  The budget was
+    # charged for an expansion only AFTER the cap and the deadline had let that
+    # expansion through, so an exit on either of those has charged one fewer;
+    # that is why the two write-backs differ by one.  Get it wrong and the pass
+    # spends a different number of nodes on every later net.
+    checkpoint = _MAX_EXPANSIONS + 1
+    if checkpoint > _DEADLINE_CHECK_EVERY:
+        checkpoint = _DEADLINE_CHECK_EVERY
+    if start_left < checkpoint:
+        checkpoint = start_left
+
+    # THE HEURISTIC IS A FUNCTION OF THE COLUMN, so it is computed once per
+    # column and not once per push.
+    #
+    # `h` reads only `x` and `y`; the level never enters it.  A cell and the two
+    # above it therefore share an answer, and so does every later push to a cell
+    # whose cost improved.  Profiled on `quantum-chip` power=1, the four `h`
+    # variants ran 2.63M times against 1.25M expansions -- roughly two calls per
+    # node expanded, all but the first of them re-deriving a number already
+    # known.
+    #
+    # `-1.0` is safe as "not yet computed" because `h` is a distance and cannot
+    # be negative: the plain term is a Manhattan distance and the landmark bands
+    # only ever raise it.  Cached by COLUMN index, which is `cur // LEVELS`, so
+    # the table is a third the size of the search arrays.
+    hcache = [-1.0] * (size // LEVELS)
+
+    open_heap: list[tuple[float, float, int]] = []
+    best = [inf] * size
+    prev = [-1] * size
+    #: Ramp moves span two cells.  The intermediate "run" cell is recorded here
+    #: rather than in ``prev``, because giving it a predecessor of its own lets a
+    #: later ramp clobber a predecessor the normal step expansion already set --
+    #: which can point a cell's chain back through itself and make ``prev`` cyclic.
+    via: dict[int, int] = {}
+    via_get = via.get
+    for si in start_indices:
+        best[si] = 0.0
+        prev[si] = -1
+        heappush(open_heap, (h(si // LEVELS), 0.0, si))
+
+    while open_heap:
+        _, g, cur = heappop(open_heap)
+        if g > best[cur]:
+            continue
+        expansions += 1
+        if expansions >= checkpoint:
+            if expansions > _MAX_EXPANSIONS:
+                if budget is not None:
+                    budget["left"] = start_left - expansions + 1
+                return None, expansions, 1, []
+            if expansions % _DEADLINE_CHECK_EVERY == 0 and _expired(deadline):
+                if budget is not None:
+                    budget["left"] = start_left - expansions + 1
+                return None, expansions, 1, []
+            if expansions >= start_left:
+                if budget is not None:
+                    budget["left"] = start_left - expansions
+                return None, expansions, 1, []
+            checkpoint = _MAX_EXPANSIONS + 1
+            due = (expansions // _DEADLINE_CHECK_EVERY + 1) * _DEADLINE_CHECK_EVERY
+            if due < checkpoint:
+                checkpoint = due
+            if start_left < checkpoint:
+                checkpoint = start_left
+        if goal_flag[cur]:
+            walk: list[int] = []
+            node = cur
+            # ``prev`` must be acyclic; walking a cycle here previously spun at
+            # 100% CPU while ``path`` grew without bound.  Guard it rather than
+            # trusting it, so a regression fails loudly instead of hanging.
+            seen: set[int] = set()
+            while node != -1:
+                if node in seen:
+                    q, lvl = divmod(node, LEVELS)
+                    px, py = divmod(q, gh)
+                    raise AssertionError(
+                        f"cycle in A* predecessor chain at "
+                        f"grid-local {(px, py, lvl)}; "
+                        "a ramp move corrupted an existing predecessor"
+                    )
+                seen.add(node)
+                walk.append(node)
+                run = via_get(node, -1)
+                if run != -1:
+                    walk.append(run)
+                node = prev[node]
+            if budget is not None:
+                budget["left"] = start_left - expansions
+            walk.reverse()
+            return walk, expansions, 0, []
+        q = cur // LEVELS
+        lvl = cur - q * LEVELS
+        # A plain step stays on `lvl`, so its toll is fixed for this expansion.
+        step_toll = 1.0 + level_toll[lvl]
+        # And so is the pair of ramps this cell may take, and the base of their
+        # cost: `g + 3.0` is the same number for all eight ramp targets, and
+        # adding it once rather than eight times keeps the association order
+        # `g + 3.0 + toll` that the ramp cost has always used -- these are
+        # floats, so re-bracketing them is not free of consequences.
+        ramps = ramp_table[lvl]
+        run_base = g + 3.0
+        # ONE pass over the four directions, doing the plain step and the two
+        # ramps that share its ground cell.
+        #
+        # A ramp's lower half IS the plain step's target, so the separate ramp
+        # loop was re-deriving and re-testing a cell the step loop had just
+        # tested, twice over for the two level changes.  Fusing them tests each
+        # ground cell once and skips both its ramps the moment it is blocked,
+        # which on a dense pack is most of the time.
+        #
+        # Exactly equivalent, not merely close: a ramp lands on ``lvl +- 1`` and
+        # a step stays on ``lvl``, so no ramp and no step of one expansion ever
+        # touch the same cell, and interleaving them cannot change which of two
+        # equal-cost paths is recorded.
+        for one, two, colone, coltwo in moves:
+            nxt = cur + one
+            if not flags[nxt]:
+                continue
+            cost = g + step_toll
+            if negotiating:
+                cost += hist[nxt] * pressure
+            if cost < best[nxt]:
+                best[nxt] = cost
+                prev[nxt] = cur
+                # A plain step reaches `nxt` directly, so any ramp via-cell
+                # recorded by an earlier, worse ramp is now stale.  Leaving it
+                # splices a cell that is not on the path into the result, which
+                # shows up as a belt linking diagonally across a level change.
+                if via:
+                    via.pop(nxt, None)
+                col = q + colone
+                far = hcache[col]
+                if far < 0.0:
+                    far = hcache[col] = h(col)
+                heappush(open_heap, (cost + far, cost, nxt))
+
+            # A level change costs two tiles of run, because belts climb 0.5 per
+            # tile.  Both are reserved so the ramp physically exists -- and the
+            # lower one is `nxt`, already cleared above.
+            run = cur + two
+            for step, toll2 in ramps:
+                top = run + step
+                if not flags[top]:
+                    continue
+                cost = run_base + toll2
+                if negotiating:
+                    cost += hist[top] * pressure
+                if cost < best[top]:
+                    best[top] = cost
+                    # The ramp is ONE edge cur -> top that happens to occupy an
+                    # extra cell.  Record `nxt` as a via, never as a node with
+                    # its own predecessor: it may already lie on another cell's
+                    # best path, and reassigning its predecessor is what made
+                    # `prev` cyclic.
+                    prev[top] = cur
+                    via[top] = nxt
+                    col = q + coltwo
+                    far = hcache[col]
+                    if far < 0.0:
+                        far = hcache[col] = h(col)
+                    heappush(open_heap, (cost + far, cost, top))
+
+    # THE HEAP EMPTIED, which is the one ending that proves no path exists -- the
+    # Budget exits above do not say the pocket is sealed.
+    if budget is not None:
+        budget["left"] = start_left - expansions
+    return None, expansions, 2, [i for i, seen_at in enumerate(best) if seen_at != inf]
 
 
 def _astar(
@@ -6184,228 +6431,85 @@ def _astar(
     for c in goal_list:
         goal_flag[(c[0] - gx0) * xstep + (c[1] - gy0) * ystep + c[2]] = 1
 
-    # (one-step cell offset, two-step cell offset, one-step column offset,
-    # two-step column offset) -- the ramp's run cell is the plain step's target,
-    # so one pass over the four directions does both, and the column offsets
-    # index `hcache` without re-deriving a column from a cell.  ``dx`` and
-    # ``dy`` are NOT carried: nothing in the loop wants them since `h` began
-    # taking a column, and unpacking two dead names four times per expansion is
-    # 5.6M unpackings in a `quantum-chip` pass.
-    moves = tuple(
-        (
-            dx * xstep + dy * ystep,
-            2 * (dx * xstep + dy * ystep),
-            dx * gh + dy,
-            2 * (dx * gh + dy),
+    # The admitted starts, as flat indices, computed once: both loops seed the
+    # heap from this list and neither re-derives it.
+    start_indices = [
+        (s[0] - gx0) * xstep + (s[1] - gy0) * ystep + s[2]
+        for s in starts
+        if not (
+            s in forbidden_cells or (not canvas.free(s) and s not in owned and s not in released)
         )
-        for dx, dy in _STEPS
-    )
-
-    expansions = 0
-    heappush = heapq.heappush
-    heappop = heapq.heappop
-    inf = math.inf
-    level_toll = _LEVEL_TOLL
-    ramp_table = _RAMPS
-
-    # ONE COUNTER AND ONE COMPARE PER EXPANSION, where there were three guards
-    # and two dict operations.
-    #
-    # The cap, the deadline check and the shared budget all fire at expansion
-    # counts that are known in advance, so the soonest of the three is computed
-    # once and re-derived only when it is reached.  `budget` is read into a
-    # local and written back at every exit, because a `budget["left"] -= 1` is a
-    # hash, a lookup and a store on the hottest line in this router -- 1.25M of
-    # them in one `quantum-chip` routing pass.
-    #
-    # It is the same arithmetic, not an approximation of it.  The budget was
-    # charged for an expansion only AFTER the cap and the deadline had let that
-    # expansion through, so an exit on either of those has charged one fewer;
-    # that is why the two write-backs differ by one.  Get it wrong and the pass
-    # spends a different number of nodes on every later net.
-    start_left = budget["left"] if budget is not None else 1 << 62
-    checkpoint = _MAX_EXPANSIONS + 1
-    if checkpoint > _DEADLINE_CHECK_EVERY:
-        checkpoint = _DEADLINE_CHECK_EVERY
-    if start_left < checkpoint:
-        checkpoint = start_left
-
-    # THE HEURISTIC IS A FUNCTION OF THE COLUMN, so it is computed once per
-    # column and not once per push.
-    #
-    # `h` reads only `x` and `y`; the level never enters it.  A cell and the two
-    # above it therefore share an answer, and so does every later push to a cell
-    # whose cost improved.  Profiled on `quantum-chip` power=1, the four `h`
-    # variants ran 2.63M times against 1.25M expansions -- roughly two calls per
-    # node expanded, all but the first of them re-deriving a number already
-    # known.
-    #
-    # `-1.0` is safe as "not yet computed" because `h` is a distance and cannot
-    # be negative: the plain term is a Manhattan distance and the landmark bands
-    # only ever raise it.  Cached by COLUMN index, which is `cur // LEVELS`, so
-    # the table is a third the size of the search arrays.
-    hcache = [-1.0] * (size // LEVELS)
-
-    open_heap: list[tuple[float, float, int]] = []
-    best = [inf] * size
-    prev = [-1] * size
-    #: Ramp moves span two cells.  The intermediate "run" cell is recorded here
-    #: rather than in ``prev``, because giving it a predecessor of its own lets a
-    #: later ramp clobber a predecessor the normal step expansion already set --
-    #: which can point a cell's chain back through itself and make ``prev`` cyclic.
-    via: dict[int, int] = {}
-    via_get = via.get
-    for s in starts:
-        if s in forbidden_cells or (not canvas.free(s) and s not in owned and s not in released):
-            continue
-        si = (s[0] - gx0) * xstep + (s[1] - gy0) * ystep + s[2]
-        best[si] = 0.0
-        prev[si] = -1
-        heappush(
-            open_heap,
-            (h((s[0] - gx0) * gh + (s[1] - gy0)), 0.0, si),
-        )
-    if not open_heap:
+    ]
+    if not start_indices:
         return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
 
-    while open_heap:
-        _, g, cur = heappop(open_heap)
-        if g > best[cur]:
-            continue
-        expansions += 1
-        if expansions >= checkpoint:
-            if expansions > _MAX_EXPANSIONS:
-                if budget is not None:
-                    budget["left"] = start_left - expansions + 1
-                return _PathSearchResult(None, RouteFailureKind.BUDGET, (), expansions)
-            if expansions % _DEADLINE_CHECK_EVERY == 0 and _expired(deadline):
-                if budget is not None:
-                    budget["left"] = start_left - expansions + 1
-                return _PathSearchResult(None, RouteFailureKind.BUDGET, (), expansions)
-            if expansions >= start_left:
-                if budget is not None:
-                    budget["left"] = start_left - expansions
-                return _PathSearchResult(None, RouteFailureKind.BUDGET, (), expansions)
-            checkpoint = _MAX_EXPANSIONS + 1
-            due = (expansions // _DEADLINE_CHECK_EVERY + 1) * _DEADLINE_CHECK_EVERY
-            if due < checkpoint:
-                checkpoint = due
-            if start_left < checkpoint:
-                checkpoint = start_left
-        if goal_flag[cur]:
-            path = []
-            node = cur
-            # ``prev`` must be acyclic; walking a cycle here previously spun at
-            # 100% CPU while ``path`` grew without bound.  Guard it rather than
-            # trusting it, so a regression fails loudly instead of hanging.
-            seen: set[int] = set()
-            while node != -1:
-                if node in seen:
-                    q, lvl = divmod(node, LEVELS)
-                    px, py = divmod(q, gh)
-                    raise AssertionError(
-                        f"cycle in A* predecessor chain at "
-                        f"{(px + gx0, py + gy0, lvl)}; "
-                        "a ramp move corrupted an existing predecessor"
-                    )
-                seen.add(node)
-                q, lvl = divmod(node, LEVELS)
-                px, py = divmod(q, gh)
-                path.append((px + gx0, py + gy0, lvl))
-                run = via_get(node, -1)
-                if run != -1:
-                    q, lvl = divmod(run, LEVELS)
-                    px, py = divmod(q, gh)
-                    path.append((px + gx0, py + gy0, lvl))
-                node = prev[node]
-            if budget is not None:
-                budget["left"] = start_left - expansions
-            return _PathSearchResult(tuple(_cut_loops(list(reversed(path)))), None, (), expansions)
-        q = cur // LEVELS
-        lvl = cur - q * LEVELS
-        # A plain step stays on `lvl`, so its toll is fixed for this expansion.
-        step_toll = 1.0 + level_toll[lvl]
-        # And so is the pair of ramps this cell may take, and the base of their
-        # cost: `g + 3.0` is the same number for all eight ramp targets, and
-        # adding it once rather than eight times keeps the association order
-        # `g + 3.0 + toll` that the ramp cost has always used -- these are
-        # floats, so re-bracketing them is not free of consequences.
-        ramps = ramp_table[lvl]
-        run_base = g + 3.0
-        # ONE pass over the four directions, doing the plain step and the two
-        # ramps that share its ground cell.
-        #
-        # A ramp's lower half IS the plain step's target, so the separate ramp
-        # loop was re-deriving and re-testing a cell the step loop had just
-        # tested, twice over for the two level changes.  Fusing them tests each
-        # ground cell once and skips both its ramps the moment it is blocked,
-        # which on a dense pack is most of the time.
-        #
-        # Exactly equivalent, not merely close: a ramp lands on ``lvl +- 1`` and
-        # a step stays on ``lvl``, so no ramp and no step of one expansion ever
-        # touch the same cell, and interleaving them cannot change which of two
-        # equal-cost paths is recorded.
-        for one, two, colone, coltwo in moves:
-            nxt = cur + one
-            if not flags[nxt]:
-                continue
-            cost = g + step_toll
-            if negotiating:
-                cost += hist[nxt] * pressure
-            if cost < best[nxt]:
-                best[nxt] = cost
-                prev[nxt] = cur
-                # A plain step reaches `nxt` directly, so any ramp via-cell
-                # recorded by an earlier, worse ramp is now stale.  Leaving it
-                # splices a cell that is not on the path into the result, which
-                # shows up as a belt linking diagonally across a level change.
-                if via:
-                    via.pop(nxt, None)
-                col = q + colone
-                far = hcache[col]
-                if far < 0.0:
-                    far = hcache[col] = h(col)
-                heappush(open_heap, (cost + far, cost, nxt))
+    # `budget` is read into a local and written back at every exit, because a
+    # `budget["left"] -= 1` is a hash, a lookup and a store on the hottest line
+    # in this router -- 1.25M of them in one `quantum-chip` routing pass.
+    start_left = budget["left"] if budget is not None else 1 << 62
 
-            # A level change costs two tiles of run, because belts climb 0.5 per
-            # tile.  Both are reserved so the ramp physically exists -- and the
-            # lower one is `nxt`, already cleared above.
-            run = cur + two
-            for step, toll2 in ramps:
-                top = run + step
-                if not flags[top]:
-                    continue
-                cost = run_base + toll2
-                if negotiating:
-                    cost += hist[top] * pressure
-                if cost < best[top]:
-                    best[top] = cost
-                    # The ramp is ONE edge cur -> top that happens to occupy an
-                    # extra cell.  Record `nxt` as a via, never as a node with
-                    # its own predecessor: it may already lie on another cell's
-                    # best path, and reassigning its predecessor is what made
-                    # `prev` cyclic.
-                    prev[top] = cur
-                    via[top] = nxt
-                    col = q + coltwo
-                    far = hcache[col]
-                    if far < 0.0:
-                        far = hcache[col] = h(col)
-                    heappush(open_heap, (cost + far, cost, top))
+    path_indices: Sequence[int] | None
+    settled: Sequence[int]
+    if route_kernel._compiled_astar is not None:
+        # The compiled loop takes the heuristic apart rather than calling back
+        # into `h`: which of the three plain terms applies, the deduplicated
+        # goal columns the exact term needs, the bounding box the weak term
+        # needs, and the landmark fields, all as buffers.  It re-derives the
+        # same bands `h` closed over, from the same goal columns.
+        near = tuple({(c[0] - gx0, c[1] - gy0) for c in goal_list})
+        goal_columns = array("q", [v for pair in near for v in pair])
+        goal_box = (
+            min(c[0] for c in goal_list) - gx0,
+            min(c[1] for c in goal_list) - gy0,
+            max(c[0] for c in goal_list) - gx0,
+            max(c[1] for c in goal_list) - gy0,
+        )
+        if not negotiating:
+            hist_buffer = array("d")
+        elif isinstance(hist, array):
+            hist_buffer = hist
+        else:
+            hist_buffer = array("d", hist)
+        # The extension is typed by `_route_kernel.pyi`, but the backend holds it
+        # as a `Callable[..., object]` so a missing extension is a None rather
+        # than an import error; the shape it returns is that stub's.
+        path_indices, expansions, kind, settled, left = cast(
+            "tuple[Sequence[int] | None, int, int, Sequence[int], int]",
+            route_kernel._compiled_astar(
+                flags, hist_buffer, pressure, flat.alt_flat, len(flat.alt), goal_flag,
+                goal_columns, len(goal_list) <= _EXACT_HEURISTIC_GOALS, goal_box,
+                array("q", start_indices), gh, xstep, LEVELS, array("d", _LEVEL_TOLL),
+                _MAX_EXPANSIONS, start_left, _DEADLINE_CHECK_EVERY, deadline, _expired,
+            ),
+        )
+        if budget is not None:
+            budget["left"] = left
+    else:
+        path_indices, expansions, kind, settled = _astar_python_loop(
+            flags, hist if negotiating else None, pressure, goal_flag, start_indices, h,
+            size, gh, xstep, budget, start_left, deadline,
+        )
+
+    if kind == 1:
+        return _PathSearchResult(None, RouteFailureKind.BUDGET, (), expansions)
+    if kind == 0:
+        assert path_indices is not None
+        cells = []
+        for index in path_indices:
+            q, lvl = divmod(index, LEVELS)
+            px, py = divmod(q, gh)
+            cells.append((px + gx0, py + gy0, lvl))
+        return _PathSearchResult(tuple(_cut_loops(cells)), None, (), expansions)
 
     # THE HEAP EMPTIED, which is the one ending that proves no path exists -- the
-    # Budget exits above do not say the pocket is sealed. The cells with a finite
-    # `best` are exactly the free space this net could reach and the blocked cells
-    # touching it are its wall. Only tentative cells have a routing-net owner.
-    if budget is not None:
-        budget["left"] = start_left - expansions
+    # Budget exits above do not say the pocket is sealed. The settled cells are
+    # exactly the free space this net could reach and the blocked cells touching
+    # them are its wall. Only tentative cells have a routing-net owner.
     if blocking_owners is not None:
         owner_get = blocking_owners.get
         wall_by_owner: dict[int, Cell] = {}
         too_diffuse = False
-        for index, seen_at in enumerate(best):
-            if seen_at == inf:
-                continue
+        for index in settled:
             q, level = divmod(index, LEVELS)
             x, y = divmod(q, gh)
             x += gx0
@@ -6434,16 +6538,10 @@ def _astar(
             expansions,
         )
     wall_cells: tuple[Cell, ...] = ()
-    pocket = []
-    for i, seen_at in enumerate(best):
-        if seen_at != inf:
-            pocket.append(i)
-            if len(pocket) > _BLAME_MAX_POCKET:
-                break
-    if len(pocket) <= _BLAME_MAX_POCKET:
+    if len(settled) <= _BLAME_MAX_POCKET:
         blocked_get = canvas.blocked.get
         wall: set[Cell] = set()
-        for i in pocket:
+        for i in settled:
             q, blvl = divmod(i, LEVELS)
             bx, by = divmod(q, gh)
             bx += gx0

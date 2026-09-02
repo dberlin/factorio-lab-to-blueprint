@@ -71,6 +71,14 @@ def _snapshot(
     shot_canvas.reserved = dict(canvas.reserved)
     shot_canvas.solid = set(canvas.solid)
     shot_canvas.keep_out = set(canvas.keep_out)
+    # `_Canvas.free` reads these two as well, and BOTH grow after a capture --
+    # junction guards are staked as later nets are routed.  Sharing them replayed
+    # a `universe-matrix` capture with a start cell the live pass had guarded in
+    # the meantime: the search dropped that start, took a longer path, and the
+    # replay digest differed from the capture for a reason that had nothing to do
+    # with the router.
+    shot_canvas.guard = set(canvas.guard)
+    shot_canvas.belt_ban = dict(canvas.belt_ban)
     shot_canvas.routing_ports = canvas.routing_ports
     shot_grid = None
     if grid is not None:
@@ -163,7 +171,8 @@ def capture(url_id: str, budget: float, every: int, cap: int, out: Path) -> None
     finally:
         freeform._astar = orig
     out.write_bytes(pickle.dumps(cases, protocol=5))
-    lens = [0 if c["path"] is None else len(c["path"]) for c in cases]
+    # `_astar` returns a `_PathSearchResult`, whose `path` is the tuple of cells.
+    lens = [0 if c["path"].path is None else len(c["path"].path) for c in cases]
     print(f"captured {len(cases)} of {seen} searches -> {out} "
           f"({out.stat().st_size / 1e6:.1f} MB); "
           f"{sum(1 for n in lens if n)} found, "
@@ -185,7 +194,10 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
         # occupancy the real pass built its fields from, and the sweep is
         # deterministic, so `--landmarks 4` reproduces the capture exactly --
         # which is the control this experiment needs.
-        done: dict[int, tuple[Any, ...]] = {}
+        # `alt_flat` is `alt` concatenated for the compiled loop and the two must
+        # move together; restoring only `alt` would hand the kernel a band count
+        # its buffer cannot cover.
+        done: dict[int, tuple[tuple[Any, ...], Any]] = {}
         for case in cases:
             grid = case["grid"]
             if grid is None:
@@ -194,8 +206,8 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
             if key not in done:
                 grid.alt = ()
                 grid.build_landmarks(landmarks)
-                done[key] = grid.alt
-            grid.alt = done[key]
+                done[key] = (grid.alt, grid.alt_flat)
+            grid.alt, grid.alt_flat = done[key]
         print(f"landmarks re-swept to {landmarks} on {len(done)} grid(s)")
     best = None
     for r in range(rounds):
