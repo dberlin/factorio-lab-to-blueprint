@@ -109,9 +109,23 @@ from flab2bp.layout.route_feedback import (
     combine_last_mile_reports,
     update_feedback,
 )
+from flab2bp.layout.sequence_alns import (
+    REWARD_RANKS,
+    OperatorChoice,
+    OperatorContext,
+    OperatorMetrics,
+    OperatorOutcome,
+    OperatorSession,
+    destroy_strips,
+    metrics_from_evaluation,
+    operator_tally,
+    remaining_fraction_bucket,
+    reward_vector,
+)
 from flab2bp.layout.sequence_pair import (
     DecodedPlacement,
     DirectInsertTarget,
+    GapProfile,
     PlacementProblem,
     SequencePair,
     encode_placement,
@@ -16866,6 +16880,11 @@ class FreeformLayout:
         #: means no pack got that far. Refusal reporting reads counts from the
         #: detailed results without destroying identities Task 10 consumes.
         attempts: list[PackAttempt] = []
+        # ONE session for the whole call, so operator credit survives a strip
+        # replan and a second arrangement pass.  It dies with this call:
+        # nothing here is process-wide, and two `lay_out` calls never share a
+        # ledger.
+        alns_session = OperatorSession()
         for sweep_s in budgets:
             if _expired(deadline):
                 break
@@ -16878,6 +16897,7 @@ class FreeformLayout:
                     budget,
                     rejected,
                     attempts,
+                    session=alns_session,
                 )
             except _PreparationDeadline as exc:
                 raise NoValidLayout(
@@ -17030,6 +17050,8 @@ class FreeformLayout:
         budget: dict[str, int] | None = None,
         rejected: list[_RefusalFinding] | None = None,
         attempts: list[PackAttempt] | None = None,
+        *,
+        session: OperatorSession,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
 
@@ -17251,8 +17273,69 @@ class FreeformLayout:
         #: The dearest candidate this sweep has COMPLETED, pack through validate.
         #: What `_room_for_another` charges the next improvement arrangement.
         dearest_candidate_s = 0.0
+        #: The dearest `_pack` solve this sweep has completed, so a windowed
+        #: retry can be charged for what it actually REPLACES rather than for a
+        #: whole candidate: the window swaps out the pack and leaves routing,
+        #: power, finalize and validate exactly where they were.
+        dearest_pack_s = 0.0
+        #: Window repairs waiting to be evaluated, and the queue that drains
+        #: them.  `candidate_packs` is iterated by index and already mutated in
+        #: four places; a separate queue adds no fifth mutation.
+        window_packs: dict[tuple[int, int], _Pack] = {}
+        window_queue: list[tuple[int, int]] = []
+        #: The choice and the pre-repair metrics that produced each queued pack,
+        #: so credit lands on the choice that earned it rather than on whatever
+        #: the selector happened to pick last.
+        window_choices: dict[tuple[int, int], tuple[OperatorChoice, OperatorMetrics]] = {}
+        #: Asked-and-answered windows, so the same question is never put to
+        #: CP-SAT twice inside one `lay_out`.
+        solved_windows: set[tuple[int, int, frozenset[int]]] = set()
+        window_solves = 0
+        window_accepted = 0
+        window_seconds = 0.0
+        window_skipped_no_goods = 0
+        window_encode_errors = 0
+        evaluations = 0
         started_at: float | None = None
         candidate_index = 0
+
+        def _count_window_skips(count: int) -> None:
+            nonlocal window_skipped_no_goods
+            window_skipped_no_goods += count
+
+        def settle_window_credit(
+            height: int,
+            arrangement: int,
+            *,
+            after: OperatorMetrics | None,
+            routing_seconds: float,
+        ) -> None:
+            """Credit the choice that produced this candidate, if there was one.
+
+            ``after=None`` means the candidate was never evaluated -- the
+            deadline arrived first -- which is a cost with no reward, so it is
+            credited unapplied.
+            """
+            stored = window_choices.pop((height, arrangement), None)
+            if stored is None:
+                return
+            choice, before = stored
+            if after is None:
+                session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+                return
+            session.observe(
+                choice,
+                reward_vector(
+                    OperatorOutcome(
+                        choice=choice,
+                        before=before,
+                        after=after,
+                        applied=True,
+                    )
+                ),
+                applied=True,
+                routing_seconds=routing_seconds,
+            )
         from flab2bp.layout import geometry_memo
 
         staged_static_cache = geometry_memo.for_spec(spec)
@@ -17318,9 +17401,17 @@ class FreeformLayout:
             cluster_relation_no_goods.clear()
             cluster_relation_no_good_keys.clear()
 
-        while candidate_index < len(candidate_packs):
-            height, arrangement, projection_retry = candidate_packs[candidate_index]
-            candidate_index += 1
+        while window_queue or candidate_index < len(candidate_packs):
+            # A queued window repair is a candidate that has ALREADY been
+            # packed, so it consumes a turn of this loop without consuming a
+            # `candidate_packs` slot: the `pop` below is what removed it.
+            queued = window_queue.pop(0) if window_queue else None
+            if queued is not None:
+                height, arrangement = queued
+                projection_retry = False
+            else:
+                height, arrangement, projection_retry = candidate_packs[candidate_index]
+                candidate_index += 1
             # Charge the PREVIOUS candidate here, at the one place every path
             # through the body reaches. The body leaves by five different
             # routes -- no pack, unpowerable, unrouted, rejected, kept -- and a
@@ -17498,33 +17589,43 @@ class FreeformLayout:
             exact_pack_no_goods = tuple(exact_no_good_state.no_goods)
             if retry_no_good is not None:
                 exact_pack_no_goods += (retry_no_good,)
-            pack = _pack(
-                strips,
-                height=height,
-                width_bound=width_bound,
-                time_budget_s=remaining,
-                direct_candidates=net_candidates,
-                workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
-                deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS,
-                seed=seed,
-                arrangement=arrangement,
-                projection_no_goods=tuple(projection_no_goods),
-                exact_pack_no_goods=exact_pack_no_goods,
-                direct_relation_no_goods=tuple(direct_relation_no_goods),
-                cluster_relation_no_goods=tuple(cluster_relation_no_goods),
-                feedback=feedback,
-                stop_when_seed_admissible=(
-                    candidate_index == 1
-                    and arrangement == 0
-                    and not projection_retry
-                    and feedback is None
-                    and _seed_admission_preserves_best_band(
-                        seed,
-                        _minimum_pack_width(strips, height),
-                        projection_envelope,
-                    )
-                ),
-            )
+            # A window repair IS this candidate's pack.  Re-solving it here
+            # would throw away the bounded solve that was just paid for and
+            # hand routing the same assignment that stranded a net.
+            pending_pack = window_packs.pop((height, arrangement), None)
+            pack: _Pack | None
+            if pending_pack is not None:
+                pack = pending_pack
+            else:
+                pack_started = time.monotonic()
+                pack = _pack(
+                    strips,
+                    height=height,
+                    width_bound=width_bound,
+                    time_budget_s=remaining,
+                    direct_candidates=net_candidates,
+                    workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
+                    deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS,
+                    seed=seed,
+                    arrangement=arrangement,
+                    projection_no_goods=tuple(projection_no_goods),
+                    exact_pack_no_goods=exact_pack_no_goods,
+                    direct_relation_no_goods=tuple(direct_relation_no_goods),
+                    cluster_relation_no_goods=tuple(cluster_relation_no_goods),
+                    feedback=feedback,
+                    stop_when_seed_admissible=(
+                        candidate_index == 1
+                        and arrangement == 0
+                        and not projection_retry
+                        and feedback is None
+                        and _seed_admission_preserves_best_band(
+                            seed,
+                            _minimum_pack_width(strips, height),
+                            projection_envelope,
+                        )
+                    ),
+                )
+                dearest_pack_s = max(dearest_pack_s, time.monotonic() - pack_started)
             if pack is None:
                 continue
             assignment = (
@@ -17560,8 +17661,15 @@ class FreeformLayout:
             # candidate rather than acting as the deleted loose fallback.  If
             # the exact incumbent is too narrow to admit the seed, CP-SAT keeps
             # its normal bounded search and the final incumbent is routed.
+            #
+            # A WINDOW REPAIR IS NOT A FRESH SOLVE and must not be swapped out
+            # for the seed.  A budget-stage failure takes no feedback snapshot,
+            # so a queued repair can arrive here on the first candidate with
+            # `feedback is None` still true -- and replacing it would discard
+            # the bounded solve and route the greedy pack that already stranded.
             if (
-                candidate_index == 1
+                pending_pack is None
+                and candidate_index == 1
                 and arrangement == 0
                 and not projection_retry
                 and feedback is None
@@ -17636,6 +17744,8 @@ class FreeformLayout:
             # routing pass. If no height survives, the spec is REFUSED. Trading
             # coverage for the last net or two, like trading density for it, is
             # buying a green cell with something the build needed.
+            evaluations += 1
+            route_started = time.monotonic()
             try:
                 result = _build(
                     spec,
@@ -17776,6 +17886,9 @@ class FreeformLayout:
                         (height, arrangement, True),
                     )
                 continue
+            # The measured routing span of THIS evaluation, which is what an
+            # operator choice is billed for when its repair is credited.
+            route_seconds = time.monotonic() - route_started
             failed = result.routing.failed_count
             attempt = PackAttempt(
                 origins=tuple(pack.at[index] for index in range(len(pack.at))),
@@ -17842,6 +17955,11 @@ class FreeformLayout:
                     attempt, feedback_state
                 )
                 promote_retry = arrangement == 0 and (learned or feedback_retry)
+                #: A window launches where a retry was WANTED and refused, so
+                #: the two facts the block below already decides are recorded
+                #: rather than re-derived.
+                retry_slot_found = False
+                retry_admitted = False
                 if promote_retry:
                     retry_candidate = (height, arrangement + 1)
                     next_candidate = (*retry_candidate, False)
@@ -17853,6 +17971,7 @@ class FreeformLayout:
                     except ValueError:
                         pass
                     else:
+                        retry_slot_found = True
                         current_candidate_s = (
                             0.0 if started_at is None else time.monotonic() - started_at
                         )
@@ -17891,11 +18010,145 @@ class FreeformLayout:
                                         ),
                                     ),
                                 )
+                            retry_admitted = True
                             candidate_packs.pop(next_index)
                             candidate_packs.insert(
                                 candidate_index,
                                 (height, arrangement + 1, True),
                             )
+                # A queued repair that failed again settles its own credit
+                # here, on the outcome it actually produced, before this
+                # candidate is allowed to ask for another window.  The
+                # membership test only avoids ENCODING an outcome for the
+                # ordinary candidates that never had a choice behind them;
+                # `settle_window_credit` is a no-op for those anyway.
+                if (height, arrangement) in window_choices:
+                    settle_window_credit(
+                        height,
+                        arrangement,
+                        after=metrics_from_evaluation(
+                            attempt.routing,
+                            _decoded_from_pack(pack, strips, height),
+                            feedback_by_height.get(
+                                height,
+                                FeedbackState.empty((pack.width, height)),
+                            ),
+                            outline_height=height,
+                            band_target_width=finalize.band_target_width(
+                                projection_envelope,
+                                height=height,
+                                width=pack.width,
+                            ),
+                            validator_clean=False,
+                        ),
+                        routing_seconds=route_seconds,
+                    )
+                # A WINDOW REPLACES A RETRY THAT WAS WANTED AND COULD NOT BE
+                # AFFORDED, and nothing else.  Alongside an admitted retry it
+                # would be redundant -- the retry re-solves the whole pack --
+                # and with no retry to promote there is no learned evidence to
+                # aim a window at either.
+                if promote_retry and retry_slot_found and not retry_admitted:
+                    window_cost = _window_candidate_seconds(
+                        dearest_candidate_s=dearest_candidate_s,
+                        dearest_pack_s=dearest_pack_s,
+                    )
+                    if (
+                        (height, arrangement) not in window_packs
+                        and (height, arrangement) not in window_choices
+                        and _room_for_another(deadline, soft, window_cost)
+                    ):
+                        target = finalize.band_target_width(
+                            projection_envelope,
+                            height=height,
+                            width=pack.width,
+                        )
+                        relation_problem = _pack_relation_problem(pack, strips, height)
+                        relation_decoded = _decoded_from_pack(pack, strips, height)
+                        feedback_state_now = feedback_by_height.get(
+                            height,
+                            FeedbackState.empty((pack.width, height)),
+                        )
+                        before_metrics = metrics_from_evaluation(
+                            attempt.routing,
+                            relation_decoded,
+                            feedback_state_now,
+                            outline_height=height,
+                            band_target_width=target,
+                            validator_clean=False,
+                        )
+                        choice = session.select(
+                            OperatorContext(
+                                strip_count=len(strips),
+                                stagnation=0,
+                                remaining_fraction=remaining_fraction_bucket(
+                                    soft - time.monotonic(),
+                                    max(time_budget_s, 1e-6),
+                                ),
+                            )
+                        )
+                        try:
+                            window = destroy_strips(
+                                choice.destroy,
+                                scale=choice.scale,
+                                result=attempt.routing,
+                                pair=_pack_relation_pair(pack, strips, height),
+                                gaps=GapProfile.zero(len(strips)),
+                                problem=relation_problem,
+                                decoded=relation_decoded,
+                                band_target_width=target,
+                            )
+                        except ValueError:
+                            # The encoder refused this pack.  Impossible for a
+                            # `no_overlap_2d` result, so it is a bug detector.
+                            window_encode_errors += 1
+                            window = frozenset()
+                        window_key = (height, arrangement, window)
+                        if (
+                            not window
+                            or len(window) >= len(strips)
+                            or window_key in solved_windows
+                        ):
+                            session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+                        else:
+                            solved_windows.add(window_key)
+                            window_solves += 1
+                            window_started = time.monotonic()
+                            repaired = _pack_window(
+                                strips,
+                                height=height,
+                                width_bound=pack.width,
+                                direct_candidates=net_candidates,
+                                window=window,
+                                fixed_at={
+                                    index: origin
+                                    for index, origin in pack.at.items()
+                                    if index not in window
+                                },
+                                seed=pack,
+                                width_target=target,
+                                arrangement=arrangement,
+                                projection_no_goods=tuple(projection_no_goods),
+                                exact_pack_no_goods=exact_pack_no_goods,
+                                direct_relation_no_goods=tuple(direct_relation_no_goods),
+                                feedback=feedback_by_height.get(height),
+                                on_skipped=_count_window_skips,
+                            )
+                            window_seconds += time.monotonic() - window_started
+                            if repaired is None or repaired.at == pack.at:
+                                session.observe(
+                                    choice,
+                                    (0.0,) * REWARD_RANKS,
+                                    applied=False,
+                                )
+                            else:
+                                window_accepted += 1
+                                window_packs[height, arrangement] = repaired
+                                window_choices[height, arrangement] = (
+                                    choice,
+                                    before_metrics,
+                                )
+                                window_queue.append((height, arrangement))
                 continue
             if result.routing.status is not DetailedRouteStatus.ROUTED:
                 retain_attempt()
@@ -18090,6 +18343,27 @@ class FreeformLayout:
             )
             certify_started = time.monotonic()
             report = validate.certify(placement, spec, expect_power=True)
+            if (height, arrangement) in window_choices:
+                settle_window_credit(
+                    height,
+                    arrangement,
+                    after=metrics_from_evaluation(
+                        result.routing,
+                        _decoded_from_pack(pack, strips, height),
+                        feedback_by_height.get(
+                            height,
+                            FeedbackState.empty((pack.width, height)),
+                        ),
+                        outline_height=height,
+                        band_target_width=finalize.band_target_width(
+                            projection_envelope,
+                            height=height,
+                            width=pack.width,
+                        ),
+                        validator_clean=not report.errors,
+                    ),
+                    routing_seconds=route_seconds,
+                )
             validation_reserve_s = max(
                 validation_reserve_s,
                 time.monotonic() - certify_started,
@@ -18122,6 +18396,29 @@ class FreeformLayout:
                 placement.stats["direct_insert_candidates"] = float(len(candidates))
                 placement.stats["area"] = float(placement.area)
                 best, best_key = placement, key
+        # A choice whose candidate never finished -- the wall arrived first --
+        # is a cost with no reward, and the ledger has to see it as one.
+        for outstanding_height, outstanding_arrangement in list(window_choices):
+            settle_window_credit(
+                outstanding_height,
+                outstanding_arrangement,
+                after=None,
+                routing_seconds=0.0,
+            )
+        # `stats["route_backend"]` is stamped in `lay_out`, where none of these
+        # locals exist, so the operator telemetry is stamped here instead --
+        # guarded, because a sweep that refuses has no placement to carry it.
+        if best is not None:
+            best.stats["alns_choices"] = float(len(session.choices))
+            best.stats["alns_applied"] = float(session.applied)
+            best.stats["alns_evaluations"] = float(evaluations)
+            best.stats["alns_routing_seconds"] = session.routing_seconds
+            best.stats["alns_operators"] = operator_tally(session)
+            best.stats["alns_window_solves"] = float(window_solves)
+            best.stats["alns_window_accepted"] = float(window_accepted)
+            best.stats["alns_window_seconds"] = window_seconds
+            best.stats["alns_encode_errors"] = float(window_encode_errors)
+            best.stats["alns_skipped_no_goods"] = float(window_skipped_no_goods)
         return best
 
 
