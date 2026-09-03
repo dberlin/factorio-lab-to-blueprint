@@ -4,14 +4,18 @@ import dataclasses
 import json
 import subprocess
 import sys
+import time
 from dataclasses import replace
+from fractions import Fraction
 from types import SimpleNamespace
 
 import pytest
 
-from flab2bp.bench.corpus import URL_CORPUS
-from flab2bp.layout import finalize, route_kernel
+from flab2bp.bench.corpus import URL_CORPUS, Tier
+from flab2bp.dsp import catalog
+from flab2bp.layout import finalize, route_kernel, validate
 from flab2bp.layout.base import (
+    ATOMIC_COMPLETION_GRACE_S,
     AreaFrame,
     LayoutAttemptFailure,
     NoValidLayout,
@@ -20,6 +24,9 @@ from flab2bp.layout.base import (
     PlacementCompletion,
     ProjectionFailureRecord,
 )
+from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.sequence_solver import SequencePairLayout
+from flab2bp.layout.strategy_race import RacingLayout
 from flab2bp.rates import CandidatePolicy
 from scripts import audit
 
@@ -101,12 +108,12 @@ def test_run_cell_preserves_typed_refusal_evidence(
     monkeypatch.setattr(
         audit,
         "_belt_rules_for",
-        lambda url: SimpleNamespace(vertical_construction=False),
+        lambda url: SimpleNamespace(vertical_construction=False, max_z=1),
     )
     monkeypatch.setitem(
         audit._STRATEGIES,
         "evidence",
-        lambda workers, vertical: RefusingStrategy(),
+        lambda workers, vertical, _max_belt_z: RefusingStrategy(),
     )
     job = audit.Job(
         strategy="evidence",
@@ -180,12 +187,12 @@ def test_run_cell_persists_post_compaction_projection_failures(
     monkeypatch.setattr(
         audit,
         "_belt_rules_for",
-        lambda url: SimpleNamespace(vertical_construction=False),
+        lambda url: SimpleNamespace(vertical_construction=False, max_z=1),
     )
     monkeypatch.setitem(
         audit._STRATEGIES,
         "post-projection",
-        lambda workers, vertical: SuccessfulStrategy(),
+        lambda workers, vertical, _max_belt_z: SuccessfulStrategy(),
     )
     monkeypatch.setattr(
         "scripts.audit.finalize.compact_open_boundary_belts",
@@ -311,7 +318,7 @@ def test_run_cell_does_not_repeat_completed_placement_work(
     monkeypatch.setitem(
         audit._STRATEGIES,
         "completed",
-        lambda workers, vertical: CompletedStrategy(),
+        lambda workers, vertical, _max_belt_z: CompletedStrategy(),
     )
     monkeypatch.setattr(audit.finalize, "compact_open_boundary_belts", compact_spy)
     monkeypatch.setattr(audit.finalize, "finalize_placement", finalize_spy)
@@ -424,7 +431,7 @@ def test_run_cell_completes_unmarked_placement_once_and_preserves_invalid_findin
     monkeypatch.setitem(
         audit._STRATEGIES,
         "ordinary",
-        lambda workers, vertical: UncompletedStrategy(),
+        lambda workers, vertical, _max_belt_z: UncompletedStrategy(),
     )
     monkeypatch.setattr(audit.finalize, "compact_open_boundary_belts", compact_spy)
     monkeypatch.setattr(audit.finalize, "finalize_placement", finalize_spy)
@@ -558,3 +565,216 @@ def test_main_resolves_and_stamps_the_commit_it_reads_at_call_time(
     assert audit._JSONL[0]["commit"] == resolved_commit
     assert audit._JSONL[0]["commit"] != "unknown"
     assert audit._JSONL[0]["commit"] == audit._head_commit()
+
+
+def test_all_resolves_to_the_two_strategies_and_the_portfolio() -> None:
+    assert audit.strategy_names("all") == ("freeform", "sequence-pair", "best")
+    assert audit.strategy_names("both") == ("freeform", "sequence-pair")
+
+
+def test_the_best_cell_builds_a_racing_layout_at_the_cells_belt_ceiling() -> None:
+    # NOT `catalog.DEFAULT_MAX_BELT_Z`: `RacingLayout.max_belt_z` defaults to
+    # exactly that, so a factory that DROPS the argument still constructs a
+    # layout carrying it and a test at the default value cannot see the drop.
+    ceiling = Fraction(23, 4)
+    assert ceiling != catalog.DEFAULT_MAX_BELT_Z
+
+    layout = audit._STRATEGIES["best"](6, True, ceiling)
+
+    assert isinstance(layout, RacingLayout)
+    assert layout.workers == 6
+    assert layout.belt_vertical_construction is True
+    # The child validates its own incumbent before publishing it; validating at
+    # a different ceiling from `run_cell`'s would publish a bound the cell then
+    # rejects.
+    assert layout.max_belt_z == ceiling
+
+
+def test_the_two_explicit_factories_ignore_the_belt_ceiling() -> None:
+    assert isinstance(
+        audit._STRATEGIES["freeform"](4, True, Fraction(171, 20)), FreeformLayout
+    )
+    assert isinstance(
+        audit._STRATEGIES["sequence-pair"](4, True, Fraction(171, 20)),
+        SequencePairLayout,
+    )
+
+
+def test_a_full_all_strategy_run_plans_one_hundred_and_eight_cells() -> None:
+    jobs = audit.build_jobs(
+        list(audit.strategy_names("all")),
+        set(Tier),
+        [30.0],
+        8,
+    )
+
+    # 12 corpus URLs x 3 candidate policies x 3 strategies.
+    assert len(jobs) == 108
+
+
+def test_run_cell_builds_the_strategy_at_the_cells_own_belt_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `run_cell` validates the winner at `belt_rules.max_z`, so a racing child
+    # handed a DIFFERENT ceiling would certify an incumbent this very cell then
+    # rejects.  The ceiling below is deliberately NOT
+    # `catalog.DEFAULT_MAX_BELT_Z`, or a `run_cell` that passed the module
+    # default instead of this cell's own rules would go unnoticed.
+    ceiling = Fraction(23, 4)
+    assert ceiling != catalog.DEFAULT_MAX_BELT_Z
+    seen: list[tuple[int, bool, Fraction]] = []
+
+    class _RefusingStrategy:
+        def lay_out(self, spec: object, *, time_budget_s: float) -> None:
+            raise NoValidLayout("nothing to lay out", spec_label="ceiling fixture")
+
+    def _factory(
+        workers: int,
+        vertical: bool,
+        max_belt_z: Fraction,
+    ) -> _RefusingStrategy:
+        seen.append((workers, vertical, max_belt_z))
+        return _RefusingStrategy()
+
+    monkeypatch.setattr(
+        audit,
+        "_specs_for",
+        lambda url, candidate_policies: (SimpleNamespace(label="ceiling fixture"),),
+    )
+    monkeypatch.setattr(
+        audit,
+        "_belt_rules_for",
+        lambda url: SimpleNamespace(vertical_construction=True, max_z=ceiling),
+    )
+    monkeypatch.setitem(audit._STRATEGIES, "ceiling", _factory)
+    job = audit.Job(
+        strategy="ceiling",
+        url_id="ceiling",
+        url="test://ceiling",
+        tier="trivial",
+        spec_index=0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        budget=1.0,
+        workers=5,
+    )
+
+    result = audit.run_cell(job)
+
+    assert result.status == "REFUSED"
+    assert seen == [(5, True, ceiling)]
+
+
+def test_a_clean_cell_reports_its_attempt_wall_and_the_overshoot_past_the_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Driven clock, no sleeping: `now[0]` is the only time source `run_cell`
+    # sees, and the stub strategy advances it by exactly the wall under test.
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    completed = Placement(
+        buildings=(
+            PlacedBuilding(item_id=2303, model_index=65, x=0, y=0, width=2, height=3),
+        ),
+        frame=AreaFrame(2, 3, 4, (4,), False),
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+
+    class _SlowStrategy:
+        def lay_out(self, spec: object, *, time_budget_s: float) -> Placement:
+            now[0] += 20.0
+            return completed
+
+    def _slow_specs(
+        url: str,
+        candidate_policies: object,
+    ) -> tuple[SimpleNamespace, ...]:
+        # Building the spec is the CELL's cost, not the attempt's, and the two
+        # spans differ by exactly this: a wall measured from `t0` would charge
+        # the layout for work it never did.
+        now[0] += 3.0
+        return (SimpleNamespace(label="slow fixture"),)
+
+    monkeypatch.setattr(audit, "_specs_for", _slow_specs)
+    monkeypatch.setattr(
+        audit,
+        "_belt_rules_for",
+        lambda url: SimpleNamespace(vertical_construction=False, max_z=1),
+    )
+    monkeypatch.setitem(
+        audit._STRATEGIES,
+        "slow",
+        lambda workers, vertical, _max_belt_z: _SlowStrategy(),
+    )
+    monkeypatch.setattr(validate, "id_map", lambda spec: object())
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *args, **kwargs: validate.Report(findings=()),
+    )
+    job = audit.Job(
+        strategy="slow",
+        url_id="slow",
+        url="test://slow",
+        tier="trivial",
+        spec_index=0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        budget=5.0,
+        workers=1,
+    )
+
+    result = audit.run_cell(job)
+
+    assert result.status == "CLEAN"
+    # The cell took 23.0s; 3.0 of that was building the spec, so the ATTEMPT is
+    # 20.0 and the two numbers are deliberately not the same quantity.
+    assert result.seconds == pytest.approx(23.0)
+    assert result.attempt_wall_s == pytest.approx(20.0)
+    # 20.0 - budget(5.0) - ATOMIC_COMPLETION_GRACE_S(5.0) == 10.0, clamped at 0.
+    assert result.wall_overshoot_s == pytest.approx(
+        20.0 - 5.0 - ATOMIC_COMPLETION_GRACE_S
+    )
+
+
+def test_only_a_row_with_a_placement_carries_a_wall_and_an_overshoot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Gate D2 reports the max overshoot straight off the JSONL, so the keys are
+    # present exactly where a placement was measured and ABSENT -- not zero --
+    # where none exists: a refusal that never produced a placement overshot
+    # nothing, and a zero would be indistinguishable from a punctual cell.
+    monkeypatch.setattr(audit, "_JSONL", [])
+    job = audit.Job(
+        strategy="freeform",
+        url_id=URL_CORPUS[0].url_id,
+        url=URL_CORPUS[0].url,
+        tier=URL_CORPUS[0].tier.value,
+        spec_index=0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        budget=5.0,
+        workers=1,
+    )
+    tallies = {"freeform": audit.Tally()}
+
+    audit.record(
+        tallies,
+        audit.Result(
+            job,
+            "CLEAN",
+            "no-proliferator",
+            "",
+            (),
+            12.5,
+            attempt_wall_s=12.25,
+            wall_overshoot_s=2.25,
+        ),
+    )
+    audit.record(
+        tallies,
+        audit.Result(job, "REFUSED", "no-proliferator", "refused", ("<refused>",), 3.0),
+    )
+
+    placed, refused = audit._JSONL
+    assert placed["attempt_wall_s"] == 12.25
+    assert placed["wall_overshoot_s"] == 2.25
+    assert "attempt_wall_s" not in refused
+    assert "wall_overshoot_s" not in refused

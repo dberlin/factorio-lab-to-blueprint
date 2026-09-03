@@ -34,6 +34,9 @@ class _BuildKwargs(TypedDict, total=False):
     browser: str | None
     no_proliferator: bool
     on_progress: pipeline.ProgressSink | None
+    workers: int | None
+    race: bool
+    share: bool
 
 
 @pytest.fixture(scope="module")
@@ -426,3 +429,120 @@ def test_cli_refuses_success_without_band_evidence(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "flab2bp: successful build placement has no area frame\n"
+
+
+def test_the_cli_offers_racing_as_an_opt_in() -> None:
+    parser = cli.build_parser()
+
+    args = parser.parse_args(["https://example/x"])
+    assert args.race is False
+    assert args.share is True
+    assert args.workers is None
+
+    opted_in = parser.parse_args(
+        ["https://example/x", "--race", "--no-share", "--workers", "8"]
+    )
+    assert opted_in.race is True
+    assert opted_in.share is False
+    assert opted_in.workers == 8
+
+
+def test_the_cli_forwards_every_race_knob_to_the_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, object] = {}
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+
+    assert (
+        cli.main(["iron-ingot", "--race", "--no-share", "--workers", "9"]) == 0
+    )
+
+    assert received["workers"] == 9
+    assert received["race"] is True
+    assert received["share"] is False
+
+
+def test_the_cli_leaves_the_race_knobs_at_their_pipeline_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `--race` is an OPT-IN until the flip task, so a plain invocation must
+    # forward the same three values `pipeline.build` would have defaulted to.
+    received: dict[str, object] = {}
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+
+    assert cli.main(["iron-ingot"]) == 0
+
+    assert received["workers"] is None
+    assert received["race"] is False
+    assert received["share"] is True
+
+
+def test_sequence_islands_are_legal_with_best_and_reach_the_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The islands live inside the raced sequence-pair arm, so `best` is now a
+    # legal companion for the flag -- and an explicit N must actually TRAVEL,
+    # not be silently flattened to 1 by the sequence-pair-only derivation.
+    received: dict[str, object] = {}
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+
+    assert (
+        cli.main(["iron-ingot", "--strategy", "best", "--sequence-islands", "4"]) == 0
+    )
+
+    assert received["sequence_islands"] == 4
+
+
+def test_best_without_the_flag_still_runs_one_island(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `best` is the DEFAULT strategy, so the affinity-capped auto default must
+    # stay exclusive to explicit sequence-pair: defaulting it here would change
+    # every plain `flab2bp <url>` build.
+    received: dict[str, object] = {}
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+    monkeypatch.setattr(cli, "_available_cpu_count", lambda: 64)
+
+    assert cli.main(["iron-ingot", "--strategy", "best"]) == 0
+
+    assert received["sequence_islands"] == 1
