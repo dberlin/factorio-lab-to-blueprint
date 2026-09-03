@@ -449,3 +449,40 @@ def test_run_cell_completes_unmarked_placement_once_and_preserves_invalid_findin
     assert result.status == "INVALID"
     assert result.checks == ("geom.collide", "power.coverage")
     assert result.detail == "2e geom.collide,power.coverage"
+
+
+def test_every_audit_row_carries_the_routing_backend_and_the_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(audit, "_COMMIT", "0123456789abcdef0123456789abcdef01234567")
+    audit._JSONL.clear()
+    job = audit.Job(
+        strategy="freeform",
+        url_id=URL_CORPUS[0].url_id,
+        url=URL_CORPUS[0].url,
+        tier=URL_CORPUS[0].tier.value,
+        spec_index=0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        budget=1.0,
+        workers=1,
+    )
+    # `Tally.total` is a read-only property summing the counters, so a Tally is
+    # constructed EMPTY and grows as `record` classifies each result.
+    tallies = {"freeform": audit.Tally()}
+    for status, detail in (("CLEAN", ""), ("REFUSED", "deadline exhausted")):
+        audit.record(
+            tallies,
+            audit.Result(job, status, "no-proliferator", detail, (), 1.0),
+        )
+
+    assert tallies["freeform"].total == 2
+    assert len(audit._JSONL) == 2
+    for row in audit._JSONL:
+        assert row["commit"] == "0123456789abcdef0123456789abcdef01234567"
+        assert row["route_backend"] in ("python", "cython")
+
+
+def test_head_commit_is_a_hash_or_the_word_unknown() -> None:
+    commit = audit._head_commit()
+
+    assert commit == "unknown" or (len(commit) == 40 and int(commit, 16) >= 0)
