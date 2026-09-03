@@ -8780,3 +8780,158 @@ def test_variant_direct_eligibility_polls_its_cancel_more_than_once() -> None:
     )
 
     assert polls >= 2, "one poll before the loop is the bug this test exists to catch"
+
+
+def _expected_eligibility_polls(
+    spec: BuildSpec,
+    strips: list[freeform_module.Strip],
+    problem: PlacementProblem,
+    policy: BandPolicy,
+) -> int:
+    """Derive the scan's poll schedule from the fixture, not from a constant.
+
+    The scan polls once on entry, once per baseline candidate, and once per
+    producer variant of each candidate -- and never inside the innermost
+    consumer-variant loop, whose body is a single ``_selected_direct_targets``
+    rebuild.  Writing the count out this way means removing any ONE of the
+    three poll sites moves the number.
+    """
+    baseline = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        (0,) * problem.size,
+        band_policy=policy,
+    )
+    variant_counts = (
+        tuple(len(table) for table in problem.variant_tables)
+        if problem.variant_tables
+        else (1,) * problem.size
+    )
+    return 1 + sum(1 + variant_counts[candidate.producer] for candidate in baseline)
+
+
+def test_variant_direct_eligibility_polls_once_per_candidate_and_producer_variant() -> None:
+    spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
+    polls = 0
+
+    def counting() -> bool:
+        nonlocal polls
+        polls += 1
+        return False
+
+    sequence_solver_module._variant_direct_eligibility(
+        spec, strips, problem, band_policy=policy, cancelled=counting
+    )
+
+    assert polls == _expected_eligibility_polls(spec, strips, problem, policy)
+
+
+def test_variant_direct_eligibility_never_returns_a_partial_tuple() -> None:
+    """Fire the cancel on each poll in turn; every one of them yields ``()``.
+
+    A ``break`` where the implementation writes ``return ()`` would hand the
+    compact seed whichever candidates happened to be enumerated before the
+    clock ran out -- a biased seed, and a silently different one per run.
+    """
+    spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
+    total_polls = _expected_eligibility_polls(spec, strips, problem, policy)
+    assert total_polls >= 3, "the fixture must exercise all three poll sites"
+
+    for fire_on in range(1, total_polls + 1):
+        seen = [0]
+
+        def cancel(seen: list[int] = seen, fire_on: int = fire_on) -> bool:
+            seen[0] += 1
+            return seen[0] == fire_on
+
+        assert (
+            sequence_solver_module._variant_direct_eligibility(
+                spec, strips, problem, band_policy=policy, cancelled=cancel
+            )
+            == ()
+        ), f"a cancel on poll {fire_on} of {total_polls} returned a partial tuple"
+
+
+class _StopProduction(BaseException):
+    """Escape ``_production_run`` from a stub.
+
+    The compact-seed block wraps its body in ``except Exception``, so an
+    ``Exception`` raised by a stub is swallowed and the run continues to its
+    budget.  Deriving from ``BaseException`` propagates instead, which is what
+    lets these tests capture the call site's arguments in milliseconds.
+    """
+
+
+def test_the_eligibility_scan_is_bound_to_the_compact_share_not_the_whole_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The predicate the call site passes must close over ``compact_deadline``.
+
+    The attempt deadline here is 3000 s away while the compact seed's share of
+    a 30 s budget is ``30 * 1/3`` = 10 s, so a predicate built over the whole
+    deadline is still False 11 s in and the scan would keep running long past
+    the share it is supposed to fit inside.
+    """
+    captured: dict[str, Any] = {}
+
+    def capture(*_args: Any, cancelled: Any = None, **_kwargs: Any) -> Never:
+        captured["cancelled"] = cancelled
+        captured["entered"] = time.monotonic()
+        raise _StopProduction
+
+    monkeypatch.setattr(sequence_solver_module, "_variant_direct_eligibility", capture)
+
+    started = time.monotonic()
+    with pytest.raises(_StopProduction):
+        _production_run(
+            two_stage_spec(),
+            band_policy=BandPolicy("portable"),
+            time_budget_s=30.0,
+            power=False,
+            strip_len=6,
+            config=SequenceSolverConfig.test(),
+            absolute_deadline=started + 3000.0,
+            compact_seed_attempt=0,
+        )
+
+    reached = captured["cancelled"]
+    entered = captured["entered"]
+    assert reached is not None, "the scan must be given a cancel at all"
+
+    monkeypatch.setattr(time, "monotonic", lambda: entered + 11.0)
+    assert reached() is True
+    monkeypatch.setattr(time, "monotonic", lambda: started + 9.0)
+    assert reached() is False
+
+
+def test_the_eligibility_scan_is_declined_when_the_compact_share_is_nearly_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Half a second of compact share left is under the 1.0 s start floor.
+
+    Starting the scan there buys a partial-at-best enumeration and spends the
+    whole remaining share doing it, so the call site must not start it.
+    """
+    calls: list[None] = []
+
+    def capture(*_args: Any, **_kwargs: Any) -> Never:
+        calls.append(None)
+        raise _StopProduction
+
+    monkeypatch.setattr(sequence_solver_module, "_variant_direct_eligibility", capture)
+
+    _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=30.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=time.monotonic() + 0.5,
+        compact_seed_attempt=0,
+    )
+
+    assert not calls, "the scan ran with less than the start floor of share left"
