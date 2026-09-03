@@ -17,7 +17,13 @@ import pytest
 import flab2bp.layout.strategy_race as strategy_race_module
 from flab2bp.dsp import catalog, provenance, registry
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import NoValidLayout, Placement, PlacementStats
+from flab2bp.layout.base import (
+    LayoutStrategy,
+    NoValidLayout,
+    Placement,
+    PlacementStats,
+    ProjectionFailureRecord,
+)
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
@@ -33,6 +39,7 @@ from flab2bp.layout.strategy_race import (
     RaceChannels,
     RaceStrategyName,
     RaceSubmit,
+    RacingLayout,
     _build_layout,
     _channels_for,
     _install_race_channels,
@@ -49,6 +56,7 @@ from flab2bp.layout.strategy_race import (
 from flab2bp.layout.strip_variants import StripFamilyId, StripInstanceId
 from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import two_stage_spec
+from tests.layout.test_sequence_solver import _placement
 
 
 def _request(strategy: RaceStrategyName = "freeform") -> _StrategyRaceRequest:
@@ -1106,7 +1114,10 @@ def test_a_race_with_no_submit_seam_goes_through_the_process_pool(
 def test_two_futures_for_one_arm_is_refused_before_the_wait() -> None:
     # The collector takes the FIRST future per name and `_ordered` keys a dict on
     # the strategy, so a duplicate would be silently dropped at one of those two
-    # points -- a lost result reported as a complete race.
+    # points -- a lost result reported as a complete race.  The children are
+    # stopped before the raise: nothing else is left holding their futures.
+    _NoopExecutor.terminated = False
+
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
@@ -1130,6 +1141,8 @@ def test_two_futures_for_one_arm_is_refused_before_the_wait() -> None:
             submit=submit,
         )
 
+    assert _NoopExecutor.terminated is True, "the raise must not strand the children"
+
 
 @pytest.mark.slow
 def test_the_real_pool_races_both_arms_end_to_end() -> None:
@@ -1137,9 +1150,14 @@ def test_the_real_pool_races_both_arms_end_to_end() -> None:
 
     Everything above this line replaces the pool with something in-process, so
     this is the only test that proves the request pickles out, a whole strategy
-    runs in a child, and a ``Placement`` pickles back.  Measured runtime on this
-    box is 2.6 s: both arms finish inside the 2 s wall, and the spawn and
-    interpreter start each child pays comes out of that wall, not on top of it.
+    runs in a child, and a ``Placement`` pickles back.
+
+    Runtime is load-dependent and no single figure stays true: 2.2-2.5 s at a
+    load average around 3, 3.1 s measured during a review run on a busier box.
+    Both arms finish inside the 2 s wall either way -- the spawn and interpreter
+    start each child pays comes out of that wall rather than on top of it, which
+    is also why this test is the first thing that would start refusing if
+    ``two_stage_spec`` ever got harder.
     """
     outcomes = run_strategy_race(
         two_stage_spec(),
@@ -1574,3 +1592,217 @@ def test_a_leg_with_sharing_off_is_delivered_no_no_goods(
     assert outcome.dropped_messages == 0
     assert outcome.published_no_goods == 0
     assert outcome.consumed_no_goods == 0
+
+
+def _completed(
+    strategy: RaceStrategyName, *, area: int, belt_tiles: int
+) -> _StrategyRaceOutcome:
+    return _StrategyRaceOutcome(
+        strategy, "completed", placement=_placement(area=area, belt_tiles=belt_tiles)
+    )
+
+
+def test_the_racing_layout_merges_by_exact_key_then_strategy_order() -> None:
+    layout = RacingLayout(BandPolicy("portable"))
+    small = _completed("sequence-pair", area=400, belt_tiles=50)
+    large = _completed("freeform", area=500, belt_tiles=40)
+
+    assert layout._merge((large, small)).area == 400
+
+
+def test_the_racing_layout_breaks_an_exact_tie_by_strategy_order() -> None:
+    layout = RacingLayout(BandPolicy("portable"))
+    freeform = _placement(area=400, belt_tiles=50)
+    sequence = _placement(area=400, belt_tiles=50)
+    merged = layout._merge(
+        (
+            _StrategyRaceOutcome("sequence-pair", "completed", placement=sequence),
+            _StrategyRaceOutcome("freeform", "completed", placement=freeform),
+        )
+    )
+
+    assert merged is freeform, "ties go to the first name in RACE_STRATEGIES"
+
+
+def test_the_racing_layout_prefers_fewer_belt_tiles_at_equal_area() -> None:
+    layout = RacingLayout(BandPolicy("portable"))
+    merged = layout._merge(
+        (
+            _completed("freeform", area=400, belt_tiles=60),
+            _completed("sequence-pair", area=400, belt_tiles=50),
+        )
+    )
+
+    assert merged.stats["belt_tiles"] == 50
+
+
+def test_the_racing_layout_takes_the_only_arm_that_finished() -> None:
+    # A refusal beside a completion is not a refused race: the survivor decides.
+    layout = RacingLayout(BandPolicy("portable"))
+    merged = layout._merge(
+        (
+            _StrategyRaceOutcome("freeform", "refused", refusal_reason="no pack"),
+            _completed("sequence-pair", area=400, belt_tiles=50),
+        )
+    )
+
+    assert merged.area == 400
+    # A refusal is not a kill: the counter is arms the PARENT had to terminate,
+    # not arms that failed to produce.
+    assert merged.stats["race_terminated"] == 0.0
+
+
+def test_the_racing_layout_refuses_naming_both_arms() -> None:
+    layout = RacingLayout(BandPolicy("portable"))
+    outcomes = (
+        _StrategyRaceOutcome(
+            "freeform", "refused", refusal_reason="no pack", refusal_spec_label="np"
+        ),
+        _StrategyRaceOutcome("sequence-pair", "terminated", refusal_reason="overran"),
+    )
+
+    with pytest.raises(NoValidLayout) as caught:
+        layout._merge(outcomes)
+
+    assert "freeform: no pack" in caught.value.reason
+    assert "sequence-pair: overran" in caught.value.reason
+    assert caught.value.spec_label == "np"
+
+
+def test_the_refusal_carries_a_budget_and_deduplicates_projection_failures() -> None:
+    # Both arms can refuse over the SAME projection failure -- they share a spec
+    # and a band policy -- and reporting it twice would read as two defects.
+    failure = ProjectionFailureRecord(3, "clearance", (7, 9), "too close")
+    layout = RacingLayout(BandPolicy("portable"))
+
+    with pytest.raises(NoValidLayout) as caught:
+        layout._merge(
+            (
+                _StrategyRaceOutcome(
+                    "freeform",
+                    "refused",
+                    refusal_reason="a",
+                    refusal_projection_failures=(failure,),
+                ),
+                _StrategyRaceOutcome(
+                    "sequence-pair",
+                    "refused",
+                    refusal_reason="b",
+                    refusal_budget_s=30.0,
+                    refusal_projection_failures=(failure,),
+                ),
+            )
+        )
+
+    assert caught.value.budget_s == 30.0
+    assert caught.value.projection_failures == (failure,)
+
+
+def test_a_completed_arm_with_no_placement_is_not_a_winner() -> None:
+    # `status == "completed"` and `placement is None` cannot both be true today,
+    # but the merge must not turn a defect into a `TypeError` inside `min`: the
+    # race still has a refusal to report, and reporting it is more useful than
+    # crashing on the shape.
+    layout = RacingLayout(BandPolicy("portable"))
+
+    with pytest.raises(NoValidLayout, match="both raced strategies refused"):
+        layout._merge(
+            (
+                _StrategyRaceOutcome("freeform", "completed", placement=None),
+                _StrategyRaceOutcome(
+                    "sequence-pair", "refused", refusal_reason="no stages"
+                ),
+            )
+        )
+
+
+def test_the_winner_carries_how_many_arms_were_killed() -> None:
+    # Spec 7: the audit row's `detail` must not be the only trace that the race
+    # had to kill an arm to finish.
+    layout = RacingLayout(BandPolicy("portable"))
+    merged = layout._merge(
+        (
+            _completed("freeform", area=400, belt_tiles=50),
+            _StrategyRaceOutcome("sequence-pair", "terminated", refusal_reason="overran"),
+        )
+    )
+
+    assert merged.stats["race_terminated"] == 1.0
+
+
+def test_a_race_that_killed_nobody_still_says_so() -> None:
+    # Stamped unconditionally: a missing key and a zero are the same thing to a
+    # reader with `.get`, and the audit needs "no arm was killed" to be a fact
+    # rather than an absence.
+    layout = RacingLayout(BandPolicy("portable"))
+    merged = layout._merge(
+        (
+            _completed("freeform", area=400, belt_tiles=50),
+            _completed("sequence-pair", area=500, belt_tiles=40),
+        )
+    )
+
+    assert merged.stats["race_terminated"] == 0.0
+
+
+def test_race_terminated_is_declared_in_the_placement_stats_schema() -> None:
+    # The stat is written onto a `PlacementStats`, so an undeclared key is a
+    # type error at the write site and an invisible field to every reader.
+    assert get_type_hints(PlacementStats)["race_terminated"] is float
+
+
+def test_the_racing_layout_is_a_layout_strategy() -> None:
+    # The annotation is the assertion: mypy checks the whole protocol here, so a
+    # signature that drifts from `LayoutStrategy` fails the type gate rather than
+    # the audit that registers this class as a cell.
+    layout: LayoutStrategy = RacingLayout(BandPolicy("portable"))
+
+    assert layout.name == "best"
+
+
+def test_the_racing_layout_hands_every_knob_to_the_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nine arguments, none of them observable in the returned placement.
+
+    A dropped `share=` or `sequence_islands=` would leave the race running a
+    different configuration from the one the caller constructed, and the merged
+    placement would look exactly the same.  The equality on the whole dict is
+    also what pins that `absolute_deadline` is NOT forwarded: a race owns its
+    own children's walls, and passing the caller's would give both children a
+    deadline that started before the pool did.
+    """
+    seen: dict[str, object] = {}
+    won = _placement(area=400, belt_tiles=50)
+
+    def fake_race(spec: object, **kwargs: object) -> tuple[_StrategyRaceOutcome, ...]:
+        seen["spec"] = spec
+        seen.update(kwargs)
+        return (_StrategyRaceOutcome("freeform", "completed", placement=won),)
+
+    monkeypatch.setattr(strategy_race_module, "run_strategy_race", fake_race)
+    spec = two_stage_spec()
+    layout = RacingLayout(
+        BandPolicy("portable"),
+        workers=8,
+        arrangements=2,
+        belt_vertical_construction=False,
+        sequence_islands=3,
+        share=False,
+        max_belt_z=Fraction(1, 2),
+    )
+
+    merged = layout.lay_out(spec, time_budget_s=7.5, absolute_deadline=123.0)
+
+    assert merged is won
+    assert seen == {
+        "spec": spec,
+        "time_budget_s": 7.5,
+        "band_policy": layout.band_policy,
+        "belt_vertical_construction": False,
+        "max_belt_z": Fraction(1, 2),
+        "workers": 8,
+        "arrangements": 2,
+        "sequence_islands": 3,
+        "share": False,
+    }

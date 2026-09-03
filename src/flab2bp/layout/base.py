@@ -312,6 +312,7 @@ class PlacementStats(TypedDict, total=False):
     quality_entries: float
     quality_exits: float
     quality_stages: float
+    race_terminated: float
     repair_iterations: float
     restarts: float
     riser_columns: float
