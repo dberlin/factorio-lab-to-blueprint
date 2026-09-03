@@ -3008,10 +3008,11 @@ def _alns_substitution(
         return unchanged, frozenset()
     neighbourhood = destroy_strips(
         choice.destroy,
-        # ``cap_scale`` is False until the portfolio opens.  The legacy rule
-        # destroyed the whole neighbourhood `select_lns_neighbourhood` returned,
-        # so capping it here would be a behaviour change smuggled into a wiring
-        # commit; Task 7 turns it on beside the arms that need it.
+        # Both production call sites pass ``cap_scale=True``: an arm that asked
+        # for a local repair gets a locally sized destroy set.  The default stays
+        # False for bare-constructed and test solvers, which then reduce exactly
+        # to the legacy rule -- destroy the whole neighbourhood
+        # `select_lns_neighbourhood` returned.
         scale=choice.scale if cap_scale else problem.size,
         result=detailed,
         pair=selected_state.pair,
