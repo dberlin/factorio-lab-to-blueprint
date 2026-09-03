@@ -116,6 +116,7 @@ from flab2bp.layout.sequence_alns import (
     OperatorMetrics,
     OperatorOutcome,
     OperatorSession,
+    RepairOperator,
     destroy_strips,
     metrics_from_evaluation,
     operator_tally,
@@ -16884,7 +16885,16 @@ class FreeformLayout:
         # replan and a second arrangement pass.  It dies with this call:
         # nothing here is process-wide, and two `lay_out` calls never share a
         # ledger.
-        alns_session = OperatorSession()
+        #
+        # ONE REPAIR ARM, because freeform has exactly one repair: the window.
+        # `_sweep` never reads `choice.repair` -- it runs `_pack_window`
+        # unconditionally -- so a session armed with the shipped PAIR would
+        # train its repair ledger on `sequence-reinsert`, an operator with no
+        # dispatch here, and `alns_operators` would report `local-exact-pack:0`
+        # on a run that did nothing but local exact packs.  The destroy arm is
+        # still chosen (spec 5.7: "destroy set from the same selector"); it is
+        # the repair that is fixed.
+        alns_session = OperatorSession(repair_arms=(RepairOperator.LOCAL_EXACT_PACK,))
         for sweep_s in budgets:
             if _expired(deadline):
                 break
@@ -17273,11 +17283,23 @@ class FreeformLayout:
         #: The dearest candidate this sweep has COMPLETED, pack through validate.
         #: What `_room_for_another` charges the next improvement arrangement.
         dearest_candidate_s = 0.0
-        #: The dearest `_pack` solve this sweep has completed, so a windowed
-        #: retry can be charged for what it actually REPLACES rather than for a
-        #: whole candidate: the window swaps out the pack and leaves routing,
+        #: The dearest POST-PACK REMAINDER this sweep has completed: over the
+        #: candidates that finished, the largest value of (that candidate's own
+        #: total minus that SAME candidate's own `_pack` seconds).  A windowed
+        #: retry is charged for what it actually replaces rather than for a
+        #: whole candidate -- the window swaps out the pack and leaves routing,
         #: power, finalize and validate exactly where they were.
-        dearest_pack_s = 0.0
+        #:
+        #: RULING AD: it must be a per-candidate remainder, not
+        #: `dearest_candidate_s - dearest_pack_s`.  Those two maxima can belong
+        #: to DIFFERENT candidates -- one slow to pack and quick to route, one
+        #: the other way round -- and their difference is then an upper bound on
+        #: nothing, collapsing toward zero exactly when some candidate's own
+        #: post-pack span is the largest thing the sweep has measured.
+        dearest_remainder_s = 0.0
+        #: This candidate's own `_pack` span, reset when its turn starts and
+        #: left at zero for a queued repair, whose pack was already bought.
+        candidate_pack_s = 0.0
         #: Window repairs waiting to be evaluated, and the queue that drains
         #: them.  `candidate_packs` is iterated by index and already mutated in
         #: four places; a separate queue adds no fifth mutation.
@@ -17322,12 +17344,21 @@ class FreeformLayout:
             `validate.certify` said so -- False for every candidate that never
             reached the certifier (spec 5.7).
 
-            ``after=None`` means NO routing evaluation of this candidate exists:
-            the wall arrived before its turn came round, or it was dropped
-            before anything routed by the power, projection or seating checks.
-            That is a cost with no reward, so it is credited unapplied.  It is
-            NOT what a repair that routed and was then refused downstream gets:
-            that one was measured, and the measurement is what it is paid on.
+            ``after=None`` means no routing evaluation of this candidate is in
+            HAND: the wall arrived before its turn came round, or `_build`
+            raised before returning a result.  That is a cost with no reward, so
+            it is credited unapplied.  It is NOT what a repair that routed and
+            was then refused downstream gets: that one was measured, and the
+            measurement is what it is paid on.
+
+            One of those raising exits did route.  `finalize.ProjectionRefusal`
+            and `_Unseatable` are decided before any net is laid, but
+            `_Unpowerable` from `_place_power` is raised AFTER `_build` has
+            finished routing (it runs under `if power and not
+            routing.failed_count`), and the handler that catches it sits above
+            `route_seconds`, so no `DetailedRouteResult` is in scope to settle
+            on and that candidate is drained here at zero.  Paying it correctly
+            means changing what `_build` hands back on that path, not this call.
             """
             stored = window_choices.pop((height, arrangement), None)
             if stored is None:
@@ -17433,9 +17464,14 @@ class FreeformLayout:
                 # UNDER-estimate, since the expensive exits are the failures that run
                 # a full routing pass into the wall.
                 if started_at is not None:
-                    dearest_candidate_s = max(
-                        dearest_candidate_s,
-                        time.monotonic() - started_at,
+                    candidate_total_s = time.monotonic() - started_at
+                    dearest_candidate_s = max(dearest_candidate_s, candidate_total_s)
+                    # The remainder is taken against THIS candidate's own pack,
+                    # so it is a span one candidate really ran (Ruling AD) and
+                    # never a difference between two different ones.
+                    dearest_remainder_s = max(
+                        dearest_remainder_s,
+                        candidate_total_s - candidate_pack_s,
                     )
                 # WHAT THIS TURN COSTS, and a queued repair does not cost a whole
                 # candidate.  `_room_for_another` charges `dearest_candidate_s`,
@@ -17446,11 +17482,7 @@ class FreeformLayout:
                 # wall.  Charging a queued repair for a whole candidate drops
                 # repairs the sweep can plainly afford, and drops them AFTER paying
                 # for the CP-SAT solve that produced them.
-                turn_cost = (
-                    max(0.0, dearest_candidate_s - dearest_pack_s)
-                    if queued is not None
-                    else dearest_candidate_s
-                )
+                turn_cost = dearest_remainder_s if queued is not None else dearest_candidate_s
                 if best is not None and not _room_for_another(deadline, soft, turn_cost):
                     break
                 # A SECOND ARRANGEMENT NORMALLY IMPROVES; ONE STRONG NEAR MISS MAY RESCUE.
@@ -17555,6 +17587,12 @@ class FreeformLayout:
                     break
                 if not projection_retry and arrangement and best is None:
                     break
+                # `turn_cost` here is `dearest_candidate_s` under every reachable
+                # state: a window launches only from `arrangement == 0`, so every
+                # queued turn short-circuits on `and arrangement` before this
+                # predicate runs.  It is written as `turn_cost` so the day a
+                # window launches from a later arrangement the charge is already
+                # right; no fixture can distinguish the two today.
                 if (
                     not projection_retry
                     and arrangement
@@ -17595,6 +17633,7 @@ class FreeformLayout:
                         )
                     continue
                 started_at = time.monotonic()
+                candidate_pack_s = 0.0
                 remaining = (
                     per_solve if deadline is None else min(per_solve, deadline - time.monotonic())
                 )
@@ -17658,7 +17697,7 @@ class FreeformLayout:
                             )
                         ),
                     )
-                    dearest_pack_s = max(dearest_pack_s, time.monotonic() - pack_started)
+                    candidate_pack_s = time.monotonic() - pack_started
                 if pack is None:
                     continue
                 assignment = (
@@ -17935,6 +17974,41 @@ class FreeformLayout:
                 # then immediately stores a fresh choice under the key it just
                 # cleared.
                 inbound_choice = window_choices.get((height, arrangement))
+
+                def window_metrics(
+                    *,
+                    validator_clean: bool,
+                    current_pack: _Pack = pack,
+                    current_height: int = height,
+                    routing: DetailedRouteResult = result.routing,
+                ) -> OperatorMetrics:
+                    """This candidate's routing pass, as the operator ledger reads it.
+
+                    The three places that settle a window's credit differ in one
+                    field only -- `validator_clean`, which is True at exactly one
+                    of them, the acceptance path that has a `validate.certify`
+                    report to read.  The turn's `pack`, `height` and routing
+                    result are bound at definition, as `retain_attempt` binds its
+                    attempt, so the closure cannot describe a later candidate;
+                    the feedback lookup stays late because the sweep writes to
+                    `feedback_by_height` inside this turn.
+                    """
+                    return metrics_from_evaluation(
+                        routing,
+                        _decoded_from_pack(current_pack, strips, current_height),
+                        feedback_by_height.get(
+                            current_height,
+                            FeedbackState.empty((current_pack.width, current_height)),
+                        ),
+                        outline_height=current_height,
+                        band_target_width=finalize.band_target_width(
+                            projection_envelope,
+                            height=current_height,
+                            width=current_pack.width,
+                        ),
+                        validator_clean=validator_clean,
+                    )
+
                 try:
                     failed = result.routing.failed_count
                     attempt = PackAttempt(
@@ -18077,21 +18151,7 @@ class FreeformLayout:
                             settle_window_credit(
                                 height,
                                 arrangement,
-                                after=metrics_from_evaluation(
-                                    attempt.routing,
-                                    _decoded_from_pack(pack, strips, height),
-                                    feedback_by_height.get(
-                                        height,
-                                        FeedbackState.empty((pack.width, height)),
-                                    ),
-                                    outline_height=height,
-                                    band_target_width=finalize.band_target_width(
-                                        projection_envelope,
-                                        height=height,
-                                        width=pack.width,
-                                    ),
-                                    validator_clean=False,
-                                ),
+                                after=window_metrics(validator_clean=False),
                                 routing_seconds=route_seconds,
                             )
                         # A WINDOW REPLACES A RETRY THAT WAS WANTED AND COULD NOT BE
@@ -18101,8 +18161,7 @@ class FreeformLayout:
                         # aim a window at either.
                         if promote_retry and retry_slot_found and not retry_admitted:
                             window_cost = _window_candidate_seconds(
-                                dearest_candidate_s=dearest_candidate_s,
-                                dearest_pack_s=dearest_pack_s,
+                                dearest_remainder_s=dearest_remainder_s,
                             )
                             if (
                                 (height, arrangement) not in window_packs
@@ -18200,9 +18259,10 @@ class FreeformLayout:
                                         # different assignment".  A repair the sweep
                                         # never gets to is not an acceptance.  This
                                         # mirrors the sequence-pair arm so the gate
-                                        # reads one number across both; ADOPTION, a
-                                        # repair that routed and certified, is
-                                        # `alns_applied`.
+                                        # reads one number across both;
+                                        # `alns_applied` counts a repair whose
+                                        # routing pass was MEASURED, certified or
+                                        # not, which is a wider set than this one.
                                         window_packs[height, arrangement] = repaired
                                         window_choices[height, arrangement] = (
                                             choice,
@@ -18407,25 +18467,14 @@ class FreeformLayout:
                     )
                     certify_started = time.monotonic()
                     report = validate.certify(placement, spec, expect_power=True)
-                    if (height, arrangement) in window_choices:
+                    if (
+                        inbound_choice is not None
+                        and window_choices.get((height, arrangement)) is inbound_choice
+                    ):
                         settle_window_credit(
                             height,
                             arrangement,
-                            after=metrics_from_evaluation(
-                                result.routing,
-                                _decoded_from_pack(pack, strips, height),
-                                feedback_by_height.get(
-                                    height,
-                                    FeedbackState.empty((pack.width, height)),
-                                ),
-                                outline_height=height,
-                                band_target_width=finalize.band_target_width(
-                                    projection_envelope,
-                                    height=height,
-                                    width=pack.width,
-                                ),
-                                validator_clean=not report.errors,
-                            ),
+                            after=window_metrics(validator_clean=not report.errors),
                             routing_seconds=route_seconds,
                         )
                     validation_reserve_s = max(
@@ -18464,11 +18513,15 @@ class FreeformLayout:
                     # SPEC 5.7: a queued repair is paid on the metrics THIS
                     # routing pass measured, and `validator_clean` is False for
                     # any candidate that never reaches `validate.certify`.
-                    # EVERY post-routing exit passes through here -- the
-                    # unrouted `continue`, the two completion breaks, the
+                    # Every exit that HOLDS a routing result passes through here
+                    # -- the unrouted `continue`, the two completion breaks, the
                     # projection/pitch refusal -- so none of them can fall
                     # through to the post-loop drain and be paid `after=None`,
                     # which is a zero reward for a repair that was measured.
+                    # The one post-routing exit outside this block is
+                    # `_Unpowerable`, raised from `_place_power` after routing
+                    # but caught above `route_seconds`, where no result exists to
+                    # settle on; `settle_window_credit`'s docstring names it.
                     # The two settles inside the body have already popped the
                     # choice by the time control reaches here: the failure block
                     # must settle BEFORE it is allowed to ask for another
@@ -18481,21 +18534,7 @@ class FreeformLayout:
                         settle_window_credit(
                             height,
                             arrangement,
-                            after=metrics_from_evaluation(
-                                result.routing,
-                                _decoded_from_pack(pack, strips, height),
-                                feedback_by_height.get(
-                                    height,
-                                    FeedbackState.empty((pack.width, height)),
-                                ),
-                                outline_height=height,
-                                band_target_width=finalize.band_target_width(
-                                    projection_envelope,
-                                    height=height,
-                                    width=pack.width,
-                                ),
-                                validator_clean=False,
-                            ),
+                            after=window_metrics(validator_clean=False),
                             routing_seconds=route_seconds,
                         )
         finally:
@@ -18553,7 +18592,7 @@ def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -
     return deadline is None or deadline - now >= candidate_s
 
 
-def _window_candidate_seconds(*, dearest_candidate_s: float, dearest_pack_s: float) -> float:
+def _window_candidate_seconds(*, dearest_remainder_s: float) -> float:
     """What one windowed retry costs, measured rather than tuned.
 
     A full retry is charged the dearest completed candidate, pack included.  A
@@ -18563,11 +18602,17 @@ def _window_candidate_seconds(*, dearest_candidate_s: float, dearest_pack_s: flo
     `_room_for_another`'s `candidate_s`, this is a measurement: a fixed constant
     cannot span a corpus running from one to 955 machines.
 
-    No clock is read here.  The charge is a pure function of two measurements
-    the sweep already keeps, and `_room_for_another` is the one that compares it
+    ``dearest_remainder_s`` is the largest post-pack span ONE candidate really
+    ran, not `dearest_candidate_s - dearest_pack_s` (Ruling AD).  That
+    difference subtracts two maxima that need not belong to the same candidate,
+    so a sweep holding one slow-to-pack candidate and one slow-to-route one
+    collapses it toward zero and admits a repair that then overruns the wall.
+
+    No clock is read here.  The charge is a pure function of a measurement the
+    sweep already keeps, and `_room_for_another` is the one that compares it
     against the wall.
     """
-    return C_WINDOW_SECONDS + max(0.0, dearest_candidate_s - dearest_pack_s)
+    return C_WINDOW_SECONDS + max(0.0, dearest_remainder_s)
 
 
 def _height_seed(strips: list[Strip]) -> int:
