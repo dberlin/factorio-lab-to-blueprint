@@ -57,6 +57,17 @@ EXPECTED_UNCONSULTED = {
     # These model non-refusing/silent protocol behavior or an unemitted turret.
     "rules.BELT_SLOT_AUTO_RANGE",
     "rules.ADDON_TURRET_AXIS_DEG",
+    # Task 6 pinned the cargo-stacking and piler facts from the game files.
+    # They change what a layout MOVES, not whether it pastes, and the planner
+    # that reads them is Deliverable B/C of the multiple-belts-and-pilers plan.
+    "catalog.SORTER_STACKING_LEVELS",
+    "catalog.sorter_pick_stack",
+    "catalog.sorter_place_stack",
+    "catalog.SORTER_STACK_RATE_FACTOR",
+    "catalog.PILER_MAX_STACK",
+    "catalog.PILER_SINGLE_PASS",
+    "catalog.PILER_THROUGHPUT",
+    "catalog.PILER_STACK_PARAMETER",
 }
 
 

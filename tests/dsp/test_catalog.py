@@ -876,3 +876,159 @@ def test_belt_rate_matches_the_dataset_belt_speed() -> None:
         assert catalog.BELT_RATE[item_id] == dataset.belt_speed(item.id)
         checked += 1
     assert checked, "the vendored dataset must have at least one belt item"
+
+
+# --- cargo stacking --------------------------------------------------------
+#
+# Every table entry is pinned as a LITERAL below, so a change to
+# ``data/stacking.json`` fails here rather than silently retiming a plan.  The
+# numbers are the game's; ``docs`` for where each one was read out of the
+# decompiled ``Assembly-CSharp`` lives in the JSON's ``*_source`` fields and in
+# `.superpowers/sdd/2026-09-02-multiple-belts-and-pilers/task-6b-report.md`.
+
+#: DSP item ids for the four sorter tiers, grade 1 to grade 4.
+_SORTER_MK1, _SORTER_MK2, _SORTER_MK3, _PILE_SORTER = 2011, 2012, 2013, 2014
+
+
+def test_sorter_stacking_levels_is_the_live_research_ladder() -> None:
+    assert catalog.SORTER_STACKING_LEVELS == 6
+
+
+@pytest.mark.parametrize(
+    ("item_id", "picks", "places"),
+    [
+        (_SORTER_MK1, (1, 1, 1, 1, 1, 1, 1), (1, 1, 1, 1, 1, 1, 1)),
+        (_SORTER_MK2, (1, 1, 1, 1, 1, 1, 1), (1, 1, 1, 1, 1, 1, 1)),
+        (_SORTER_MK3, (1, 1, 1, 1, 1, 1, 1), (1, 1, 1, 1, 1, 1, 1)),
+        (_PILE_SORTER, (2, 2, 3, 3, 4, 4, 4), (1, 2, 2, 3, 3, 4, 4)),
+    ],
+)
+def test_sorter_stack_tables_are_pinned(
+    item_id: int, picks: tuple[int, ...], places: tuple[int, ...]
+) -> None:
+    """Every level of every tier, as a literal.
+
+    Only the Pile Sorter moves.  Mk.III reads ``inserterStackCountObsolete``,
+    whose only writers are the ``IsObsolete`` techs 3301-3305 and the new-game
+    baseline of 1, so on this build it never leaves 1.
+    """
+    got_picks = tuple(
+        catalog.sorter_pick_stack(item_id, level)
+        for level in range(catalog.SORTER_STACKING_LEVELS + 1)
+    )
+    got_places = tuple(
+        catalog.sorter_place_stack(item_id, level)
+        for level in range(catalog.SORTER_STACKING_LEVELS + 1)
+    )
+    assert got_picks == picks
+    assert got_places == places
+
+
+def test_the_pile_sorter_answers_its_own_entry() -> None:
+    """2014 is the one tier whose stacking is not the shared table."""
+    assert catalog.sorter_pick_stack(_PILE_SORTER, 0) == 2
+    assert catalog.sorter_pick_stack(_SORTER_MK3, 0) == 1
+    assert catalog.sorter_place_stack(_PILE_SORTER, 6) == 4
+    assert catalog.sorter_place_stack(_SORTER_MK3, 6) == 1
+
+
+def test_sorter_stack_rejects_an_unknown_tier_or_level() -> None:
+    with pytest.raises(ValueError, match="not a sorter"):
+        catalog.sorter_pick_stack(catalog.SPLITTER_ID, 0)
+    with pytest.raises(ValueError, match="not a sorter"):
+        catalog.sorter_place_stack(catalog.SPLITTER_ID, 0)
+    with pytest.raises(ValueError, match="outside 0"):
+        catalog.sorter_pick_stack(_PILE_SORTER, catalog.SORTER_STACKING_LEVELS + 1)
+    with pytest.raises(ValueError, match="outside 0"):
+        catalog.sorter_place_stack(_PILE_SORTER, -1)
+
+
+def test_sorter_stack_rate_factor_is_pinned() -> None:
+    assert catalog.SORTER_STACK_RATE_FACTOR is True
+
+
+def test_piler_facts_are_pinned() -> None:
+    assert catalog.PILER_MAX_STACK == 4
+    assert catalog.PILER_SINGLE_PASS is False
+    assert Fraction(6) == catalog.PILER_THROUGHPUT
+    assert catalog.PILER_STACK_PARAMETER is None
+
+
+def test_one_piler_does_not_reach_max_stack_from_an_unstacked_belt() -> None:
+    """The consequence of ``PILER_SINGLE_PASS`` being False, as a number.
+
+    ``PilerComponent`` merges at most the two cargos it has cached, so it
+    doubles; 1 -> 2 -> 4 needs two pilers in series.
+    """
+    assert catalog.piler_output_stack(1) == 2
+    assert catalog.piler_output_stack(2) == 4
+    assert catalog.piler_output_stack(3) == catalog.PILER_MAX_STACK
+    assert catalog.piler_output_stack(4) == catalog.PILER_MAX_STACK
+    assert not catalog.PILER_SINGLE_PASS
+    with pytest.raises(ValueError, match="at least 1"):
+        catalog.piler_output_stack(0)
+
+
+def test_piler_throughput_is_the_belt_rate_it_sits_on() -> None:
+    """``PILER_THROUGHPUT`` is cargo/s per unit of ``PrefabDesc.beltSpeed``.
+
+    Multiplying by the three tiers' belt speeds must reproduce
+    :data:`catalog.BELT_RATE` exactly -- that identity is the whole reason the
+    constant is stored per unit speed rather than as one belt's number, and it
+    is the arithmetic form of "a piler never throttles the belt".
+    """
+    for item_id, belt_speed in ((2001, 1), (2002, 2), (2003, 5)):
+        assert catalog.PILER_THROUGHPUT * belt_speed == catalog.BELT_RATE[item_id]
+
+
+def test_stacking_json_sources_every_number() -> None:
+    """No fact may arrive without saying which file and line it came from."""
+    payload = json.loads(
+        (pathlib.Path(catalog.__file__).parent / "data" / "stacking.json").read_text()
+    )
+    assert payload["source"]["game_version"] == "0.10.34"
+    assert payload["source"]["assembly"] == "Assembly-CSharp.dll"
+    sorter = payload["sorter_cargo_stacking"]
+    assert "GameData.OnInserterTechChange" in sorter["applies_to"]["grade_rule_source"]
+    assert "TechProtoSet 3311-3316" in sorter["pile_sorter"]["level_source"]
+    assert "PilerComponent.cs:195-207" in payload["piler"]["max_stack_source"]
+    assert "PilerComponent.cs:161-169" in payload["piler"]["single_pass_source"]
+    assert "PilerDesc declares no fields" in payload["piler"]["parameter_index_source"]
+    assert "BuildingParameters" in payload["piler"]["parameter_index_source"]
+
+
+def test_stacking_techs_table_is_the_provenance_for_the_level_tables() -> None:
+    """``stacking_techs.json`` is what the extractor read; the level tables must
+    be derivable from it, so a re-extraction that changes the game's unlock
+    values fails here instead of silently disagreeing with ``stacking.json``.
+    """
+    rows = json.loads(
+        (
+            pathlib.Path(catalog.__file__).parent / "data" / "stacking_techs.json"
+        ).read_text()
+    )
+    by_id = {row["ID"]: row for row in rows}
+    assert sorted(by_id) == [3301, 3302, 3303, 3304, 3305, 3306,
+                             3311, 3312, 3313, 3314, 3315, 3316]
+
+    # GameHistoryData.SetForNewGame (:554-557).
+    pick, place = 2, 1
+    picks, places = [pick], [place]
+    for tech_id in (3311, 3312, 3313, 3314, 3315, 3316):
+        row = by_id[tech_id]
+        for func, value in zip(row["UnlockFunctions"], row["UnlockValues"], strict=True):
+            if func == 41:  # inserterStackInput
+                pick = int(value)
+            elif func == 39:  # inserterStackOutput
+                place = int(value)
+        picks.append(pick)
+        places.append(place)
+
+    assert picks == [
+        catalog.sorter_pick_stack(_PILE_SORTER, level)
+        for level in range(catalog.SORTER_STACKING_LEVELS + 1)
+    ]
+    assert places == [
+        catalog.sorter_place_stack(_PILE_SORTER, level)
+        for level in range(catalog.SORTER_STACKING_LEVELS + 1)
+    ]
