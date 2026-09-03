@@ -16965,6 +16965,9 @@ class FreeformLayout:
 
         #: Ordered authoritative findings from candidates rejected after packing.
         rejected: list[_RefusalFinding] = []
+        #: Candidate heights whose greedy seed extent fits no band.  NOT a
+        #: rejection: no pack existed to reject.
+        skipped_heights: list[int] = []
         #: Complete immutable evidence from every pack the sweep routed. Empty
         #: means no pack got that far. Refusal reporting reads counts from the
         #: detailed results without destroying identities Task 10 consumes.
@@ -16995,6 +16998,7 @@ class FreeformLayout:
                     budget,
                     rejected,
                     attempts,
+                    skipped_heights=skipped_heights,
                     session=alns_session,
                 )
             except _PreparationDeadline as exc:
@@ -17028,6 +17032,11 @@ class FreeformLayout:
             for finding in rejected
             if isinstance(finding, finalize.ProjectionFailure)
         )
+        over_band = (
+            f"; {len(skipped_heights)} candidate heights were skipped as over-band"
+            if skipped_heights
+            else ""
+        )
         # A build that WIRED and then failed our own validator is a different
         # defect from one that could not be wired, and saying so is the whole
         # value of checking: "the packer produced packs its own router cannot
@@ -17038,7 +17047,8 @@ class FreeformLayout:
                 + _refusal_summary(rejected)
                 + "); a placement that fails validation is refused rather than "
                 "returned, because an invalid blueprint pastes and then does not "
-                "run",
+                "run"
+                + over_band,
                 spec_label=spec.label,
                 budget_s=budgets[-1],
                 projection_failures=projection_failures,
@@ -17122,6 +17132,7 @@ class FreeformLayout:
                     "; earlier completed packs were also rejected by our own "
                     f"validator ({_refusal_summary(rejected)})"
                 )
+            note += over_band
             raise NoValidLayout(
                 f"the {ceiling:g}s deadline passed with no completed packing of "
                 f"{len(strips)} strips; {note}. This is a REFUSAL and not a "
@@ -17134,7 +17145,8 @@ class FreeformLayout:
             f"no packing of {len(strips)} strips could be wired at any candidate "
             "height; every pack the sweep produced left nets unrouted. That is a "
             "PACKER defect -- it is producing packs its own router cannot wire -- "
-            "and it is reported rather than papered over with a looser packing",
+            "and it is reported rather than papered over with a looser packing"
+            + over_band,
             spec_label=spec.label,
             budget_s=budgets[-1],
         )
@@ -17148,6 +17160,7 @@ class FreeformLayout:
         budget: dict[str, int] | None = None,
         rejected: list[_RefusalFinding] | None = None,
         attempts: list[PackAttempt] | None = None,
+        skipped_heights: list[int] | None = None,
         *,
         session: OperatorSession,
     ) -> Placement | None:
@@ -17166,6 +17179,13 @@ class FreeformLayout:
         ``rejected`` collects ordered structured findings from placements thrown
         out by self-checks or projected geometry, so a terminal refusal can name
         the broken promise and retain the authoritative record that proved it.
+
+        ``skipped_heights`` collects candidate heights whose GREEDY SEED extent
+        fits no band.  They are kept apart from ``rejected`` deliberately: that
+        gate fires before `_pack`, so no pack ever existed, and feeding it into
+        ``rejected`` made `lay_out` report "every packing that wired was rejected
+        by our own validator" for a cell where nothing wired (R1 §0).  The
+        POST-pack gate still retains a real pack's rejection.
 
         ``time_budget_s`` bounds the WHOLE sweep, not just CP-SAT.  It used to
         bound only the packing: routing is limited by an expansion count, not a
@@ -17777,14 +17797,8 @@ class FreeformLayout:
                     seed_width,
                     seed_height,
                 ):
-                    if rejected is not None:
-                        _retain_refusal(
-                            rejected,
-                            projection_envelope.extent_failure(
-                                seed_width,
-                                seed_height,
-                            ),
-                        )
+                    if skipped_heights is not None and height not in skipped_heights:
+                        skipped_heights.append(height)
                     continue
                 started_at = time.monotonic()
                 candidate_pack_s = 0.0
