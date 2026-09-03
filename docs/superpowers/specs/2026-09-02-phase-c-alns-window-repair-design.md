@@ -638,10 +638,15 @@ immediate retry (`:16719-16723`), and when it says no, the failed pack is simply
 
 Phase C adds one measured quantity, one branch, and an explicit re-visit queue:
 
-- `dearest_pack_s` tracks the dearest `_pack` call this sweep has completed, alongside the existing
-  `dearest_candidate_s`. `window_candidate_s = C_WINDOW_SECONDS + max(0.0, dearest_candidate_s -
-  dearest_pack_s)` — the cost of a window solve plus the measured cost of everything after packing.
-  It is a measurement, like `dearest_candidate_s`, not a tuned constant.
+- `dearest_remainder_s` tracks, over the candidates this sweep has completed, the largest value of
+  (that candidate's total seconds minus that same candidate's `_pack` seconds), alongside the
+  existing `dearest_candidate_s`. `window_candidate_s = C_WINDOW_SECONDS + dearest_remainder_s` —
+  the cost of a window solve plus the measured cost of everything after packing. It is a
+  measurement, like `dearest_candidate_s`, not a tuned constant. (Ruling AD: an earlier draft
+  differenced two independent maxima, `dearest_candidate_s - dearest_pack_s`, which is not an
+  upper bound on any single candidate's post-pack span and could admit a repair that then overran
+  the deadline.) The same remainder is what a queued repair is charged at the loop-head
+  affordability gates, since its pack is already paid for.
 - In the `if failed:` block, after the `promote_retry` branch and before `continue`
   (`freeform.py:16700-16755`): when a full retry was WANTED (`promote_retry`), had a slot
   (`retry_slot_found`), and the clock refused it (`not retry_admitted`), and
