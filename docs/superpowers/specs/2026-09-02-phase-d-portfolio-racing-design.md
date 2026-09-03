@@ -662,8 +662,14 @@ geometry... retaining them can forbid a relation the widened strip just made
 feasible." A cross-process no-good is that same kind of proof, so it obeys that
 same rule: it is admitted only against the strip set in force at the moment it
 would constrain a solve, and a queued message whose ids are not a subset of the
-*current* set is dropped and counted. The inbox therefore holds undecided
-messages and the receiver supplies its current
+*current* set is not applied on that application; it stays in the inbox
+(Ruling AM: a later replan may make it match again, and freeform clears its own
+relation no-goods on replan, so a message consumed on first match could never
+be re-supplied). `dropped_messages` counts only what no strip set could ever
+match (empty ids), what the inbox cap evicted, and what a full queue refused.
+A matched message is re-judged on every application and never consumed, so
+each receiver dedupes what it has already applied. The inbox therefore holds
+undecided messages and the receiver supplies its current
 `frozenset[StripInstanceId]` on each application — freeform from its live
 `strips` list, sequence-pair from the live `problem.instance_ids`.
 
