@@ -2943,10 +2943,11 @@ class _RepairAdapters:
     #: window is unaffordable, infeasible, or returns the incumbent unchanged.
     #: The encoding rather than the placement, because the round trip is not
     #: exact: re-encoding the compaction here could yield a second, different
-    #: pair.  Wired in a later task; until then this is ``None`` and a
-    #: LOCAL_EXACT_PACK choice is SKIPPED -- credited a count and a zero reward
-    #: and returned unchanged -- rather than being served by another arm's
-    #: repair, which would pay the window arm for the reinsert's work.
+    #: pair.  ``None`` where the run has no window to offer -- a bare-constructed
+    #: or test solver -- and a LOCAL_EXACT_PACK choice is then SKIPPED --
+    #: credited a count and a zero reward and returned unchanged -- rather than
+    #: being served by another arm's repair, which would pay the window arm for
+    #: the reinsert's work.
     window_pack: (
         Callable[
             [frozenset[int], PlacementProblem, AnnealState, DecodedPlacement],
@@ -2980,10 +2981,17 @@ def _alns_substitution(
 ) -> tuple[AnnealState, frozenset[int]]:
     """Replace a failed candidate with the local repair the selector chose.
 
-    Same contract as :func:`_routing_feedback_substitution`, which stays in this
-    module as the implementation behind the FAILED_ENDPOINTS + SEQUENCE_REINSERT
-    pairing: geometric failures only (never BUDGET), never the whole problem,
-    and the unchanged state when there is nothing to repair.
+    Same contract as :func:`_routing_feedback_substitution`: geometric failures
+    only (never BUDGET), never the whole problem, and the unchanged state when
+    there is nothing to repair.
+
+    That function is NOT the implementation behind the FAILED_ENDPOINTS +
+    SEQUENCE_REINSERT pairing -- THIS one is, at both production call sites.
+    The legacy `_routing_feedback_substitution` / `_lns_neighbourhood` pair has
+    no production caller left and stays in this module as a TEST-ONLY
+    EQUIVALENCE ORACLE: the tests run the two side by side to show that the
+    shipped path reduces exactly to the rule it replaced.  The pair is deleted
+    once a corpus round certifies the new path (Phase D).
     """
     unchanged = AnnealState(
         pair=selected_state.pair,

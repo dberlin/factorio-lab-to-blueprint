@@ -17338,12 +17338,17 @@ class FreeformLayout:
         #: the selector happened to pick last.
         window_choices: dict[tuple[int, int], tuple[OperatorChoice, OperatorMetrics]] = {}
         #: Asked-and-answered windows, so the same question is never put to
-        #: CP-SAT twice inside one SWEEP.  Per sweep and not per `lay_out`
-        #: because `replan_strips_for_learned_geometry` renumbers the strips,
-        #: and the strip indices in the key are what a window means: the same
-        #: `(height, arrangement, window)` triple names a DIFFERENT question
-        #: once the numbering underneath it has changed, so carrying the set
-        #: across a replan would silently refuse a window nobody has asked.
+        #: CP-SAT twice inside one SWEEP.  `lay_out` runs exactly one sweep
+        #: today, so "per sweep" is also "per `lay_out`": this set spans every
+        #: replan the sweep makes rather than being scoped inside one.  What the
+        #: key MEANS is strip indices, and `replan_strips_for_learned_geometry`
+        #: renumbers the strips -- the same `(height, arrangement, window)`
+        #: triple names a DIFFERENT question afterwards, so an entry recorded
+        #: against the old numbering can refuse a window nobody has asked
+        #: against the new one.  Left that way deliberately: refusing a window
+        #: costs a repair the sweep might have made and can never produce a
+        #: wrong pack, and it is the third thing to clear at the replan --
+        #: beside `window_packs` and `window_queue` -- if that miss is measured.
         solved_windows: set[tuple[int, int, frozenset[int]]] = set()
         window_solves = 0
         window_accepted = 0
@@ -17435,6 +17440,28 @@ class FreeformLayout:
                 max(dearest_candidate_s, current_candidate_s),
             )
 
+        def band_target_for(height: int, width: int) -> int:
+            """Widest core this policy's bands still accept at ``height``, guarded.
+
+            `finalize.band_target_width` raises `ValueError` above
+            `finalize.C_BAND_SCAN_MAX` and for a non-positive height or width,
+            and a pack's width is not bounded by either.  Neither caller here may
+            raise over that: one is the window launch, where a repair attempt must
+            never take the whole sweep down, and the other is the metrics closure,
+            which runs inside a `finally` where a raise would REPLACE the
+            exception already in flight.  Falling back to the input width makes
+            the band term inert for that call, which is the same choice the
+            sequence-pair arm's own `band_target_for` makes.
+            """
+            try:
+                return finalize.band_target_width(
+                    projection_envelope,
+                    height=height,
+                    width=width,
+                )
+            except ValueError:
+                return width
+
         def replan_strips_for_learned_geometry() -> None:
             nonlocal strips, greedy, bound, direct_candidate_snapshot, net_candidates, seeds
 
@@ -17472,6 +17499,30 @@ class FreeformLayout:
             direct_relation_no_good_keys.clear()
             cluster_relation_no_goods.clear()
             cluster_relation_no_good_keys.clear()
+            # AND SO DOES EVERY PENDING WINDOW.  A queued repair is a set of
+            # origins keyed by STRIP INDEX, and the numbering it was solved
+            # against is the numbering this function just replaced: installing
+            # one afterwards would seat the new strips at the old strips' places,
+            # and settling its credit reads `pack.at` at the new indices, which
+            # raises `KeyError` the moment the strip count changes.
+            #
+            # The choice behind each one is settled FIRST, and unapplied: it
+            # bought a CP-SAT solve, so the ledger has to see the cost, and the
+            # routing pass it would have been paid on describes a pack that no
+            # longer exists.  Settling here is also what keeps the settle to
+            # ONE: `settle_window_credit` pops, so the `finally` below the
+            # candidate body finds nothing left to pay, and neither does the
+            # post-loop drain.
+            for pending_height, pending_arrangement in list(window_choices):
+                settle_window_credit(
+                    pending_height,
+                    pending_arrangement,
+                    after=None,
+                    routing_seconds=0.0,
+                )
+            window_choices.clear()
+            window_packs.clear()
+            window_queue.clear()
 
         try:
             while window_queue or candidate_index < len(candidate_packs):
@@ -18029,10 +18080,9 @@ class FreeformLayout:
                             FeedbackState.empty((current_pack.width, current_height)),
                         ),
                         outline_height=current_height,
-                        band_target_width=finalize.band_target_width(
-                            projection_envelope,
-                            height=current_height,
-                            width=current_pack.width,
+                        band_target_width=band_target_for(
+                            current_height,
+                            current_pack.width,
                         ),
                         validator_clean=validator_clean,
                     )
@@ -18196,11 +18246,7 @@ class FreeformLayout:
                                 and (height, arrangement) not in window_choices
                                 and _room_for_another(deadline, soft, window_cost)
                             ):
-                                target = finalize.band_target_width(
-                                    projection_envelope,
-                                    height=height,
-                                    width=pack.width,
-                                )
+                                target = band_target_for(height, pack.width)
                                 relation_problem = _pack_relation_problem(pack, strips, height)
                                 relation_decoded = _decoded_from_pack(pack, strips, height)
                                 feedback_state_now = feedback_by_height.get(
@@ -18269,6 +18315,13 @@ class FreeformLayout:
                                         projection_no_goods=tuple(projection_no_goods),
                                         exact_pack_no_goods=exact_pack_no_goods,
                                         direct_relation_no_goods=tuple(direct_relation_no_goods),
+                                        # THE SAME PROOFS `_pack` GETS.  A window
+                                        # is a sub-model of the full formulation,
+                                        # so a collection the packer is forbidden
+                                        # to violate cannot be dropped here: the
+                                        # window would hand back a pack the sweep
+                                        # has already proved unroutable.
+                                        cluster_relation_no_goods=tuple(cluster_relation_no_goods),
                                         feedback=feedback_by_height.get(height),
                                         on_skipped=_count_window_skips,
                                     )
