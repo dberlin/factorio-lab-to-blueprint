@@ -9,6 +9,7 @@ touch it.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
@@ -35,6 +36,7 @@ from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize, markers, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
+    ATOMIC_COMPLETION_GRACE_S,
     LayoutAttemptFailure,
     NoValidLayout,
     Placement,
@@ -540,6 +542,21 @@ def build(
                 sequence_islands=sequence_islands,
                 band_policy=policy,
             )
+            attempt_started = time.monotonic()
+            # A HARD wall per attempt, in the one place that can see the whole
+            # cost.  A strategy's own budget covers its search; compaction,
+            # projection, validation and encoding all run AFTER it and are
+            # charged to nobody.  `validate.validate` takes no cancellation
+            # parameter at all, so this cancels where a hook exists and REPORTS
+            # everywhere else -- a number the gate can fail on beats a number
+            # nobody produced.
+            attempt_deadline = (
+                attempt_started + time_budget_s + ATOMIC_COMPLETION_GRACE_S
+            )
+
+            def attempt_expired(_deadline: float = attempt_deadline) -> bool:
+                return time.monotonic() >= _deadline
+
             try:
                 placement = layout.lay_out(spec, time_budget_s=time_budget_s)
             except NoValidLayout as exc:
@@ -573,7 +590,11 @@ def build(
                     expect_power=True,
                 )
                 try:
-                    placement = finalize.finalize_placement(placement, policy)
+                    placement = finalize.finalize_placement(
+                        placement,
+                        policy,
+                        cancelled=attempt_expired,
+                    )
                 except finalize.ProjectionRefusal as exc:
                     reason = str(exc)
                     failure = LayoutAttemptFailure(
@@ -593,6 +614,38 @@ def build(
                                 phase="refused",
                                 reason=reason,
                                 projection_failures=failure.projection_failures,
+                            )
+                        )
+                    continue
+                except finalize.ProjectionCancelled:
+                    # Every other call site that hands `finalize_placement` a
+                    # `cancelled` predicate (freeform.py, sequence_solver.py)
+                    # catches this alongside ProjectionRefusal.  It is a bare
+                    # Exception, not a ProjectionRefusal subclass, so without
+                    # this clause one attempt's deadline firing here would
+                    # crash the whole build instead of refusing that attempt --
+                    # exactly the failure this per-attempt deadline exists to
+                    # replace with a reported number.
+                    reason = (
+                        f"attempt deadline exhausted during finalization "
+                        f"(budget {time_budget_s:g}s + grace "
+                        f"{ATOMIC_COMPLETION_GRACE_S:g}s)"
+                    )
+                    failure = LayoutAttemptFailure(
+                        candidate=spec.label,
+                        strategy=sname,
+                        reason=reason,
+                    )
+                    refused.append(failure)
+                    if on_progress is not None:
+                        on_progress(
+                            AttemptProgress(
+                                index=pair_index,
+                                total=total_pairs,
+                                candidate=spec.label,
+                                strategy=sname,
+                                phase="refused",
+                                reason=reason,
                             )
                         )
                     continue
@@ -643,6 +696,12 @@ def build(
                         )
                     )
                 continue
+            attempt_wall_s = time.monotonic() - attempt_started
+            labelled.stats["attempt_wall_s"] = attempt_wall_s
+            labelled.stats["wall_overshoot_s"] = max(
+                0.0,
+                attempt_wall_s - time_budget_s - ATOMIC_COMPLETION_GRACE_S,
+            )
             attempts.append(
                 Attempt(
                     spec.label,

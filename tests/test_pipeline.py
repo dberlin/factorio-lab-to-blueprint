@@ -24,6 +24,7 @@ from flab2bp.lab.url import parse_url
 from flab2bp.layout import finalize, freeform, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
+    ATOMIC_COMPLETION_GRACE_S,
     AreaFrame,
     NoValidLayout,
     Placement,
@@ -466,7 +467,7 @@ def test_projection_refusal_preserves_structured_exception_text(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        lambda _placement, _policy: (_ for _ in ()).throw(refusal),
+        lambda _placement, _policy, **_kwargs: (_ for _ in ()).throw(refusal),
     )
     steps: list[pipeline.AttemptProgress] = []
 
@@ -709,6 +710,180 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     # -- this is what actually proves the refusal happened during exact
     # preparation, the code path 0d2a69b guarded.
     assert preparation_deadline_fires > 0
+
+
+@pytest.mark.slow
+def test_every_attempt_reports_its_wall_and_its_overshoot() -> None:
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=5.0,
+    )
+
+    assert built.attempts
+    for attempt in built.attempts:
+        stats = attempt.placement.stats
+        assert stats["attempt_wall_s"] > 0.0
+        assert stats["wall_overshoot_s"] == max(
+            0.0, stats["attempt_wall_s"] - 5.0 - ATOMIC_COMPLETION_GRACE_S
+        )
+
+
+def _stub_needs_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    advance_s: float,
+    capture: dict[str, object] | None = None,
+) -> list[float]:
+    """Rig one freeform attempt whose placement is NOT already
+    ``COMPACTED_AND_FINALIZED``, so `pipeline.build` takes the
+    `finalize.finalize_placement` branch under test, on a driven clock rather
+    than the real one.
+
+    Returns the mutable one-element clock box: from the moment this returns,
+    `time.monotonic()` inside `pipeline.build` reads `now[0]`, so a test can
+    move it *after* `build` returns to probe a captured predicate against a
+    deadline it already knows.
+    """
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    class _NeedsFinalization:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            now[0] += advance_s
+            return Placement(buildings=(), completion=None, frame=None)
+
+    monkeypatch.setattr(pipeline, "_new_layout", lambda *_a, **_kw: _NeedsFinalization())
+    monkeypatch.setattr(
+        finalize, "compact_open_boundary_belts", lambda placement, *_a, **_kw: placement
+    )
+
+    def _finalize(
+        placement: Placement,
+        _policy: object,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Placement:
+        if capture is not None:
+            capture["cancelled"] = cancelled
+        return dataclasses.replace(placement, frame=AreaFrame(1, 1, 4, (4,), False))
+
+    monkeypatch.setattr(finalize, "finalize_placement", _finalize)
+    monkeypatch.setattr(validate, "validate", lambda *_a, **_kw: validate.Report(findings=()))
+    return now
+
+
+def test_wall_overshoot_is_clamped_at_zero_under_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_needs_finalization(monkeypatch, advance_s=2.0)
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=5.0,
+    )
+
+    stats = built.attempts[0].placement.stats
+    # 2.0s wall is well under budget(5.0) + grace(5.0) = 10.0s -- clamped, not
+    # negative.
+    assert stats["attempt_wall_s"] == pytest.approx(2.0)
+    assert stats["wall_overshoot_s"] == 0.0
+
+
+def test_wall_overshoot_reports_the_excess_past_budget_and_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_needs_finalization(monkeypatch, advance_s=20.0)
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=5.0,
+    )
+
+    stats = built.attempts[0].placement.stats
+    assert stats["attempt_wall_s"] == pytest.approx(20.0)
+    # 20.0 - budget(5.0) - ATOMIC_COMPLETION_GRACE_S(5.0) == 10.0
+    assert stats["wall_overshoot_s"] == pytest.approx(20.0 - 5.0 - ATOMIC_COMPLETION_GRACE_S)
+
+
+def test_finalize_placement_receives_a_cancelled_predicate_over_the_attempt_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    capture: dict[str, object] = {}
+    now = _stub_needs_finalization(monkeypatch, advance_s=0.0, capture=capture)
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=3.0,
+    )
+
+    cancelled = capture["cancelled"]
+    assert callable(cancelled)
+    # attempt_started was 1000.0 (advance_s=0.0 never moved the clock before
+    # finalize_placement captured this predicate); the deadline it closes over
+    # is attempt_started + time_budget_s + ATOMIC_COMPLETION_GRACE_S.
+    deadline = 1000.0 + 3.0 + ATOMIC_COMPLETION_GRACE_S
+    now[0] = deadline - 0.001
+    assert cancelled() is False
+    now[0] = deadline
+    assert cancelled() is True
+
+
+def test_a_finalization_cancelled_by_the_attempt_deadline_is_reported_as_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`finalize_placement` now sees `cancelled`, so it can raise
+    `finalize.ProjectionCancelled` -- a bare Exception, not a ProjectionRefusal
+    subclass. Every other call site that hands `finalize_placement` a
+    `cancelled` predicate (sequence_solver.py, freeform.py) catches this
+    alongside ProjectionRefusal; pipeline.build must too, or a single
+    attempt's cancellation crashes the whole build rather than refusing that
+    attempt -- "a number the gate can fail on beats a number nobody produced"
+    kept for real, not just reported.
+    """
+    monkeypatch.setattr(time, "monotonic", lambda: 1000.0)
+
+    class _NeedsFinalization:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            return Placement(buildings=(), completion=None, frame=None)
+
+    monkeypatch.setattr(pipeline, "_new_layout", lambda *_a, **_kw: _NeedsFinalization())
+    monkeypatch.setattr(
+        finalize, "compact_open_boundary_belts", lambda placement, *_a, **_kw: placement
+    )
+
+    def _always_cancelled(
+        _placement: Placement,
+        _policy: object,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Placement:
+        assert cancelled is not None
+        raise finalize.ProjectionCancelled
+
+    monkeypatch.setattr(finalize, "finalize_placement", _always_cancelled)
+
+    with pytest.raises(NoValidLayout) as exc_info:
+        pipeline.build(
+            SMALL_URL,
+            strategy="freeform",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=5.0,
+        )
+
+    assert len(exc_info.value.attempt_failures) == 1
+    failure = exc_info.value.attempt_failures[0]
+    assert failure.strategy == "freeform"
+    assert "deadline" in failure.reason
 
 
 DEUTERON_URL = (
