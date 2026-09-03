@@ -25,6 +25,7 @@ import multiprocessing
 import os
 import queue
 import time
+from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -227,6 +228,72 @@ class RaceChannels:
             self.publish.cancel_join_thread()
 
 
+def applicable_no_good(
+    message: NoGoodMessage,
+    planned: frozenset[StripInstanceId],
+) -> bool:
+    """May this receiver apply a no-good the other strategy proved?
+
+    Only when every instance the no-good names is one of the receiver's OWN
+    planned strips, judged against the set in force RIGHT NOW.  A
+    ``StripInstanceId`` embeds the family, the machine start and the machine
+    count, so a receiver that sharded the same recipe group differently -- or
+    that has replanned since the message arrived -- fails this test by
+    construction.  A dropped no-good costs a hint; an applied wrong one would
+    forbid a legal placement.
+    """
+    if not message.instance_ids:
+        return False
+    return set(message.instance_ids) <= planned
+
+
+#: No-goods held awaiting a strip set that matches them.  A held message is
+#: never discarded by matching -- it may become applicable again after a replan
+#: -- so without a bound the inbox grows for the whole solve on exactly the
+#: receiver the identity predicate exists to protect: one whose strips never
+#: match.  The OLDEST is dropped first, because a proof made earlier is the one
+#: most likely to name strips a later replan has already invalidated.
+NOGOOD_INBOX_MAX = 256
+
+
+@dataclass
+class _NoGoodInbox:
+    """Holds UNDECIDED no-goods and re-judges them on every application.
+
+    Deliberately NOT a set filtered once against a snapshot taken when planning
+    finished: freeform replans strips mid-sweep, which changes every
+    ``StripInstanceId``, and a message admitted against the old plan could
+    forbid a relation the replanned strips just made feasible.
+    """
+
+    _held: deque[NoGoodMessage] = field(
+        default_factory=lambda: deque(maxlen=NOGOOD_INBOX_MAX), init=False
+    )
+    _dropped: int = field(default=0, init=False)
+
+    @property
+    def dropped(self) -> int:
+        return self._dropped
+
+    def offer(self, message: NoGoodMessage) -> None:
+        if not message.instance_ids:
+            # Nothing names nothing: no strip set can ever match it.
+            self._dropped += 1
+            return
+        if len(self._held) == NOGOOD_INBOX_MAX:
+            # `deque(maxlen=...)` evicts silently; count it first so a receiver
+            # that never matches anything is visible in the outcome.
+            self._dropped += 1
+        self._held.append(message)
+
+    def applicable(self, planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
+        return tuple(
+            message.no_good
+            for message in self._held
+            if applicable_no_good(message, planned)
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class _StrategyRaceRequest:
     """Plain pickleable inputs for one racer.  No queue: see ``run_strategy_race``."""
@@ -282,6 +349,9 @@ class _StrategyRaceOutcome:
         projection_failures: tuple[ProjectionFailureRecord, ...] = (),
         published_incumbents: int = 0,
         consumed_incumbents: int = 0,
+        published_no_goods: int = 0,
+        consumed_no_goods: int = 0,
+        dropped_messages: int = 0,
     ) -> _StrategyRaceOutcome:
         return cls(
             strategy,
@@ -292,6 +362,9 @@ class _StrategyRaceOutcome:
             refusal_projection_failures=projection_failures,
             published_incumbents=published_incumbents,
             consumed_incumbents=consumed_incumbents,
+            published_no_goods=published_no_goods,
+            consumed_no_goods=consumed_no_goods,
+            dropped_messages=dropped_messages,
         )
 
 
@@ -380,19 +453,51 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
     #: fold has to survive the drain -- and a list of every key ever seen would
     #: grow for the whole life of the child to hold one number.
     best_external: tuple[int, int] | None = None
+    inbox = _NoGoodInbox()
     published = 0
     consumed = 0
+    published_no_goods = 0
 
-    def portfolio_incumbent() -> tuple[int, int] | None:
+    def _drain() -> None:
+        """The leg's ONE poll of its queue, routing both message kinds.
+
+        Both kinds ride the same queue, so a second drain somewhere else would
+        race this one for the same messages and each would silently swallow what
+        the other needed.  An incumbent folds into the running minimum here; a
+        no-good goes to the inbox, which decides at APPLICATION time -- this
+        drain has no strip set to judge one against.
+        """
         nonlocal consumed, best_external
         if channels is None:
-            return None
+            return
         for message in channels.drain():
             if isinstance(message, IncumbentMessage):
                 consumed += 1
                 if best_external is None or message.exact_key < best_external:
                     best_external = message.exact_key
+            else:
+                inbox.offer(message)
+
+    def portfolio_incumbent() -> tuple[int, int] | None:
+        _drain()
         return best_external
+
+    def external_no_goods(planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
+        """The no-goods this receiver may apply to the strips it holds NOW.
+
+        Takes the CURRENT set rather than registering a snapshot: freeform
+        replans strips mid-sweep, and a message admitted against the old plan
+        could forbid a relation the replanned strips just made feasible.
+        """
+        _drain()
+        return inbox.applicable(planned)
+
+    def publish_no_good(no_good: object, instances: tuple[StripInstanceId, ...]) -> None:
+        nonlocal published_no_goods
+        if channels is None:
+            return
+        channels.publish_no_good(NoGoodMessage(request.strategy, instances, no_good))
+        published_no_goods += 1
 
     def publish(placement: Placement) -> None:
         nonlocal published
@@ -423,6 +528,11 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         )
         published += 1
 
+    # `external_no_goods` and `publish_no_good` are deliberately not handed over
+    # here: the two receivers gain those keyword parameters in the wiring task
+    # (6.2), which is also where the live strip set the predicate judges against
+    # comes from.  They are built in this frame because the channel, the inbox and
+    # the counter they close over all live in it.
     layout = _build_layout(
         request,
         portfolio_incumbent=portfolio_incumbent,
@@ -443,6 +553,9 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
             projection_failures=exc.projection_failures,
             published_incumbents=published,
             consumed_incumbents=consumed,
+            published_no_goods=published_no_goods,
+            consumed_no_goods=len(inbox.applicable(frozenset())),
+            dropped_messages=(0 if channels is None else channels.dropped) + inbox.dropped,
         )
     finally:
         # In a `finally` because refusing is the common path, and a child that
@@ -455,7 +568,15 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         placement=placement,
         published_incumbents=published,
         consumed_incumbents=consumed,
-        dropped_messages=0 if channels is None else channels.dropped,
+        published_no_goods=published_no_goods,
+        # Against the EMPTY set, which is always 0, because the leg holds no
+        # strip set of its own -- the receivers do, and they get the live one
+        # through `external_no_goods`.  The field has exactly one writer, and the
+        # wiring task replaces this argument rather than this line's shape.
+        consumed_no_goods=len(inbox.applicable(frozenset())),
+        # Both halves of "a hint that never arrived": what the outbound queue
+        # refused, and what the inbox could not hold.
+        dropped_messages=(0 if channels is None else channels.dropped) + inbox.dropped,
     )
 
 
