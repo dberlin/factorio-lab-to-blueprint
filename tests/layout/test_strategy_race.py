@@ -1291,8 +1291,11 @@ def test_a_leg_counts_and_folds_every_incumbent_it_consumes(
     layout_of = _hook_layout(monkeypatch)
     inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
     outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
-    inbox.put(IncumbentMessage("sequence-pair", (480, 62)))
+    # The BETTER key arrives first, so a last-wins fold gives (480, 62) and a
+    # running minimum gives (470, 90).  In the other order both folds agree and
+    # the assertion below cannot tell them apart.
     inbox.put(IncumbentMessage("sequence-pair", (470, 90)))
+    inbox.put(IncumbentMessage("sequence-pair", (480, 62)))
     _install_race_channels(inbox, outbox)
     try:
         outcome = _run_race_leg(_request("freeform"))
@@ -1359,3 +1362,207 @@ def test_build_layout_hands_the_portfolio_hooks_to_both_layouts(
 
     assert layout.portfolio_incumbent is bound
     assert layout.publish_incumbent is publish
+
+
+def _instance(group: str, start: int, count: int) -> StripInstanceId:
+    return StripInstanceId(StripFamilyId(group, 0), start, count)
+
+
+def test_a_no_good_naming_only_planned_instances_is_applicable() -> None:
+    from flab2bp.layout.strategy_race import applicable_no_good
+
+    planned = frozenset({_instance("iron-ingot", 0, 4), _instance("iron-ingot", 4, 4)})
+    message = NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good="a")
+
+    assert applicable_no_good(message, planned) is True
+
+
+def test_a_no_good_from_a_different_shard_or_family_is_dropped() -> None:
+    from flab2bp.layout.strategy_race import applicable_no_good
+
+    planned = frozenset({_instance("iron-ingot", 0, 8)})
+    differently_sharded = NoGoodMessage(
+        "freeform", (_instance("iron-ingot", 0, 4),), no_good="a"
+    )
+    different_family = NoGoodMessage(
+        "freeform", (_instance("copper-ingot", 0, 8),), no_good="b"
+    )
+
+    assert applicable_no_good(differently_sharded, planned) is False
+    assert applicable_no_good(different_family, planned) is False
+
+
+def test_an_empty_no_good_is_dropped() -> None:
+    from flab2bp.layout.strategy_race import applicable_no_good
+
+    empty = NoGoodMessage("freeform", (), no_good="a")
+
+    assert applicable_no_good(empty, frozenset({_instance("iron-ingot", 0, 4)})) is False
+
+
+def test_the_inbox_decides_at_application_time_not_at_arrival() -> None:
+    """A replan changes every StripInstanceId, so the predicate must re-run.
+
+    `freeform.py:16179-16182` clears the LOCAL relation no-goods on a replan for
+    exactly this reason: "these proofs carry offsets, widths, or relation rows
+    from the old strip geometry... retaining them can forbid a relation the
+    widened strip just made feasible."  A cross-process no-good is the same kind
+    of proof and obeys the same rule.
+    """
+    from flab2bp.layout.strategy_race import _NoGoodInbox
+
+    inbox = _NoGoodInbox()
+    inbox.offer(NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good="a"))
+    inbox.offer(NoGoodMessage("freeform", (_instance("iron-ingot", 0, 8),), no_good="b"))
+
+    before_replan = frozenset({_instance("iron-ingot", 0, 4)})
+    after_replan = frozenset({_instance("iron-ingot", 0, 8)})
+
+    assert inbox.applicable(before_replan) == ("a",)
+    assert inbox.applicable(after_replan) == ("b",)
+    assert inbox.dropped == 0, "a message not applicable NOW may be applicable later"
+
+
+def test_the_inbox_reports_messages_no_strip_set_can_ever_use() -> None:
+    from flab2bp.layout.strategy_race import _NoGoodInbox
+
+    inbox = _NoGoodInbox()
+    inbox.offer(NoGoodMessage("freeform", (), no_good="a"))
+
+    assert inbox.applicable(frozenset({_instance("iron-ingot", 0, 4)})) == ()
+    assert inbox.dropped == 1, "an empty instance list can never match anything"
+
+
+def test_the_inbox_is_bounded_and_evicts_the_oldest() -> None:
+    """A held message is never discarded by matching, so the inbox needs a cap.
+
+    Without one it grows for the whole solve on the receiver the identity
+    predicate exists to protect: one whose strips never match.
+    """
+    from flab2bp.layout.strategy_race import NOGOOD_INBOX_MAX, _NoGoodInbox
+
+    inbox = _NoGoodInbox()
+    planned = frozenset({_instance("iron-ingot", 0, 4)})
+    for index in range(NOGOOD_INBOX_MAX + 3):
+        inbox.offer(
+            NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good=index)
+        )
+
+    applicable = inbox.applicable(planned)
+
+    assert len(applicable) == NOGOOD_INBOX_MAX
+    assert inbox.dropped == 3
+    assert applicable[0] == 3, "the three OLDEST were evicted, not the newest"
+
+
+def test_the_one_drain_routes_a_no_good_to_the_inbox_not_to_the_incumbent_fold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The leg polls its queue ONCE per read, and both message kinds ride it.
+
+    A second drain would race the first for the same messages, so the incumbent
+    poll is where a no-good is routed too.  The empty-id no-good is the probe:
+    the inbox drops it on `offer` and counts it, so `dropped_messages` can only
+    be 1 if the drain handed it over instead of discarding it.
+    """
+    layout_of = _hook_layout(monkeypatch)
+    inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    inbox.put(NoGoodMessage("sequence-pair", (), no_good="unusable"))
+    inbox.put(IncumbentMessage("sequence-pair", (470, 90)))
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(_request("freeform"))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    assert layout_of().observed == [(470, 90), (470, 90)]
+    assert outcome.consumed_incumbents == 1, "a no-good is not an incumbent bound"
+    assert outcome.dropped_messages == 1
+    assert outcome.consumed_no_goods == 0
+    assert outcome.published_no_goods == 0
+
+
+def test_a_no_good_no_strip_set_matches_yet_is_held_and_not_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _hook_layout(monkeypatch)
+    inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    inbox.put(
+        NoGoodMessage("sequence-pair", (_instance("iron-ingot", 0, 4),), no_good="a")
+    )
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(_request("freeform"))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    assert outcome.status == "completed"
+    assert outcome.dropped_messages == 0, "held, because a later replan may match it"
+    assert outcome.consumed_no_goods == 0
+
+
+def test_a_leg_adds_up_the_queue_drops_and_the_inbox_drops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`dropped_messages` is both halves: what the queue refused and what the inbox did."""
+    from flab2bp.layout import validate
+
+    monkeypatch.setattr(
+        validate, "validate", lambda *_a, **_kw: validate.Report(findings=())
+    )
+    _hook_layout(
+        monkeypatch,
+        publish=(_stub_placement(belt_tiles=1), _stub_placement(belt_tiles=2)),
+    )
+    inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    outbox: queue.Queue[object] = queue.Queue(maxsize=1)
+    inbox.put(NoGoodMessage("sequence-pair", (), no_good="unusable"))
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(_request("freeform"))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    assert outbox.qsize() == 1, "the second incumbent found a full queue"
+    assert outcome.dropped_messages == 2, "one queue drop plus one unusable no-good"
+
+
+def test_a_refused_leg_still_reports_its_message_counters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _hook_layout(monkeypatch, refuse=True)
+    inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    inbox.put(NoGoodMessage("sequence-pair", (), no_good="unusable"))
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(_request("freeform"))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    assert outcome.status == "refused"
+    assert outcome.dropped_messages == 1, "a refusal reports the same message counters"
+    assert outcome.published_no_goods == 0
+    assert outcome.consumed_no_goods == 0
+
+
+def test_a_leg_with_sharing_off_is_delivered_no_no_goods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout_of = _hook_layout(monkeypatch)
+    inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    inbox.put(NoGoodMessage("sequence-pair", (), no_good="unusable"))
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(replace(_request("freeform"), share=False))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    assert layout_of().observed == [None, None]
+    assert inbox.qsize() == 1, "sharing off must not even poll the queue"
+    assert outcome.dropped_messages == 0
+    assert outcome.published_no_goods == 0
+    assert outcome.consumed_no_goods == 0
