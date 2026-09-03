@@ -375,19 +375,24 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
 
     channels = _channels_for(request.strategy) if request.share else None
 
-    seen_keys: list[tuple[int, int]] = []
+    #: The best key any drained message has carried, kept as a RUNNING minimum:
+    #: the queue is drained once and the answer is asked for many times, so the
+    #: fold has to survive the drain -- and a list of every key ever seen would
+    #: grow for the whole life of the child to hold one number.
+    best_external: tuple[int, int] | None = None
     published = 0
     consumed = 0
 
     def portfolio_incumbent() -> tuple[int, int] | None:
-        nonlocal consumed
+        nonlocal consumed, best_external
         if channels is None:
             return None
         for message in channels.drain():
             if isinstance(message, IncumbentMessage):
                 consumed += 1
-                seen_keys.append(message.exact_key)
-        return min(seen_keys) if seen_keys else None
+                if best_external is None or message.exact_key < best_external:
+                    best_external = message.exact_key
+        return best_external
 
     def publish(placement: Placement) -> None:
         nonlocal published
@@ -408,7 +413,11 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         )
         if not report.ok:
             return
-        belt_tiles = int(placement.stats.get("belt_tiles", 0))
+        # Subscript and not `.get(..., 0)`: both producers guarantee the stat on
+        # a certified placement, and a silent zero would publish an
+        # OVER-OPTIMISTIC key -- the other arm would prune against a belt count
+        # nothing achieved.  A missing stat is a defect and reads as one.
+        belt_tiles = int(placement.stats["belt_tiles"])
         channels.publish_incumbent(
             IncumbentMessage(request.strategy, (placement.area, belt_tiles))
         )

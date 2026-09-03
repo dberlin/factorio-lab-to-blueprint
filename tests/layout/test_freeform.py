@@ -20102,12 +20102,20 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
     the three improvement sites, so a runtime spy cannot tell a correct sweep
     from one that rebound `soft`.  The static form can, and it is exactly the
     `git diff | grep` check the design asks a reader to perform by hand.
+
+    Counts alone are not enough: swapping one improvement read for one finding
+    read, or deleting the `best is not None` term from an improvement guard,
+    leaves every count where it was.  So each site is also pinned BY POSITION --
+    `_room_for_another`'s calls keyed on the candidate cost they charge -- and
+    every `improvement_soft` read is required to sit under a `best is not None`
+    guard, directly or through the pre-break the arrangement arm relies on.
     """
     import ast
     import inspect
     import textwrap
 
     tree = ast.parse(textwrap.dedent(inspect.getsource(freeform.FreeformLayout._sweep)))
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
 
     def counted(name: str, node: ast.AST) -> tuple[int, int]:
         loads = sum(
@@ -20122,6 +20130,43 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
         )
         return loads, stores
 
+    def loads_of(name: str, node: ast.AST) -> list[ast.Name]:
+        return [
+            sub
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load)
+        ]
+
+    def enclosing_if(node: ast.AST) -> ast.If:
+        current = node
+        while not isinstance(current, ast.If):
+            current = parents[current]
+        return current
+
+    def tests_best_is_not_none(node: ast.AST) -> bool:
+        return any(
+            isinstance(sub, ast.Compare)
+            and isinstance(sub.left, ast.Name)
+            and sub.left.id == "best"
+            and len(sub.ops) == 1
+            and isinstance(sub.ops[0], ast.IsNot)
+            and isinstance(sub.comparators[0], ast.Constant)
+            and sub.comparators[0].value is None
+            for sub in ast.walk(node)
+        )
+
+    def tests_best_is_none(node: ast.AST) -> bool:
+        return any(
+            isinstance(sub, ast.Compare)
+            and isinstance(sub.left, ast.Name)
+            and sub.left.id == "best"
+            and len(sub.ops) == 1
+            and isinstance(sub.ops[0], ast.Is)
+            and isinstance(sub.comparators[0], ast.Constant)
+            and sub.comparators[0].value is None
+            for sub in ast.walk(node)
+        )
+
     soft_loads, soft_stores = counted("soft", tree)
     improvement_loads, improvement_stores = counted("improvement_soft", tree)
     assert soft_stores == 1, "the sweep's own soft is bound once and never rebound"
@@ -20134,6 +20179,70 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
     # promotion, and the window launch's two), plus the argument handed to
     # `_portfolio_soft_deadline`.
     assert soft_loads == 5
+
+    # EVERY improvement read sits under a `best is not None` guard.  Three carry
+    # the term in their own `if`; the arrangement arm carries it as the
+    # `arrangement and best is None: break` that immediately precedes it, which
+    # is why that site is reachable only with a `best` in hand.
+    unguarded: list[ast.If] = []
+    for load in loads_of("improvement_soft", tree):
+        guard = enclosing_if(load)
+        if tests_best_is_not_none(guard.test):
+            continue
+        body = parents[guard]
+        siblings = getattr(body, "body", None)
+        preceding = (
+            siblings[siblings.index(guard) - 1]
+            if isinstance(siblings, list) and siblings.index(guard) > 0
+            else None
+        )
+        if (
+            isinstance(preceding, ast.If)
+            and tests_best_is_none(preceding.test)
+            and all(isinstance(statement, ast.Break) for statement in preceding.body)
+        ):
+            continue
+        unguarded.append(guard)
+    assert not unguarded, (
+        "an improvement site lost its `best is not None` guard, so an external "
+        "incumbent can now end a sweep that has found nothing"
+    )
+
+    # BY POSITION.  `_room_for_another`'s third argument names what the call
+    # charges, and that is what says which clock it belongs to: `turn_cost` is
+    # this turn's improvement, `retry_cost` the learned-retry promotion,
+    # `window_cost` the window launch.
+    charged: dict[str, set[str]] = {}
+    for call in ast.walk(tree):
+        if (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "_room_for_another"
+        ):
+            charge = call.args[2]
+            key = charge.id if isinstance(charge, ast.Name) else "measured-candidate"
+            clock = call.args[1]
+            assert isinstance(clock, ast.Name)
+            charged.setdefault(key, set()).add(clock.id)
+    assert charged == {
+        "turn_cost": {"improvement_soft"},
+        "retry_cost": {"soft"},
+        "window_cost": {"soft"},
+        # `projection_retry_affordable`'s own `max(dearest_candidate_s, ...)`.
+        "measured-candidate": {"soft"},
+    }
+
+    # The bandit's remaining-fraction bucket is not a deadline at all, and it is
+    # inside the window launch, so it reads the sweep's own clock too.
+    bucket = next(
+        call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "remaining_fraction_bucket"
+    )
+    assert [name.id for name in loads_of("soft", bucket)] == ["soft"]
+    assert not loads_of("improvement_soft", bucket)
 
     affordable = next(
         node
@@ -20187,6 +20296,9 @@ def test_a_portfolio_bound_never_costs_the_placement(
 
     assert placement.area > 0, "an external bound must never cost the placement"
     assert calls, "the improvement deadline must be computed at least once"
+    assert len(calls) > 1, (
+        "the improvement deadline is recomputed each turn, not sampled once"
+    )
     assert all(result <= soft for soft, result in calls), "it may only ever shorten"
     assert any(result < soft for soft, result in calls), (
         "a bound better than anything this sweep holds must actually pull the "

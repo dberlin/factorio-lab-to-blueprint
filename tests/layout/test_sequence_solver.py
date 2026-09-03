@@ -9301,3 +9301,35 @@ def test_the_solver_publishes_every_exact_incumbent_it_records() -> None:
     assert published[-1] is result.placement
     keys = [sequence_solver_module._exact_key(placement) for placement in published]
     assert keys == sorted(keys, reverse=True), "each published incumbent must improve"
+
+
+def test_a_bound_that_took_nothing_away_does_not_get_the_blame() -> None:
+    """A pruned height that had no stage budget left did not end this search.
+
+    `any(pruned)` would label a genuine stage exhaustion "portfolio-bound"
+    whenever one unrelated height happened to be pruned, and a refusal that
+    names the wrong cause sends the next reader to the wrong half of the
+    program.  Here the bound arrives only once EVERY height has used up its
+    stage budget, so it took nothing away and the exhaustion keeps its name.
+    """
+    solver = _two_height_solver(_FakeRouting(), area_lower_bounds=(400, 900))
+
+    def portfolio_area() -> int | None:
+        exhausted = all(
+            all(run.stages >= solver.config.stages for run in height.restarts)
+            for height in solver._heights
+        )
+        # 500 prunes the 900 height and keeps the 400 one, so `any(pruned)` is
+        # true and `with_stage_budget` is empty: exactly the disagreement.
+        return 500 if exhausted else None
+
+    solver.portfolio_area = portfolio_area
+
+    # A stage cap high enough that the schedule runs out of stages rather than
+    # out of the cap: the default limit binds first and never reaches the
+    # branch under test.
+    with pytest.raises(NoValidLayout) as refusal:
+        solver.search(max_stages=1_000)
+
+    assert "portfolio incumbent" not in str(refusal.value)
+    assert "all scheduled candidates were exhausted" in str(refusal.value)
