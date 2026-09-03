@@ -8624,3 +8624,41 @@ def test_lay_out_production_branch_asks_the_solver_to_continue(
 
     assert captured["max_stages"] == 2
     assert captured["feasibility_continuation"] is True
+
+
+def test_variant_direct_eligibility_returns_nothing_once_cancelled() -> None:
+    spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
+    enumerate_eligibility = sequence_solver_module._variant_direct_eligibility
+
+    full = enumerate_eligibility(spec, strips, problem, band_policy=policy)
+    never = enumerate_eligibility(
+        spec, strips, problem, band_policy=policy, cancelled=lambda: False
+    )
+    immediately = enumerate_eligibility(
+        spec, strips, problem, band_policy=policy, cancelled=lambda: True
+    )
+
+    assert full, "the fixture must produce at least one eligible target"
+    assert never == full, "an un-fired cancel must not change the result"
+    # The empty tuple is what the budget guard at the call site already
+    # produces; a PARTIAL tuple would bias the seed by whichever candidates
+    # happened to be enumerated before the clock ran out.
+    assert immediately == ()
+
+
+def test_variant_direct_eligibility_polls_its_cancel_more_than_once() -> None:
+    spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
+    polls = 0
+
+    def counting() -> bool:
+        nonlocal polls
+        polls += 1
+        return False
+
+    sequence_solver_module._variant_direct_eligibility(
+        spec, strips, problem, band_policy=policy, cancelled=counting
+    )
+
+    assert polls >= 2, "one poll before the loop is the bug this test exists to catch"
