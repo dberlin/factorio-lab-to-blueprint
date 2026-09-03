@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Start from master after Phase C of the reliability program lands** (branch `phase-c-alns`), or rebase onto it before Task 5's gate. Phase C edits `freeform.py` extensively (`FreeformLayout.lay_out`, `_sweep`, `_pack`) and `sequence_solver.py`; this plan's hunks in those files are small and elsewhere (`plan_strips`, `_box`, `Strip`), so the rebase is expected to be clean, but the gate must be measured against a baseline that includes Phase C. Create the worktree from that master and generate the A baseline there.
+- **Base: master `60ab5f8`** (2026-09-03; Phases B, C and D of the reliability program, the belt-and-sorter-tier work and the rates commit `98dfa5d` are all merged). Phase C and D edited `freeform.py` extensively (`FreeformLayout.lay_out`, `_sweep`, `_pack`) and `sequence_solver.py`; this plan's hunks in those files are small and elsewhere (`plan_strips`, `_box`, `Strip`). Every gate baseline is generated fresh at this base. Phase E (`docs/superpowers/specs/2026-09-03-phase-e-universe-matrix-closure-design.md`) runs concurrently in another worktree and edits `strip_variants._logical_strip_plans` (the `input_items` order and `_seat_inputs`), `NoValidLayout` (an additive `stats` keyword) and `audit.Result` (an additive `stats` field); Task 8's hunks in `_logical_strip_plans` are the one likely merge conflict and are merged by hand, never blind.
 - **The cap has two seams** (§4.1): `partition_strip_variant` and `sequence_pair.merge_strip_instances` (the stage-boundary merge that sums two instances' machine counts after partitioning). Task 2 covers both.
 - **Deliverables are gates, not milestones.** A ships alone if B's game facts cannot be pinned (Task 6 says how to stop). C does not start until Task 11's fixture exists. Each deliverable's last task runs the three-round corpus audit against the previous deliverable's rounds.
 - **The partition cap lives in `partition_strip_variant`** (§4.1). The sequence solver reaches it through `partition_strip_family` (`sequence_solver.py::_variant_search_inputs`), freeform through `plan_strips`; a cap in either caller misses the other.
@@ -20,7 +20,7 @@
 - **No behaviour change for a URL with `ist=1`** beyond A's cap, and A's cap binds only where a lane would already have been refused (§4.3). The gate's `--regressions-only` compare is the proof; a `CLEAN -> REFUSED` flip is a defect, not noise.
 - **The validator judges, the planner plans.** Every planned stack is re-derived by `Context.stack_of` from the built placement (§5.5). Nothing reads a `LogicalLane.stack` inside `validate.py`.
 - **Stacks are the minimum over a run's contributors** (§5.5). No `flow.stack_mixed` error; mixing is judged conservatively, not refused.
-- Every `file:line` below was read at master `54614e8` and is a hint only. Resolve each target by symbol name with Serena `find_symbol` before editing, and enumerate call sites with Serena `find_referencing_symbols`, never with grep alone; grep only for strings, data files, and the QUOTED name of any function whose signature you change (string-named `monkeypatch.setattr` sites are invisible to Serena and LSP).
+- Every `file:line` below was read at master `54614e8` and is a hint only; re-validated at `60ab5f8` on 2026-09-03: exact in `validate.py`, `spec.py`, `strip_variants.py`, `url.py`, `solve.py`, `catalog.py` (±1); drifted by +21..+361 in `freeform.py`, +475..+500 in `sequence_solver.py`, +330 in `tests/test_pipeline.py`, +693 in `tests/layout/test_freeform.py`. The mypy baseline at `60ab5f8` is 184 errors in 16 files. Resolve each target by symbol name with Serena `find_symbol` before editing, and enumerate call sites with Serena `find_referencing_symbols`, never with grep alone; grep only for strings, data files, and the QUOTED name of any function whose signature you change (string-named `monkeypatch.setattr` sites are invisible to Serena and LSP).
 - **Symbol-tool activation (every implementer and reviewer, first thing):** `ToolSearch("select:mcp__serena__activate_project,mcp__serena__initial_instructions,mcp__serena__find_symbol,mcp__serena__find_referencing_symbols,mcp__serena__get_symbols_overview,LSP")`, then `mcp__serena__activate_project` with the absolute path of the worktree being edited, then `mcp__serena__initial_instructions`. If Serena errors, use the `LSP` tool; if both fail, stop and report NEEDS_CONTEXT; never grep for symbols.
 - `PlacementStats` (`src/flab2bp/layout/base.py:198`) is a `TypedDict(total=False)` with alphabetically ordered keys; the task that first writes a stat declares it and lists `base.py` in its Files.
 - Magic-constant lint R1 (`tests/rules/test_rule_registry.py`) applies to new numeric literals under `src/`; name constants at module level with a comment; add a `LintException` in `src/flab2bp/dsp/registry.py` only for a genuine coincidence.
@@ -66,7 +66,7 @@ def _rated_spec(rate: Fraction, *, count: int = 8, capacity: Fraction = Fraction
         groups=(
             MachineGroup(
                 recipe_id="deuterium",
-                machine_item_id="particle-collider",
+                machine_item_id="miniature-particle-collider",
                 count=count,
                 inputs_per_machine={"hydrogen": rate},
                 outputs_per_machine={"deuterium": Fraction(1, 2)},
@@ -105,7 +105,7 @@ def test_a_single_machine_over_the_ceiling_is_refused_early_with_the_rate() -> N
         generate_strip_families(_rated_spec(Fraction(31)))
 ```
 
-`particle-collider` must be a catalog machine id that `_adapt` accepts; if the module's helpers use another machine for a two-input recipe, use that one and keep the rates. Add `MachineGroup` to the module's `from flab2bp.spec import ...` line (`:44`) if it is not already there, or build the group through the module's `_group` helper. Import `NoValidLayout` from `flab2bp.layout.base`; its constructor is `NoValidLayout(reason, *, spec_label, budget_s, attempt_reasons, attempt_failures, projection_failures)` (`base.py:440-451`), and it prepends its own preamble to `reason`, so the regex above matches the numbers in the order the message emits them.
+`miniature-particle-collider` is the catalog id (`particle-collider` is not one; re-validated 2026-09-03). Add `MachineGroup` to the module's `from flab2bp.spec import ...` line (`:44`) if it is not already there, or build the group through the module's `_group` helper. Import `NoValidLayout` from `flab2bp.layout.base`; its constructor is `NoValidLayout(reason, *, spec_label, budget_s, attempt_reasons, attempt_failures, projection_failures)` (`base.py:440-451`), and it prepends its own preamble to `reason`, so the regex above matches the numbers in the order the message emits them.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -193,7 +193,7 @@ git commit -m "feat(layout): cap machines per strip by the effective lane capaci
 
 **Files:**
 - Modify: `src/flab2bp/layout/strip_variants.py` — `partition_strip_variant` (`:1589`)
-- Modify: `src/flab2bp/layout/strip_variants.py` — `merge_strip_instances` (`:1712-1737`, exported at `:1783`; called lazily from `sequence_pair.merge_stage_boundary` at `sequence_pair.py:1712`)
+- Modify: `src/flab2bp/layout/strip_variants.py` — `merge_strip_instances` (`:1712-1737`, exported at `:1783`; called lazily from `sequence_pair.merge_stage_boundary` at `sequence_pair.py:1869`)
 - Modify: `src/flab2bp/layout/freeform.py` — the no-variant fallback in `plan_strips` (`:2157-2160`)
 - Test: `tests/layout/test_strip_variants.py`, `tests/layout/test_sequence_pair.py`, `tests/layout/test_freeform.py`, `tests/layout/test_sequence_solver.py`
 
@@ -305,7 +305,8 @@ git commit -m "feat(layout): bound every strip partition by the family machine c
 - Modify: `src/flab2bp/layout/validate.py` — `_external_entry_points` (`:4237`)
 - Modify: `src/flab2bp/cli.py` — after the `belts:` line (`:94-115`)
 - Modify: `src/flab2bp/web/payload.py` — `_belt_tiers` (`:76`)
-- Test: `tests/layout/test_validate.py`, `tests/test_cli.py` (or wherever the `belts:` line is pinned; find with grep for the string `"belts: "`), `tests/web/test_payload.py` (find the `_belt_tiers` test with Serena)
+- Test: `tests/layout/test_validate.py`, `tests/web/test_payload.py` (find the `_belt_tiers` test with Serena)
+- Create: `tests/test_cli.py` — there is no CLI test module today and nothing pins the `belts:` report block (`tests/test_pipeline_cli_strategy.py` covers strategy selection only); this task creates the module with the `entry lanes:` test in the style of the strategy tests' fake-build fixtures
 
 **Interfaces:**
 - Consumes: `_entry_runs(ctx)` (`validate.py:4084`), `ctx.spec.external_inputs`, `ctx.spec.lane_capacity`, `ctx.spec.planning_stack`.
@@ -377,7 +378,7 @@ In `_external_entry_points`, before the loop, compute the per-item need; inside,
         )
 ```
 
-(`-(-a // b)` is ceiling division on `Fraction`s; keep it exact, no float.) In `cli.py`, after the `belts:` block, iterate `build.report.by_check("flow.external_entry_points")` and print one `  entry lanes: {item} {entry_lanes} (needs {lanes_needed} at {capacity}/s)` line per finding. In `payload.py::_belt_tiers`, add `"entry_lanes": _array(sorted({...} per finding))` from the same findings (the function has the placement; if it lacks the report, take the report as a parameter and update its one caller, found with Serena).
+(`-(-a // b)` is ceiling division on `Fraction`s; keep it exact, no float.) In `cli.py`, after the `belts:` block, iterate `build.report.by_check("flow.external_entry_points")` and print one `  entry lanes: {item} {entry_lanes} (needs {lanes_needed} at {capacity}/s)` line per finding. In `payload.py::_belt_tiers`, add `"entry_lanes": _array(sorted({...} per finding))` from the same findings (the function has the placement; take the report as a parameter and update its two callers: `payload.py:111` inside the per-attempt block, where `attempt.report` is in scope, and `payload.py:202`, where `build.report` is in scope).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -424,19 +425,24 @@ def test_without_planetary_logistics_hydrogen_arrives_on_four_lanes(
     build = pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=45.0,
                            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
     assert build.report.ok
-    (finding,) = build.report.by_check("flow.external_entry_points")
-    assert finding.detail["item"] == "hydrogen"
+    findings = build.report.by_check("flow.external_entry_points")
+    # super-magnetic-ring is also belted in on two lanes (two assembler strips,
+    # each wanting its own feed); only hydrogen is this test's subject.
+    (finding,) = [f for f in findings if f.detail["item"] == "hydrogen"]
     assert finding.detail["entry_lanes"] == finding.detail["lanes_needed"] == 4
 
 
-@pytest.mark.slow
 def test_at_mk3_hydrogen_above_the_ceiling_arrives_on_two_lanes() -> None:
-    """Same budget reasoning as above."""
-    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=45.0,
+    """Mk.III already fits 40/s hydrogen on two lanes through the ordinary
+    ``strip_len`` heuristic (10 colliders split 5 + 5, 20/s each, and the cap
+    of 7 is inert); this pins that the new ``lanes_needed`` detail agrees with
+    the lanes actually built.  Fast (about 2 s at the default budget): not
+    slow, no budget bump."""
+    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair",
                            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
     assert build.report.ok
-    (finding,) = build.report.by_check("flow.external_entry_points")
-    assert finding.detail["item"] == "hydrogen"
+    findings = build.report.by_check("flow.external_entry_points")
+    (finding,) = [f for f in findings if f.detail["item"] == "hydrogen"]
     assert finding.detail["entry_lanes"] == finding.detail["lanes_needed"] == 2
 ```
 
@@ -445,7 +451,7 @@ Extend `_with_belt` with an optional `researched` keyword that also patches `res
 - [ ] **Step 2: Run them**
 
 Run: `uv run pytest tests/test_pipeline.py -q -k "four_lanes or two_lanes"`
-Expected: PASS twice. If a build refuses, the refusal message is the finding to report; do not lower the assertions.
+Expected: PASS twice. If the Mk.II build refuses, read the refusal's check list. `flow.belt_capacity` means the cap did not bind: report the strip counts. `flow.sorter_capacity` means the cap cannot help: hydrogen at 4/s per collider needs a span-1 `sorter-3` (6/s; span 2 is only 3/s) and the Pile Sorter is not allowed in this scenario (today's Mk.II refusal at `60ab5f8` names both checks, measured 2026-09-03). That is a sorter-seating problem, not a belt problem: record it in the report with the placement's sorter spans and stop with DONE_WITH_CONCERNS; do not lower the assertions.
 
 - [ ] **Step 3: Single-cell measurement**
 
@@ -467,26 +473,30 @@ git commit -m "test(pipeline): a flow above the ceiling arrives on several lanes
 ### Task 5: Corpus gate for Deliverable A
 
 **Files:**
-- Create: `docs/superpowers/evidence/<date>-multiple-belts/baseline-budget30-round{1,2,3}.jsonl` (generated at the worktree's base commit in a detached checkout, or reused from the newest master baseline if its commit equals the base)
+- Create: `docs/superpowers/evidence/<date>-multiple-belts/baseline-budget30-round{1,2,3}.jsonl` — generated fresh from a `git archive 60ab5f8` extraction (copy the two compiled kernels `src/flab2bp/layout/_*.so` into it; give it a minimal `.git` holding a detached `HEAD` file with the full SHA so `_head_commit` stamps rows; run the archive's own `scripts/audit.py` with the worktree's `.venv/bin/python`, exactly as `docs/superpowers/evidence/2026-09-02-phase-d-portfolio/gate-d1.md` describes). No committed baseline is reusable: every earlier evidence directory pre-dates this base.
 - Create: `docs/superpowers/evidence/<date>-multiple-belts/candidate-budget30-round{1,2,3}.jsonl`, `compare-round{1,2,3}.txt`, `gate.md`
 
 - [ ] **Step 1: Baseline and candidate rounds**
 
 ```bash
 d=docs/superpowers/evidence/$(date +%F)-multiple-belts; mkdir -p $d
+# $ARCHIVE is the git-archive extraction of 60ab5f8 described under Files; the candidate is a
+# git-archive extraction of this task's HEAD prepared the same way, so no in-flight edit leaks in.
 for r in 1 2 3; do
   uptime | tee -a $d/load.txt; vmstat 1 3 | tail -3 >> $d/load.txt
-  uv run python scripts/audit.py --budget 30 --jobs 16 --json $d/candidate-budget30-round$r.jsonl | tail -5
+  .venv/bin/python $ARCHIVE/scripts/audit.py --budget 30 --jobs 16 --json $d/baseline-budget30-round$r.jsonl | tail -5
+  uptime | tee -a $d/load.txt; vmstat 1 3 | tail -3 >> $d/load.txt
+  .venv/bin/python $CANDIDATE/scripts/audit.py --budget 30 --jobs 16 --json $d/candidate-budget30-round$r.jsonl | tail -5
 done
 for r in 1 2 3; do
-  uv run python scripts/audit_compare.py $d/baseline-budget30-round1.jsonl $d/candidate-budget30-round$r.jsonl \
+  uv run python scripts/audit_compare.py $d/baseline-budget30-round$r.jsonl $d/candidate-budget30-round$r.jsonl \
     --expect-cells 72 --p95-seconds 31 --regressions-only | tee $d/compare-round$r.txt
 done
 ```
 
 - [ ] **Step 2: Write `gate.md`**
 
-Verdict (PASS iff no `REGRESSION:` and no INVALID/CRASH in any round and p95 within threshold), the per-round CLEAN/72, the list of cells whose strip count changed (diff `detail` strings or the audit's `strips` field if present), area ratios on unchanged cells, the load snapshots, and a **coarsening count**: the cells where `_coarsen_saturated_strip_plan` used to collapse a plan over `_COARSE_STRIP_THRESHOLD` strips and now cannot because the cap binds (instrument with a one-off log line during the run, or compare strip counts against the baseline's), per spec §10. A must not cost a clean cell; more clean cells are the expected direction.
+Verdict (PASS iff no `REGRESSION:` and no INVALID/CRASH in any round and p95 within threshold), the per-round CLEAN/72, the list of cells whose strip count changed (diff `detail` strings or the audit's `strips` field if present), area ratios on unchanged cells, the load snapshots, and a **coarsening count**: the cells where `_coarsen_saturated_strip_plan` (`freeform.py:2323`) used to collapse a plan over `_COARSE_STRIP_THRESHOLD` (`freeform.py:2320`) strips and now cannot because the cap binds (instrument with a one-off log line during the run, or compare strip counts against the baseline's), per spec §10. A must not cost a clean cell; more clean cells are the expected direction.
 
 - [ ] **Step 3: Full verification and commit**
 
@@ -676,7 +686,7 @@ def _stacked(
     piler: bool = False,
 ) -> BuildSpec:
     return BuildSpec(
-        groups=(MachineGroup(recipe_id="deuterium", machine_item_id="particle-collider", count=1,
+        groups=(MachineGroup(recipe_id="deuterium", machine_item_id="miniature-particle-collider", count=1,
                              inputs_per_machine={"hydrogen": Fraction(4)},
                              outputs_per_machine={"deuterium": Fraction(1, 2)}),),
         external_inputs={"hydrogen": Fraction(4)}, outputs={"deuterium": Fraction(1, 2)},
@@ -708,7 +718,20 @@ def test_a_produced_item_is_planned_at_the_place_stack_or_the_piler_maximum() ->
     assert _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 1), pick=(4, 4, 4, 4)).planning_stack("deuterium") == 4
     with pytest.raises(NoValidLayout, match=r"stack 4.*pick"):
         _stacked(belt_stack=2, place=(4, 4, 4, 4), pick=(2, 2, 2, 2)).planning_stack("deuterium")
+
+
+def test_an_item_fed_from_the_bus_and_from_inside_is_planned_at_the_smaller_stack() -> None:
+    spec = _stacked(belt_stack=4, place=(2, 2, 2, 2), pick=(4, 4, 4, 4))
+    both_fed = spec.model_copy(update={"groups": (*spec.groups, MachineGroup(
+        recipe_id="hydrogen-cracking", machine_item_id="oil-refinery", count=1,
+        inputs_per_machine={"refined-oil": Fraction(1)},
+        outputs_per_machine={"hydrogen": Fraction(3)},
+    ))})
+    assert both_fed.planning_stack("hydrogen") == 2
+    assert spec.planning_stack("hydrogen") == 4
 ```
+
+(`BuildSpec` is a pydantic model; if the module builds specs through a helper rather than `model_copy`, use that helper. `oil-refinery` must be a catalog machine id; if `_adapt` rejects the recipe, any two-group spec where one group's `outputs_per_machine` names the external item works.)
 
 (`pick`/`place` index the four default sorter tiers; the last entry is the Pile Sorter.) `planning_stack` raising `NoValidLayout` from a spec method is deliberate: it is the plan-time refusal §5.3 requires, and `generate_strip_families` is its first caller.
 
@@ -740,6 +763,12 @@ Expected: FAIL — `planning_stack` returns 1 everywhere; `LogicalLane` has no `
         pick = self.sorter_pick_stacks[-1]
         if is_external:
             stack = self.belt_stack
+            if any(item in group.outputs_per_machine for group in self.groups):
+                # Fed from the bus AND from an internal producer (universe-matrix's
+                # hydrogen is the corpus case): the lane also carries what the
+                # producer's sorter places, and a merge is judged at its minimum
+                # (design 5.5), so plan it at the smaller of the two stacks.
+                stack = min(stack, self.sorter_place_stacks[-1])
         else:
             stack = self.sorter_place_stacks[-1]
             if self.piler_unlocked:
@@ -886,7 +915,7 @@ git commit -m "feat(validate): judge belt and sorter capacity at the cargo stack
 - Modify: `src/flab2bp/cli.py`, `src/flab2bp/web/payload.py` — the `belts:` line and payload gain `stack N (URL ist=N)`
 - Modify: `tests/test_pipeline.py` — the `ist=2` end-to-end test
 - Create: `docs/superpowers/evidence/<date>-stacked-lanes/...`
-- Test: `tests/layout/test_belt_tiers.py`, `tests/test_cli.py`, `tests/web`
+- Test: `tests/layout/test_belt_tiers.py`, `tests/test_cli.py` (created by Task 3), `tests/web`
 
 **Interfaces:**
 - Produces: `belt_run_demands(placement, spec) -> tuple[tuple[BeltRun, ...], dict[int, dict[str | None, Fraction]], dict[int, int]]` (update its callers, found with Serena; the retier pass is the only production one).
@@ -906,7 +935,9 @@ def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch: pytest.MonkeyP
                            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
     assert build.report.ok
     assert build.spec.belt_stack == 2
-    assert not build.report.by_check("flow.external_entry_points")
+    hydrogen = [f for f in build.report.by_check("flow.external_entry_points")
+                if f.detail["item"] == "hydrogen"]
+    assert not hydrogen  # super-magnetic-ring's two lanes are unrelated to stacking
 ```
 
 `_with_belt` gains a `stack` keyword that patches `LabRequest.stack`.
@@ -935,7 +966,7 @@ git commit -m "feat(layout): retier and report belt runs at their cargo stack"
 
 **Files:**
 - Create: `tests/fixtures/<name>-piler.txt` (a player-built blueprint with one Automatic Piler between two belts, obtained from the game)
-- Modify: `src/flab2bp/dsp/params.py` — `piler(stack: int) -> tuple[int, ...]` beside `energy_exchanger` (`:87`)
+- Modify: `src/flab2bp/dsp/params.py` — `piler(stack: int) -> tuple[int, ...]` beside `energy_exchanger` (`:87`), and its inverse `piler_stack(parameters: tuple[int, ...]) -> int` (Task 14's `stack_of` reads a placed piler's stack through it; pinned against the fixture's parameters)
 - Modify: `src/flab2bp/layout/junction.py` — `make_piler` after `make_splitter` (`:157`)
 - Modify: `src/flab2bp/dsp/catalog.py` — `PILER_ID = 2040`, `BELT_INTEGRATED_IDS` (`:258`) gains it
 - Test: `tests/dsp/test_roundtrip.py` (parametrised over fixtures, picks the new one up automatically), `tests/dsp/test_params.py`; Create: `tests/layout/test_junction.py` (there is none today; the splitter helpers are tested from `test_freeform.py` and `test_validate.py`)
@@ -1129,7 +1160,7 @@ Hand-built placements with a `piler(x, y, yaw, stack)` helper: `_kind` returns `
 
 - [ ] **Step 2: Implement**
 
-`Kind.PILER`; in `_kind`, `if b.item_id == cat.PILER_ID: return Kind.PILER` before the catalog lookup; `_context`'s two `is Kind.SPLITTER` tests become `in (Kind.SPLITTER, Kind.PILER)`; `_build_graph` treats a piler like a splitter with one in and one out; `stack_of` returns `cat.piler_stack(parameters)` (Task 11's decoder) for a run whose head draws from a piler. Checks mirror `junction.ports` (`:2977`) and `sorter.tier_allowed` (`:5192`) in shape; `piler.input_rate` reads `_run_demand` on the run feeding the piler and compares `demand / stack_of(that run)` against `BELT_RATE` of its slowest tile.
+`Kind.PILER`; in `_kind`, `if b.item_id == cat.PILER_ID: return Kind.PILER` before the catalog lookup; `_context`'s two `is Kind.SPLITTER` tests become `in (Kind.SPLITTER, Kind.PILER)`; `_build_graph` treats a piler like a splitter with one in and one out; `stack_of` returns `params.piler_stack(parameters)` (Task 11's decoder) for a run whose head draws from a piler. Checks mirror `junction.ports` (`:2977`) and `sorter.tier_allowed` (`:5192`) in shape; `piler.input_rate` reads `_run_demand` on the run feeding the piler and compares `demand / stack_of(that run)` against `BELT_RATE` of its slowest tile.
 
 - [ ] **Step 3: Commit**
 
@@ -1173,5 +1204,6 @@ git commit -m "feat(layout): report pilers and gate the piled build"
 - **Spec coverage.** §2 rules -> Tasks 9, 12, 14. §4.1-4.5 -> Tasks 1-4. §4.4 (lane multiplicity) is deliberately not a task: the spec defers it to the gate. §5.1 -> Task 6. §5.2 -> Task 7 (including the `rates/solve.py` Belts objective). §5.3-5.4 -> Task 8. §5.5 -> Task 9. §5.6 -> Task 10. §6.1-6.2 -> Task 12 and 13. §6.3 -> Tasks 11, 13. §6.4 -> Task 14. §6.5 and §7 -> Tasks 10, 15. §8 tests are distributed as listed. §9 sequencing -> the three gates.
 - **Type consistency.** `planning_stack(item, *, external=None)` is introduced in Task 1 with one positional parameter and gains the keyword in Task 8; Task 3's call uses the positional form and Task 9's the keyword form, both valid after Task 8. `belt_run_demands`' three-tuple is introduced in Task 10 and consumed there only. `PilerPlan(lane_id, stack)` and `MergePlan(stack, groups, pilers)` are defined in Task 12 and consumed in Task 13 by name. `LogicalLane` is `order=True`; `stack` is appended as a trailing field so ordering of existing lanes is unchanged.
 - **Placeholders.** Task 6's JSON and Task 11's literals are deliberately marked as shapes to be replaced by dump/fixture values; no code step says "add appropriate handling".
+- **Re-validation at `60ab5f8` (2026-09-03, before execution)** found and this revision fixed: `particle-collider` is not a catalog id (`miniature-particle-collider`); `tests/test_cli.py` does not exist (Task 3 creates it); the deuteron build emits two `flow.external_entry_points` findings (hydrogen and super-magnetic-ring), so Tasks 4 and 10 filter on the item; the Mk.III test already passes today (the cap is inert at Mk.III) and is now the fast pin of `lanes_needed`; today's Mk.II refusal also names `flow.sorter_capacity`, which the belt cap cannot clear (Task 4's stop condition says what to report); gate baselines are generated fresh at the base from a git archive; a both-fed external item is planned at `min(belt_stack, place_stack)` (Task 8); `params.piler_stack` is the decoder Task 14 reads (Task 11). The design premise (hydrogen belted in at 40 items/s; Mk.II refused with `flow.belt_capacity`) was re-measured and holds; both route digests MATCH at the base.
 - **Review round 2 (2026-09-03)** found and this revision fixed: `merge_strip_instances` lives in `strip_variants.py`; the conservation test at `test_strip_variants.py:1343` needs its family uncapped; the three piler/sorter facts are now in Task 6's dump, schema and Produces and `plan_merges` takes `piler_throughput`; `_pick_sorter` floors its tier by the planned stack (Task 8 Step 3b); `LogicalLane`, not `LanePlan`, carries the stack; §8's example count; §3 rule 3's edge; the pessimistic fit test is stated; `MachineGroup` import; typed `monkeypatch`.
 - **Review round 1 (2026-09-03)** found and this revision fixed: the leaf-only merge tree could not express the spec's own example (resolved by single-pass piling to the uniform stack, no trunk pilers); `merge_strip_instances` as a second cap seam; `stack_of` and `planning_stack` gated on `belt_stack > 1`; an unpickable bus is refused, not capped; `cat.item_name` does not exist; `tests/layout/test_junction.py` is created, not modified; the Phase C collision reason; typed test signatures; the refusal regex order; `_family` always caps.
