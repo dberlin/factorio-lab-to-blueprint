@@ -20429,3 +20429,64 @@ def test_an_over_band_seed_is_skipped_and_never_reported_as_wired(
     assert result is None
     assert skipped == [20]
     assert rejected == []
+
+
+def _port_seating_attempt(count: int, *, expansions: int = 0) -> freeform.PackAttempt:
+    """A pack whose router never ran: STATIC_ACCESS only, zero expansions.
+
+    Built from the file's existing `_proof_attempt` factory so the `PackAttempt`
+    invariants and the `_DirectCandidateSnapshot` come from one place.
+    """
+    strips = plan_strips(two_stage_spec())
+    failures = tuple(
+        NetFailure(
+            NetId(0, 1, "hydrogen", NetRole.INTERNAL, index),
+            RouteFailureKind.STATIC_ACCESS,
+            ((1, 10 + index, 0),),
+            (),
+            0,
+        )
+        for index in range(count)
+    )
+    routing = DetailedRouteResult(
+        DetailedRouteStatus.STRANDED, (), failures, 0, expansions
+    )
+    attempt = _proof_attempt(routing, strips)
+    return replace(
+        attempt,
+        stranded_ports=tuple(
+            freeform.StrandedPort(
+                cell=(1, 10 + index, 0),
+                item="hydrogen",
+                strip_label="casimir-crystal#1",
+                held=1,
+                wants=2,
+                options=1,
+            )
+            for index in range(count)
+        ),
+    )
+
+
+def test_a_pack_that_never_routed_is_reported_as_a_port_seating_defect() -> None:
+    """`PACKER defect` is reserved for a pack the router actually ran on.
+
+    R2 §3 measured the old message on `universe-matrix/output-products`: five
+    packs, ZERO A* expansions, every failure a preparation-time STATIC_ACCESS --
+    and a refusal naming the packer, which is exactly what sent that research to
+    the wrong file.
+    """
+    message = freeform._port_seating_refusal([_port_seating_attempt(6)])
+
+    assert message is not None
+    assert "no pack was ever routed" in message
+    assert "6 lane heads" in message
+    assert "PORT-SEATING defect" in message
+    assert "hydrogen" in message and "casimir-crystal#1" in message
+    assert "wants 2" in message and "held 1" in message
+    assert "PACKER defect" not in message
+
+
+def test_a_pack_the_router_ran_on_is_not_reported_as_port_seating() -> None:
+    assert freeform._port_seating_refusal([_port_seating_attempt(1, expansions=1200)]) is None
+    assert freeform._port_seating_refusal([]) is None

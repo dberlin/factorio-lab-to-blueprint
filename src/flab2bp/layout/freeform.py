@@ -7199,6 +7199,7 @@ class _PreparedRoutingProblem:
     junction_ban: frozenset[Cell] = frozenset()
     junction_frame_bans: tuple[frozenset[Cell], ...] = ()
     preparation_failures: tuple[NetFailure, ...] = ()
+    stranded_ports: tuple[StrandedPort, ...] = ()
     external_output_nets: tuple[_PreparedNet, ...] = ()
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
 
@@ -10065,12 +10066,16 @@ def _reserve_port_access(
     *,
     twice: Collection[tuple[int, int, int]] = (),
     failed_ports: set[Cell] | None = None,
+    demands: dict[Cell, tuple[int, int, int]] | None = None,
 ) -> int:
     """Hold a complete two-cell corridor next to every port role.
 
     Returns the number of ports that could not retain any usable access
     corridor. An access cell without its selected onward witness is
     inaccessible, just like a port with no free neighbour.
+
+    ``demands`` collects ``(held, wants, options)`` for every port that came up
+    short, so a caller can say WHY without re-deriving the geometry.
 
     Reservations are per PORT, not per net: several nets can share one lane end
     (a lane feeding two consumers), and they can share its access cell too,
@@ -10195,6 +10200,11 @@ def _reserve_port_access(
     missing = {key for key in order if held[key] < wants[key]}
     if failed_ports is not None:
         failed_ports.update(missing)
+    if demands is not None:
+        demands.update(
+            (key, (held[key], wants[key], len(options.get(key, ()))))
+            for key in missing
+        )
     return len(missing)
 
 
@@ -14185,6 +14195,7 @@ def _prepare_routing_problem(
     # occupied by a building rather than contested by another path.
     #
     unreachable_ports: set[Cell] = set()
+    stranded_ports: list[StrandedPort] = []
 
     # Measured across the trivial+small+mid corpus, before this: every boxed-in
     # port on the refusing candidates had a coater drop or an external belt on
@@ -14204,11 +14215,30 @@ def _prepare_routing_problem(
             if item in spec.external_inputs
         } & net_ports
         unreachable_ports.clear()
+        stranded_ports.clear()
+        demands: dict[Cell, tuple[int, int, int]] = {}
         _reserve_port_access(
             canvas,
             nets,
             twice=shared_feed,
             failed_ports=unreachable_ports,
+            demands=demands,
+        )
+        owner = {
+            (port.x, port.y, port.z): (item, strips[strip_index].sid)
+            for strip_index, ports in enumerate(strip_in_ports)
+            for item, port in ports.items()
+        }
+        stranded_ports.extend(
+            StrandedPort(
+                cell=cell,
+                item=owner.get(cell, ("?", "?"))[0],
+                strip_label=owner.get(cell, ("?", "?"))[1],
+                held=demands[cell][0],
+                wants=demands[cell][1],
+                options=demands[cell][2],
+            )
+            for cell in sorted(unreachable_ports)
         )
 
     if _reserve_ports:
@@ -14710,6 +14740,7 @@ def _prepare_routing_problem(
         junction_ban=junction_ban,
         junction_frame_bans=junction_frame_bans,
         preparation_failures=preparation_failures,
+        stranded_ports=tuple(stranded_ports),
     )
 
 
@@ -14720,6 +14751,30 @@ class _BuildBudgetStage(Enum):
     ROUTING = "routing"
     CERTIFICATION = "certification"
     FINALIZATION = "finalization"
+
+
+@dataclass(frozen=True, slots=True)
+class StrandedPort:
+    """One lane head that could not obtain the belt approaches its feeds need.
+
+    Carried out of preparation so a refusal can name the PORT rather than the
+    nets that happened to end on it.  R2 §7 option 1 asked for exactly this: the
+    old message named the packer, and the reader had to instrument
+    `_reserve_port_access` to learn that `held=1 wants=2 options=1` on a
+    `hydrogen` lane head was the whole story.
+    """
+
+    cell: tuple[int, int, int]
+    item: str
+    strip_label: str
+    #: Corridors the matching actually reserved for this port.
+    held: int
+    #: Corridors it needed: one per role, plus one when the port is in ``twice``.
+    wants: int
+    #: Free 4-neighbours the port had to build a corridor from.  ``1`` is the
+    #: signature of a middle lane head and is not a matching failure -- there is
+    #: nothing to match.
+    options: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -14736,6 +14791,7 @@ class PackAttempt:
     promised_direct: frozenset[DirectInsertId]
     realized_direct: frozenset[DirectInsertId]
     direct_candidates: _DirectCandidateSnapshot
+    stranded_ports: tuple[StrandedPort, ...] = ()
 
     def __post_init__(self) -> None:
         if any(
@@ -14931,6 +14987,7 @@ class _BuildResult:
     towers: tuple[PlacedBuilding, ...]
     promised_direct: frozenset[DirectInsertId] = frozenset()
     realized_direct: frozenset[DirectInsertId] = frozenset()
+    stranded_ports: tuple[StrandedPort, ...] = ()
 
 
 def _build(
@@ -14985,6 +15042,7 @@ def _build(
             ),
             towers=(),
             budget_stage=_BuildBudgetStage.PREPARATION,
+            stranded_ports=prepared.stranded_ports,
         )
     return _build_prepared(
         spec,
@@ -15171,6 +15229,7 @@ def _build_prepared(
             budget_stage=_BuildBudgetStage.ROUTING,
             promised_direct=prepared.promised_direct,
             realized_direct=prepared.realized_direct,
+            stranded_ports=prepared.stranded_ports,
         )
 
     # Reservations and tentative markers are attempt-local and are spent before
@@ -15231,6 +15290,7 @@ def _build_prepared(
         budget_stage=None,
         promised_direct=prepared.promised_direct,
         realized_direct=prepared.realized_direct,
+        stranded_ports=prepared.stranded_ports,
     )
 
 
@@ -16689,6 +16749,49 @@ def _retain_refusal(
         rejected.append(finding)
 
 
+def _port_seating_refusal(attempts: Sequence[PackAttempt]) -> str | None:
+    """The refusal for a sweep whose router never ran, or ``None``.
+
+    Every retained attempt failed at PREPARATION with static access only and
+    expanded zero A* nodes: `_build` substitutes a synthetic STRANDED result and
+    skips routing entirely when `prepared.preparation_failures` is non-empty, so
+    "the packer produced packs its own router cannot wire" is false twice over --
+    nothing was routed and the packer is blameless.  Measured on all three
+    freeform `universe-matrix` cells at `e0bf432` (R2 §3, R4 §1).
+    """
+    if not attempts:
+        return None
+    for attempt in attempts:
+        if attempt.routing.expansions:
+            return None
+        if not attempt.routing.failures:
+            return None
+        if any(
+            failure.kind is not RouteFailureKind.STATIC_ACCESS
+            for failure in attempt.routing.failures
+        ):
+            return None
+    ports = {port.cell: port for attempt in attempts for port in attempt.stranded_ports}
+    if not ports:
+        return None
+    named = ", ".join(
+        f"{port.item} into {port.strip_label} at {port.cell} "
+        f"(wants {port.wants}, held {port.held}, {port.options} free side(s))"
+        for port in sorted(ports.values(), key=lambda port: port.cell)[:3]
+    )
+    counts = {len(attempt.stranded_ports) for attempt in attempts}
+    same = (
+        f"every candidate height produced the same {next(iter(counts))} failures"
+        if len(counts) == 1
+        else "the failure count varied by candidate height"
+    )
+    return (
+        f"no pack was ever routed: {len(ports)} lane heads could not obtain the "
+        f"belt approaches they need ({named}); this is a PORT-SEATING defect "
+        f"independent of the packing -- {same}"
+    )
+
+
 def _refusal_summary(rejected: Sequence[_RefusalFinding]) -> str:
     """List concise checks first, then the structured records that explain them."""
     checks: list[str] = []
@@ -17132,6 +17235,13 @@ class FreeformLayout:
                     "; earlier completed packs were also rejected by our own "
                     f"validator ({_refusal_summary(rejected)})"
                 )
+            # A sweep whose router never ran has a mechanism, and the deadline is
+            # not it.  When every retained attempt is a preparation-time static
+            # access with zero expansions, say so instead of counting packs that
+            # were never routed.
+            seating = _port_seating_refusal(attempts)
+            if seating is not None:
+                note = seating
             note += over_band
             raise NoValidLayout(
                 f"the {ceiling:g}s deadline passed with no completed packing of "
@@ -17141,12 +17251,25 @@ class FreeformLayout:
                 budget_s=ceiling,
                 projection_failures=projection_failures,
             )
-        raise NoValidLayout(
+        # "every pack the sweep produced left nets unrouted" is false when no
+        # pack was ever produced -- every candidate height's greedy seed can be
+        # skipped as over-band before `_pack` runs (see `skipped_heights`
+        # above), and that leaves `attempts` empty with nothing to blame the
+        # packer for.
+        base = (
             f"no packing of {len(strips)} strips could be wired at any candidate "
             "height; every pack the sweep produced left nets unrouted. That is a "
             "PACKER defect -- it is producing packs its own router cannot wire -- "
             "and it is reported rather than papered over with a looser packing"
-            + over_band,
+            if attempts
+            else (
+                f"no packing of {len(strips)} strips was ever attempted at any "
+                "candidate height; every candidate's greedy seed was skipped before "
+                "a pack could be produced"
+            )
+        )
+        raise NoValidLayout(
+            (_port_seating_refusal(attempts) or base) + over_band,
             spec_label=spec.label,
             budget_s=budgets[-1],
         )
@@ -18193,6 +18316,7 @@ class FreeformLayout:
                         promised_direct=result.promised_direct,
                         realized_direct=result.realized_direct,
                         direct_candidates=direct_candidate_snapshot,
+                        stranded_ports=result.stranded_ports,
                     )
 
                     def retain_attempt(
