@@ -20388,3 +20388,44 @@ def test_the_sweep_publishes_every_incumbent_it_certifies(
     assert keys == sorted(keys, reverse=True) or len(keys) == 1, (
         "each published incumbent must improve on the last"
     )
+
+
+def test_an_over_band_seed_is_skipped_and_never_reported_as_wired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R1 §0: the 264x162 extent is a PRE-PACK seed rejection.
+
+    Nothing wired, nothing reached the validator, and `lay_out` turned the
+    retained finding into "every packing that wired was rejected by our own
+    validator", which sends the reader to the finalizer instead of to the router.
+
+    `_band_policy_candidate_heights` is stubbed rather than `_candidate_heights`:
+    with `frame_candidates` empty, `reserve_boundary_height` proves height 20
+    infeasible and substitutes `boundary_core_height` (154), so the sweep would
+    skip 154 and the assertion would read `[154] != [20]`.
+    """
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    monkeypatch.setattr(
+        freeform, "_band_policy_candidate_heights", lambda _strips, _policy: (20,)
+    )
+    monkeypatch.setattr(
+        finalize.BandPolicySearchEnvelope,
+        "frame_candidates",
+        lambda _self, _width, _height: (),
+    )
+    skipped: list[int] = []
+    rejected: list[freeform._RefusalFinding] = []
+
+    result = FreeformLayout(band_policy=BandPolicy("portable"), arrangements=1)._sweep(
+        spec,
+        strips,
+        1.0,
+        rejected=rejected,
+        skipped_heights=skipped,
+        session=OperatorSession(),
+    )
+
+    assert result is None
+    assert skipped == [20]
+    assert rejected == []
