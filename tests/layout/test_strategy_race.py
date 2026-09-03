@@ -9,7 +9,8 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import fields, replace
 from fractions import Fraction
-from typing import get_type_hints
+from multiprocessing.context import BaseContext
+from typing import ClassVar, get_type_hints
 
 import pytest
 
@@ -17,7 +18,8 @@ import flab2bp.layout.strategy_race as strategy_race_module
 from flab2bp.dsp import catalog, provenance, registry
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.compact_seed import CompactSeedConfig
-from flab2bp.layout.sequence_solver import SequenceSolverConfig
+from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
 from flab2bp.layout.strategy_race import (
     RACE_COMPLETION_GRACE_S,
     RACE_DRAIN_MAX_MESSAGES,
@@ -30,10 +32,12 @@ from flab2bp.layout.strategy_race import (
     RaceChannels,
     RaceStrategyName,
     RaceSubmit,
+    _build_layout,
     _channels_for,
     _install_race_channels,
     _JoinCancellable,
     _ordered,
+    _pool_submit,
     _run_race_leg,
     _StrategyRaceOutcome,
     _StrategyRaceRequest,
@@ -870,3 +874,282 @@ def test_a_leg_with_sharing_off_touches_no_channel() -> None:
         assert to_freeform.cancelled == 0
     finally:
         strategy_race_module._RACE_CHANNELS = None
+
+
+def test_build_layout_hands_over_every_knob_the_request_carries() -> None:
+    """A dropped keyword here is a raced arm quietly solving a different problem.
+
+    Nothing downstream would notice: the leg would still return a valid
+    ``Placement``, just one the caller did not ask for.  So the knobs are checked
+    on the constructed object rather than inferred from a solve, which cannot
+    tell "the knob was ignored" from "the knob did not matter on this spec".
+    """
+    freeform_request = replace(
+        _request("freeform"),
+        workers=3,
+        arrangements=2,
+        belt_vertical_construction=False,
+    )
+    freeform = _build_layout(freeform_request)
+
+    assert isinstance(freeform, FreeformLayout)
+    assert freeform.band_policy is freeform_request.band_policy
+    assert freeform.workers == 3
+    assert freeform.arrangements == 2
+    assert freeform.ramped is True  # belt_vertical_construction=False
+
+    # `belt_vertical_construction` is False on BOTH requests on purpose: both
+    # layouts default it to True, so a dropped keyword is invisible against a
+    # request that asked for the default.
+    sequence_request = replace(
+        _request("sequence-pair"),
+        belt_vertical_construction=False,
+        sequence_islands=2,
+    )
+    sequence = _build_layout(sequence_request)
+
+    assert isinstance(sequence, SequencePairLayout)
+    assert sequence.band_policy is sequence_request.band_policy
+    assert sequence.config is sequence_request.config
+    assert sequence.compact_seed_config is sequence_request.compact_seed_config
+    assert sequence.islands == 2
+    assert sequence.ramped is True
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("strategy", RACE_STRATEGIES)
+def test_a_leg_produces_exactly_what_the_serial_arm_produces(
+    strategy: RaceStrategyName,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec 5.5: racing changes WHO runs a strategy, never WHAT it computes.
+
+    The ``monkeypatch`` fixture is requested for its side effect alone: it
+    switches the suite's freeform memo off (``tests/conftest.py``), so this
+    compares two REAL solves rather than one cached object handed back twice.
+
+    Both runs are given the SAME absolute wall, far enough out that neither is
+    cut by it, so the second run is not quietly the easier of the two.
+    """
+    del monkeypatch
+    spec = two_stage_spec()
+    deadline = time.monotonic() + 60.0
+    request = replace(
+        _request(strategy),
+        spec=spec,
+        time_budget_s=30.0,
+        soft_deadline=deadline,
+        workers=1,
+        arrangements=1,
+        share=False,
+    )
+    serial: FreeformLayout | SequencePairLayout
+    if strategy == "freeform":
+        serial = FreeformLayout(
+            band_policy=request.band_policy,
+            workers=request.workers,
+            arrangements=request.arrangements,
+            belt_vertical_construction=request.belt_vertical_construction,
+        )
+    else:
+        serial = SequencePairLayout(
+            band_policy=request.band_policy,
+            belt_vertical_construction=request.belt_vertical_construction,
+            config=request.config,
+            compact_seed_config=request.compact_seed_config,
+            islands=request.sequence_islands,
+        )
+
+    outcome = _run_race_leg(request)
+    alone = serial.lay_out(spec, time_budget_s=30.0, absolute_deadline=deadline)
+
+    assert outcome.status == "completed"
+    assert outcome.placement is not None
+    assert outcome.placement.area == alone.area
+    assert outcome.placement.stats["belt_tiles"] == alone.stats["belt_tiles"]
+    assert outcome.placement.buildings == alone.buildings
+
+
+class _RecordedPool:
+    """Stands in for ``ProcessPoolExecutor`` and records how it was built.
+
+    The keywords are named parameters rather than ``**kwargs`` on purpose: a
+    keyword the production code stops passing then shows up as its default here
+    (``max_tasks_per_child`` becoming ``None``) instead of vanishing from a dict
+    the assertions have to remember to look in.
+    """
+
+    built: ClassVar[list[_RecordedPool]] = []
+
+    def __init__(
+        self,
+        *,
+        max_workers: int,
+        mp_context: BaseContext,
+        max_tasks_per_child: int | None = None,
+        initializer: Callable[..., object] | None = None,
+        initargs: tuple[object, ...] = (),
+    ) -> None:
+        self.max_workers = max_workers
+        self.mp_context = mp_context
+        self.max_tasks_per_child = max_tasks_per_child
+        self.initializer = initializer
+        self.initargs = initargs
+        self.ran: list[Callable[[_StrategyRaceRequest], _StrategyRaceOutcome]] = []
+        self.submitted: list[_StrategyRaceRequest] = []
+        _RecordedPool.built.append(self)
+
+    def submit(
+        self,
+        fn: Callable[[_StrategyRaceRequest], _StrategyRaceOutcome],
+        request: _StrategyRaceRequest,
+    ) -> Future[_StrategyRaceOutcome]:
+        self.ran.append(fn)
+        self.submitted.append(request)
+        future: Future[_StrategyRaceOutcome] = Future()
+        future.set_result(
+            _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x")
+        )
+        return future
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        return None
+
+
+def _record_pools(monkeypatch: pytest.MonkeyPatch) -> None:
+    _RecordedPool.built.clear()
+    monkeypatch.setattr(strategy_race_module, "ProcessPoolExecutor", _RecordedPool)
+
+
+def test_the_pool_is_spawned_two_wide_and_recycles_every_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every argument here is load-bearing, and none of them is observable later.
+
+    ``max_workers=1`` silently SERIALISES the race; ``fork`` hands a child a
+    CP-SAT-loaded parent's memory and its locks; without
+    ``max_tasks_per_child=1`` a second candidate reuses a child that already ran
+    a solve; swapped ``initargs`` make each arm read its own messages and hear
+    nothing from its rival.  None of the four changes a single outcome the other
+    tests look at, so they are asserted at the construction site.
+    """
+    _record_pools(monkeypatch)
+    context = multiprocessing.get_context("spawn")
+    to_freeform = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    to_sequence_pair = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    channels = {
+        "freeform": RaceChannels(publish=to_sequence_pair, consume=to_freeform),
+        "sequence-pair": RaceChannels(publish=to_freeform, consume=to_sequence_pair),
+    }
+    requests = tuple(_request(name) for name in RACE_STRATEGIES)
+    try:
+        futures, executor = _pool_submit(requests, channels)
+
+        assert len(_RecordedPool.built) == 1
+        pool = _RecordedPool.built[0]
+        assert executor is pool
+        assert list(futures.values()) == list(RACE_STRATEGIES)
+        assert pool.ran == [strategy_race_module._run_race_leg] * len(RACE_STRATEGIES)
+        assert pool.max_workers == len(RACE_STRATEGIES) == 2
+        assert pool.mp_context.get_start_method() == "spawn"
+        assert pool.max_tasks_per_child == 1
+        assert pool.initializer is _install_race_channels
+        assert pool.initargs == (to_freeform, to_sequence_pair)
+    finally:
+        for one in (to_freeform, to_sequence_pair):
+            one.cancel_join_thread()
+            one.close()
+
+
+def test_the_pool_gets_no_initializer_at_all_when_sharing_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Empty channels means sharing is off, and the initializer is then OMITTED
+    # rather than handed empty queues: only a multiprocessing.Queue survives the
+    # spawn hand-off, so anything else in initargs fails at pickling here.
+    _record_pools(monkeypatch)
+    requests = tuple(_request(name) for name in RACE_STRATEGIES)
+
+    _pool_submit(requests, {})
+
+    pool = _RecordedPool.built[0]
+
+    assert pool.initializer is None
+    assert pool.initargs == ()
+    assert pool.max_workers == len(RACE_STRATEGIES) == 2
+    assert pool.mp_context.get_start_method() == "spawn"
+    assert pool.max_tasks_per_child == 1
+
+
+def test_a_race_with_no_submit_seam_goes_through_the_process_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The seam defaults to `_pool_submit`; without this the whole pool path is
+    # only ever reached by a human running the thing by hand.
+    _record_pools(monkeypatch)
+
+    outcomes = run_strategy_race(
+        two_stage_spec(),
+        time_budget_s=0.05,
+        band_policy=BandPolicy("portable"),
+        belt_vertical_construction=True,
+        share=False,
+    )
+
+    assert len(_RecordedPool.built) == 1
+    assert [r.strategy for r in _RecordedPool.built[0].submitted] == list(RACE_STRATEGIES)
+    assert tuple(o.strategy for o in outcomes) == RACE_STRATEGIES
+
+
+def test_two_futures_for_one_arm_is_refused_before_the_wait() -> None:
+    # The collector takes the FIRST future per name and `_ordered` keys a dict on
+    # the strategy, so a duplicate would be silently dropped at one of those two
+    # points -- a lost result reported as a complete race.
+    def submit(
+        requests: tuple[_StrategyRaceRequest, ...],
+        channels: dict[str, RaceChannels],
+    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
+        futures: dict[Future[_StrategyRaceOutcome], str] = {}
+        for _ in range(2):
+            future: Future[_StrategyRaceOutcome] = Future()
+            future.set_result(
+                _StrategyRaceOutcome("freeform", "refused", refusal_reason="x")
+            )
+            futures[future] = "freeform"
+        return futures, _NoopExecutor()
+
+    with pytest.raises(ValueError, match="exactly once"):
+        run_strategy_race(
+            two_stage_spec(),
+            time_budget_s=0.05,
+            band_policy=BandPolicy("portable"),
+            belt_vertical_construction=True,
+            share=False,
+            submit=submit,
+        )
+
+
+@pytest.mark.slow
+def test_the_real_pool_races_both_arms_end_to_end() -> None:
+    """No seam, no stub: two spawned children, two real strategies, one wall.
+
+    Everything above this line replaces the pool with something in-process, so
+    this is the only test that proves the request pickles out, a whole strategy
+    runs in a child, and a ``Placement`` pickles back.  Measured runtime on this
+    box is 2.6 s: both arms finish inside the 2 s wall, and the spawn and
+    interpreter start each child pays comes out of that wall, not on top of it.
+    """
+    outcomes = run_strategy_race(
+        two_stage_spec(),
+        time_budget_s=2.0,
+        band_policy=BandPolicy("portable"),
+        belt_vertical_construction=True,
+        workers=4,
+    )
+
+    assert tuple(o.strategy for o in outcomes) == RACE_STRATEGIES
+    assert [o.status for o in outcomes] == ["completed", "completed"]
+    for outcome in outcomes:
+        assert outcome.placement is not None
+        assert outcome.placement.area > 0
+        assert outcome.dropped_messages == 0

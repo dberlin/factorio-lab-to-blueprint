@@ -1,4 +1,6 @@
 [1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
-spawns 10  min 0.098s  median 0.099s  max 0.101s
-all: 0.098  0.098  0.099  0.099  0.099  0.099  0.100  0.100  0.101  0.101
-RACE_COMPLETION_GRACE_S = ceil(max) + ATOMIC_COMPLETION_GRACE_S = 1 + 5.0 = 6.0
+spawn-to-first-instruction (INSIDE the wall, context only): runs 10  min 0.100s  median 0.104s  max 0.107s
+  all: 0.100  0.101  0.101  0.103  0.104  0.104  0.105  0.105  0.105  0.107
+post-deadline tail (what the grace covers): runs 10  min 0.001s  median 0.001s  max 0.001s
+  all: 0.001  0.001  0.001  0.001  0.001  0.001  0.001  0.001  0.001  0.001
+RACE_COMPLETION_GRACE_S = ceil(tail_max) + ATOMIC_COMPLETION_GRACE_S = 1 + 5.0 = 6.0
