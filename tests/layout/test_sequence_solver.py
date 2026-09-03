@@ -51,16 +51,20 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
     select_lns_neighbourhood,
     select_split_candidate,
+    update_feedback,
 )
 from flab2bp.layout.sequence_alns import (
     C_CONTEXT_FRACTION_STEPS,
     REWARD_RANKS,
+    SHIPPED_DESTROY,
     SHIPPED_REPAIR,
     DestroyOperator,
     OperatorContext,
+    OperatorMetrics,
     OperatorSession,
     RepairOperator,
     metrics_from_evaluation,
+    operator_scale,
 )
 from flab2bp.layout.sequence_pair import (
     AnnealIncumbent,
@@ -1341,6 +1345,39 @@ def test_the_uncapped_destroy_set_is_wider_than_the_capped_one() -> None:
     )
     assert uncapped == frozenset({0, 1, 2, 3, 4, 7, 9})
     assert capped == frozenset({0, 1})
+
+
+def test_the_substitution_caps_the_destroy_set_once_the_portfolio_is_open() -> None:
+    """`cap_scale=True` bounds the destroy set by `operator_scale`, not the size."""
+    session = OperatorSession()
+    problem, state, decoded, routing = _substitution_fixture()
+    _repaired, neighbourhood = sequence_solver_module._alns_substitution(
+        routing,
+        state,
+        problem,
+        decoded,
+        seed=11,
+        stage_index=0,
+        session=session,
+        context=OperatorContext(
+            strip_count=problem.size, stagnation=0, remaining_fraction=10
+        ),
+        metrics=metrics_from_evaluation(
+            routing,
+            decoded,
+            FeedbackState.empty((decoded.width, problem.outline_height)),
+            outline_height=problem.outline_height,
+            band_target_width=decoded.width,
+            validator_clean=False,
+        ),
+        routing_seconds=0.5,
+        band_target_width=decoded.width,
+        adapters=sequence_solver_module._RepairAdapters(),
+        cap_scale=True,
+    )
+    assert len(neighbourhood) <= operator_scale(
+        OperatorContext(strip_count=problem.size, stagnation=0, remaining_fraction=10)
+    )
 
 
 def test_local_exact_pack_takes_the_encoding_the_window_adapter_measured() -> None:
@@ -7707,14 +7744,14 @@ def test_sequence_solver_exposes_a_default_operator_session() -> None:
 
 
 def test_the_default_operator_session_arms_the_whole_repair_portfolio() -> None:
-    """A bare-constructed solver arms both repair arms and one destroy arm.
+    """A bare-constructed solver arms the whole destroy and repair portfolio.
 
     The arms are declared in two places -- this default and `_production_run`'s
     explicit session -- and the two must agree, so each site has its own test.
     `LOCAL_EXACT_PACK` is safe to arm without a window adapter: it is SKIPPED for
     a count and a zero reward rather than served by another arm.  `BAND_BOUNDARY`
-    stays closed until a real band target is threaded to it, because it is inert
-    when the band target equals the decoded width.
+    is likewise safe unarmed: it is inert whenever `band_target_for` reports the
+    decoded width back, which a bare-constructed solver's default does.
     """
     solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
     armed = {
@@ -7724,8 +7761,46 @@ def test_the_default_operator_session_arms_the_whole_repair_portfolio() -> None:
     }
     assert armed == {
         DestroyOperator.FAILED_ENDPOINTS.value,
+        DestroyOperator.BAND_BOUNDARY.value,
         RepairOperator.SEQUENCE_REINSERT.value,
         RepairOperator.LOCAL_EXACT_PACK.value,
+    }
+
+
+def test_the_production_destroy_portfolio_is_the_shipped_set() -> None:
+    """Driving selection `len(SHIPPED_DESTROY)` times plays every shipped arm."""
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    played: set[DestroyOperator] = set()
+    for _ in range(len(SHIPPED_DESTROY)):
+        choice = solver.alns_session.select(
+            OperatorContext(strip_count=20, stagnation=0, remaining_fraction=10)
+        )
+        played.add(choice.destroy)
+        solver.alns_session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
+    assert played == set(SHIPPED_DESTROY)
+
+
+def test_the_production_session_arms_the_shipped_destroy_and_repair_portfolio() -> None:
+    """`_production_run`'s explicit session must agree with `__init__`'s default.
+
+    Both declaration sites are pinned separately (Task 5 concern 1 / Task 11
+    concern 5) so a mutant that opens only one of them fails a test.
+    """
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    armed = {
+        key.removeprefix("count:")
+        for key in run.solver.alns_session.credit
+        if key.startswith("count:")
+    }
+    assert armed == {operator.value for operator in SHIPPED_DESTROY} | {
+        operator.value for operator in SHIPPED_REPAIR
     }
 
 
@@ -7747,12 +7822,12 @@ def test_the_stage_boundary_repair_runs_through_the_operator_session(
     with pytest.raises(NoValidLayout):
         solver.search()
     assert solver.alns_session.choices
-    # The destroy portfolio is still one arm; the repair portfolio is open, so
-    # this pins the armed set rather than a single pairing.  What the test is
-    # for is the spy: every choice came from the session.
-    assert {choice.destroy for choice in solver.alns_session.choices} == {
-        DestroyOperator.FAILED_ENDPOINTS
-    }
+    # Both the destroy and the repair portfolio are open, so this pins the
+    # armed set rather than a single pairing. What the test is for is the spy:
+    # every choice came from the session.
+    assert {choice.destroy for choice in solver.alns_session.choices} <= set(
+        SHIPPED_DESTROY
+    )
     assert {choice.repair for choice in solver.alns_session.choices} <= set(SHIPPED_REPAIR)
 
 
@@ -7773,6 +7848,183 @@ def test_the_compact_seed_repair_runs_through_the_operator_session(
         1_000,
     )
     assert solver.alns_session.choices
+
+
+def _pre_update_feedback_spy(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Wire spies around `update_feedback` and `metrics_from_evaluation`.
+
+    Returns a list that grows by one `bool` per `metrics_from_evaluation` call:
+    whether the `feedback` argument that call received IS (by identity) the
+    `FeedbackState` object `update_feedback` most recently produced. `True`
+    means the candidate was scored against congestion evidence that already
+    includes its own failures -- the bug Addendum C describes. Both callers
+    read `height_state.feedback` and call `update_feedback` synchronously
+    within the same stage completion, with no other call in between, so this
+    identity check is exact regardless of which call site fires or how many
+    prior stages ran.
+    """
+    real_update = update_feedback
+    latest_update: list[FeedbackState | None] = [None]
+
+    def spy_update(
+        state: FeedbackState,
+        result: DetailedRouteResult,
+        *,
+        origins: tuple[tuple[int, int], ...] | None = None,
+    ) -> FeedbackState:
+        produced = real_update(state, result, origins=origins)
+        latest_update[0] = produced
+        return produced
+
+    real_metrics = metrics_from_evaluation
+    self_scored: list[bool] = []
+
+    def spy_metrics(
+        result: DetailedRouteResult,
+        decoded: DecodedPlacement,
+        feedback: FeedbackState,
+        *,
+        outline_height: int,
+        band_target_width: int,
+        validator_clean: bool,
+    ) -> OperatorMetrics:
+        self_scored.append(feedback is latest_update[0])
+        return real_metrics(
+            result,
+            decoded,
+            feedback,
+            outline_height=outline_height,
+            band_target_width=band_target_width,
+            validator_clean=validator_clean,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "update_feedback", spy_update)
+    monkeypatch.setattr(sequence_solver_module, "metrics_from_evaluation", spy_metrics)
+    return self_scored
+
+
+def test_the_compact_seed_repair_scores_congestion_against_the_pre_update_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_complete_routing_stage` folds this candidate's own failures into
+    `height_state.feedback` before `_route_compact_seed_closure` scores its
+    repair choice. The metrics call must read the feedback as it stood before
+    that fold-in, or the candidate is scored partly against itself.
+    """
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    self_scored = _pre_update_feedback_spy(monkeypatch)
+    height_state = solver._heights[0]
+    solver._route_compact_seed_closure(
+        height_state,
+        AnnealState.initial(height_state.problem.size, 7),
+        1_000,
+    )
+    assert self_scored
+    assert not any(self_scored)
+
+
+def test_the_stage_boundary_repair_scores_congestion_against_the_pre_update_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same claim as the compact-seed test, for `_complete_routing_stage`'s own
+    (stage-boundary) call site."""
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    self_scored = _pre_update_feedback_spy(monkeypatch)
+    with pytest.raises(NoValidLayout):
+        solver.search()
+    assert self_scored
+    assert not any(self_scored)
+
+
+def test_the_production_band_target_guards_widths_above_the_scan_cap() -> None:
+    """`band_target_for` must degrade to the input width, not raise, above the
+    scan cap (`finalize.C_BAND_SCAN_MAX`), so a repair attempt never crashes
+    the solve over a width `band_target_width` refuses to scan."""
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    assert run.solver._band_target_for(12, 5000) == 5000
+
+
+def _cap_scale_spy(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Wire a spy around `_alns_substitution` that records every `cap_scale`
+    it was called with, at either production call site."""
+    real_substitution = sequence_solver_module._alns_substitution
+    cap_scales: list[bool] = []
+
+    def spy_substitution(
+        detailed: DetailedRouteResult,
+        selected_state: AnnealState,
+        problem: PlacementProblem,
+        decoded: DecodedPlacement,
+        *,
+        seed: int,
+        stage_index: int,
+        session: OperatorSession,
+        context: OperatorContext,
+        metrics: OperatorMetrics,
+        routing_seconds: float,
+        band_target_width: int,
+        adapters: sequence_solver_module._RepairAdapters,
+        cap_scale: bool = False,
+    ) -> tuple[AnnealState, frozenset[int]]:
+        cap_scales.append(cap_scale)
+        return real_substitution(
+            detailed,
+            selected_state,
+            problem,
+            decoded,
+            seed=seed,
+            stage_index=stage_index,
+            session=session,
+            context=context,
+            metrics=metrics,
+            routing_seconds=routing_seconds,
+            band_target_width=band_target_width,
+            adapters=adapters,
+            cap_scale=cap_scale,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "_alns_substitution", spy_substitution)
+    return cap_scales
+
+
+def test_the_compact_seed_repair_caps_the_destroy_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_route_compact_seed_closure` must pass `cap_scale=True`.
+
+    `cap_scale` defaults to `False` (Task 4/5); Task 7 turns it on in
+    production. Reverting it at this call site alone must fail this test.
+    """
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    cap_scales = _cap_scale_spy(monkeypatch)
+    height_state = solver._heights[0]
+    solver._route_compact_seed_closure(
+        height_state,
+        AnnealState.initial(height_state.problem.size, 7),
+        1_000,
+    )
+    assert cap_scales
+    assert all(cap_scales)
+
+
+def test_the_stage_boundary_repair_caps_the_destroy_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same claim as the compact-seed test, for `_complete_routing_stage`'s own
+    (stage-boundary) call site."""
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    cap_scales = _cap_scale_spy(monkeypatch)
+    with pytest.raises(NoValidLayout):
+        solver.search()
+    assert cap_scales
+    assert all(cap_scales)
 
 
 def test_search_without_continuation_stops_at_the_derived_stage_limit() -> None:

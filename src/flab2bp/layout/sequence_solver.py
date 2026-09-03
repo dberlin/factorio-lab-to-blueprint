@@ -101,8 +101,8 @@ from flab2bp.layout.route_feedback import (
 from flab2bp.layout.sequence_alns import (
     C_CONTEXT_FRACTION_STEPS,
     REWARD_RANKS,
+    SHIPPED_DESTROY,
     SHIPPED_REPAIR,
-    DestroyOperator,
     OperatorContext,
     OperatorMetrics,
     OperatorSession,
@@ -927,6 +927,7 @@ class SequenceSolver[PreparedT]:
         alns_session: OperatorSession | None = None,
         alns_adapters: _RepairAdapters | None = None,
         remaining_fraction: Callable[[], int] | None = None,
+        band_target_for: Callable[[int, int], int] | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -964,14 +965,15 @@ class SequenceSolver[PreparedT]:
         self.stop_on_stable_exact = stop_on_stable_exact
         self.routing_seed_allowance_cap = routing_seed_allowance_cap
         self.stage_admission = stage_admission
-        # The repair portfolio is open: LOCAL_EXACT_PACK has an implementation
-        # behind it now.  A solver built without a window adapter still SKIPS
-        # that arm for a count and a zero reward, so arming it costs a
-        # bare-constructed solver a turn and never a wrong credit.  The destroy
-        # portfolio stays at the legacy arm; opening it is its own commit so any
-        # corpus movement is attributable to that commit.
+        # Both destroy operators (FAILED_ENDPOINTS, BAND_BOUNDARY) and both
+        # repair operators (SEQUENCE_REINSERT, LOCAL_EXACT_PACK) are open. A
+        # solver built without a window adapter still SKIPS LOCAL_EXACT_PACK
+        # for a count and a zero reward, so arming it costs a bare-constructed
+        # solver a turn and never a wrong credit.  BAND_BOUNDARY is likewise
+        # safe unarmed: it is inert whenever `band_target_for` reports the
+        # decoded width back, which is the default below.
         self.alns_session = alns_session or OperatorSession(
-            destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+            destroy_arms=SHIPPED_DESTROY,
             repair_arms=SHIPPED_REPAIR,
         )
         self.alns_adapters = alns_adapters or _RepairAdapters()
@@ -981,6 +983,11 @@ class SequenceSolver[PreparedT]:
         self._remaining_fraction = remaining_fraction or (
             lambda: C_CONTEXT_FRACTION_STEPS
         )
+        #: Widest core BAND_BOUNDARY should treat as fitting.  A solver built
+        #: without a band policy -- every existing test construction -- has no
+        #: band to overflow, so the default returns the input width unchanged,
+        #: which makes BAND_BOUNDARY inert rather than wrong.
+        self._band_target_for = band_target_for or (lambda height, width: width)
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
@@ -1655,6 +1662,12 @@ class SequenceSolver[PreparedT]:
         self._finish_measured_completion(measured_detailed_started)
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
+        # `_complete_routing_stage` folds this very candidate's own failures
+        # into `height_state.feedback` before it returns.  Capture the feedback
+        # as it stood BEFORE that fold-in, so the repair choice below is scored
+        # against the congestion evidence prior candidates left, not against
+        # itself.
+        pre_update_feedback = height_state.feedback
         completed = self._complete_routing_stage(
             height_state,
             selected,
@@ -1684,7 +1697,9 @@ class SequenceSolver[PreparedT]:
             height_state.estimated_area = incumbent.decoded.width * height_state.height
         restart = height_state.restarts[0]
         if not height_state.projection_feedback_pending:
-            band_target = incumbent.decoded.width
+            band_target = self._band_target_for(
+                problem.outline_height, incumbent.decoded.width
+            )
             next_anneal, neighbourhood = _alns_substitution(
                 detailed.routing,
                 incumbent.state,
@@ -1701,7 +1716,7 @@ class SequenceSolver[PreparedT]:
                 metrics=metrics_from_evaluation(
                     detailed.routing,
                     incumbent.decoded,
-                    height_state.feedback,
+                    pre_update_feedback,
                     outline_height=problem.outline_height,
                     band_target_width=band_target,
                     validator_clean=False,
@@ -1709,6 +1724,7 @@ class SequenceSolver[PreparedT]:
                 routing_seconds=detailed_route_time_s,
                 band_target_width=band_target,
                 adapters=self.alns_adapters,
+                cap_scale=True,
             )
             if neighbourhood and restart.stages < self.config.stages:
                 restart.anneal = next_anneal
@@ -2558,6 +2574,10 @@ class SequenceSolver[PreparedT]:
             if self.adapters.feedback_origins is None
             else self.adapters.feedback_origins(selected.prepared)
         )
+        # Capture the feedback as it stood BEFORE this candidate's own failures
+        # are folded in, so the repair choice below is scored against prior
+        # congestion evidence, not against itself.
+        pre_update_feedback = height_state.feedback
         height_state.feedback = update_feedback(
             decay_feedback(height_state.feedback),
             detailed.routing,
@@ -2580,7 +2600,9 @@ class SequenceSolver[PreparedT]:
         )
         neighbourhood = frozenset[int]()
         if starting_mode is ObjectiveMode.EXPLORATION:
-            band_target = selected.decoded.width
+            band_target = self._band_target_for(
+                problem.outline_height, selected.decoded.width
+            )
             next_anneal, neighbourhood = _alns_substitution(
                 detailed.routing,
                 selected.state,
@@ -2597,7 +2619,7 @@ class SequenceSolver[PreparedT]:
                 metrics=metrics_from_evaluation(
                     detailed.routing,
                     selected.decoded,
-                    height_state.feedback,
+                    pre_update_feedback,
                     outline_height=problem.outline_height,
                     band_target_width=band_target,
                     validator_clean=False,
@@ -2605,6 +2627,7 @@ class SequenceSolver[PreparedT]:
                 routing_seconds=detailed_route_time_s,
                 band_target_width=band_target,
                 adapters=self.alns_adapters,
+                cap_scale=True,
             )
             if neighbourhood and restart.stages < self.config.stages:
                 # This is an already-scheduled search candidate with exact local
@@ -5240,6 +5263,19 @@ def _production_run(
         expansion_total,
         speculative_candidates=(1 + _TOPOLOGY_BEAM_CANDIDATES + _TOPOLOGY_REFINEMENT_CANDIDATES),
     )
+    def band_target_for(height: int, width: int) -> int:
+        """Widest core BAND_BOUNDARY should treat as fitting, guarded.
+
+        `finalize.band_target_width` raises above `C_BAND_SCAN_MAX` (4096) or
+        for a non-positive height/width.  A repair attempt must never crash the
+        solve over a width the helper refuses to scan; falling back to the
+        input width makes BAND_BOUNDARY inert for that call instead.
+        """
+        try:
+            return finalize.band_target_width(envelope, height=height, width=width)
+        except ValueError:
+            return width
+
     solver = SequenceSolver(
         stage_admission=stage_admission,
         heights=heights,
@@ -5273,17 +5309,20 @@ def _production_run(
             sprayed_lanes=len(spec.spray_lanes),
         ),
         stage_boundary_commit=commit_stage,
-        # The repair portfolio is open: the window adapter exists, so
-        # LOCAL_EXACT_PACK has an implementation behind it.  The destroy
-        # portfolio is still the legacy arm alone.
+        # Both the destroy portfolio (FAILED_ENDPOINTS, BAND_BOUNDARY) and the
+        # repair portfolio (SEQUENCE_REINSERT, LOCAL_EXACT_PACK) are open: the
+        # window adapter exists, so LOCAL_EXACT_PACK has an implementation
+        # behind it, and `band_target_for` below gives BAND_BOUNDARY a real
+        # target.
         alns_session=OperatorSession(
-            destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+            destroy_arms=SHIPPED_DESTROY,
             repair_arms=SHIPPED_REPAIR,
         ),
         alns_adapters=_RepairAdapters(window_pack=window_pack),
         remaining_fraction=lambda: remaining_fraction_bucket(
             max(0.0, (started + ceiling) - time.monotonic()), ceiling
         ),
+        band_target_for=band_target_for,
     )
     seed_started = time.monotonic()
     seed_deadline = min(
