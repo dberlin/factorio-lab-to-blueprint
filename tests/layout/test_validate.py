@@ -4036,6 +4036,49 @@ def test_flow_external_entry_points_warns_on_several_lanes_for_one_item() -> Non
     assert findings[0].severity is Severity.WARNING, "nothing starves; must not block emission"
 
 
+def _two_entry_lanes(*, external: Fraction, capacity: Fraction) -> tuple[Placement, BuildSpec]:
+    """Two separate lanes feeding one machine, on a spec whose rate and lane
+    capacity are both parameters -- so a caller can ask for lanes needed above,
+    at, or below the number of lanes actually built."""
+    p = place(
+        machine(6, 6, recipe_id=6),  # 0
+        belt(5, 6, carries="copper-ingot"),  # 1
+        belt(5, 8, carries="copper-ingot"),  # 2  a second, separate entry lane
+        sorter(5, 6, 6, 6, inp=1, out=0),  # 3
+        sorter(5, 8, 6, 8, inp=2, out=0),  # 4
+    )
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(1)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ingot": external},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=capacity,
+    )
+    return p, spec
+
+
+def test_flow_external_entry_points_says_how_many_lanes_the_rate_needs() -> None:
+    p, spec = _two_entry_lanes(external=Fraction(40), capacity=Fraction(30))
+    (finding,) = validate(p, spec, ids=TWO_INPUT_IDS).by_check("flow.external_entry_points")
+    assert finding.detail["entry_lanes"] == 2
+    assert finding.detail["lanes_needed"] == 2
+    assert "needs 2 lanes of 30/s" in finding.message
+
+
+def test_flow_external_entry_points_keeps_the_old_wording_when_lanes_exceed_the_need() -> None:
+    p, spec = _two_entry_lanes(external=Fraction(10), capacity=Fraction(30))
+    (finding,) = validate(p, spec, ids=TWO_INPUT_IDS).by_check("flow.external_entry_points")
+    assert finding.detail["lanes_needed"] == 1
+    assert "the player must connect a supply to every one of them" in finding.message
+
+
 def test_flow_external_entry_points_silent_on_a_single_entry() -> None:
     r = validate(inland_input_lane(), ore_spec(), ids=SPLIT_IDS)
     assert not fired(r, "flow.external_entry_points")
