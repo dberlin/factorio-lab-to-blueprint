@@ -14,7 +14,7 @@ import pytest
 import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
-from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.strip_variants import (
@@ -87,6 +87,51 @@ def _family(spec: BuildSpec) -> StripFamily:
     families = generate_strip_families(spec)
     assert len(families) == 1
     return families[0]
+
+
+def _rated_spec(rate: Fraction, *, count: int = 8, capacity: Fraction = Fraction(30)) -> BuildSpec:
+    """One collider-like group drawing ``rate`` of hydrogen per machine."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=count,
+                inputs_per_machine={"hydrogen": rate},
+                outputs_per_machine={"deuterium": Fraction(1, 2)},
+            ),
+        ),
+        external_inputs={"hydrogen": rate * count},
+        outputs={"deuterium": Fraction(count, 2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=capacity,
+    )
+
+
+def test_machine_cap_is_the_floor_of_capacity_over_the_largest_single_item_rate() -> None:
+    (family,) = generate_strip_families(_rated_spec(Fraction(4)))
+    assert family.machine_cap == 7  # floor(30 / 4)
+
+
+def test_machine_cap_uses_the_fastest_allowed_belt() -> None:
+    (family,) = generate_strip_families(_rated_spec(Fraction(4), capacity=Fraction(12)))
+    assert family.machine_cap == 3  # floor(12 / 4)
+
+
+def test_machine_cap_is_at_least_one_and_a_literal_family_defaults_to_uncapped() -> None:
+    (family,) = generate_strip_families(_rated_spec(Fraction(29)))
+    assert family.machine_cap == 1
+    # `_family(...)` goes through `generate_strip_families`, so it is always
+    # capped (the module's default spec gives 6 at 6/s and 1 per machine);
+    # only a literal `StripFamily(...)` keeps the 0 default.
+    generated = _family(_single_machine_spec("assembling-machine-1", count=3))
+    assert generated.machine_cap == 6
+    assert replace(generated, machine_cap=0).machine_cap == 0
+
+
+def test_a_single_machine_over_the_ceiling_is_refused_early_with_the_rate() -> None:
+    with pytest.raises(NoValidLayout, match=r"31.*hydrogen.*30"):
+        generate_strip_families(_rated_spec(Fraction(31)))
 
 
 def test_sequence_families_keep_same_group_feedback_destination(

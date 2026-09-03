@@ -70,3 +70,8 @@ def test_upgrades_out_of_order_are_refused() -> None:
 def test_sorter_tiers_may_not_be_empty() -> None:
     with pytest.raises(ValueError, match="sorter"):
         BuildSpec(groups=(_group(),), sorter_item_ids=())
+
+
+def test_planning_stack_is_one_for_every_item_until_stacked_lanes_land() -> None:
+    spec = BuildSpec(groups=(), belt_item_id="conveyor-belt-3", belt_items_per_second=Fraction(30))
+    assert spec.planning_stack("hydrogen") == 1
