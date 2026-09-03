@@ -10,7 +10,7 @@ touch it.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
@@ -33,7 +33,7 @@ from flab2bp.lab.flow import (
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import finalize, markers, validate
+from flab2bp.layout import finalize, markers, strategy_race, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
@@ -82,17 +82,53 @@ def _new_layout(
     belt_vertical_construction: bool,
     sequence_islands: int = 1,
     band_policy: BandPolicy,
+    #: CP-SAT search workers for the one backend that has a multi-threaded
+    #: solve.  ``None`` keeps freeform's own default (all cores), which is what
+    #: every caller got before racing existed.  ``SequencePairLayout`` takes no
+    #: such argument: its sub-solves are pinned at one worker each, so its share
+    #: of a split is headroom for its process rather than a solver setting.
+    workers: int | None = None,
 ) -> FreeformLayout | SequencePairLayout:
     """Construct one explicitly selected layout backend."""
     if strategy == "freeform":
         return FreeformLayout(
             belt_vertical_construction=belt_vertical_construction,
             band_policy=band_policy,
+            workers=workers,
         )
     return SequencePairLayout(
         belt_vertical_construction=belt_vertical_construction,
         islands=sequence_islands,
         band_policy=band_policy,
+    )
+
+
+#: One settled pair: its strategy, its 1-based index over ``total_pairs``, the
+#: monotonic instant its solve began, and what that solve produced.  A racing
+#: pair and a serial one reduce to exactly this, which is why the attempt loop
+#: below has one shape rather than two.
+_Resolved = tuple[ExplicitStrategyName, int, float, Placement | NoValidLayout]
+
+
+def _raced_result(
+    outcome: strategy_race._StrategyRaceOutcome,
+    spec_label: str,
+    budget_s: float,
+) -> Placement | NoValidLayout:
+    """Reduce one arm's outcome to the two shapes a serial solve returns.
+
+    Only ``completed`` carries geometry.  ``refused``, ``terminated`` and
+    ``crashed`` all become a refusal, so the reason reaches ``Build.refused``
+    instead of being lost: a terminated arm has no placement at all, and
+    admitting it as an ``Attempt`` would put a hole into the selection below.
+    """
+    if outcome.status == "completed" and outcome.placement is not None:
+        return outcome.placement
+    return NoValidLayout(
+        outcome.refusal_reason or f"{outcome.strategy} produced nothing",
+        spec_label=spec_label,
+        budget_s=budget_s,
+        projection_failures=outcome.refusal_projection_failures,
     )
 
 
@@ -379,6 +415,18 @@ def build(
     fetch_url_validator: UrlValidator | None = None,
     no_proliferator: bool = False,
     on_progress: ProgressSink | None = None,
+    #: CP-SAT search workers.  ``None`` is every core for an explicit strategy
+    #: and ``strategy_race.race_worker_split(every core)`` when racing.  It is
+    #: surfaced here because racing puts TWO CP-SAT users on one box and the
+    #: split has to be decided by whoever knows both arms exist.
+    workers: int | None = None,
+    #: Race the two strategies for ONE budget instead of running them serially
+    #: for one budget EACH.  OFF by default until the flip commit: a change this
+    #: large in wall time and process count opts in before it opts everyone in.
+    race: bool = False,
+    #: Exchange certified incumbents and cluster no-goods between the racers.
+    #: Meaningless unless ``race`` is true.
+    share: bool = True,
 ) -> Build:
     """Turn a FactorioLab URL into a pasteable DSP blueprint.
 
@@ -394,8 +442,11 @@ def build(
     are standing in front of it in game.
     """
     policy = BandPolicy.parse(band)
-    if sequence_islands != 1 and strategy != "sequence-pair":
-        raise ValueError("sequence islands require --strategy sequence-pair")
+    # Islands now live INSIDE the sequence-pair racer, so `best` may ask for
+    # them: the raced sequence-pair child constructs its own SequencePairLayout
+    # with this island count.  `freeform` still may not -- it has no islands.
+    if sequence_islands != 1 and strategy not in ("sequence-pair", "best"):
+        raise ValueError("sequence islands require --strategy sequence-pair or best")
     data = canonicalize_dataset(dataset if dataset is not None else load_vendored())
     request = canonicalize_request(parse_url(url))
     # How high a belt may go, and whether it may climb with no run at all, are
@@ -519,55 +570,116 @@ def build(
     # Counted here, after the flow filter, so a progress report never promises a
     # pair that was already dropped.
     total_pairs = len(spec_set.candidates) * len(wanted)
-    pair_index = 0
 
     attempts: list[Attempt] = []
     refused: list[LayoutAttemptFailure] = []
-    for spec in spec_set.candidates:
-        for sname in wanted:
-            pair_index += 1
-            if on_progress is not None:
-                on_progress(
-                    AttemptProgress(
-                        index=pair_index,
-                        total=total_pairs,
-                        candidate=spec.label,
-                        strategy=sname,
-                        phase="started",
-                    )
+
+    def _announce(index: int, candidate: str, sname: ExplicitStrategyName) -> None:
+        """Report that a pair has started.  Fired BEFORE its solve, both modes."""
+        if on_progress is not None:
+            on_progress(
+                AttemptProgress(
+                    index=index,
+                    total=total_pairs,
+                    candidate=candidate,
+                    strategy=sname,
+                    phase="started",
                 )
-            layout = _new_layout(
+            )
+
+    def _solve_one(
+        candidate: BuildSpec, sname: ExplicitStrategyName
+    ) -> Placement | NoValidLayout:
+        """The pre-racing path, returning the refusal instead of raising it.
+
+        The loop below branches on the RESULT rather than catching, so one shape
+        handles a raced pair and a serial one.
+        """
+        layout = _new_layout(
+            sname,
+            belt_vertical_construction=belt_rules.vertical_construction,
+            sequence_islands=sequence_islands,
+            band_policy=policy,
+            workers=workers,
+        )
+        try:
+            return layout.lay_out(candidate, time_budget_s=time_budget_s)
+        except NoValidLayout as exc:
+            return exc
+
+    def _solve_serially(candidate: BuildSpec, first_index: int) -> Iterator[_Resolved]:
+        """Yield one solved pair at a time, exactly as the pre-racing loop did.
+
+        A generator and not a tuple, deliberately.  Each attempt's compaction,
+        finalization, validation and encoding must run before the NEXT strategy
+        starts: solving both up front would leave the first attempt's
+        finalization to begin a whole budget past its own ``attempt_deadline``,
+        and refuse a placement that is fine.
+        """
+        for offset, sname in enumerate(wanted):
+            _announce(first_index + offset, candidate.label, sname)
+            yield (
                 sname,
-                belt_vertical_construction=belt_rules.vertical_construction,
-                sequence_islands=sequence_islands,
+                first_index + offset,
+                time.monotonic(),
+                _solve_one(candidate, sname),
+            )
+
+    for candidate_ordinal, spec in enumerate(spec_set.candidates):
+        #: 1-based over ``total_pairs``, candidates outer and strategies inner.
+        #: Derived rather than counted so the raced branch, which settles a
+        #: candidate's pairs together, cannot renumber them.
+        first_index = candidate_ordinal * len(wanted) + 1
+        solved: Iterable[_Resolved]
+        if strategy == "best" and race:
+            # Both arms genuinely start together, so both are announced BEFORE
+            # the race (spec 5.4).  Told afterwards, a caller's progress bar
+            # would sit silent for a whole budget and then jump by two.
+            for offset, sname in enumerate(wanted):
+                _announce(first_index + offset, spec.label, sname)
+            race_started = time.monotonic()
+            outcomes = strategy_race.run_strategy_race(
+                spec,
+                time_budget_s=time_budget_s,
                 band_policy=policy,
+                belt_vertical_construction=belt_rules.vertical_construction,
+                max_belt_z=belt_rules.max_z,
+                workers=workers,
+                sequence_islands=sequence_islands,
+                share=share,
             )
-            attempt_started = time.monotonic()
-            # A HARD wall per attempt, in the one place that can see the whole
-            # cost.  A strategy's own budget covers its search; compaction,
-            # projection, validation and encoding all run AFTER it and are
-            # charged to nobody.  `validate.validate` takes no cancellation
-            # parameter at all, so this cancels where a hook exists and REPORTS
-            # everywhere else -- a number the gate can fail on beats a number
-            # nobody produced.
-            attempt_deadline = (
-                attempt_started + time_budget_s + ATOMIC_COMPLETION_GRACE_S
-            )
+            by_strategy = {outcome.strategy: outcome for outcome in outcomes}
+            if set(by_strategy) != set(wanted):
+                # A lost arm must never read as a complete build: `total_pairs`
+                # promised a settlement for each, and the selection below would
+                # happily pick a winner from whatever came back without ever
+                # saying that one of them went missing.
+                raise ValueError(
+                    f"the race settled {sorted(by_strategy)} but this build "
+                    f"asked for {sorted(wanted)}"
+                )
+            solved = [
+                (
+                    sname,
+                    first_index + offset,
+                    race_started,
+                    _raced_result(by_strategy[sname], spec.label, time_budget_s),
+                )
+                for offset, sname in enumerate(wanted)
+            ]
+        else:
+            solved = _solve_serially(spec, first_index)
 
-            def attempt_expired(_deadline: float = attempt_deadline) -> bool:
-                return time.monotonic() >= _deadline
-
-            try:
-                placement = layout.lay_out(spec, time_budget_s=time_budget_s)
-            except NoValidLayout as exc:
+        for sname, pair_index, attempt_started, result in solved:
+            if isinstance(result, NoValidLayout):
                 # One strategy failing a candidate is not a failed build -- the
                 # others may well succeed. Record it so the reason survives to
                 # the report rather than vanishing into an empty result.
                 failure = LayoutAttemptFailure(
                     candidate=spec.label,
                     strategy=sname,
-                    reason=exc.reason,
-                    projection_failures=exc.projection_failures,
+                    reason=result.reason,
+                    projection_failures=result.projection_failures,
                 )
                 refused.append(failure)
                 if on_progress is not None:
@@ -578,11 +690,24 @@ def build(
                             candidate=spec.label,
                             strategy=sname,
                             phase="refused",
-                            reason=exc.reason,
+                            reason=result.reason,
                             projection_failures=failure.projection_failures,
                         )
                     )
                 continue
+            placement = result
+            # A HARD wall per attempt, in the one place that can see the whole
+            # cost.  A strategy's own budget covers its search; compaction,
+            # projection, validation and encoding all run AFTER it and are
+            # charged to nobody.  `validate.validate` takes no cancellation
+            # parameter at all, so this cancels where a hook exists and REPORTS
+            # everywhere else -- a number the gate can fail on beats a number
+            # nobody produced.
+            attempt_deadline = attempt_started + time_budget_s + ATOMIC_COMPLETION_GRACE_S
+
+            def attempt_expired(_deadline: float = attempt_deadline) -> bool:
+                return time.monotonic() >= _deadline
+
             if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
                 placement = finalize.compact_open_boundary_belts(
                     placement,

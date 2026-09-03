@@ -235,7 +235,10 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         metavar="N",
         help="whole-solve process islands for explicit sequence-pair (default: "
-        "CPU affinity capped at 8; explicit range 1..16)",
+        "CPU affinity capped at 8; explicit range 1..16). Islands inside a "
+        "RACED sequence-pair arm pay the spawn cost twice and start a fresh "
+        "budget those seconds late, because the islands branch derives its own "
+        "deadlines and takes no absolute one",
     )
     add_candidate_policy_argument(ap)
     ap.add_argument(
