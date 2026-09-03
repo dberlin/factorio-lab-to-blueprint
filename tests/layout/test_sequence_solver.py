@@ -1355,7 +1355,10 @@ def test_the_substitution_caps_the_destroy_set_once_the_portfolio_is_open() -> N
     On `_applied_substitution_fixture`, whose destroy set is a proper subset:
     `_substitution_fixture`'s is the whole four-strip problem, so the "never the
     whole problem" guard empties it and `len(frozenset()) <= scale` holds
-    however -- or whether -- the cap is wired at all.
+    however -- or whether -- the cap is wired at all. The narrower-than-uncapped
+    claim is pinned exactly, and standalone, by
+    `test_the_uncapped_destroy_set_is_wider_than_the_capped_one`; this test adds
+    the scale bound rather than repeating that comparison.
     """
     fixture = _applied_substitution_fixture()
     problem = fixture[0]
@@ -1368,14 +1371,7 @@ def test_the_substitution_caps_the_destroy_set_once_the_portfolio_is_open() -> N
         adapters=sequence_solver_module._RepairAdapters(),
         cap_scale=True,
     )
-    _uncapped_state, uncapped = _run_alns(
-        fixture,
-        session=OperatorSession(),
-        adapters=sequence_solver_module._RepairAdapters(),
-        cap_scale=False,
-    )
     assert 0 < len(capped) <= scale
-    assert len(capped) < len(uncapped)
 
 
 def test_local_exact_pack_takes_the_encoding_the_window_adapter_measured() -> None:
@@ -3132,6 +3128,32 @@ def test_the_window_adapter_solves_under_the_deadline_margin_budget(
     assert run.telemetry.alns_window_solves == 1
     assert run.telemetry.alns_window_accepted == 0
     assert run.telemetry.alns_encode_errors == 0
+
+
+def test_the_window_adapter_guards_a_width_the_scan_cap_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decoded width above `finalize.C_BAND_SCAN_MAX` must not crash the arm.
+
+    `finalize.band_target_width` raises `ValueError` above the scan cap; the
+    arm must reach its `width_target` through the guarded `band_target_for`
+    closure `_production_run` also hands the solver, not by calling
+    `finalize.band_target_width` directly, so an incumbent width like 5000
+    degrades to the input width instead of turning a repair attempt into a
+    crash.
+    """
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, planned = _window_adapter_pieces(run)
+    decoded = replace(planned, width=5000)
+    seen: list[int] = []
+
+    def capture(strips: object, **kwargs: Any) -> Any:
+        seen.append(kwargs["width_target"])
+        return None
+
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", capture)
+    assert adapter(frozenset({0}), problem, state, decoded) is None
+    assert seen == [5000]
 
 
 def test_the_window_budget_keeps_a_safety_margin_off_the_run_deadline(
@@ -7900,22 +7922,53 @@ def _install_reporting_solver(
     repaired: AnnealState,
     neighbourhood: frozenset[int],
 ) -> tuple[SequenceSolver[object], list[AnnealState]]:
-    """A solver whose substitution always answers `(repaired, neighbourhood)`.
+    """A solver whose substitution answers `(repaired, neighbourhood)` for a
+    non-empty `neighbourhood`, or the real `unchanged` state
+    `_alns_substitution` itself returns for a no-op choice when it is empty.
 
     Stubbing the substitution takes arm selection out of the question: what is
     under test is whether the CALL SITE reports the state it installs, which is
-    where `alns_window_accepted` is counted.
+    where `alns_window_accepted` is counted. `window_installed` filters on
+    `state.pair is repaired.pair`, mirroring the identity check the production
+    closure makes (`_RepairAdapters.window_installed` in `_production_run`), so
+    a call site that now reports every state it installs (Major A) is still
+    only counted here when that state is the window's own repair.
     """
     installed: list[AnnealState] = []
+
+    def window_installed(state: AnnealState) -> None:
+        if state.pair is repaired.pair:
+            installed.append(state)
+
     solver = _never_certifying_solver(
         heights=(12,),
         deadline_reached=lambda: False,
         alns_adapters=sequence_solver_module._RepairAdapters(
-            window_installed=installed.append
+            window_installed=window_installed
         ),
     )
 
-    def stub(*args: object, **kwargs: object) -> tuple[AnnealState, frozenset[int]]:
+    def stub(
+        detailed: object,
+        selected_state: AnnealState,
+        problem: object,
+        decoded: object,
+        *,
+        seed: int,
+        stage_index: int,
+        **kwargs: object,
+    ) -> tuple[AnnealState, frozenset[int]]:
+        if not neighbourhood:
+            return (
+                AnnealState(
+                    pair=selected_state.pair,
+                    gaps=selected_state.gaps,
+                    base_seed=seed,
+                    stage_index=stage_index,
+                    variant_indices=selected_state.variant_indices,
+                ),
+                frozenset(),
+            )
         return repaired, neighbourhood
 
     monkeypatch.setattr(sequence_solver_module, "_alns_substitution", stub)
@@ -7975,12 +8028,37 @@ def test_the_stage_boundary_site_reports_nothing_when_it_installs_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An empty neighbourhood is not installed, so it is not reported."""
+    repaired = AnnealState.initial(2, 5)
     solver, installed = _install_reporting_solver(
-        monkeypatch, repaired=AnnealState.initial(2, 5), neighbourhood=frozenset()
+        monkeypatch, repaired=repaired, neighbourhood=frozenset()
     )
     with pytest.raises(NoValidLayout):
         solver.search()
+    assert solver._heights[0].restarts[0].anneal is not repaired
     assert installed == []
+
+
+def test_the_stage_boundary_site_reports_the_state_it_installs_at_its_stage_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restart already at its stage ceiling still gets its install reported.
+
+    `restart.anneal = next_anneal` (the unconditional assignment right after
+    the report) has never cared whether the restart has already reached
+    `self.config.stages`; only the caller's OLD report was gated on it. Pin
+    the restart one stage short of the ceiling so its one scheduled stage
+    lands it exactly there, and confirm the install is still counted -- the
+    under-count Major A fixes.
+    """
+    repaired = AnnealState.initial(2, 5)
+    solver, installed = _install_reporting_solver(
+        monkeypatch, repaired=repaired, neighbourhood=frozenset({0})
+    )
+    solver._heights[0].restarts[0].stages = solver.config.stages - 1
+    with pytest.raises(NoValidLayout):
+        solver.search()
+    assert installed == [repaired]
+    assert solver._heights[0].restarts[0].anneal is repaired
 
 
 def test_sequence_solver_exposes_a_default_operator_session() -> None:
