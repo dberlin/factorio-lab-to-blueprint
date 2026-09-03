@@ -104,6 +104,7 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
     combine_last_mile_reports,
 )
+from flab2bp.layout.sequence_alns import OperatorSession
 from flab2bp.layout.sequence_pair import SequencePair
 from flab2bp.layout.strip_variants import (
     CargoDomain,
@@ -3903,7 +3904,14 @@ def _sweep_after_first_routing(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
-    )._sweep(spec, strips, time_budget_s, deadline=deadline, attempts=attempts)
+    )._sweep(
+        spec,
+        strips,
+        time_budget_s,
+        deadline=deadline,
+        attempts=attempts,
+        session=OperatorSession(),
+    )
     return result, seen, attempts
 
 
@@ -3994,6 +4002,7 @@ def test_terminal_refusal_names_completion_stage_after_every_net_wired(
         _budget: dict[str, int],
         rejected: list[freeform._RefusalFinding],
         attempts: list[freeform.PackAttempt],
+        **_kwargs: object,
     ) -> None:
         nonlocal clock
         rejected.append(
@@ -4554,7 +4563,7 @@ def test_fifteen_strip_pack_uses_reproducible_solver_budget(
         band_policy=BandPolicy("portable"),
         workers=8,
         arrangements=1,
-    )._sweep(two_stage_spec(), strips, 1.0)
+    )._sweep(two_stage_spec(), strips, 1.0, session=OperatorSession())
 
     assert result is None
     assert seen_solver_modes == [(1, True)]
@@ -4619,7 +4628,7 @@ def test_route_aware_height_order_preserves_exact_candidate_set(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     assert result is None
     assert [height for height, _width, _seed_height in seen] == [30, 40, 20]
@@ -4708,7 +4717,7 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     assert result is not None
     assert pack_calls == len(routed_packs) == 1
@@ -4796,7 +4805,7 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=2,
-    )._sweep(spec, strips, 1.0, attempts=attempts)
+    )._sweep(spec, strips, 1.0, attempts=attempts, session=OperatorSession())
 
     assert result is not None
     assert [call["arrangement"] for call in calls] == [0, 1]
@@ -5612,7 +5621,7 @@ def _sweep_with_pitch_feedback(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0, rejected=rejected)
+    )._sweep(spec, strips, 1.0, rejected=rejected, session=OperatorSession())
     return result, seen_candidates, rejected
 
 
@@ -5811,7 +5820,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     assert result is not None
     assert result.stats["test_height"] == 21.0
@@ -5977,7 +5986,7 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=2,
-    )._sweep(spec, strips, 5.0)
+    )._sweep(spec, strips, 5.0, session=OperatorSession())
 
     assert result is not None, seen_pack_state
     assert seen_pack_state == [
@@ -6338,7 +6347,7 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     assert result is not None
     assert len(seen_no_goods) == len(seen_exact_no_goods) == 2
@@ -7948,7 +7957,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     assert result is not None
     assert seen_no_goods[0] == ()
@@ -8207,7 +8216,7 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0, rejected=rejected)
+    )._sweep(spec, strips, 1.0, rejected=rejected, session=OperatorSession())
 
     assert result is None
     assert seen_clearance == [
@@ -8319,7 +8328,7 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     monkeypatch.undo()
     freeform._staged_static_preclearance_proved.cache_clear()
@@ -8558,7 +8567,7 @@ def _sweep_with_repeated_exact_feedback(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 1.0, session=OperatorSession())
     return result, seen_candidates, applicable_no_good_counts
 
 
@@ -8664,7 +8673,7 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=1,
-    )._sweep(spec, strips, 1.0)
+    )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     assert result is not None
     assert result.stats["test_height"] == 20.0
@@ -11617,6 +11626,7 @@ class TestTheTimeBudgetIsAWall:
             sweep_s: float,
             deadline: float,
             *_args: object,
+            **_kwargs: object,
         ) -> None:
             observed.append((sweep_s, deadline - time.monotonic()))
             return None
@@ -11641,7 +11651,13 @@ class TestTheTimeBudgetIsAWall:
         assert (
             FreeformLayout(
                 band_policy=BandPolicy("portable"),
-            )._sweep(spec, strips, 4.0, time.monotonic() - 1.0)
+            )._sweep(
+                spec,
+                strips,
+                4.0,
+                time.monotonic() - 1.0,
+                session=OperatorSession(),
+            )
             is None
         )
 
@@ -18744,3 +18760,403 @@ def test_a_relaxed_run_that_loses_the_round_withdraws_both_claims(
     assert result.last_mile.bounded == 1
     assert result.last_mile.relation_strips == ()
     assert result.exhaustive is False
+
+
+# --- Phase C: the freeform window-repair operator session -------------------
+
+
+def _only_a_window_charge_is_affordable(
+    _deadline: float | None,
+    _soft: float,
+    candidate_s: float,
+) -> bool:
+    """A clock with room for a window's charge and for nothing dearer.
+
+    `_window_candidate_seconds` FLOORS at `C_WINDOW_SECONDS`, while every other
+    charge the sweep computes here is a measured span over a stubbed `_pack` and
+    a stubbed `_build` -- microseconds.  Splitting the two at that floor is the
+    same statement as "no room for a full retry, room for a window", written so
+    that it holds on a box where the stubs return instantly rather than
+    depending on a real solve being slow.
+    """
+    return candidate_s >= freeform.C_WINDOW_SECONDS
+
+
+def _sweep_over_a_stranded_first_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    session: OperatorSession,
+    room_for_another: Callable[..., bool],
+    pack_window: Callable[..., freeform._Pack | None] | None = None,
+    destroy: Callable[..., frozenset[int]] | None = None,
+    first_routing: DetailedRouteResult | None = None,
+    routes_after_repair: bool = True,
+    wires: frozenset[tuple[int, int]] = frozenset(),
+    heights: tuple[int, ...] = (20, 21),
+) -> tuple[Placement | None, list[tuple[int, int]], list[str]]:
+    """Drive `_sweep` over candidates whose routing strands a net exhaustively.
+
+    An exhaustive STRANDED result is what `_proof_scoped_no_goods` turns into an
+    exact no-good (so ``learned`` holds) and what `_feedback_retry_eligible`
+    refuses (so the cheap feedback rescue does not pre-empt the clock gate) --
+    which is exactly the state in which the window is the sweep's only remaining
+    repair.  Everything below the sweep is stubbed at the module seam production
+    reads it through, so what the test measures is the SWEEP's decisions.
+
+    Returns the placement, the ``(height, arrangement)`` pairs handed to `_pack`,
+    and the ``status`` of every pack handed to `_build`, in order.
+    """
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    # The origins have to ENCODE: `_pack_relation_pair` refuses an overlapping
+    # placement, and the two `two_stage` strips are 14 and 18 wide, so they are
+    # spaced 25 apart rather than the 10 the older sweep harnesses use.
+    packs = {
+        (height, arrangement): freeform._Pack(
+            at={index: (index * 25 + 5 + arrangement * 7, 0) for index in range(len(strips))},
+            width=60,
+            height=height,
+            status="test",
+        )
+        for height in heights
+        for arrangement in range(2)
+    }
+    packed: list[tuple[int, int]] = []
+    builds: list[str] = []
+    candidate_of: dict[int, tuple[int, int]] = {}
+    stranded = first_routing or _routing_failures(
+        RouteFailureKind.CONGESTION_WALL,
+        exhaustive=True,
+    )
+    routed = _routing_failures()
+
+    def pack(
+        *_args: object,
+        height: int,
+        arrangement: int,
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        packed.append((height, arrangement))
+        candidate = packs[height, arrangement]
+        candidate_of[id(candidate)] = (height, arrangement)
+        return candidate
+
+    def build(
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        candidate_pack: freeform._Pack,
+        **_kwargs: object,
+    ) -> _BuildResult:
+        builds.append(candidate_pack.status)
+        wired = (candidate_pack.status == "window" and routes_after_repair) or (
+            candidate_of.get(id(candidate_pack)) in wires
+        )
+        routing = routed if wired else stranded
+        return _BuildResult(
+            placement=(Placement(buildings=(), stats={"belt_tiles": 0.0}) if wired else None),
+            routing=routing,
+            budget_stage=(
+                freeform._BuildBudgetStage.ROUTING
+                if routing.status is DetailedRouteStatus.BUDGET
+                else None
+            ),
+            towers=(),
+        )
+
+    def repair(*_args: object, **kwargs: object) -> freeform._Pack:
+        seed = kwargs["seed"]
+        assert isinstance(seed, freeform._Pack)
+        return replace(
+            seed,
+            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+            status="window",
+        )
+
+    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: list(heights))
+    monkeypatch.setattr(
+        freeform,
+        "_greedy_pack",
+        lambda _strips, height: packs.get((height, 0), packs[heights[0], 0]),
+    )
+    monkeypatch.setattr(freeform, "_pack", pack)
+    monkeypatch.setattr(freeform, "_build", build)
+    monkeypatch.setattr(freeform, "_room_for_another", room_for_another)
+    monkeypatch.setattr(
+        freeform,
+        "destroy_strips",
+        destroy if destroy is not None else lambda *_args, **_kwargs: frozenset({0}),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_pack_window",
+        repair if pack_window is None else pack_window,
+    )
+    monkeypatch.setattr(validate, "certify", lambda *_args, **_kwargs: validate.Report(findings=()))
+    monkeypatch.setattr(
+        finalize,
+        "finalize_placement",
+        lambda placement, _policy, **_kwargs: placement,
+    )
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=2,
+    )._sweep(spec, strips, 1.0, session=session)
+    return result, packed, builds
+
+
+def test_the_sweep_repairs_a_window_when_a_full_resolve_is_unaffordable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed pack with no clock for a full re-solve still gets a bounded repair.
+
+    `_room_for_another` charges the DEAREST COMPLETED candidate for a full
+    retry; a window costs `C_WINDOW_SECONDS` plus the measured post-pack work,
+    which is a different and much smaller charge.  When only the second one is
+    affordable, the sweep must take it, and it must not call `_pack` again for
+    that candidate.
+    """
+    session = OperatorSession()
+    windows: list[dict[str, object]] = []
+
+    def recording(*_args: object, **kwargs: object) -> freeform._Pack:
+        windows.append(dict(kwargs))
+        seed = kwargs["seed"]
+        assert isinstance(seed, freeform._Pack)
+        return replace(
+            seed,
+            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+            status="window",
+        )
+
+    result, packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        pack_window=recording,
+    )
+
+    # Nothing but the repaired pack ever wires here, so a placement at all is
+    # the repair having been carried through routing and certification.
+    assert result is not None
+    assert builds == ["test", "window"]
+    # The repaired candidate is re-evaluated, never re-packed.
+    assert packed == [(20, 0)]
+    assert len(windows) == 1
+    assert windows[0]["window"] == frozenset({0})
+    assert windows[0]["fixed_at"] == {1: (30, 0)}
+    assert windows[0]["arrangement"] == 0
+    assert windows[0]["width_bound"] == 60
+    # The choice that produced the repair is credited by the outcome it earned.
+    assert session.applied == 1
+    assert len(session.choices) == 1
+
+
+def test_the_sweep_never_solves_the_same_window_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same question is never put to CP-SAT twice inside one sweep.
+
+    A repair that fails again settles its own credit and is free to ask for
+    another window; when the selector names a set already asked, the LEDGER
+    answers -- an unapplied credit -- instead of the solver.
+    """
+    session = OperatorSession()
+    keys: list[tuple[int, int, frozenset[int]]] = []
+
+    def recording(*_args: object, **kwargs: object) -> freeform._Pack:
+        window = kwargs["window"]
+        assert isinstance(window, frozenset)
+        key = (int(str(kwargs["height"])), int(str(kwargs["arrangement"])), window)
+        assert key not in keys, f"window {key} solved twice"
+        keys.append(key)
+        seed = kwargs["seed"]
+        assert isinstance(seed, freeform._Pack)
+        return replace(
+            seed,
+            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+            status="window",
+        )
+
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        pack_window=recording,
+        routes_after_repair=False,
+    )
+
+    assert result is None
+    assert len(keys) == len(set(keys))
+    assert (20, 0, frozenset({0})) in keys
+    # More choices than solves: the repeats were declined without a solve.
+    assert len(session.choices) > len(keys)
+
+
+def test_the_sweep_never_windows_when_neither_clock_allows_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No clock, no window -- and no arm burned deciding that."""
+    session = OperatorSession()
+    calls: list[object] = []
+
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=lambda *_args, **_kwargs: False,
+        pack_window=lambda *_args, **kwargs: calls.append(kwargs) or None,
+        routes_after_repair=False,
+    )
+
+    assert result is None
+    assert calls == []
+    assert session.choices == ()
+
+
+def test_a_window_whose_pack_will_not_encode_is_counted_and_never_solved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An encoder refusal is a bug detector, not a repair: count it and move on."""
+    session = OperatorSession()
+    calls: list[object] = []
+
+    def refuse(*_args: object, **_kwargs: object) -> SequencePair:
+        raise ValueError("this pack does not encode")
+
+    monkeypatch.setattr(freeform, "_pack_relation_pair", refuse)
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        pack_window=lambda *_args, **kwargs: calls.append(kwargs) or None,
+        wires=frozenset({(21, 0)}),
+    )
+
+    assert result is not None
+    assert calls == []
+    assert result.stats["alns_encode_errors"] == 1.0
+    assert result.stats["alns_window_solves"] == 0.0
+    assert session.applied == 0
+
+
+def test_a_repaired_window_pack_is_never_replaced_by_the_greedy_warm_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A queued repair is routed, not swapped back out for the greedy seed.
+
+    The warm-start swap fires on the FIRST candidate while no feedback exists
+    for its height, and a BUDGET failure leaves exactly that state: no feedback
+    snapshot is taken, yet a structural proof can still make ``learned`` true.
+    A queued repair then arrives under every clause of the swap, and taking it
+    would throw the repair away and route the greedy seed in its place.
+    """
+    session = OperatorSession()
+    budgeted = DetailedRouteResult(
+        DetailedRouteStatus.BUDGET,
+        (),
+        (
+            NetFailure(
+                NetId(0, 1, "item-0", NetRole.INTERNAL, 0),
+                RouteFailureKind.BUDGET,
+                (),
+                (),
+                0,
+            ),
+        ),
+        0,
+        0,
+    )
+
+    def always_learns(
+        attempt: freeform.PackAttempt,
+        _strips: list[Strip],
+    ) -> tuple[tuple[object, ...], freeform.ExactPackNoGood, tuple[object, ...]]:
+        return (
+            (),
+            freeform.ExactPackNoGood(
+                height=attempt.height,
+                outline=attempt.outline,
+                width=attempt.compact_width,
+                origins=attempt.origins,
+                evidence=(
+                    finalize.ProjectionFailure(
+                        check="test.learned",
+                        buildings=(),
+                        detail="a fresh proof for every distinct assignment",
+                        band=0,
+                    ),
+                ),
+            ),
+            (),
+        )
+
+    monkeypatch.setattr(freeform, "_proof_scoped_no_goods", always_learns)
+    _result, packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        first_routing=budgeted,
+        routes_after_repair=False,
+    )
+
+    assert packed[0] == (20, 0)
+    assert builds[:2] == ["test", "window"]
+
+
+def test_the_freeform_sweep_stamps_the_operator_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every `alns_*` number the gate reads is stamped on the winning placement."""
+    session = OperatorSession()
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+    )
+
+    assert result is not None
+    for key in (
+        "alns_choices",
+        "alns_applied",
+        "alns_evaluations",
+        "alns_routing_seconds",
+        "alns_window_solves",
+        "alns_window_accepted",
+        "alns_window_seconds",
+        "alns_encode_errors",
+        "alns_skipped_no_goods",
+    ):
+        assert isinstance(result.stats[key], float), key
+    assert isinstance(result.stats["alns_operators"], str)
+    # Sequence-pair only: freeform never re-encodes a compaction.
+    assert "alns_encode_inexact" not in result.stats
+    assert result.stats["alns_choices"] == 1.0
+    assert result.stats["alns_applied"] == 1.0
+    assert result.stats["alns_window_solves"] == 1.0
+    assert result.stats["alns_window_accepted"] == 1.0
+    assert result.stats["alns_encode_errors"] == 0.0
+    # One evaluation for the stranded pack and one for its repair.
+    assert result.stats["alns_evaluations"] == 2.0
+
+
+@pytest.mark.slow
+def test_freeform_placement_stats_carry_the_operator_telemetry() -> None:
+    """The whole `lay_out` path stamps the telemetry on a real corpus spec."""
+    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        plastic_spec(), time_budget_s=15.0
+    )
+    for key in (
+        "alns_choices",
+        "alns_applied",
+        "alns_evaluations",
+        "alns_routing_seconds",
+        "alns_window_solves",
+        "alns_window_accepted",
+        "alns_window_seconds",
+        "alns_encode_errors",
+        "alns_skipped_no_goods",
+    ):
+        assert isinstance(placement.stats[key], float), key
+    assert isinstance(placement.stats["alns_operators"], str)
+    # Sequence-pair only: freeform never re-encodes a compaction.
+    assert "alns_encode_inexact" not in placement.stats
