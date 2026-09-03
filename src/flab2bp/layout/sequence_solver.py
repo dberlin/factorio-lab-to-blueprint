@@ -177,6 +177,13 @@ _MAX_SEQUENCE_ISLANDS = 16
 _COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND = 32.0 / 375.0
 _COMPACT_SEED_WALL_SHARE = Fraction(1, 3)
 _COMPACT_SEED_DIRECT_MIN_BUDGET_S = 30.0
+#: Seconds of the compact-seed wall share below which the variant direct
+#: eligibility scan is not worth starting.  It is a triple nested loop over
+#: (baseline candidate x producer variant x consumer variant), each iteration a
+#: full ``_selected_direct_targets`` rebuild; measured at 27s of a 30s budget on
+#: quantum-chip/no-proliferator, where it consumed the whole search and ran 5s
+#: past the deadline because nothing inside it looked at a clock.
+_DIRECT_ELIGIBILITY_MIN_REMAINING_S = 1.0
 _DENSE_SPRAY_MACHINE_THRESHOLD = 90
 _DENSE_SPRAY_LANE_THRESHOLD = 10
 _DENSE_SPRAY_COMPACT_SEED_ATTEMPT = 4
@@ -4021,8 +4028,18 @@ def _variant_direct_eligibility(
     problem: PlacementProblem,
     *,
     band_policy: BandPolicy,
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[VariantDirectInsertTarget, ...]:
-    """Enumerate only endpoint-variant pairs production can directly attach."""
+    """Enumerate only endpoint-variant pairs production can directly attach.
+
+    ``cancelled`` returns the empty tuple, which is exactly what the call site
+    already produces when the budget is too small for the scan -- so a cancelled
+    scan is an outcome the compact seed has always handled, not a new one.  A
+    PARTIAL tuple is deliberately never returned: the seed would then be biased
+    by whichever candidates happened to be enumerated before the clock ran out.
+    """
+    if cancelled is not None and cancelled():
+        return ()
     defaults = (0,) * problem.size
     baseline = _selected_direct_targets(
         spec,
@@ -4041,7 +4058,11 @@ def _variant_direct_eligibility(
     )
     eligible: list[VariantDirectInsertTarget] = []
     for candidate in baseline:
+        if cancelled is not None and cancelled():
+            return ()
         for producer_variant in range(variant_counts[candidate.producer]):
+            if cancelled is not None and cancelled():
+                return ()
             for consumer_variant in range(variant_counts[candidate.consumer]):
                 selection = list(defaults)
                 selection[candidate.producer] = producer_variant
@@ -4593,14 +4614,23 @@ def _production_run(
                 / _COMPACT_SEED_WALL_SHARE.denominator,
             )
             try:
+
+                def compact_deadline_reached() -> bool:
+                    return time.monotonic() >= compact_deadline
+
                 direct_eligibility = (
                     _variant_direct_eligibility(
                         spec,
                         strips,
                         problems[compact_height],
                         band_policy=band_policy,
+                        cancelled=compact_deadline_reached,
                     )
-                    if ceiling >= _COMPACT_SEED_DIRECT_MIN_BUDGET_S and not deadline_reached()
+                    if (
+                        ceiling >= _COMPACT_SEED_DIRECT_MIN_BUDGET_S
+                        and compact_deadline - time.monotonic()
+                        >= _DIRECT_ELIGIBILITY_MIN_REMAINING_S
+                    )
                     else ()
                 )
                 seed_config = (
