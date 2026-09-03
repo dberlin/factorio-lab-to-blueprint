@@ -626,8 +626,18 @@ def build(
                     # crash the whole build instead of refusing that attempt --
                     # exactly the failure this per-attempt deadline exists to
                     # replace with a reported number.
+                    #
+                    # `attempt_expired` is the only `cancelled` predicate this
+                    # call site ever hands `finalize_placement`, so a
+                    # ProjectionCancelled while it still reads False cannot BE
+                    # an attempt-deadline cancellation -- some future,
+                    # unrelated cancel source. Re-raise rather than mislabel it
+                    # "deadline exhausted".
+                    if not attempt_expired():
+                        raise
                     reason = (
                         f"attempt deadline exhausted during finalization "
+                        f"after {time.monotonic() - attempt_started:.1f}s "
                         f"(budget {time_budget_s:g}s + grace "
                         f"{ATOMIC_COMPLETION_GRACE_S:g}s)"
                     )
