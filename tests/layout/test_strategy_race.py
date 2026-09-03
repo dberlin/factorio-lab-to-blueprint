@@ -1421,6 +1421,14 @@ def test_the_inbox_decides_at_application_time_not_at_arrival() -> None:
     assert inbox.applicable(before_replan) == ("a",)
     assert inbox.applicable(after_replan) == ("b",)
     assert inbox.dropped == 0, "a message not applicable NOW may be applicable later"
+    # Ruling AM: matching does not consume.  A receiver that has already applied
+    # a no-good cannot re-supply it -- freeform CLEARS its own relation no-goods
+    # on a replan (`freeform.py:16179-16182`) -- so the inbox is the only thing
+    # holding the proof, and an inbox that emptied on a match would silently lose
+    # it the moment a later replan brought the matching strips back.
+    assert inbox.applicable(before_replan) == ("a",), (
+        "matching never consumes a held message"
+    )
 
 
 def test_the_inbox_reports_messages_no_strip_set_can_ever_use() -> None:
