@@ -1487,18 +1487,25 @@ class SequenceSolver[PreparedT]:
                 if self.budget.shared_left == 0:
                     termination = "budget"
                     break
-                eligible = [
+                with_stage_budget = [
                     height
                     for height in self._heights
                     if any(run.stages < self.config.stages for run in height.restarts)
-                    and not self._portfolio_pruned(height)
+                ]
+                eligible = [
+                    height for height in with_stage_budget if not self._portfolio_pruned(height)
                 ]
                 if not eligible:
-                    termination = (
-                        "portfolio-bound"
-                        if any(self._portfolio_pruned(height) for height in self._heights)
-                        else "candidates"
-                    )
+                    # The bound is only what ENDED this search if it took away
+                    # every height that still had stage budget.  `any(pruned)`
+                    # would blame the portfolio for a genuine stage exhaustion
+                    # whenever one unrelated height happened to be pruned, and a
+                    # refusal that names the wrong cause sends the next reader
+                    # to the wrong half of the program.  `eligible` is
+                    # `with_stage_budget` minus the pruned, so an empty
+                    # `eligible` beside a non-empty `with_stage_budget` IS
+                    # "every height that still had budget was pruned".
+                    termination = "portfolio-bound" if with_stage_budget else "candidates"
                     break
                 protected_followup = next(
                     (
