@@ -20003,3 +20003,63 @@ def test_a_replan_drops_a_pending_window_repair_and_settles_it_once(
     assert log == ["observe:False"]
     assert session.applied == 0
     assert len(session.choices) == 1
+
+
+def test_lay_out_honours_an_absolute_deadline_from_another_process() -> None:
+    """A child cannot compute its own wall: it starts spawn-cost seconds late.
+
+    An absolute deadline already in the past must refuse immediately rather than
+    run for `time_budget_s` more seconds.
+    """
+    layout = FreeformLayout(band_policy=BandPolicy("portable"))
+    started = time.monotonic()
+
+    with pytest.raises(NoValidLayout):
+        layout.lay_out(
+            two_stage_spec(),
+            time_budget_s=30.0,
+            absolute_deadline=time.monotonic() - 1.0,
+        )
+
+    assert time.monotonic() - started < 10.0, (
+        "an expired absolute deadline must not buy a fresh 30s budget"
+    )
+
+
+def test_the_suite_memo_keys_on_the_absolute_deadline() -> None:
+    """The memo must never serve one wall's answer for another wall.
+
+    ``tests/conftest.py`` replaces ``FreeformLayout.lay_out`` process-wide with a
+    memoising wrapper.  ``absolute_deadline`` changes the result, so a key that
+    omitted it would hand back a placement computed against a different
+    deadline -- a wrong answer, which is worse than being slow.
+    """
+    from tests import conftest
+
+    calls: list[float | None] = []
+
+    class _Recorded:
+        def lay_out(
+            self,
+            spec: BuildSpec,
+            *,
+            time_budget_s: float = 15.0,
+            absolute_deadline: float | None = None,
+        ) -> Placement:
+            calls.append(absolute_deadline)
+            return Placement(buildings=(), stats={"belt_tiles": float(len(calls))})
+
+    conftest._install_memo(_Recorded)
+    layout = _Recorded()
+    spec = two_stage_spec()
+
+    first = layout.lay_out(spec, time_budget_s=1.0, absolute_deadline=100.0)
+    second = layout.lay_out(spec, time_budget_s=1.0, absolute_deadline=200.0)
+    repeat = layout.lay_out(spec, time_budget_s=1.0, absolute_deadline=100.0)
+    without = layout.lay_out(spec, time_budget_s=1.0)
+
+    # Two different walls are two different calls; the repeat is the memo.
+    assert calls == [100.0, 200.0, None]
+    assert first is repeat
+    assert second is not first
+    assert without is not first

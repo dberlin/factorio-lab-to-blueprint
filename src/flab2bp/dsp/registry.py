@@ -966,8 +966,7 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "flab2bp.layout.strategy_race",
         "<module>",
         0.75,
-        "RACE_FREEFORM_WORKER_SHARE: freeform's share of CP-SAT search workers; "
-        "not MAX_BELT_SLOPE",
+        "RACE_FREEFORM_WORKER_SHARE: freeform's share of CP-SAT search workers; not MAX_BELT_SLOPE",
     ),
     LintException(
         "flab2bp.layout.sequence_pair",

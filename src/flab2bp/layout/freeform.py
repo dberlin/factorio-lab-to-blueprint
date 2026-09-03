@@ -16741,7 +16741,13 @@ class FreeformLayout:
         #: compares against.
         self.arrangements = _ARRANGEMENTS if arrangements is None else arrangements
 
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement:
+    def lay_out(
+        self,
+        spec: BuildSpec,
+        *,
+        time_budget_s: float = 15.0,
+        absolute_deadline: float | None = None,
+    ) -> Placement:
         """Return the densest ROUTABLE ``Placement``, or raise :class:`NoValidLayout`.
 
         Routability is a condition for existing, not a ranking key.  It used to
@@ -16783,7 +16789,11 @@ class FreeformLayout:
 
         ceiling = time_budget_s
         started = time.monotonic()
-        deadline = started + ceiling
+        # A racing child starts the budget its PARENT started, so it must be
+        # told the wall rather than compute one: spawn, interpreter start and
+        # unpickling the spec all happen after the clock began.  Same expression
+        # `sequence_solver._production_run` already uses for the same reason.
+        deadline = started + ceiling if absolute_deadline is None else absolute_deadline
         # ONE routing budget for the call. `_MAX_EXPANSIONS` bounds a single
         # search and `_ROUTING_BUDGET` bounded one routing pass; nothing bounded
         # the ten to twenty passes a sweep makes, so the packer could spend it
