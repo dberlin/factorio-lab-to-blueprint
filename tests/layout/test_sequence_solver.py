@@ -2267,6 +2267,88 @@ def test_measured_stage_reserves_bounded_work_without_an_incumbent() -> None:
     assert admission.try_start() is None
 
 
+def test_cold_stage_admission_refuses_the_last_quarter_of_the_budget() -> None:
+    """A role with no history must reserve a share of the WHOLE budget.
+
+    deadline 100.0, total_budget_s 100.0, COLD_STAGE_FRACTION 0.25,
+    COLD_STAGE_MIN_RESERVE_S 0.25, so a cold role requires
+    max(0.25, 0.25 * 100.0) = 25.0 seconds of remaining wall:
+
+        now = 10.0 -> remaining 90.0 > 25.0 -> ADMIT
+        now = 80.0 -> remaining 20.0 < 25.0 -> REFUSE
+        now = 99.9 -> remaining  0.1 < 25.0 -> REFUSE
+
+    Written out because `remaining > remaining * fraction` is the vacuous rule
+    this test exists to keep out of the code.
+    """
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    admission = sequence_solver_module._MeasuredStageAdmission(
+        deadline=100.0, monotonic=clock, total_budget_s=100.0
+    )
+
+    now = 10.0
+    assert admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY) == 10.0
+    admission.finish(10.0, sequence_solver_module._MeasuredStageRole.ORDINARY)
+
+    now = 80.0
+    assert admission.try_start(sequence_solver_module._MeasuredStageRole.COMPACT) is None
+
+    now = 99.9
+    assert admission.try_start(sequence_solver_module._MeasuredStageRole.FEEDBACK) is None
+
+
+def test_an_unmigrated_admission_keeps_a_quarter_second_floor() -> None:
+    """``total_budget_s`` defaults to 0.0, so only the floor applies."""
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    admission = sequence_solver_module._MeasuredStageAdmission(deadline=100.0, monotonic=clock)
+
+    now = 80.0   # 20.0 remaining, over the 0.25 floor
+    assert admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY) == 80.0
+    admission.finish(80.0, sequence_solver_module._MeasuredStageRole.ORDINARY)
+
+    now = 99.9   # 0.1 remaining, under the 0.25 floor
+    assert admission.try_start(sequence_solver_module._MeasuredStageRole.COMPACT) is None
+
+
+def test_warm_stage_admission_is_unchanged_by_the_cold_cap() -> None:
+    """Measured history is the whole requirement -- no floor, no share.
+
+    The first stage runs 0.0 -> 8.0 with 3.0 of that recorded as completion, so
+    the ORDINARY history becomes speculative 5.0 + completion 3.0 = 8.0.  At
+    now = 90.0 there are 10.0 seconds left: over the measured 8.0 and UNDER the
+    25.0 a cold role would have required, which is what makes this a test of the
+    warm path rather than a second test of the cold one.
+    """
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    admission = sequence_solver_module._MeasuredStageAdmission(
+        deadline=100.0, monotonic=clock, total_budget_s=100.0
+    )
+    started = admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY)
+    assert started == 0.0
+    now = 8.0
+    admission.record_completion(3.0)
+    admission.finish(started, sequence_solver_module._MeasuredStageRole.ORDINARY)
+
+    now = 90.0
+    assert admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY) == 90.0
+    admission.finish(90.0, sequence_solver_module._MeasuredStageRole.ORDINARY)
+
+    now = 93.0   # 7.0 remaining, under the measured 8.0
+    assert admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY) is None
+
+
 def test_compact_completion_history_does_not_price_first_ordinary_stage() -> None:
     now = 0.0
     admission = sequence_solver_module._MeasuredStageAdmission(
@@ -2914,6 +2996,42 @@ def test_production_run_uses_requested_budget_with_supplied_absolute_deadline() 
     assert run.solver.deadline_reached()
     assert run.ceiling == 2.0
     assert run.solver.budget.total == 2_000_000
+
+
+def test_production_run_tells_stage_admission_its_own_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_production_run` must pass its own ``ceiling`` as ``total_budget_s``.
+
+    Without this wiring every cold stage in the attempt falls back to the
+    0.25 s floor regardless of the attempt's actual budget (5.1.2).
+    """
+    captured: dict[str, object] = {}
+    real_admission = sequence_solver_module._MeasuredStageAdmission
+
+    def capturing_admission(
+        **kwargs: object,
+    ) -> sequence_solver_module._MeasuredStageAdmission:
+        captured.update(kwargs)
+        return real_admission(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_MeasuredStageAdmission",
+        capturing_admission,
+    )
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=7.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=time.monotonic() - 1.0,
+    )
+
+    assert run.ceiling == 7.0
+    assert captured.get("total_budget_s") == 7.0
 
 
 def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_cache(
