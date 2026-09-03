@@ -1716,6 +1716,32 @@ def test_a_completed_arm_with_no_placement_is_not_a_winner() -> None:
         )
 
 
+def test_an_invalid_arm_never_wins_however_small_its_placement_is() -> None:
+    """A placement that failed the validator is not a smaller answer, it is none.
+
+    `invalid` is in the outcome's `Literal` and nothing emits it yet, so the only
+    thing standing between a validator-rejected placement and the audit's `best`
+    cell is the `status == "completed"` half of the winner filter.  Loosen that
+    to `placement is not None` and this 100-tile reject beats a real refusal and
+    is returned as the race's answer -- which is the whole failure mode
+    `NoValidLayout` exists to prevent, arriving through the one path that skips
+    it.  The island merge raises on `invalid` for the same reason.
+    """
+    layout = RacingLayout(BandPolicy("portable"))
+
+    with pytest.raises(NoValidLayout, match="both raced strategies refused"):
+        layout._merge(
+            (
+                _StrategyRaceOutcome(
+                    "freeform", "invalid", placement=_placement(area=100, belt_tiles=10)
+                ),
+                _StrategyRaceOutcome(
+                    "sequence-pair", "refused", refusal_reason="no stages"
+                ),
+            )
+        )
+
+
 def test_the_winner_carries_how_many_arms_were_killed() -> None:
     # Spec 7: the audit row's `detail` must not be the only trace that the race
     # had to kill an arm to finish.
