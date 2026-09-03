@@ -881,6 +881,51 @@ def _has_exact_two_face_seating(
     return False
 
 
+def _seat_both_fed_outermost(
+    in_above: tuple[tuple[str, ...], ...],
+    in_below: tuple[tuple[str, ...], ...],
+    both_fed: frozenset[str],
+) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
+    """Move every lane carrying a both-fed ingredient to its side's outermost row.
+
+    A lane fed from the boundary AND from an internal producer needs TWO belt
+    approaches, and only the outermost lane of a side has two free 4-neighbours.
+    Measured (R4 §1.2): the head tile of a MIDDLE lane has its own lane's second
+    tile east, a sibling lane head north, a sibling lane head or its own machine
+    band south, and the strip's `WEST_CHANNEL` column west -- one free side for
+    two claims, at every height, in every pack, under every arrangement.
+
+    THE UNWRITTEN COUPLING THIS RELIES ON, written down here because a packer
+    change could silently remove it: the row directly north of every strip is
+    free.  `freeform._box` charges each strip `height + MARGIN` with
+    `MARGIN = 1`, and `freeform._greedy_pack` seats each strip at the TOP of its
+    slot, so the outermost `in_above` lane head can always step north.  If that
+    margin row ever goes away, `casimir-crystal#1` and `energy-matrix#12` strand
+    again; the router-side pin in `tests/layout/test_freeform.py` and the corpus
+    invariant in `tests/layout/test_strip_variants.py` are the tripwires.
+
+    The two sides count rows in OPPOSITE directions -- `Strip.row_of_input`
+    returns `in_above.index(lane)` for an `in_above` lane and
+    `first_row_below_band + len(out_lanes) + in_below.index(lane)` for an
+    `in_below` one -- so `in_above` wants the both-fed lanes FIRST and `in_below`
+    wants them LAST.  Ordering `input_items` alone gets `in_above` right and
+    `in_below` exactly wrong, which is why the rule is expressed here, on the
+    seated rows.
+
+    Both sorts are STABLE, so a side with no both-fed lane is returned unchanged
+    and every strip without one is byte-identical to today's.
+    """
+    if not both_fed:
+        return in_above, in_below
+    above = tuple(
+        sorted(in_above, key=lambda lane: not (both_fed & frozenset(lane)))
+    )
+    below = tuple(
+        sorted(in_below, key=lambda lane: bool(both_fed & frozenset(lane)))
+    )
+    return above, below
+
+
 def _logical_strip_plans(
     spec: BuildSpec,
     *,
@@ -918,6 +963,14 @@ def _logical_strip_plans(
             for source in producers.get(item, []):
                 consumers[source, item].append(key)
 
+    # An ingredient that is BOTH belted in from the boundary and produced inside
+    # the block accepts two independent feeds on one lane, so its lane head needs
+    # two belt approaches.  `producers` is already keyed by every internally
+    # produced item, so this costs one set intersection.  `universe-matrix` is
+    # the only corpus spec where it is non-empty (R4 §4); measured today it is
+    # exactly `{'hydrogen'}`.
+    both_fed = frozenset(spec.external_inputs) & frozenset(producers)
+
     plans: list[_LogicalStripPlan] = []
     for key, group in groups.items():
         above_cap, below_cap = _legacy_side_lane_caps(
@@ -925,7 +978,14 @@ def _logical_strip_plans(
             group.yaw,
             group.pitch_h,
         )
-        input_items = tuple(sorted(group.inputs))
+        # SURGICAL, not broad.  Sorting every external input first was measured
+        # too (R4 §7, `LANEORDER=1`): same coverage, +0.78% total area and a
+        # reproducible +27.2% on `sequence-pair|quantum-chip|2`.  Restricting the
+        # key to items that actually raise the corridor demand changed 2 of 66
+        # cells for +0.11%, inside the measured 12%-per-cell noise floor.
+        input_items = tuple(
+            sorted(group.inputs, key=lambda item: (item not in both_fed, item))
+        )
         sinks: list[tuple[str, str, CargoDomain]] = []
         for item in sorted(group.outputs):
             destinations = consumers.get((key, item), [])
@@ -1027,6 +1087,21 @@ def _logical_strip_plans(
             except ValueError as flanked:
                 raise ValueError(f"recipe {group.recipe_id!r}: {flanked}") from None
             flank = True
+
+        # The sort key above puts the both-fed items at index 0 of `input_items`,
+        # which `_seat_inputs` turns into lane 0 -- the outermost `in_above` row
+        # when the split leaves at least one lane there.  When it does not, lane
+        # 0 is `in_below[0]`, the row nearest the machine band and the worst one
+        # available.  No corpus spec takes that path today; the normalisation is
+        # what makes the invariant true rather than lucky.
+        #
+        # BEFORE `south_columns` deliberately: `_has_exact_two_face_seating`
+        # below encodes lane order into `side_index`, so it must see the seating
+        # this function actually ships.  On the corpus this changes nothing --
+        # only `universe-matrix` has a both-fed item and both of its affected
+        # strips keep `box_height` and `width` (R4 §6 E6) -- but a reviewer
+        # should know the prover is downstream of the reorder on purpose.
+        in_above, in_below = _seat_both_fed_outermost(in_above, in_below, both_fed)
 
         south_columns = len(slots.attachable_columns(probe, group.pitch_h))
         out_capacity = below_cap - len(in_below)

@@ -41,6 +41,7 @@ from flab2bp.layout.strip_variants import (
     variant_with_minimum_pitch,
     variants_for_count,
 )
+from flab2bp.rates.candidates import CandidatePolicy
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 
 
@@ -1420,3 +1421,170 @@ def test_merge_rejects_non_adjacent_or_pose_incompatible_ranges() -> None:
 
     assert merge_strip_instances(family, left, incompatible) is None
     assert merge_strip_instances(family, left, displaced) is None
+
+
+def _corpus_spec(url_id: str, policy: CandidatePolicy) -> BuildSpec:
+    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import build_candidates
+
+    entry = next(e for e in URL_CORPUS if e.url_id == url_id)
+    return build_candidates(
+        load_vendored(),
+        parse_url(entry.url),
+        candidate_policies=(policy,),
+    ).candidates[0]
+
+
+def test_an_ingredient_fed_from_outside_and_inside_takes_the_outermost_lane_row() -> None:
+    """The `hydrogen` lane head must have a second free 4-neighbour.
+
+    R4 §1.2 measured both failing ports as the WEST HEAD TILE of the MIDDLE
+    input lane: east is its own lane's second tile, north is the sibling lane
+    above, south is the sibling lane below or its own machine band, and only the
+    `WEST_CHANNEL` tile is free.  `_reserve_port_access` then reports
+    `wants=2 held=1`.  The outermost `in_above` row is the one whose north
+    neighbour is the free margin row `_box` charges (`height + MARGIN`,
+    MARGIN = 1) and `_greedy_pack` leaves above every strip.
+
+    `universe-matrix` is the only corpus spec where `hydrogen` is BOTH an
+    external input and internally produced (R4 §4), which is why the same two
+    strips wire cleanly in `casimir-crystal`, `energy-matrix` and `quantum-chip`.
+    """
+    from flab2bp.rates.candidates import CandidatePolicy
+
+    spec = _corpus_spec("universe-matrix", CandidatePolicy.NO_PROLIFERATOR)
+    strips = {strip.group_key: strip for strip in plan_strips(spec)}
+
+    for group_key in ("casimir-crystal#1", "energy-matrix#12"):
+        strip = strips[group_key]
+        assert strip.in_above[0] == ("hydrogen",), group_key
+        assert strip.row_of_input("hydrogen") == 0, group_key
+
+
+def test_the_seating_rule_changes_no_strip_dimension() -> None:
+    """R4 §6 E6 measured `box_height` and `width` unchanged on both strips."""
+    from flab2bp.rates.candidates import CandidatePolicy
+
+    spec = _corpus_spec("universe-matrix", CandidatePolicy.NO_PROLIFERATOR)
+    strips = {strip.group_key: strip for strip in plan_strips(spec)}
+
+    assert (strips["casimir-crystal#1"].box_height, strips["casimir-crystal#1"].width) == (8, 12)
+    assert (strips["energy-matrix#12"].box_height, strips["energy-matrix#12"].width) == (8, 36)
+
+
+def test_every_both_fed_ingredient_is_seated_on_its_side_s_outermost_row() -> None:
+    """The invariant, over every corpus spec.
+
+    Stated as geometry: a lane head must have at least as many free
+    4-neighbours as the number of independent feeds the lane accepts.  The strip
+    builder's only lever is row order, so it can guarantee this for at most two
+    lanes per strip -- `in_above`'s first row and `in_below`'s last.  A recipe
+    with three both-fed ingredients would refuse again; R4 §8(B)'s staircase is
+    the recorded answer and is out of this phase.
+
+    Runs the LOGICAL planner rather than `plan_strips`: it owns the rule, it is
+    pure, and it costs no physical variant enumeration.
+    """
+    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.layout.freeform import _adapt
+    from flab2bp.layout.strip_variants import _logical_strip_plans
+    from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
+
+    vendored = load_vendored()
+    checked = 0
+    for entry in URL_CORPUS:
+        candidates = build_candidates(
+            vendored,
+            parse_url(entry.url),
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+        ).candidates
+        for spec in candidates:
+            groups = _adapt(spec)
+            internally_produced = {item for group in groups.values() for item in group.outputs}
+            both_fed = frozenset(spec.external_inputs) & internally_produced
+            if not both_fed:
+                continue
+            for plan in _logical_strip_plans(spec):
+                for index, lane in enumerate(plan.in_above):
+                    if both_fed & frozenset(lane):
+                        assert index == 0, f"{entry.url_id} {plan.group_key} above {lane}"
+                        checked += 1
+                for index, lane in enumerate(plan.in_below):
+                    if both_fed & frozenset(lane):
+                        assert index == len(plan.in_below) - 1, (
+                            f"{entry.url_id} {plan.group_key} below {lane}"
+                        )
+                        checked += 1
+    assert checked, "no corpus spec exercised the rule; the invariant proved nothing"
+
+
+def test_a_spec_with_no_both_fed_ingredient_keeps_its_alphabetical_lane_order() -> None:
+    """The surgical/broad mutant guard, stated where the mutants live.
+
+    Two mutants of `_logical_strip_plans`' sort key, and this test plus the
+    `hydrogen` test above pin one each:
+
+    * WIDENING the key to `(item not in spec.external_inputs, item)` is R4's
+      broad `LANEORDER=1` rule.  `quantum-chip` has ten external inputs and an
+      EMPTY both-fed set, so under the broad rule its lanes move and THIS test
+      goes red; under the surgical rule they cannot move at all.  R4 §7 measured
+      the broad rule at +27.2% area on `sequence-pair|quantum-chip|2`,
+      reproduced across arms, and that is the one regression risk to the 66
+      clean cells this phase carries.
+    * DROPPING the `not in both_fed` term leaves `key=lambda item: item`, plain
+      alphabetical order -- today's behaviour.  That leaves this test green and
+      turns
+      `test_an_ingredient_fed_from_outside_and_inside_takes_the_outermost_lane_row`
+      red, which is exactly the pair spec section 5.1 test 4 asks for.
+    """
+    from flab2bp.layout.freeform import _adapt
+    from flab2bp.layout.strip_variants import _logical_strip_plans
+    from flab2bp.rates.candidates import CandidatePolicy
+
+    spec = _corpus_spec("quantum-chip", CandidatePolicy.NO_PROLIFERATOR)
+    groups = _adapt(spec)
+    produced = {item for group in groups.values() for item in group.outputs}
+    assert not (frozenset(spec.external_inputs) & produced), "pick a spec with no both-fed item"
+
+    for plan in _logical_strip_plans(spec):
+        items = [item for lane in (*plan.in_above, *plan.in_below) for item in lane]
+        assert items == sorted(items), plan.group_key
+
+
+def test_a_side_with_no_both_fed_lane_is_returned_unchanged() -> None:
+    """The helper is a stable no-op wherever the rule does not apply."""
+    from flab2bp.layout.strip_variants import _seat_both_fed_outermost
+
+    in_above = (("alpha",), ("beta",))
+    in_below = (("gamma",), ("delta",))
+
+    assert _seat_both_fed_outermost(in_above, in_below, frozenset()) == (in_above, in_below)
+    assert _seat_both_fed_outermost(in_above, in_below, frozenset({"zeta"})) == (
+        in_above,
+        in_below,
+    )
+
+
+def test_a_both_fed_ingredient_seated_below_takes_the_LAST_below_row() -> None:
+    """The case no corpus spec exercises, pinned because the indices differ.
+
+    `Strip.row_of_input` counts `in_above` from the strip's top (index 0 is
+    outermost) and `in_below` downward from the band (the LAST index is
+    outermost).  Ordering `input_items` alone puts a both-fed item at
+    `in_below[0]` -- the row nearest the machine band, the worst one available --
+    whenever `_seat_inputs` seats lane 0 below.
+    """
+    from flab2bp.layout.strip_variants import _seat_both_fed_outermost
+
+    above, below = _seat_both_fed_outermost(
+        (),
+        (("hydrogen",), ("graphene",), ("titanium-crystal",)),
+        frozenset({"hydrogen"}),
+    )
+
+    assert above == ()
+    assert below == (("graphene",), ("titanium-crystal",), ("hydrogen",))
