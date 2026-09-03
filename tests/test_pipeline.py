@@ -849,7 +849,8 @@ def test_a_finalization_cancelled_by_the_attempt_deadline_is_reported_as_a_refus
     attempt -- "a number the gate can fail on beats a number nobody produced"
     kept for real, not just reported.
     """
-    monkeypatch.setattr(time, "monotonic", lambda: 1000.0)
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
 
     class _NeedsFinalization:
         def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
@@ -868,22 +869,130 @@ def test_a_finalization_cancelled_by_the_attempt_deadline_is_reported_as_a_refus
         cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         assert cancelled is not None
+        # attempt_started(1000.0) + budget(5.0) + grace(5.0) == 1010.0 -- push
+        # the driven clock past it so `attempt_expired()` reads True, exactly
+        # what a real deadline firing during finalization looks like (and what
+        # the hardening check inside the except clause requires before it will
+        # convert this into a refusal at all).
+        now[0] = 1010.0
         raise finalize.ProjectionCancelled
 
     monkeypatch.setattr(finalize, "finalize_placement", _always_cancelled)
 
+    steps: list[pipeline.AttemptProgress] = []
     with pytest.raises(NoValidLayout) as exc_info:
         pipeline.build(
             SMALL_URL,
             strategy="freeform",
             candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
             time_budget_s=5.0,
+            on_progress=steps.append,
         )
 
     assert len(exc_info.value.attempt_failures) == 1
     failure = exc_info.value.attempt_failures[0]
     assert failure.strategy == "freeform"
     assert "deadline" in failure.reason
+
+    refused_steps = [s for s in steps if s.phase == "refused"]
+    assert len(refused_steps) == 1
+    assert refused_steps[0].reason == failure.reason
+
+
+def test_the_deadline_refusal_reason_pins_wall_budget_and_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins the exact refusal text under a driven clock: the measured wall
+    (not just the static budget and grace) must be in it, formatted to one
+    decimal, so a reader sees how far past the deadline finalization actually
+    ran rather than just the two numbers that define the deadline.
+    """
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    class _NeedsFinalization:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            return Placement(buildings=(), completion=None, frame=None)
+
+    monkeypatch.setattr(pipeline, "_new_layout", lambda *_a, **_kw: _NeedsFinalization())
+    monkeypatch.setattr(
+        finalize, "compact_open_boundary_belts", lambda placement, *_a, **_kw: placement
+    )
+
+    def _cancel_past_deadline(
+        _placement: Placement,
+        _policy: object,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Placement:
+        del cancelled
+        # attempt_started(1000.0) + budget(3.0) + grace(5.0) == 1008.0 --
+        # land 0.4s past it, at a value whose fractional part exercises the
+        # ":.1f" formatting rather than landing on a round number by luck.
+        now[0] = 1008.4
+        raise finalize.ProjectionCancelled
+
+    monkeypatch.setattr(finalize, "finalize_placement", _cancel_past_deadline)
+
+    with pytest.raises(NoValidLayout) as exc_info:
+        pipeline.build(
+            SMALL_URL,
+            strategy="freeform",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=3.0,
+        )
+
+    reason = exc_info.value.attempt_failures[0].reason
+    assert reason == (
+        "attempt deadline exhausted during finalization after 8.4s "
+        "(budget 3s + grace 5s)"
+    )
+
+
+def test_a_cancellation_before_the_deadline_is_not_relabelled_and_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`attempt_expired` is the only `cancelled` predicate this call site ever
+    hands `finalize_placement`, so a `ProjectionCancelled` raised while that
+    predicate still reads False cannot be an attempt-deadline cancellation --
+    it can only be some future, unrelated cancel source. Relabelling it
+    "deadline exhausted" would be a lie about why the attempt was refused;
+    this call site must re-raise instead of guessing.
+    """
+    monkeypatch.setattr(time, "monotonic", lambda: 1000.0)
+
+    class _NeedsFinalization:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            return Placement(buildings=(), completion=None, frame=None)
+
+    monkeypatch.setattr(pipeline, "_new_layout", lambda *_a, **_kw: _NeedsFinalization())
+    monkeypatch.setattr(
+        finalize, "compact_open_boundary_belts", lambda placement, *_a, **_kw: placement
+    )
+
+    def _cancel_before_deadline(
+        _placement: Placement,
+        _policy: object,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Placement:
+        del cancelled
+        # The clock never moves: attempt_started(1000.0) + budget(5.0) +
+        # grace(5.0) == 1010.0, and `time.monotonic()` stays pinned at
+        # 1000.0 -- `attempt_expired()` reads False throughout.
+        raise finalize.ProjectionCancelled
+
+    monkeypatch.setattr(finalize, "finalize_placement", _cancel_before_deadline)
+
+    with pytest.raises(finalize.ProjectionCancelled):
+        pipeline.build(
+            SMALL_URL,
+            strategy="freeform",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=5.0,
+        )
 
 
 DEUTERON_URL = (
