@@ -731,6 +731,11 @@ def run_strategy_race(
         # strategy, so a second future for one arm would be silently dropped at
         # one of those two points -- a lost result reported as a complete race.
         if len(strategy_by_future) != len(set(strategy_by_future.values())):
+            # Stop the children BEFORE raising.  `_pool_submit` cannot produce a
+            # duplicate today, but a `submit` seam that did would otherwise leave
+            # two spawned processes solving for their whole ceiling with nobody
+            # left holding their futures.
+            _terminate_executor(executor, tuple(strategy_by_future))
             raise ValueError("each strategy must be raced exactly once")
         done, not_done = wait(
             tuple(strategy_by_future),
@@ -788,3 +793,127 @@ def run_strategy_race(
     if first_error is not None and all(outcome.status == "crashed" for outcome in outcomes):
         raise first_error
     return _ordered(outcomes)
+
+
+def _require_placement(outcome: _StrategyRaceOutcome) -> Placement:
+    """Narrow ``Placement | None`` where the status already promised a placement.
+
+    Only ever called on outcomes the caller has already filtered to
+    ``status == "completed" and placement is not None``, so the raise is a
+    defect report, not a control path: it turns a shape nobody should be able to
+    produce into a named error rather than a ``TypeError`` inside ``min``.
+    """
+    placement = outcome.placement
+    if placement is None:
+        raise RuntimeError(f"completed race leg {outcome.strategy} returned no placement")
+    return placement
+
+
+class RacingLayout:
+    """``LayoutStrategy`` shim so one raced portfolio is a single audit cell.
+
+    ``pipeline.build`` does NOT go through this class: it keeps both outcomes as
+    two ``Attempt``s and picks by ``min(area)`` itself.  This exists for callers
+    that want one placement out of a race -- the audit's ``best`` cell.
+    """
+
+    name = "best"
+
+    def __init__(
+        self,
+        band_policy: BandPolicy,
+        *,
+        workers: int | None = None,
+        arrangements: int | None = None,
+        belt_vertical_construction: bool = True,
+        sequence_islands: int = 1,
+        share: bool = True,
+        max_belt_z: Fraction = DEFAULT_RACE_MAX_BELT_Z,
+    ) -> None:
+        self.band_policy = band_policy
+        self.workers = workers
+        self.arrangements = arrangements
+        self.belt_vertical_construction = belt_vertical_construction
+        self.sequence_islands = sequence_islands
+        self.share = share
+        self.max_belt_z = max_belt_z
+
+    def _merge(self, outcomes: Sequence[_StrategyRaceOutcome]) -> Placement:
+        """Pick one placement, by quality and then by name -- never by arrival.
+
+        The key is ``(*_exact_key(placement), RACE_STRATEGIES.index(strategy))``,
+        the same shape ``_merge_sequence_island_outcomes`` uses with its
+        ``island_id`` tie-break, so two arms that prove the same area and belt
+        count resolve to a fixed strategy rather than to whichever child
+        happened to finish first.
+        """
+        from flab2bp.layout.base import NoValidLayout
+        from flab2bp.layout.sequence_solver import _exact_key
+
+        completed = tuple(
+            outcome
+            for outcome in outcomes
+            if outcome.status == "completed" and outcome.placement is not None
+        )
+        if completed:
+            winner = _require_placement(
+                min(
+                    completed,
+                    key=lambda outcome: (
+                        *_exact_key(_require_placement(outcome)),
+                        RACE_STRATEGIES.index(outcome.strategy),
+                    ),
+                )
+            )
+            # Stamped unconditionally, including the zero: the audit row's
+            # `detail` is otherwise the only trace that the race had to kill an
+            # arm to finish, and to a reader using `.get` an absent key and a
+            # zero are the same answer to a different question.
+            winner.stats["race_terminated"] = float(
+                sum(1 for outcome in outcomes if outcome.status == "terminated")
+            )
+            return winner
+        details = "; ".join(
+            f"{outcome.strategy}: {outcome.refusal_reason}"
+            for outcome in outcomes
+            if outcome.refusal_reason
+        )
+        raise NoValidLayout(
+            "both raced strategies refused" + (f": {details}" if details else ""),
+            spec_label=next(
+                (o.refusal_spec_label for o in outcomes if o.refusal_spec_label), ""
+            ),
+            budget_s=next((o.refusal_budget_s for o in outcomes if o.refusal_budget_s), 0.0),
+            # Both arms refuse over the same spec and the same band policy, so
+            # the same projection failure can arrive twice; reporting it twice
+            # would read as two defects.
+            projection_failures=tuple(
+                dict.fromkeys(
+                    failure
+                    for outcome in outcomes
+                    for failure in outcome.refusal_projection_failures
+                )
+            ),
+        )
+
+    def lay_out(
+        self,
+        spec: BuildSpec,
+        *,
+        time_budget_s: float = 15.0,
+        absolute_deadline: float | None = None,
+    ) -> Placement:
+        del absolute_deadline  # a race owns its own children's walls
+        return self._merge(
+            run_strategy_race(
+                spec,
+                time_budget_s=time_budget_s,
+                band_policy=self.band_policy,
+                belt_vertical_construction=self.belt_vertical_construction,
+                max_belt_z=self.max_belt_z,
+                workers=self.workers,
+                arrangements=self.arrangements,
+                sequence_islands=self.sequence_islands,
+                share=self.share,
+            )
+        )
