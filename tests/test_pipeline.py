@@ -20,11 +20,13 @@ from flab2bp import pipeline
 from flab2bp.dsp import catalog, codec
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import finalize, freeform, validate
+from flab2bp.layout import finalize, freeform, strategy_race, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
+    DEFAULT_SEARCH_WORKERS,
     AreaFrame,
     NoValidLayout,
     Placement,
@@ -208,6 +210,7 @@ def test_build_defaults_to_one_portable_policy(
         belt_vertical_construction: bool,
         sequence_islands: int = 1,
         band_policy: BandPolicy,
+        workers: int | None = None,
     ) -> FreeformLayout | SequencePairLayout:
         seen.append(band_policy)
         return original_new_layout(
@@ -215,6 +218,7 @@ def test_build_defaults_to_one_portable_policy(
             belt_vertical_construction=belt_vertical_construction,
             sequence_islands=sequence_islands,
             band_policy=band_policy,
+            workers=workers,
         )
 
     def validate_spy(
@@ -1068,3 +1072,418 @@ def test_without_planetary_logistics_the_same_url_is_refused(
             time_budget_s=45.0,
             candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
         )
+
+
+# --- Task 14: `workers`, opt-in racing, and the relaxed islands guard ---------
+
+#: A budget the stubbed race never actually spends.  Named so the refusal an
+#: arm reports and the budget the build was asked for cannot drift apart.
+STUB_RACE_BUDGET_S = 4.0
+
+
+def _finished(width: int, height: int) -> Placement:
+    """A finished placement, cheap enough to stand in for a raced arm's result.
+
+    Same shape the ``completed_layout`` fixture uses: no buildings, a frame, and
+    ``COMPACTED_AND_FINALIZED`` so the pipeline's completion branch is skipped.
+    Two distinct objects are needed per race, because ``dataclasses.replace``
+    shares the ``stats`` dict and one shared dict cannot carry two walls.
+    """
+    return Placement(
+        buildings=(),
+        frame=AreaFrame(width, height, 4, (4,), False),
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+
+
+def _install_stub_race(
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: tuple[strategy_race._StrategyRaceOutcome, ...],
+    calls: list[dict[str, object]],
+) -> None:
+    """Replace the race with a recorder, so a raced build spawns nothing."""
+
+    def record(
+        spec: BuildSpec, **kwargs: object
+    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+        calls.append({"spec": spec, **kwargs})
+        return outcomes
+
+    monkeypatch.setattr(strategy_race, "run_strategy_race", record)
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+
+def _one_win_one_refusal() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+    return (
+        strategy_race._StrategyRaceOutcome(
+            "freeform",
+            "completed",
+            placement=_finished(2, 3),
+        ),
+        strategy_race._StrategyRaceOutcome.refused(
+            "sequence-pair",
+            "no arrangement fit the band",
+            "no-proliferator",
+            STUB_RACE_BUDGET_S,
+        ),
+    )
+
+
+def test_islands_are_legal_with_best_and_still_illegal_with_freeform() -> None:
+    # Islands now live INSIDE the sequence-pair racer, so `best` may ask for
+    # them.  The guard fires before any URL work, so a bogus URL proves which
+    # rejection we got: `freeform` must fail on the guard's own message, and
+    # `best` must get past it and fail on the URL instead.
+    with pytest.raises(ValueError, match="sequence islands"):
+        pipeline.build("not-a-url", strategy="freeform", sequence_islands=2)
+
+    with pytest.raises(Exception) as caught:
+        pipeline.build("not-a-url", strategy="best", sequence_islands=2)
+
+    assert "sequence islands" not in str(caught.value)
+
+
+@pytest.mark.slow
+def test_best_is_serial_until_a_caller_opts_into_racing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default must not race, so every existing `best` caller is unchanged."""
+    races = 0
+
+    def counting(*_args: object, **_kwargs: object) -> tuple[object, ...]:
+        nonlocal races
+        races += 1
+        raise AssertionError("race=False must never reach run_strategy_race")
+
+    # The pipeline reaches `run_strategy_race` through this module object, so
+    # patching the attribute here is what a raced build would pick up.
+    monkeypatch.setattr(strategy_race, "run_strategy_race", counting)
+
+    build = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=3.0,
+    )
+
+    assert races == 0
+    assert {attempt.strategy for attempt in build.attempts} | {
+        failure.strategy for failure in build.refused
+    } == {"freeform", "sequence-pair"}
+
+
+def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each outcome becomes exactly one Attempt or one LayoutAttemptFailure."""
+    calls: list[dict[str, object]] = []
+    _install_stub_race(monkeypatch, _one_win_one_refusal(), calls)
+    steps: list[pipeline.AttemptProgress] = []
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+        on_progress=steps.append,
+    )
+
+    assert len(calls) == 1
+    assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
+    assert [failure.strategy for failure in built.refused] == ["sequence-pair"]
+    assert built.refused[0].reason == "no arrangement fit the band"
+    assert built.strategy == "freeform"
+    assert built.placement.area == 6
+    # One candidate x two strategies, counted and settled exactly as serially.
+    assert [step.index for step in steps] == [1, 2, 1, 2]
+    assert {step.total for step in steps} == {2}
+    assert [step.phase for step in steps] == ["started", "started", "laid-out", "refused"]
+    assert [step.strategy for step in steps] == [
+        "freeform",
+        "sequence-pair",
+        "freeform",
+        "sequence-pair",
+    ]
+
+
+def test_both_arms_are_announced_before_the_race_rather_than_after_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec 5.4: ``started`` fires for both pairs BEFORE the race.
+
+    Announcing afterwards would leave a progress bar silent for a whole budget
+    and then jump by two, which is the one thing ``AttemptProgress`` exists to
+    prevent -- and it would make the field's own docstring ("``started`` fires
+    before the solve") false for a raced build.
+    """
+    steps: list[pipeline.AttemptProgress] = []
+    announced_when_the_race_began: list[int] = []
+    outcomes = _one_win_one_refusal()
+
+    def record(
+        _spec: BuildSpec, **_kwargs: object
+    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+        announced_when_the_race_began.append(len(steps))
+        return outcomes
+
+    monkeypatch.setattr(strategy_race, "run_strategy_race", record)
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+        on_progress=steps.append,
+    )
+
+    assert announced_when_the_race_began == [2]
+    assert [step.phase for step in steps[:2]] == ["started", "started"]
+
+
+def test_racing_forwards_every_knob_the_race_owns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``workers`` is forwarded WHOLE: the race, not the pipeline, splits it."""
+    calls: list[dict[str, object]] = []
+    _install_stub_race(monkeypatch, _one_win_one_refusal(), calls)
+    rules = belt_rules_for_url(SMALL_URL, canonicalize_dataset(load_vendored()))
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+        share=False,
+        workers=9,
+        sequence_islands=2,
+    )
+
+    assert len(calls) == 1
+    call = dict(calls[0])
+    assert call.pop("spec") is not None
+    assert call == {
+        "time_budget_s": STUB_RACE_BUDGET_S,
+        "band_policy": BandPolicy("portable"),
+        "belt_vertical_construction": rules.vertical_construction,
+        "max_belt_z": rules.max_z,
+        "workers": 9,
+        "sequence_islands": 2,
+        "share": False,
+    }
+    # Pre-splitting here would split twice: `run_strategy_race` calls
+    # `race_worker_split` itself, and (6, 3) is what 9 becomes inside it.
+    assert strategy_race.race_worker_split(9) == (6, 3)
+
+
+def test_an_explicit_strategy_never_races_even_when_asked_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Racing is a ``best`` mechanism: there is no second arm to race against."""
+    calls: list[dict[str, object]] = []
+    _install_stub_race(monkeypatch, _one_win_one_refusal(), calls)
+    seen: list[int | None] = []
+
+    class _Completed:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            return _finished(2, 2)
+
+    def spy(
+        _strategy: pipeline.ExplicitStrategyName,
+        *,
+        belt_vertical_construction: bool,
+        sequence_islands: int = 1,
+        band_policy: BandPolicy,
+        workers: int | None = None,
+    ) -> _Completed:
+        del belt_vertical_construction, sequence_islands, band_policy
+        seen.append(workers)
+        return _Completed()
+
+    monkeypatch.setattr(pipeline, "_new_layout", spy)
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+        workers=7,
+    )
+
+    assert calls == []
+    assert seen == [7]
+    assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
+
+
+def test_the_serial_path_settles_each_pair_before_starting_the_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Serial `best` interleaves solve and settlement, exactly as it always did.
+
+    Resolving both strategies up front and settling them afterwards would look
+    identical in the result, and would still be wrong: an attempt's
+    ``attempt_deadline`` is its own solve start plus one budget and the grace,
+    so the first pair's finalization would begin a whole budget late and refuse
+    a placement that is fine.
+    """
+    steps: list[pipeline.AttemptProgress] = []
+
+    class _Completed:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            return _finished(2, 2)
+
+    monkeypatch.setattr(pipeline, "_new_layout", lambda *_a, **_k: _Completed())
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        on_progress=steps.append,
+    )
+
+    assert [step.phase for step in steps] == [
+        "started",
+        "laid-out",
+        "started",
+        "laid-out",
+    ]
+    assert [step.index for step in steps] == [1, 1, 2, 2]
+
+
+def test_workers_reaches_the_freeform_layout_it_configures() -> None:
+    """The knob exists so a racer's share is a number, not all 128 cores."""
+    freeform_layout = pipeline._new_layout(
+        "freeform",
+        belt_vertical_construction=True,
+        band_policy=BandPolicy("portable"),
+        workers=7,
+    )
+    default_layout = pipeline._new_layout(
+        "freeform",
+        belt_vertical_construction=True,
+        band_policy=BandPolicy("portable"),
+    )
+
+    assert isinstance(freeform_layout, FreeformLayout)
+    assert isinstance(default_layout, FreeformLayout)
+    assert freeform_layout.workers == 7
+    # `None` is unchanged behaviour: freeform's own default, all cores.
+    assert default_layout.workers == DEFAULT_SEARCH_WORKERS
+
+
+def test_a_terminated_or_crashed_arm_is_a_failure_and_never_an_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A killed arm has no placement, so counting it as an Attempt is a lie."""
+    calls: list[dict[str, object]] = []
+    _install_stub_race(
+        monkeypatch,
+        (
+            strategy_race._StrategyRaceOutcome(
+                "freeform",
+                "terminated",
+                refusal_reason="freeform overran the 4s budget and was terminated",
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair",
+                "crashed",
+                refusal_reason="sequence-pair strategy process failed: ValueError: boom",
+            ),
+        ),
+        calls,
+    )
+
+    with pytest.raises(NoValidLayout) as caught:
+        pipeline.build(
+            SMALL_URL,
+            strategy="best",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=STUB_RACE_BUDGET_S,
+            race=True,
+        )
+
+    assert [failure.strategy for failure in caught.value.attempt_failures] == [
+        "freeform",
+        "sequence-pair",
+    ]
+    assert "was terminated" in str(caught.value)
+    assert "ValueError: boom" in str(caught.value)
+
+
+def test_every_raced_attempt_reports_its_wall_and_its_overshoot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wall stats Task 6 added are per-attempt, raced or not."""
+    calls: list[dict[str, object]] = []
+    _install_stub_race(
+        monkeypatch,
+        (
+            strategy_race._StrategyRaceOutcome(
+                "freeform", "completed", placement=_finished(2, 3)
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair", "completed", placement=_finished(3, 3)
+            ),
+        ),
+        calls,
+    )
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+    )
+
+    assert len(built.attempts) == 2
+    for attempt in built.attempts:
+        stats = attempt.placement.stats
+        assert stats["attempt_wall_s"] > 0.0
+        assert stats["wall_overshoot_s"] == max(
+            0.0,
+            stats["attempt_wall_s"] - STUB_RACE_BUDGET_S - ATOMIC_COMPLETION_GRACE_S,
+        )
+
+
+@pytest.mark.slow
+def test_racing_best_produces_the_same_attempt_shape_as_the_serial_one() -> None:
+    serial = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=8.0,
+    )
+    raced = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=8.0,
+        race=True,
+    )
+
+    def shape(build: pipeline.Build) -> set[str | None]:
+        return {a.strategy for a in build.attempts} | {f.strategy for f in build.refused}
+
+    assert shape(raced) == shape(serial)
+    assert len(raced.attempts) + len(raced.refused) == 2
