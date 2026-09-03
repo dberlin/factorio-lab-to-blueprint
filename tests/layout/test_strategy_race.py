@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import inspect
 import pickle
 import queue
 from dataclasses import fields
 from fractions import Fraction
+from typing import get_type_hints
 
 import pytest
 
-from flab2bp.dsp import catalog, provenance
-from flab2bp.layout import strategy_race
+from flab2bp.dsp import catalog, provenance, registry
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.sequence_solver import SequenceSolverConfig
@@ -148,6 +147,21 @@ def test_drain_is_bounded_per_poll() -> None:
     assert len(channels.drain()) == 5
 
 
+def test_drain_bounds_what_it_pulls_not_only_what_it_keeps() -> None:
+    # The bound exists so a burst cannot turn a poll into a pause, and the cost
+    # of a poll is the GET, not the append.  Bounding only the accepted items
+    # lets a queue full of things that are not messages be drained end to end in
+    # one call -- the exact pause the constant is there to prevent.
+    consume: queue.Queue[object] = queue.Queue()
+    for _ in range(RACE_DRAIN_MAX_MESSAGES + 5):
+        consume.put(object())
+    publish: queue.Queue[object] = queue.Queue()
+    channels = RaceChannels(publish=publish, consume=consume)
+
+    assert channels.drain() == ()
+    assert consume.qsize() == 5
+
+
 @pytest.mark.parametrize(
     ("total", "expected"),
     [
@@ -204,20 +218,63 @@ def test_the_race_runs_exactly_the_two_production_strategies() -> None:
     assert RACE_STRATEGIES == ("freeform", "sequence-pair")
 
 
-def test_the_freeform_share_is_three_quarters_however_it_is_spelled() -> None:
-    # The constant is assembled from named parts rather than written as
-    # `Fraction(3, 4)`; this is what stops that spelling from drifting.
+def test_the_freeform_share_is_three_quarters() -> None:
     assert Fraction(3, 4) == RACE_FREEFORM_WORKER_SHARE
 
 
-def test_the_module_smuggles_no_game_constant_past_the_provenance_lint() -> None:
-    # `Fraction(3, 4)` evaluates to 0.75, which the R1 lint owns as
-    # catalog.MAX_BELT_SLOPE / catalog.BELT_Z_PER_WORLD_UNIT.  The worker share
-    # is a CPU schedule and shares nothing with a belt, and the lint's exception
-    # registry lives in flab2bp.dsp.registry -- a file a layout module has no
-    # business editing.  So the module is written to have no needle at all, and
-    # this pins it here rather than only in tests/rules/test_rule_registry.py,
-    # where the failure arrives with no idea whose it is.
-    source = inspect.getsource(strategy_race)
+def test_the_worker_share_is_a_declared_coincidence_not_a_lint_dodge() -> None:
+    # `Fraction(3, 4)` is 0.75, which R1 owns as catalog.MAX_BELT_SLOPE, and
+    # `test_the_lint_would_catch_a_fraction_spelling_of_one` exists to make sure
+    # that spelling cannot hide.  So the share is written the obvious way and the
+    # coincidence is DECLARED, beside freeform's `_PACK_SHARE`.
+    #
+    # `not stale` is the half with teeth: an exception matching no site is what
+    # `provenance.stale_lint_exceptions` reports, so re-spelling the constant to
+    # duck the lint -- named integers, a division, anything -- fails here rather
+    # than quietly leaving a declaration behind that explains nothing.
+    site = ("flab2bp.layout.strategy_race", "<module>", 0.75)
+    declared = {(e.module, e.where, e.value) for e in registry.LINT_EXCEPTIONS}
+    stale = {(e.module, e.where, e.value) for e in provenance.stale_lint_exceptions()}
 
-    assert provenance.scan_source("flab2bp.layout.strategy_race", source) == ()
+    assert site in declared
+    assert site not in stale
+
+
+def test_the_incumbent_key_is_pinned_to_two_ints() -> None:
+    # freeform's `best_key` and `sequence_solver._exact_key` are both
+    # (area, belt_tiles); a widened annotation here would let a third number in
+    # on one side of the race and not the other.
+    assert get_type_hints(IncumbentMessage)["exact_key"] == tuple[int, int]
+
+
+def test_close_cancels_the_join_thread_when_the_queue_has_one() -> None:
+    # multiprocessing.Queue has cancel_join_thread and queue.Queue does not, so
+    # close() must act on the first and be a no-op on the second.  Without this,
+    # a child with unflushed hints blocks its own exit until a reader that is
+    # never coming arrives.
+    class _Cancellable:
+        def __init__(self) -> None:
+            self.cancelled = 0
+
+        def put_nowait(self, item: object, /) -> None:
+            raise AssertionError("close() must not publish")
+
+        def get_nowait(self) -> object:
+            raise queue.Empty
+
+        def cancel_join_thread(self) -> None:
+            self.cancelled += 1
+
+    publish = _Cancellable()
+    consume: queue.Queue[object] = queue.Queue()
+
+    RaceChannels(publish=publish, consume=consume).close()
+
+    assert publish.cancelled == 1
+
+
+def test_close_is_a_no_op_on_a_queue_without_a_feeder_thread() -> None:
+    publish: queue.Queue[object] = queue.Queue()
+    consume: queue.Queue[object] = queue.Queue()
+
+    RaceChannels(publish=publish, consume=consume).close()  # must not raise

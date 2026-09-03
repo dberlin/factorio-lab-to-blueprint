@@ -23,7 +23,7 @@ import queue
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
@@ -60,15 +60,14 @@ RACE_DRAIN_MAX_MESSAGES = 32
 #: freeform tie-break, and ``DETERMINISTIC_WORKERS``).  So the split is mostly a
 #: bound on freeform, and its share is the larger one.
 #:
-#: Three and four are NAMED rather than written straight into ``Fraction(3, 4)``
-#: because the R1 provenance lint evaluates ``Fraction(a, b)`` and would read the
-#: resulting 0.75 as ``catalog.MAX_BELT_SLOPE`` / ``catalog.BELT_Z_PER_WORLD_UNIT``
-#: in disguise.  This ratio is a CPU schedule and has nothing to do with belts,
-#: and the lint's exception registry lives in ``flab2bp.dsp.registry``, which a
-#: layout module has no business editing to declare a coincidence.
-_FREEFORM_SHARE_NUMERATOR = 3
-_FREEFORM_SHARE_DENOMINATOR = 4
-RACE_FREEFORM_WORKER_SHARE = Fraction(_FREEFORM_SHARE_NUMERATOR, _FREEFORM_SHARE_DENOMINATOR)
+#: This is 0.75, which is also ``catalog.MAX_BELT_SLOPE`` and
+#: ``catalog.BELT_Z_PER_WORLD_UNIT``, so the R1 provenance lint sees it -- as it
+#: should: ``Fraction(3, 4)`` is exactly the spelling
+#: ``test_the_lint_would_catch_a_fraction_spelling_of_one`` exists to catch.  It
+#: is a declared coincidence, written down as a ``LintException`` in
+#: ``flab2bp.dsp.registry`` beside ``freeform._PACK_SHARE``, not hidden from the
+#: lint by spelling the number some other way.
+RACE_FREEFORM_WORKER_SHARE = Fraction(3, 4)
 
 #: Never zero: ortools reads ``num_search_workers == 0`` as ALL CORES.
 RACE_MIN_WORKERS = 1
@@ -98,6 +97,20 @@ class _MessageQueue(Protocol):
     def put_nowait(self, item: object, /) -> None: ...
 
     def get_nowait(self) -> object: ...
+
+
+@runtime_checkable
+class _JoinCancellable(Protocol):
+    """A queue whose feeder thread can be told not to hold the process open.
+
+    ``multiprocessing.Queue`` has this method and ``queue.Queue`` does not, so
+    ``RaceChannels.close`` asks the type rather than the object: an
+    ``isinstance`` against this Protocol is Any-free, whereas a ``getattr``
+    lookup would type as ``Any`` and would silently accept any object that
+    happened to carry the name.
+    """
+
+    def cancel_join_thread(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,8 +175,15 @@ class RaceChannels:
         self._put(message)
 
     def drain(self) -> tuple[RaceMessage, ...]:
+        """Take at most ``RACE_DRAIN_MAX_MESSAGES`` items off the consume queue.
+
+        The bound is on the GETS, not on what survives the type check: the cost
+        of a poll is the dequeue, so bounding only the accepted items would let a
+        queue holding anything else be drained end to end in one call -- the very
+        pause the constant exists to prevent.
+        """
         taken: list[RaceMessage] = []
-        while len(taken) < RACE_DRAIN_MAX_MESSAGES:
+        for _ in range(RACE_DRAIN_MAX_MESSAGES):
             try:
                 item = self.consume.get_nowait()
             except queue.Empty:
@@ -178,9 +198,8 @@ class RaceChannels:
         A ``multiprocessing.Queue`` with unflushed data blocks its process's exit
         until something reads it, and after the deadline there is nothing to.
         """
-        canceller = getattr(self.publish, "cancel_join_thread", None)
-        if canceller is not None:
-            canceller()
+        if isinstance(self.publish, _JoinCancellable):
+            self.publish.cancel_join_thread()
 
 
 @dataclass(frozen=True, slots=True)
