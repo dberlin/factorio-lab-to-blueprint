@@ -630,7 +630,12 @@ class _OriginArithmeticCounter(int):
 def _adversarial_projection_fixture(
     machine_count: int,
 ) -> tuple[StripInstance, tuple[tuple[_OriginArithmeticCounter, int], ...]]:
-    family = _family(_single_machine_spec("chemical-plant", count=machine_count))
+    # This is about projection-pitch arithmetic growth, not capacity: lift
+    # the family's machine cap so one big adversarial strip still forms.
+    family = replace(
+        _family(_single_machine_spec("chemical-plant", count=machine_count)),
+        machine_cap=0,
+    )
     (instance,) = partition_strip_family(family, max_machine_count=machine_count)
     variant = instance.variant
     adversarial_origins = (
@@ -1419,6 +1424,9 @@ def test_repeated_stage_boundary_splits_conserve_every_machine_and_lane(
         for instance in instances
     )
 
+    # This test is about conservation, not capacity: lift the family's cap
+    # before merging instances back up past it.
+    family = replace(family, machine_cap=0)
     while len(instances) > 1:
         merged = merge_strip_instances(family, instances[0], instances[1])
         assert merged is not None
@@ -1465,3 +1473,33 @@ def test_merge_rejects_non_adjacent_or_pose_incompatible_ranges() -> None:
 
     assert merge_strip_instances(family, left, incompatible) is None
     assert merge_strip_instances(family, left, displaced) is None
+
+
+def test_partition_never_exceeds_the_family_machine_cap() -> None:
+    family = replace(_family(_single_machine_spec("assembling-machine-1", count=7)), machine_cap=2)
+    instances = partition_strip_family(family, max_machine_count=6)
+    assert [instance.machine_count for instance in instances] == [2, 2, 2, 1]
+    validate_instance_partition(family, instances)
+
+
+def test_a_zero_cap_leaves_the_requested_length_alone() -> None:
+    family = replace(_family(_single_machine_spec("assembling-machine-1", count=7)), machine_cap=0)
+    instances = partition_strip_family(family, max_machine_count=6)
+    assert [instance.machine_count for instance in instances] == [4, 3]
+
+
+def test_a_stage_boundary_merge_refuses_to_exceed_the_cap() -> None:
+    family = replace(_family(_single_machine_spec("assembling-machine-1", count=6)), machine_cap=4)
+    left, right = partition_strip_family(family, max_machine_count=3)
+    assert merge_strip_instances(family, left, right) is None  # 3 + 3 > 4
+    uncapped = replace(family, machine_cap=0)
+    left, right = partition_strip_family(uncapped, max_machine_count=3)
+    assert merge_strip_instances(uncapped, left, right) is not None
+
+
+@pytest.mark.parametrize("requested", [1, 3, 12, 40])
+def test_every_strip_length_heuristic_survives_the_cap(requested: int) -> None:
+    family = replace(_family(_single_machine_spec("assembling-machine-1", count=9)), machine_cap=3)
+    instances = partition_strip_family(family, max_machine_count=requested)
+    assert max(instance.machine_count for instance in instances) <= 3
+    assert sum(instance.machine_count for instance in instances) == 9

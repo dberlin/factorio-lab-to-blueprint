@@ -1636,6 +1636,8 @@ def partition_strip_variant(
     """Partition a family through one explicit ordinary or padded variant."""
     if max_machine_count <= 0:
         raise ValueError("maximum strip machine count must be positive")
+    if family.machine_cap > 0:
+        max_machine_count = min(max_machine_count, family.machine_cap)
     minimum_pitches = _family_pose_minimum_pitches(family)
     pose_id = strip_pose_id(variant)
     if variant.variant_id.family_id != family.family_id or pose_id not in minimum_pitches:
@@ -1765,6 +1767,8 @@ def merge_strip_instances(
     ):
         return None
     machine_count = left.machine_count + right.machine_count
+    if family.machine_cap > 0 and machine_count > family.machine_cap:
+        return None
     instance_id = StripInstanceId(
         family_id=family.family_id,
         machine_start=left.machine_start,

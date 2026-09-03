@@ -7122,7 +7122,10 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
         external_inputs={"iron-ore": Fraction(240)},
         outputs={"iron-ingot": Fraction(240)},
         belt_item_id="conveyor-belt-3",
-        belt_items_per_second=Fraction(30),
+        # This is about coarse-partition reuse, not capacity: a belt fast
+        # enough to carry all 240 machines keeps the family's machine cap
+        # from binding, so the coarse replan still collapses to one strip.
+        belt_items_per_second=Fraction(240),
         label="coarse-sequence-partition",
     )
     fine = plan_strips(spec, strip_len=6, band_policy=policy)
