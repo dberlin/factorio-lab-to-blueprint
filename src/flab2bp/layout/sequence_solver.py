@@ -2067,6 +2067,7 @@ class SequenceSolver[PreparedT]:
                     stage_start,
                     restart_config,
                     context,
+                    cancelled=self.deadline_reached,
                 )
             else:
                 result = anneal_stage(
@@ -2075,6 +2076,7 @@ class SequenceSolver[PreparedT]:
                     restart_config,
                     context,
                     direct_targets_for_state=self.direct_targets_for_state,
+                    cancelled=self.deadline_reached,
                 )
             results.append(
                 _AnnealedRestart(

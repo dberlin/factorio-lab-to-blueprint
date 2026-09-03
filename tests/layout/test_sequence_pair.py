@@ -2544,3 +2544,163 @@ def test_topological_order_breaks_ties_by_index_and_re_sorts_the_ready_set() -> 
 def test_topological_order_rejects_a_cycle() -> None:
     with pytest.raises(ValueError):
         _topological_order([{1}, {0}], key=lambda index: (index,))
+
+
+def _cancellable_anneal_scene() -> tuple[PlacementProblem, AnnealState]:
+    """Four strips, four nets: enough for real moves, small enough to be fast."""
+    problem = PlacementProblem(
+        sizes=((3, 2), (2, 4), (4, 1), (1, 3)),
+        nets=((0, 1), (1, 2), (2, 3), (0, 3)),
+        outline_height=6,
+        area_lower_bound=20,
+    )
+    state = AnnealState(
+        pair=SequencePair(positive=(0, 1, 2, 3), negative=(3, 2, 1, 0)),
+        gaps=GapProfile.zero(problem.size),
+        base_seed=20260824,
+        stage_index=0,
+        variant_indices=(0,) * problem.size,
+    )
+    return problem, state
+
+
+def test_anneal_stage_stops_between_moves_when_cancelled() -> None:
+    from flab2bp.layout.sequence_pair import ANNEAL_DEADLINE_CHECK_MOVES
+
+    problem, state = _cancellable_anneal_scene()
+    config = AnnealConfig(moves_per_stage=4 * ANNEAL_DEADLINE_CHECK_MOVES, elite_count=4)
+
+    full = anneal_stage(problem, state, config)
+    polls = 0
+
+    def after_one_poll() -> bool:
+        nonlocal polls
+        polls += 1
+        return polls > 1
+
+    cut = anneal_stage(problem, state, config, cancelled=after_one_poll)
+
+    assert full.cancelled is False
+    assert cut.cancelled is True
+    assert cut.accepted_moves < full.accepted_moves
+    assert len(cut.final_state.gaps.east) == problem.size
+    assert cut.archive, "a cancelled stage still returns the elites it scored"
+
+
+def test_anneal_stage_without_a_cancel_is_byte_identical() -> None:
+    problem, state = _cancellable_anneal_scene()
+    config = AnnealConfig(moves_per_stage=512, elite_count=4)
+
+    assert anneal_stage(problem, state, config) == anneal_stage(
+        problem, state, config, cancelled=None
+    )
+
+
+def test_anneal_stage_polls_the_clock_every_stride() -> None:
+    """A ``cancelled`` that never fires must still be polled on the stride.
+
+    ``moves_per_stage`` is 5 * ``ANNEAL_DEADLINE_CHECK_MOVES`` so the poll
+    happens at move indices 256, 512, 768, and 1024 -- four calls, none at
+    move 0 -- independent of the loop's own implementation.  A stage polled
+    every move instead of every stride would call this closure roughly 1,279
+    times, not 4.
+    """
+    from flab2bp.layout.sequence_pair import ANNEAL_DEADLINE_CHECK_MOVES
+
+    problem, state = _cancellable_anneal_scene()
+    moves = 5 * ANNEAL_DEADLINE_CHECK_MOVES
+    config = AnnealConfig(moves_per_stage=moves, elite_count=4)
+    expected_polls = len(
+        [index for index in range(moves) if index and index % ANNEAL_DEADLINE_CHECK_MOVES == 0]
+    )
+
+    calls = 0
+
+    def never_cancel() -> bool:
+        nonlocal calls
+        calls += 1
+        return False
+
+    result = anneal_stage(problem, state, config, cancelled=never_cancel)
+
+    assert calls == expected_polls == 4
+    assert result.cancelled is False
+    assert result == anneal_stage(problem, state, config)
+
+
+def test_anneal_restarts_passes_the_solvers_deadline_predicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_anneal_restarts`` must hand its own ``deadline_reached`` to ``anneal_stage``.
+
+    Without this wiring, ``anneal_stage``'s cancellation (this file's other
+    tests) never engages during a real solve no matter how close the attempt
+    is to its deadline: the capability exists but nothing calls it.
+    """
+    import flab2bp.layout.sequence_solver as sequence_solver_module
+    from flab2bp.layout.sequence_solver import (
+        SequenceSolver,
+        SequenceSolverConfig,
+        _default_feedback,
+        _new_height_state,
+    )
+
+    problem, _ = _cancellable_anneal_scene()
+    height_state = _new_height_state(
+        0,
+        problem.outline_height,
+        problem,
+        _default_feedback,
+        SequenceSolverConfig.test(),
+        None,
+    )
+
+    captured: list[Callable[[], bool] | None] = []
+
+    def capturing_anneal_stage(
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+        *,
+        direct_targets_for_state: Callable[
+            [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> sequence_pair_module.AnnealStageResult:
+        captured.append(cancelled)
+        return anneal_stage(
+            problem,
+            state,
+            config,
+            context,
+            direct_targets_for_state=direct_targets_for_state,
+            cancelled=cancelled,
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "anneal_stage", capturing_anneal_stage)
+    sentinel = lambda: False  # noqa: E731 - identity-compared below, a def adds nothing
+
+    class _WithoutDirectTargets:
+        config = SequenceSolverConfig.test()
+        direct_targets: tuple[object, ...] = ()
+        direct_targets_for_state: (
+            Callable[[PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]] | None
+        ) = None
+        deadline_reached = staticmethod(sentinel)
+
+    class _WithDirectTargets(_WithoutDirectTargets):
+        direct_targets_for_state = staticmethod(
+            lambda _problem, _state: cast(tuple[DirectInsertTarget, ...], ())
+        )
+
+    for host_cls in (_WithoutDirectTargets, _WithDirectTargets):
+        captured.clear()
+        SequenceSolver._anneal_restarts(
+            host_cls(),  # type: ignore[arg-type]
+            height_state,
+            tuple(height_state.restarts),
+        )
+        assert captured, f"anneal_stage was never called for {host_cls.__name__}"
+        assert all(predicate is sentinel for predicate in captured)

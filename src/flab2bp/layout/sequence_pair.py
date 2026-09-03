@@ -346,6 +346,13 @@ class EliteCategory(Enum):
     LOWEST_HISTORY = "lowest_history"
 
 
+#: Moves between clock polls in :func:`anneal_stage`.  A move is a scored state
+#: transition, far dearer than ``time.monotonic()``, so the stride exists to keep
+#: the poll off the hot path rather than to save the syscall; 256 of 2,000 moves
+#: bounds the overrun at an eighth of a stage.
+ANNEAL_DEADLINE_CHECK_MOVES = 256
+
+
 @dataclass(frozen=True, slots=True)
 class AnnealConfig:
     """Fixed schedule for one deterministic annealing temperature stage."""
@@ -804,6 +811,10 @@ class AnnealStageResult:
     elites: tuple[AnnealIncumbent, ...]
     archive: tuple[TaggedAnnealIncumbent, ...] = ()
     backend: BackendName = field(default="python", compare=False)
+    #: Whether the caller's clock ended the stage before its move count did.
+    #: ``compare=False`` for the same reason ``backend`` is: two stages that
+    #: reached the same state are the same result however they got there.
+    cancelled: bool = field(default=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.archive:
@@ -1607,6 +1618,7 @@ def anneal_stage(
         [PlacementProblem, AnnealState], tuple[DirectInsertTarget, ...]
     ]
     | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> AnnealStageResult:
     """Run exactly one reproducible linearly cooled block of cheap SA moves."""
     from flab2bp.layout.sequence_kernel import build_sequence_kernel
@@ -1634,7 +1646,16 @@ def anneal_stage(
     accepted_moves = 0
     move_kinds = config.move_kinds
 
+    stopped = False
     for move_index in range(config.moves_per_stage):
+        if (
+            cancelled is not None
+            and move_index
+            and move_index % ANNEAL_DEADLINE_CHECK_MOVES == 0
+            and cancelled()
+        ):
+            stopped = True
+            break
         candidate_state = apply_move(
             state=current.state,
             kind=rng.choice(move_kinds),
@@ -1667,6 +1688,7 @@ def anneal_stage(
         elites=archive_builder.blended_elites,
         archive=archive_builder.archive,
         backend=kernel.backend,
+        cancelled=stopped,
     )
 
 
