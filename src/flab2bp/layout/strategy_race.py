@@ -40,7 +40,7 @@ from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Placement, ProjectionFailureRecord
 from flab2bp.layout.compact_seed import CompactSeedConfig
-from flab2bp.layout.sequence_solver import SequenceSolverConfig
+from flab2bp.layout.sequence_solver import _MAX_SEQUENCE_ISLANDS, SequenceSolverConfig
 from flab2bp.layout.strip_variants import StripInstanceId
 from flab2bp.spec import BuildSpec
 
@@ -482,23 +482,6 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         _drain()
         return best_external
 
-    def external_no_goods(planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
-        """The no-goods this receiver may apply to the strips it holds NOW.
-
-        Takes the CURRENT set rather than registering a snapshot: freeform
-        replans strips mid-sweep, and a message admitted against the old plan
-        could forbid a relation the replanned strips just made feasible.
-        """
-        _drain()
-        return inbox.applicable(planned)
-
-    def publish_no_good(no_good: object, instances: tuple[StripInstanceId, ...]) -> None:
-        nonlocal published_no_goods
-        if channels is None:
-            return
-        channels.publish_no_good(NoGoodMessage(request.strategy, instances, no_good))
-        published_no_goods += 1
-
     def publish(placement: Placement) -> None:
         nonlocal published
         if channels is None:
@@ -528,11 +511,12 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         )
         published += 1
 
-    # `external_no_goods` and `publish_no_good` are deliberately not handed over
-    # here: the two receivers gain those keyword parameters in the wiring task
-    # (6.2), which is also where the live strip set the predicate judges against
-    # comes from.  They are built in this frame because the channel, the inbox and
-    # the counter they close over all live in it.
+    # No `external_no_goods` / `publish_no_good` closures here: neither
+    # receiver is handed those keyword parameters yet (Ruling AN defers the
+    # wiring task, 6.2), so a receiver-facing hook would be unreachable dead
+    # code today.  When the wiring task lands, they are rebuilt in this frame,
+    # because the channel, the inbox and the counter they would close over all
+    # live in it.
     layout = _build_layout(
         request,
         portfolio_incumbent=portfolio_incumbent,
@@ -679,6 +663,14 @@ def run_strategy_race(
     """
     if time_budget_s <= 0:
         raise ValueError("racing requires a positive time budget")
+    # Mirrors the guard `SequencePairLayout.__init__` runs at construction
+    # (sequence_solver.py): the serial path raises here immediately, but a
+    # raced request only reaches that construction inside a spawned child, so
+    # an unvalidated count would submit both arms and come back as two
+    # crashed outcomes instead of raising -- refuse before anything is
+    # submitted, exactly like the serial path.
+    if type(sequence_islands) is not int or not 1 <= sequence_islands <= _MAX_SEQUENCE_ISLANDS:
+        raise ValueError(f"islands must be an integer from 1 to {_MAX_SEQUENCE_ISLANDS}")
     # One queue per direction is a complete graph only for TWO arms, and
     # `_install_race_channels` keys exactly two.  A third strategy must fail
     # loudly here rather than silently receive nothing.

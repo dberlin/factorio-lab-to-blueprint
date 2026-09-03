@@ -26,7 +26,11 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.freeform import FreeformLayout
-from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
+from flab2bp.layout.sequence_solver import (
+    _MAX_SEQUENCE_ISLANDS,
+    SequencePairLayout,
+    SequenceSolverConfig,
+)
 from flab2bp.layout.strategy_race import (
     RACE_COMPLETION_GRACE_S,
     RACE_DRAIN_MAX_MESSAGES,
@@ -680,6 +684,25 @@ def test_a_race_without_a_budget_is_refused() -> None:
             time_budget_s=0.0,
             band_policy=BandPolicy("portable"),
             belt_vertical_construction=True,
+            submit=_stub_submit({}),
+        )
+
+
+@pytest.mark.parametrize("islands", [0, _MAX_SEQUENCE_ISLANDS + 1])
+def test_a_race_rejects_sequence_islands_outside_the_serial_range(islands: int) -> None:
+    """`run_strategy_race` must refuse the same range `SequencePairLayout` does.
+
+    Left unvalidated, an out-of-range count reaches each child, which fails at
+    construction there instead: the race reports two crashed arms rather than
+    raising, unlike the serial path which raises `ValueError` immediately.
+    """
+    with pytest.raises(ValueError, match="islands must be an integer from 1 to"):
+        run_strategy_race(
+            two_stage_spec(),
+            time_budget_s=0.05,
+            band_policy=BandPolicy("portable"),
+            belt_vertical_construction=True,
+            sequence_islands=islands,
             submit=_stub_submit({}),
         )
 
