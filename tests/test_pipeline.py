@@ -1100,13 +1100,21 @@ def _install_stub_race(
     monkeypatch: pytest.MonkeyPatch,
     outcomes: tuple[strategy_race._StrategyRaceOutcome, ...],
     calls: list[dict[str, object]],
+    on_call: Callable[[], None] | None = None,
 ) -> None:
-    """Replace the race with a recorder, so a raced build spawns nothing."""
+    """Replace the race with a recorder, so a raced build spawns nothing.
+
+    ``on_call`` runs before the outcomes are handed back, which is where a
+    driven clock spends the race's wall: the pipeline must see time pass
+    between ``race_started`` and the settlement, or a grace cannot be tested.
+    """
 
     def record(
         spec: BuildSpec, **kwargs: object
     ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
         calls.append({"spec": spec, **kwargs})
+        if on_call is not None:
+            on_call()
         return outcomes
 
     monkeypatch.setattr(strategy_race, "run_strategy_race", record)
@@ -1464,6 +1472,164 @@ def test_every_raced_attempt_reports_its_wall_and_its_overshoot(
             0.0,
             stats["attempt_wall_s"] - STUB_RACE_BUDGET_S - ATOMIC_COMPLETION_GRACE_S,
         )
+
+
+#: A race that returns half a second INSIDE its own contract and half a second
+#: past the atomic one -- the whole window where the two graces disagree.
+RACED_WALL_S = STUB_RACE_BUDGET_S + strategy_race.RACE_COMPLETION_GRACE_S - 0.5
+
+
+def test_a_raced_attempt_reports_overshoot_against_the_races_own_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The atomic grace is the wrong ruler for a pair the race owns.
+
+    `run_strategy_race` waits until `budget + RACE_COMPLETION_GRACE_S` before it
+    terminates an arm, so a race returning at 9.5 s into a 4.0 s budget spent
+    exactly what it is allowed to.  Measured against the ATOMIC grace instead,
+    that attempt reports `max(0.0, 9.5 - 4.0 - 5.0) = 0.5` s of overshoot that
+    never happened -- and the gate reads overshoot.
+    """
+    assert ATOMIC_COMPLETION_GRACE_S < strategy_race.RACE_COMPLETION_GRACE_S
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    def spend_the_race() -> None:
+        now[0] += RACED_WALL_S
+
+    calls: list[dict[str, object]] = []
+    _install_stub_race(
+        monkeypatch,
+        (
+            strategy_race._StrategyRaceOutcome(
+                "freeform", "completed", placement=_finished(2, 3)
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair", "completed", placement=_finished(3, 3)
+            ),
+        ),
+        calls,
+        on_call=spend_the_race,
+    )
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+    )
+
+    assert len(built.attempts) == 2
+    for attempt in built.attempts:
+        stats = attempt.placement.stats
+        assert stats["attempt_wall_s"] == RACED_WALL_S
+        assert stats["wall_overshoot_s"] == 0.0
+
+
+def test_a_raced_attempt_is_not_born_deadline_expired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same grace decides the attempt's finalization deadline.
+
+    An arm that hands back an unfinalized placement still has to be finalized
+    here.  Its deadline is `race start + 4.0 + 6.0 = 1010.0` and the race
+    returned at 1009.5, so `cancelled()` must read False.  Under the atomic
+    grace the deadline is 1009.0 -- already past when the placement arrived --
+    and the attempt is refused for a wall the race never blew.
+    """
+    now = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    def spend_the_race() -> None:
+        now[0] += RACED_WALL_S
+
+    calls: list[dict[str, object]] = []
+    _install_stub_race(
+        monkeypatch,
+        (
+            strategy_race._StrategyRaceOutcome(
+                "freeform",
+                "completed",
+                # A frame but no `completion`: the pipeline's compaction and
+                # finalization branch is exactly what this test needs to run.
+                placement=Placement(
+                    buildings=(), completion=None, frame=AreaFrame(2, 3, 4, (4,), False)
+                ),
+            ),
+            strategy_race._StrategyRaceOutcome.refused(
+                "sequence-pair",
+                "no arrangement fit the band",
+                "no-proliferator",
+                STUB_RACE_BUDGET_S,
+            ),
+        ),
+        calls,
+        on_call=spend_the_race,
+    )
+    polled: list[bool] = []
+
+    def _finalize_spy(
+        placement: Placement,
+        _policy: object,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Placement:
+        assert cancelled is not None
+        polled.append(cancelled())
+        if polled[-1]:
+            raise finalize.ProjectionCancelled
+        return placement
+
+    monkeypatch.setattr(
+        finalize, "compact_open_boundary_belts", lambda placement, *_a, **_kw: placement
+    )
+    monkeypatch.setattr(finalize, "finalize_placement", _finalize_spy)
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+    )
+
+    assert polled == [False]
+    assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
+    assert [failure.strategy for failure in built.refused] == ["sequence-pair"]
+
+
+def test_a_race_that_loses_an_arm_refuses_rather_than_reporting_a_full_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`total_pairs` promised two settlements, so one outcome is a lost arm.
+
+    `run_strategy_race` filters its collector on both a present future and a
+    known name, so a `submit` seam that returned fewer outcomes than arms would
+    otherwise have the selection below pick a winner from the survivor without
+    anything ever saying the other went missing.
+    """
+    calls: list[dict[str, object]] = []
+    _install_stub_race(
+        monkeypatch,
+        (
+            strategy_race._StrategyRaceOutcome(
+                "freeform", "completed", placement=_finished(2, 3)
+            ),
+        ),
+        calls,
+    )
+
+    with pytest.raises(ValueError, match="the race settled"):
+        pipeline.build(
+            SMALL_URL,
+            strategy="best",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=STUB_RACE_BUDGET_S,
+            race=True,
+        )
+
+    assert len(calls) == 1
 
 
 @pytest.mark.slow
