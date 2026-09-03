@@ -357,6 +357,7 @@ namespace FlabOracle.Check
             Check("piler maxOutputStack", piler.GetProperty("maxOutputStack").GetInt32() == 4);
             Check("piler not single pass", !piler.GetProperty("singlePassToMaxStack").GetBoolean());
             Check("piler no stack parameter", piler.GetProperty("stackParameterIndex").ValueKind == JsonValueKind.Null);
+            Check("piler prefabComponentFields empty", piler.GetProperty("prefabComponentFields").GetArrayLength() == 0);
             Check("piler states are None/Pile/Split", piler.GetProperty("stateEnumValues").GetArrayLength() == 3);
             Check("piler cooldown table read by reflection",
                 piler.GetProperty("cacheCdTickArray").ValueKind == JsonValueKind.Array

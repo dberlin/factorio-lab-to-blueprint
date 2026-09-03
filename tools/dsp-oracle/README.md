@@ -238,13 +238,14 @@ prebuild id, and the ladder negates the latter. The plugin records what
 | `piler` | The component and prefab-component field lists, `PilerState` values, the private `cacheCdTickArray` read by reflection, `stackParameterIndex` (null — the piler has no stack setting, see below), `maxOutputStack`, `outputStackFromUnstackedInput`, `singlePassToMaxStack`, and the throughput rule. |
 | `live` | Every piler and sorter in the save (capped at 256 each) with its real state and stack fields, plus the largest cargo `stack` byte currently riding any belt — the empirical check on `maxOutputStack`. |
 
-Three of those are read out of a method body rather than off a field, because the
+Six of those are read out of a method body rather than off a field, because the
 game keeps them as IL literals. Each is written next to a `…Source` string naming
 the method it was read from and a `…Observed: false` flag, so a transcriber can
 see which numbers the game handed over and which were quoted:
-`piler.maxOutputStack`, `sorter.itemsPerCargoDivisor` and
-`sorter.stackRateFactor`. `live.maxCargoStackObserved` is the runtime
-cross-check on the first of them.
+`piler.maxOutputStack`, `sorter.itemsPerCargoDivisor`, `sorter.stackRateFactor`,
+`sorter.gradeRules[]`, `piler.singlePassToMaxStack`/`piler.outputStackFromUnstackedInput`,
+and `piler.throughputEqualsBeltRate`/`piler.throughputRule`. `live.maxCargoStackObserved`
+is the runtime cross-check on the first of them.
 
 The piler's `stackParameterIndex` is `null` because the setting does not exist,
 not because it was not found: `CargoTraffic.RematchPilerConnection` is the only

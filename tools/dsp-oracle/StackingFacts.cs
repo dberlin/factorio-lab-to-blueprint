@@ -393,7 +393,12 @@ namespace FlabOracle
                     w.Prop("Name", item.Name);
                     w.Prop("translatedName", SafeTranslatedName(item));
                     w.Prop("beltSpeed", speed);
-                    w.Prop("cargoPerSecond", speed * 60000.0 / 10000.0);
+                    // Not the belt's own reported rate: computed from the piler's constants
+                    // (60 ticks/s, 10000 ticks-per-cargo, i.e. kCargoLength 10 * 1000 charge
+                    // per tick per belt speed -- see WriteBelts's doc comment). It only
+                    // coincides with the belt's own throughput because both derive from the
+                    // same beltSpeed.
+                    w.Prop("pilerCargoPerSecond", speed * 60000.0 / 10000.0);
                     int clamped = speed > 2 ? 3 : speed;
                     if (cd != null && clamped >= 1 && clamped <= cd.Length)
                     {
@@ -442,9 +447,20 @@ namespace FlabOracle
             // Read out of GameData.OnInserterTechChange and FactorySystem.NewInserterComponent,
             // which are the only two places that assign stackInput/stackOutput.
             w.BeginArray("gradeRules");
-            WriteGradeRule(w, 3, "inserterStackCountObsolete", "1", false, "GameData.OnInserterTechChange: grade == 3");
-            WriteGradeRule(w, 4, "inserterStackInput", "inserterStackOutput", true, "GameData.OnInserterTechChange: grade == 4");
-            WriteGradeRule(w, -1, "1", "1", false, "GameData.OnInserterTechChange: every other grade");
+            WriteGradeRule(w, 3, "inserterStackCountObsolete", "1", false,
+                "GameData.OnInserterTechChange: grade == 3 (stackInput = inserterStackCountObsolete, " +
+                "stackOutput forced to 1). FactorySystem.NewInserterComponent (FactorySystem.cs:534-554) " +
+                "and the upgrade path in PlanetFactory.cs:1822-1845 apply the same values using grade >= 3.");
+            WriteGradeRule(w, 4, "inserterStackInput", "inserterStackOutput", true,
+                "GameData.OnInserterTechChange: grade == 4 (stackInput = inserterStackInput, stackOutput = " +
+                "inserterStackOutput, bidirectional from history). FactorySystem.NewInserterComponent " +
+                "(FactorySystem.cs:534-554) and the upgrade path in PlanetFactory.cs:1822-1845 apply the " +
+                "same values using grade > 3.");
+            WriteGradeRule(w, -1, "1", "1", false,
+                "GameData.OnInserterTechChange: every other grade -> stackInput = stackOutput = 1. " +
+                "FactorySystem.NewInserterComponent (FactorySystem.cs:534-554) and the upgrade path in " +
+                "PlanetFactory.cs:1822-1845 use range comparisons (grade >= 3 / grade > 3) that produce " +
+                "the same 1/1 outcome for every grade that exists.");
             w.EndArray();
 
             w.Prop("stackRateFactor", true);
@@ -481,6 +497,7 @@ namespace FlabOracle
             w.Prop("stackOutputFrom", stackOutput);
             w.Prop("bidirectionalFromHistory", bidirectional);
             w.Prop("source", source);
+            w.Prop("observed", false);
             w.EndObject();
         }
 
@@ -573,18 +590,24 @@ namespace FlabOracle
             }
 
             // The piler's stack setting: there is none. RematchPilerConnection is the
-            // only writer of pilerState, and it decides from which side the belts are
-            // wired to; BuildingParameters has no piler case (its only "piler" mention
-            // is StationComponent.pilerCount, a logistics-station field). So the plan's
-            // PILER_STACK_PARAMETER is null, and it is null because the setting does
-            // not exist, not because we failed to find it.
+            // only writer that derives Pile/Split from wiring (which connected belt is
+            // the output side); CargoTraffic.DisconnectToPiler and PilerComponent.SetEmpty/
+            // Import also write pilerState, but only to reset it to None or restore a
+            // serialised value, never to derive it from wiring. BuildingParameters has no
+            // piler case (its only "piler" mention is StationComponent.pilerCount, a
+            // logistics-station field). So the plan's PILER_STACK_PARAMETER is null, and
+            // it is null because the setting does not exist, not because we failed to
+            // find it.
             w.Prop("stackParameterIndex", (string)null);
             w.Prop(
                 "stackParameterSource",
-                "None. CargoTraffic.RematchPilerConnection is the only assignment of PilerComponent.pilerState, " +
-                "and it derives Pile/Split/None from which connected belt is the output side. " +
-                "BuildingParameters mentions 'piler' only as StationComponent.pilerCount (logistics stations), " +
-                "never for a PilerComponent, and PilerComponent.Export/Import serialise no stack setting.");
+                "None. CargoTraffic.RematchPilerConnection is the only writer that derives Pile/Split from " +
+                "wiring: it decides pilerState from which connected belt is the output side. " +
+                "CargoTraffic.DisconnectToPiler (CargoTraffic.cs:984,989), PilerComponent.SetEmpty (:44) and " +
+                "PilerComponent.Import (:83) also write pilerState, but each resets it to None or restores a " +
+                "previously serialised value rather than deriving it from wiring. BuildingParameters mentions " +
+                "'piler' only as StationComponent.pilerCount (logistics stations), never for a PilerComponent, " +
+                "and PilerComponent.Export serialises no stack setting.");
             w.Prop("hasPerBuildingStackSetting", false);
 
             w.Prop("maxOutputStack", 4);
@@ -596,23 +619,32 @@ namespace FlabOracle
             w.Prop("maxOutputStackObserved", false);
 
             w.Prop("outputStackFromUnstackedInput", 2);
+            w.Prop(
+                "outputStackFromUnstackedInputSource",
+                "PilerComponent.InternalUpdate, Pile branch: it holds at most two cargos (cacheItemId1 newest, " +
+                "cacheItemId2 shifted) and emits ONE cargo of stack1 + stack2 (capped at 4) per output. Fed a " +
+                "belt of stack-1 cargos, stack1 + stack2 = 1 + 1 = 2, so the emitted cargo's stack is 2.");
+            w.Prop("outputStackFromUnstackedInputObserved", false);
             w.Prop("singlePassToMaxStack", false);
             w.Prop(
-                "singlePassSource",
-                "PilerComponent.InternalUpdate, Pile branch: it holds at most two cargos (cacheItemId1 newest, " +
-                "cacheItemId2 shifted) and emits ONE cargo of stack1 + stack2 (capped at 4) per output. Fed a belt " +
-                "of stack-1 cargos it therefore emits stack 2, not stack 4: reaching 4 from an unstacked belt " +
-                "takes two pilers in series (1 -> 2 -> 4). It reaches 4 in one pass only when the input is " +
-                "already stacked 2 or more.");
+                "singlePassToMaxStackSource",
+                "PilerComponent.InternalUpdate, Pile branch: the same stack1 + stack2 (capped at 4) combine " +
+                "means reaching stack 4 from an unstacked (stack-1) belt takes two pilers in series " +
+                "(1 -> 2 -> 4). It reaches 4 in one pass only when the input is already stacked 2 or more.");
+            w.Prop("singlePassToMaxStackObserved", false);
 
             w.Prop(
                 "throughputRule",
                 "The piler has no rate of its own: timeSpend += beltSpeed * 1000 * powerRatio per tick and one " +
                 "cargo costs 10000, where beltSpeed is the INPUT belt's speed in Pile state and the OUTPUT " +
                 "belt's speed in Split state (PilerComponent.InternalUpdate). At 60 ticks per second and full " +
-                "power that is 6 * beltSpeed cargo per second, i.e. exactly the belt's own cargo rate. " +
-                "slowlyBeltSpeed = min(input, output) clamped to 3 selects the animation and cooldown row only.");
+                "power that is 6 * beltSpeed cargo per second on the timed branch alone. The untimed pick " +
+                "branch (PilerComponent.cs:176-187, :265-272) pulls a cargo without spending timeSpend, so the " +
+                "piler's actual intake is at least the belt's own cargo rate; only the timed branch alone " +
+                "equals it exactly. slowlyBeltSpeed = min(input, output) clamped to 3 selects the animation " +
+                "and cooldown row only.");
             w.Prop("throughputEqualsBeltRate", true);
+            w.Prop("throughputEqualsBeltRateObserved", false);
             w.Prop("throughputTicksPerCargoNumerator", 10000);
             w.Prop("throughputChargePerTickPerBeltSpeed", 1000);
             w.Prop("ticksPerSecond", 60);
