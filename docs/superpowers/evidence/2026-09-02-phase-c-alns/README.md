@@ -4,10 +4,15 @@ Six 72-cell rounds, interleaved baseline/branch so that the two arms share the
 same box load. Ruling R: the box is never idle and never waited for; `uptime`
 and `vmstat 1 3` are recorded immediately before every round instead.
 
+A second candidate arm was measured after the whole-branch review: three more
+branch rounds at `ed7f428`, against the same committed master baseline. Its
+section is at the bottom of this file.
+
 | File | Arm | Tree |
 |---|---|---|
 | `baseline-master-a4501e0-budget30-round{1,2,3}.jsonl` | baseline | master `a4501e0`, Phase C absent |
 | `branch-8ab701f-budget30-round{1,2,3}.jsonl` | candidate | `phase-c-alns` `8ab701f` (= master `a4501e0` merged into the Phase C branch) |
+| `branch-ed7f428-budget30-round{1,2,3}.jsonl` | candidate | `phase-c-alns` `ed7f428` (the whole-branch fixes `1c522e4` + Ruling AF `ed7f428`) |
 
 `baseline-budget30-round{1,2,3}.jsonl` (Task 1, commit `2971089`) are the older
 baseline, taken at `22bf910` before master's belt-tier work landed. They are
@@ -122,3 +127,104 @@ report were therefore taken from a separate 72-cell sweep that reproduces
 `audit.py`'s cell enumeration exactly and reads `PlacementStats` on solved
 cells and the solver's own `_ProductionTelemetry` / `OperatorSession` on
 refusing ones. See `.superpowers/sdd/2026-09-02-phase-c-alns-window-repair/task-14-report.md`.
+
+---
+
+# Ruling AF re-measurement — branch `ed7f428`
+
+After Task 14 the whole-branch review found that Task 7's `cap_scale=True` was
+truncating the exact window's evidence set, and ruled that the cap be lifted for
+LOCAL_EXACT_PACK on this branch (`ed7f428`) behind the hygiene commit
+(`1c522e4`), followed by a fresh three-round branch measurement against the
+**existing** master baseline. These are those rounds. Same invocation, same
+budget, same `--jobs 16`; the baseline files are the ones already committed at
+`d9aefd2` and were not re-run.
+
+## Machine load before each round (Ruling R)
+
+| Round | Time (UTC) | `uptime` load 1/5/15 | `vmstat 1 3`: `r` / `wa` / `id` |
+|---|---|---|---|
+| branch 1 | 06:10:12 | 4.35 / 5.03 / 5.17 | 3,0,3 / 0,4,0 / 93,91,98 |
+| branch 2 | 06:11:27 | 14.14 / 8.07 / 6.23 | 8,2,0 / 0,2,0 / 93,95,97 |
+| branch 3 | 06:12:43 | 16.22 / 10.31 / 7.18 | 8,5,1 / 0,0,0 / 93,96,97 |
+| telemetry sweep | 06:15:26 | 7.63 / 11.36 / 8.27 | 3,6,5 / 0,1,0 / 93,97,97 |
+
+I/O wait was 0 in every sample but two; idle never fell below 91%.
+
+## Corpus table
+
+| Round | Arm | CLEAN | REFUSED | INVALID | CRASH | p95 wall (s) | area ratio vs its baseline | `--regressions-only` | + the 3 `--require-clean` |
+|---|---|---:|---:|---:|---:|---:|---:|---|---|
+| 1 | baseline `a4501e0` | 66 | 6 | 0 | 0 | 28.766 | — | — | — |
+| 1 | branch `ed7f428` | 66 | 6 | 0 | 0 | 28.557 | 0.9992 | **PASS** | **FAIL** |
+| 2 | baseline | 66 | 6 | 0 | 0 | 28.618 | — | — | — |
+| 2 | branch | 66 | 6 | 0 | 0 | 28.755 | 0.9991 | **PASS** | **FAIL** |
+| 3 | baseline | 66 | 6 | 0 | 0 | 28.633 | — | — | — |
+| 3 | branch | 66 | 6 | 0 | 0 | 28.727 | 1.0004 | **PASS** | **FAIL** |
+
+Zero `REGRESSION` lines; all six refusals `CARRIED` with byte-identical
+`detail`; **zero status flips in either direction in any round**. The
+`--require-clean` FAIL is the same two `universe-matrix/no-proliferator` cells
+as above and nothing else. Best-of-three: baseline 66/72, branch 66/72, paired
+area ratio 0.9987, zero flips.
+
+**The three gate verdicts are unchanged** — gate 1 fails only on
+`feasibility_restart_batches == 0` (moot, the cell is CLEAN at baseline), gate 2
+because the four-cell refusal count is 3 on both arms, gate 3 only on
+`universe-matrix/no-proliferator`, refused by the validator under freeform and by
+the 30 s deadline under sequence-pair. No regression.
+
+## Determinism across the three rounds
+
+Non-timing fields, over the 66 cells CLEAN in all three rounds of an arm:
+
+* branch `ed7f428`: **11 cells differ** — 10 freeform and one sequence-pair,
+  `information-matrix/output-products` (area 5150 / 5394 / 5150).
+* master `a4501e0` control: **7 cells differ** — 6 freeform and one
+  sequence-pair, `information-matrix/all-products`.
+
+Task 14 measured 0 differing sequence-pair cells at `8ab701f`. The change is
+what spec §3 predicts rather than a determinism defect: the wall clock decides
+how many operator choices a cell draws, and this cell draws only two. Per-seed
+determinism is untouched; the number of draws is what varies.
+
+## The window arm after the uncapping
+
+72-cell telemetry sweep at `ed7f428`: `alns_window_solves`,
+`alns_window_accepted` and `alns_window_seconds` are **0 corpus-wide on both
+arms**, including on `universe-matrix/no-proliferator` (16 choices drawn, 14
+applied, 16 detailed routes, 0 window solves). Task 14 measured 4 solves /
+0.001992 s / 0 installs at `8ab701f`, so the corpus goes from four sub-millisecond
+solves that installed nothing to none.
+
+A probe over the three sequence-pair `universe-matrix` cells, run against this
+tree and again with the Ruling AF commit reverted in the working tree 40 seconds
+later, says why: **every** LOCAL_EXACT_PACK choice on those cells was paired by
+D-UCB with BAND_BOUNDARY, which returns either the empty set (the incumbent
+already fits its band) or, uncapped, the whole 43-strip problem — and
+`_alns_substitution` drops a whole-problem neighbourhood before the window is
+asked. On `universe-matrix/output-products` the cap was what held those calls at
+6 strips: capped 8 window-arm calls → 4 usable; uncapped 7 → 0 usable. The
+binding constraint is the portfolio pairing, not the scale cap, and it is a
+Phase D item.
+
+## The full-suite exit code is not a merge gate here
+
+`uv run pytest -q` on this tree hits an intermittent NATIVE abort inside
+OR-Tools — `SharedTreeWorker::SyncWithLocalTrail`, reported as `Fatal Python
+error: Aborted` (exit 134) or as a segfault (exit 139) — which kills the whole
+process, so the run has no summary line and no failing test to read: only the
+faulthandler dump names where it was, most often
+`tests/layout/test_freeform.py::test_freeform_placement_stats_carry_the_operator_telemetry`
+or `tests/test_pipeline.py::test_build_defaults_to_one_portable_policy`. It is a
+pre-existing flake, recorded in this phase's ledger since its first task. Rates
+measured deliberately at `ed7f428`, alternating so both arms share the box load
+(loads 2.97–8.33, no run waited for an idle box): **branch 0 crashes in 3 runs;
+master `a4501e0` control, same interpreter and the same copied kernels with
+`PYTHONPATH` at its own `src`, 0 crashes in 3 runs.** Across every full-suite
+run made while preparing these two commits the branch crashed **2 times in 10**;
+each re-run was immediately clean, and no crash ever came with a test failure.
+So a single non-zero exit code from this suite does not distinguish a broken tree
+from a busy one, and it must not be read as a merge signal on its own. The policy
+this evidence supports: a native crash is re-run once, a clean re-run stands, and
+two crashes in a row are reported rather than re-run again.
