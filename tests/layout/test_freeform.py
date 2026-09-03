@@ -104,7 +104,13 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
     combine_last_mile_reports,
 )
-from flab2bp.layout.sequence_alns import OperatorChoice, OperatorSession
+from flab2bp.layout.sequence_alns import (
+    OperatorChoice,
+    OperatorContext,
+    OperatorSession,
+    RepairOperator,
+    operator_tally,
+)
 from flab2bp.layout.sequence_pair import SequencePair
 from flab2bp.layout.strip_variants import (
     CargoDomain,
@@ -7197,42 +7203,35 @@ def _channelled_row_pack() -> tuple[freeform._Pack, list[Strip], int]:
 
 
 def test_window_candidate_cost_charges_the_window_plus_the_measured_remainder() -> None:
-    assert freeform._window_candidate_seconds(
-        dearest_candidate_s=6.0, dearest_pack_s=2.0
-    ) == freeform.C_WINDOW_SECONDS + 4.0
     assert (
-        freeform._window_candidate_seconds(dearest_candidate_s=1.0, dearest_pack_s=4.0)
+        freeform._window_candidate_seconds(dearest_remainder_s=4.0)
+        == freeform.C_WINDOW_SECONDS + 4.0
+    )
+    assert (
+        freeform._window_candidate_seconds(dearest_remainder_s=0.0)
         == freeform.C_WINDOW_SECONDS
     )
 
 
 def test_window_candidate_cost_is_monotone_and_never_below_the_window() -> None:
-    """The charge grows with the remainder, shrinks with the pack, and has a floor.
+    """The charge grows with the remainder and has the window's own floor.
 
     A window always pays for the bounded solve, so `C_WINDOW_SECONDS` is a hard
     floor no measurement can undercut; above it the charge is the measured cost
-    of everything a full candidate does after packing, which rises with the
-    dearest candidate and falls with the dearest pack.  Nothing here reads a
-    clock: the same two measurements always give the same charge.
+    of everything a single candidate did after ITS OWN pack (Ruling AD -- a
+    difference of two maxima over different candidates is not an upper bound on
+    any one of them).  Nothing here reads a clock: the same measurement always
+    gives the same charge.
     """
     grid = (0.0, 0.5, 1.0, 2.0, 7.5, 130.0)
-    for pack_s in grid:
-        charges = [
-            freeform._window_candidate_seconds(
-                dearest_candidate_s=candidate_s, dearest_pack_s=pack_s
-            )
-            for candidate_s in grid
-        ]
-        assert all(charge >= freeform.C_WINDOW_SECONDS for charge in charges)
-        assert charges == sorted(charges)
-    for candidate_s in grid:
-        charges = [
-            freeform._window_candidate_seconds(
-                dearest_candidate_s=candidate_s, dearest_pack_s=pack_s
-            )
-            for pack_s in grid
-        ]
-        assert charges == sorted(charges, reverse=True)
+    charges = [
+        freeform._window_candidate_seconds(dearest_remainder_s=remainder_s)
+        for remainder_s in grid
+    ]
+    assert all(charge >= freeform.C_WINDOW_SECONDS for charge in charges)
+    assert charges == sorted(charges)
+    # Strictly increasing: no remainder is swallowed by the floor.
+    assert len(set(charges)) == len(grid)
 
 
 def test_decoded_from_pack_views_a_pack_as_a_decoded_placement() -> None:
@@ -18798,8 +18797,13 @@ class _RecordingSession(OperatorSession):
     """
 
     def __init__(self, log: list[str]) -> None:
-        super().__init__()
+        super().__init__(repair_arms=(RepairOperator.LOCAL_EXACT_PACK,))
         self._log = log
+        #: Every observation as ``(choice, applied, reward)``.  WHICH choice was
+        #: paid WHAT is the claim the identity guard makes, and the log's
+        #: `applied` flags cannot express it: settling the wrong choice produces
+        #: the same number of events in the same order.
+        self.observations: list[tuple[OperatorChoice, bool, tuple[float, ...]]] = []
 
     def observe(
         self,
@@ -18810,6 +18814,7 @@ class _RecordingSession(OperatorSession):
         routing_seconds: float = 0.0,
     ) -> None:
         self._log.append(f"observe:{applied}")
+        self.observations.append((choice, applied, tuple(reward)))
         super().observe(
             choice,
             reward,
@@ -18829,8 +18834,10 @@ def _sweep_over_a_stranded_first_candidate(
     repair_routing: DetailedRouteResult | None = None,
     finalize_placement: Callable[..., Placement] | None = None,
     slow_pack: tuple[tuple[int, int], float] | None = None,
+    slow_build: tuple[tuple[int, int], float] | None = None,
     raise_on_repair: BaseException | None = None,
     routes_after_repair: bool = True,
+    repair_routes: Sequence[bool] | None = None,
     wires: frozenset[tuple[int, int]] = frozenset(),
     heights: tuple[int, ...] = (20, 21),
     time_budget_s: float = 1.0,
@@ -18878,8 +18885,8 @@ def _sweep_over_a_stranded_first_candidate(
         **_kwargs: object,
     ) -> freeform._Pack:
         # `slow_pack` makes ONE candidate's packing expensive and everything
-        # else instant, which is the only way a stubbed sweep can separate
-        # `dearest_pack_s` from `dearest_candidate_s`.
+        # else instant, which is the only way a stubbed sweep can give a
+        # candidate a total much larger than its own post-pack remainder.
         if slow_pack is not None and (height, arrangement) == slow_pack[0]:
             time.sleep(slow_pack[1])
         packed.append((height, arrangement))
@@ -18893,12 +18900,21 @@ def _sweep_over_a_stranded_first_candidate(
         candidate_pack: freeform._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
+        repair_index = builds.count("window")
         builds.append(candidate_pack.status)
         if raise_on_repair is not None and candidate_pack.status == "window":
             raise raise_on_repair
-        wired = (candidate_pack.status == "window" and routes_after_repair) or (
-            candidate_of.get(id(candidate_pack)) in wires
-        )
+        # `slow_build` makes ONE candidate's post-pack work expensive: the only
+        # way a stubbed sweep can give a candidate a large REMAINDER (its total
+        # minus its own pack) rather than a large pack.
+        if slow_build is not None and candidate_of.get(id(candidate_pack)) == slow_build[0]:
+            time.sleep(slow_build[1])
+        if candidate_pack.status == "window" and repair_routes is not None:
+            wired = repair_routes[repair_index]
+        else:
+            wired = (candidate_pack.status == "window" and routes_after_repair) or (
+                candidate_of.get(id(candidate_pack)) in wires
+            )
         routing = routed if wired else stranded
         if repair_routing is not None and candidate_pack.status == "window":
             routing = repair_routing
@@ -19169,7 +19185,7 @@ def test_the_freeform_sweep_stamps_the_operator_telemetry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Every `alns_*` number the gate reads is stamped on the winning placement."""
-    session = OperatorSession()
+    session = OperatorSession(repair_arms=(RepairOperator.LOCAL_EXACT_PACK,))
     result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
         monkeypatch,
         session=session,
@@ -19202,15 +19218,61 @@ def test_the_freeform_sweep_stamps_the_operator_telemetry(
     # The four numbers a type check cannot tell from a hard-coded zero.  A
     # window solve and a routing pass both happened, so both spans are
     # positive, and the tally names every arm of both portfolios with the
-    # count each was played -- one destroy and one repair, the cold-start
-    # heads of their ledgers.
+    # count each was played.  RULING AC: the repair freeform runs is the
+    # window, so the arm it credits is `local-exact-pack` -- the tally names
+    # the operator that ran, and `sequence-reinsert`, which freeform has no
+    # dispatch for, is present at zero because it is a shipped arm.
     assert result.stats["alns_window_seconds"] > 0.0
     assert result.stats["alns_routing_seconds"] > 0.0
+    assert "local-exact-pack:1" in str(result.stats["alns_operators"])
     assert result.stats["alns_operators"] == (
         "destroy:failed-endpoints:1|destroy:band-boundary:0"
-        "|repair:sequence-reinsert:1|repair:local-exact-pack:0"
+        "|repair:sequence-reinsert:0|repair:local-exact-pack:1"
     )
     assert result.stats["alns_skipped_no_goods"] == 0.0
+
+
+def test_lay_out_arms_only_the_repair_operator_its_window_actually_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RULING AC: freeform's repair portfolio has exactly one member.
+
+    `_sweep` never consults `choice.repair` -- the window IS the repair -- so a
+    session armed with the shipped PAIR trains its repair ledger on
+    `sequence-reinsert`, an operator freeform has no dispatch for, and reports
+    `local-exact-pack:0` on a run that did nothing but local exact packs.
+    `lay_out` therefore arms the one arm it can run, and the arm the ledger
+    credits is the arm that did the work.
+    """
+    captured: list[OperatorSession] = []
+
+    def capture(
+        _self: FreeformLayout,
+        *_args: object,
+        session: OperatorSession,
+        **_kwargs: object,
+    ) -> Placement:
+        captured.append(session)
+        return Placement(buildings=(), stats={})
+
+    monkeypatch.setattr(FreeformLayout, "_sweep", capture)
+    FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        two_stage_spec(),
+        time_budget_s=1.0,
+    )
+
+    assert len(captured) == 1
+    # Both ends of the `remaining_fraction` gate: above the window floor the
+    # whole ledger is affordable, below it the exclusion empties and the
+    # session falls back to its declared order.  One arm answers both.
+    for fraction in (0, 10):
+        choice = captured[0].select(
+            OperatorContext(strip_count=2, stagnation=0, remaining_fraction=fraction)
+        )
+        assert choice.repair is RepairOperator.LOCAL_EXACT_PACK
+    assert operator_tally(captured[0]).endswith(
+        "repair:sequence-reinsert:0|repair:local-exact-pack:2"
+    )
 
 
 def test_the_freeform_window_counts_the_no_goods_its_model_declined(
@@ -19431,6 +19493,169 @@ def test_a_queued_repair_is_charged_for_routing_and_not_for_a_whole_candidate(
     assert packed == [(20, 0), (21, 0)]
     # The third build is the repair: it survived the loop-head gate.
     assert builds == ["test", "test", "window"]
+
+
+#: A candidate whose PACK dominates its cost, and one whose ROUTE does.  Their
+#: totals differ, so an affordability band can separate them; the pack-heavy
+#: one owns `dearest_pack_s` and the route-heavy one owns `dearest_candidate_s`,
+#: which is exactly the pairing the old difference collapsed toward zero.
+_PACK_HEAVY_S = 0.4
+_ROUTE_HEAVY_S = 0.6
+
+
+def _room_for_everything_but_a_measured_route(
+    _deadline: float | None,
+    _soft: float,
+    candidate_s: float,
+) -> bool:
+    """Refuse only the band between the two candidates' costs.
+
+    The refused band is ``[0.5s, C_WINDOW_SECONDS)``.  It contains the
+    route-heavy candidate's whole cost -- which is also its post-pack remainder,
+    since its pack is instant -- and excludes three charges the sweep must still
+    afford: the pack-heavy candidate's 0.4s, the 0.2s the OLD difference of two
+    maxima would have produced, and the window's own `C_WINDOW_SECONDS` floor.
+    """
+    midpoint = (_PACK_HEAVY_S + _ROUTE_HEAVY_S) / 2
+    return candidate_s < midpoint or candidate_s >= freeform.C_WINDOW_SECONDS
+
+
+def test_a_queued_repair_is_charged_the_dearest_post_pack_remainder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RULING AD: the charge is one candidate's remainder, not a difference of maxima.
+
+    `max(0, dearest_candidate_s - dearest_pack_s)` differences two maxima that
+    need not belong to the same candidate, so it is not an upper bound on any
+    single repair's route-through-validate span.  One pack-heavy candidate and
+    one route-heavy candidate collapse it toward zero, and a queued repair is
+    then admitted on a charge no candidate ever cost -- and runs on past the
+    wall the gate exists to respect.  The charge is the largest
+    (total - that same candidate's own pack) the sweep has measured.
+    """
+    log: list[str] = []
+    session = _RecordingSession(log)
+    charges: list[float] = []
+
+    def recording_room(
+        deadline: float | None,
+        soft: float,
+        candidate_s: float,
+    ) -> bool:
+        charges.append(candidate_s)
+        return _room_for_everything_but_a_measured_route(deadline, soft, candidate_s)
+
+    result, packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=recording_room,
+        # `(20, 0)` is pack-heavy and WIRES, so `best` exists and the loop-head
+        # gate is live by the time the repair is drained; `(21, 0)` is
+        # route-heavy and strands, so it is the one that launches a window.
+        wires=frozenset({(20, 0)}),
+        slow_pack=((20, 0), _PACK_HEAVY_S),
+        slow_build=((21, 0), _ROUTE_HEAVY_S),
+        time_budget_s=30.0,
+    )
+
+    assert result is not None
+    assert packed == [(20, 0), (21, 0)]
+    # The window solved and the repair was then refused at the loop head, so it
+    # never reached `_build` and there is no third entry.
+    assert builds == ["test", "test"]
+    assert result.stats["alns_window_solves"] == 1.0
+    # AND NEVER REACHED THE INSTALL SITE, which is where `alns_window_accepted`
+    # is counted.  Counting it back at the encode would read 1 for a repair the
+    # sweep never handed to the pipeline.
+    assert result.stats["alns_window_accepted"] == 0.0
+    # THE EXACT CHARGE THE PREDICATE SAW at the queued turn: the route-heavy
+    # candidate's own post-pack remainder, and not the ~0.2s the difference of
+    # two maxima would have handed it.
+    assert charges
+    assert _ROUTE_HEAVY_S <= charges[-1] < freeform.C_WINDOW_SECONDS
+    # A launched window whose repair was never evaluated is a cost with no
+    # reward, and the drain is what says so.
+    assert log == ["observe:False"]
+    assert session.applied == 0
+
+
+def test_the_second_window_is_not_paid_for_the_repair_that_launched_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Credit lands on the choice whose repair was evaluated, held by IDENTITY.
+
+    A repair that fails again settles its own credit and then launches another
+    window under the SAME `(height, arrangement)` key.  The loop body's exit
+    then runs the settle at its foot, and a membership test -- "is there a
+    choice for this key?" -- answers yes, for a choice whose repair has not been
+    evaluated at all: it would be paid on THIS turn's metrics, and the repair it
+    belongs to would then be evaluated for nothing.  Only identity can tell the
+    choice this candidate ARRIVED with from the one it just created.
+    """
+    log: list[str] = []
+    session = _RecordingSession(log)
+    windows: list[frozenset[int]] = []
+
+    def two_distinct_sets(*_args: object, **_kwargs: object) -> frozenset[int]:
+        window = frozenset({len(windows) % 2})
+        windows.append(window)
+        return window
+
+    result, _packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        destroy=two_distinct_sets,
+        # The first repair fails and asks for a second window; the second
+        # repair ROUTES and certifies, so the two choices earn different
+        # rewards and paying the wrong one is visible.
+        repair_routes=(False, True),
+        heights=(20,),
+    )
+
+    assert result is not None
+    assert builds == ["test", "window", "window"]
+    # A different question each time, so the second window is a real solve and
+    # a second choice is really stored under the key the first one just left.
+    assert windows == [frozenset({0}), frozenset({1})]
+    assert log == ["observe:True", "observe:True"]
+    assert [choice.ordinal for choice, _applied, _reward in session.observations] == [0, 1]
+    # The first component of the reward vector is earned only by a placement
+    # the validator certified, and the SECOND repair is the one that certified.
+    assert [reward[0] for _choice, _applied, reward in session.observations] == [0.0, 1.0]
+
+
+def test_a_repair_that_dies_after_routing_is_paid_on_the_pass_it_ran(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exception raised AFTER the routing span still settles on real metrics.
+
+    The inner `finally` covers the body from `route_seconds` onward, so a
+    failure inside it -- here a finalize step raising something the sweep does
+    not catch -- credits the choice on the pass that actually ran, and the
+    post-loop drain that follows has nothing left to pay `after=None`.
+    """
+    log: list[str] = []
+    session = _RecordingSession(log)
+
+    def fall_over(
+        _placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        raise RuntimeError("finalize fell over")
+
+    with pytest.raises(RuntimeError, match="finalize fell over"):
+        _sweep_over_a_stranded_first_candidate(
+            monkeypatch,
+            session=session,
+            room_for_another=_only_a_window_charge_is_affordable,
+            finalize_placement=fall_over,
+            heights=(20,),
+        )
+
+    assert log == ["observe:True"]
+    assert session.applied == 1
 
 
 @pytest.mark.slow
