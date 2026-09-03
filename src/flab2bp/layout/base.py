@@ -202,9 +202,15 @@ class PlacementStats(TypedDict, total=False):
     accepted_moves: float
     alns_applied: float
     alns_choices: float
+    alns_encode_errors: float
+    alns_encode_inexact: float
     alns_evaluations: float
     alns_operators: str
     alns_routing_seconds: float
+    alns_skipped_no_goods: float
+    alns_window_accepted: float
+    alns_window_seconds: float
+    alns_window_solves: float
     anneal_stages: float
     archive_categories: list[str]
     archive_category: str

@@ -5,7 +5,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
-from typing import Never, TypedDict
+from typing import Any, Never, TypedDict
 
 import pytest
 
@@ -55,6 +55,7 @@ from flab2bp.layout.route_feedback import (
 from flab2bp.layout.sequence_alns import (
     C_CONTEXT_FRACTION_STEPS,
     REWARD_RANKS,
+    SHIPPED_REPAIR,
     DestroyOperator,
     OperatorContext,
     OperatorSession,
@@ -96,6 +97,7 @@ from flab2bp.layout.sequence_solver import (
     _pose_stage_boundary_update,
     _production_run,
     _ProductionCandidate,
+    _ProductionRun,
     _selected_direct_targets,
     _selected_strips,
     _variant_search_inputs,
@@ -2945,6 +2947,264 @@ def test_the_production_run_divides_the_remaining_wall_by_its_own_ceiling(
         "flab2bp.layout.sequence_solver.time.monotonic", lambda: run.started
     )
     assert run.solver._remaining_fraction() == C_CONTEXT_FRACTION_STEPS
+
+
+#: Wall a window-adapter test hands the production run so the adapter's own
+#: deadline-margin guard never fires by accident.  Every assertion below that
+#: cares about the margin drives the clock instead of waiting on it.
+_WINDOW_DEADLINE_MARGIN_S = 60.0
+
+_WindowAdapter = Callable[
+    [frozenset[int], PlacementProblem, AnnealState, DecodedPlacement],
+    EncodedPlacement | None,
+]
+
+
+def _window_adapter_run(deadline: float) -> _ProductionRun:
+    return _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=deadline,
+    )
+
+
+def _window_adapter_pieces(
+    run: _ProductionRun,
+) -> tuple[_WindowAdapter, PlacementProblem, AnnealState, DecodedPlacement]:
+    adapter = run.solver.alns_adapters.window_pack
+    assert adapter is not None, "the production run must wire a window adapter"
+    height_state = run.solver._heights[0]
+    problem = height_state.problem
+    state = height_state.restarts[0].anneal
+    assert problem.size > 1
+    return adapter, problem, state, decode_state(problem, state)
+
+
+def _forbidden_window_pack(strips: object, **kwargs: Any) -> Any:
+    raise AssertionError("the window must not be solved here")
+
+
+def _unchanged_window_pack(strips: object, **kwargs: Any) -> Any:
+    return kwargs["seed"]
+
+
+def _shifted_window_pack(strips: object, **kwargs: Any) -> Any:
+    """Return a pack that differs from the seed but is still a legal placement.
+
+    Translating every strip one tile east keeps the arrangement disjoint, so the
+    encoder sees a valid placement and the adapter's own accept path runs.
+    """
+    seed = kwargs["seed"]
+    return replace(
+        seed, at={index: (x + 1, y) for index, (x, y) in seed.at.items()}
+    )
+
+
+def test_the_window_adapter_solves_under_the_deadline_margin_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The adapter reaches `_pack_window` with the window budget and the pins.
+
+    The keyword is captured rather than the solve timed: Ruling S forbids a
+    wall-clock assertion, and the margin subtraction is pinned by the refusal
+    test below, which drives the clock instead of reading it.
+    """
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    seen: list[object] = []
+
+    def capture(strips: object, **kwargs: Any) -> Any:
+        seen.append(kwargs["time_budget_s"])
+        assert kwargs["height"] == problem.outline_height
+        assert kwargs["width_bound"] == decoded.width
+        assert kwargs["window"] == frozenset({0})
+        assert set(kwargs["fixed_at"]) == set(range(problem.size)) - {0}
+        return None
+
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", capture)
+    assert adapter(frozenset({0}), problem, state, decoded) is None
+    assert seen == [freeform_module.C_WINDOW_SECONDS]
+    # An infeasible or unknown window is the ordinary drop, not an error.
+    assert run.telemetry.alns_window_solves == 1
+    assert run.telemetry.alns_window_accepted == 0
+    assert run.telemetry.alns_encode_errors == 0
+
+
+def test_the_window_budget_keeps_a_safety_margin_off_the_run_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the remaining wall binds, the budget is `remaining - margin`.
+
+    The clock is driven, not waited on, so the `min(...)` is pinned on the side
+    the previous test cannot reach without a wall-clock race.
+    """
+    deadline = time.monotonic() + _WINDOW_DEADLINE_MARGIN_S
+    run = _window_adapter_run(deadline)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    remaining = (
+        freeform_module.C_WINDOW_SECONDS
+        + freeform_module.C_WINDOW_DEADLINE_SAFETY_SECONDS / 2
+    )
+    seen: list[float] = []
+
+    def capture(strips: object, **kwargs: Any) -> Any:
+        seen.append(kwargs["time_budget_s"])
+        return None
+
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", capture)
+    monkeypatch.setattr(
+        "flab2bp.layout.sequence_solver.time.monotonic", lambda: deadline - remaining
+    )
+    assert adapter(frozenset({0}), problem, state, decoded) is None
+    expected = remaining - freeform_module.C_WINDOW_DEADLINE_SAFETY_SECONDS
+    assert seen == [pytest.approx(expected)]
+    assert seen[0] < freeform_module.C_WINDOW_SECONDS
+
+
+def test_the_window_adapter_refuses_a_window_the_deadline_cannot_pay_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deadline = time.monotonic() + _WINDOW_DEADLINE_MARGIN_S
+    run = _window_adapter_run(deadline)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", _forbidden_window_pack)
+    monkeypatch.setattr(
+        "flab2bp.layout.sequence_solver.time.monotonic",
+        lambda: deadline - freeform_module.C_WINDOW_SECONDS,
+    )
+    assert adapter(frozenset({0}), problem, state, decoded) is None
+    assert run.telemetry.alns_window_solves == 0
+
+
+def test_the_window_adapter_refuses_an_empty_or_whole_problem_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", _forbidden_window_pack)
+    assert adapter(frozenset(), problem, state, decoded) is None
+    assert adapter(frozenset(range(problem.size)), problem, state, decoded) is None
+    assert run.telemetry.alns_window_solves == 0
+
+
+def test_the_window_adapter_drops_a_pack_that_did_not_move(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unchanged assignment is not a repair, so the choice is unapplied."""
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", _unchanged_window_pack)
+    assert adapter(frozenset({0}), problem, state, decoded) is None
+    assert run.telemetry.alns_window_solves == 1
+    assert run.telemetry.alns_window_accepted == 0
+
+
+def test_the_window_adapter_encodes_a_repaired_pack_and_carries_its_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", _shifted_window_pack)
+    encoded = adapter(frozenset({0}), problem, state, decoded)
+    assert encoded is not None
+    encoded.pair.validate(problem.size)
+    assert len(encoded.decoded.x) == problem.size
+    assert encoded.decoded.used_height <= problem.outline_height
+    assert encoded.decoded.variant_indices == state.variant_indices
+    assert run.telemetry.alns_window_accepted == 1
+    assert run.telemetry.alns_encode_errors == 0
+    # `exact` is False most of the time by design; whichever way it lands, the
+    # counter must agree with the flag, because the decode is what is scored.
+    assert run.telemetry.alns_encode_inexact == (0 if encoded.exact else 1)
+
+
+def test_the_window_adapter_charges_an_unencodable_pack_to_the_error_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cyclic relation graph is dropped, never repaired, and always counted."""
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError("encoded placement relations must be acyclic")
+
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", _shifted_window_pack)
+    monkeypatch.setattr(sequence_solver_module, "encode_placement", refuse)
+    assert adapter(frozenset({0}), problem, state, decoded) is None
+    assert run.telemetry.alns_encode_errors == 1
+    assert run.telemetry.alns_window_accepted == 0
+
+
+def test_the_window_adapter_sums_the_no_goods_its_window_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+
+    def skip_three(strips: object, **kwargs: Any) -> Any:
+        kwargs["on_skipped"](3)
+        return None
+
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", skip_three)
+    assert adapter(frozenset({0}), problem, state, decoded) is None
+    assert run.telemetry.alns_skipped_no_goods == 3
+
+
+@pytest.mark.slow
+def test_the_window_adapter_returns_a_decodable_placement() -> None:
+    spec = plastic_spec()
+    run = _production_run(
+        spec,
+        time_budget_s=10.0,
+        power=True,
+        band_policy=BandPolicy.parse("portable"),
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=time.monotonic() + _WINDOW_DEADLINE_MARGIN_S,
+    )
+    adapters = run.solver.alns_adapters
+    assert adapters.window_pack is not None
+    problem = run.solver._heights[0].problem
+    state = run.solver._heights[0].restarts[0].anneal
+    decoded = decode_state(problem, state)
+    repaired = adapters.window_pack(frozenset({0}), problem, state, decoded)
+    # A real window really ran; the assertions below are not vacuous because it
+    # returned None before reaching the solver.
+    assert run.telemetry.alns_window_solves == 1
+    if repaired is not None:
+        repaired.pair.validate(problem.size)
+        assert len(repaired.decoded.x) == problem.size
+        assert repaired.decoded.used_height <= problem.outline_height
+        assert repaired.decoded.width <= decoded.width
+        assert repaired.decoded.variant_indices == state.variant_indices
+
+
+@pytest.mark.slow
+def test_local_exact_pack_is_in_the_production_repair_portfolio() -> None:
+    spec = plastic_spec()
+    run = _production_run(
+        spec,
+        time_budget_s=10.0,
+        power=True,
+        band_policy=BandPolicy.parse("portable"),
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    session = run.solver.alns_session
+    played: set[RepairOperator] = set()
+    for _ in range(len(SHIPPED_REPAIR)):
+        choice = session.select(
+            OperatorContext(
+                strip_count=8, stagnation=0, remaining_fraction=C_CONTEXT_FRACTION_STEPS
+            )
+        )
+        played.add(choice.repair)
+        session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
+    assert played == set(SHIPPED_REPAIR)
 
 
 def test_production_exact_preparation_replay_is_deterministic() -> None:
@@ -6745,6 +7005,12 @@ def test_production_stats_carry_the_operator_telemetry() -> None:
         "alns_applied",
         "alns_evaluations",
         "alns_routing_seconds",
+        "alns_window_solves",
+        "alns_window_accepted",
+        "alns_window_seconds",
+        "alns_encode_inexact",
+        "alns_encode_errors",
+        "alns_skipped_no_goods",
     ):
         assert isinstance(placement.stats[key], float), key
     tally = placement.stats["alns_operators"]
@@ -7440,12 +7706,15 @@ def test_sequence_solver_exposes_a_default_operator_session() -> None:
     assert solver._remaining_fraction() == C_CONTEXT_FRACTION_STEPS
 
 
-def test_the_default_operator_session_only_arms_the_legacy_pairing() -> None:
-    """Until Task 7 opens the portfolio, exactly one pairing may be selected.
+def test_the_default_operator_session_arms_the_whole_repair_portfolio() -> None:
+    """A bare-constructed solver arms both repair arms and one destroy arm.
 
-    `BAND_BOUNDARY` is inert when the band target equals the decoded width, and
-    `LOCAL_EXACT_PACK` is skipped for a zero reward while no window adapter is
-    wired: arming either here would burn selections on an arm that cannot work.
+    The arms are declared in two places -- this default and `_production_run`'s
+    explicit session -- and the two must agree, so each site has its own test.
+    `LOCAL_EXACT_PACK` is safe to arm without a window adapter: it is SKIPPED for
+    a count and a zero reward rather than served by another arm.  `BAND_BOUNDARY`
+    stays closed until a real band target is threaded to it, because it is inert
+    when the band target equals the decoded width.
     """
     solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
     armed = {
@@ -7456,6 +7725,7 @@ def test_the_default_operator_session_only_arms_the_legacy_pairing() -> None:
     assert armed == {
         DestroyOperator.FAILED_ENDPOINTS.value,
         RepairOperator.SEQUENCE_REINSERT.value,
+        RepairOperator.LOCAL_EXACT_PACK.value,
     }
 
 
@@ -7477,9 +7747,13 @@ def test_the_stage_boundary_repair_runs_through_the_operator_session(
     with pytest.raises(NoValidLayout):
         solver.search()
     assert solver.alns_session.choices
-    assert {
-        (choice.destroy, choice.repair) for choice in solver.alns_session.choices
-    } == {(DestroyOperator.FAILED_ENDPOINTS, RepairOperator.SEQUENCE_REINSERT)}
+    # The destroy portfolio is still one arm; the repair portfolio is open, so
+    # this pins the armed set rather than a single pairing.  What the test is
+    # for is the spy: every choice came from the session.
+    assert {choice.destroy for choice in solver.alns_session.choices} == {
+        DestroyOperator.FAILED_ENDPOINTS
+    }
+    assert {choice.repair for choice in solver.alns_session.choices} <= set(SHIPPED_REPAIR)
 
 
 def test_the_compact_seed_repair_runs_through_the_operator_session(
