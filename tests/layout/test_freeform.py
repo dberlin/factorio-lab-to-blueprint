@@ -20138,9 +20138,14 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
         ]
 
     def enclosing_if(node: ast.AST) -> ast.If:
-        current = node
-        while not isinstance(current, ast.If):
-            current = parents[current]
+        current: ast.AST | None = node
+        while current is not None and not isinstance(current, ast.If):
+            current = parents.get(current)
+        # Walking off the top means the read sits under no `if` at all, which is
+        # the failure this test exists to report -- not a KeyError at the root.
+        assert isinstance(current, ast.If), (
+            "an `improvement_soft` read sits outside any `if`, so nothing guards it"
+        )
         return current
 
     def tests_best_is_not_none(node: ast.AST) -> bool:
@@ -20181,25 +20186,23 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
     assert soft_loads == 5
 
     # EVERY improvement read sits under a `best is not None` guard.  Three carry
-    # the term in their own `if`; the arrangement arm carries it as the
-    # `arrangement and best is None: break` that immediately precedes it, which
-    # is why that site is reachable only with a `best` in hand.
+    # the term in their own `if`; the arrangement arm carries it as an
+    # `arrangement and best is None: break` EARLIER IN THE SAME BODY, which is
+    # why that site is reachable only with a `best` in hand.  Any preceding
+    # sibling will do -- pinning it to index-1 would fail on a statement
+    # inserted between the two that changes nothing about the guarantee.
     unguarded: list[ast.If] = []
     for load in loads_of("improvement_soft", tree):
         guard = enclosing_if(load)
         if tests_best_is_not_none(guard.test):
             continue
-        body = parents[guard]
-        siblings = getattr(body, "body", None)
-        preceding = (
-            siblings[siblings.index(guard) - 1]
-            if isinstance(siblings, list) and siblings.index(guard) > 0
-            else None
-        )
-        if (
-            isinstance(preceding, ast.If)
-            and tests_best_is_none(preceding.test)
-            and all(isinstance(statement, ast.Break) for statement in preceding.body)
+        siblings = getattr(parents[guard], "body", None)
+        preceding = siblings[: siblings.index(guard)] if isinstance(siblings, list) else []
+        if any(
+            isinstance(statement, ast.If)
+            and tests_best_is_none(statement.test)
+            and all(isinstance(inner, ast.Break) for inner in statement.body)
+            for statement in preceding
         ):
             continue
         unguarded.append(guard)
@@ -20208,29 +20211,33 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
         "incumbent can now end a sweep that has found nothing"
     )
 
-    # BY POSITION.  `_room_for_another`'s third argument names what the call
-    # charges, and that is what says which clock it belongs to: `turn_cost` is
-    # this turn's improvement, `retry_cost` the learned-retry promotion,
-    # `window_cost` the window launch.
-    charged: dict[str, set[str]] = {}
-    for call in ast.walk(tree):
-        if (
-            isinstance(call, ast.Call)
-            and isinstance(call.func, ast.Name)
-            and call.func.id == "_room_for_another"
-        ):
-            charge = call.args[2]
-            key = charge.id if isinstance(charge, ast.Name) else "measured-candidate"
-            clock = call.args[1]
-            assert isinstance(clock, ast.Name)
-            charged.setdefault(key, set()).add(clock.id)
-    assert charged == {
-        "turn_cost": {"improvement_soft"},
-        "retry_cost": {"soft"},
-        "window_cost": {"soft"},
-        # `projection_retry_affordable`'s own `max(dearest_candidate_s, ...)`.
-        "measured-candidate": {"soft"},
-    }
+    # WHICH CLOCK, bound by NAME.  Nothing here reads the cost argument: what it
+    # is called, and whether it is passed positionally, are free to change.
+    room_calls = [
+        call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "_room_for_another"
+    ]
+
+    def clock_of(call: ast.Call) -> str:
+        by_keyword = {keyword.arg: keyword.value for keyword in call.keywords}
+        node = by_keyword.get("soft") or (call.args[1] if len(call.args) > 1 else None)
+        assert isinstance(node, ast.Name), (
+            "a `_room_for_another` call passes its soft deadline as something "
+            "other than a plain name, so this pin can no longer read it"
+        )
+        return node.id
+
+    clocks = [clock_of(call) for call in room_calls]
+    # Three improvement calls and three finding ones.  The fourth improvement
+    # read is `time.monotonic() >= improvement_soft`, which is not a call.
+    assert sorted(clocks) == ["improvement_soft"] * 3 + ["soft"] * 3, (
+        "every `_room_for_another` reads one of the two clocks, and the split "
+        "between improvement and finding sites is fixed"
+    )
+    assert clocks.count("improvement_soft") == improvement_loads - 1
 
     # The bandit's remaining-fraction bucket is not a deadline at all, and it is
     # inside the window launch, so it reads the sweep's own clock too.
