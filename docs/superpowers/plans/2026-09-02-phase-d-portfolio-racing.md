@@ -1,5 +1,7 @@
 # Phase D Portfolio Racing Implementation Plan
 
+**Status:** Executed 2026-09-03 on branch `phase-d-portfolio`. Tasks 1 to 11 and 13 to 16 landed with review and fix rounds; Task 12 deferred (Ruling AN: the cluster no-good names strips by integer index, so the receivers stay unwired); Gate D1 PASSED; Gate D2 FAILED on the `best`-area clause, so Task 17 (the racing flip and the web-ceiling change) was not executed and racing ships opt-in. The spec's status note carries the gate numbers, the mechanism and the ranked levers. Line numbers in this plan pre-date the branch; locate symbols with Serena.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `strategy="best"` cost one wall budget per candidate instead of two by racing freeform and sequence-pair in spawned processes that share incumbent bounds and cluster no-goods, and stop the sequence-pair solver overrunning its budget by 5 to 10 seconds.
