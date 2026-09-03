@@ -166,23 +166,36 @@ compare tool prints):
 ## Coarsening count (spec section 10)
 
 `_coarsen_saturated_strip_plan` (`freeform.py:2323`, `_COARSE_STRIP_THRESHOLD = 40` at
-`freeform.py:2320`) only fires for the `freeform` strategy, so it was instrumented and measured
-**separately from the three gate rounds above**, per the brief's explicit allowance ("instrument
-... ONLY IF you run that instrumented round separately and do not count it as one of the three
-gate rounds").
+`freeform.py:2320`) fires on **both** strategies, not just `freeform`: `sequence_solver.py:58`
+imports it from `freeform.py` and `sequence_solver.py:4559` calls it inside `_production_run`, on
+the live `sequence-pair` path. (An earlier draft of this section claimed it "only fires for the
+freeform strategy" — that was wrong and has been corrected here; see the fix report appended to
+`task-5-report.md` for how the correction was measured.) It was instrumented and measured
+**separately from the three gate rounds above**, per the controller's dispatch instruction for
+this task (not the brief itself) that a one-off diagnostic print belongs in its own uncounted run
+rather than in one of the three gate rounds.
 
 **What was done:** both scratch archives' `src/flab2bp/layout/freeform.py` (the baseline archive
 and the candidate archive used for the gate rounds — never the worktree, which was not edited) got
 one identical one-off `print(..., file=sys.stderr)` inserted right after the `plan_strips(...)`
 re-partition call inside `_coarsen_saturated_strip_plan`, logging `spec.label`, the strip count
 before re-partitioning, the strip count after, the `coarse_len` chosen, and whether the result
-dropped back under the 40-strip threshold (`rescued`). Two extra runs — `--budget 30 --jobs 1
---strategy freeform` (serial, so the debug line for a cell prints immediately before that cell's
-own completion line, letting each event be attributed unambiguously) — were made against each
-instrumented archive and their JSONL/stdout/stderr discarded to scratch; they are not part of the
-gate's 6 counted rounds and are not committed.
+dropped back under the 40-strip threshold (`rescued`). No call site needed touching since both
+`freeform.py`'s own `plan_strips` path and `sequence_solver.py`'s `_production_run` path call the
+same, single instrumented function. Four extra runs were made against the two instrumented
+archives and their JSONL/stdout/stderr discarded to scratch; none is part of the gate's 6 counted
+rounds and none is committed:
 
-**Result — identical in both arms:**
+- `--budget 30 --jobs 1 --strategy freeform` (serial, full corpus) against each archive, covering
+  the freeform half.
+- `--only universe-matrix --strategy sequence-pair --jobs 1 --budget 30` against each archive,
+  covering the sequence-pair half (restricted to `universe-matrix` because that is where the
+  freeform half already showed every coarsening event land, and `_production_run`'s coarsening
+  call is reached only via the same saturated-strip-count precondition).
+
+**Result — identical in both arms, both strategies:**
+
+freeform (full corpus, serial):
 
 ```
 COARSEN_DEBUG label='no-proliferator' before=57 after=43 coarse_len=224 rescued=False
@@ -190,16 +203,45 @@ COARSEN_DEBUG label='all-products' before=46 after=42 coarse_len=113 rescued=Fal
 COARSEN_DEBUG label='output-products' before=53 after=43 coarse_len=193 rescued=False
 ```
 
-in both the baseline-archive run and the candidate-archive run, matching (by job order and by the
-42/43-strip counts named in the REFUSED `detail` text) the three `universe-matrix` freeform cells
-— the same three that refuse in every gate round above. `_coarsen_saturated_strip_plan` entered
-its collapsing branch for exactly these 3 cells in **both** arms, produced the exact same
-before/after strip counts in both arms (57->43, 46->42, 53->43), and rescued none of them (all
-stayed above the 40-strip threshold) in **both** arms.
+sequence-pair (`--only universe-matrix`, serial):
 
-**Coarsening-no-longer-rescues count: 0.** On this corpus, at this budget, Deliverable A's cap did
-not change which cells trigger coarsening, how many strips they start or end with, or whether
-coarsening rescues them — the cap simply does not bind tightly enough on `universe-matrix`'s
+```
+COARSEN_DEBUG label='no-proliferator' before=45 after=43 coarse_len=224 rescued=False
+COARSEN_DEBUG label='all-products' before=46 after=42 coarse_len=113 rescued=False
+COARSEN_DEBUG label='output-products' before=43 after=43 coarse_len=193 rescued=False
+```
+
+Load recorded (`uptime` + `vmstat 1 3 | tail -3`) immediately before each sequence-pair off-gate
+run:
+
+```
+=== off-gate sequence-pair coarsen check: baseline, before ===
+ 18:30:54 up 19 days, 16 min, 10 users,  load average: 6.34, 7.80, 11.98
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ 5  0      0 1034792372  0 10401120   0    0 49276 15356 23370   4  5  2 93  0  0  0
+ 3  0      0 1034811372  0 10401120   0    0     0   284 14153 32793 2 1 96  0  0  0
+ 3  0      0 1034813040  0 10401120   0    0     0    24 13609 37731 3 1 96  0  0  0
+
+=== off-gate sequence-pair coarsen check: candidate, before ===
+ 18:32:28 up 19 days, 18 min, 10 users,  load average: 3.86, 6.71, 11.20
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ 1  0      0 1035516692  0 10401568   0    0 49274 15356 23369   4  5  2 93  0  0  0
+ 3  0      0 1035517816  0 10401572   0    0     0     0 13589 25277 0 1 98  0  0  0
+ 5  0      0 1035518928  0 10401576   0    0     0    80 14279 26947 1 0 98  0  0  0
+```
+
+Both blocks are byte-for-byte identical between the baseline-archive run and the candidate-archive
+run. Matched (by job order and by the strip counts named in the REFUSED `detail` text) against the
+six cells that refuse in every gate round above: `_coarsen_saturated_strip_plan` entered its
+collapsing branch for exactly these six cells — the same three `universe-matrix` specs under
+`freeform` and the same three under `sequence-pair` — produced identical before/after strip counts
+in both arms, and rescued none of them (all six stayed at or above the 40-strip threshold) in
+**both** arms, **both** strategies.
+
+**Coarsening-no-longer-rescues count: 0, on all six refusing cells, both strategies.** On this
+corpus, at this budget, Deliverable A's cap did not change which cells trigger coarsening, how
+many strips they start or end with, or whether coarsening rescues them, on either the `freeform`
+or the `sequence-pair` path — the cap simply does not bind tightly enough on `universe-matrix`'s
 `machine_cap` to move these strip counts. This is consistent with the corpus gate showing no area
 or coverage regression: the risk section 10 flags (coarsening losing its rescue where the cap
 binds) has not materialized on the 72-cell corpus at budget 30.
