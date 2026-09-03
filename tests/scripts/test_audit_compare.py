@@ -286,3 +286,21 @@ def test_regressions_only_never_carries_an_invalid_or_crash_row() -> None:
 
         assert verdict.passed is False, status
         assert any(reason.startswith(f"{status}:") for reason in verdict.reasons)
+
+
+def test_the_expected_cell_count_covers_a_three_strategy_run() -> None:
+    # `compare` keys on (strategy, url_id, spec_index), so "best" is simply a
+    # third strategy and no schema change is needed for the 108-cell gate.
+    # This is the regression guard that says so.
+    rows = [
+        _row(strategy, "plastic", index, f"label-{index}", "CLEAN", 100.0, 5.0)
+        for strategy in ("freeform", "sequence-pair", "best")
+        for index in range(36)
+    ]
+
+    assert audit_compare.compare(
+        rows, rows, noise_area=0.013, p95_seconds=30.0, expect_cells=108
+    ).passed
+    assert not audit_compare.compare(
+        rows, rows, noise_area=0.013, p95_seconds=30.0, expect_cells=72
+    ).passed

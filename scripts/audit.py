@@ -4,6 +4,7 @@
     uv run python scripts/audit.py --tier mid         # up to mid
     uv run python scripts/audit.py --budget 1,4,15    # sweep the solver budget
     uv run python scripts/audit.py --strategy sequence-pair
+    uv run python scripts/audit.py --strategy all      # + the racing portfolio
     uv run python scripts/audit.py --jobs 1           # serial, for honest timing
 
 Exits non-zero if any cell is not clean, so it works as a gate.
@@ -70,6 +71,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import asdict, dataclass, field, replace
+from fractions import Fraction
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -88,6 +90,7 @@ from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import finalize, route_kernel, validate  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import (  # noqa: E402
+    ATOMIC_COMPLETION_GRACE_S,
     LayoutAttemptFailure,
     LayoutStrategy,
     NoValidLayout,
@@ -96,6 +99,7 @@ from flab2bp.layout.base import (  # noqa: E402
 )
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
+from flab2bp.layout.strategy_race import RacingLayout  # noqa: E402
 from flab2bp.rates import (  # noqa: E402
     DEFAULT_CANDIDATE_POLICIES,
     CandidatePolicy,
@@ -104,25 +108,39 @@ from flab2bp.rates import (  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
-_StrategyFactory = Callable[[int, bool], LayoutStrategy]
+#: The third argument is the CELL'S belt ceiling.  ``run_cell`` validates the
+#: winner at ``belt_rules.max_z``, and a raced child that validates its own
+#: incumbent at a DIFFERENT ceiling would publish a bound this cell then
+#: rejects.  The two explicit lambdas ignore it -- neither layout takes a belt
+#: ceiling, and only the racing child validates on its own.
+_StrategyFactory = Callable[[int, bool, Fraction], LayoutStrategy]
 _STRATEGIES: dict[str, _StrategyFactory] = {
-    "freeform": lambda workers, vertical: FreeformLayout(
+    "freeform": lambda workers, vertical, _max_belt_z: FreeformLayout(
         band_policy=BandPolicy("portable"),
         workers=workers,
         belt_vertical_construction=vertical,
     ),
-    "sequence-pair": lambda _workers, vertical: SequencePairLayout(
+    "sequence-pair": lambda _workers, vertical, _max_belt_z: SequencePairLayout(
         band_policy=BandPolicy("portable"),
         belt_vertical_construction=vertical,
     ),
+    "best": lambda workers, vertical, max_belt_z: RacingLayout(
+        BandPolicy("portable"),
+        workers=workers,
+        belt_vertical_construction=vertical,
+        max_belt_z=max_belt_z,
+    ),
 }
 _DEFAULT_STRATEGIES = ("freeform", "sequence-pair")
+_ALL_STRATEGIES = ("freeform", "sequence-pair", "best")
 
 
 def strategy_names(requested: str) -> tuple[str, ...]:
-    """Resolve ``both`` to the two implemented strategies."""
+    """Resolve ``both`` to the two explicit strategies and ``all`` to all three."""
     if requested == "both":
         return _DEFAULT_STRATEGIES
+    if requested == "all":
+        return _ALL_STRATEGIES
     if requested not in _STRATEGIES:
         raise ValueError(f"unknown strategy: {requested}")
     return (requested,)
@@ -187,6 +205,19 @@ class Result:
     #: fact from a refusal under Cython, and a JSONL that cannot tell them apart
     #: cannot be compared against one taken with the other backend.
     route_backend: str = field(default_factory=route_kernel.selected_backend)
+    #: Wall of the ATTEMPT -- the solve plus the compaction, projection and
+    #: validation charged to nobody else -- and how far past
+    #: ``budget + ATOMIC_COMPLETION_GRACE_S`` it ran, clamped at zero.  The same
+    #: two numbers ``pipeline`` stamps on ``PlacementStats``; the audit is its
+    #: own driver, so it measures them itself rather than reading a stat no
+    #: layout produces.
+    #:
+    #: ``None`` -- and therefore ABSENT from the JSONL row -- when the cell
+    #: produced no placement at all.  A refusal overshot nothing, and a zero
+    #: there would be indistinguishable from a punctual cell to whatever reports
+    #: the maximum.
+    attempt_wall_s: float | None = None
+    wall_overshoot_s: float | None = None
 
     @property
     def label(self) -> str:
@@ -252,6 +283,11 @@ def run_cell(job: Job) -> Result:
     belt_rules = _belt_rules_for(job.url)
     make_strategy = _STRATEGIES[job.strategy]
     strategy: LayoutStrategy
+    #: Everything from here on is the attempt: the search AND the completion,
+    #: projection and validation that run after the strategy's own budget
+    #: expires and are charged to nobody.  `t0` also covers building the spec,
+    #: which is not the layout's cost.
+    attempt_started = time.monotonic()
     try:
         if job.arrangements is not None and job.strategy == "freeform":
             strategy = FreeformLayout(
@@ -261,7 +297,11 @@ def run_cell(job: Job) -> Result:
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
         else:
-            strategy = make_strategy(job.workers, belt_rules.vertical_construction)
+            strategy = make_strategy(
+                job.workers,
+                belt_rules.vertical_construction,
+                belt_rules.max_z,
+            )
         placement = strategy.lay_out(
             spec,
             time_budget_s=job.budget,
@@ -332,7 +372,13 @@ def run_cell(job: Job) -> Result:
         max_belt_z=belt_rules.max_z,
         belt_vertical_construction=belt_rules.vertical_construction,
     )
-    elapsed = time.monotonic() - t0
+    now = time.monotonic()
+    elapsed = now - t0
+    attempt_wall_s = now - attempt_started
+    wall_overshoot_s = max(
+        0.0,
+        attempt_wall_s - job.budget - ATOMIC_COMPLETION_GRACE_S,
+    )
     skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
     if report.ok and not skipped_power:
         return Result(
@@ -348,6 +394,8 @@ def run_cell(job: Job) -> Result:
             projection_collider_pairs,
             projection_power_pairs,
             projection_sorters,
+            attempt_wall_s=attempt_wall_s,
+            wall_overshoot_s=wall_overshoot_s,
         )
     checks = tuple(sorted({f.check for f in report.errors})) + tuple(
         f"unchecked:{check}" for check in skipped_power
@@ -365,6 +413,8 @@ def run_cell(job: Job) -> Result:
         projection_collider_pairs,
         projection_power_pairs,
         projection_sorters,
+        attempt_wall_s=attempt_wall_s,
+        wall_overshoot_s=wall_overshoot_s,
     )
 
 
@@ -505,7 +555,7 @@ _JSONL: list[dict[str, object]] = []
 
 
 def record(tallies: dict[str, Tally], r: Result) -> None:
-    _JSONL.append(
+    row: dict[str, object] = (
         {
             "strategy": r.job.strategy,
             "commit": _COMMIT,
@@ -533,6 +583,14 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
             "detail": r.detail,
         }
     )
+    # Present exactly where a placement was measured.  A reader takes them with
+    # `row.get`: a REFUSED or CRASH row never had a placement, so it carries no
+    # wall to compare and no overshoot to report.
+    if r.attempt_wall_s is not None:
+        row["attempt_wall_s"] = r.attempt_wall_s
+    if r.wall_overshoot_s is not None:
+        row["wall_overshoot_s"] = r.wall_overshoot_s
+    _JSONL.append(row)
     t = tallies[r.job.strategy]
     t.slowest.append((r.seconds, f"{r.job.strategy} {r.label}"))
     if r.status == "CLEAN":
@@ -563,7 +621,9 @@ def main() -> int:
     ap.add_argument(
         "--strategy",
         default="both",
-        choices=("both", "freeform", "sequence-pair"),
+        choices=("both", "all", "freeform", "sequence-pair", "best"),
+        help="which arms to audit; both = the two explicit strategies (72 "
+        "cells), all = those plus the racing portfolio (108 cells)",
     )
     ap.add_argument(
         "--jobs",

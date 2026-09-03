@@ -208,7 +208,14 @@ def candidate_policies_from_args(
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Every flag this CLI accepts, in one place a test can parse without main.
+
+    Extracted from :func:`main` so the argument surface can be asserted on
+    directly: a default that silently changes -- ``--race`` becoming opt-OUT
+    before the flip commit intends it, say -- is a behaviour change no
+    end-to-end test of ``main`` distinguishes from the pipeline's own default.
+    """
     ap = argparse.ArgumentParser(
         prog="flab2bp",
         description="Turn a FactorioLab URL for Dyson Sphere Program into a "
@@ -277,6 +284,25 @@ def main(argv: list[str] | None = None) -> int:
         "URL produces is proliferated.",
     )
     ap.add_argument("--budget", type=float, default=15.0, help="solver seconds per layout")
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="CP-SAT search workers (default: every core; split between the two "
+        "racers under --strategy best --race)",
+    )
+    ap.add_argument(
+        "--race",
+        action="store_true",
+        help="run --strategy best as a concurrent race for ONE budget instead of "
+        "two serial solves for one budget each",
+    )
+    ap.add_argument(
+        "--no-share",
+        dest="share",
+        action="store_false",
+        help="race without exchanging incumbents or no-goods",
+    )
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
     ap.add_argument("-v", "--verbose", action="store_true", help="show every attempt")
@@ -286,16 +312,27 @@ def main(argv: list[str] | None = None) -> int:
         help="emit even when validation fails (default: exit non-zero instead, since "
         "an invalid blueprint pastes cleanly and then does not run)",
     )
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = build_parser()
     args = ap.parse_args(argv)
     candidate_policies = candidate_policies_from_args(ap, args)
-    if args.sequence_islands is not None and args.strategy != "sequence-pair":
-        ap.error("--sequence-islands requires --strategy sequence-pair")
+    if args.sequence_islands is not None and args.strategy not in (
+        "sequence-pair",
+        "best",
+    ):
+        ap.error("--sequence-islands requires --strategy sequence-pair or best")
     if args.sequence_islands is not None and not 1 <= args.sequence_islands <= 16:
         ap.error("--sequence-islands must be from 1 to 16")
+    # The affinity-capped default stays exclusive to EXPLICIT sequence-pair:
+    # `best` is the default strategy, so defaulting islands here would silently
+    # re-shape every plain `flab2bp <url>` build.  An explicit N still travels.
     sequence_islands = (
         args.sequence_islands or min(8, _available_cpu_count())
         if args.strategy == "sequence-pair"
-        else 1
+        else args.sequence_islands or 1
     )
 
     try:
@@ -312,6 +349,9 @@ def main(argv: list[str] | None = None) -> int:
             fetch_timeout_s=args.fetch_timeout,
             browser=args.browser,
             no_proliferator=args.no_proliferator,
+            workers=args.workers,
+            race=args.race,
+            share=args.share,
         )
         _report(build, verbose=args.verbose)
     except NoValidLayout as exc:
