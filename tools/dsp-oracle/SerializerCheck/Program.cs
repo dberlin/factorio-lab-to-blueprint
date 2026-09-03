@@ -135,6 +135,7 @@ namespace FlabOracle.Check
             Check("prefab portPoses null", pf.GetProperty("portPoses").ValueKind == JsonValueKind.Null);
 
             CheckTargetCapture();
+            CheckStackingFacts();
 
             if (_failures == 0)
             {
@@ -299,6 +300,82 @@ namespace FlabOracle.Check
             ctx.Records = new Dictionary<BuildPreview, MatchRecord> { { bad, rec } };
 
             return Dumper.Serialize(tool, "hotkey", true, true, ctx);
+        }
+
+        /// <summary>
+        /// The stacking-facts dump. Outside the game there is no LDB and no save,
+        /// so the proto and live halves come back as recorded errors/nulls -- but
+        /// the reflection-derived halves (which PrefabDesc/InserterComponent fields
+        /// are named for stacking, what PilerComponent carries, the piler's private
+        /// cooldown table) are real here, and so is the JSON shape. That is exactly
+        /// what this harness is for: a missing EndObject or a bad field name is
+        /// caught here rather than mid-session.
+        /// </summary>
+        private static void CheckStackingFacts()
+        {
+            string json = StackingFacts.Serialize("harness");
+            Console.WriteLine("stacking facts serialised " + json.Length + " bytes");
+
+            string factsOut = Environment.GetEnvironmentVariable("FLAB_ORACLE_STACKING_OUT");
+            if (!string.IsNullOrEmpty(factsOut))
+            {
+                File.WriteAllText(factsOut, json);
+                Console.WriteLine("wrote stacking facts to " + factsOut);
+            }
+
+            JsonDocument doc;
+            try
+            {
+                doc = JsonDocument.Parse(json);
+            }
+            catch (JsonException e)
+            {
+                Check("stacking facts is valid JSON (" + e.Message + ")", false);
+                return;
+            }
+
+            JsonElement root = doc.RootElement;
+            Check("stacking schema", root.GetProperty("schema").GetString() == "flab2bp-stacking/1");
+            Check("stacking trigger", root.GetProperty("trigger").GetString() == "harness");
+            Check("stacking inGame false out of game", !root.GetProperty("inGame").GetBoolean());
+            Check("stacking history null out of game", root.GetProperty("history").ValueKind == JsonValueKind.Null);
+            Check("stacking live null out of game", root.GetProperty("live").ValueKind == JsonValueKind.Null);
+
+            JsonElement prefabFields = root.GetProperty("prefabDescStackFieldNames");
+            Check("PrefabDesc has stack-named fields", prefabFields.GetArrayLength() > 0);
+            Check("PrefabDesc stack fields include isPiler", HasFieldNamed(prefabFields, "isPiler"));
+            Check("PrefabDesc stack fields include inserterStackSize", HasFieldNamed(prefabFields, "inserterStackSize"));
+
+            JsonElement sorter = root.GetProperty("sorter");
+            Check("sorter stackRateFactor", sorter.GetProperty("stackRateFactor").GetBoolean());
+            Check("sorter itemsPerCargoDivisor", sorter.GetProperty("itemsPerCargoDivisor").GetInt32() == 4);
+            Check("sorter component stack fields include stackInput",
+                HasFieldNamed(sorter.GetProperty("componentStackFieldNames"), "stackInput"));
+            Check("sorter grade rules", sorter.GetProperty("gradeRules").GetArrayLength() == 3);
+
+            JsonElement piler = root.GetProperty("piler");
+            Check("piler maxOutputStack", piler.GetProperty("maxOutputStack").GetInt32() == 4);
+            Check("piler not single pass", !piler.GetProperty("singlePassToMaxStack").GetBoolean());
+            Check("piler no stack parameter", piler.GetProperty("stackParameterIndex").ValueKind == JsonValueKind.Null);
+            Check("piler states are None/Pile/Split", piler.GetProperty("stateEnumValues").GetArrayLength() == 3);
+            Check("piler cooldown table read by reflection",
+                piler.GetProperty("cacheCdTickArray").ValueKind == JsonValueKind.Array
+                && piler.GetProperty("cacheCdTickArray").GetArrayLength() == 3);
+            Check("piler component fields include pilerState",
+                HasFieldNamed(piler.GetProperty("componentFields"), "pilerState"));
+        }
+
+        private static bool HasFieldNamed(JsonElement fieldArray, string name)
+        {
+            foreach (JsonElement entry in fieldArray.EnumerateArray())
+            {
+                if (entry.GetProperty("field").GetString() == name)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void CheckTargetCapture()
