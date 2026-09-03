@@ -2349,6 +2349,65 @@ def test_warm_stage_admission_is_unchanged_by_the_cold_cap() -> None:
     assert admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY) is None
 
 
+@pytest.mark.parametrize(
+    ("speculative_s", "completion_s", "remaining", "admitted"),
+    (
+        (2.0, 1.0, 3.0, False),          # remaining == required: refused
+        (2.0, 1.0, 3.0 + 1e-6, True),    # remaining == required + eps: admitted
+        (5.0, 3.0, 8.0, False),          # a second boundary at a different span
+        (5.0, 3.0, 8.0 + 1e-6, True),
+        (5.0, 3.0, 20.0, True),          # well above the measured requirement
+        (5.0, 3.0, 4.0, False),          # well below the measured requirement
+    ),
+    ids=(
+        "boundary-refused",
+        "boundary-plus-eps-admitted",
+        "second-boundary-refused",
+        "second-boundary-plus-eps-admitted",
+        "well-above-admitted",
+        "well-below-refused",
+    ),
+)
+def test_warm_stage_admission_decides_on_the_measured_boundary(
+    speculative_s: float,
+    completion_s: float,
+    remaining: float,
+    admitted: bool,
+) -> None:
+    """A warm role's decision is `remaining > required`, not `>=`.
+
+    History is seeded by one full stage: run 0.0 -> speculative_s +
+    completion_s with completion_s of that recorded as completion, so
+    `finish` prices the history at exactly (speculative_s, completion_s) and
+    `required` is their sum.  The deadline is then set so that a second
+    stage's `remaining` lands exactly on the boundary (refused, since the
+    guard is `remaining <= required`) or one microsecond over it (admitted).
+    total_budget_s is left at its 0.0 default so no cold share can leak in --
+    every case here has a positive `required` and takes the warm branch.
+    """
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    role = sequence_solver_module._MeasuredStageRole.ORDINARY
+    required = speculative_s + completion_s
+    admission = sequence_solver_module._MeasuredStageAdmission(
+        deadline=required,
+        monotonic=clock,
+    )
+    started = admission.try_start(role)
+    assert started == 0.0
+    now = required
+    admission.record_completion(completion_s)
+    admission.finish(started, role)
+
+    now = 0.0
+    admission.deadline = remaining
+    result = admission.try_start(role)
+    assert (result is not None) is admitted
+
+
 def test_compact_completion_history_does_not_price_first_ordinary_stage() -> None:
     now = 0.0
     admission = sequence_solver_module._MeasuredStageAdmission(
@@ -3009,18 +3068,24 @@ def test_production_run_uses_requested_budget_with_supplied_absolute_deadline() 
 def test_production_run_tells_stage_admission_its_own_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_production_run` must pass its own ``ceiling`` as ``total_budget_s``.
+    """`_production_run` must tell admission the wall it ACTUALLY has.
 
-    Without this wiring every cold stage in the attempt falls back to the
-    0.25 s floor regardless of the attempt's actual budget (5.1.2).
+    Ruling AJ (spec 5.1.2, eadd45f): under ``absolute_deadline`` a raced child
+    can be handed a large ``time_budget_s`` with only a few seconds of parent
+    wall left.  ``ceiling`` alone overstates the span and a cold role refused
+    against a requirement built from it never records history, so
+    ``total_budget_s`` must be ``min(ceiling, max(0.0, deadline - started))``:
+    with ``time_budget_s=30.0`` and ``absolute_deadline = started + 5.0`` the
+    real span is ~5.0 s, not the 30.0 s ceiling.  With no ``absolute_deadline``
+    the two coincide and ``total_budget_s`` is exactly the ceiling.
     """
-    captured: dict[str, object] = {}
+    captured: list[float] = []
     real_admission = sequence_solver_module._MeasuredStageAdmission
 
     def capturing_admission(
         **kwargs: object,
     ) -> sequence_solver_module._MeasuredStageAdmission:
-        captured.update(kwargs)
+        captured.append(kwargs["total_budget_s"])  # type: ignore[arg-type]
         return real_admission(**kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(
@@ -3028,6 +3093,22 @@ def test_production_run_tells_stage_admission_its_own_ceiling(
         "_MeasuredStageAdmission",
         capturing_admission,
     )
+
+    started = time.monotonic()
+    _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=30.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        absolute_deadline=started + 5.0,
+    )
+
+    assert len(captured) == 1
+    assert 4.9 <= captured[0] <= 5.0
+
+    captured.clear()
     run = _production_run(
         two_stage_spec(),
         band_policy=BandPolicy("portable"),
@@ -3035,11 +3116,10 @@ def test_production_run_tells_stage_admission_its_own_ceiling(
         power=False,
         strip_len=6,
         config=SequenceSolverConfig.test(),
-        absolute_deadline=time.monotonic() - 1.0,
     )
 
     assert run.ceiling == 7.0
-    assert captured.get("total_budget_s") == 7.0
+    assert captured == [7.0]
 
 
 def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_cache(
@@ -4555,6 +4635,81 @@ def _two_stage_variant_problem() -> tuple[
     PlacementProblem,
 ]:
     spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    instance_ids, variant_tables = _variant_search_inputs(
+        spec,
+        strips,
+        strip_len=6,
+    )
+    sizes = tuple((variants[0].box_width, variants[0].box_height) for variants in variant_tables)
+    return (
+        spec,
+        strips,
+        PlacementProblem(
+            sizes=sizes,
+            nets=tuple(_nets_between(strips)),
+            outline_height=20,
+            area_lower_bound=sum(
+                min(variant.box_width * variant.box_height for variant in variants)
+                for variants in variant_tables
+            ),
+            instance_ids=instance_ids,
+            variant_tables=variant_tables,
+        ),
+    )
+
+
+def _three_stage_spec() -> BuildSpec:
+    """Three linear stages, RATE-BALANCED, so direct eligibility sees two candidates.
+
+    ``two_stage_spec`` has only one producer/consumer pair, so a poll fired on
+    the second baseline candidate can never happen there and a candidate-level
+    ``break`` (which would leak whatever the first candidate already
+    contributed) is indistinguishable from the correct ``return ()``. A third
+    stage gives ``_selected_direct_targets`` two candidates -- (0, 1) and
+    (1, 2) -- so that distinction becomes observable.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=4,
+                proliferator_mode=ProliferatorMode.NONE,
+                inputs_per_machine={"iron-ore": Fraction(1)},
+                outputs_per_machine={"iron-ingot": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-2",
+                count=4,
+                proliferator_mode=ProliferatorMode.NONE,
+                inputs_per_machine={"iron-ingot": Fraction(1)},
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="electric-motor",
+                machine_item_id="assembling-machine-2",
+                count=4,
+                proliferator_mode=ProliferatorMode.NONE,
+                inputs_per_machine={"gear": Fraction(1)},
+                outputs_per_machine={"electric-motor": Fraction(1)},
+            ),
+        ),
+        external_inputs={"iron-ore": Fraction(4)},
+        outputs={"electric-motor": Fraction(4)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+        label="three-stage",
+    )
+
+
+def _three_stage_variant_problem() -> tuple[
+    BuildSpec,
+    list[freeform_module.Strip],
+    PlacementProblem,
+]:
+    spec = _three_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     instance_ids, variant_tables = _variant_search_inputs(
         spec,
@@ -8841,10 +8996,18 @@ def test_variant_direct_eligibility_never_returns_a_partial_tuple() -> None:
 
     A ``break`` where the implementation writes ``return ()`` would hand the
     compact seed whichever candidates happened to be enumerated before the
-    clock ran out -- a biased seed, and a silently different one per run.
+    clock ran out -- a biased seed, and a silently different one per run. That
+    mutant is only observable once a SECOND baseline candidate exists to leak:
+    with one candidate a break on its own poll has nothing yet accumulated to
+    leak, so it is indistinguishable from the correct ``return ()`` -- hence
+    the three-stage fixture and the ``len(baseline) >= 2`` assertion below.
     """
-    spec, strips, problem = _two_stage_variant_problem()
+    spec, strips, problem = _three_stage_variant_problem()
     policy = BandPolicy("portable")
+    baseline = _selected_direct_targets(
+        spec, strips, problem, (0,) * problem.size, band_policy=policy
+    )
+    assert len(baseline) >= 2, "the fixture must give the scan a second candidate to leak"
     total_polls = _expected_eligibility_polls(spec, strips, problem, policy)
     assert total_polls >= 3, "the fixture must exercise all three poll sites"
 
@@ -8922,6 +9085,10 @@ def test_the_eligibility_scan_is_declined_when_the_compact_share_is_nearly_gone(
 
     Starting the scan there buys a partial-at-best enumeration and spends the
     whole remaining share doing it, so the call site must not start it.
+    ``assert not calls`` alone would also pass if ``_production_run`` returned
+    early for some unrelated reason before ever reaching the eligibility
+    decision, so ``run.telemetry.compact_seed_height`` is checked too, to pin
+    that the run actually got there.
     """
     calls: list[None] = []
 
@@ -8931,7 +9098,7 @@ def test_the_eligibility_scan_is_declined_when_the_compact_share_is_nearly_gone(
 
     monkeypatch.setattr(sequence_solver_module, "_variant_direct_eligibility", capture)
 
-    _production_run(
+    run = _production_run(
         two_stage_spec(),
         band_policy=BandPolicy("portable"),
         time_budget_s=30.0,
@@ -8943,3 +9110,4 @@ def test_the_eligibility_scan_is_declined_when_the_compact_share_is_nearly_gone(
     )
 
     assert not calls, "the scan ran with less than the start floor of share left"
+    assert run.telemetry.compact_seed_height is not None
