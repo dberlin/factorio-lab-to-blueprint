@@ -602,6 +602,19 @@ class StageAdapters[PreparedT]:
     feedback_origins: Callable[[PreparedT], tuple[tuple[int, int], ...]] | None = None
 
 
+#: The share of the attempt's WHOLE budget a role with no measured history must
+#: have left before it may start.  A cold stage is admitted on `remaining > 0`
+#: today, so the first stage of any role can start with a millisecond left and
+#: then run to its move count.  The rule is written against the total rather
+#: than the remainder because `remaining > remaining * fraction` is vacuous.
+COLD_STAGE_FRACTION = 0.25
+
+#: Absolute floor under :data:`COLD_STAGE_FRACTION`, and the whole requirement
+#: for an admission constructed without a ``total_budget_s`` -- which is every
+#: caller outside ``_production_run``, the tests included.
+COLD_STAGE_MIN_RESERVE_S = 0.25
+
+
 class _MeasuredStageRole(StrEnum):
     ORDINARY = "ordinary"
     COMPACT = "compact"
@@ -628,6 +641,12 @@ class _MeasuredStageAdmission:
 
     deadline: float
     monotonic: Callable[[], float] = time.monotonic
+    #: The attempt's whole wall, so a cold stage can reserve a share of the
+    #: BUDGET rather than a share of whatever happens to be left.  ``0.0`` (the
+    #: default) leaves only ``cold_floor_s``.
+    total_budget_s: float = 0.0
+    cold_fraction: float = COLD_STAGE_FRACTION
+    cold_floor_s: float = COLD_STAGE_MIN_RESERVE_S
     _histories: dict[_MeasuredStageRole, _MeasuredStageHistory] = field(
         default_factory=dict,
         init=False,
@@ -659,7 +678,12 @@ class _MeasuredStageAdmission:
         now = self.monotonic()
         remaining = self.deadline - now
         required = history.speculative_s + history.completion_s
-        if remaining <= 0.0 or (required > 0.0 and remaining <= required):
+        if required <= 0.0:
+            required = max(
+                self.cold_floor_s,
+                self.cold_fraction * self.total_budget_s,
+            )
+        if remaining <= 0.0 or remaining <= required:
             return None
         self._active_started = now
         self._active_role = role
@@ -4351,6 +4375,7 @@ def _production_run(
     stage_admission = _MeasuredStageAdmission(
         deadline=deadline,
         monotonic=time.monotonic,
+        total_budget_s=ceiling,
     )
 
     def deadline_reached() -> bool:
