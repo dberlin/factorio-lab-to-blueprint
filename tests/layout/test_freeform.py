@@ -107,8 +107,10 @@ from flab2bp.layout.route_feedback import (
 from flab2bp.layout.sequence_alns import (
     OperatorChoice,
     OperatorContext,
+    OperatorMetrics,
     OperatorSession,
     RepairOperator,
+    metrics_from_evaluation,
     operator_tally,
 )
 from flab2bp.layout.sequence_pair import SequencePair
@@ -6858,7 +6860,7 @@ def test_pack_window_pins_one_worker_and_a_deterministic_work_bound() -> None:
 
     original = freeform._pack_result
     try:
-        freeform._pack_result = _capture  # type: ignore[assignment]
+        freeform._pack_result = _capture
         for budget, work in ((4.0, 0.25), (0.1, 0.5)):
             freeform._pack_window(
                 strips,
@@ -6871,7 +6873,7 @@ def test_pack_window_pins_one_worker_and_a_deterministic_work_bound() -> None:
                 deterministic_work=work,
             )
     finally:
-        freeform._pack_result = original  # type: ignore[assignment]
+        freeform._pack_result = original
 
     assert len(seen) == 2
     for solver, budget, expected in ((seen[0], 4.0, 0.25), (seen[1], 0.1, 0.1)):
@@ -18883,6 +18885,23 @@ def _only_a_window_charge_is_affordable(
     return candidate_s >= freeform.C_WINDOW_SECONDS
 
 
+def _recording_window_refusal(
+    calls: list[object],
+) -> Callable[..., freeform._Pack | None]:
+    """A `_pack_window` stub that records its keywords and repairs nothing.
+
+    Written out rather than as `lambda *_a, **kw: calls.append(kw) or None`,
+    which reads as returning `None` and does -- but by feeding `or` a value
+    `list.append` never had, which mypy reports.
+    """
+
+    def refuse(*_args: object, **kwargs: object) -> freeform._Pack | None:
+        calls.append(kwargs)
+        return None
+
+    return refuse
+
+
 class _RecordingSession(OperatorSession):
     """An `OperatorSession` that writes every observation into a shared log.
 
@@ -18937,6 +18956,9 @@ def _sweep_over_a_stranded_first_candidate(
     wires: frozenset[tuple[int, int]] = frozenset(),
     heights: tuple[int, ...] = (20, 21),
     time_budget_s: float = 1.0,
+    pack_width: int = 60,
+    pitch_requirements: Callable[..., tuple[ProjectionPitchRequirement, ...]] | None = None,
+    replanned_strips: list[Strip] | None = None,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[str]]:
     """Drive `_sweep` over candidates whose routing strands a net exhaustively.
 
@@ -18958,7 +18980,7 @@ def _sweep_over_a_stranded_first_candidate(
     packs = {
         (height, arrangement): freeform._Pack(
             at={index: (index * 25 + 5 + arrangement * 7, 0) for index in range(len(strips))},
-            width=60,
+            width=pack_width,
             height=height,
             status="test",
         )
@@ -19053,6 +19075,12 @@ def _sweep_over_a_stranded_first_candidate(
         "_pack_window",
         repair if pack_window is None else pack_window,
     )
+    if pitch_requirements is not None:
+        monkeypatch.setattr(freeform, "_projection_pitch_requirements", pitch_requirements)
+    if replanned_strips is not None:
+        # Only `replan_strips_for_learned_geometry` reaches `plan_strips` from
+        # inside `_sweep`; the harness planned its own strips before this.
+        monkeypatch.setattr(freeform, "plan_strips", lambda *_args, **_kwargs: replanned_strips)
     monkeypatch.setattr(validate, "certify", lambda *_args, **_kwargs: validate.Report(findings=()))
     monkeypatch.setattr(
         finalize,
@@ -19178,7 +19206,7 @@ def test_the_sweep_never_windows_when_neither_clock_allows_it(
         monkeypatch,
         session=session,
         room_for_another=lambda *_args, **_kwargs: False,
-        pack_window=lambda *_args, **kwargs: calls.append(kwargs) or None,
+        pack_window=_recording_window_refusal(calls),
         routes_after_repair=False,
     )
 
@@ -19202,7 +19230,7 @@ def test_a_window_whose_pack_will_not_encode_is_counted_and_never_solved(
         monkeypatch,
         session=session,
         room_for_another=_only_a_window_charge_is_affordable,
-        pack_window=lambda *_args, **kwargs: calls.append(kwargs) or None,
+        pack_window=_recording_window_refusal(calls),
         wires=frozenset({(21, 0)}),
     )
 
@@ -19775,3 +19803,203 @@ def test_freeform_placement_stats_carry_the_operator_telemetry() -> None:
     assert isinstance(placement.stats["alns_operators"], str)
     # Sequence-pair only: freeform never re-encodes a compaction.
     assert "alns_encode_inexact" not in placement.stats
+
+
+def test_a_window_launches_at_a_width_the_band_scan_will_not_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`finalize.band_target_width` REFUSES a width above 4096; a window may not.
+
+    The helper raises `ValueError` above `finalize.C_BAND_SCAN_MAX`, and the
+    sweep asks it for a band target out of the pack's own width, which is
+    unbounded.  A repair attempt must never take the whole sweep down over a
+    width the scan declines to search; falling back to the input width makes
+    the band term inert for that call instead, which is what the sequence-pair
+    arm's `band_target_for` already does.
+    """
+    session = OperatorSession()
+    targets: list[object] = []
+
+    def destroy(*_args: object, **kwargs: object) -> frozenset[int]:
+        targets.append(kwargs["band_target_width"])
+        return frozenset({0})
+
+    def refuse(*_args: object, **kwargs: object) -> freeform._Pack | None:
+        targets.append(kwargs["width_target"])
+        return None
+
+    result, packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        destroy=destroy,
+        pack_window=refuse,
+        pack_width=5000,
+        heights=(20,),
+    )
+
+    assert packed == [(20, 0)]
+    # The launch site asked for a target twice -- the destroy operator's band
+    # term and the window's own width target -- and both got the input width.
+    assert targets == [5000, 5000]
+    assert result is None
+
+
+def test_a_queued_repair_is_credited_at_a_width_the_band_scan_will_not_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The metrics closure asks for the same target, and it runs in a `finally`.
+
+    `window_metrics` is called from the block that settles a repair's credit,
+    which sits in a `finally`: a raise there would REPLACE whatever exception
+    the sweep was already carrying.  The same guard as the launch site, for the
+    same reason, and here it also protects the exception in flight.
+    """
+    session = OperatorSession()
+    widths: list[object] = []
+    def recording(*args: object, **kwargs: object) -> OperatorMetrics:
+        widths.append(kwargs["band_target_width"])
+        return metrics_from_evaluation(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(freeform, "metrics_from_evaluation", recording)
+    result, packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        pack_width=5000,
+        heights=(20,),
+    )
+
+    assert packed == [(20, 0)]
+    assert builds == ["test", "window"]
+    assert result is not None
+    # The pre-repair metrics at the launch, then the repair's own pass at the
+    # settle: both took the input width rather than raising.
+    assert widths == [5000, 5000]
+    assert session.applied == 1
+
+
+def test_the_window_solves_against_the_cluster_no_goods_the_packer_holds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A window is a SUB-MODEL of `_pack`, so it carries every proof `_pack` has.
+
+    `_pack_window` rebuilds the whole formulation and collapses only the pinned
+    strips' domains, which is only true if it is handed the same no-good
+    collections the packer gets.  A cluster relation no-good is a Phase B proof
+    that one relative placement of two strips cannot be wired at all; solving
+    the window without it lets CP-SAT hand back a pack the sweep has already
+    proved unroutable.
+    """
+    session = OperatorSession()
+    calls: list[object] = []
+    cut = ClusterRelationNoGood(
+        height=20,
+        outline=((14, 5), (18, 6)),
+        strips=(0, 1),
+        deltas=((0, 0), (25, 0)),
+        evidence=("test.cluster",),
+    )
+    proofs = freeform._proof_scoped_no_goods
+
+    def with_a_cluster_cut(*args: object, **kwargs: object) -> object:
+        local, exact, clusters = proofs(*args, **kwargs)  # type: ignore[arg-type]
+        return local, exact, (*clusters, cut)
+
+    monkeypatch.setattr(freeform, "_proof_scoped_no_goods", with_a_cluster_cut)
+    result, packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        pack_window=_recording_window_refusal(calls),
+        heights=(20,),
+    )
+
+    assert packed == [(20, 0)]
+    assert result is None
+    assert len(calls) == 1
+    window_call = calls[0]
+    assert isinstance(window_call, dict)
+    assert window_call["cluster_relation_no_goods"] == (cut,)
+
+
+def test_a_replan_drops_a_pending_window_repair_and_settles_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A geometry replan renumbers the strips out from under a queued repair.
+
+    `replan_strips_for_learned_geometry` re-plans the strips, so every window
+    key and every packed origin the sweep is holding names a DIFFERENT strip
+    afterwards.  Settling that choice on the old pack reads `pack.at` at the new
+    strips' indices -- a `KeyError` the moment the replan changes the count --
+    so the pending window state is dropped at the replan, and the choice behind
+    it is settled exactly once, unapplied: it cost a CP-SAT solve and the
+    measurement it would have been paid on no longer describes anything.
+    """
+    log: list[str] = []
+    session = _RecordingSession(log)
+    replanned = plan_strips(two_stage_spec(), strip_len=1)
+
+    def refuse_the_frame(
+        _placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        raise finalize.ProjectionRefusal(
+            (
+                finalize.ProjectionFailure(
+                    check="test.projection",
+                    buildings=(),
+                    detail="no band accepts the repaired placement",
+                    band=0,
+                ),
+            )
+        )
+
+    def pitch_requirements(
+        _placement: Placement,
+        current: list[Strip],
+        failures: tuple[finalize.ProjectionFailure, ...],
+    ) -> tuple[ProjectionPitchRequirement, ...]:
+        from flab2bp.layout.strip_variants import StripInstanceId
+
+        strip = current[0]
+        variant = strip.physical_variant
+        assert strip.family_id is not None
+        assert variant is not None
+        return tuple(
+            ProjectionPitchRequirement(
+                family_id=strip.family_id,
+                instance_id=StripInstanceId(
+                    strip.family_id,
+                    strip.machine_start,
+                    strip.machines,
+                ),
+                variant_id=variant.variant_id,
+                axis="x",
+                rejected_pitch=variant.placement_geometry.pitch_x,
+                required_pitch=variant.placement_geometry.pitch_x + 1,
+                failure=failure,
+            )
+            for failure in failures
+        )
+
+    result, packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        finalize_placement=refuse_the_frame,
+        pitch_requirements=pitch_requirements,
+        replanned_strips=replanned,
+        heights=(20,),
+    )
+
+    # The strip count really did change under the pending repair.
+    assert len(replanned) > 2
+    assert packed == [(20, 0)]
+    assert builds == ["test", "window"]
+    assert result is None
+    # Settled once, at the replan, and never again from the `finally` below it.
+    assert log == ["observe:False"]
+    assert session.applied == 0
+    assert len(session.choices) == 1

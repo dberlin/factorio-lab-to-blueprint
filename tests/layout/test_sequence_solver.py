@@ -34,6 +34,7 @@ from flab2bp.layout.compact_seed import (
 from flab2bp.layout.freeform import (
     _ENTRY_RING,
     _box,
+    _direct_net_candidates,
     _greedy_pack,
     _nets_between,
     _prepare_routing_problem,
@@ -98,7 +99,6 @@ from flab2bp.layout.sequence_solver import (
     StageBoundaryTransform,
     ValidationVerdict,
     _decoded_pack,
-    _direct_net_candidates,
     _placement_nets,
     _pose_stage_boundary_update,
     _production_run,
