@@ -18957,7 +18957,25 @@ def _band_policy_candidate_heights(
     strips: list[Strip],
     policy: BandPolicy,
 ) -> tuple[int, ...]:
-    """Keep the measured order while reserving one proved fixed-band boundary."""
+    """Keep the measured order while reserving one proved fixed-band boundary.
+
+    THE WITNESS IS THE GREEDY SEED'S WIDTH, not `_minimum_pack_width`'s.  The
+    latter is a valid area-based LOWER bound and it is far below anything the
+    packer builds: 92 against 258 on `universe-matrix/no-proliferator`, where a
+    98x166 extent fits the 200-segment band rotated and a 264x162 extent fits
+    nothing.  Height 160 therefore survived the filter, its greedy seed was
+    rejected at the pre-pack gate, and one of five candidate slots was spent
+    proving that (R1 §2).  With the seed's width the boundary height 154 replaces
+    it, and its 258x154 pack packs and routes (R1 §3, E1).
+
+    `max(...)` rather than the seed alone: `_minimum_pack_width` is still a proof
+    and can exceed the seed for a height the shelf pack seats badly, and taking
+    the larger of the two keeps the filter no weaker than it was.
+
+    This is a WIDTH witness at the SCHEDULED height; the sweep's own seed gate
+    filters on `strip_outline(seed)`, whose height is the shelf's realised one.
+    The two are different questions and this function answers only the first.
+    """
     seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
     ordered = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
     envelope = finalize.band_policy_search_envelope(
@@ -18967,6 +18985,7 @@ def _band_policy_candidate_heights(
     return envelope.reserve_boundary_height(
         ordered,
         minimum_width_for_height={
-            height: _minimum_pack_width(strips, height) for height in ordered
+            height: max(_minimum_pack_width(strips, height), seeds[height].width)
+            for height in ordered
         },
     )
