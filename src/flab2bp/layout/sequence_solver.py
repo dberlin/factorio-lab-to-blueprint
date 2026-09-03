@@ -4377,7 +4377,7 @@ def _production_run(
     stage_admission = _MeasuredStageAdmission(
         deadline=deadline,
         monotonic=time.monotonic,
-        total_budget_s=ceiling,
+        total_budget_s=min(ceiling, max(0.0, deadline - started)),
     )
 
     def deadline_reached() -> bool:
