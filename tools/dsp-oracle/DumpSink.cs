@@ -41,6 +41,27 @@ namespace FlabOracle
             }
         }
 
+        /// <summary>
+        /// The sorter cargo-stacking and Automatic Piler dump. Independent of the
+        /// paste tool: it reads LDB, the game history and the live component pools,
+        /// so it works from any screen (and says so in the file when there is no
+        /// save loaded and only the LDB half is available).
+        /// </summary>
+        internal static void DumpStackingFacts(string trigger)
+        {
+            try
+            {
+                string json = StackingFacts.Serialize(trigger);
+                string path = Oracle.NextStackingFactsPath();
+                File.WriteAllText(path, json);
+                Oracle.Log.LogMessage("flab2bp oracle wrote stacking facts " + path);
+            }
+            catch (Exception e)
+            {
+                Oracle.Log.LogError("flab2bp oracle stacking-facts dump failed: " + e);
+            }
+        }
+
         internal static void DumpTargetCapture(TargetCaptureSession capture, string trigger, bool? checkResult)
         {
             try

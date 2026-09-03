@@ -137,6 +137,15 @@ namespace FlabOracle
             AppendFloat(value);
         }
 
+        /// <summary>Doubles go out as "R", the shortest round-tripping form for
+        /// System.Double, for the same reason floats go out as "G9".</summary>
+        public void Prop(string key, double value)
+        {
+            Sep();
+            WriteKeyRaw(key);
+            AppendDouble(value);
+        }
+
         /// <summary>Vector3 as [x, y, z] at full float precision.</summary>
         public void Prop(string key, Vector3 v)
         {
@@ -194,6 +203,60 @@ namespace FlabOracle
             }
 
             _sb.Append(']');
+        }
+
+        /// <summary>Whole array; null writes null. The counted overload stays for
+        /// callers that hold a pool plus a cursor.</summary>
+        public void PropIntArray(string key, int[] values)
+        {
+            PropIntArray(key, values, values == null ? 0 : values.Length);
+        }
+
+        public void PropDoubleArray(string key, double[] values)
+        {
+            Sep();
+            WriteKeyRaw(key);
+            if (values == null)
+            {
+                _sb.Append("null");
+                return;
+            }
+
+            _sb.Append('[');
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (i > 0)
+                {
+                    _sb.Append(", ");
+                }
+
+                AppendDouble(values[i]);
+            }
+
+            _sb.Append(']');
+        }
+
+        private void AppendDouble(double value)
+        {
+            if (double.IsNaN(value))
+            {
+                _sb.Append("\"NaN\"");
+                return;
+            }
+
+            if (double.IsPositiveInfinity(value))
+            {
+                _sb.Append("\"Infinity\"");
+                return;
+            }
+
+            if (double.IsNegativeInfinity(value))
+            {
+                _sb.Append("\"-Infinity\"");
+                return;
+            }
+
+            _sb.Append(value.ToString("R", CultureInfo.InvariantCulture));
         }
 
         private void AppendFloat(float value)

@@ -30,6 +30,7 @@
     <Compile Include="../Capture.cs" />
     <Compile Include="../Dumper.cs" />
     <Compile Include="../TargetCapture.cs" />
+    <Compile Include="../StackingFacts.cs" />
   </ItemGroup>
 
   <ItemGroup>
