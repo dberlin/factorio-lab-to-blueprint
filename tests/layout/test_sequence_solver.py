@@ -53,6 +53,7 @@ from flab2bp.layout.route_feedback import (
     select_split_candidate,
 )
 from flab2bp.layout.sequence_alns import (
+    C_CONTEXT_FRACTION_STEPS,
     REWARD_RANKS,
     DestroyOperator,
     OperatorContext,
@@ -2917,6 +2918,33 @@ def test_production_exact_preparation_reuses_realized_direct_insert(
     assert candidate.decoded.x == decoded.x
     assert candidate.decoded.y == decoded.y
     assert promised_direct and promised_direct[0]
+
+
+def test_the_production_run_divides_the_remaining_wall_by_its_own_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production solver's bucket reads the run's clock, not the inert default.
+
+    A solver that always reports the full bucket would make the affordability
+    filter that gates the window repair dead before Task 11 ever arms it.
+    """
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=2.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+    )
+    monkeypatch.setattr(
+        "flab2bp.layout.sequence_solver.time.monotonic",
+        lambda: run.started + run.ceiling,
+    )
+    assert run.solver._remaining_fraction() == 0
+    monkeypatch.setattr(
+        "flab2bp.layout.sequence_solver.time.monotonic", lambda: run.started
+    )
+    assert run.solver._remaining_fraction() == C_CONTEXT_FRACTION_STEPS
 
 
 def test_production_exact_preparation_replay_is_deterministic() -> None:
@@ -6706,6 +6734,43 @@ def test_sequence_pair_routes_self_consuming_pinned_flow(
 
 
 @pytest.mark.slow
+def test_production_stats_carry_the_operator_telemetry() -> None:
+    spec = plastic_spec()
+    placement = SequencePairLayout(band_policy=BandPolicy.parse("portable")).lay_out(
+        spec, time_budget_s=15.0
+    )
+    for key in (
+        "feasibility_restart_batches",
+        "alns_choices",
+        "alns_applied",
+        "alns_evaluations",
+        "alns_routing_seconds",
+    ):
+        assert isinstance(placement.stats[key], float), key
+    tally = placement.stats["alns_operators"]
+    assert isinstance(tally, str)
+    for part in filter(None, tally.split("|")):
+        kind, name, count = part.split(":")
+        assert kind in {"destroy", "repair"}
+        assert name
+        assert count.isdigit()
+
+
+@pytest.mark.slow
+def test_production_counts_every_candidate_that_reached_the_detailed_router() -> None:
+    """`alns_evaluations` is an absolute the corpus gate records, so pin it non-zero.
+
+    A production solve always routes at least one candidate in detail, so a zero
+    here means the counter was never wired into the adapter closure.
+    """
+    placement = SequencePairLayout(band_policy=BandPolicy.parse("portable")).lay_out(
+        plastic_spec(), time_budget_s=15.0
+    )
+    assert placement.stats["alns_evaluations"] >= 1.0
+    assert placement.stats["alns_evaluations"] == placement.stats["detailed_routes"]
+
+
+@pytest.mark.slow
 def test_reported_sequence_output_products_keeps_machine_inputs_separate() -> None:
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
@@ -7366,6 +7431,74 @@ def _never_certifying_solver(
 ) -> SequenceSolver[object]:
     """A solver whose detailed route always strands one net, so no incumbent appears."""
     return _staged_solver(heights=heights, deadline_reached=deadline_reached)
+
+
+def test_sequence_solver_exposes_a_default_operator_session() -> None:
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    assert solver.alns_session is not None
+    assert solver.alns_adapters.window_pack is None
+    assert solver._remaining_fraction() == C_CONTEXT_FRACTION_STEPS
+
+
+def test_the_default_operator_session_only_arms_the_legacy_pairing() -> None:
+    """Until Task 7 opens the portfolio, exactly one pairing may be selected.
+
+    `BAND_BOUNDARY` is inert when the band target equals the decoded width, and
+    `LOCAL_EXACT_PACK` is skipped for a zero reward while no window adapter is
+    wired: arming either here would burn selections on an arm that cannot work.
+    """
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    armed = {
+        key.removeprefix("count:")
+        for key in solver.alns_session.credit
+        if key.startswith("count:")
+    }
+    assert armed == {
+        DestroyOperator.FAILED_ENDPOINTS.value,
+        RepairOperator.SEQUENCE_REINSERT.value,
+    }
+
+
+def _forbid_the_legacy_substitution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make any surviving `_routing_feedback_substitution` call site fail loudly."""
+
+    def forbidden(*args: object, **kwargs: object) -> Never:
+        raise AssertionError("the repair must be selected through the operator session")
+
+    monkeypatch.setattr(sequence_solver_module, "_routing_feedback_substitution", forbidden)
+
+
+def test_the_stage_boundary_repair_runs_through_the_operator_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reverting `_complete_routing_stage`'s call site trips the spy."""
+    _forbid_the_legacy_substitution(monkeypatch)
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    with pytest.raises(NoValidLayout):
+        solver.search()
+    assert solver.alns_session.choices
+    assert {
+        (choice.destroy, choice.repair) for choice in solver.alns_session.choices
+    } == {(DestroyOperator.FAILED_ENDPOINTS, RepairOperator.SEQUENCE_REINSERT)}
+
+
+def test_the_compact_seed_repair_runs_through_the_operator_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reverting `_route_compact_seed_closure`'s call site trips the spy.
+
+    The closure hands `_complete_routing_stage` a source-less candidate, which
+    returns before its own substitution, so this drives the seed site alone.
+    """
+    _forbid_the_legacy_substitution(monkeypatch)
+    solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
+    height_state = solver._heights[0]
+    solver._route_compact_seed_closure(
+        height_state,
+        AnnealState.initial(height_state.problem.size, 7),
+        1_000,
+    )
+    assert solver.alns_session.choices
 
 
 def test_search_without_continuation_stops_at_the_derived_stage_limit() -> None:
