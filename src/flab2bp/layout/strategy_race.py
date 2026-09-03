@@ -51,14 +51,24 @@ type RaceStrategyName = Literal["freeform", "sequence-pair"]
 RACE_STRATEGIES: tuple[RaceStrategyName, ...] = ("freeform", "sequence-pair")
 
 #: Seconds past the soft deadline the parent waits before killing a racer.
-#: MEASURED, not guessed: ``scripts/spawn_cost.py`` timed this box's
-#: spawn-to-first-instruction cost over ten spawns of the same pool shape this
-#: module builds -- worst case 0.101 s -- and this is
-#: ``ceil(0.101) + ATOMIC_COMPLETION_GRACE_S = 1 + 5.0``.  The numbers and the
-#: box load are in
-#: ``docs/superpowers/evidence/2026-09-02-phase-d-portfolio/race-grace.md``.  It
-#: is deliberately NOT ``sequence_islands._ISLAND_COMPLETION_GRACE_S``, which is
-#: 90.0: a grace that large is a second budget.
+#:
+#: MEASURED, not guessed, and measured on the right span.  What the grace has to
+#: cover is the post-deadline TAIL: at the wall a child is holding a finished
+#: ``Placement``, and the parent cannot kill it until that answer has come back
+#: -- the child returns, the pool pickles a real ``Placement`` through the result
+#: queue, and the parent unpickles it and resolves the future.  Spawn cost is
+#: NOT part of this: the child is handed the parent's absolute deadline, so
+#: starting up is search it loses, inside the wall rather than after it.
+#:
+#: ``scripts/spawn_cost.py`` timed that tail over ten runs of the same pool shape
+#: this module builds -- worst case 0.001 s -- so this is
+#: ``ceil(0.001) + ATOMIC_COMPLETION_GRACE_S = 1 + 5.0``, the second term being
+#: the in-process atomic completion a serial arm already gets.  The numbers, the
+#: box load and the spawn figure kept as context are in
+#: ``docs/superpowers/evidence/2026-09-02-phase-d-portfolio/race-grace.md``.
+#:
+#: It is deliberately NOT ``sequence_islands._ISLAND_COMPLETION_GRACE_S``, which
+#: is 90.0: a grace that large is a second budget.
 RACE_COMPLETION_GRACE_S = 6.0
 
 #: Messages a direction may hold before publishing starts dropping.  A dropped
@@ -524,6 +534,12 @@ def run_strategy_race(
     try:
         futures, executor = (submit or _pool_submit)(requests, channels)
         strategy_by_future = dict(futures)
+        # One future per arm, asserted rather than assumed.  The collector takes
+        # the FIRST future for each name and `_ordered` keys a dict on the
+        # strategy, so a second future for one arm would be silently dropped at
+        # one of those two points -- a lost result reported as a complete race.
+        if len(strategy_by_future) != len(set(strategy_by_future.values())):
+            raise ValueError("each strategy must be raced exactly once")
         done, not_done = wait(
             tuple(strategy_by_future),
             timeout=max(0.0, hard_deadline - monotonic()),
