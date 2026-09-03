@@ -2585,6 +2585,9 @@ def test_anneal_stage_stops_between_moves_when_cancelled() -> None:
     assert cut.accepted_moves < full.accepted_moves
     assert len(cut.final_state.gaps.east) == problem.size
     assert cut.archive, "a cancelled stage still returns the elites it scored"
+    assert full.moves_made == config.moves_per_stage
+    assert cut.moves_made == 2 * ANNEAL_DEADLINE_CHECK_MOVES
+    assert cut.moves_made < config.moves_per_stage
 
 
 def test_anneal_stage_without_a_cancel_is_byte_identical() -> None:
@@ -2606,6 +2609,8 @@ def test_anneal_stage_polls_the_clock_every_stride() -> None:
     times, not 4.
     """
     from flab2bp.layout.sequence_pair import ANNEAL_DEADLINE_CHECK_MOVES
+
+    assert ANNEAL_DEADLINE_CHECK_MOVES == 256
 
     problem, state = _cancellable_anneal_scene()
     moves = 5 * ANNEAL_DEADLINE_CHECK_MOVES
@@ -2704,3 +2709,60 @@ def test_anneal_restarts_passes_the_solvers_deadline_predicate(
         )
         assert captured, f"anneal_stage was never called for {host_cls.__name__}"
         assert all(predicate is sentinel for predicate in captured)
+
+
+def test_anneal_restarts_reports_the_moves_a_cut_stage_actually_made() -> None:
+    """``_AnnealedRestart.move_count`` must be the moves made, not the configured count.
+
+    Without ``result.moves_made`` threaded through, a cut stage's ``move_count``
+    reads ``self.config.moves_per_stage`` regardless of how far the stage actually
+    got, over-reporting ``anneal_moves``/``anneal_stages`` telemetry on exactly the
+    deadline-crossing cells the gate measures.
+    """
+    from flab2bp.layout.sequence_pair import ANNEAL_DEADLINE_CHECK_MOVES
+    from flab2bp.layout.sequence_solver import (
+        SequenceSolver,
+        SequenceSolverConfig,
+        _default_feedback,
+        _new_height_state,
+    )
+
+    problem, _ = _cancellable_anneal_scene()
+    solver_config = SequenceSolverConfig(
+        stages=2,
+        moves_per_stage=4 * ANNEAL_DEADLINE_CHECK_MOVES,
+        restarts_per_height=1,
+        global_elites=2,
+    )
+    height_state = _new_height_state(
+        0,
+        problem.outline_height,
+        problem,
+        _default_feedback,
+        solver_config,
+        None,
+    )
+
+    polls = 0
+
+    def after_one_poll() -> bool:
+        nonlocal polls
+        polls += 1
+        return polls > 1
+
+    class _Host:
+        config = solver_config
+        direct_targets: tuple[object, ...] = ()
+        direct_targets_for_state = None
+        deadline_reached = staticmethod(after_one_poll)
+
+    (restart_result,) = SequenceSolver._anneal_restarts(
+        _Host(),  # type: ignore[arg-type]
+        height_state,
+        tuple(height_state.restarts),
+    )
+
+    assert restart_result.result.cancelled is True
+    assert restart_result.result.moves_made == 2 * ANNEAL_DEADLINE_CHECK_MOVES
+    assert restart_result.move_count == restart_result.result.moves_made
+    assert restart_result.move_count < solver_config.moves_per_stage
