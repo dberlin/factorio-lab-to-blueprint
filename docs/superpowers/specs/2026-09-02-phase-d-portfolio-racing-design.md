@@ -262,7 +262,11 @@ against the measured 27 s.
 `deadline`, so it can express a cold-stage rule only in terms of `remaining` —
 and `remaining > remaining * fraction` is vacuous for every fraction under 1.
 It therefore gains the span it is bounding: `total_budget_s: float = 0.0`, set
-by `_production_run` from its own `ceiling`. For a role with no history
+by `_production_run` to the wall it actually has, `min(ceiling, max(0.0, deadline
+- started))` (Ruling AJ: under `absolute_deadline` a raced child can be handed
+`time_budget_s = 30` with five seconds of parent wall left, and a cold role
+refused against a 7.5 s requirement never records history, so `ceiling` alone
+would refuse every cold role for that child's whole life). For a role with no history
 (`required == 0.0`) the requirement becomes
 
 ```
