@@ -4506,6 +4506,74 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     assert run.solver._borrow_first_discovery is False
 
 
+def test_large_sparse_compact_seed_survives_a_bounded_narrowest_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The large-sparse role must read the SCHEDULED narrowest height, not the
+    pre-bound one.  `two_stage_spec()`'s narrowest greedy height is 14, and
+    `BandPolicy("80")` gives a boundary of 9 -- low enough that the ceiling
+    bound (and `reserve_boundary_height` ahead of it) replaces the schedule's
+    narrowest slot before `_large_sparse_compact_seed_height`'s
+    ``narrowest_height in scheduled_heights`` guard ever runs.  Capturing
+    `narrowest_greedy_height` off the pre-bound, `seeds`-sorted tuple leaves a
+    stale 14 that is never in the bounded schedule, so the guard silently
+    fails and the seed falls back to `_balanced_compact_seed_height` --
+    monkeypatched here to a value (999) no real bounded height can produce, so
+    a fallback is unambiguous.  Reading it off the bounded `coarse_heights`
+    (this task's fix) keeps the guard honest and the large-sparse role reaches
+    the height the schedule actually offers.
+    """
+    monkeypatch.setattr(sequence_solver_module, "_LARGE_SPARSE_COMPACT_MIN_MACHINES", 1)
+    monkeypatch.setattr(sequence_solver_module, "_LARGE_SPARSE_COMPACT_MIN_STRIPS", 1)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_balanced_compact_seed_height",
+        lambda _template_problem: 999,
+    )
+
+    def cancelled_seed(
+        _problem: PlacementProblem,
+        *,
+        base_seed: int,
+        attempt: int,
+        config: CompactSeedConfig | None = None,
+        direct_eligibility: tuple[VariantDirectInsertTarget, ...] = (),
+        absolute_deadline: float | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> CompactSeedResult:
+        del base_seed, attempt, config, direct_eligibility, absolute_deadline, cancelled
+        return CompactSeedResult(
+            CompactSeedStatus.CANCELLED,
+            None,
+            CompactSeedDiagnostics(
+                solver_seed=0,
+                status_name="CANCELLED",
+                width_weight=1,
+                secondary_upper_bound=0,
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", cancelled_seed)
+
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("80"),
+        time_budget_s=2.0,
+        power=True,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        compact_seed_attempt=0,
+    )
+
+    # MEASURED: `two_stage_spec()`'s coarse heights are (14, 17, 22, 8, 11) by
+    # width; boundary 9 replaces the over-ceiling ones, and 9 -- the boundary
+    # itself, already scheduled by `reserve_boundary_height` -- lands at index
+    # 0, so it is what the fixed `narrowest_greedy_height` reads back.
+    assert run.telemetry.compact_seed_height == 9
+    assert run.telemetry.compact_seed_height != 999
+    assert run.telemetry.compact_seed_height == run.heights[0]
+
+
 def test_production_planning_generates_variant_families_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7732,22 +7800,20 @@ def test_production_forwards_fixed_band_through_fallback_replan(
     assert plan_calls == [(6, policy), (spec.machine_count, policy)]
 
 
-def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Pins the boundary-slot swap alone; the new ceiling bound is orthogonal.
+def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot() -> None:
+    """The single boundary-slot swap, now composed end-to-end with the ceiling bound.
 
     ``band_120_control_spec()`` legitimately schedules coarse heights (33, 35,
     28, 23, ...) above `BandPolicy("120")`'s boundary (19) -- that IS the over-
-    ceiling schedule Task 6 declares deviation 2 against.  This test's purpose
-    is the single boundary-slot reservation `reserve_boundary_height` performs,
-    so the ceiling bound is held off here and covered by its own tests instead.
+    ceiling schedule Task 6 declares deviation 2 against, and `BandPolicy("120")`
+    is a fixed band the corpus audit never runs, so this is the one place a
+    production change on it is pinned.  ``fixed`` starts with the boundary
+    itself (`reserve_boundary_height`'s single swap, unchanged) and then the
+    ceiling bound pulls 33, 28 and 21 into the seven-slot approach band 19..13
+    -- filling it, so 35 and 23 (further down the schedule; deviation 1) are
+    left over-ceiling.  The test's purpose survives either way: ``fixed[0] ==
+    19`` where ``portable[0] == 26``, and the schedules stay equal length.
     """
-    monkeypatch.setattr(
-        sequence_solver_module,
-        "_ceiling_bounded_schedule",
-        lambda ordered, *, boundary=None, reserved=frozenset(): ordered,
-    )
     portable = _production_run(
         band_120_control_spec(),
         band_policy=BandPolicy("portable"),
@@ -7766,7 +7832,7 @@ def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot(
     ).heights
 
     assert portable == (26, 33, 12, 16, 21, 28, 35, 14, 18, 23)
-    assert fixed == (19, 33, 12, 16, 21, 28, 35, 14, 18, 23)
+    assert fixed == (19, 17, 12, 16, 15, 13, 35, 14, 18, 23)
     assert len(fixed) == len(portable)
 
 
@@ -7969,17 +8035,15 @@ def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # 595 is a deliberately extreme candidate height, chosen to exercise the
-    # extent gate -- unrelated to the boundary ceiling, which would otherwise
-    # pull it down and remove it from the schedule this test inspects.
-    monkeypatch.setattr(
-        sequence_solver_module,
-        "_ceiling_bounded_schedule",
-        lambda ordered, *, boundary=None, reserved=frozenset(): ordered,
-    )
+    # extent gate.  `BandPolicy("120")`'s boundary is 19 and the approach band
+    # below it holds `C_CEILING_APPROACH_STEP + 1 == 7` slots (19..13); filling
+    # every one of them with a real candidate height leaves 595 no free slot to
+    # be pulled into, so `_ceiling_bounded_schedule` leaves it alone BY
+    # CONSTRUCTION (deviation 1) and this test never has to neutralise it.
     monkeypatch.setattr(
         sequence_solver_module,
         "_candidate_heights",
-        lambda _strips: [19, 595],
+        lambda _strips: [19, 18, 17, 16, 15, 14, 13, 595],
     )
     monkeypatch.setattr(
         freeform_module,
@@ -8029,17 +8093,15 @@ def test_sequence_extent_gate_uses_realized_core_not_nominal_outline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # 595 is a deliberately extreme candidate height, chosen to exercise the
-    # extent gate -- unrelated to the boundary ceiling, which would otherwise
-    # pull it down and remove it from the schedule this test inspects.
-    monkeypatch.setattr(
-        sequence_solver_module,
-        "_ceiling_bounded_schedule",
-        lambda ordered, *, boundary=None, reserved=frozenset(): ordered,
-    )
+    # extent gate.  `BandPolicy("120")`'s boundary is 19 and the approach band
+    # below it holds `C_CEILING_APPROACH_STEP + 1 == 7` slots (19..13); filling
+    # every one of them with a real candidate height leaves 595 no free slot to
+    # be pulled into, so `_ceiling_bounded_schedule` leaves it alone BY
+    # CONSTRUCTION (deviation 1) and this test never has to neutralise it.
     monkeypatch.setattr(
         sequence_solver_module,
         "_candidate_heights",
-        lambda _strips: [19, 595],
+        lambda _strips: [19, 18, 17, 16, 15, 14, 13, 595],
     )
     run = _production_run(
         two_stage_spec(),
@@ -9430,8 +9492,10 @@ def test_a_reserved_height_is_not_reused_as_a_replacement() -> None:
 def test_the_portable_band_core_boundary_is_the_number_the_helper_is_given() -> None:
     """Pins 154 where a test can see it, without running a production search.
 
-    `_ENTRY_RING` lives in `freeform` and is NOT imported into `sequence_solver`;
-    reading `sequence_solver._ENTRY_RING` raises `AttributeError`.
+    `_ENTRY_RING` is DEFINED in `freeform` (`sequence_solver` re-imports the
+    same name for `_production_run`'s own use); reading it off either module
+    gives the identical value, and this test reads it off `freeform` because
+    that is where the perimeter is authored.
     """
     from flab2bp.layout import freeform
     from flab2bp.layout.finalize import band_policy_search_envelope
