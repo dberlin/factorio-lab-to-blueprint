@@ -32,6 +32,7 @@ from flab2bp.layout.compact_seed import (
     VariantDirectInsertTarget,
 )
 from flab2bp.layout.freeform import (
+    _ENTRY_RING,
     _box,
     _greedy_pack,
     _nets_between,
@@ -1349,36 +1350,32 @@ def test_the_uncapped_destroy_set_is_wider_than_the_capped_one() -> None:
 
 
 def test_the_substitution_caps_the_destroy_set_once_the_portfolio_is_open() -> None:
-    """`cap_scale=True` bounds the destroy set by `operator_scale`, not the size."""
-    session = OperatorSession()
-    problem, state, decoded, routing = _substitution_fixture()
-    _repaired, neighbourhood = sequence_solver_module._alns_substitution(
-        routing,
-        state,
-        problem,
-        decoded,
-        seed=11,
-        stage_index=0,
-        session=session,
-        context=OperatorContext(
-            strip_count=problem.size, stagnation=0, remaining_fraction=10
-        ),
-        metrics=metrics_from_evaluation(
-            routing,
-            decoded,
-            FeedbackState.empty((decoded.width, problem.outline_height)),
-            outline_height=problem.outline_height,
-            band_target_width=decoded.width,
-            validator_clean=False,
-        ),
-        routing_seconds=0.5,
-        band_target_width=decoded.width,
+    """`cap_scale=True` bounds the destroy set by `operator_scale`, not the size.
+
+    On `_applied_substitution_fixture`, whose destroy set is a proper subset:
+    `_substitution_fixture`'s is the whole four-strip problem, so the "never the
+    whole problem" guard empties it and `len(frozenset()) <= scale` holds
+    however -- or whether -- the cap is wired at all.
+    """
+    fixture = _applied_substitution_fixture()
+    problem = fixture[0]
+    scale = operator_scale(
+        OperatorContext(strip_count=problem.size, stagnation=0, remaining_fraction=10)
+    )
+    _capped_state, capped = _run_alns(
+        fixture,
+        session=OperatorSession(),
         adapters=sequence_solver_module._RepairAdapters(),
         cap_scale=True,
     )
-    assert len(neighbourhood) <= operator_scale(
-        OperatorContext(strip_count=problem.size, stagnation=0, remaining_fraction=10)
+    _uncapped_state, uncapped = _run_alns(
+        fixture,
+        session=OperatorSession(),
+        adapters=sequence_solver_module._RepairAdapters(),
+        cap_scale=False,
     )
+    assert 0 < len(capped) <= scale
+    assert len(capped) < len(uncapped)
 
 
 def test_local_exact_pack_takes_the_encoding_the_window_adapter_measured() -> None:
@@ -8017,8 +8014,12 @@ def test_the_default_operator_session_arms_the_whole_repair_portfolio() -> None:
     }
 
 
-def test_the_production_destroy_portfolio_is_the_shipped_set() -> None:
-    """Driving selection `len(SHIPPED_DESTROY)` times plays every shipped arm."""
+def test_the_default_session_plays_every_shipped_arm() -> None:
+    """Driving a bare-constructed solver's session plays every shipped arm.
+
+    This is `SequenceSolver.__init__`'s default session, not `_production_run`'s;
+    the production one is pinned separately below.
+    """
     solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
     played: set[DestroyOperator] = set()
     for _ in range(len(SHIPPED_DESTROY)):
@@ -8034,24 +8035,27 @@ def test_the_production_session_arms_the_shipped_destroy_and_repair_portfolio() 
     """`_production_run`'s explicit session must agree with `__init__`'s default.
 
     Both declaration sites are pinned separately (Task 5 concern 1 / Task 11
-    concern 5) so a mutant that opens only one of them fails a test.
+    concern 5) so a mutant that opens only one of them fails a test.  The two
+    ledgers are asserted separately: one merged value set cannot tell a destroy
+    arm armed as a repair from the portfolio being right.
     """
-    run = _production_run(
-        two_stage_spec(),
-        band_policy=BandPolicy("portable"),
-        time_budget_s=2.0,
-        power=False,
-        strip_len=6,
-        config=SequenceSolverConfig.test(),
-    )
-    armed = {
-        key.removeprefix("count:")
-        for key in run.solver.alns_session.credit
-        if key.startswith("count:")
-    }
-    assert armed == {operator.value for operator in SHIPPED_DESTROY} | {
-        operator.value for operator in SHIPPED_REPAIR
-    }
+    run = _band_target_run()
+    session = run.solver.alns_session
+    played_destroy: set[DestroyOperator] = set()
+    played_repair: set[RepairOperator] = set()
+    for _ in range(max(len(SHIPPED_DESTROY), len(SHIPPED_REPAIR))):
+        choice = session.select(
+            OperatorContext(
+                strip_count=8,
+                stagnation=0,
+                remaining_fraction=C_CONTEXT_FRACTION_STEPS,
+            )
+        )
+        played_destroy.add(choice.destroy)
+        played_repair.add(choice.repair)
+        session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
+    assert played_destroy == set(SHIPPED_DESTROY)
+    assert played_repair == set(SHIPPED_REPAIR)
 
 
 def _forbid_the_legacy_substitution(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -8186,11 +8190,8 @@ def test_the_stage_boundary_repair_scores_congestion_against_the_pre_update_feed
     assert not any(self_scored)
 
 
-def test_the_production_band_target_guards_widths_above_the_scan_cap() -> None:
-    """`band_target_for` must degrade to the input width, not raise, above the
-    scan cap (`finalize.C_BAND_SCAN_MAX`), so a repair attempt never crashes
-    the solve over a width `band_target_width` refuses to scan."""
-    run = _production_run(
+def _band_target_run() -> _ProductionRun:
+    return _production_run(
         two_stage_spec(),
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
@@ -8198,6 +8199,32 @@ def test_the_production_band_target_guards_widths_above_the_scan_cap() -> None:
         strip_len=6,
         config=SequenceSolverConfig.test(),
     )
+
+
+def test_the_production_band_target_narrows_a_width_the_policy_refuses() -> None:
+    """`band_target_for` must report the POLICY's widest fitting core.
+
+    Reporting the input width back makes BAND_BOUNDARY inert -- every fitting
+    placement is "in band" -- which is what an unwired solver does, so the
+    production wiring is pinned against the envelope `_production_run` itself
+    builds.  At 1000 tiles the portable policy refuses and the target narrows.
+    """
+    run = _band_target_run()
+    envelope = finalize.band_policy_search_envelope(
+        BandPolicy("portable"),
+        perimeter=_ENTRY_RING,
+    )
+    height, width = 12, 1000
+    target = finalize.band_target_width(envelope, height=height, width=width)
+    assert target < width
+    assert run.solver._band_target_for(height, width) == target
+
+
+def test_the_production_band_target_guards_widths_above_the_scan_cap() -> None:
+    """`band_target_for` must degrade to the input width, not raise, above the
+    scan cap (`finalize.C_BAND_SCAN_MAX`), so a repair attempt never crashes
+    the solve over a width `band_target_width` refuses to scan."""
+    run = _band_target_run()
     assert run.solver._band_target_for(12, 5000) == 5000
 
 
