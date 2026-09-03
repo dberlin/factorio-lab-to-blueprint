@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -84,7 +85,7 @@ from flab2bp.dsp import catalog  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
-from flab2bp.layout import finalize, validate  # noqa: E402
+from flab2bp.layout import finalize, route_kernel, validate  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
 from flab2bp.layout.base import (  # noqa: E402
     LayoutAttemptFailure,
@@ -180,6 +181,12 @@ class Result:
     projection_sorters: int = 0
     attempt_failures: tuple[LayoutAttemptFailure, ...] = ()
     projection_failures: tuple[ProjectionFailureRecord, ...] = ()
+    #: Routing kernel THIS WORKER PROCESS selected.  A property of the process,
+    #: not of a placement, so it is present on REFUSED and CRASH rows too --
+    #: which is the point: a refusal under the Python fallback is a different
+    #: fact from a refusal under Cython, and a JSONL that cannot tell them apart
+    #: cannot be compared against one taken with the other backend.
+    route_backend: str = field(default_factory=route_kernel.selected_backend)
 
     @property
     def label(self) -> str:
@@ -467,6 +474,33 @@ def _available_cores() -> int:
     return os.cpu_count() or 4
 
 
+def _head_commit() -> str:
+    """The tree under audit, or ``"unknown"`` when git cannot say.
+
+    An audit JSONL outlives the checkout that produced it.  Without this field a
+    comparison of two files is a comparison of two anonymous runs, and the only
+    way back to the code is the file's mtime.
+    """
+    try:
+        finished = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return finished.stdout.strip() or "unknown"
+
+
+#: Stamped onto every row by ``record``.  Resolved once in ``main`` rather than
+#: per cell: it is a property of the run, and 72 subprocess calls to learn one
+#: constant is 72 chances to be slow or to disagree with itself.
+_COMMIT = "unknown"
+
+
 _JSONL: list[dict[str, object]] = []
 
 
@@ -474,6 +508,8 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
     _JSONL.append(
         {
             "strategy": r.job.strategy,
+            "commit": _COMMIT,
+            "route_backend": r.route_backend,
             "url_id": r.job.url_id,
             "spec_index": r.job.spec_index,
             "spec_label": r.spec_label,
@@ -572,6 +608,8 @@ def main() -> int:
         "which cells moved and what they cost",
     )
     args = ap.parse_args()
+    global _COMMIT
+    _COMMIT = _head_commit()
     candidate_policies = candidate_policies_from_args(ap, args)
 
     cutoff = _TIER_ORDER.index(Tier(args.tier))
