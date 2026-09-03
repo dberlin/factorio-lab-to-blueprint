@@ -99,7 +99,10 @@ from flab2bp.layout.base import (  # noqa: E402
 )
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
-from flab2bp.layout.strategy_race import RacingLayout  # noqa: E402
+from flab2bp.layout.strategy_race import (  # noqa: E402
+    RACE_COMPLETION_GRACE_S,
+    RacingLayout,
+)
 from flab2bp.rates import (  # noqa: E402
     DEFAULT_CANDIDATE_POLICIES,
     CandidatePolicy,
@@ -206,14 +209,19 @@ class Result:
     #: cannot be compared against one taken with the other backend.
     route_backend: str = field(default_factory=route_kernel.selected_backend)
     #: Wall of the ATTEMPT -- the solve plus the compaction, projection and
-    #: validation charged to nobody else -- and how far past
-    #: ``budget + ATOMIC_COMPLETION_GRACE_S`` it ran, clamped at zero.  The same
-    #: two numbers ``pipeline`` stamps on ``PlacementStats``; the audit is its
-    #: own driver, so it measures them itself rather than reading a stat no
-    #: layout produces.
+    #: validation charged to nobody else -- and how far past ``budget + grace``
+    #: it ran, clamped at zero, where ``grace`` is
+    #: ``strategy_race.RACE_COMPLETION_GRACE_S`` for a ``best`` cell (a raced
+    #: attempt runs under the race's own completion contract, not the serial
+    #: one) and ``base.ATOMIC_COMPLETION_GRACE_S`` for every other strategy --
+    #: the same two contracts ``pipeline`` honours on ``PlacementStats``.  The
+    #: audit is its own driver, so it measures them itself rather than reading
+    #: a stat no layout produces.
     #:
-    #: ``None`` -- and therefore ABSENT from the JSONL row -- when the cell
-    #: produced no placement at all.  A refusal overshot nothing, and a zero
+    #: ``None`` -- and therefore ABSENT from the JSONL row -- only when the
+    #: cell produced no placement at all (a refusal before any layout was
+    #: built).  A rejected placement still overshot something and carries both
+    #: numbers; only a placement-free refusal overshot nothing, and a zero
     #: there would be indistinguishable from a punctual cell to whatever reports
     #: the maximum.
     attempt_wall_s: float | None = None
@@ -288,6 +296,13 @@ def run_cell(job: Job) -> Result:
     #: expires and are charged to nobody.  `t0` also covers building the spec,
     #: which is not the layout's cost.
     attempt_started = time.monotonic()
+    #: A raced `best` cell runs under the race's own completion contract, not
+    #: the serial one: `RacingLayout` gives its children until
+    #: RACE_COMPLETION_GRACE_S (6.0) past the shared deadline, a full second
+    #: more than the ATOMIC_COMPLETION_GRACE_S (5.0) a lone strategy gets.
+    #: Judging every strategy by the serial grace would over-report a clean
+    #: `best` cell's overshoot by up to that second.
+    grace = RACE_COMPLETION_GRACE_S if job.strategy == "best" else ATOMIC_COMPLETION_GRACE_S
     try:
         if job.arrangements is not None and job.strategy == "freeform":
             strategy = FreeformLayout(
@@ -345,14 +360,27 @@ def run_cell(job: Job) -> Result:
                 )
                 for failure in exc.failures
             )
+            # A placement WAS produced here -- it is what got projected and
+            # rejected -- so the attempt spent its whole budget and the row is
+            # honest carrying a wall and an overshoot, unlike the NoValidLayout
+            # refusal above (which never had a placement to charge for).
+            # A placement WAS produced here -- it is what got projected and
+            # rejected -- so the attempt spent its whole budget and the row is
+            # honest carrying a wall and an overshoot, unlike the NoValidLayout
+            # refusal above (which never had a placement to charge for).
+            now = time.monotonic()
+            attempt_wall_s = now - attempt_started
+            wall_overshoot_s = max(0.0, attempt_wall_s - job.budget - grace)
             return Result(
                 job,
                 "REFUSED",
                 label,
                 reason[:70],
                 exc.checks,
-                time.monotonic() - t0,
+                now - t0,
                 projection_failures=projection_failures,
+                attempt_wall_s=attempt_wall_s,
+                wall_overshoot_s=wall_overshoot_s,
             )
         placement = replace(
             placement,
@@ -377,7 +405,7 @@ def run_cell(job: Job) -> Result:
     attempt_wall_s = now - attempt_started
     wall_overshoot_s = max(
         0.0,
-        attempt_wall_s - job.budget - ATOMIC_COMPLETION_GRACE_S,
+        attempt_wall_s - job.budget - grace,
     )
     skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
     if report.ok and not skipped_power:
@@ -609,7 +637,13 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
     t.misses.append(f"{r.status:<8} {r.label}  {r.detail}")
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Every flag this audit accepts, in one place a test can parse without main.
+
+    Extracted from :func:`main` so a flag's exact surface -- ``--strategy``'s
+    choices among them -- can be asserted on directly rather than only through
+    the functions those choices are later handed to.
+    """
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tier", default="stress", choices=[t.value for t in _TIER_ORDER])
     ap.add_argument(
@@ -667,6 +701,11 @@ def main() -> int:
         "compared cell-by-cell and on area rather than on a tally that hides "
         "which cells moved and what they cost",
     )
+    return ap
+
+
+def main() -> int:
+    ap = build_parser()
     args = ap.parse_args()
     global _COMMIT
     _COMMIT = _head_commit()

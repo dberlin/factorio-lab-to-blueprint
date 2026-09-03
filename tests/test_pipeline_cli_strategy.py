@@ -546,3 +546,22 @@ def test_best_without_the_flag_still_runs_one_island(
     assert cli.main(["iron-ingot", "--strategy", "best"]) == 0
 
     assert received["sequence_islands"] == 1
+
+
+@pytest.mark.parametrize("workers", (0, -1))
+def test_cli_rejects_a_non_positive_workers_count(
+    workers: int,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        pipeline,
+        "build",
+        lambda *args, **kwargs: pytest.fail("invalid CLI arguments reached pipeline"),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["iron-ingot", "--workers", str(workers)])
+
+    assert exc_info.value.code == 2
+    assert "--workers must be a positive integer" in capsys.readouterr().err

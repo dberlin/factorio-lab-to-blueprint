@@ -326,6 +326,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--sequence-islands requires --strategy sequence-pair or best")
     if args.sequence_islands is not None and not 1 <= args.sequence_islands <= 16:
         ap.error("--sequence-islands must be from 1 to 16")
+    if args.workers is not None and args.workers < 1:
+        ap.error("--workers must be a positive integer")
     # The affinity-capped default stays exclusive to EXPLICIT sequence-pair:
     # `best` is the default strategy, so defaulting islands here would silently
     # re-shape every plain `flab2bp <url>` build.  An explicit N still travels.
