@@ -2244,17 +2244,17 @@ class SequenceSolver[PreparedT]:
         prepared_candidates: list[_StageCandidate[PreparedT]] = []
         global_candidates: list[_GlobalCandidate[PreparedT]] = []
         completion_reserve_stop = False
-        deadline_stop = False
         for index, (tagged, source) in enumerate(candidates):
             if prepared_candidates and self.deadline_reached():
                 # Preparation is the dearest thing in this loop -- 1.9 to 4.6s
-                # per candidate on the largest cells -- and `prepare` turns a
-                # passed deadline into `preparation_error="deadline"` anyway, so
-                # every further iteration buys a candidate that cannot be routed.
-                # The FIRST candidate is always prepared: `detailed_route` maps
-                # its deadline error to DetailedRouteStatus.BUDGET, the existing
-                # tested path, while an empty `prepared_candidates` would raise.
-                deadline_stop = True
+                # per candidate on the largest cells -- so once one candidate
+                # is prepared and the deadline has passed, every further
+                # candidate would only be prepared to sit unrouted: stop here.
+                # This only shortens the loop -- the candidate already
+                # prepared this iteration already reached its own
+                # global_route (or one of the other stop paths below, each of
+                # which already records its own skip reason) -- so no new
+                # telemetry reason is written for a deadline stop.
                 break
             if proxy_left == 0 and prepared_candidates:
                 break
@@ -2316,11 +2316,7 @@ class SequenceSolver[PreparedT]:
             if global_result.cancelled:
                 break
 
-        if deadline_stop and not global_candidates:
-            selected = prepared_candidates[0]
-            global_overflow = None
-            global_skip_reason = "deadline"
-        elif completion_reserve_stop and not global_candidates:
+        if completion_reserve_stop and not global_candidates:
             selected = prepared_candidates[0]
             global_overflow = None
             global_skip_reason = "completion-reserve"

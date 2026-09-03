@@ -9134,6 +9134,10 @@ def test_archive_routing_stops_preparing_candidates_after_the_deadline(
         "preparation is the dearest thing in this loop and a passed deadline "
         "makes every candidate after the first unroutable"
     )
+    assert len(fake.global_allowances) == 1, (
+        "the break falls between candidates, not inside one: the candidate "
+        "already prepared this iteration must still reach its own global_route"
+    )
 
 
 def test_archive_routing_prepares_every_elite_while_the_clock_holds(
