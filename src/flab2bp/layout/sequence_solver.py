@@ -898,6 +898,20 @@ StageBoundaryTransform = Callable[
 StageBoundaryCommit = Callable[[int, PlacementProblem], None]
 
 
+def _shipped_operator_session() -> OperatorSession:
+    """A session arming the whole shipped portfolio.
+
+    Both destroy operators (FAILED_ENDPOINTS, BAND_BOUNDARY) and both repair
+    operators (SEQUENCE_REINSERT, LOCAL_EXACT_PACK).  The two production
+    declaration sites -- `SequenceSolver.__init__`'s default and
+    `_production_run`'s explicit session -- must arm the same set, so they say it
+    once, here.  A factory rather than a constant: a session owns the D-UCB
+    ledgers of one search, and sharing them between solvers would leak one run's
+    rewards into another's.
+    """
+    return OperatorSession(destroy_arms=SHIPPED_DESTROY, repair_arms=SHIPPED_REPAIR)
+
+
 class SequenceSolver[PreparedT]:
     """Run deterministic discovery, then best-first closed routing stages."""
 
@@ -965,17 +979,12 @@ class SequenceSolver[PreparedT]:
         self.stop_on_stable_exact = stop_on_stable_exact
         self.routing_seed_allowance_cap = routing_seed_allowance_cap
         self.stage_admission = stage_admission
-        # Both destroy operators (FAILED_ENDPOINTS, BAND_BOUNDARY) and both
-        # repair operators (SEQUENCE_REINSERT, LOCAL_EXACT_PACK) are open. A
-        # solver built without a window adapter still SKIPS LOCAL_EXACT_PACK
+        # A solver built without a window adapter still SKIPS LOCAL_EXACT_PACK
         # for a count and a zero reward, so arming it costs a bare-constructed
         # solver a turn and never a wrong credit.  BAND_BOUNDARY is likewise
         # safe unarmed: it is inert whenever `band_target_for` reports the
         # decoded width back, which is the default below.
-        self.alns_session = alns_session or OperatorSession(
-            destroy_arms=SHIPPED_DESTROY,
-            repair_arms=SHIPPED_REPAIR,
-        )
+        self.alns_session = alns_session or _shipped_operator_session()
         self.alns_adapters = alns_adapters or _RepairAdapters()
         #: Remaining wall as a bucket index.  A solver built without one -- a
         #: test or a probe -- reports "all the time in the world", which is the
@@ -1727,6 +1736,8 @@ class SequenceSolver[PreparedT]:
                 cap_scale=True,
             )
             if neighbourhood and restart.stages < self.config.stages:
+                if self.alns_adapters.window_installed is not None:
+                    self.alns_adapters.window_installed(next_anneal)
                 restart.anneal = next_anneal
                 height_state.feedback_restart = restart.restart
         return completed
@@ -2633,6 +2644,8 @@ class SequenceSolver[PreparedT]:
                 # This is an already-scheduled search candidate with exact local
                 # failure evidence, not another speculative retry. Close its LNS
                 # substitution before discovery advances to an unrelated height.
+                if self.alns_adapters.window_installed is not None:
+                    self.alns_adapters.window_installed(next_anneal)
                 height_state.feedback_restart = restart.restart
         split_count = 0
         merge_count = 0
@@ -2934,6 +2947,12 @@ class _RepairAdapters:
         ]
         | None
     ) = None
+    #: Report the state a call site is INSTALLING into the search.  A repair the
+    #: caller declines to install (a restart already at its stage ceiling) is a
+    #: window that ran and bought nothing, so ``alns_window_accepted`` is counted
+    #: here rather than where the encoding is produced.  The run's own closure
+    #: recognises its window's state and ignores every other one.
+    window_installed: Callable[[AnnealState], None] | None = None
 
 
 def _alns_substitution(
@@ -5168,6 +5187,12 @@ def _production_run(
     def _count_skipped_no_goods(count: int) -> None:
         telemetry.alns_skipped_no_goods += count
 
+    #: The encoding the window last produced, until a call site installs it.  A
+    #: one-slot list, not a counter: the install sites report the state they are
+    #: about to install, and only the state carrying this encoding's pair is the
+    #: window's own repair.
+    window_repair: list[EncodedPlacement] = []
+
     def window_pack(
         window: frozenset[int],
         problem: PlacementProblem,
@@ -5184,6 +5209,10 @@ def _production_run(
         returned placement before accepting it: what the search then evaluates is
         what would be built.
         """
+        # No "no worse than the incumbent" test here, by design (spec 5.6/5.7):
+        # the area is bounded structurally -- `width_bound=decoded.width` caps
+        # the window and the encoder is provably never wider, never taller -- and
+        # the search's own incumbent comparison decides the rest.
         if not window or len(window) >= problem.size:
             return None
         remaining = deadline - time.monotonic()
@@ -5249,11 +5278,28 @@ def _production_run(
             telemetry.alns_encode_inexact += 1
         if encoded.decoded.used_height > problem.outline_height:
             return None
-        telemetry.alns_window_accepted += 1
-        return replace(
+        # The encoder emits `variant_indices=()`; the freeform caller (Task 13)
+        # and the state selection here both need a self-consistent encoding.
+        repair = replace(
             encoded,
             decoded=replace(encoded.decoded, variant_indices=state.variant_indices),
         )
+        # NOT counted here: `alns_window_accepted` means "installed into the
+        # search", and the caller can still decline this state.  `window_installed`
+        # below recognises it and counts it then.
+        window_repair[:] = [repair]
+        return repair
+
+    def window_installed(state: AnnealState) -> None:
+        """Count a window repair once a call site installs the state it produced.
+
+        Identity, not equality: only the state carrying the pair object this
+        adapter last returned is that repair.  Every other install -- a reinsert,
+        an unchanged state -- passes through uncounted.
+        """
+        if window_repair and state.pair is window_repair[0].pair:
+            telemetry.alns_window_accepted += 1
+            window_repair.clear()
 
     expansion_total = max(
         _ROUTING_BUDGET,
@@ -5309,16 +5355,14 @@ def _production_run(
             sprayed_lanes=len(spec.spray_lanes),
         ),
         stage_boundary_commit=commit_stage,
-        # Both the destroy portfolio (FAILED_ENDPOINTS, BAND_BOUNDARY) and the
-        # repair portfolio (SEQUENCE_REINSERT, LOCAL_EXACT_PACK) are open: the
-        # window adapter exists, so LOCAL_EXACT_PACK has an implementation
-        # behind it, and `band_target_for` below gives BAND_BOUNDARY a real
-        # target.
-        alns_session=OperatorSession(
-            destroy_arms=SHIPPED_DESTROY,
-            repair_arms=SHIPPED_REPAIR,
+        # The window adapter exists here, so LOCAL_EXACT_PACK has an
+        # implementation behind it, and `band_target_for` above gives
+        # BAND_BOUNDARY a real target.
+        alns_session=_shipped_operator_session(),
+        alns_adapters=_RepairAdapters(
+            window_pack=window_pack,
+            window_installed=window_installed,
         ),
-        alns_adapters=_RepairAdapters(window_pack=window_pack),
         remaining_fraction=lambda: remaining_fraction_bucket(
             max(0.0, (started + ceiling) - time.monotonic()), ceiling
         ),

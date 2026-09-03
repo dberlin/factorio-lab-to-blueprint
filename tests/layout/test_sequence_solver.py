@@ -97,6 +97,7 @@ from flab2bp.layout.sequence_solver import (
     StageBoundaryTransform,
     ValidationVerdict,
     _decoded_pack,
+    _direct_net_candidates,
     _placement_nets,
     _pose_stage_boundary_update,
     _production_run,
@@ -3041,29 +3042,94 @@ def _shifted_window_pack(strips: object, **kwargs: Any) -> Any:
     )
 
 
+def _selected_candidates(
+    run: _ProductionRun,
+    problem: PlacementProblem,
+    state: AnnealState,
+    spec: BuildSpec,
+) -> dict[tuple[int, int], Any]:
+    """The direct-insert candidates of the strips this state actually selects.
+
+    Built the way production builds them, through the run's own `prepare`: the
+    strips resolved for THIS state's variants, not the variant-0 strips the plan
+    drew and keyed into the run's raw `direct_candidates`.
+    """
+    candidate = run.solver.adapters.prepare(
+        run.solver._heights[0].height, decode_state(problem, state)
+    )
+    return _direct_net_candidates(list(candidate.selected_strips), spec)
+
+
+def _reselected_state(
+    run: _ProductionRun,
+    problem: PlacementProblem,
+    state: AnnealState,
+    spec: BuildSpec,
+) -> AnnealState:
+    """A state whose variant choice changes the direct-insert candidates.
+
+    The raw mapping is one fixed answer for the whole run; this state's mapping
+    is a different one, so a window handed the raw mapping is observable.
+    """
+    planned = _selected_candidates(run, problem, state, spec)
+    for index in range(1, len(problem.variant_tables[0])):
+        other = replace(state, variant_indices=(index,) + state.variant_indices[1:])
+        if _selected_candidates(run, problem, other, spec) != planned:
+            return other
+    pytest.fail("no variant of instance 0 changes the direct-insert candidates")
+
+
 def test_the_window_adapter_solves_under_the_deadline_margin_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The adapter reaches `_pack_window` with the window budget and the pins.
+    """The adapter reaches `_pack_window` with the whole model, not just a budget.
 
-    The keyword is captured rather than the solve timed: Ruling S forbids a
-    wall-clock assertion, and the margin subtraction is pinned by the refusal
-    test below, which drives the clock instead of reading it.
+    The window must solve the model production prepares: the candidates of the
+    variants the STATE selected, the incumbent's own CONTENT origins as pins,
+    and the band's width target.  The keyword is captured rather than the solve
+    timed: Ruling S forbids a wall-clock assertion, and the margin subtraction is
+    pinned by the refusal test below, which drives the clock instead of reading
+    it.
     """
+    spec = two_stage_spec()
     run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
-    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    adapter, problem, planned_state, _planned = _window_adapter_pieces(run)
+    state = _reselected_state(run, problem, planned_state, spec)
+    decoded = decode_state(problem, state)
+    expected_candidates = _selected_candidates(run, problem, state, spec)
+    assert expected_candidates != _selected_candidates(
+        run, problem, planned_state, spec
+    ), "the fixture must separate the selected mapping from the planned one"
+    west = tuple(
+        strip.west_channel
+        for strip in run.solver.adapters.prepare(
+            run.solver._heights[0].height, decoded
+        ).selected_strips
+    )
+    window = frozenset({0})
     seen: list[object] = []
 
     def capture(strips: object, **kwargs: Any) -> Any:
         seen.append(kwargs["time_budget_s"])
         assert kwargs["height"] == problem.outline_height
         assert kwargs["width_bound"] == decoded.width
-        assert kwargs["window"] == frozenset({0})
-        assert set(kwargs["fixed_at"]) == set(range(problem.size)) - {0}
+        assert kwargs["window"] == window
+        assert kwargs["direct_candidates"] == expected_candidates
+        # CONTENT origins: every strip outside the window is pinned where the
+        # incumbent put it, its west channel included.
+        assert kwargs["fixed_at"] == {
+            index: (decoded.x[index] + west[index], decoded.y[index])
+            for index in range(problem.size)
+            if index not in window
+        }
+        assert kwargs["width_target"] == run.solver._band_target_for(
+            problem.outline_height, decoded.width
+        )
+        assert kwargs["width_target"] > 0
         return None
 
     monkeypatch.setattr(sequence_solver_module, "_pack_window", capture)
-    assert adapter(frozenset({0}), problem, state, decoded) is None
+    assert adapter(window, problem, state, decoded) is None
     assert seen == [freeform_module.C_WINDOW_SECONDS]
     # An infeasible or unknown window is the ordinary drop, not an error.
     assert run.telemetry.alns_window_solves == 1
@@ -3131,13 +3197,31 @@ def test_the_window_adapter_refuses_an_empty_or_whole_problem_window(
 def test_the_window_adapter_drops_a_pack_that_did_not_move(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unchanged assignment is not a repair, so the choice is unapplied."""
-    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    """An unchanged assignment is not a repair, so the choice is unapplied.
+
+    The wall the solve spent is still charged to `alns_window_seconds`: a
+    dropped answer costs the run the same seconds as an accepted one.  The stub
+    advances a driven clock rather than sleeping, so the delta is exact and
+    Ruling S is respected.
+    """
+    deadline = time.monotonic() + _WINDOW_DEADLINE_MARGIN_S
+    run = _window_adapter_run(deadline)
     adapter, problem, state, decoded = _window_adapter_pieces(run)
-    monkeypatch.setattr(sequence_solver_module, "_pack_window", _unchanged_window_pack)
+    now = [deadline - _WINDOW_DEADLINE_MARGIN_S]
+    solve_seconds = 3.0
+
+    def unchanged_after_three_seconds(strips: object, **kwargs: Any) -> Any:
+        now[0] += solve_seconds
+        return kwargs["seed"]
+
+    monkeypatch.setattr(
+        sequence_solver_module, "_pack_window", unchanged_after_three_seconds
+    )
+    monkeypatch.setattr("flab2bp.layout.sequence_solver.time.monotonic", lambda: now[0])
     assert adapter(frozenset({0}), problem, state, decoded) is None
     assert run.telemetry.alns_window_solves == 1
     assert run.telemetry.alns_window_accepted == 0
+    assert run.telemetry.alns_window_seconds == pytest.approx(solve_seconds)
 
 
 def test_the_window_adapter_encodes_a_repaired_pack_and_carries_its_variants(
@@ -3152,11 +3236,81 @@ def test_the_window_adapter_encodes_a_repaired_pack_and_carries_its_variants(
     assert len(encoded.decoded.x) == problem.size
     assert encoded.decoded.used_height <= problem.outline_height
     assert encoded.decoded.variant_indices == state.variant_indices
-    assert run.telemetry.alns_window_accepted == 1
+    # Encoding is not accepting: the counter belongs to the install site, and
+    # nothing here installed the state (see the install tests below).
+    assert run.telemetry.alns_window_accepted == 0
     assert run.telemetry.alns_encode_errors == 0
     # `exact` is False most of the time by design; whichever way it lands, the
     # counter must agree with the flag, because the decode is what is scored.
+    # Both branches are forced with a stubbed encoder below.
     assert run.telemetry.alns_encode_inexact == (0 if encoded.exact else 1)
+
+
+def test_the_window_adapter_counts_an_inexact_encoding_and_only_that(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`alns_encode_inexact` follows the encoder's flag, not this fixture's luck.
+
+    The real round trip is inexact here, so an assertion that reads
+    `encoded.exact` back cannot tell "counts when inexact" from "counts always".
+    A stubbed encoder forces each branch.
+    """
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", _shifted_window_pack)
+    measured = adapter(frozenset({0}), problem, state, decoded)
+    assert measured is not None
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "encode_placement",
+        lambda *args, **kwargs: replace(measured, exact=False),
+    )
+    inexact_before = run.telemetry.alns_encode_inexact
+    assert adapter(frozenset({0}), problem, state, decoded) is not None
+    assert run.telemetry.alns_encode_inexact == inexact_before + 1
+
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "encode_placement",
+        lambda *args, **kwargs: replace(measured, exact=True),
+    )
+    exact_before = run.telemetry.alns_encode_inexact
+    assert adapter(frozenset({0}), problem, state, decoded) is not None
+    assert run.telemetry.alns_encode_inexact == exact_before
+
+
+def test_a_window_accept_counts_only_when_the_search_installs_the_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`alns_window_accepted` counts repairs that entered the search.
+
+    The adapter can encode a placement the caller then declines to install -- a
+    restart already at its stage ceiling drops it -- so counting at the encode
+    would report repairs the search never ran.  The counter moves when the
+    install site reports the state, and only for the state the window produced.
+    """
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    adapter, problem, state, decoded = _window_adapter_pieces(run)
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", _shifted_window_pack)
+    encoded = adapter(frozenset({0}), problem, state, decoded)
+    assert encoded is not None
+    assert run.telemetry.alns_window_accepted == 0
+    report = run.solver.alns_adapters.window_installed
+    assert report is not None, "the production run must wire an install report"
+    # A state the window did not produce is not a window repair.
+    report(state)
+    assert run.telemetry.alns_window_accepted == 0
+    report(
+        AnnealState(
+            pair=encoded.pair,
+            gaps=encoded.gaps,
+            base_seed=state.base_seed,
+            stage_index=state.stage_index,
+            variant_indices=state.variant_indices,
+        )
+    )
+    assert run.telemetry.alns_window_accepted == 1
 
 
 def test_the_window_adapter_charges_an_unencodable_pack_to_the_error_counter(
@@ -3209,15 +3363,15 @@ def test_the_window_adapter_returns_a_decodable_placement() -> None:
     state = run.solver._heights[0].restarts[0].anneal
     decoded = decode_state(problem, state)
     repaired = adapters.window_pack(frozenset({0}), problem, state, decoded)
-    # A real window really ran; the assertions below are not vacuous because it
-    # returned None before reaching the solver.
+    # A real window really ran, and it must come back with a placement: a
+    # silent INFEASIBLE would otherwise skip every assertion below.
     assert run.telemetry.alns_window_solves == 1
-    if repaired is not None:
-        repaired.pair.validate(problem.size)
-        assert len(repaired.decoded.x) == problem.size
-        assert repaired.decoded.used_height <= problem.outline_height
-        assert repaired.decoded.width <= decoded.width
-        assert repaired.decoded.variant_indices == state.variant_indices
+    assert repaired is not None, "CP-SAT returned no placement"
+    repaired.pair.validate(problem.size)
+    assert len(repaired.decoded.x) == problem.size
+    assert repaired.decoded.used_height <= problem.outline_height
+    assert repaired.decoded.width <= decoded.width
+    assert repaired.decoded.variant_indices == state.variant_indices
 
 
 @pytest.mark.slow
@@ -7674,6 +7828,7 @@ def _staged_solver(
     total_expansions: int = 10_000,
     clean_after: int | None = None,
     spend_allowance: bool = False,
+    alns_adapters: sequence_solver_module._RepairAdapters | None = None,
 ) -> SequenceSolver[object]:
     """A solver that strands one net until its ``clean_after``-th detailed route.
 
@@ -7724,6 +7879,7 @@ def _staged_solver(
         expansion_budget=ExpansionBudget(total=total_expansions),
         config=SequenceSolverConfig.test(),
         deadline_reached=deadline_reached,
+        alns_adapters=alns_adapters,
     )
 
 
@@ -7731,9 +7887,103 @@ def _never_certifying_solver(
     *,
     heights: tuple[int, ...],
     deadline_reached: Callable[[], bool],
+    alns_adapters: sequence_solver_module._RepairAdapters | None = None,
 ) -> SequenceSolver[object]:
     """A solver whose detailed route always strands one net, so no incumbent appears."""
-    return _staged_solver(heights=heights, deadline_reached=deadline_reached)
+    return _staged_solver(
+        heights=heights,
+        deadline_reached=deadline_reached,
+        alns_adapters=alns_adapters,
+    )
+
+
+def _install_reporting_solver(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    repaired: AnnealState,
+    neighbourhood: frozenset[int],
+) -> tuple[SequenceSolver[object], list[AnnealState]]:
+    """A solver whose substitution always answers `(repaired, neighbourhood)`.
+
+    Stubbing the substitution takes arm selection out of the question: what is
+    under test is whether the CALL SITE reports the state it installs, which is
+    where `alns_window_accepted` is counted.
+    """
+    installed: list[AnnealState] = []
+    solver = _never_certifying_solver(
+        heights=(12,),
+        deadline_reached=lambda: False,
+        alns_adapters=sequence_solver_module._RepairAdapters(
+            window_installed=installed.append
+        ),
+    )
+
+    def stub(*args: object, **kwargs: object) -> tuple[AnnealState, frozenset[int]]:
+        return repaired, neighbourhood
+
+    monkeypatch.setattr(sequence_solver_module, "_alns_substitution", stub)
+    return solver, installed
+
+
+def test_the_compact_seed_site_reports_the_state_it_installs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_route_compact_seed_closure` must report every state it installs."""
+    repaired = AnnealState.initial(2, 5)
+    solver, installed = _install_reporting_solver(
+        monkeypatch, repaired=repaired, neighbourhood=frozenset({0})
+    )
+    height_state = solver._heights[0]
+    solver._route_compact_seed_closure(
+        height_state,
+        AnnealState.initial(height_state.problem.size, 7),
+        1_000,
+    )
+    assert height_state.restarts[0].anneal is repaired
+    assert installed and all(state is repaired for state in installed)
+
+
+def test_the_compact_seed_site_reports_nothing_when_it_installs_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty neighbourhood is not installed, so it is not reported."""
+    repaired = AnnealState.initial(2, 5)
+    solver, installed = _install_reporting_solver(
+        monkeypatch, repaired=repaired, neighbourhood=frozenset()
+    )
+    height_state = solver._heights[0]
+    solver._route_compact_seed_closure(
+        height_state,
+        AnnealState.initial(height_state.problem.size, 7),
+        1_000,
+    )
+    assert height_state.restarts[0].anneal is not repaired
+    assert installed == []
+
+
+def test_the_stage_boundary_site_reports_the_state_it_installs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same claim as the compact-seed test, for `_complete_routing_stage`."""
+    repaired = AnnealState.initial(2, 5)
+    solver, installed = _install_reporting_solver(
+        monkeypatch, repaired=repaired, neighbourhood=frozenset({0})
+    )
+    with pytest.raises(NoValidLayout):
+        solver.search()
+    assert installed and all(state is repaired for state in installed)
+
+
+def test_the_stage_boundary_site_reports_nothing_when_it_installs_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty neighbourhood is not installed, so it is not reported."""
+    solver, installed = _install_reporting_solver(
+        monkeypatch, repaired=AnnealState.initial(2, 5), neighbourhood=frozenset()
+    )
+    with pytest.raises(NoValidLayout):
+        solver.search()
+    assert installed == []
 
 
 def test_sequence_solver_exposes_a_default_operator_session() -> None:
