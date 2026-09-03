@@ -2376,9 +2376,13 @@ def test_first_ordinary_archive_preserves_unmeasured_detailed_completion(
     fake = _FakeRouting()
     original_anneal_stage = sequence_solver_module.anneal_stage
 
-    def measured_anneal(*args: object, **kwargs: object) -> object:
+    def measured_anneal(
+        *args: object,
+        cancelled: Callable[[], bool] | None = None,
+        **kwargs: object,
+    ) -> object:
         nonlocal now
-        result = original_anneal_stage(*args, **kwargs)
+        result = original_anneal_stage(*args, cancelled=cancelled, **kwargs)
         now += 1.0
         return result
 
@@ -2442,9 +2446,13 @@ def test_pending_routing_feedback_uses_zero_anneal_feedback_admission(
     fake = _FakeRouting()
     original_anneal_stage = sequence_solver_module.anneal_stage
 
-    def measured_anneal(*args: object, **kwargs: object) -> object:
+    def measured_anneal(
+        *args: object,
+        cancelled: Callable[[], bool] | None = None,
+        **kwargs: object,
+    ) -> object:
         nonlocal now
-        result = original_anneal_stage(*args, **kwargs)
+        result = original_anneal_stage(*args, cancelled=cancelled, **kwargs)
         now += 3.0
         return result
 
