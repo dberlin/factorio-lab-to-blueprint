@@ -104,7 +104,7 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
     combine_last_mile_reports,
 )
-from flab2bp.layout.sequence_alns import OperatorSession
+from flab2bp.layout.sequence_alns import OperatorChoice, OperatorSession
 from flab2bp.layout.sequence_pair import SequencePair
 from flab2bp.layout.strip_variants import (
     CargoDomain,
@@ -18765,6 +18765,12 @@ def test_a_relaxed_run_that_loses_the_round_withdraws_both_claims(
 # --- Phase C: the freeform window-repair operator session -------------------
 
 
+#: How long the one deliberately expensive `_pack` stub sleeps.  Big enough
+#: that the post-pack remainder of the same candidate is nowhere near it on a
+#: loaded box, small enough that the sweep still finishes in a blink.
+_SLOW_PACK_S = 0.2
+
+
 def _only_a_window_charge_is_affordable(
     _deadline: float | None,
     _soft: float,
@@ -18782,6 +18788,36 @@ def _only_a_window_charge_is_affordable(
     return candidate_s >= freeform.C_WINDOW_SECONDS
 
 
+class _RecordingSession(OperatorSession):
+    """An `OperatorSession` that writes every observation into a shared log.
+
+    WHEN a choice is settled, relative to the window solves around it, is the
+    claim several of these tests make, and the counters cannot express it: an
+    unsettled choice and a settled-too-late one both end the sweep with the
+    same `applied`.  The log interleaves the two events in one sequence.
+    """
+
+    def __init__(self, log: list[str]) -> None:
+        super().__init__()
+        self._log = log
+
+    def observe(
+        self,
+        choice: OperatorChoice,
+        reward: Sequence[float],
+        *,
+        applied: bool,
+        routing_seconds: float = 0.0,
+    ) -> None:
+        self._log.append(f"observe:{applied}")
+        super().observe(
+            choice,
+            reward,
+            applied=applied,
+            routing_seconds=routing_seconds,
+        )
+
+
 def _sweep_over_a_stranded_first_candidate(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -18790,9 +18826,14 @@ def _sweep_over_a_stranded_first_candidate(
     pack_window: Callable[..., freeform._Pack | None] | None = None,
     destroy: Callable[..., frozenset[int]] | None = None,
     first_routing: DetailedRouteResult | None = None,
+    repair_routing: DetailedRouteResult | None = None,
+    finalize_placement: Callable[..., Placement] | None = None,
+    slow_pack: tuple[tuple[int, int], float] | None = None,
+    raise_on_repair: BaseException | None = None,
     routes_after_repair: bool = True,
     wires: frozenset[tuple[int, int]] = frozenset(),
     heights: tuple[int, ...] = (20, 21),
+    time_budget_s: float = 1.0,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[str]]:
     """Drive `_sweep` over candidates whose routing strands a net exhaustively.
 
@@ -18836,6 +18877,11 @@ def _sweep_over_a_stranded_first_candidate(
         arrangement: int,
         **_kwargs: object,
     ) -> freeform._Pack:
+        # `slow_pack` makes ONE candidate's packing expensive and everything
+        # else instant, which is the only way a stubbed sweep can separate
+        # `dearest_pack_s` from `dearest_candidate_s`.
+        if slow_pack is not None and (height, arrangement) == slow_pack[0]:
+            time.sleep(slow_pack[1])
         packed.append((height, arrangement))
         candidate = packs[height, arrangement]
         candidate_of[id(candidate)] = (height, arrangement)
@@ -18848,10 +18894,14 @@ def _sweep_over_a_stranded_first_candidate(
         **_kwargs: object,
     ) -> _BuildResult:
         builds.append(candidate_pack.status)
+        if raise_on_repair is not None and candidate_pack.status == "window":
+            raise raise_on_repair
         wired = (candidate_pack.status == "window" and routes_after_repair) or (
             candidate_of.get(id(candidate_pack)) in wires
         )
         routing = routed if wired else stranded
+        if repair_routing is not None and candidate_pack.status == "window":
+            routing = repair_routing
         return _BuildResult(
             placement=(Placement(buildings=(), stats={"belt_tiles": 0.0}) if wired else None),
             routing=routing,
@@ -18895,13 +18945,17 @@ def _sweep_over_a_stranded_first_candidate(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        lambda placement, _policy, **_kwargs: placement,
+        (
+            finalize_placement
+            if finalize_placement is not None
+            else (lambda placement, _policy, **_kwargs: placement)
+        ),
     )
 
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=2,
-    )._sweep(spec, strips, 1.0, session=session)
+    )._sweep(spec, strips, time_budget_s, session=session)
     return result, packed, builds
 
 
@@ -18978,7 +19032,7 @@ def test_the_sweep_never_solves_the_same_window_twice(
             status="window",
         )
 
-    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+    result, packed, _builds = _sweep_over_a_stranded_first_candidate(
         monkeypatch,
         session=session,
         room_for_another=_only_a_window_charge_is_affordable,
@@ -18991,6 +19045,14 @@ def test_the_sweep_never_solves_the_same_window_twice(
     assert (20, 0, frozenset({0})) in keys
     # More choices than solves: the repeats were declined without a solve.
     assert len(session.choices) > len(keys)
+    # A DRAINED REPAIR CONSUMES NO `candidate_packs` SLOT.  Both arrangement-0
+    # candidates are packed once each, and the two repairs that follow them are
+    # evaluated from the stored pack; hoisting the `candidate_index += 1` out of
+    # the `else` would spend a slot on each repair and leave `(21, 0)` unpacked.
+    # The two arrangement-1 candidates are never reached at all, because the
+    # pre-existing improvement gate breaks the sweep on `best is None` before
+    # any of them starts -- which is why this list is two long and not four.
+    assert packed == [(20, 0), (21, 0)]
 
 
 def test_the_sweep_never_windows_when_neither_clock_allows_it(
@@ -19137,6 +19199,238 @@ def test_the_freeform_sweep_stamps_the_operator_telemetry(
     assert result.stats["alns_encode_errors"] == 0.0
     # One evaluation for the stranded pack and one for its repair.
     assert result.stats["alns_evaluations"] == 2.0
+    # The four numbers a type check cannot tell from a hard-coded zero.  A
+    # window solve and a routing pass both happened, so both spans are
+    # positive, and the tally names every arm of both portfolios with the
+    # count each was played -- one destroy and one repair, the cold-start
+    # heads of their ledgers.
+    assert result.stats["alns_window_seconds"] > 0.0
+    assert result.stats["alns_routing_seconds"] > 0.0
+    assert result.stats["alns_operators"] == (
+        "destroy:failed-endpoints:1|destroy:band-boundary:0"
+        "|repair:sequence-reinsert:1|repair:local-exact-pack:0"
+    )
+    assert result.stats["alns_skipped_no_goods"] == 0.0
+
+
+def test_the_freeform_window_counts_the_no_goods_its_model_declined(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cuts `_pack_window` refused to post reach the placement stats.
+
+    `on_skipped` is the window model's only channel for "I was handed a proof
+    I could not express against these pins", and a count that never leaves
+    `_sweep` is a proof silently dropped.
+    """
+    session = OperatorSession()
+
+    def skipping(*_args: object, **kwargs: object) -> freeform._Pack:
+        on_skipped = kwargs["on_skipped"]
+        assert callable(on_skipped)
+        on_skipped(2)
+        seed = kwargs["seed"]
+        assert isinstance(seed, freeform._Pack)
+        return replace(
+            seed,
+            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+            status="window",
+        )
+
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        pack_window=skipping,
+    )
+
+    assert result is not None
+    assert result.stats["alns_skipped_no_goods"] == 2.0
+
+
+def test_a_repair_refused_by_the_projection_step_is_paid_on_real_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repair that ROUTED and was then refused a frame is not paid `after=None`.
+
+    Spec 5.7 credits a queued repair from the routing pass it actually ran,
+    with `validator_clean` False for anything that never reaches
+    `validate.certify`.  `after=None` -- an unapplied choice with a zero reward
+    -- belongs to a candidate no routing pass ever measured; this one was
+    measured, and paying it nothing tells the ledger the operator did nothing.
+    """
+    log: list[str] = []
+    session = _RecordingSession(log)
+
+    def refuse_the_frame(
+        _placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        raise finalize.ProjectionRefusal(
+            (
+                finalize.ProjectionFailure(
+                    check="test.projection",
+                    buildings=(),
+                    detail="no band accepts the repaired placement",
+                    band=0,
+                ),
+            )
+        )
+
+    result, packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        finalize_placement=refuse_the_frame,
+        heights=(20,),
+    )
+
+    # The repair was packed by the window, routed, and only then thrown out.
+    assert result is None
+    assert packed == [(20, 0)]
+    assert builds == ["test", "window"]
+    assert log == ["observe:True"]
+    assert session.applied == 1
+
+
+def test_a_repair_that_routes_into_the_budget_wall_is_paid_on_real_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `status is not ROUTED` exit settles the repair that walked into it.
+
+    A router that stops at its expansion budget without naming a failed net
+    leaves `failed_count == 0`, so the failure block never runs and the
+    candidate leaves by a bare `continue` -- with a whole routing pass behind
+    it, which is what its choice has to be paid on.
+    """
+    log: list[str] = []
+    session = _RecordingSession(log)
+    walled = DetailedRouteResult(DetailedRouteStatus.BUDGET, (), (), 0, 0)
+
+    result, packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        repair_routing=walled,
+        heights=(20,),
+    )
+
+    assert result is None
+    assert packed == [(20, 0)]
+    assert builds == ["test", "window"]
+    assert log == ["observe:True"]
+
+
+def test_a_repair_that_fails_again_settles_before_it_asks_for_another_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The failure block settles its own credit BEFORE the next window launch.
+
+    The launch guard refuses a candidate that still has an unsettled choice
+    against it, so the ORDER decides whether a second window can be asked for
+    at all.  Settling only on the way out of the loop body would leave the
+    guard looking at a choice the sweep had already finished with.
+    """
+    log: list[str] = []
+    session = _RecordingSession(log)
+
+    def solving(*_args: object, **kwargs: object) -> freeform._Pack:
+        log.append("solve")
+        seed = kwargs["seed"]
+        assert isinstance(seed, freeform._Pack)
+        return replace(
+            seed,
+            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+            status="window",
+        )
+
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_only_a_window_charge_is_affordable,
+        pack_window=solving,
+        routes_after_repair=False,
+        heights=(20,),
+    )
+
+    assert result is None
+    # The settle sits BETWEEN the two launches: the second is declined by
+    # `solved_windows` -- the same question -- and not by an unsettled choice.
+    assert log == ["solve", "observe:True", "observe:False"]
+
+
+def test_a_sweep_that_dies_mid_flight_still_settles_its_outstanding_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An escaping exception must not hand an operator a free turn.
+
+    The session outlives `_sweep` -- `lay_out` builds one per call and the
+    ledger it carries is what picks the next arm -- so a launched window whose
+    candidate never came back has to be credited unapplied on the way out,
+    whichever way out that is.
+    """
+    log: list[str] = []
+    session = _RecordingSession(log)
+
+    with pytest.raises(RuntimeError, match="the router fell over"):
+        _sweep_over_a_stranded_first_candidate(
+            monkeypatch,
+            session=session,
+            room_for_another=_only_a_window_charge_is_affordable,
+            raise_on_repair=RuntimeError("the router fell over"),
+            heights=(20,),
+        )
+
+    # The window was solved and queued, and the repair never came back, so the
+    # choice is a cost with no reward -- observed, not silently dropped.
+    assert log == ["observe:False"]
+    assert session.applied == 0
+
+
+def _room_for_a_window_or_a_routing_only_turn(
+    _deadline: float | None,
+    _soft: float,
+    candidate_s: float,
+) -> bool:
+    """Room for a window's charge, and for what is left of a packed candidate.
+
+    Deliberately NOT monotone: a whole candidate -- which here is dominated by
+    one deliberately slow `_pack` -- does not fit, while the window's own
+    `C_WINDOW_SECONDS` floor and the post-pack remainder both do.  That is the
+    exact clock in which a queued repair charged for a whole candidate is
+    dropped and one charged for what it has left to spend is kept.
+    """
+    return candidate_s >= freeform.C_WINDOW_SECONDS or candidate_s < _SLOW_PACK_S / 2
+
+
+def test_a_queued_repair_is_charged_for_routing_and_not_for_a_whole_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The window bought the pack, so the loop head must not charge for it again.
+
+    `_room_for_another` charges `dearest_candidate_s`, which is pack THROUGH
+    validate.  A queued repair arrives already packed; charging it the whole
+    candidate throws away a repair the sweep can afford, after paying for the
+    CP-SAT solve that produced it.
+    """
+    session = OperatorSession()
+
+    result, packed, builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=session,
+        room_for_another=_room_for_a_window_or_a_routing_only_turn,
+        # `(20, 0)` wires and is cheap, so `best` exists and the loop-head
+        # affordability gate is live by the time the repair is drained; the
+        # expensive pack is `(21, 0)`, the candidate the window then repairs.
+        wires=frozenset({(20, 0)}),
+        slow_pack=((21, 0), _SLOW_PACK_S),
+        time_budget_s=5.0,
+    )
+
+    assert result is not None
+    assert packed == [(20, 0), (21, 0)]
+    # The third build is the repair: it survived the loop-head gate.
+    assert builds == ["test", "test", "window"]
 
 
 @pytest.mark.slow
