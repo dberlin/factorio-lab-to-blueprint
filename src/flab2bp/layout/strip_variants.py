@@ -938,7 +938,7 @@ def _logical_strip_plans(
                     for destination in destinations
                     if not groups[destination].proliferated
                     and surplus + _sink_demand(groups, spec, item, destination)
-                    <= spec.belt_items_per_second
+                    <= spec.lane_capacity
                 ]
                 if shareable:
                     shared_boundary = min(
@@ -986,9 +986,9 @@ def _logical_strip_plans(
                     for item, rate in input_rates
                     if item in lane
                 ),
-                spec.belt_items_per_second * 0,
+                spec.lane_capacity * 0,
             )
-            return total <= spec.belt_items_per_second
+            return total <= spec.lane_capacity
 
         probe = slots.probe_building(group.item_id, group.yaw)
         columns = len(slots.attachable_columns(probe, -1)) or 1
@@ -1092,7 +1092,7 @@ def _logical_strip_plans(
                     shard,
                     out_capacity,
                     demand,
-                    spec.belt_items_per_second,
+                    spec.lane_capacity,
                 )
                 for shard in shards
             ]

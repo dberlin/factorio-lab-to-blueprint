@@ -93,6 +93,7 @@ from flab2bp.layout.base import (
     PlacementStats,
     ProjectionFailureRecord,
 )
+from flab2bp.layout.belt_tiers import retier_belts
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.route_feedback import (
     Cell,
@@ -1893,7 +1894,7 @@ def _check_shared_lane_capacity(
     Exact ``Fraction`` throughout: a float here would let a lane that lands
     precisely on the tier's limit read as over capacity, or worse, the reverse.
     """
-    cap = spec.belt_items_per_second
+    cap = spec.lane_capacity
     for lane in lanes:
         if len(lane) < 2:
             continue
@@ -1905,7 +1906,7 @@ def _check_shared_lane_capacity(
             raise ValueError(
                 f"recipe {g.recipe_id!r}: lane carrying {list(lane)} needs "
                 f"{total} items/s across {machines} machine(s), over the "
-                f"{cap}/s a {spec.belt_item_id} sustains; these ingredients "
+                f"{cap}/s the fastest belt this save can build sustains; these ingredients "
                 f"cannot share a belt at this rate"
             )
 
@@ -4497,6 +4498,9 @@ class _Canvas:
     #: because an absent technology set means every technology researched --
     #: see :func:`catalog.belt_rules_for_technologies`.
     ramped: bool = False
+    #: Sorter tiers this save can build, slowest first.  Every sorter the
+    #: emitter picks comes from this tuple; see :func:`_pick_sorter`.
+    sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
 
     buildings: list[PlacedBuilding] = field(default_factory=list)
     #: ``(x, y, level)`` -> building index, for cells that block routing.
@@ -4745,17 +4749,37 @@ def _grow(box: tuple[int, int, int, int], rings: int) -> tuple[int, int, int, in
     return (x0 - rings, y0 - rings, x1 + rings, y1 + rings)
 
 
-def _pick_sorter(rate: Fraction, span: int, machines: int) -> tuple[int, int]:
-    """Cheapest sorter tier and count carrying ``rate`` across ``span``.
+def _sorter_tiers_for(spec: BuildSpec) -> tuple[int, ...]:
+    """The spec's allowed sorter tiers as catalog ids, slowest first.
+
+    Catalog order rather than spec order, so the picker's "cheapest first"
+    walk holds whatever order the spec listed them in.  A spec naming no
+    sorter the catalog knows falls back to every tier: an unknown id is a
+    dataset mismatch, not a save that can build nothing.
+    """
+    allowed = {catalog.get_item_id(item_id) for item_id in spec.sorter_item_ids}
+    return tuple(tier for tier in catalog.SORTER_TIERS if tier in allowed) or catalog.SORTER_TIERS
+
+
+def _pick_sorter(
+    rate: Fraction,
+    span: int,
+    machines: int,
+    tiers: tuple[int, ...] = catalog.SORTER_TIERS,
+) -> tuple[int, int]:
+    """Cheapest allowed sorter tier and count carrying ``rate`` across ``span``.
 
     Reach is three tiles for every tier, so tiers differ only in throughput --
     there is never a reason to pay for a higher tier than the rate needs.
+    ``tiers`` is what the save can build, slowest first; when none carries the
+    rate the fastest allowed one is returned and ``flow.sorter_capacity``
+    refuses the placement, rather than emitting a tier the save cannot build.
     """
     per_machine = rate / machines if machines else rate
-    for tier in catalog.SORTER_TIERS:
+    for tier in tiers:
         if catalog.sorter_rate(tier, span) >= per_machine:
             return tier, machines
-    return catalog.SORTER_TIERS[-1], machines
+    return tiers[-1], machines
 
 
 @dataclass(frozen=True, slots=True)
@@ -5423,7 +5447,7 @@ def _flank_lane(
         for a, b in zip(column, column[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
         canvas.buildings[column[-1]] = _relink(canvas.buildings[column[-1]], output_obj=tail)
-        tier, _count = _pick_sorter(rate, got.span, 1)
+        tier, _count = _pick_sorter(rate, got.span, 1, canvas.sorter_tiers)
         canvas.buildings.append(
             PlacedBuilding(
                 item_id=tier,
@@ -5688,7 +5712,7 @@ def _link_lane(
         belt_index = lane_by_x.get(column)
         if belt_index is None:
             raise NoValidLayout(f"lane for {planned.item!r} omits precomputed column {column}")
-        tier, _count = _pick_sorter(rate, planned.span, 1)
+        tier, _count = _pick_sorter(rate, planned.span, 1, canvas.sorter_tiers)
         model_index = catalog.building(tier).model_index
         facing = Facing.SOUTH.value if lane_y < expected_cell[1] else Facing.NORTH.value
         if into_machine:
@@ -7176,11 +7200,13 @@ class _PreparedRoutingProblem:
     junction_frame_bans: tuple[frozenset[Cell], ...] = ()
     preparation_failures: tuple[NetFailure, ...] = ()
     external_output_nets: tuple[_PreparedNet, ...] = ()
+    sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
 
     def new_workspace(self) -> _RoutingWorkspace:
         buildings = list(self.building_templates)
         canvas = _Canvas(
             ramped=self.ramped,
+            sorter_tiers=self.sorter_tiers,
             buildings=buildings,
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
@@ -13923,7 +13949,7 @@ def _prepare_routing_problem(
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
-    canvas = _Canvas(ramped=ramped)
+    canvas = _Canvas(ramped=ramped, sorter_tiers=_sorter_tiers_for(spec))
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
     if cancelled is not None and cancelled():
@@ -14667,6 +14693,7 @@ def _prepare_routing_problem(
         promised_direct=promised_direct,
         realized_direct=frozenset(realized_direct),
         ramped=canvas.ramped,
+        sorter_tiers=canvas.sorter_tiers,
         world_taken=frozenset(canvas.world_taken),
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())
@@ -15187,6 +15214,7 @@ def _build_prepared(
             **_last_mile_stats(routing.last_mile),
         },
     )
+    placement = retier_belts(placement, spec)
     return _BuildResult(
         placement=placement,
         routing=routing,
@@ -15270,7 +15298,7 @@ def _bridge(
     if span < 1 or span > catalog.SORTER_MAX_REACH:
         return None
 
-    tier, _ = _pick_sorter(rates.get(item, Fraction(1)), span, 1)
+    tier, _ = _pick_sorter(rates.get(item, Fraction(1)), span, 1, canvas.sorter_tiers)
     for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
         if (column, src.y, 0) not in canvas.blocked:
             continue
