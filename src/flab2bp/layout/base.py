@@ -200,6 +200,11 @@ class PlacementStats(TypedDict, total=False):
 
     accelerator: str
     accepted_moves: float
+    alns_applied: float
+    alns_choices: float
+    alns_evaluations: float
+    alns_operators: str
+    alns_routing_seconds: float
     anneal_stages: float
     archive_categories: list[str]
     archive_category: str

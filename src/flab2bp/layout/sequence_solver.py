@@ -96,12 +96,17 @@ from flab2bp.layout.route_feedback import (
     update_feedback,
 )
 from flab2bp.layout.sequence_alns import (
+    C_CONTEXT_FRACTION_STEPS,
     REWARD_RANKS,
+    DestroyOperator,
     OperatorContext,
     OperatorMetrics,
     OperatorSession,
     RepairOperator,
     destroy_strips,
+    metrics_from_evaluation,
+    operator_tally,
+    remaining_fraction_bucket,
 )
 from flab2bp.layout.sequence_kernel import BackendName, build_sequence_kernel
 from flab2bp.layout.sequence_pair import (
@@ -914,6 +919,9 @@ class SequenceSolver[PreparedT]:
         borrow_first_discovery: bool = False,
         stop_on_stable_exact: bool = False,
         stage_admission: _MeasuredStageAdmission | None = None,
+        alns_session: OperatorSession | None = None,
+        alns_adapters: _RepairAdapters | None = None,
+        remaining_fraction: Callable[[], int] | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -951,6 +959,19 @@ class SequenceSolver[PreparedT]:
         self.stop_on_stable_exact = stop_on_stable_exact
         self.routing_seed_allowance_cap = routing_seed_allowance_cap
         self.stage_admission = stage_admission
+        # Only the legacy pairing is armed here.  Opening the portfolio is its
+        # own commit so any corpus movement is attributable to that commit.
+        self.alns_session = alns_session or OperatorSession(
+            destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+            repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
+        )
+        self.alns_adapters = alns_adapters or _RepairAdapters()
+        #: Remaining wall as a bucket index.  A solver built without one -- a
+        #: test or a probe -- reports "all the time in the world", which is the
+        #: honest answer when there is no deadline to divide by.
+        self._remaining_fraction = remaining_fraction or (
+            lambda: C_CONTEXT_FRACTION_STEPS
+        )
         if not isinstance(direct_targets, tuple):
             raise ValueError("direct-insert targets must be an immutable tuple")
         self.direct_targets = direct_targets
@@ -1654,13 +1675,31 @@ class SequenceSolver[PreparedT]:
             height_state.estimated_area = incumbent.decoded.width * height_state.height
         restart = height_state.restarts[0]
         if not height_state.projection_feedback_pending:
-            next_anneal, neighbourhood = _routing_feedback_substitution(
+            band_target = incumbent.decoded.width
+            next_anneal, neighbourhood = _alns_substitution(
                 detailed.routing,
                 incumbent.state,
                 problem,
                 incumbent.decoded,
                 seed=restart.seed,
                 stage_index=restart.anneal.stage_index,
+                session=self.alns_session,
+                context=OperatorContext(
+                    strip_count=problem.size,
+                    stagnation=0,
+                    remaining_fraction=self._remaining_fraction(),
+                ),
+                metrics=metrics_from_evaluation(
+                    detailed.routing,
+                    incumbent.decoded,
+                    height_state.feedback,
+                    outline_height=problem.outline_height,
+                    band_target_width=band_target,
+                    validator_clean=False,
+                ),
+                routing_seconds=detailed_route_time_s,
+                band_target_width=band_target,
+                adapters=self.alns_adapters,
             )
             if neighbourhood and restart.stages < self.config.stages:
                 restart.anneal = next_anneal
@@ -2532,13 +2571,31 @@ class SequenceSolver[PreparedT]:
         )
         neighbourhood = frozenset[int]()
         if starting_mode is ObjectiveMode.EXPLORATION:
-            next_anneal, neighbourhood = _routing_feedback_substitution(
+            band_target = selected.decoded.width
+            next_anneal, neighbourhood = _alns_substitution(
                 detailed.routing,
                 selected.state,
                 problem,
                 selected.decoded,
                 seed=restart.seed,
                 stage_index=annealed.final_state.stage_index,
+                session=self.alns_session,
+                context=OperatorContext(
+                    strip_count=problem.size,
+                    stagnation=restart.feedback_stagnation,
+                    remaining_fraction=self._remaining_fraction(),
+                ),
+                metrics=metrics_from_evaluation(
+                    detailed.routing,
+                    selected.decoded,
+                    height_state.feedback,
+                    outline_height=problem.outline_height,
+                    band_target_width=band_target,
+                    validator_clean=False,
+                ),
+                routing_seconds=detailed_route_time_s,
+                band_target_width=band_target,
+                adapters=self.alns_adapters,
             )
             if neighbourhood and restart.stages < self.config.stages:
                 # This is an already-scheduled search candidate with exact local
@@ -4080,6 +4137,7 @@ class _ProductionTelemetry:
     topology_beam_height: int | None = None
     topology_beam_candidates: int = 0
     topology_beam_wall_time_s: float = 0.0
+    alns_evaluations: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -4777,6 +4835,10 @@ def _production_run(
 
     def detailed_route(candidate: _ProductionCandidate, allowance: int) -> DetailedStageResult:
         telemetry.detailed_routes += 1
+        # Every candidate that reaches the detailed router is one evaluation the
+        # operator ledger's rewards were paid out of, so it is counted here and
+        # not at the annealing candidate.
+        telemetry.alns_evaluations += 1
         if candidate.preparation_error == "deadline" or deadline_reached():
             return _closed_detailed_result(DetailedRouteStatus.BUDGET)
         if candidate.prepared is None:
@@ -5106,6 +5168,14 @@ def _production_run(
             sprayed_lanes=len(spec.spray_lanes),
         ),
         stage_boundary_commit=commit_stage,
+        alns_session=OperatorSession(
+            destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+            repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
+        ),
+        alns_adapters=_RepairAdapters(),
+        remaining_fraction=lambda: remaining_fraction_bucket(
+            max(0.0, (started + ceiling) - time.monotonic()), ceiling
+        ),
     )
     seed_started = time.monotonic()
     seed_deadline = min(
@@ -5719,6 +5789,11 @@ def _with_observational_stats(
             "power": float(power),
             "termination": result.termination,
             "feasibility_restart_batches": float(result.feasibility_restart_batches),
+            "alns_choices": float(len(run.solver.alns_session.choices)),
+            "alns_applied": float(run.solver.alns_session.applied),
+            "alns_evaluations": float(telemetry.alns_evaluations),
+            "alns_routing_seconds": run.solver.alns_session.routing_seconds,
+            "alns_operators": operator_tally(run.solver.alns_session),
             "termination_cause": result.termination,
             "validation_clean": 1.0,
             "validation_status": "clean",
