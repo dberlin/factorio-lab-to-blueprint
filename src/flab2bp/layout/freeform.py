@@ -10089,13 +10089,20 @@ def _reserve_port_access(
     lane the player must fill, buried inside the block -- which is exactly what
     ``flow.external_entry_reachable`` was reporting.
 
-    ``twice`` names ports that need one MORE approach on top of that, which is
-    what an input lane fed from both outside and inside is.  ``_seat_inputs``
-    mixes two ingredients onto one lane when they will not fit one per lane, and
-    one of them can be an external input while the other is produced internally;
-    the external run then arrives on the lane head's one open side and the
-    internal net finds an empty goal set.  Both claims are legitimate and they
-    are not the same cell, so both are staked.
+    ``twice`` names ports that need one MORE approach on top of that: an input
+    lane fed from BOTH the boundary and from a producer inside the block.  The
+    external run and the internal net are two independent claims on the same lane
+    head and they cannot share a cell, so both are staked.
+
+    The lane need not be MIXED, and this docstring used to say it was.  Every
+    port that has ever failed this demand carried ONE item (R4 §1.2:
+    ``lane=('hydrogen',)``, ten distinct ports across three cells and five
+    heights, all ``wants=2 held=1``).  Narrowing the predicate to mixed lanes was
+    tried (R4 §6, E1) and the same ports failed again at ROUTE time with
+    ``dynamic-access`` and ZERO expansions -- the external run had taken the one
+    corridor and laid a belt on it, and the internal net was handed an empty goal
+    set.  The demand is real; the answer is to seat such an ingredient on a lane
+    head that has two free sides (``strip_variants._seat_both_fed_outermost``).
 
     Ports are served shortest-lane-first within a round, which is arbitrary and
     deliberately so: what decides whether a port gets an access cell at all is
@@ -14185,8 +14192,10 @@ def _prepare_routing_problem(
     # exactly. `_route_all` re-derives these once every path is laid, so this is
     # a claim staked early rather than a second source of truth.
     def hold_ports() -> None:
-        # A lane carrying an external ingredient AND an internally produced one
-        # has two feeds to accept, not one, so it needs two ways in.
+        # A lane fed from the boundary AND from a producer inside the block has
+        # two feeds to accept, not one, so it needs two ways in.  Note this is a
+        # property of the ITEM, not of the lane's cardinality: a single-item lane
+        # is in this set whenever that item is both external and made internally.
         net_ports = {(p.x, p.y, p.z) for n in nets for p in (n.src, n.dst) if p is not None}
         shared_feed = {
             (port.x, port.y, port.z)

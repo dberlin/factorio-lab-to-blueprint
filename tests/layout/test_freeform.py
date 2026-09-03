@@ -10028,6 +10028,35 @@ class TestPortAccessIsReservedForEveryRole:
         assert first == (1, ((1, 0, 0), (2, 0, 0)), True)
 
 
+def test_a_middle_lane_head_in_twice_cannot_hold_its_second_corridor() -> None:
+    """The regression a future reordering would trip.
+
+    Three stacked lane heads in one column, the middle one in `twice`: its east,
+    north and south neighbours are the sibling belts and only the west channel
+    tile is free, so it holds ONE corridor against `wants=2`.  This is R4 §1.2's
+    geometry reduced to the smallest canvas that reproduces it, and it is what
+    stops a later change putting a both-fed item back on a middle row.
+    """
+    canvas = _Canvas(limit=(-4, -2, 10, 6))
+    heads = [_Port(canvas.add(_belt(0, row)), 0, row, 0, 4) for row in (0, 1, 2)]
+    for row in (0, 1, 2):
+        for column in (1, 2, 3, 4):
+            canvas.add(_belt(column, row))
+    far = _Port(canvas.add(_belt(8, 4)), 8, 4, 8, 8)
+    middle = (0, 1, 0)
+    failed: set[tuple[int, int, int]] = set()
+
+    missing = _reserve_port_access(
+        canvas,
+        [_Net(src=far, dst=head, item="hydrogen") for head in heads],
+        twice={middle},
+        failed_ports=failed,
+    )
+
+    assert missing == 1
+    assert failed == {middle}
+
+
 class TestProliferatorSupplyIsOneReachableTree:
     """Every coater drop belongs to one externally fed terminal supply run."""
 
