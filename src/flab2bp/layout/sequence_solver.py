@@ -973,6 +973,8 @@ class SequenceSolver[PreparedT]:
         alns_adapters: _RepairAdapters | None = None,
         remaining_fraction: Callable[[], int] | None = None,
         band_target_for: Callable[[int, int], int] | None = None,
+        portfolio_area: Callable[[], int | None] | None = None,
+        publish_incumbent: Callable[[Placement], None] | None = None,
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -1060,6 +1062,13 @@ class SequenceSolver[PreparedT]:
         self._stage_stats: list[StageObservation] = []
         self._incumbent: _ExactIncumbent | None = None
         self._last_height: int | None = None
+        #: The AREA of the best placement another racing strategy has certified,
+        #: or ``None``.  Read afresh at every selection point so a bound the
+        #: other arm publishes mid-search reaches the very next stage.
+        self.portfolio_area = portfolio_area
+        #: Called with each placement this search certifies, so the other racer
+        #: can use it as a bound.
+        self.publish_incumbent = publish_incumbent
 
 
     def _start_measured_stage(
@@ -1129,6 +1138,22 @@ class SequenceSolver[PreparedT]:
             ):
                 snapshots.append(current)
         return len(snapshots) == 2 and snapshots[-1] is not None and snapshots[-1] == snapshots[-2]
+
+    def _portfolio_pruned(self, height_state: _HeightState) -> bool:
+        """Can this height still beat what the other racer already certified?
+
+        STRICTLY greater, and on area alone.  ``area_lower_bound`` is the
+        smallest area the height could possibly produce and there is no
+        per-height lower bound on belt tiles, so the second component of the
+        exact key has no counterpart here.  The winner is ``(area, belt_tiles)``
+        lexicographic, so a placement of EQUAL area with fewer belt tiles beats
+        the incumbent -- and ``>=`` would prune exactly the heights that could
+        produce it.
+        """
+        if self.portfolio_area is None:
+            return False
+        bound = self.portfolio_area()
+        return bound is not None and height_state.problem.area_lower_bound > bound
 
     def search(
         self,
@@ -1365,7 +1390,14 @@ class SequenceSolver[PreparedT]:
                     break
                 continue
 
-            discovery = next((height for height in self._heights if height.stages == 0), None)
+            discovery = next(
+                (
+                    height
+                    for height in self._heights
+                    if height.stages == 0 and not self._portfolio_pruned(height)
+                ),
+                None,
+            )
             if discovery is not None:
                 height_state = discovery
                 allowance = self.budget.discovery_allowance(height_state.height)
@@ -1443,6 +1475,15 @@ class SequenceSolver[PreparedT]:
                     else:
                         self.budget.settle_discovery(height_state.height, spent)
             else:
+                # A schedule the portfolio bound has emptied is a portfolio
+                # stop, and it is decided BEFORE the ledger: `shared_left` is
+                # zero until a discovery settles, so a fully pruned schedule
+                # would otherwise be reported as a budget refusal it never
+                # actually reached.  With no bound every height is unpruned and
+                # this branch is unreachable.
+                if all(self._portfolio_pruned(height) for height in self._heights):
+                    termination = "portfolio-bound"
+                    break
                 if self.budget.shared_left == 0:
                     termination = "budget"
                     break
@@ -1450,9 +1491,14 @@ class SequenceSolver[PreparedT]:
                     height
                     for height in self._heights
                     if any(run.stages < self.config.stages for run in height.restarts)
+                    and not self._portfolio_pruned(height)
                 ]
                 if not eligible:
-                    termination = "candidates"
+                    termination = (
+                        "portfolio-bound"
+                        if any(self._portfolio_pruned(height) for height in self._heights)
+                        else "candidates"
+                    )
                     break
                 protected_followup = next(
                     (
@@ -1484,6 +1530,10 @@ class SequenceSolver[PreparedT]:
                 "deadline": "deadline exhausted before finding an exact layout",
                 "budget": "expansion budget exhausted before finding an exact layout",
                 "candidates": "all scheduled candidates were exhausted",
+                "portfolio-bound": (
+                    "every scheduled height's area lower bound is above the "
+                    "portfolio incumbent"
+                ),
                 "cancelled": "routing was cancelled before detailed emission",
                 "stage-limit": "no scheduled stage produced an exact layout",
                 "feasibility-exhausted": (
@@ -2250,11 +2300,9 @@ class SequenceSolver[PreparedT]:
                 # per candidate on the largest cells -- so once one candidate
                 # is prepared and the deadline has passed, every further
                 # candidate would only be prepared to sit unrouted: stop here.
-                # This only shortens the loop -- the candidate already
-                # prepared this iteration already reached its own
-                # global_route (or one of the other stop paths below, each of
-                # which already records its own skip reason) -- so no new
-                # telemetry reason is written for a deadline stop.
+                # This only shortens the loop -- the last candidate prepared
+                # already reached its own global_route -- so no new telemetry
+                # reason is written for a deadline stop.
                 break
             if proxy_left == 0 and prepared_candidates:
                 break
@@ -2434,6 +2482,8 @@ class SequenceSolver[PreparedT]:
                         breakdown=selected.breakdown,
                         archive_categories=selected.archive_categories,
                     )
+                    if self.publish_incumbent is not None:
+                        self.publish_incumbent(finalized)
                 if height_state.exact_key is None or exact_key < height_state.exact_key:
                     height_state.exact_key = exact_key
         if validation_budget:
@@ -3454,6 +3504,11 @@ def _exact_key(placement: Placement) -> tuple[int, int]:
     return placement.area, int(belt_tiles)
 
 
+def _area_of(exact_key: tuple[int, int] | None) -> int | None:
+    """The area component of a portfolio bound, or ``None`` when there is none."""
+    return None if exact_key is None else exact_key[0]
+
+
 def _variant_search_inputs(
     spec: BuildSpec,
     strips: list[Strip],
@@ -4381,6 +4436,8 @@ def _production_run(
     compact_seed_attempt: int | None = None,
     compact_seed_base_seed: int | None = None,
     compact_seed_config: CompactSeedConfig | None = None,
+    portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
+    publish_incumbent: Callable[[Placement], None] | None = None,
 ) -> _ProductionRun:
     started = time.monotonic()
     ceiling = time_budget_s
@@ -5460,6 +5517,10 @@ def _production_run(
             max(0.0, (started + ceiling) - time.monotonic()), ceiling
         ),
         band_target_for=band_target_for,
+        portfolio_area=(
+            None if portfolio_incumbent is None else lambda: _area_of(portfolio_incumbent())
+        ),
+        publish_incumbent=publish_incumbent,
     )
     seed_started = time.monotonic()
     seed_deadline = min(
@@ -5822,6 +5883,8 @@ class SequencePairLayout:
         solver_factory: _SolverFactory | None = None,
         compact_seed_config: CompactSeedConfig | None = None,
         islands: int = 1,
+        portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
+        publish_incumbent: Callable[[Placement], None] | None = None,
     ) -> None:
         if type(strip_len) is not int or strip_len <= 0:
             raise ValueError("strip length must be a positive integer")
@@ -5838,6 +5901,13 @@ class SequencePairLayout:
         self.config = config or SequenceSolverConfig()
         self.compact_seed_config = compact_seed_config or CompactSeedConfig()
         self.islands = islands
+        #: The best ``(area, belt_tiles)`` another racing strategy has certified,
+        #: or ``None``.  A SCHEDULING input only: the solver prunes heights that
+        #: provably cannot reach it, and never ranks a placement by it.
+        self.portfolio_incumbent = portfolio_incumbent
+        #: Called with each placement this search certifies, so the other racer
+        #: can use it as a bound.
+        self.publish_incumbent = publish_incumbent
 
     def lay_out(
         self,
@@ -5923,6 +5993,8 @@ class SequencePairLayout:
                     time_budget_s,
                     self.compact_seed_config,
                 ),
+                portfolio_incumbent=self.portfolio_incumbent,
+                publish_incumbent=self.publish_incumbent,
             )
             try:
                 result = run.solver.search(

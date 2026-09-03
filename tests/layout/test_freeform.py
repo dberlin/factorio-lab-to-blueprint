@@ -20063,3 +20063,180 @@ def test_the_suite_memo_keys_on_the_absolute_deadline() -> None:
     assert first is repeat
     assert second is not first
     assert without is not first
+
+
+def test_the_portfolio_soft_deadline_only_shortens_and_only_for_a_better_bound() -> None:
+    """Four cases, and none of them may LENGTHEN the improvement share."""
+    from flab2bp.layout.freeform import _portfolio_soft_deadline
+
+    # No bound at all: the sweep's own soft, untouched.
+    assert _portfolio_soft_deadline(100.0, None, None, 40.0) == 100.0
+    # A bound, no own best yet: pulled in.  (All four read sites are guarded by
+    # `best is not None`, so this value is not actually read in that state; the
+    # function is still defined for it rather than raising.)
+    assert _portfolio_soft_deadline(100.0, (480, 62), None, 40.0) == 40.0
+    # A bound BETTER than ours: pulled in.
+    assert _portfolio_soft_deadline(100.0, (480, 62), (500, 70.0), 40.0) == 40.0
+    # A bound WORSE than ours: it tells us nothing, so nothing moves.
+    assert _portfolio_soft_deadline(100.0, (520, 62), (500, 70.0), 40.0) == 100.0
+    # An exact tie counts as "at least as good", so it still pulls in.
+    assert _portfolio_soft_deadline(100.0, (500, 70), (500, 70.0), 40.0) == 40.0
+    # Never pushed OUT, even by a better bound.
+    assert _portfolio_soft_deadline(30.0, (480, 62), (500, 70.0), 40.0) == 30.0
+
+
+def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> None:
+    """`soft` is never rebound, and `improvement_soft` is read at exactly four sites.
+
+    `_sweep` has `_room_for_another` sites with NO `best is not None` guard --
+    `projection_retry_affordable`, the learned-retry promotion, and the window
+    launch -- and they are finding paths, deliberately exempt from the
+    soft-deadline breaks (each is spelled `if not projection_retry and ...`).
+    If an external bound rebound the enclosing `soft`, every retry for the rest
+    of the sweep would be refused and a spec that only routes after a retry
+    would refuse under racing where the unraced arm succeeds.
+
+    This is asserted on the SOURCE rather than on a spy because no spec in this
+    suite reaches a finding-path `_room_for_another` call: instrumented over
+    `two_stage_spec` and over the corpus cell `plastic`, all 38 calls come from
+    the three improvement sites, so a runtime spy cannot tell a correct sweep
+    from one that rebound `soft`.  The static form can, and it is exactly the
+    `git diff | grep` check the design asks a reader to perform by hand.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(freeform.FreeformLayout._sweep)))
+
+    def counted(name: str, node: ast.AST) -> tuple[int, int]:
+        loads = sum(
+            1
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load)
+        )
+        stores = sum(
+            1
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Store)
+        )
+        return loads, stores
+
+    soft_loads, soft_stores = counted("soft", tree)
+    improvement_loads, improvement_stores = counted("improvement_soft", tree)
+    assert soft_stores == 1, "the sweep's own soft is bound once and never rebound"
+    assert improvement_stores == 1, "the improvement deadline is bound once per turn"
+    assert improvement_loads == 4, (
+        "the improvement deadline is read at exactly the four sites already "
+        "guarded by `best is not None`, and nowhere else"
+    )
+    # One read per finding site (`projection_retry_affordable`, the learned-retry
+    # promotion, and the window launch's two), plus the argument handed to
+    # `_portfolio_soft_deadline`.
+    assert soft_loads == 5
+
+    affordable = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "projection_retry_affordable"
+    )
+    assert counted("soft", affordable)[0] == 1, "the retry rule keeps the sweep's own soft"
+    assert counted("improvement_soft", affordable)[0] == 0, (
+        "an external incumbent must not be able to refuse a retry"
+    )
+
+
+@pytest.mark.slow
+def test_a_portfolio_bound_never_costs_the_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bound shortens the polish and can never manufacture a refusal.
+
+    `monkeypatch` is requested for a second reason besides patching: the autouse
+    `_layout_memo_policy` fixture in `tests/conftest.py` disables the layout memo
+    for any test that requests it, so this run is a real solve and not a cached
+    placement from an earlier test.
+    """
+    seen: list[float] = []
+    original_room = freeform_module._room_for_another
+
+    def spying(deadline: float | None, soft: float, candidate_s: float) -> bool:
+        seen.append(soft)
+        return original_room(deadline, soft, candidate_s)
+
+    calls: list[tuple[float, float]] = []
+    original_rule = freeform_module._portfolio_soft_deadline
+
+    def recording(
+        soft: float,
+        external_key: tuple[int, int] | None,
+        best_key: tuple[int, float] | None,
+        now: float,
+    ) -> float:
+        result = original_rule(soft, external_key, best_key, now)
+        calls.append((soft, result))
+        return result
+
+    monkeypatch.setattr(freeform_module, "_room_for_another", spying)
+    monkeypatch.setattr(freeform_module, "_portfolio_soft_deadline", recording)
+
+    placement = freeform.FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        portfolio_incumbent=lambda: (1, 1),
+    ).lay_out(two_stage_spec(), time_budget_s=20.0)
+
+    assert placement.area > 0, "an external bound must never cost the placement"
+    assert calls, "the improvement deadline must be computed at least once"
+    assert all(result <= soft for soft, result in calls), "it may only ever shorten"
+    assert any(result < soft for soft, result in calls), (
+        "a bound better than anything this sweep holds must actually pull the "
+        "improvement deadline in"
+    )
+    assert seen, "the sweep must reach _room_for_another at least once"
+    pulled = {result for _soft, result in calls}
+    assert set(seen) <= pulled, (
+        "every guarded site the sweep reached must have been handed the "
+        "improvement deadline, not the sweep's own soft"
+    )
+
+
+@pytest.mark.slow
+def test_without_a_portfolio_bound_the_sweep_sees_only_its_own_soft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no hooks, `improvement_soft` is `soft` and nothing moves."""
+    seen: list[float] = []
+    original_room = freeform_module._room_for_another
+
+    def spying(deadline: float | None, soft: float, candidate_s: float) -> bool:
+        seen.append(soft)
+        return original_room(deadline, soft, candidate_s)
+
+    monkeypatch.setattr(freeform_module, "_room_for_another", spying)
+
+    placement = freeform.FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        two_stage_spec(), time_budget_s=20.0
+    )
+
+    assert placement.area > 0
+    assert len(set(seen)) == 1, "an unraced sweep charges every site its own single soft"
+
+
+@pytest.mark.slow
+def test_the_sweep_publishes_every_incumbent_it_certifies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The publish hook sits on the line that records `best`, not beside it."""
+    published: list[Placement] = []
+
+    placement = freeform.FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        publish_incumbent=published.append,
+    ).lay_out(two_stage_spec(), time_budget_s=20.0)
+
+    assert published, "a certified placement must be published"
+    assert published[-1] is placement
+    keys = [(item.area, item.stats["belt_tiles"]) for item in published]
+    assert keys == sorted(keys, reverse=True) or len(keys) == 1, (
+        "each published incumbent must improve on the last"
+    )

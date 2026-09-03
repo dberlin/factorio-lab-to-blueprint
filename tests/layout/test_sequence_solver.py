@@ -3715,6 +3715,8 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
         compact_seed_attempt: int | None = None,
         compact_seed_base_seed: int | None = None,
         compact_seed_config: CompactSeedConfig | None = None,
+        portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
+        publish_incumbent: Callable[[Placement], None] | None = None,
     ) -> Never:
         del (
             band_policy,
@@ -3724,6 +3726,8 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
             belt_vertical_construction,
             absolute_deadline,
             compact_seed_base_seed,
+            portfolio_incumbent,
+            publish_incumbent,
         )
         captured["power"] = power
         captured["compact_seed_attempt"] = compact_seed_attempt
@@ -9175,3 +9179,125 @@ def test_sequence_lay_out_honours_an_absolute_deadline_from_another_process() ->
     assert time.monotonic() - started < 10.0, (
         "an expired absolute deadline must not buy a fresh 30s budget"
     )
+
+
+def _two_height_solver(
+    fake: _FakeRouting, *, area_lower_bounds: tuple[int, int]
+) -> SequenceSolver[Prepared]:
+    """A solver whose two heights have DIFFERENT area lower bounds.
+
+    `_solver` gives every height `area_lower_bound=1`, which cannot express a
+    bound one height clears and the other does not.
+    """
+    bounds = dict(zip((40, 60), area_lower_bounds, strict=True))
+    return SequenceSolver(
+        heights=(40, 60),
+        problem_for_height=lambda height: PlacementProblem(
+            sizes=((1, 1),),
+            nets=((0, 0),),
+            outline_height=height,
+            area_lower_bound=bounds[height],
+        ),
+        adapters=fake.adapters(),
+        expansion_budget=ExpansionBudget(total=1_000),
+        config=SequenceSolverConfig(
+            stages=6, moves_per_stage=1, restarts_per_height=2, global_elites=1
+        ),
+    )
+
+
+def test_the_solver_prunes_only_heights_the_bound_strictly_beats() -> None:
+    solver = _two_height_solver(_FakeRouting(), area_lower_bounds=(400, 900))
+    solver.portfolio_area = lambda: 500
+
+    pruned = [h.height for h in solver._heights if solver._portfolio_pruned(h)]
+    kept = [h.height for h in solver._heights if not solver._portfolio_pruned(h)]
+
+    assert pruned == [60] and kept == [40]
+
+
+def test_a_height_that_can_still_tie_on_area_survives_pruning() -> None:
+    """Strict `>`: an equal-area placement with fewer belt tiles still wins.
+
+    `area_lower_bound` is an area and there is no per-height lower bound on belt
+    tiles, so `>=` would prune exactly the heights that could produce the tie.
+    """
+    solver = _two_height_solver(_FakeRouting(), area_lower_bounds=(500, 501))
+    solver.portfolio_area = lambda: 500
+
+    assert not solver._portfolio_pruned(solver._heights[0])
+    assert solver._portfolio_pruned(solver._heights[1])
+
+
+def test_a_fully_pruned_search_refuses_naming_the_portfolio_bound() -> None:
+    solver = _two_height_solver(_FakeRouting(), area_lower_bounds=(400, 900))
+    solver.portfolio_area = lambda: 100
+
+    with pytest.raises(NoValidLayout, match="area lower bound"):
+        solver.search()
+
+
+def test_no_portfolio_bound_prunes_nothing() -> None:
+    solver = _two_height_solver(_FakeRouting(), area_lower_bounds=(400, 900))
+
+    assert not any(solver._portfolio_pruned(h) for h in solver._heights)
+
+
+def test_the_portfolio_bound_is_re_read_at_every_selection_point() -> None:
+    """The bound is drained per stage, never sampled once at the start.
+
+    A bound published by the other arm halfway through this search must reach
+    the next selection point; hoisting the read out of `_portfolio_pruned` would
+    let the first answer stand for the whole search.
+    """
+    reads = 0
+
+    def portfolio_area() -> int | None:
+        nonlocal reads
+        reads += 1
+        return None
+
+    solver = _two_height_solver(
+        _FakeRouting(
+            detailed_results=(
+                DetailedStageResult(
+                    _routing(DetailedRouteStatus.ROUTED),
+                    _placement(area=20, belt_tiles=4),
+                ),
+            )
+        ),
+        area_lower_bounds=(400, 900),
+    )
+    solver.portfolio_area = portfolio_area
+    solver.search()
+
+    assert reads > len(solver._heights), (
+        "the bound must be re-read at each selection point, not once per height"
+    )
+
+
+def test_the_solver_publishes_every_exact_incumbent_it_records() -> None:
+    """Publication sits on the line that records `self._incumbent`."""
+    published: list[Placement] = []
+    solver = _solver(
+        _FakeRouting(
+            detailed_results=(
+                DetailedStageResult(
+                    _routing(DetailedRouteStatus.ROUTED),
+                    _placement(area=30, belt_tiles=8),
+                ),
+                DetailedStageResult(
+                    _routing(DetailedRouteStatus.ROUTED),
+                    _placement(area=20, belt_tiles=4),
+                ),
+            )
+        )
+    )
+    solver.publish_incumbent = published.append
+
+    result = solver.search()
+
+    assert published, "an exact incumbent must be published"
+    assert published[-1] is result.placement
+    keys = [sequence_solver_module._exact_key(placement) for placement in published]
+    assert keys == sorted(keys, reverse=True), "each published incumbent must improve"

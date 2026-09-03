@@ -17,6 +17,7 @@ import pytest
 import flab2bp.layout.strategy_race as strategy_race_module
 from flab2bp.dsp import catalog, provenance, registry
 from flab2bp.layout.band_policy import BandPolicy
+from flab2bp.layout.base import NoValidLayout, Placement, PlacementStats
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
@@ -46,6 +47,7 @@ from flab2bp.layout.strategy_race import (
     run_strategy_race,
 )
 from flab2bp.layout.strip_variants import StripFamilyId, StripInstanceId
+from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import two_stage_spec
 
 
@@ -1153,3 +1155,207 @@ def test_the_real_pool_races_both_arms_end_to_end() -> None:
         assert outcome.placement is not None
         assert outcome.placement.area > 0
         assert outcome.dropped_messages == 0
+
+
+def test_an_incumbent_published_by_one_arm_reaches_the_other() -> None:
+    to_freeform: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    to_sequence_pair: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    _install_race_channels(to_freeform, to_sequence_pair)
+    try:
+        freeform = _channels_for("freeform")
+        sequence = _channels_for("sequence-pair")
+        assert freeform is not None and sequence is not None
+
+        freeform.publish_incumbent(IncumbentMessage("freeform", (480, 62)))
+
+        assert sequence.drain() == (IncumbentMessage("freeform", (480, 62)),)
+        assert freeform.drain() == (), "a publisher must not read its own message"
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+
+class _HookedLayout:
+    """A layout that only exercises the two portfolio callables it was handed."""
+
+    def __init__(
+        self,
+        *,
+        portfolio_incumbent: Callable[[], tuple[int, int] | None] | None,
+        publish_incumbent: Callable[[Placement], None] | None,
+        publish: tuple[Placement, ...] = (),
+        refuse: bool = False,
+    ) -> None:
+        self.portfolio_incumbent = portfolio_incumbent
+        self.publish_incumbent = publish_incumbent
+        self.publish = publish
+        self.refuse = refuse
+        self.observed: list[tuple[int, int] | None] = []
+
+    def lay_out(
+        self,
+        spec: BuildSpec,
+        *,
+        time_budget_s: float = 15.0,
+        absolute_deadline: float | None = None,
+    ) -> Placement:
+        if self.portfolio_incumbent is not None:
+            self.observed.append(self.portfolio_incumbent())
+        for placement in self.publish:
+            assert self.publish_incumbent is not None
+            self.publish_incumbent(placement)
+        if self.portfolio_incumbent is not None:
+            self.observed.append(self.portfolio_incumbent())
+        if self.refuse:
+            raise NoValidLayout("stub refusal", spec_label=spec.label, budget_s=time_budget_s)
+        return _stub_placement(belt_tiles=1)
+
+
+def _stub_placement(*, belt_tiles: int) -> Placement:
+    """A bare placement: `area` is 1 and `belt_tiles` is whatever the test wants."""
+    return Placement(buildings=(), stats=PlacementStats(belt_tiles=float(belt_tiles)))
+
+
+def _hook_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    publish: tuple[Placement, ...] = (),
+    refuse: bool = False,
+) -> Callable[[], _HookedLayout]:
+    """Replace `_build_layout` with a `_HookedLayout`, and hand it back."""
+    built: list[_HookedLayout] = []
+
+    def build(
+        request: _StrategyRaceRequest,
+        *,
+        portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
+        publish_incumbent: Callable[[Placement], None] | None = None,
+    ) -> _HookedLayout:
+        layout = _HookedLayout(
+            portfolio_incumbent=portfolio_incumbent,
+            publish_incumbent=publish_incumbent,
+            publish=publish,
+            refuse=refuse,
+        )
+        built.append(layout)
+        return layout
+
+    monkeypatch.setattr(strategy_race_module, "_build_layout", build)
+    return lambda: built[0]
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_a_leg_publishes_only_a_placement_its_own_validation_accepts(
+    monkeypatch: pytest.MonkeyPatch, ok: bool
+) -> None:
+    """The PARENT's standard of proof, run in the child, before any publication."""
+    from flab2bp.layout import validate
+
+    seen: list[dict[str, object]] = []
+
+    def validate_spy(placement: Placement, spec: BuildSpec, **kwargs: object) -> validate.Report:
+        seen.append(kwargs)
+        return validate.Report(
+            findings=()
+            if ok
+            else (validate.Finding("belt-z", validate.Severity.ERROR, "nope"),)
+        )
+
+    monkeypatch.setattr(validate, "validate", validate_spy)
+    _hook_layout(monkeypatch, publish=(_stub_placement(belt_tiles=62),))
+
+    inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(_request("freeform"))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    assert seen, "the child must validate before it publishes"
+    assert seen[0]["expect_power"] is True
+    assert outcome.published_incumbents == (1 if ok else 0)
+    assert outbox.qsize() == (1 if ok else 0)
+    if ok:
+        message = outbox.get_nowait()
+        assert message == IncumbentMessage("freeform", (1, 62))
+        assert isinstance(message, IncumbentMessage)
+        # Rebuilt from the placement as two ints.  Freeform's own `best_key`
+        # carries `float(belt_tiles)`, and `(1, 62.0) == (1, 62)` in Python, so
+        # equality alone cannot see a key forwarded straight from it.
+        assert [type(part) for part in message.exact_key] == [int, int]
+
+
+def test_a_leg_counts_and_folds_every_incumbent_it_consumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout_of = _hook_layout(monkeypatch)
+    inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    inbox.put(IncumbentMessage("sequence-pair", (480, 62)))
+    inbox.put(IncumbentMessage("sequence-pair", (470, 90)))
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(_request("freeform"))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    # Drained once, kept across a second read: the queue is empty by then, and a
+    # bound that evaporated would let the other arm's proof go to waste.
+    assert layout_of().observed == [(470, 90), (470, 90)]
+    assert outcome.consumed_incumbents == 2
+    assert outcome.status == "completed"
+
+
+def test_a_refused_leg_still_reports_what_it_published_and_consumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from flab2bp.layout import validate
+
+    monkeypatch.setattr(
+        validate, "validate", lambda *_a, **_kw: validate.Report(findings=())
+    )
+    _hook_layout(monkeypatch, publish=(_stub_placement(belt_tiles=7),), refuse=True)
+    inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    inbox.put(IncumbentMessage("sequence-pair", (480, 62)))
+    _install_race_channels(inbox, outbox)
+    try:
+        outcome = _run_race_leg(_request("freeform"))
+    finally:
+        strategy_race_module._RACE_CHANNELS = None
+
+    assert outcome.status == "refused"
+    assert outcome.published_incumbents == 1
+    assert outcome.consumed_incumbents == 1
+
+
+def test_a_leg_with_sharing_off_reads_and_publishes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout_of = _hook_layout(monkeypatch, publish=(_stub_placement(belt_tiles=3),))
+
+    outcome = _run_race_leg(replace(_request("freeform"), share=False))
+
+    assert layout_of().observed == [None, None]
+    assert outcome.published_incumbents == 0
+    assert outcome.consumed_incumbents == 0
+
+
+@pytest.mark.parametrize("strategy", list(RACE_STRATEGIES))
+def test_build_layout_hands_the_portfolio_hooks_to_both_layouts(
+    strategy: RaceStrategyName,
+) -> None:
+    def bound() -> tuple[int, int] | None:
+        return (480, 62)
+
+    def publish(_placement: Placement) -> None:
+        return None
+
+    layout = _build_layout(
+        _request(strategy),
+        portfolio_incumbent=bound,
+        publish_incumbent=publish,
+    )
+
+    assert layout.portfolio_incumbent is bound
+    assert layout.publish_incumbent is publish
