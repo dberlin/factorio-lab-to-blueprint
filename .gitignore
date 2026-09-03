@@ -41,3 +41,6 @@ node_modules/
 /tools/dsp-oracle/SerializerCheck/bin/
 /tools/dsp-oracle/SerializerCheck/obj/
 # `dist/` above already covers tools/dsp-oracle/dist.
+
+# SDD ledgers, briefs and reports stay local
+.superpowers/
