@@ -296,14 +296,22 @@ candidate loop breaks before `self.adapters.prepare(...)` when
 candidate is always prepared, because `prepare` already short-circuits a passed
 deadline into `preparation_error="deadline"` and `detailed_route` turns that into
 `DetailedRouteStatus.BUDGET`, the existing tested path, while an empty
-`prepared_candidates` would raise. The break sets a **new** flag,
-`deadline_stop`, not the existing `completion_reserve_stop`
-(`sequence_solver.py:2036`): that flag's only reader selects
-`global_skip_reason = "completion-reserve"`, a specific claim about the
-measured completion reserve, and reusing it would make a deadline stop report
-itself as a reserve stop in stage telemetry. `deadline_stop` selects
-`global_skip_reason = "deadline"` and takes the same
-`selected = prepared_candidates[0]` branch.
+`prepared_candidates` would raise. The break does **not** reuse the existing
+`completion_reserve_stop` (`sequence_solver.py:2036`): that flag's only reader
+selects `global_skip_reason = "completion-reserve"`, a specific claim about the
+measured completion reserve, and a deadline stop must not report itself as a
+reserve stop. Ruling AK: the deadline stop only shortens the loop and writes no
+stage telemetry of its own. An earlier draft had it select
+`global_skip_reason = "deadline"` when `global_candidates` was empty, but with
+the break placed before `prepare` that arm is unreachable: the stop can only
+fire at candidate index one or later, and reaching a later index means the
+previous candidate ran to the bottom of the body and appended its global
+result. Global routing was never skipped, so no skip reason is true; the
+already-prepared candidates are routed through the unchanged
+`elif global_candidates:` branch. The observable effect is one fewer
+`prepare` per deadline-crossing stage (the pre-change loop already stopped one
+candidate later, after a post-deadline `prepare` returned a cancelled empty
+result), visible only as a smaller `global_routes` count.
 
 **5.1.5 Measure the attempt wall in the pipeline.** `pipeline.build` computes
 `attempt_deadline = attempt_started + time_budget_s + ATOMIC_COMPLETION_GRACE_S`
