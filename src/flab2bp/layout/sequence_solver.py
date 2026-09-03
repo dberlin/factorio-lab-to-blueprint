@@ -3828,6 +3828,10 @@ def _ceiling_bounded_schedule(
     ``boundary`` is `BandPolicySearchEnvelope.boundary_core_height`: 154 at a
     160-row band and 3-row entry rings.  ``None`` means the policy names no band
     and there is no ceiling to bind.
+
+    The scan is left-to-right over ``ordered``, so the COARSE heights -- which
+    lead the schedule -- claim the approach band first; a protected follow-up
+    later in ``ordered`` is the one left over-ceiling once the band fills.
     """
     if boundary is None or boundary <= 0:
         return ordered
@@ -4669,7 +4673,6 @@ def _production_run(
         )
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
         coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
-        narrowest_greedy_height = coarse_heights[0]
         coarse_height_count = len(coarse_heights)
         neighbor_heights: list[int] = []
         for height in coarse_heights:
@@ -4701,6 +4704,11 @@ def _production_run(
             seeds.setdefault(height, _greedy_pack(strips, height))
         coarse_heights = heights[:coarse_height_count]
         protected_followup_heights = heights[coarse_height_count:]
+        # Read AFTER the bound, not off the pre-bound `seeds`-sorted tuple: the
+        # ceiling (and `reserve_boundary_height` before it) can replace index 0,
+        # and `_large_sparse_compact_seed_height`'s `narrowest_height in
+        # scheduled_heights` guard needs the height that is actually scheduled.
+        narrowest_greedy_height = coarse_heights[0]
         topology_beam_height = _topology_beam_height(
             seeds,
             coarse_heights,
