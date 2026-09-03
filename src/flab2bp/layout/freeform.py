@@ -16701,6 +16701,38 @@ def _refusal_summary(rejected: Sequence[_RefusalFinding]) -> str:
     return summary + (f"; findings: {'; '.join(records)}" if records else "")
 
 
+def _portfolio_soft_deadline(
+    soft: float,
+    external_key: tuple[int, int] | None,
+    best_key: tuple[int, float] | None,
+    now: float,
+) -> float:
+    """The IMPROVEMENT deadline, which is NEVER this sweep's own ``soft``.
+
+    ``soft`` is the sweep's own share and is what stops it improving; the hard
+    ``deadline`` is what stops it entirely.  The value returned here is bound to
+    a SEPARATE name and read only at the four sites already guarded by ``best is
+    not None`` -- never written back over ``soft``.  Several ``_room_for_another``
+    sites have no such guard -- ``projection_retry_affordable``, the
+    learned-retry promotion and the window launch -- and all of them are finding
+    paths that the soft-deadline breaks deliberately exempt (``if not
+    projection_retry and ...``).  Setting ``soft`` itself would refuse every
+    retry for the rest of the sweep, and a spec that only routes after a retry
+    would then refuse under racing where the unraced arm succeeds -- a refusal
+    manufactured by another process.
+
+    A bound WORSE than what this sweep already holds moves nothing: an incumbent
+    we have already beaten is not a reason to stop polishing.  Both keys are
+    ``(area, belt_tiles)`` in that order, so ``>`` is the same lexicographic rule
+    ``best_key`` is selected by.
+    """
+    if external_key is None:
+        return soft
+    if best_key is not None and external_key > best_key:
+        return soft
+    return min(soft, now)
+
+
 class FreeformLayout:
     """Free-form packing plus belt routing."""
 
@@ -16715,6 +16747,8 @@ class FreeformLayout:
         direct_insert: bool = True,
         arrangements: int | None = None,
         belt_vertical_construction: bool = True,
+        portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
+        publish_incumbent: Callable[[Placement], None] | None = None,
     ) -> None:
         self.band_policy = band_policy
         #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
@@ -16740,6 +16774,13 @@ class FreeformLayout:
         #: search as it stood before arrangements existed, and is what the A/B
         #: compares against.
         self.arrangements = _ARRANGEMENTS if arrangements is None else arrangements
+        #: The best ``(area, belt_tiles)`` another racing strategy has certified,
+        #: or ``None``.  A SCHEDULING input only: it never enters ``best_key``,
+        #: so it can never select or reject a placement.
+        self.portfolio_incumbent = portfolio_incumbent
+        #: Called with each placement this sweep certifies, so the other racer
+        #: can use it as a bound.
+        self.publish_incumbent = publish_incumbent
 
     def lay_out(
         self,
@@ -17546,6 +17587,15 @@ class FreeformLayout:
                 else:
                     height, arrangement, projection_retry = candidate_packs[candidate_index]
                     candidate_index += 1
+                # A SECOND deadline, never a replacement for `soft`.  See
+                # `_portfolio_soft_deadline` for why rebinding `soft` would let
+                # another process refuse this one's retries.
+                improvement_soft = _portfolio_soft_deadline(
+                    soft,
+                    None if self.portfolio_incumbent is None else self.portfolio_incumbent(),
+                    best_key,
+                    time.monotonic(),
+                )
                 # Charge the PREVIOUS candidate here, at the one place every path
                 # through the body reaches. The body leaves by five different
                 # routes -- no pack, unpowerable, unrouted, rejected, kept -- and a
@@ -17572,7 +17622,9 @@ class FreeformLayout:
                 # repairs the sweep can plainly afford, and drops them AFTER paying
                 # for the CP-SAT solve that produced them.
                 turn_cost = dearest_remainder_s if queued is not None else dearest_candidate_s
-                if best is not None and not _room_for_another(deadline, soft, turn_cost):
+                if best is not None and not _room_for_another(
+                    deadline, improvement_soft, turn_cost
+                ):
                     break
                 # A SECOND ARRANGEMENT NORMALLY IMPROVES; ONE STRONG NEAR MISS MAY RESCUE.
                 #
@@ -17671,7 +17723,7 @@ class FreeformLayout:
                 if (
                     not projection_retry
                     and best is not None
-                    and not _room_for_another(deadline, soft, turn_cost)
+                    and not _room_for_another(deadline, improvement_soft, turn_cost)
                 ):
                     break
                 if not projection_retry and arrangement and best is None:
@@ -17685,7 +17737,7 @@ class FreeformLayout:
                 if (
                     not projection_retry
                     and arrangement
-                    and not _room_for_another(deadline, soft, turn_cost)
+                    and not _room_for_another(deadline, improvement_soft, turn_cost)
                 ):
                     break
                 # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
@@ -17695,7 +17747,11 @@ class FreeformLayout:
                 # free-proliferation chain only wires at the tallest, so a 2s budget
                 # refused a spec that routes every net cleanly given the chance to
                 # reach it.
-                if not projection_retry and best is not None and time.monotonic() >= soft:
+                if (
+                    not projection_retry
+                    and best is not None
+                    and time.monotonic() >= improvement_soft
+                ):
                     break
                 # The HARD deadline is the call's, and it does stop us finding --
                 # that is what makes `time_budget_s` a wall rather than a suggestion.
@@ -18600,6 +18656,8 @@ class FreeformLayout:
                         placement.stats["direct_insert_candidates"] = float(len(candidates))
                         placement.stats["area"] = float(placement.area)
                         best, best_key = placement, key
+                        if self.publish_incumbent is not None:
+                            self.publish_incumbent(placement)
                 finally:
                     # SPEC 5.7: a queued repair is paid on the metrics THIS
                     # routing pass measured, and `validator_clean` is False for

@@ -280,6 +280,8 @@ class _StrategyRaceOutcome:
         budget_s: float,
         *,
         projection_failures: tuple[ProjectionFailureRecord, ...] = (),
+        published_incumbents: int = 0,
+        consumed_incumbents: int = 0,
     ) -> _StrategyRaceOutcome:
         return cls(
             strategy,
@@ -288,6 +290,8 @@ class _StrategyRaceOutcome:
             refusal_spec_label=spec_label,
             refusal_budget_s=budget_s,
             refusal_projection_failures=projection_failures,
+            published_incumbents=published_incumbents,
+            consumed_incumbents=consumed_incumbents,
         )
 
 
@@ -329,7 +333,12 @@ def _channels_for(strategy: str) -> RaceChannels | None:
     return None if _RACE_CHANNELS is None else _RACE_CHANNELS.get(strategy)
 
 
-def _build_layout(request: _StrategyRaceRequest) -> FreeformLayout | SequencePairLayout:
+def _build_layout(
+    request: _StrategyRaceRequest,
+    *,
+    portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
+    publish_incumbent: Callable[[Placement], None] | None = None,
+) -> FreeformLayout | SequencePairLayout:
     """Reconstruct one strategy from the pickled request, in the child."""
     from flab2bp.layout.freeform import FreeformLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
@@ -340,6 +349,8 @@ def _build_layout(request: _StrategyRaceRequest) -> FreeformLayout | SequencePai
             workers=request.workers,
             arrangements=request.arrangements,
             belt_vertical_construction=request.belt_vertical_construction,
+            portfolio_incumbent=portfolio_incumbent,
+            publish_incumbent=publish_incumbent,
         )
     return SequencePairLayout(
         band_policy=request.band_policy,
@@ -347,6 +358,8 @@ def _build_layout(request: _StrategyRaceRequest) -> FreeformLayout | SequencePai
         config=request.config,
         compact_seed_config=request.compact_seed_config,
         islands=request.sequence_islands,
+        portfolio_incumbent=portfolio_incumbent,
+        publish_incumbent=publish_incumbent,
     )
 
 
@@ -357,10 +370,55 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
     search: the parent started the clock, and spawn, interpreter start and
     unpickling the spec all happened after it did.
     """
+    from flab2bp.layout import validate
     from flab2bp.layout.base import NoValidLayout
 
     channels = _channels_for(request.strategy) if request.share else None
-    layout = _build_layout(request)
+
+    seen_keys: list[tuple[int, int]] = []
+    published = 0
+    consumed = 0
+
+    def portfolio_incumbent() -> tuple[int, int] | None:
+        nonlocal consumed
+        if channels is None:
+            return None
+        for message in channels.drain():
+            if isinstance(message, IncumbentMessage):
+                consumed += 1
+                seen_keys.append(message.exact_key)
+        return min(seen_keys) if seen_keys else None
+
+    def publish(placement: Placement) -> None:
+        nonlocal published
+        if channels is None:
+            return
+        # The PARENT's standard of proof, run in the child.  Freeform's in-sweep
+        # report and sequence-pair's `validate.certify` are not it, and a bound
+        # the parent will reject would prune the other arm on a promise nobody
+        # keeps.  One extra validation per PUBLISHED incumbent, off the parent's
+        # critical path.
+        report = validate.validate(
+            placement,
+            request.spec,
+            ids=validate.id_map(request.spec),
+            expect_power=True,
+            max_belt_z=request.max_belt_z,
+            belt_vertical_construction=request.belt_vertical_construction,
+        )
+        if not report.ok:
+            return
+        belt_tiles = int(placement.stats.get("belt_tiles", 0))
+        channels.publish_incumbent(
+            IncumbentMessage(request.strategy, (placement.area, belt_tiles))
+        )
+        published += 1
+
+    layout = _build_layout(
+        request,
+        portfolio_incumbent=portfolio_incumbent,
+        publish_incumbent=publish,
+    )
     try:
         placement = layout.lay_out(
             request.spec,
@@ -374,6 +432,8 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
             exc.spec_label,
             exc.budget_s,
             projection_failures=exc.projection_failures,
+            published_incumbents=published,
+            consumed_incumbents=consumed,
         )
     finally:
         # In a `finally` because refusing is the common path, and a child that
@@ -384,6 +444,8 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         request.strategy,
         "completed",
         placement=placement,
+        published_incumbents=published,
+        consumed_incumbents=consumed,
         dropped_messages=0 if channels is None else channels.dropped,
     )
 
