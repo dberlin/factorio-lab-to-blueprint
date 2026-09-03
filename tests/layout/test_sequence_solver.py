@@ -9158,3 +9158,20 @@ def test_archive_routing_prepares_every_elite_while_the_clock_holds(
     solver._run_stage(height_state, solver._select_restart(height_state), 400)
 
     assert len(fake.prepared_candidates) == 4
+
+
+def test_sequence_lay_out_honours_an_absolute_deadline_from_another_process() -> None:
+    """The parent's wall, not a fresh budget started spawn-cost seconds late."""
+    layout = SequencePairLayout(band_policy=BandPolicy("portable"))
+    started = time.monotonic()
+
+    with pytest.raises(NoValidLayout):
+        layout.lay_out(
+            two_stage_spec(),
+            time_budget_s=30.0,
+            absolute_deadline=time.monotonic() - 1.0,
+        )
+
+    assert time.monotonic() - started < 10.0, (
+        "an expired absolute deadline must not buy a fresh 30s budget"
+    )

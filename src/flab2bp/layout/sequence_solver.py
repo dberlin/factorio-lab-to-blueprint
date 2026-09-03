@@ -5839,8 +5839,23 @@ class SequencePairLayout:
         self.compact_seed_config = compact_seed_config or CompactSeedConfig()
         self.islands = islands
 
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement:
-        """Return only a detailed-routed, powered, validator-clean placement."""
+    def lay_out(
+        self,
+        spec: BuildSpec,
+        *,
+        time_budget_s: float = 15.0,
+        absolute_deadline: float | None = None,
+    ) -> Placement:
+        """Return only a detailed-routed, powered, validator-clean placement.
+
+        ``absolute_deadline`` is the PARENT's wall, handed to a spawned racing
+        child so it does not start a fresh budget spawn-cost seconds late.  It
+        goes straight into :func:`_production_run`, which already prefers it over
+        ``started + ceiling`` and already derives the stage-admission span from
+        it.  The ``islands > 1`` branch keeps its own arithmetic: islands inside
+        a raced child are bounded by that child's own budget, and
+        ``run_sequence_islands`` takes no absolute deadline.
+        """
         if time_budget_s <= 0:
             raise NoValidLayout(
                 "no time budget was given, so the sequence search was never asked",
@@ -5897,6 +5912,7 @@ class SequencePairLayout:
                 belt_vertical_construction=not self.ramped,
                 strip_len=self.strip_len,
                 config=self.config,
+                absolute_deadline=absolute_deadline,
                 compact_seed_attempt=_serial_compact_seed_attempt(
                     spec.machine_count,
                     len(spec.spray_lanes),

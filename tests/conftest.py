@@ -46,7 +46,13 @@ def refined_oil_feedback_spec() -> BuildSpec:
 
 
 class _Layout(Protocol):
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement: ...
+    def lay_out(
+        self,
+        spec: BuildSpec,
+        *,
+        time_budget_s: float = 15.0,
+        absolute_deadline: float | None = None,
+    ) -> Placement: ...
 
 
 _CACHE: dict[tuple[str, ...], Placement | NoValidLayout] = {}
@@ -54,7 +60,12 @@ _CACHE: dict[tuple[str, ...], Placement | NoValidLayout] = {}
 _enabled = True
 
 
-def _key(layout: _Layout, spec: BuildSpec, time_budget_s: float) -> tuple[str, ...]:
+def _key(
+    layout: _Layout,
+    spec: BuildSpec,
+    time_budget_s: float,
+    absolute_deadline: float | None,
+) -> tuple[str, ...]:
     """Identify a ``lay_out`` call by everything that can change its result.
 
     ``BuildSpec`` is frozen but unhashable (it holds ``dict`` fields), so its
@@ -68,6 +79,10 @@ def _key(layout: _Layout, spec: BuildSpec, time_budget_s: float) -> tuple[str, .
         repr(sorted(vars(layout).items(), key=lambda kv: kv[0])),
         spec.model_dump_json(),
         repr(time_budget_s),
+        # An absolute deadline changes the result, so it MUST be in the key: a
+        # memo that omits an input returns the wrong answer, which is worse than
+        # being slow.  `None` and a float are distinct keys.
+        repr(absolute_deadline),
     )
 
 
@@ -76,16 +91,30 @@ def _install_memo(cls: type[_Layout]) -> None:
 
     @functools.wraps(original)
     def lay_out(
-        self: _Layout, spec: BuildSpec, *, time_budget_s: float = 15.0
+        self: _Layout,
+        spec: BuildSpec,
+        *,
+        time_budget_s: float = 15.0,
+        absolute_deadline: float | None = None,
     ) -> Placement:
         if not _enabled:
-            return original(self, spec, time_budget_s=time_budget_s)
-        key = _key(self, spec, time_budget_s)
+            return original(
+                self,
+                spec,
+                time_budget_s=time_budget_s,
+                absolute_deadline=absolute_deadline,
+            )
+        key = _key(self, spec, time_budget_s, absolute_deadline)
         try:
             hit = _CACHE[key]
         except KeyError:
             try:
-                hit = original(self, spec, time_budget_s=time_budget_s)
+                hit = original(
+                    self,
+                    spec,
+                    time_budget_s=time_budget_s,
+                    absolute_deadline=absolute_deadline,
+                )
             except NoValidLayout as refusal:
                 # Refusals are outcomes and are cached like successful layouts.
                 hit = refusal

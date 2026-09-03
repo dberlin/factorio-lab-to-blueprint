@@ -485,8 +485,20 @@ class LayoutStrategy(Protocol):
     """
     name: str
 
-    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement:
+    def lay_out(
+        self,
+        spec: BuildSpec,
+        *,
+        time_budget_s: float = 15.0,
+        absolute_deadline: float | None = None,
+    ) -> Placement:
         """Lay out ``spec``, returning the densest valid ``Placement`` found.
+
+        ``absolute_deadline`` is a wall someone ELSE started, in the same
+        ``time.monotonic()`` frame: a strategy run in a spawned child cannot
+        compute its own deadline, because spawn, interpreter start and
+        unpickling the spec all happen after the parent started the clock.
+        ``None`` means "start the budget now", which is every serial caller.
 
         Raises :class:`NoValidLayout` rather than returning a degraded result.
         The bake-off can only compare strategies that produce something, but the

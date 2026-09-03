@@ -12,18 +12,28 @@ an exception; a spawn-context ``ProcessPoolExecutor`` with
 ``max_tasks_per_child=1``; one ``wait`` in the parent; and OS-level termination
 for whatever is still running when the wall runs out.
 
-This file is the transport layer only: the request and outcome that cross the
-pickle boundary, the two message kinds, and the channel that publishes and
-drains them.  The executor, the receivers, and the merge rule land on top of it.
+This file carries the transport -- the request and outcome that cross the pickle
+boundary, the two message kinds, and the channel that publishes and drains them
+-- and the race itself: the child-side leg, the pool, and the parent's one
+``wait``.  The receivers that consume a hint, and the merge rule that turns two
+outcomes into one placement, land on top of it.
 """
 
 from __future__ import annotations
 
+import multiprocessing
+import os
 import queue
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from fractions import Fraction
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
+
+if TYPE_CHECKING:
+    from flab2bp.layout.freeform import FreeformLayout
+    from flab2bp.layout.sequence_solver import SequencePairLayout
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
@@ -41,9 +51,13 @@ type RaceStrategyName = Literal["freeform", "sequence-pair"]
 RACE_STRATEGIES: tuple[RaceStrategyName, ...] = ("freeform", "sequence-pair")
 
 #: Seconds past the soft deadline the parent waits before killing a racer.
-#: MEASURED, not guessed: Task 9 records this box's spawn-to-first-instruction
-#: cost and sets this to ``ceil(that) + ATOMIC_COMPLETION_GRACE_S``.  It is
-#: deliberately NOT ``sequence_islands._ISLAND_COMPLETION_GRACE_S``, which is
+#: MEASURED, not guessed: ``scripts/spawn_cost.py`` timed this box's
+#: spawn-to-first-instruction cost over ten spawns of the same pool shape this
+#: module builds -- worst case 0.101 s -- and this is
+#: ``ceil(0.101) + ATOMIC_COMPLETION_GRACE_S = 1 + 5.0``.  The numbers and the
+#: box load are in
+#: ``docs/superpowers/evidence/2026-09-02-phase-d-portfolio/race-grace.md``.  It
+#: is deliberately NOT ``sequence_islands._ISLAND_COMPLETION_GRACE_S``, which is
 #: 90.0: a grace that large is a second budget.
 RACE_COMPLETION_GRACE_S = 6.0
 
@@ -106,8 +120,9 @@ class _JoinCancellable(Protocol):
     ``multiprocessing.Queue`` has this method and ``queue.Queue`` does not, so
     ``RaceChannels.close`` asks the type rather than the object: an
     ``isinstance`` against this Protocol is Any-free, whereas a ``getattr``
-    lookup would type as ``Any`` and would silently accept any object that
-    happened to carry the name.
+    lookup would type as ``Any``.  (A runtime-checkable Protocol still only
+    checks that the attribute exists, so this buys the type, not a stronger
+    runtime guarantee.)
     """
 
     def cancel_join_thread(self) -> None: ...
@@ -275,3 +290,293 @@ def _ordered(outcomes: Sequence[_StrategyRaceOutcome]) -> tuple[_StrategyRaceOut
 #: Referenced so ``catalog`` is not an unused import: the default belt ceiling a
 #: caller gets when it does not know the URL's technology set.
 DEFAULT_RACE_MAX_BELT_Z = catalog.DEFAULT_MAX_BELT_Z
+
+
+#: Set by the pool initializer in each child; ``None`` in the parent and when
+#: sharing is off.  A module global rather than a request field because a
+#: ``multiprocessing.Queue`` cannot be pickled as a TASK argument -- it reaches a
+#: child only through ``Process(args=...)``, which is what ``initargs`` becomes.
+_RACE_CHANNELS: dict[str, RaceChannels] | None = None
+
+
+def _install_race_channels(to_freeform: object, to_sequence_pair: object) -> None:
+    """Pool initializer: give this child both ends, keyed by who reads which.
+
+    The parameters are ``object`` because the executor hands ``initargs`` through
+    untyped; the cast is where the queue type is asserted, once, rather than at
+    every use.
+    """
+    global _RACE_CHANNELS
+    freeform_in = cast(_MessageQueue, to_freeform)
+    sequence_in = cast(_MessageQueue, to_sequence_pair)
+    _RACE_CHANNELS = {
+        "freeform": RaceChannels(publish=sequence_in, consume=freeform_in),
+        "sequence-pair": RaceChannels(publish=freeform_in, consume=sequence_in),
+    }
+
+
+def _channels_for(strategy: str) -> RaceChannels | None:
+    return None if _RACE_CHANNELS is None else _RACE_CHANNELS.get(strategy)
+
+
+def _build_layout(request: _StrategyRaceRequest) -> FreeformLayout | SequencePairLayout:
+    """Reconstruct one strategy from the pickled request, in the child."""
+    from flab2bp.layout.freeform import FreeformLayout
+    from flab2bp.layout.sequence_solver import SequencePairLayout
+
+    if request.strategy == "freeform":
+        return FreeformLayout(
+            band_policy=request.band_policy,
+            workers=request.workers,
+            arrangements=request.arrangements,
+            belt_vertical_construction=request.belt_vertical_construction,
+        )
+    return SequencePairLayout(
+        band_policy=request.band_policy,
+        belt_vertical_construction=request.belt_vertical_construction,
+        config=request.config,
+        compact_seed_config=request.compact_seed_config,
+        islands=request.sequence_islands,
+    )
+
+
+def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
+    """Reconstruct and run one whole strategy inside a child.
+
+    ``request.soft_deadline`` and not ``time_budget_s`` is what bounds the
+    search: the parent started the clock, and spawn, interpreter start and
+    unpickling the spec all happened after it did.
+    """
+    from flab2bp.layout.base import NoValidLayout
+
+    channels = _channels_for(request.strategy) if request.share else None
+    layout = _build_layout(request)
+    try:
+        placement = layout.lay_out(
+            request.spec,
+            time_budget_s=request.time_budget_s,
+            absolute_deadline=request.soft_deadline,
+        )
+    except NoValidLayout as exc:
+        return _StrategyRaceOutcome.refused(
+            request.strategy,
+            exc.reason,
+            exc.spec_label,
+            exc.budget_s,
+            projection_failures=exc.projection_failures,
+        )
+    finally:
+        # In a `finally` because refusing is the common path, and a child that
+        # refused still holds whatever it published.
+        if channels is not None:
+            channels.close()
+    return _StrategyRaceOutcome(
+        request.strategy,
+        "completed",
+        placement=placement,
+        dropped_messages=0 if channels is None else channels.dropped,
+    )
+
+
+#: What ``run_strategy_race`` needs from whatever starts the two legs: given the
+#: requests and the channels, return the futures by strategy and the executor to
+#: stop.  The seam exists so the parent's wall discipline can be tested without a
+#: process pool.
+type RaceSubmit = Callable[
+    [tuple[_StrategyRaceRequest, ...], dict[str, RaceChannels]],
+    tuple[dict[Future[_StrategyRaceOutcome], str], object],
+]
+
+
+def _available_cores() -> int:
+    """Cores this process may actually use, Linux-first, with a fallback.
+
+    ``sched_getaffinity`` is Linux-only, so it is probed rather than assumed --
+    the same guard ``scripts/audit.py:_available_cores`` already uses.
+    """
+    affinity = getattr(os, "sched_getaffinity", None)
+    if affinity is not None:
+        return len(affinity(0)) or 4
+    return os.cpu_count() or 4
+
+
+def _terminate_executor(
+    executor: object,
+    futures: Sequence[Future[_StrategyRaceOutcome]],
+) -> None:
+    """Stop whatever is still running, without waiting for its solve ceiling.
+
+    Copied from ``sequence_islands._terminate_executor`` rather than imported:
+    the two callers have the same need today, and a change made for islands must
+    not silently change what racing does to a live CP-SAT child.
+    """
+    for future in futures:
+        _ = future.cancel()
+    try:
+        cast(ProcessPoolExecutor, executor).terminate_workers()
+    except BaseException:
+        try:
+            cast(ProcessPoolExecutor, executor).kill_workers()
+        except BaseException:
+            cast(ProcessPoolExecutor, executor).shutdown(wait=False, cancel_futures=True)
+
+
+def _pool_submit(
+    requests: tuple[_StrategyRaceRequest, ...],
+    channels: dict[str, RaceChannels],
+) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
+    """Start both legs in spawned children, one task per child.
+
+    An EMPTY ``channels`` means sharing is off.  The initializer is then omitted
+    entirely rather than handed empty queues: only a ``multiprocessing.Queue``
+    survives the spawn hand-off, so passing anything else in ``initargs`` fails
+    at pickling in the parent.
+    """
+    context = multiprocessing.get_context("spawn")
+    if channels:
+        executor = ProcessPoolExecutor(
+            max_workers=len(RACE_STRATEGIES),
+            mp_context=context,
+            max_tasks_per_child=1,
+            initializer=_install_race_channels,
+            initargs=(channels["freeform"].consume, channels["sequence-pair"].consume),
+        )
+    else:
+        executor = ProcessPoolExecutor(
+            max_workers=len(RACE_STRATEGIES),
+            mp_context=context,
+            max_tasks_per_child=1,
+        )
+    futures: dict[Future[_StrategyRaceOutcome], str] = {}
+    for request in requests:
+        futures[executor.submit(_run_race_leg, request)] = request.strategy
+    return futures, executor
+
+
+def run_strategy_race(
+    spec: BuildSpec,
+    *,
+    time_budget_s: float,
+    band_policy: BandPolicy,
+    belt_vertical_construction: bool,
+    max_belt_z: Fraction = DEFAULT_RACE_MAX_BELT_Z,
+    workers: int | None = None,
+    arrangements: int | None = None,
+    sequence_islands: int = 1,
+    config: SequenceSolverConfig | None = None,
+    compact_seed_config: CompactSeedConfig | None = None,
+    share: bool = True,
+    submit: RaceSubmit | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[_StrategyRaceOutcome, ...]:
+    """Run both strategies concurrently for ONE budget and return both outcomes.
+
+    The first validator-clean result deliberately does NOT stop the race: the
+    other arm may still find something smaller, and ``pipeline.build`` picks the
+    winner by ``min(area)`` over whatever both produced.
+    """
+    if time_budget_s <= 0:
+        raise ValueError("racing requires a positive time budget")
+    # One queue per direction is a complete graph only for TWO arms, and
+    # `_install_race_channels` keys exactly two.  A third strategy must fail
+    # loudly here rather than silently receive nothing.
+    if len(RACE_STRATEGIES) != 2:
+        raise ValueError("the race queue topology is defined for exactly two strategies")
+    started = monotonic()
+    soft_deadline = started + time_budget_s
+    hard_deadline = soft_deadline + RACE_COMPLETION_GRACE_S
+    freeform_workers, sequence_workers = race_worker_split(
+        _available_cores() if workers is None else workers
+    )
+    workers_by_strategy = {
+        "freeform": freeform_workers,
+        "sequence-pair": sequence_workers,
+    }
+    channels: dict[str, RaceChannels] = {}
+    if share:
+        context = multiprocessing.get_context("spawn")
+        to_freeform = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+        to_sequence_pair = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+        channels = {
+            "freeform": RaceChannels(publish=to_sequence_pair, consume=to_freeform),
+            "sequence-pair": RaceChannels(publish=to_freeform, consume=to_sequence_pair),
+        }
+    requests = tuple(
+        _StrategyRaceRequest(
+            spec=spec,
+            strategy=name,
+            time_budget_s=time_budget_s,
+            soft_deadline=soft_deadline,
+            band_policy=band_policy,
+            belt_vertical_construction=belt_vertical_construction,
+            max_belt_z=max_belt_z,
+            workers=workers_by_strategy[name],
+            arrangements=arrangements,
+            sequence_islands=sequence_islands,
+            config=config or SequenceSolverConfig(),
+            compact_seed_config=compact_seed_config or CompactSeedConfig(),
+            share=share,
+        )
+        for name in RACE_STRATEGIES
+    )
+    outcomes: list[_StrategyRaceOutcome] = []
+    first_error: BaseException | None = None
+    try:
+        futures, executor = (submit or _pool_submit)(requests, channels)
+        strategy_by_future = dict(futures)
+        done, not_done = wait(
+            tuple(strategy_by_future),
+            timeout=max(0.0, hard_deadline - monotonic()),
+        )
+        del done
+        if not_done:
+            _terminate_executor(executor, tuple(strategy_by_future))
+        else:
+            cast(ProcessPoolExecutor, executor).shutdown(wait=True, cancel_futures=False)
+        # Walked in RACE_STRATEGIES order, never in `done` order: `done` is a
+        # set, and letting its iteration decide which of two crashed arms is
+        # re-raised would make a failing race report a different exception run
+        # to run.
+        for name in RACE_STRATEGIES:
+            future = next(
+                (item for item, strategy in strategy_by_future.items() if strategy == name),
+                None,
+            )
+            if future is None:
+                continue
+            if future in not_done:
+                outcomes.append(
+                    _StrategyRaceOutcome(
+                        name,
+                        "terminated",
+                        refusal_reason=(
+                            f"{name} overran the {time_budget_s:g}s budget by more than "
+                            f"{RACE_COMPLETION_GRACE_S:g}s and was terminated"
+                        ),
+                        refusal_spec_label=spec.label,
+                        refusal_budget_s=time_budget_s,
+                    )
+                )
+                continue
+            error = future.exception()
+            if error is not None:
+                first_error = first_error or error
+                outcomes.append(
+                    _StrategyRaceOutcome(
+                        name,
+                        "crashed",
+                        refusal_reason=(
+                            f"{name} strategy process failed: {type(error).__name__}: {error}"
+                        ),
+                    )
+                )
+                continue
+            outcomes.append(future.result())
+    finally:
+        # Always, even on an exception: an unflushed queue holds its feeder
+        # thread, and a held feeder thread holds this process open.
+        for side in channels.values():
+            side.close()
+    if first_error is not None and all(outcome.status == "crashed" for outcome in outcomes):
+        raise first_error
+    return _ordered(outcomes)
