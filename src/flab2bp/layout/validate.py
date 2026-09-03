@@ -4279,7 +4279,7 @@ def _external_entry_points(ctx: Context) -> Iterable[Finding]:
             {
                 "item": item,
                 "entry_lanes": len(runs),
-                "lanes_needed": int(lanes_needed),
+                "lanes_needed": lanes_needed,
                 "capacity": str(capacity),
                 "runs": sorted(runs),
             },

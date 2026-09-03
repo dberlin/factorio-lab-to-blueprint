@@ -159,9 +159,61 @@ compare tool prints):
   - **These are CP-SAT run-to-run noise, not a systematic effect of the cap.** The evidence:
     `processor/0` (freeform) goes -2.3% in round 1 and then **+2.3% in both round 2 and round 3**
     — the sign flips depending on which round happened to land which equally-valid packing on
-    which arm, not on which arm is the baseline. No cell is a repeat offender in the same
-    direction across all three rounds. The aggregate geometric-mean ratio (1.0002, 1.0007, 0.9991)
-    already captures this: no net growth either way.
+    which arm, not on which arm is the baseline. The aggregate geometric-mean ratio (1.0002,
+    1.0007, 0.9991) already captures this: no net growth either way.
+  - **Whether the cap could even be the cause was checked directly, not inferred from the sign
+    flips.** Command, run from the worktree:
+
+    ```
+    uv run python - <<'PY'
+    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.layout.strip_variants import generate_strip_families
+    from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
+
+    dataset = load_vendored()
+    for entry in URL_CORPUS:
+        candidates = build_candidates(
+            dataset, parse_url(entry.url), candidate_policies=DEFAULT_CANDIDATE_POLICIES
+        ).candidates
+        for spec_index, spec in enumerate(candidates):
+            families = generate_strip_families(spec)
+            binding = [f for f in families
+                       if f.machine_cap > 0 and f.machine_cap < f.total_machine_count]
+            print(entry.url_id, spec_index, len(families), len(binding))
+    PY
+    ```
+
+    This is the same corpus x candidate-policy enumeration `scripts/audit.py`'s `build_jobs` uses
+    (`URL_CORPUS` x `DEFAULT_CANDIDATE_POLICIES`); each `(url, spec_index)` pair here stands for two
+    audit.py cells (`freeform` and `sequence-pair`), since `generate_strip_families` depends only on
+    the spec, never on which layout strategy later consumes it — so the 36 rows below cover all 72
+    cells:
+
+    | url_id | families (each spec) | binding (each spec) |
+    | --- | --- | --- |
+    | iron-ingot | 1 | 0 |
+    | magnetic-coil | 3 | 0 |
+    | graphene | 2 | 0 |
+    | electromagnetic-matrix | 6 | 0 |
+    | plastic | 3 | 0 |
+    | processor | 6 | 0 |
+    | energy-matrix | 2 | 0 |
+    | super-magnetic-ring | 9 | 0 |
+    | casimir-crystal | 5 | 0 |
+    | information-matrix | 15 | 0 |
+    | quantum-chip | 15 | 0 |
+    | universe-matrix | 43 (`all-products`: 42) | 0 |
+
+    (Family counts are identical across the three candidate policies for every URL except
+    `universe-matrix`, where `all-products` produces 42 instead of 43; every one of the 108
+    per-family checks across the 36 specs came back non-binding — 0 binding families on all 72
+    cells.) On all 72 cells every family's `machine_cap` is at least its own
+    `total_machine_count`, so `min(max_machine_count, machine_cap)` is a no-op corpus-wide; the
+    residual per-cell area deltas are solver nondeterminism by construction, not attribution. The
+    corollary: the corpus gate exercises no binding cap; the only coverage of the cap binding is
+    the unit tests and the two deuteron pipeline tests.
 
 ## Coarsening count (spec section 10)
 
@@ -191,7 +243,13 @@ rounds and none is committed:
 - `--only universe-matrix --strategy sequence-pair --jobs 1 --budget 30` against each archive,
   covering the sequence-pair half (restricted to `universe-matrix` because that is where the
   freeform half already showed every coarsening event land, and `_production_run`'s coarsening
-  call is reached only via the same saturated-strip-count precondition).
+  call is reached only via the same saturated-strip-count precondition). **This is a scope limit
+  on the sequence-pair run, not an equivalence between the two runs**: the `--only universe-matrix`
+  restriction only picks which cells sequence-pair is asked about, and its pre-coarsening strip
+  counts are not the freeform run's — the two paths land on the same `universe-matrix` specs by
+  different construction, so `no-proliferator` starts at 45 strips on `sequence-pair` versus 57 on
+  `freeform` (see the `COARSEN_DEBUG` output below). What is compared below is the each-arm-vs-
+  itself before/after/rescued triple per path, not the two paths' strip counts against each other.
 
 **Result — identical in both arms, both strategies:**
 
@@ -230,8 +288,10 @@ procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu----
  5  0      0 1035518928  0 10401576   0    0     0    80 14279 26947 1 0 98  0  0  0
 ```
 
-Both blocks are byte-for-byte identical between the baseline-archive run and the candidate-archive
-run. Matched (by job order and by the strip counts named in the REFUSED `detail` text) against the
+The two `COARSEN_DEBUG` output blocks above (freeform's and sequence-pair's) are each
+byte-for-byte identical between the baseline-archive run and the candidate-archive run — not the
+`vmstat` blocks above those, which are load snapshots and differ as expected. Matched (by job
+order and by the strip counts named in the REFUSED `detail` text) against the
 six cells that refuse in every gate round above: `_coarsen_saturated_strip_plan` entered its
 collapsing branch for exactly these six cells — the same three `universe-matrix` specs under
 `freeform` and the same three under `sequence-pair` — produced identical before/after strip counts
