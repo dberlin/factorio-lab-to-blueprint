@@ -304,10 +304,11 @@ def install(tally: Tally) -> Callable[[], None]:
         *,
         twice: Collection[Cell] = (),
         failed_ports: set[Cell] | None = None,
+        demands: dict[Cell, tuple[int, int, int]] | None = None,
     ) -> int:
         t0 = time.perf_counter()
         out = orig_reserve(
-            canvas, nets, twice=twice, failed_ports=failed_ports
+            canvas, nets, twice=twice, failed_ports=failed_ports, demands=demands
         )
         tally.add("reserve_port_access", time.perf_counter() - t0)
         return out
