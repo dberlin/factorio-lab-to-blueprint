@@ -1006,11 +1006,19 @@ DEUTERON_URL = (
 )
 
 
-def _with_belt(monkeypatch: pytest.MonkeyPatch, belt_id: str) -> None:
+def _with_belt(
+    monkeypatch: pytest.MonkeyPatch,
+    belt_id: str,
+    *,
+    researched: set[str] | None = None,
+) -> None:
     original = pipeline.parse_url  # type: ignore[attr-defined]
 
     def patched(url: str, **kwargs: object):  # type: ignore[no-untyped-def]
-        return dataclasses.replace(original(url, **kwargs), belt_id=belt_id)  # type: ignore[arg-type]
+        replacements: dict[str, object] = {"belt_id": belt_id}
+        if researched is not None:
+            replacements["researched_technology_ids"] = set(researched)
+        return dataclasses.replace(original(url, **kwargs), **replacements)  # type: ignore[arg-type]
 
     monkeypatch.setattr(pipeline, "parse_url", patched)
 
@@ -1043,43 +1051,47 @@ def test_a_mk2_url_whose_lanes_need_mk3_builds(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.slow
-def test_without_planetary_logistics_the_same_url_now_splits_across_lanes(
+def test_without_planetary_logistics_hydrogen_arrives_on_four_lanes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Was ``..._is_refused``: without Mk.III research the hydrogen lanes used
-    to overrun a 12/s belt and the build raised ``flow.belt_capacity``.  Now
-    that the family machine cap binds at the strip partition seam, no strip's
-    single-item lane is ever sized past the floor belt's capacity, so the
-    same candidate builds clean on conveyor-belt-2 alone -- multiple narrower
-    strips instead of one belt upgrade."""
-    wanted = [
-        "basic-logistics-system",
-        "improved-logistics-system",
+    """Mk.II is the ceiling (12/s) and hydrogen enters at 40/s, so the cap
+    shortens the collider strips until four entry lanes carry it.  Before the
+    multiple-belts work this URL was refused with ``flow.belt_capacity``.
+
+    Budget: 45 s on a sequence-pair build at ~30 s plus preparation keeps this
+    under pytest-timeout's 120 s backstop even on a loaded box.
+    """
+    _with_belt(monkeypatch, "conveyor-belt-2", researched={
+        "basic-logistics-system", "improved-logistics-system",
         "high-efficiency-logistics-system",
-    ]
-    original = pipeline.parse_url  # type: ignore[attr-defined]
-
-    def patched(url: str, **kwargs: object):  # type: ignore[no-untyped-def]
-        return dataclasses.replace(
-            original(url, **kwargs),  # type: ignore[arg-type]
-            belt_id="conveyor-belt-2",
-            researched_technology_ids=set(wanted),
-        )
-
-    monkeypatch.setattr(pipeline, "parse_url", patched)
-    # One policy keeps this test under a single 45 s budget and pytest-timeout's
-    # 120 s backstop; the tier logic under test is policy-independent.
-    build = pipeline.build(
-        DEUTERON_URL,
-        strategy="sequence-pair",
-        time_budget_s=45.0,
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
-    )
+    })
+    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=45.0,
+                           candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
     assert build.report.ok
-    assert build.spec.belt_item_id == "conveyor-belt-2"
-    assert build.spec.belt_upgrades == ()
+    findings = build.report.by_check("flow.external_entry_points")
+    # super-magnetic-ring is also belted in on two lanes (two assembler strips,
+    # each wanting its own feed); only hydrogen is this test's subject.
+    (finding,) = [f for f in findings if f.detail["item"] == "hydrogen"]
+    assert finding.detail["entry_lanes"] == finding.detail["lanes_needed"] == 4
+    # The family machine cap binds at the strip partition seam, so capacity
+    # comes from lane splitting rather than a belt upgrade: no strip ever
+    # needs a tier the floor belt (conveyor-belt-2, item 2002) doesn't cover.
     tiers = {b.item_id for b in build.placement.buildings if catalog.is_belt(b.item_id)}
     assert tiers == {2002}, "no Mk.III belt: capacity comes from lane splitting, not tier"
+
+
+def test_at_mk3_hydrogen_above_the_ceiling_arrives_on_two_lanes() -> None:
+    """Mk.III already fits 40/s hydrogen on two lanes through the ordinary
+    ``strip_len`` heuristic (10 colliders split 5 + 5, 20/s each, and the cap
+    of 7 is inert); this pins that the new ``lanes_needed`` detail agrees with
+    the lanes actually built.  Fast (about 2 s at the default budget): not
+    slow, no budget bump."""
+    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair",
+                           candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
+    assert build.report.ok
+    findings = build.report.by_check("flow.external_entry_points")
+    (finding,) = [f for f in findings if f.detail["item"] == "hydrogen"]
+    assert finding.detail["entry_lanes"] == finding.detail["lanes_needed"] == 2
 
 
 # --- Task 14: `workers`, opt-in racing, and the relaxed islands guard ---------
