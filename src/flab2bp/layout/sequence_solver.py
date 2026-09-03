@@ -46,6 +46,8 @@ from flab2bp.layout.freeform import (
     _ENTRY_RING,
     _ROUTING_BUDGET,
     _ROUTING_EXPANSIONS_PER_SECOND,
+    C_WINDOW_DEADLINE_SAFETY_SECONDS,
+    C_WINDOW_SECONDS,
     WEST_CHANNEL,
     DirectInsertId,
     ExactPackNoGood,
@@ -64,6 +66,7 @@ from flab2bp.layout.freeform import (
     _minimum_pack_width,
     _Pack,
     _pack,
+    _pack_window,
     _PreparationDeadline,
     _prepare_routing_problem,
     _PreparedRoutingProblem,
@@ -98,6 +101,7 @@ from flab2bp.layout.route_feedback import (
 from flab2bp.layout.sequence_alns import (
     C_CONTEXT_FRACTION_STEPS,
     REWARD_RANKS,
+    SHIPPED_REPAIR,
     DestroyOperator,
     OperatorContext,
     OperatorMetrics,
@@ -133,6 +137,7 @@ from flab2bp.layout.sequence_pair import (
     decode_state,
     derive_stage_seed,
     enable_variant_stage_boundary,
+    encode_placement,
     merge_stage_boundary,
     quality_archive_key,
     repair_neighbourhood,
@@ -959,11 +964,15 @@ class SequenceSolver[PreparedT]:
         self.stop_on_stable_exact = stop_on_stable_exact
         self.routing_seed_allowance_cap = routing_seed_allowance_cap
         self.stage_admission = stage_admission
-        # Only the legacy pairing is armed here.  Opening the portfolio is its
-        # own commit so any corpus movement is attributable to that commit.
+        # The repair portfolio is open: LOCAL_EXACT_PACK has an implementation
+        # behind it now.  A solver built without a window adapter still SKIPS
+        # that arm for a count and a zero reward, so arming it costs a
+        # bare-constructed solver a turn and never a wrong credit.  The destroy
+        # portfolio stays at the legacy arm; opening it is its own commit so any
+        # corpus movement is attributable to that commit.
         self.alns_session = alns_session or OperatorSession(
             destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
-            repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
+            repair_arms=SHIPPED_REPAIR,
         )
         self.alns_adapters = alns_adapters or _RepairAdapters()
         #: Remaining wall as a bucket index.  A solver built without one -- a
@@ -4138,6 +4147,12 @@ class _ProductionTelemetry:
     topology_beam_candidates: int = 0
     topology_beam_wall_time_s: float = 0.0
     alns_evaluations: int = 0
+    alns_window_solves: int = 0
+    alns_window_accepted: int = 0
+    alns_window_seconds: float = 0.0
+    alns_encode_inexact: int = 0
+    alns_encode_errors: int = 0
+    alns_skipped_no_goods: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -5127,6 +5142,96 @@ def _production_run(
         selected_cache.clear()
         direct_cache.clear()
 
+    def _count_skipped_no_goods(count: int) -> None:
+        telemetry.alns_skipped_no_goods += count
+
+    def window_pack(
+        window: frozenset[int],
+        problem: PlacementProblem,
+        state: AnnealState,
+        decoded: DecodedPlacement,
+    ) -> EncodedPlacement | None:
+        """Repair a decoded placement with a bounded CP-SAT window, then encode it.
+
+        Returns the whole encoding, not just its placement: the round trip is not
+        exact, so re-encoding the compaction upstream could yield a second,
+        different pair.  The compaction itself is provably never wider and never
+        taller, so this cannot lose area or band fit.  It can move a strip and so
+        change a direct-insert offset, which is why the caller scores the
+        returned placement before accepting it: what the search then evaluates is
+        what would be built.
+        """
+        if not window or len(window) >= problem.size:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= C_WINDOW_SECONDS:
+            return None
+        selected = selected_strips(problem, state.variant_indices)
+        window_candidates = selected_direct_candidates(problem, state.variant_indices)
+        pack = _decoded_pack(
+            problem.outline_height,
+            decoded,
+            west_channels=tuple(strip.west_channel for strip in selected),
+            direct_candidates=window_candidates,
+        )
+        telemetry.alns_window_solves += 1
+        started_window = time.monotonic()
+        repaired = _pack_window(
+            list(selected),
+            height=problem.outline_height,
+            width_bound=decoded.width,
+            direct_candidates=window_candidates,
+            window=window,
+            fixed_at={
+                index: origin for index, origin in pack.at.items() if index not in window
+            },
+            seed=pack,
+            width_target=finalize.band_target_width(
+                envelope,
+                height=problem.outline_height,
+                width=decoded.width,
+            ),
+            time_budget_s=min(
+                C_WINDOW_SECONDS, remaining - C_WINDOW_DEADLINE_SAFETY_SECONDS
+            ),
+            on_skipped=_count_skipped_no_goods,
+        )
+        telemetry.alns_window_seconds += time.monotonic() - started_window
+        if repaired is None or repaired.at == pack.at:
+            # INFEASIBLE, UNKNOWN, unaffordable, or an unchanged assignment --
+            # none of which is a repair.  The caller credits the choice as
+            # unapplied rather than re-evaluating a placement the router has
+            # already refused.
+            return None
+        try:
+            encoded = encode_placement(
+                problem.selected_sizes(state.variant_indices),
+                tuple(
+                    repaired.at[index][0] - selected[index].west_channel
+                    for index in range(problem.size)
+                ),
+                tuple(repaired.at[index][1] for index in range(problem.size)),
+                outline_height=problem.outline_height,
+            )
+        except ValueError:
+            # An overlapping result cannot happen for a pack CP-SAT returned; a
+            # cyclic relation graph has never been produced but is not proven
+            # impossible.  Either way the choice is dropped, not repaired.
+            telemetry.alns_encode_errors += 1
+            return None
+        if not encoded.exact:
+            # Expected, not exceptional: the decode closes every gap, so it
+            # rarely reproduces the window's own coordinates.  It is never wider
+            # and never taller, so the caller scores the decode and continues.
+            telemetry.alns_encode_inexact += 1
+        if encoded.decoded.used_height > problem.outline_height:
+            return None
+        telemetry.alns_window_accepted += 1
+        return replace(
+            encoded,
+            decoded=replace(encoded.decoded, variant_indices=state.variant_indices),
+        )
+
     expansion_total = max(
         _ROUTING_BUDGET,
         int(_ROUTING_EXPANSIONS_PER_SECOND * ceiling),
@@ -5168,11 +5273,14 @@ def _production_run(
             sprayed_lanes=len(spec.spray_lanes),
         ),
         stage_boundary_commit=commit_stage,
+        # The repair portfolio is open: the window adapter exists, so
+        # LOCAL_EXACT_PACK has an implementation behind it.  The destroy
+        # portfolio is still the legacy arm alone.
         alns_session=OperatorSession(
             destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
-            repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
+            repair_arms=SHIPPED_REPAIR,
         ),
-        alns_adapters=_RepairAdapters(),
+        alns_adapters=_RepairAdapters(window_pack=window_pack),
         remaining_fraction=lambda: remaining_fraction_bucket(
             max(0.0, (started + ceiling) - time.monotonic()), ceiling
         ),
@@ -5794,6 +5902,12 @@ def _with_observational_stats(
             "alns_evaluations": float(telemetry.alns_evaluations),
             "alns_routing_seconds": run.solver.alns_session.routing_seconds,
             "alns_operators": operator_tally(run.solver.alns_session),
+            "alns_window_solves": float(telemetry.alns_window_solves),
+            "alns_window_accepted": float(telemetry.alns_window_accepted),
+            "alns_window_seconds": telemetry.alns_window_seconds,
+            "alns_encode_inexact": float(telemetry.alns_encode_inexact),
+            "alns_encode_errors": float(telemetry.alns_encode_errors),
+            "alns_skipped_no_goods": float(telemetry.alns_skipped_no_goods),
             "termination_cause": result.termination,
             "validation_clean": 1.0,
             "validation_status": "clean",
