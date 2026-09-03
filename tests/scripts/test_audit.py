@@ -26,7 +26,7 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.layout.strategy_race import RacingLayout
+from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S, RacingLayout
 from flab2bp.rates import CandidatePolicy
 from scripts import audit
 
@@ -158,6 +158,12 @@ def test_run_cell_preserves_typed_refusal_evidence(
 def test_run_cell_persists_post_compaction_projection_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Driven clock, no sleeping: a projection refusal REJECTS a placement the
+    # attempt already built, so it spent its whole budget and the row must
+    # still carry a wall and an overshoot -- unlike a NoValidLayout refusal,
+    # which never had a placement to charge for.
+    now = [500.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
     failures = (
         finalize.ProjectionFailure(
             check="geom.collide",
@@ -194,15 +200,20 @@ def test_run_cell_persists_post_compaction_projection_failures(
         "post-projection",
         lambda workers, vertical, _max_belt_z: SuccessfulStrategy(),
     )
+    def compact_stub(result: object, spec: object, *, expect_power: bool) -> object:
+        now[0] += 4.0
+        return result
+
     monkeypatch.setattr(
         "scripts.audit.finalize.compact_open_boundary_belts",
-        lambda result, spec, *, expect_power: result,
+        compact_stub,
     )
 
     def reject_projection(
         result: object,
         policy: object,
     ) -> object:
+        now[0] += 3.0
         raise refusal
 
     monkeypatch.setattr("scripts.audit.finalize.finalize_placement", reject_projection)
@@ -253,6 +264,14 @@ def test_run_cell_persists_post_compaction_projection_failures(
         ),
     )
     assert persisted["projection_failures"] == expected
+    # The attempt ran 500.0 -> 507.0 (compact +4.0, then the projection refusal
+    # +3.0) = 7.0s wall; 7.0 - budget(1.0) - ATOMIC_COMPLETION_GRACE_S(5.0) ==
+    # 1.0, clamped at 0.  A refusal AFTER a placement existed is not the same
+    # as a refusal that never built one: this row is honest carrying both.
+    assert result.attempt_wall_s == pytest.approx(7.0)
+    assert result.wall_overshoot_s == pytest.approx(1.0)
+    assert persisted["attempt_wall_s"] == pytest.approx(7.0)
+    assert persisted["wall_overshoot_s"] == pytest.approx(1.0)
 
 
 def test_run_cell_does_not_repeat_completed_placement_work(
@@ -778,3 +797,81 @@ def test_only_a_row_with_a_placement_carries_a_wall_and_an_overshoot(
     assert placed["wall_overshoot_s"] == 2.25
     assert "attempt_wall_s" not in refused
     assert "wall_overshoot_s" not in refused
+
+
+def test_a_raced_best_cell_is_judged_by_the_race_grace_not_the_atomic_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `best` runs under `strategy_race.RACE_COMPLETION_GRACE_S` (6.0), a raced
+    # child's own completion contract -- not `base.ATOMIC_COMPLETION_GRACE_S`
+    # (5.0), which governs a lone serial strategy.  The wall below (20.0) and
+    # budget (5.0) are chosen so the two graces disagree by a full, nonzero
+    # second (9.0 vs 10.0) rather than both clamping to the same zero, so a
+    # `run_cell` that used the wrong grace fails this assertion outright.
+    now = [2000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    completed = Placement(
+        buildings=(
+            PlacedBuilding(item_id=2303, model_index=65, x=0, y=0, width=2, height=3),
+        ),
+        frame=AreaFrame(2, 3, 4, (4,), False),
+        completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+    )
+
+    class _SlowRacingStrategy:
+        def lay_out(self, spec: object, *, time_budget_s: float) -> Placement:
+            now[0] += 20.0
+            return completed
+
+    monkeypatch.setattr(
+        audit,
+        "_specs_for",
+        lambda url, candidate_policies: (SimpleNamespace(label="race grace fixture"),),
+    )
+    monkeypatch.setattr(
+        audit,
+        "_belt_rules_for",
+        lambda url: SimpleNamespace(vertical_construction=False, max_z=1),
+    )
+    # Override the real "best" factory: `job.strategy == "best"` is what
+    # selects the grace, and only that key does, so the fixture must be
+    # installed under "best" itself rather than a fresh strategy name.
+    monkeypatch.setitem(
+        audit._STRATEGIES,
+        "best",
+        lambda workers, vertical, _max_belt_z: _SlowRacingStrategy(),
+    )
+    monkeypatch.setattr(validate, "id_map", lambda spec: object())
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *args, **kwargs: validate.Report(findings=()),
+    )
+    job = audit.Job(
+        strategy="best",
+        url_id="race-grace",
+        url="test://race-grace",
+        tier="trivial",
+        spec_index=0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        budget=5.0,
+        workers=1,
+    )
+
+    result = audit.run_cell(job)
+
+    assert result.status == "CLEAN"
+    assert result.attempt_wall_s == pytest.approx(20.0)
+    # 20.0 - budget(5.0) - RACE_COMPLETION_GRACE_S(6.0) == 9.0.  The ATOMIC
+    # form (5.0 grace) would report 10.0 instead: this is the assertion that
+    # fails against a `run_cell` that always uses ATOMIC_COMPLETION_GRACE_S.
+    assert result.wall_overshoot_s == pytest.approx(20.0 - 5.0 - RACE_COMPLETION_GRACE_S)
+    assert result.wall_overshoot_s == pytest.approx(9.0)
+
+
+def test_the_strategy_flag_accepts_all_five_choices() -> None:
+    parser = audit.build_parser()
+
+    for choice in ("both", "all", "freeform", "sequence-pair", "best"):
+        args = parser.parse_args(["--strategy", choice])
+        assert args.strategy == choice
