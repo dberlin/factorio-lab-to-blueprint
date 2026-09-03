@@ -1,5 +1,7 @@
 # Phase C: ALNS Placement with a CP-SAT Window Repair Implementation Plan
 
+**Status:** Executed 2026-09-02/03 on branch `phase-c-alns`; all 14 tasks landed with review and fix rounds; the Task 14 gate FAILED on all three gates with no regression (66/72 both arms, every round). The spec's status note records why both repair arms are corpus-inert and the ranked levers for Phase D. Task-level line numbers in this plan pre-date the branch and the 2026-09-03 history rewrite; locate symbols with Serena.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the placement search choose its own local repair from measured evidence, and give it an exact one — a CP-SAT window over a handful of strips with the rest pinned — so that `graphene/output-products` and `universe-matrix/no-proliferator` stop refusing at a 30-second budget.
