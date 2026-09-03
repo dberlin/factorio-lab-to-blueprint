@@ -104,10 +104,17 @@ def _new_layout(
 
 
 #: One settled pair: its strategy, its 1-based index over ``total_pairs``, the
-#: monotonic instant its solve began, and what that solve produced.  A racing
-#: pair and a serial one reduce to exactly this, which is why the attempt loop
-#: below has one shape rather than two.
-_Resolved = tuple[ExplicitStrategyName, int, float, Placement | NoValidLayout]
+#: monotonic instant its solve began, the completion grace it is JUDGED by, and
+#: what that solve produced.  A racing pair and a serial one reduce to exactly
+#: this, which is why the attempt loop below has one shape rather than two.
+#:
+#: The grace travels with the pair because the two modes do not share one.  A
+#: serial solve is bounded by ``ATOMIC_COMPLETION_GRACE_S``; a raced one is
+#: bounded by the race's own contract, ``RACE_COMPLETION_GRACE_S``, which is
+#: longer -- ``run_strategy_race`` waits that long before terminating an arm.
+#: Judging a raced pair by the atomic grace reports overshoot the race never
+#: spent and starts its finalization already past a deadline it never blew.
+_Resolved = tuple[ExplicitStrategyName, int, float, float, Placement | NoValidLayout]
 
 
 def _raced_result(
@@ -398,6 +405,12 @@ def build(
     ] = DEFAULT_CANDIDATE_POLICIES,
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
+    #: Legal with ``best`` as well as ``sequence-pair``, because islands live
+    #: inside the raced sequence-pair arm.  Under ``race=True`` they cost a
+    #: SECOND spawn -- once for the arm, once per island -- and the islands
+    #: start a fresh ``time_budget_s`` those spawn seconds late, because
+    #: ``run_sequence_islands`` derives its own deadlines and takes no absolute
+    #: one.  A direct ``build(...)`` call is the only way to reach that today.
     sequence_islands: int = 1,
     dataset: Dataset | None = None,
     name: str = "",
@@ -622,6 +635,7 @@ def build(
                 sname,
                 first_index + offset,
                 time.monotonic(),
+                ATOMIC_COMPLETION_GRACE_S,
                 _solve_one(candidate, sname),
             )
 
@@ -663,6 +677,7 @@ def build(
                     sname,
                     first_index + offset,
                     race_started,
+                    strategy_race.RACE_COMPLETION_GRACE_S,
                     _raced_result(by_strategy[sname], spec.label, time_budget_s),
                 )
                 for offset, sname in enumerate(wanted)
@@ -670,7 +685,7 @@ def build(
         else:
             solved = _solve_serially(spec, first_index)
 
-        for sname, pair_index, attempt_started, result in solved:
+        for sname, pair_index, attempt_started, completion_grace_s, result in solved:
             if isinstance(result, NoValidLayout):
                 # One strategy failing a candidate is not a failed build -- the
                 # others may well succeed. Record it so the reason survives to
@@ -703,7 +718,11 @@ def build(
             # parameter at all, so this cancels where a hook exists and REPORTS
             # everywhere else -- a number the gate can fail on beats a number
             # nobody produced.
-            attempt_deadline = attempt_started + time_budget_s + ATOMIC_COMPLETION_GRACE_S
+            #
+            # `completion_grace_s` and not the atomic constant: a raced pair is
+            # judged by the race's own, longer contract, or it arrives here
+            # already past a deadline the race was entitled to reach.
+            attempt_deadline = attempt_started + time_budget_s + completion_grace_s
 
             def attempt_expired(_deadline: float = attempt_deadline) -> bool:
                 return time.monotonic() >= _deadline
@@ -764,7 +783,7 @@ def build(
                         f"attempt deadline exhausted during finalization "
                         f"after {time.monotonic() - attempt_started:.1f}s "
                         f"(budget {time_budget_s:g}s + grace "
-                        f"{ATOMIC_COMPLETION_GRACE_S:g}s)"
+                        f"{completion_grace_s:g}s)"
                     )
                     failure = LayoutAttemptFailure(
                         candidate=spec.label,
@@ -831,11 +850,15 @@ def build(
                         )
                     )
                 continue
+            # Serially this is the pair's own solve plus its own completion.
+            # Under racing it is the RACE's wall plus this attempt's own
+            # post-processing -- the same base for both arms, because the arms'
+            # individual walls stay in the children and no outcome carries them.
             attempt_wall_s = time.monotonic() - attempt_started
             labelled.stats["attempt_wall_s"] = attempt_wall_s
             labelled.stats["wall_overshoot_s"] = max(
                 0.0,
-                attempt_wall_s - time_budget_s - ATOMIC_COMPLETION_GRACE_S,
+                attempt_wall_s - time_budget_s - completion_grace_s,
             )
             attempts.append(
                 Attempt(
