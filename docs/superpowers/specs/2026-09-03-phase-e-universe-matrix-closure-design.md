@@ -201,9 +201,12 @@ item is seated south, it takes the south outermost row.
 property: the lane head has at least as many free 4-neighbours on a canvas containing only that strip
 as the number of independent feeds the lane accepts.
 
-**Docstring correction.** The `twice` predicate's docstring (`freeform.py:14188-14196`) is rewritten
-to say what the code does: a lane fed from both the boundary and from inside the block needs two
-approaches. The predicate is not narrowed.
+**Docstring correction.** The prose to rewrite is the `twice` paragraph in **`_reserve_port_access`'s
+docstring** (`freeform.py:10092`), which explains the demand through a MIXED lane; the line hint this
+document originally gave, `freeform.py:14188-14196`, is `hold_ports`' `shared_feed` construction,
+which carries a comment rather than the docstring. Both sites are corrected to say what the code
+does: a lane fed from both the boundary and from inside the block needs two approaches, whatever the
+lane's cardinality. The predicate is not narrowed.
 
 **Tests (pure, no clock, no solver):**
 1. Build the `universe-matrix` `no-proliferator` candidate, call `freeform.plan_strips(spec)`,
@@ -250,11 +253,23 @@ a pack that never existed. The post-pack gate (`freeform.py:17911-17925`) still 
 **5.2.3 Sequence-pair height schedule.** The sequence-pair height generator (the schedule that
 produced `[99, 125, 160, 100, 80, 60, 127, 162, ...]`, resolved by symbol in
 `sequence_solver.py`) offers at least one height in `[boundary_core_height - 6,
-boundary_core_height]` (148 to 154 at 160 rows and 3-row entry rings) once the deadline-continuation
-restarts begin, and never offers a height above the boundary core. The exact spacing is a named
-constant `C_CEILING_APPROACH_STEP` with a docstring naming R3's 300 s run. Tests: the schedule
-generator, called with a fake envelope of ceiling 160, yields a height in the band and none above it;
-explicit `max_stages` probes are unchanged.
+boundary_core_height]` (148 to 154 at 160 rows and 3-row entry rings), and offers no height above the
+boundary core **whenever a distinct approach slot is free**. The exact spacing is a named constant
+`C_CEILING_APPROACH_STEP` with a docstring naming R3's 300 s run. Tests: the schedule generator,
+called with a fake envelope of ceiling 160, yields a height in the band and none above it; explicit
+`max_stages` probes are unchanged.
+
+Two implementation deviations, recorded here because they are behaviour and not detail:
+
+1. The clause is conditional, not absolute. A replacement must be distinct — `SequenceSolver.__init__`
+   raises on a duplicate height — and the transformation must preserve length and position, because
+   `_production_run` re-splits the schedule BY INDEX into the coarse heights and the protected
+   follow-ups. When the approach band's `C_CEILING_APPROACH_STEP + 1` slots are all taken, the
+   over-ceiling height is left in place, which is exactly what happens today for every such height.
+2. The bounding applies to the WHOLE schedule, not only once the deadline-continuation restarts
+   begin, so it can rewrite the primary schedule of any corpus cell that ever schedules an
+   over-ceiling height. Gate E1 is what judges that. The compact-seed height, which is prepended
+   after the schedule is built, is bounded at its own site against the schedule it joins.
 
 ### 5.3 Honest refusals and stats on refused rows
 
@@ -266,26 +281,33 @@ same N failures". The `PACKER defect` wording is reserved for the case where rou
 and every pack left nets unrouted. `_reserve_port_access`'s `missing` record (`freeform.py:10188`)
 threads `held`/`wants`/`options` into the `NetFailure` detail so the refusal names the port.
 
-**5.3.2 Stats on refused rows.** `NoValidLayout` gains an optional `stats: Mapping[str, float] |
-None` attached at the raise sites of both strategies (`sequence_solver.py:1535` and the re-raise at
+**5.3.2 Stats on refused rows.** `NoValidLayout` gains an optional `stats: Mapping[str, float | str]
+| None` attached at the raise sites of both strategies (`sequence_solver.py:1535` and the re-raise at
 `sequence_solver.py:6011-6018`; freeform's raises at `freeform.py:17116` and `17124`). `audit.Result`
-gains `stats: dict[str, float]` (default empty) filled on CLEAN rows from `PlacementStats` as today
-and on REFUSED rows from the exception. Keys this phase needs on refused rows: freeform
+gains `stats: dict[str, float | str]` (default empty) filled on CLEAN rows from `PlacementStats` as
+today and on **every** REFUSED row — `run_cell` has two of them, and the second is the
+`finalize.ProjectionRefusal` handler that follows the audit's own `finalize_placement` call, where a
+placement exists and its own stats are the right source. The value type admits `str` because
+`alns_operators` is a tally string (`operator_tally` returns `str`, and `PlacementStats` types it
+`str`) and section 7's Gate E2 asserts on it. Keys this phase needs on refused rows: freeform
 `attempts`, `evaluations`, `distinct_assignments`, `stale_draws`, `window_solves`,
 `window_accepted`; sequence-pair `stages`, `alns_operators`, `alns_window_solves`,
 `alns_window_accepted`, `alns_window_dropped_empty`, `alns_window_dropped_whole`,
-`alns_window_unchanged`. Keys absent on a row are read as zero by the gate.
+`alns_window_unchanged`. Keys absent on a row are read as zero by the gate, or as the empty string
+for `alns_operators`.
 
 ### 5.4 Freeform: diversify, then continue while new evidence appears
 
 Applies only when no incumbent exists at the end of arrangement 0. A cell that wires is untouched.
 
-**5.4.1 Diversification cut.** After each evaluated pack at a height, its assignment is added to
-`_ExactPackNoGoodState` (`freeform.py:17323`) as a diversification cut for the **next arrangement at
-the same height only**, never sweep-wide (it is not an infeasibility proof; the comment at
-`freeform.py:18256-18259` makes the same argument for feedback cuts). The cut is what makes
-arrangement N a different draw from arrangement 0; R2 showed that without it every later draw is
-byte-identical.
+**5.4.1 Diversification cut.** After each evaluated pack at a height, its assignment is kept as a
+diversification cut for the **next arrangement at the same height only**, in a per-candidate
+`(height, arrangement)` collection **beside** `_ExactPackNoGoodState` (`freeform.py:17323`) and never
+inside it: that class is sweep-wide by construction — `_sweep` reads
+`tuple(exact_no_good_state.no_goods)` for every candidate — and its entries are infeasibility proofs,
+which a diversification cut is not (the comment at `freeform.py:18256-18259` makes the same argument
+for feedback cuts). The cut is what makes arrangement N a different draw from arrangement 0; R2
+showed that without it every later draw is byte-identical.
 
 **5.4.2 Staleness-guarded continuation.** The break at `freeform.py:17729-17730` becomes: with
 `best is None`, `not _expired(deadline)`, room for one more candidate by `_room_for_another`
@@ -299,8 +321,11 @@ keeps calling `_portfolio_soft_deadline` per turn (`freeform.py:17593`) and neve
 (`freeform.py:14900-14913`) drops the "exactly one failure" conjunct and `promote_retry`
 (`freeform.py:18225`) drops the `arrangement == 0 and (learned or feedback_retry)` conjunct, keeping
 `retry_slot_found and not retry_admitted`; the window is posed against the failing nets' strips of
-the best-failing pack (fewest unrouted nets). This is a spec change to Phase C's §5.7, recorded
-there when this phase executes.
+the best-failing pack the sweep has seen **so far**, implemented as a LAUNCH GUARD — `_sweep` retains
+no earlier pack, and re-posing against one would queue a repair at a candidate slot already consumed.
+The comparison is strict: a pack that merely ties the fewest unrouted nets seen so far offers no
+better evidence than the solve already spent, and R3 §4.2 prices one window solve at a hard 1.006 s.
+This is a spec change to Phase C's §5.7, recorded there when this phase executes.
 
 **Refusal text:** with more evaluations, the deadline branch at `freeform.py:17037-17122` applies and
 already says "N packs were routed and the best of them still left M nets unrouted"; a stale stop says
@@ -322,10 +347,17 @@ wires.
 
 **5.5.1 Product probe.** In `OperatorSession.select` (`sequence_alns.py:490-504`), while
 `len(self._choices) < len(destroy.order) * len(repair.order)`, the pairing is
-`(destroy.order[probe // len(repair)], repair.order[probe % len(repair)])`, still subject to
-`_affordable_repairs` (a probe naming `LOCAL_EXACT_PACK` below `C_WINDOW_FRACTION_FLOOR` falls
-through to the D-UCB). After the probe the two ledgers are genuinely desynchronised and all four
-pairings stay reachable. Two ledgers are kept; the product is probed, not learned
+`(destroy.order[probe // len(repair)], repair.order[probe % len(repair)])` — destroy-major, with the
+repair order **as declared** — still subject to `_affordable_repairs` (a probe naming
+`LOCAL_EXACT_PACK` below `C_WINDOW_FRACTION_FLOOR` falls through to the D-UCB). Since
+`SHIPPED_REPAIR = (SEQUENCE_REINSERT, LOCAL_EXACT_PACK)`, draw 0 stays master's own
+`(FAILED_ENDPOINTS, SEQUENCE_REINSERT)` and draw 1 is `(FAILED_ENDPOINTS, LOCAL_EXACT_PACK)`: the
+window is still posed against the routing-failure set, one ordinal later. Keeping draw 0 identical is
+deliberate and measured — reversing the repair axis to reach the window on draw 0 moved six
+`tests/layout/test_sequence_solver.py` behaviour tests, because it changes the FIRST repair the
+production solver makes; in declaration order those six are untouched and exactly ten pinned
+expectations across the two selector suites are re-derived. After the probe the two ledgers are
+genuinely desynchronised and all four pairings stay reachable. Two ledgers are kept; the product is probed, not learned
 (`OperatorSession.__doc__`, `sequence_alns.py:411-418`, still holds). `observe`, `reward_vector`,
 `operator_scale` and the dropped-proposal accounting (`sequence_solver.py:3120`, `3153`,
 `3161-3163`: zero reward, `applied=False`) are untouched. Cost: two extra exploration draws per
@@ -337,9 +369,10 @@ each drop site in `_alns_substitution` and in `window_pack` (`sequence_solver.py
 Phase C open item 3), published in the stats dict (`sequence_solver.py:6171-6181`) and, through
 5.3.2, on refused rows.
 
-**Tests (pure, table-driven):** the eight tests R3 lists: first draw is
-`(FAILED_ENDPOINTS, LOCAL_EXACT_PACK)`; every shipped pairing is reachable under a pinned 8-draw
-trace (the test master cannot pass); each ledger still plays every arm once before any twice;
+**Tests (pure, table-driven):** the eight tests R3 lists: the first draw that names
+`LOCAL_EXACT_PACK` is paired with `FAILED_ENDPOINTS` (draw 1 under the declared repair order); every
+shipped pairing is reachable within the first `|D| x |R|` draws (the test master cannot pass); each
+ledger still plays every arm the same number of times over the probe;
 selection is deterministic for the same observation sequence; a dropped window proposal is charged a
 count and no reward; the window is still withheld without room; `_band_boundary` on a band-legal
 placement is empty and on a vertical-only overflow is the whole problem; a whole-problem destroy set
@@ -361,9 +394,9 @@ Named so the plan's stop conditions can point at them:
 
 ## 6. Public Interfaces
 
-- `NoValidLayout(..., stats: Mapping[str, float] | None = None)`; existing positional and keyword
-  callers are unchanged.
-- `scripts/audit.py` `Result.stats: dict[str, float] = {}`; JSONL rows gain a `stats` object on
+- `NoValidLayout(..., stats: Mapping[str, float | str] | None = None)`; existing positional and
+  keyword callers are unchanged. The value type admits `str` for `alns_operators` (see §5.3.2).
+- `scripts/audit.py` `Result.stats: dict[str, float | str] = {}`; JSONL rows gain a `stats` object on
   CLEAN and REFUSED rows; rows without it read as empty.
 - `sequence_alns.OperatorSession.select` keeps its signature; its first `|D| x |R|` draws change
   value.
