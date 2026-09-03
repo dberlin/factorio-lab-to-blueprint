@@ -9111,3 +9111,46 @@ def test_the_eligibility_scan_is_declined_when_the_compact_share_is_nearly_gone(
 
     assert not calls, "the scan ran with less than the start floor of share left"
     assert run.telemetry.compact_seed_height is not None
+
+
+def test_archive_routing_stops_preparing_candidates_after_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _repeat_merged_elite(monkeypatch, 4)
+    fake = _FakeRouting()
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=6, moves_per_stage=1, restarts_per_height=2, global_elites=4
+        ),
+        deadline_reached=lambda: True,
+    )
+    height_state = solver._heights[0]
+
+    solver._run_stage(height_state, solver._select_restart(height_state), 400)
+
+    assert len(fake.prepared_candidates) == 1, (
+        "preparation is the dearest thing in this loop and a passed deadline "
+        "makes every candidate after the first unroutable"
+    )
+
+
+def test_archive_routing_prepares_every_elite_while_the_clock_holds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _repeat_merged_elite(monkeypatch, 4)
+    fake = _FakeRouting()
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig(
+            stages=6, moves_per_stage=1, restarts_per_height=2, global_elites=4
+        ),
+        deadline_reached=lambda: False,
+    )
+    height_state = solver._heights[0]
+
+    solver._run_stage(height_state, solver._select_restart(height_state), 400)
+
+    assert len(fake.prepared_candidates) == 4
