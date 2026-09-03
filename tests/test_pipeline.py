@@ -1043,9 +1043,15 @@ def test_a_mk2_url_whose_lanes_need_mk3_builds(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.slow
-def test_without_planetary_logistics_the_same_url_is_refused(
+def test_without_planetary_logistics_the_same_url_now_splits_across_lanes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Was ``..._is_refused``: without Mk.III research the hydrogen lanes used
+    to overrun a 12/s belt and the build raised ``flow.belt_capacity``.  Now
+    that the family machine cap binds at the strip partition seam, no strip's
+    single-item lane is ever sized past the floor belt's capacity, so the
+    same candidate builds clean on conveyor-belt-2 alone -- multiple narrower
+    strips instead of one belt upgrade."""
     wanted = [
         "basic-logistics-system",
         "improved-logistics-system",
@@ -1063,15 +1069,17 @@ def test_without_planetary_logistics_the_same_url_is_refused(
     monkeypatch.setattr(pipeline, "parse_url", patched)
     # One policy keeps this test under a single 45 s budget and pytest-timeout's
     # 120 s backstop; the tier logic under test is policy-independent.
-    # NO_PROLIFERATOR still exhausts its budget refusing this candidate and
-    # still reports a flow.belt_capacity failure, matching the assertion below.
-    with pytest.raises(pipeline.NoValidLayout, match="flow.belt_capacity"):  # type: ignore[attr-defined]
-        pipeline.build(
-            DEUTERON_URL,
-            strategy="sequence-pair",
-            time_budget_s=45.0,
-            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
-        )
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        time_budget_s=45.0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
+    assert build.report.ok
+    assert build.spec.belt_item_id == "conveyor-belt-2"
+    assert build.spec.belt_upgrades == ()
+    tiers = {b.item_id for b in build.placement.buildings if catalog.is_belt(b.item_id)}
+    assert tiers == {2002}, "no Mk.III belt: capacity comes from lane splitting, not tier"
 
 
 # --- Task 14: `workers`, opt-in racing, and the relaxed islands guard ---------

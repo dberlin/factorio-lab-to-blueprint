@@ -2175,10 +2175,10 @@ def plan_strips(
             # still reaches emission, which owns the established structured
             # refusal.  It has no physical StripVariant and must not be exposed
             # to projection feedback or sequence search as though it did.
-            instance_count = max(
-                1,
-                math.ceil(family.total_machine_count / max(1, strip_len)),
-            )
+            capped_len = max(1, strip_len)
+            if family.machine_cap > 0:
+                capped_len = min(capped_len, family.machine_cap)
+            instance_count = max(1, math.ceil(family.total_machine_count / capped_len))
             base, extra = divmod(family.total_machine_count, instance_count)
             machine_counts = tuple(
                 base + (1 if index < extra else 0) for index in range(instance_count)
