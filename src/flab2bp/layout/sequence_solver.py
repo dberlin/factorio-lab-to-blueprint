@@ -219,6 +219,20 @@ _MID_NO_SPRAY_COMPACT_MAX_STRIPS = 15
 #: stage admission, and the expansion ledger are still the binding stops.
 C_FEASIBILITY_RESTART_BATCHES = 8
 
+#: Rows below the band's core boundary the height schedule must be able to reach.
+#:
+#: MEASURED, not guessed.  R3 §3 ran `universe-matrix/no-proliferator` under
+#: sequence-pair at `--budget 300`: 81 stages, heights
+#: `[99, 125, 160, 100, 80, 60, 127, 162, 102, 82, 62]`, and exactly one of them
+#: reached `stranded == 0` -- outline height 160, the first fully routed
+#: candidate anywhere in that investigation.  Its FINALIZED extent needed 162 to
+#: 163 latitude rows against the 160-row band and the finalizer refused it.  The
+#: schedule offered nothing between 128 and 160, so a placement that routed had
+#: nowhere legal to land.  Six is that two-to-three-row overshoot doubled: wide
+#: enough that a routed placement has a fallback under the ceiling, narrow enough
+#: that the approach height is an approach and not just another mid-range height.
+C_CEILING_APPROACH_STEP = 6
+
 
 @dataclass(frozen=True, slots=True)
 class SequenceSolverConfig:
@@ -3792,6 +3806,54 @@ def _topology_beam_height(
     )
 
 
+def _ceiling_bounded_schedule(
+    ordered: tuple[int, ...],
+    *,
+    boundary: int | None,
+    reserved: frozenset[int] = frozenset(),
+) -> tuple[int, ...]:
+    """Pull every over-ceiling scheduled height into the band's approach.
+
+    LENGTH- AND POSITION-PRESERVING, and that is a requirement rather than a
+    convenience: `_production_run` re-splits this tuple BY INDEX into the coarse
+    schedule and the protected follow-ups, so a dropped entry would move a
+    follow-up into the coarse half.  `SequenceSolver.__init__` also refuses a
+    duplicate height outright, so a replacement must be distinct from every other
+    scheduled height AND from every height in ``reserved`` -- which is how a
+    compact-seed height is bounded against the schedule it is about to join.
+    When the approach band -- ``C_CEILING_APPROACH_STEP + 1`` slots below
+    ``boundary`` -- has no free slot, the over-ceiling height is LEFT ALONE, which
+    is strictly no worse than today, where every over-ceiling height is.
+
+    ``boundary`` is `BandPolicySearchEnvelope.boundary_core_height`: 154 at a
+    160-row band and 3-row entry rings.  ``None`` means the policy names no band
+    and there is no ceiling to bind.
+    """
+    if boundary is None or boundary <= 0:
+        return ordered
+    taken = set(ordered) | set(reserved)
+    bounded: list[int] = []
+    for height in ordered:
+        if height <= boundary:
+            bounded.append(height)
+            continue
+        replacement = next(
+            (
+                candidate
+                for candidate in range(boundary, boundary - C_CEILING_APPROACH_STEP - 1, -1)
+                if candidate > 0 and candidate not in taken
+            ),
+            None,
+        )
+        if replacement is None:
+            bounded.append(height)
+            continue
+        taken.discard(height)
+        taken.add(replacement)
+        bounded.append(replacement)
+    return tuple(bounded)
+
+
 def _uses_topology_beam(
     *,
     strip_count: int,
@@ -4630,11 +4692,13 @@ def _production_run(
             },
         )
         boundary_height = envelope.boundary_core_height
-        if boundary_height is not None and boundary_height in heights:
-            seeds.setdefault(
-                boundary_height,
-                _greedy_pack(strips, boundary_height),
-            )
+        # THE CEILING BINDS HERE.  `reserve_boundary_height` replaces at most ONE
+        # height and only one it can prove infeasible, against a witness that is
+        # an area lower bound; R3 §3 measured a schedule that kept TWO heights
+        # over the boundary (160 and 162) and routed only the illegal one.
+        heights = _ceiling_bounded_schedule(heights, boundary=boundary_height)
+        for height in heights:
+            seeds.setdefault(height, _greedy_pack(strips, height))
         coarse_heights = heights[:coarse_height_count]
         protected_followup_heights = heights[coarse_height_count:]
         topology_beam_height = _topology_beam_height(
@@ -4687,6 +4751,14 @@ def _production_run(
                 power=power,
             )
             telemetry.compact_seed_base_seed = chosen_compact_base_seed
+            # The compact seed joins `heights` below and is not produced by the
+            # schedule generator, so the ceiling has to bind it separately or a
+            # bounded schedule can be re-broken one line later.
+            compact_height = _ceiling_bounded_schedule(
+                (compact_height,),
+                boundary=envelope.boundary_core_height,
+                reserved=frozenset(heights),
+            )[0]
             telemetry.compact_seed_height = compact_height
             if compact_height not in seeds:
                 seeds[compact_height] = _greedy_pack(strips, compact_height)

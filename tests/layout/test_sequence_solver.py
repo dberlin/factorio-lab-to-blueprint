@@ -10,6 +10,7 @@ from typing import Any, Never, TypedDict
 import pytest
 
 import flab2bp.layout.freeform as freeform_module
+import flab2bp.layout.sequence_solver as sequence_solver
 import flab2bp.layout.sequence_solver as sequence_solver_module
 import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog, rules
@@ -7731,7 +7732,22 @@ def test_production_forwards_fixed_band_through_fallback_replan(
     assert plan_calls == [(6, policy), (spec.machine_count, policy)]
 
 
-def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot() -> None:
+def test_sequence_band_policy_height_reserves_one_band_120_boundary_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins the boundary-slot swap alone; the new ceiling bound is orthogonal.
+
+    ``band_120_control_spec()`` legitimately schedules coarse heights (33, 35,
+    28, 23, ...) above `BandPolicy("120")`'s boundary (19) -- that IS the over-
+    ceiling schedule Task 6 declares deviation 2 against.  This test's purpose
+    is the single boundary-slot reservation `reserve_boundary_height` performs,
+    so the ceiling bound is held off here and covered by its own tests instead.
+    """
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_ceiling_bounded_schedule",
+        lambda ordered, *, boundary=None, reserved=frozenset(): ordered,
+    )
     portable = _production_run(
         band_120_control_spec(),
         band_policy=BandPolicy("portable"),
@@ -7952,6 +7968,14 @@ def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
     core_height: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 595 is a deliberately extreme candidate height, chosen to exercise the
+    # extent gate -- unrelated to the boundary ceiling, which would otherwise
+    # pull it down and remove it from the schedule this test inspects.
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_ceiling_bounded_schedule",
+        lambda ordered, *, boundary=None, reserved=frozenset(): ordered,
+    )
     monkeypatch.setattr(
         sequence_solver_module,
         "_candidate_heights",
@@ -8004,6 +8028,14 @@ def test_sequence_extent_gate_stops_before_preparation_and_detailed_routing(
 def test_sequence_extent_gate_uses_realized_core_not_nominal_outline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # 595 is a deliberately extreme candidate height, chosen to exercise the
+    # extent gate -- unrelated to the boundary ceiling, which would otherwise
+    # pull it down and remove it from the schedule this test inspects.
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_ceiling_bounded_schedule",
+        lambda ordered, *, boundary=None, reserved=frozenset(): ordered,
+    )
     monkeypatch.setattr(
         sequence_solver_module,
         "_candidate_heights",
@@ -9333,3 +9365,86 @@ def test_a_bound_that_took_nothing_away_does_not_get_the_blame() -> None:
 
     assert "portfolio incumbent" not in str(refusal.value)
     assert "all scheduled candidates were exhausted" in str(refusal.value)
+
+
+def test_the_schedule_never_offers_a_height_above_the_band_core_boundary() -> None:
+    """R3 §3, the 300 s `universe-matrix/no-proliferator` run.
+
+    Its heights were [99, 125, 160, 100, 80, 60, 127, 162, 102, 82, 62] --
+    nothing between 128 and 160 -- and the ONLY height that routed was 160,
+    whose finalized extent was 162 to 163 latitude rows against a 160-row band.
+    Two to three rows over, with no candidate underneath to fall back to.
+    """
+    ordered = (125, 160, 100, 80, 60, 127, 162, 102, 82, 62)
+
+    bounded = sequence_solver._ceiling_bounded_schedule(ordered, boundary=154)
+
+    assert len(bounded) == len(ordered)
+    assert len(set(bounded)) == len(bounded)
+    assert max(bounded) <= 154
+    assert bounded == (125, 154, 100, 80, 60, 127, 153, 102, 82, 62)
+
+
+def test_the_schedule_reaches_the_approach_band_when_it_is_pulled_down() -> None:
+    step = sequence_solver.C_CEILING_APPROACH_STEP
+    bounded = sequence_solver._ceiling_bounded_schedule((160, 60), boundary=154)
+
+    assert any(154 - step <= height <= 154 for height in bounded)
+
+
+def test_a_schedule_already_under_the_ceiling_is_returned_unchanged() -> None:
+    """Byte-identical for every cell that never scheduled an over-band height."""
+    ordered = (128, 100, 80, 64, 48, 130, 102, 82, 66, 50)
+
+    assert sequence_solver._ceiling_bounded_schedule(ordered, boundary=154) == ordered
+    assert sequence_solver._ceiling_bounded_schedule(ordered, boundary=None) == ordered
+
+
+def test_an_over_ceiling_height_with_no_free_approach_slot_is_left_alone() -> None:
+    """Uniqueness beats the ceiling: a duplicate makes `SequenceSolver` raise.
+
+    The approach band holds `C_CEILING_APPROACH_STEP + 1` slots.  A schedule that
+    fills all of them and still carries an over-ceiling height keeps it, because
+    dropping the entry would shift a protected follow-up into the coarse half of
+    the index split and a duplicate would refuse the search outright.  This is
+    declared deviation 1 from spec section 5.2.3.
+    """
+    step = sequence_solver.C_CEILING_APPROACH_STEP
+    full = tuple(range(154, 154 - step - 1, -1))
+    ordered = (*full, 200)
+
+    bounded = sequence_solver._ceiling_bounded_schedule(ordered, boundary=154)
+
+    assert bounded == ordered
+
+
+def test_a_reserved_height_is_not_reused_as_a_replacement() -> None:
+    """The compact-seed height is bounded against the schedule it joins."""
+    bounded = sequence_solver._ceiling_bounded_schedule(
+        (200,), boundary=154, reserved=frozenset({154, 153})
+    )
+
+    assert bounded == (152,)
+
+
+def test_the_portable_band_core_boundary_is_the_number_the_helper_is_given() -> None:
+    """Pins 154 where a test can see it, without running a production search.
+
+    `_ENTRY_RING` lives in `freeform` and is NOT imported into `sequence_solver`;
+    reading `sequence_solver._ENTRY_RING` raises `AttributeError`.
+    """
+    from flab2bp.layout import freeform
+    from flab2bp.layout.finalize import band_policy_search_envelope
+
+    envelope = band_policy_search_envelope(
+        BandPolicy("portable"), perimeter=freeform._ENTRY_RING
+    )
+
+    assert freeform._ENTRY_RING == 3
+    assert envelope.boundary_core_height == 154
+    assert (
+        max(sequence_solver._ceiling_bounded_schedule(
+            (125, 160, 100), boundary=envelope.boundary_core_height
+        ))
+        <= 154
+    )
