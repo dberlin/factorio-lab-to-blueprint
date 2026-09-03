@@ -17288,7 +17288,12 @@ class FreeformLayout:
         #: the selector happened to pick last.
         window_choices: dict[tuple[int, int], tuple[OperatorChoice, OperatorMetrics]] = {}
         #: Asked-and-answered windows, so the same question is never put to
-        #: CP-SAT twice inside one `lay_out`.
+        #: CP-SAT twice inside one SWEEP.  Per sweep and not per `lay_out`
+        #: because `replan_strips_for_learned_geometry` renumbers the strips,
+        #: and the strip indices in the key are what a window means: the same
+        #: `(height, arrangement, window)` triple names a DIFFERENT question
+        #: once the numbering underneath it has changed, so carrying the set
+        #: across a replan would silently refuse a window nobody has asked.
         solved_windows: set[tuple[int, int, frozenset[int]]] = set()
         window_solves = 0
         window_accepted = 0
@@ -17312,9 +17317,17 @@ class FreeformLayout:
         ) -> None:
             """Credit the choice that produced this candidate, if there was one.
 
-            ``after=None`` means the candidate was never evaluated -- the
-            deadline arrived first -- which is a cost with no reward, so it is
-            credited unapplied.
+            ``after`` carries the metrics of the routing pass this candidate
+            ACTUALLY RAN, and its ``validator_clean`` is True only where
+            `validate.certify` said so -- False for every candidate that never
+            reached the certifier (spec 5.7).
+
+            ``after=None`` means NO routing evaluation of this candidate exists:
+            the wall arrived before its turn came round, or it was dropped
+            before anything routed by the power, projection or seating checks.
+            That is a cost with no reward, so it is credited unapplied.  It is
+            NOT what a repair that routed and was then refused downstream gets:
+            that one was measured, and the measurement is what it is paid on.
             """
             stored = window_choices.pop((height, arrangement), None)
             if stored is None:
@@ -17401,1010 +17414,1104 @@ class FreeformLayout:
             cluster_relation_no_goods.clear()
             cluster_relation_no_good_keys.clear()
 
-        while window_queue or candidate_index < len(candidate_packs):
-            # A queued window repair is a candidate that has ALREADY been
-            # packed, so it consumes a turn of this loop without consuming a
-            # `candidate_packs` slot: the `pop` below is what removed it.
-            queued = window_queue.pop(0) if window_queue else None
-            if queued is not None:
-                height, arrangement = queued
-                projection_retry = False
-            else:
-                height, arrangement, projection_retry = candidate_packs[candidate_index]
-                candidate_index += 1
-            # Charge the PREVIOUS candidate here, at the one place every path
-            # through the body reaches. The body leaves by five different
-            # routes -- no pack, unpowerable, unrouted, rejected, kept -- and a
-            # cost recorded at only some of them would systematically
-            # UNDER-estimate, since the expensive exits are the failures that run
-            # a full routing pass into the wall.
-            if started_at is not None:
-                dearest_candidate_s = max(
-                    dearest_candidate_s,
-                    time.monotonic() - started_at,
-                )
-            if best is not None and not _room_for_another(
-                deadline,
-                soft,
-                dearest_candidate_s,
-            ):
-                break
-            # A SECOND ARRANGEMENT NORMALLY IMPROVES; ONE STRONG NEAR MISS MAY RESCUE.
-            #
-            # This is the whole shape of the feature and it was measured into
-            # existence rather than designed. Extra arrangements were tried
-            # unconditionally first, and on a spec that has not wired anything
-            # they buy NOTHING: every refusal on the stress specs reads "the 15s
-            # deadline passed", 36 of 36 across ten runs, so the binding
-            # constraint there is the clock and another arrangement spends it
-            # rather than buying it. Paired, five rounds, `universe-matrix` and
-            # `quantum-chip` at budget 4: 8.4 of 12 clean either way, difference
-            # exactly 0.00.
-            #
-            # AND THE EARLIER NUMBER FOR THIS DID NOT SURVIVE THE POWER REWRITE,
-            # which is why the gate exists at all. Before `_power_plan` decided
-            # coverage in the solve, ungated arrangements measured +1.17 clean
-            # cells on the corpus (paired, six rounds, t = +3.80). Re-measured
-            # after it: -0.33 (t = -0.79). The rewrite lifted the baseline from
-            # 70.0 to 71.8 of 72 and took the headroom with it, so what was a
-            # routability lever is now primarily a density one.
-            #
-            # Where they DO pay is on a spec that has already wired and has clock
-            # left, because the sweep keeps the best `(area, belt_tiles)` it has
-            # seen and a further arrangement is another draw at a denser one.
-            # Tier `large` at budget 60, six paired rounds, 60 of 60 clean in
-            # every run of both arms: -1.51% AREA, paired t = -5.26, denser in
-            # SIX OF SIX rounds, and per cell denser on 24 of 60 against larger
-            # on 1. That costs 2.6x the cell-seconds, which is the trade being
-            # made knowingly: `time_budget_s` is an allowance the caller has
-            # already agreed to spend, the sweep used to hand most of it back,
-            # and density is the objective it is spent on.
-            #
-            # So the first pass over the heights is exactly what shipped before,
-            # and arrangements past it are normally gated TWICE: on having
-            # something to improve, and on being able to afford the improvement.
-            #
-            # `best is None` alone was not enough, and the number that says so
-            # was measured at the DEFAULT budget rather than at the budget the
-            # density win came from. Nine paired rounds at `--budget 4
-            # --jobs 16`, arrangements 3 against 1: -4, 0, 0, 0, 0, -1, +1, 0,
-            # -2, a mean of -0.67 cells. The -1.51% area is real and it is a
-            # `tier large --budget 60` number; shipping it unconditionally
-            # charges budget-4 cells for a budget-60 gain, which is the wrong way
-            # round because budget 4 is what the audit runs and what a user gets.
-            #
-            # THE AFFORDABILITY RULE, and it carries no tuned constant: an
-            # improvement arrangement may start only if as much clock remains as
-            # the most expensive candidate so far actually took. By the time
-            # `best` exists at least one candidate has been packed, routed,
-            # powered and validated, so its cost is MEASURED for this spec on
-            # this machine rather than guessed -- which is the only honest
-            # estimate of what the next one costs, and it self-calibrates across
-            # a corpus spanning 1 to 955 machines instead of asking a threshold
-            # to span it.
-            #
-            # It reads on both ends the way the diagnosis says it should. At
-            # budget 4 a `universe-matrix` candidate costs ten seconds or more
-            # against a sweep share of four, so no improvement arrangement ever
-            # starts and the stress cells get back the search they had. At budget
-            # 60 a tier-`large` candidate costs a second or two against a share
-            # of sixty, so they all run and the density win stands.
-            #
-            # Measured on both ends after the rule went in, paired and
-            # interleaved:
-            #
-            #   budget 4, jobs 16, full corpus, TWELVE rounds
-            #     -3 +1 0 +1 0 0 -1 +2 -4 +2 -1 0
-            #     mean -0.25 cells, 95% CI [-1.40, +0.90], median 0, and the
-            #     rounds split 4 better / 4 worse / 4 level. INVALID 0 over all
-            #     1728 cells. The two specs that carry every refusal are where
-            #     the rule has to work and it does: `universe-matrix` refuses 11
-            #     times against 10, and `quantum-chip` measured alone at jobs 6,
-            #     away from the audit's own CPU contention, is identical on six
-            #     of seven rounds.
-            #
-            #   tier large, budget 60, four rounds
-            #     -1.98% AREA, paired t = -5.41, denser in FOUR OF FOUR rounds,
-            #     60 of 60 clean in every run of both arms, per cell denser on 21
-            #     and larger on 2.
-            #
-            # So the default is the one both ends support, which is the thing the
-            # unconditional version got wrong: it was measured at budget 60 and
-            # shipped to budget 4.
-            # One bounded exception lets a strong near miss look at the next
-            # arrangement for that exact height. The candidate already exists in
-            # `candidate_packs`: ordinary improvements still require the measured
-            # cost above, while a complete one-net geometric near miss may use any
-            # positive hard time left after the completion reserve. The marker
-            # preserves that admission through this gate; the hard deadline still
-            # applies. A failed admitted retry cannot unlock the height's later
-            # arrangements.
-            # Once a valid candidate exists, every later base height is an
-            # improvement attempt too. Starting one without enough measured
-            # clock for a complete candidate can only discard the valid result
-            # at the hard deadline; it cannot improve it.
-            if (
-                not projection_retry
-                and best is not None
-                and not _room_for_another(deadline, soft, dearest_candidate_s)
-            ):
-                break
-            if not projection_retry and arrangement and best is None:
-                break
-            if (
-                not projection_retry
-                and arrangement
-                and not _room_for_another(deadline, soft, dearest_candidate_s)
-            ):
-                break
-            # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
-            # means the model could not lay the spec out; a sweep's own clock
-            # must not be able to manufacture one. Breaking on time alone did
-            # exactly that: heights are tried shortest-first and the
-            # free-proliferation chain only wires at the tallest, so a 2s budget
-            # refused a spec that routes every net cleanly given the chance to
-            # reach it.
-            if not projection_retry and best is not None and time.monotonic() >= soft:
-                break
-            # The HARD deadline is the call's, and it does stop us finding --
-            # that is what makes `time_budget_s` a wall rather than a suggestion.
-            # `lay_out` turns it into a refusal that names the deadline, so the
-            # distinction between "cannot" and "ran out" survives into the error.
-            completion_reserve_s = compaction_reserve_s + finalize_reserve_s + validation_reserve_s
-            if deadline is not None and deadline - time.monotonic() < completion_reserve_s:
-                break
-            seed = seeds[height]
-            seed_width, seed_height = strip_outline(seed)
-            if not projection_envelope.frame_candidates(
-                seed_width,
-                seed_height,
-            ):
-                if rejected is not None:
-                    _retain_refusal(
-                        rejected,
-                        projection_envelope.extent_failure(
-                            seed_width,
-                            seed_height,
-                        ),
+        try:
+            while window_queue or candidate_index < len(candidate_packs):
+                # A queued window repair is a candidate that has ALREADY been
+                # packed, so it consumes a turn of this loop without consuming a
+                # `candidate_packs` slot: the `pop` below is what removed it.
+                queued = window_queue.pop(0) if window_queue else None
+                if queued is not None:
+                    height, arrangement = queued
+                    projection_retry = False
+                else:
+                    height, arrangement, projection_retry = candidate_packs[candidate_index]
+                    candidate_index += 1
+                # Charge the PREVIOUS candidate here, at the one place every path
+                # through the body reaches. The body leaves by five different
+                # routes -- no pack, unpowerable, unrouted, rejected, kept -- and a
+                # cost recorded at only some of them would systematically
+                # UNDER-estimate, since the expensive exits are the failures that run
+                # a full routing pass into the wall.
+                if started_at is not None:
+                    dearest_candidate_s = max(
+                        dearest_candidate_s,
+                        time.monotonic() - started_at,
                     )
-                continue
-            started_at = time.monotonic()
-            remaining = (
-                per_solve if deadline is None else min(per_solve, deadline - time.monotonic())
-            )
-            if remaining <= 0:
-                break
-            # CP-SAT's multi-worker portfolio changes the returned large-plan
-            # arrangement with audit job allocation.  Those 24+ strip cells
-            # route in one round from the deterministic seed; pin only their
-            # packing solve so jobs=2 and a standalone call ask the same model.
-            feedback = feedback_by_height.get(height)
-            width_bound = max(bound * 2, 8)
-            if feedback is not None and height in compact_width_by_height:
-                width_bound = min(
-                    width_bound,
-                    _width_slack_cap(compact_width_by_height[height]),
+                # WHAT THIS TURN COSTS, and a queued repair does not cost a whole
+                # candidate.  `_room_for_another` charges `dearest_candidate_s`,
+                # which is pack THROUGH validate; a window has already bought this
+                # candidate's pack, so what is left to spend on it is route, power,
+                # finalize and validate -- the same measured remainder
+                # `_window_candidate_seconds` charges on top of the window's own
+                # wall.  Charging a queued repair for a whole candidate drops
+                # repairs the sweep can plainly afford, and drops them AFTER paying
+                # for the CP-SAT solve that produced them.
+                turn_cost = (
+                    max(0.0, dearest_candidate_s - dearest_pack_s)
+                    if queued is not None
+                    else dearest_candidate_s
                 )
-            retry_no_good = feedback_retry_no_goods.pop((height, arrangement), None)
-            exact_pack_no_goods = tuple(exact_no_good_state.no_goods)
-            if retry_no_good is not None:
-                exact_pack_no_goods += (retry_no_good,)
-            # A window repair IS this candidate's pack.  Re-solving it here
-            # would throw away the bounded solve that was just paid for and
-            # hand routing the same assignment that stranded a net.
-            pending_pack = window_packs.pop((height, arrangement), None)
-            pack: _Pack | None
-            if pending_pack is not None:
-                pack = pending_pack
-            else:
-                pack_started = time.monotonic()
-                pack = _pack(
-                    strips,
-                    height=height,
-                    width_bound=width_bound,
-                    time_budget_s=remaining,
-                    direct_candidates=net_candidates,
-                    workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
-                    deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS,
-                    seed=seed,
-                    arrangement=arrangement,
-                    projection_no_goods=tuple(projection_no_goods),
-                    exact_pack_no_goods=exact_pack_no_goods,
-                    direct_relation_no_goods=tuple(direct_relation_no_goods),
-                    cluster_relation_no_goods=tuple(cluster_relation_no_goods),
-                    feedback=feedback,
-                    stop_when_seed_admissible=(
-                        candidate_index == 1
-                        and arrangement == 0
-                        and not projection_retry
-                        and feedback is None
-                        and _seed_admission_preserves_best_band(
-                            seed,
-                            _minimum_pack_width(strips, height),
-                            projection_envelope,
+                if best is not None and not _room_for_another(deadline, soft, turn_cost):
+                    break
+                # A SECOND ARRANGEMENT NORMALLY IMPROVES; ONE STRONG NEAR MISS MAY RESCUE.
+                #
+                # This is the whole shape of the feature and it was measured into
+                # existence rather than designed. Extra arrangements were tried
+                # unconditionally first, and on a spec that has not wired anything
+                # they buy NOTHING: every refusal on the stress specs reads "the 15s
+                # deadline passed", 36 of 36 across ten runs, so the binding
+                # constraint there is the clock and another arrangement spends it
+                # rather than buying it. Paired, five rounds, `universe-matrix` and
+                # `quantum-chip` at budget 4: 8.4 of 12 clean either way, difference
+                # exactly 0.00.
+                #
+                # AND THE EARLIER NUMBER FOR THIS DID NOT SURVIVE THE POWER REWRITE,
+                # which is why the gate exists at all. Before `_power_plan` decided
+                # coverage in the solve, ungated arrangements measured +1.17 clean
+                # cells on the corpus (paired, six rounds, t = +3.80). Re-measured
+                # after it: -0.33 (t = -0.79). The rewrite lifted the baseline from
+                # 70.0 to 71.8 of 72 and took the headroom with it, so what was a
+                # routability lever is now primarily a density one.
+                #
+                # Where they DO pay is on a spec that has already wired and has clock
+                # left, because the sweep keeps the best `(area, belt_tiles)` it has
+                # seen and a further arrangement is another draw at a denser one.
+                # Tier `large` at budget 60, six paired rounds, 60 of 60 clean in
+                # every run of both arms: -1.51% AREA, paired t = -5.26, denser in
+                # SIX OF SIX rounds, and per cell denser on 24 of 60 against larger
+                # on 1. That costs 2.6x the cell-seconds, which is the trade being
+                # made knowingly: `time_budget_s` is an allowance the caller has
+                # already agreed to spend, the sweep used to hand most of it back,
+                # and density is the objective it is spent on.
+                #
+                # So the first pass over the heights is exactly what shipped before,
+                # and arrangements past it are normally gated TWICE: on having
+                # something to improve, and on being able to afford the improvement.
+                #
+                # `best is None` alone was not enough, and the number that says so
+                # was measured at the DEFAULT budget rather than at the budget the
+                # density win came from. Nine paired rounds at `--budget 4
+                # --jobs 16`, arrangements 3 against 1: -4, 0, 0, 0, 0, -1, +1, 0,
+                # -2, a mean of -0.67 cells. The -1.51% area is real and it is a
+                # `tier large --budget 60` number; shipping it unconditionally
+                # charges budget-4 cells for a budget-60 gain, which is the wrong way
+                # round because budget 4 is what the audit runs and what a user gets.
+                #
+                # THE AFFORDABILITY RULE, and it carries no tuned constant: an
+                # improvement arrangement may start only if as much clock remains as
+                # the most expensive candidate so far actually took. By the time
+                # `best` exists at least one candidate has been packed, routed,
+                # powered and validated, so its cost is MEASURED for this spec on
+                # this machine rather than guessed -- which is the only honest
+                # estimate of what the next one costs, and it self-calibrates across
+                # a corpus spanning 1 to 955 machines instead of asking a threshold
+                # to span it.
+                #
+                # It reads on both ends the way the diagnosis says it should. At
+                # budget 4 a `universe-matrix` candidate costs ten seconds or more
+                # against a sweep share of four, so no improvement arrangement ever
+                # starts and the stress cells get back the search they had. At budget
+                # 60 a tier-`large` candidate costs a second or two against a share
+                # of sixty, so they all run and the density win stands.
+                #
+                # Measured on both ends after the rule went in, paired and
+                # interleaved:
+                #
+                #   budget 4, jobs 16, full corpus, TWELVE rounds
+                #     -3 +1 0 +1 0 0 -1 +2 -4 +2 -1 0
+                #     mean -0.25 cells, 95% CI [-1.40, +0.90], median 0, and the
+                #     rounds split 4 better / 4 worse / 4 level. INVALID 0 over all
+                #     1728 cells. The two specs that carry every refusal are where
+                #     the rule has to work and it does: `universe-matrix` refuses 11
+                #     times against 10, and `quantum-chip` measured alone at jobs 6,
+                #     away from the audit's own CPU contention, is identical on six
+                #     of seven rounds.
+                #
+                #   tier large, budget 60, four rounds
+                #     -1.98% AREA, paired t = -5.41, denser in FOUR OF FOUR rounds,
+                #     60 of 60 clean in every run of both arms, per cell denser on 21
+                #     and larger on 2.
+                #
+                # So the default is the one both ends support, which is the thing the
+                # unconditional version got wrong: it was measured at budget 60 and
+                # shipped to budget 4.
+                # One bounded exception lets a strong near miss look at the next
+                # arrangement for that exact height. The candidate already exists in
+                # `candidate_packs`: ordinary improvements still require the measured
+                # cost above, while a complete one-net geometric near miss may use any
+                # positive hard time left after the completion reserve. The marker
+                # preserves that admission through this gate; the hard deadline still
+                # applies. A failed admitted retry cannot unlock the height's later
+                # arrangements.
+                # Once a valid candidate exists, every later base height is an
+                # improvement attempt too. Starting one without enough measured
+                # clock for a complete candidate can only discard the valid result
+                # at the hard deadline; it cannot improve it.
+                if (
+                    not projection_retry
+                    and best is not None
+                    and not _room_for_another(deadline, soft, turn_cost)
+                ):
+                    break
+                if not projection_retry and arrangement and best is None:
+                    break
+                if (
+                    not projection_retry
+                    and arrangement
+                    and not _room_for_another(deadline, soft, turn_cost)
+                ):
+                    break
+                # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
+                # means the model could not lay the spec out; a sweep's own clock
+                # must not be able to manufacture one. Breaking on time alone did
+                # exactly that: heights are tried shortest-first and the
+                # free-proliferation chain only wires at the tallest, so a 2s budget
+                # refused a spec that routes every net cleanly given the chance to
+                # reach it.
+                if not projection_retry and best is not None and time.monotonic() >= soft:
+                    break
+                # The HARD deadline is the call's, and it does stop us finding --
+                # that is what makes `time_budget_s` a wall rather than a suggestion.
+                # `lay_out` turns it into a refusal that names the deadline, so the
+                # distinction between "cannot" and "ran out" survives into the error.
+                completion_reserve_s = (
+                    compaction_reserve_s + finalize_reserve_s + validation_reserve_s
+                )
+                if deadline is not None and deadline - time.monotonic() < completion_reserve_s:
+                    break
+                seed = seeds[height]
+                seed_width, seed_height = strip_outline(seed)
+                if not projection_envelope.frame_candidates(
+                    seed_width,
+                    seed_height,
+                ):
+                    if rejected is not None:
+                        _retain_refusal(
+                            rejected,
+                            projection_envelope.extent_failure(
+                                seed_width,
+                                seed_height,
+                            ),
                         )
-                    ),
+                    continue
+                started_at = time.monotonic()
+                remaining = (
+                    per_solve if deadline is None else min(per_solve, deadline - time.monotonic())
                 )
-                dearest_pack_s = max(dearest_pack_s, time.monotonic() - pack_started)
-            if pack is None:
-                continue
-            assignment = (
-                pack.height,
-                pack.width,
-                tuple(_box(strip) for strip in strips),
-                tuple(pack.at[index] for index in range(len(strips))),
-            )
-            # A retry is useful only when CP-SAT actually moved something.
-            # Deterministic short solves can return the same incumbent for two
-            # arrangement seeds; routing it again is the same deterministic
-            # multi-second search and can consume the candidate that would wire.
-            if assignment in routed_assignments:
-                continue
-            routed_assignments.add(assignment)
-            if (
-                deadline is not None
-                and deadline - time.monotonic()
-                < compaction_reserve_s + finalize_reserve_s + validation_reserve_s
-            ):
-                break
-            if feedback is None:
-                compact_width_by_height.setdefault(height, pack.width)
-            # Route the deterministic warm-start once this exact solve has
-            # produced a compact incumbent that admits it under the existing
-            # evidence-bound width contract.  The width-36 warm-start routes on
-            # the fourteen-strip calibration chain, while continuing to tighten
-            # it can replace it with a width-35 arrangement that strands one net.
-            #
-            # The admission callback stops only this first optimisation once the
-            # same exact width proof exists.  It does not add a solve, route,
-            # arrangement, worker, or deadline, and the seed REPLACES the
-            # candidate rather than acting as the deleted loose fallback.  If
-            # the exact incumbent is too narrow to admit the seed, CP-SAT keeps
-            # its normal bounded search and the final incumbent is routed.
-            #
-            # A WINDOW REPAIR IS NOT A FRESH SOLVE and must not be swapped out
-            # for the seed.  A budget-stage failure takes no feedback snapshot,
-            # so a queued repair can arrive here on the first candidate with
-            # `feedback is None` still true -- and replacing it would discard
-            # the bounded solve and route the greedy pack that already stranded.
-            if (
-                pending_pack is None
-                and candidate_index == 1
-                and arrangement == 0
-                and not projection_retry
-                and feedback is None
-                and seed.width <= _width_slack_cap(pack.width)
-                and (seed.at != pack.at or seed.width != pack.width or seed.height != pack.height)
-            ):
-                pack = replace(
-                    seed,
-                    status="WARM_START",
-                    hit_budget=pack.hit_budget,
-                )
-            # Reject a provably oversized strip outline before emitting coaters,
-            # reserving power, and preparing exact routing geometry.  The
-            # emitted core contains every packed strip, so an outline that fits
-            # no legal frame cannot become feasible when later passes only add
-            # buildings.  This is the same projection envelope `_prepare` asks,
-            # moved to the first point where the exact solved origins exist.
-            outline_width, outline_height = strip_outline(pack)
-            if not projection_envelope.frame_candidates(
-                outline_width,
-                outline_height,
-            ):
-                if rejected is not None:
-                    _retain_refusal(
-                        rejected,
-                        projection_envelope.extent_failure(
-                            outline_width,
-                            outline_height,
+                if remaining <= 0:
+                    break
+                # CP-SAT's multi-worker portfolio changes the returned large-plan
+                # arrangement with audit job allocation.  Those 24+ strip cells
+                # route in one round from the deterministic seed; pin only their
+                # packing solve so jobs=2 and a standalone call ask the same model.
+                feedback = feedback_by_height.get(height)
+                width_bound = max(bound * 2, 8)
+                if feedback is not None and height in compact_width_by_height:
+                    width_bound = min(
+                        width_bound,
+                        _width_slack_cap(compact_width_by_height[height]),
+                    )
+                retry_no_good = feedback_retry_no_goods.pop((height, arrangement), None)
+                exact_pack_no_goods = tuple(exact_no_good_state.no_goods)
+                if retry_no_good is not None:
+                    exact_pack_no_goods += (retry_no_good,)
+                # A window repair IS this candidate's pack.  Re-solving it here
+                # would throw away the bounded solve that was just paid for and
+                # hand routing the same assignment that stranded a net.
+                pending_pack = window_packs.pop((height, arrangement), None)
+                pack: _Pack | None
+                if pending_pack is not None:
+                    # THE INSTALL SITE, and where `alns_window_accepted` is
+                    # counted -- mirroring the sequence-pair arm, so the gate
+                    # can read one number across both.  A window that solved
+                    # and produced a different pack has not been accepted by
+                    # anything yet; it is accepted here, where the sweep hands
+                    # it to the pipeline in place of a `_pack` call.
+                    window_accepted += 1
+                    pack = pending_pack
+                else:
+                    pack_started = time.monotonic()
+                    pack = _pack(
+                        strips,
+                        height=height,
+                        width_bound=width_bound,
+                        time_budget_s=remaining,
+                        direct_candidates=net_candidates,
+                        workers=(1 if len(strips) >= _DETERMINISTIC_PACK_STRIPS else self.workers),
+                        deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS,
+                        seed=seed,
+                        arrangement=arrangement,
+                        projection_no_goods=tuple(projection_no_goods),
+                        exact_pack_no_goods=exact_pack_no_goods,
+                        direct_relation_no_goods=tuple(direct_relation_no_goods),
+                        cluster_relation_no_goods=tuple(cluster_relation_no_goods),
+                        feedback=feedback,
+                        stop_when_seed_admissible=(
+                            candidate_index == 1
+                            and arrangement == 0
+                            and not projection_retry
+                            and feedback is None
+                            and _seed_admission_preserves_best_band(
+                                seed,
+                                _minimum_pack_width(strips, height),
+                                projection_envelope,
+                            )
                         ),
                     )
-                continue
-            # RATIONING THE CLOCK BETWEEN HEIGHTS WAS TRIED AND IS WORSE.
-            #
-            # The observation is real: a routing pass that will wire this pack
-            # does it in four to eleven seconds and one that will not runs to
-            # the wall, so the first candidate can spend a whole cell's ceiling
-            # on a pack that was never going to work. Eighteen runs at a 15s
-            # ceiling on `universe-matrix`: every refusal reads `f138@13.9s`,
-            # one pass, one height, while every success reads 4.0s, 5.6s, 5.7s,
-            # 10.7s, 10.8s, 10.9s.
-            #
-            # Capping a height at a share of what remains buys nothing, because
-            # the successes are spread right across the range the cap has to cut.
-            # `universe-matrix` at budget 15, three runs each: uncapped 3, 3, 3
-            # of 6; at 55% of the remaining clock 2, 2, 2; at 75%, 4, 3, 2 and
-            # 2, 3, 4 -- the same mean, more variance. And the corpus pays for
-            # it: 68, 69, 68 against 69, 70, 70, 68, 70.
-            #
-            # What that says is that the spread is not the sweep's to manage.
-            # Two solves of one height to the same width differ by seconds of
-            # routing and by whether they converge at all, so the clock is not
-            # being misallocated between heights -- it is being spent on a pack
-            # CP-SAT happened to return. The lever is the packer's arrangement,
-            # not the stopwatch.
-            # A pack that cannot be POWERED is discarded exactly like a pack
-            # that cannot be WIRED, and for the same reason: it is not a
-            # feasible packing, so there is nothing here to rescue.
-            #
-            # There is no `claim_power=False` retry, and there is no coverage
-            # repair behind this either. The retry gave the whole power claim up
-            # as soon as a pack left one to three nets unrouted, on the
-            # reasoning that a build which cannot be wired is worth nothing
-            # while coverage still had a repair pass to fall back on. The second
-            # half of that never held: the repair needed free ground and a pack
-            # tight enough to strand a net has none, so what came back was a
-            # wired blueprint with buildings outside every tower's radius --
-            # `power.coverage`, an INVALID, in place of a refusal that would
-            # have emitted nothing.
-            #
-            # `_power_plan` now decides coverage before routing and says so when
-            # it cannot, which costs a pack rather than a pack plus a full
-            # routing pass. If no height survives, the spec is REFUSED. Trading
-            # coverage for the last net or two, like trading density for it, is
-            # buying a green cell with something the build needed.
-            evaluations += 1
-            route_started = time.monotonic()
-            try:
-                result = _build(
-                    spec,
-                    strips,
-                    pack,
-                    power=True,
-                    route=True,
-                    policy=self.band_policy,
-                    ramped=self.ramped,
-                    deadline=deadline,
-                    budget=budget,
-                    staged_static_cache=staged_static_cache,
+                    dearest_pack_s = max(dearest_pack_s, time.monotonic() - pack_started)
+                if pack is None:
+                    continue
+                assignment = (
+                    pack.height,
+                    pack.width,
+                    tuple(_box(strip) for strip in strips),
+                    tuple(pack.at[index] for index in range(len(strips))),
                 )
-            except finalize.ProjectionRefusal as exc:
-                if rejected is not None:
-                    for failure in exc.failures:
-                        _retain_refusal(rejected, failure)
-                continue
-            except _Unpowerable as exc:
-                if rejected is not None:
-                    _retain_refusal(rejected, exc.failure or "power.coverage")
-                evidence = exc.exact_retry_evidence
-                if evidence is not None and exc.failure is not None:
-                    no_good = ExactPackNoGood(
-                        height=pack.height,
-                        outline=tuple(_box(strip) for strip in strips),
-                        width=pack.width,
-                        origins=tuple(pack.at[index] for index in range(len(strips))),
-                        evidence=exc.failures,
+                # A retry is useful only when CP-SAT actually moved something.
+                # Deterministic short solves can return the same incumbent for two
+                # arrangement seeds; routing it again is the same deterministic
+                # multi-second search and can consume the candidate that would wire.
+                if assignment in routed_assignments:
+                    continue
+                routed_assignments.add(assignment)
+                if (
+                    deadline is not None
+                    and deadline - time.monotonic()
+                    < compaction_reserve_s + finalize_reserve_s + validation_reserve_s
+                ):
+                    break
+                if feedback is None:
+                    compact_width_by_height.setdefault(height, pack.width)
+                # Route the deterministic warm-start once this exact solve has
+                # produced a compact incumbent that admits it under the existing
+                # evidence-bound width contract.  The width-36 warm-start routes on
+                # the fourteen-strip calibration chain, while continuing to tighten
+                # it can replace it with a width-35 arrangement that strands one net.
+                #
+                # The admission callback stops only this first optimisation once the
+                # same exact width proof exists.  It does not add a solve, route,
+                # arrangement, worker, or deadline, and the seed REPLACES the
+                # candidate rather than acting as the deleted loose fallback.  If
+                # the exact incumbent is too narrow to admit the seed, CP-SAT keeps
+                # its normal bounded search and the final incumbent is routed.
+                #
+                # A WINDOW REPAIR IS NOT A FRESH SOLVE and must not be swapped out
+                # for the seed.  A budget-stage failure takes no feedback snapshot,
+                # so a queued repair can arrive here on the first candidate with
+                # `feedback is None` still true -- and replacing it would discard
+                # the bounded solve and route the greedy pack that already stranded.
+                if (
+                    pending_pack is None
+                    and candidate_index == 1
+                    and arrangement == 0
+                    and not projection_retry
+                    and feedback is None
+                    and seed.width <= _width_slack_cap(pack.width)
+                    and (
+                        seed.at != pack.at
+                        or seed.width != pack.width
+                        or seed.height != pack.height
                     )
-                    retry_key = _ExactRetryKey(height, arrangement, evidence)
-                    if exact_no_good_state.admit_retry(
-                        retry_key,
-                        no_good,
-                        affordable=projection_retry_affordable(),
+                ):
+                    pack = replace(
+                        seed,
+                        status="WARM_START",
+                        hit_budget=pack.hit_budget,
+                    )
+                # Reject a provably oversized strip outline before emitting coaters,
+                # reserving power, and preparing exact routing geometry.  The
+                # emitted core contains every packed strip, so an outline that fits
+                # no legal frame cannot become feasible when later passes only add
+                # buildings.  This is the same projection envelope `_prepare` asks,
+                # moved to the first point where the exact solved origins exist.
+                outline_width, outline_height = strip_outline(pack)
+                if not projection_envelope.frame_candidates(
+                    outline_width,
+                    outline_height,
+                ):
+                    if rejected is not None:
+                        _retain_refusal(
+                            rejected,
+                            projection_envelope.extent_failure(
+                                outline_width,
+                                outline_height,
+                            ),
+                        )
+                    continue
+                # RATIONING THE CLOCK BETWEEN HEIGHTS WAS TRIED AND IS WORSE.
+                #
+                # The observation is real: a routing pass that will wire this pack
+                # does it in four to eleven seconds and one that will not runs to
+                # the wall, so the first candidate can spend a whole cell's ceiling
+                # on a pack that was never going to work. Eighteen runs at a 15s
+                # ceiling on `universe-matrix`: every refusal reads `f138@13.9s`,
+                # one pass, one height, while every success reads 4.0s, 5.6s, 5.7s,
+                # 10.7s, 10.8s, 10.9s.
+                #
+                # Capping a height at a share of what remains buys nothing, because
+                # the successes are spread right across the range the cap has to cut.
+                # `universe-matrix` at budget 15, three runs each: uncapped 3, 3, 3
+                # of 6; at 55% of the remaining clock 2, 2, 2; at 75%, 4, 3, 2 and
+                # 2, 3, 4 -- the same mean, more variance. And the corpus pays for
+                # it: 68, 69, 68 against 69, 70, 70, 68, 70.
+                #
+                # What that says is that the spread is not the sweep's to manage.
+                # Two solves of one height to the same width differ by seconds of
+                # routing and by whether they converge at all, so the clock is not
+                # being misallocated between heights -- it is being spent on a pack
+                # CP-SAT happened to return. The lever is the packer's arrangement,
+                # not the stopwatch.
+                # A pack that cannot be POWERED is discarded exactly like a pack
+                # that cannot be WIRED, and for the same reason: it is not a
+                # feasible packing, so there is nothing here to rescue.
+                #
+                # There is no `claim_power=False` retry, and there is no coverage
+                # repair behind this either. The retry gave the whole power claim up
+                # as soon as a pack left one to three nets unrouted, on the
+                # reasoning that a build which cannot be wired is worth nothing
+                # while coverage still had a repair pass to fall back on. The second
+                # half of that never held: the repair needed free ground and a pack
+                # tight enough to strand a net has none, so what came back was a
+                # wired blueprint with buildings outside every tower's radius --
+                # `power.coverage`, an INVALID, in place of a refusal that would
+                # have emitted nothing.
+                #
+                # `_power_plan` now decides coverage before routing and says so when
+                # it cannot, which costs a pack rather than a pack plus a full
+                # routing pass. If no height survives, the spec is REFUSED. Trading
+                # coverage for the last net or two, like trading density for it, is
+                # buying a green cell with something the build needed.
+                evaluations += 1
+                route_started = time.monotonic()
+                try:
+                    result = _build(
+                        spec,
+                        strips,
+                        pack,
+                        power=True,
+                        route=True,
+                        policy=self.band_policy,
+                        ramped=self.ramped,
+                        deadline=deadline,
+                        budget=budget,
+                        staged_static_cache=staged_static_cache,
+                    )
+                except finalize.ProjectionRefusal as exc:
+                    if rejected is not None:
+                        for failure in exc.failures:
+                            _retain_refusal(rejected, failure)
+                    continue
+                except _Unpowerable as exc:
+                    if rejected is not None:
+                        _retain_refusal(rejected, exc.failure or "power.coverage")
+                    evidence = exc.exact_retry_evidence
+                    if evidence is not None and exc.failure is not None:
+                        no_good = ExactPackNoGood(
+                            height=pack.height,
+                            outline=tuple(_box(strip) for strip in strips),
+                            width=pack.width,
+                            origins=tuple(pack.at[index] for index in range(len(strips))),
+                            evidence=exc.failures,
+                        )
+                        retry_key = _ExactRetryKey(height, arrangement, evidence)
+                        if exact_no_good_state.admit_retry(
+                            retry_key,
+                            no_good,
+                            affordable=projection_retry_affordable(),
+                        ):
+                            candidate_packs.insert(
+                                candidate_index,
+                                (height, arrangement, True),
+                            )
+                    continue
+                except _Unseatable as exc:
+                    # A pack that cannot seat one of its Spray Coaters is not a
+                    # pack, for the same reason one that cannot be powered is not:
+                    # the spec asked for proliferation and this height cannot
+                    # deliver it. Discarding the height is the search doing its job;
+                    # what is NOT allowed is emitting the pack with the coater left
+                    # out, which is what this replaced.
+                    if rejected is not None:
+                        _retain_refusal(
+                            rejected,
+                            exc.failure or "prolif.sprayed_cargo_reaches_machines",
+                        )
+
+                    retry_promoted = False
+                    evidence = exc.exact_retry_evidence
+                    if evidence is not None and exc.failure is not None:
+                        no_good = ExactPackNoGood(
+                            height=pack.height,
+                            outline=tuple(_box(strip) for strip in strips),
+                            width=pack.width,
+                            origins=tuple(pack.at[index] for index in range(len(strips))),
+                            evidence=exc.failures,
+                        )
+                        retry_key = _ExactRetryKey(height, arrangement, evidence)
+                        retry_promoted = exact_no_good_state.admit_retry(
+                            retry_key,
+                            no_good,
+                            affordable=projection_retry_affordable(),
+                        )
+
+                    pending_clearance: tuple[StagedStaticClearanceKey, int] | None = None
+
+                    clearance_exhausted = False
+                    requirement = exc.clearance_requirement
+                    if requirement is not None:
+                        selected_strip = next(
+                            (
+                                strip
+                                for strip in strips
+                                if strip.family_id == requirement.instance_id.family_id
+                                and strip.machine_start == requirement.instance_id.machine_start
+                                and strip.machines == requirement.instance_id.machine_count
+                            ),
+                            None,
+                        )
+                        if (
+                            selected_strip is not None
+                            and selected_strip.physical_variant is not None
+                            and selected_strip.staged_static_variant_id == requirement.variant_id
+                        ):
+                            if requirement.required_west_channel > _COATER_WEST_CHANNEL + 1:
+                                clearance_exhausted = True
+                            else:
+                                retained_clearance = minimum_staged_static_clearance.get(
+                                    requirement.relation,
+                                    selected_strip.west_channel,
+                                )
+                                if requirement.required_west_channel > retained_clearance:
+                                    pending_clearance = (
+                                        requirement.relation,
+                                        requirement.required_west_channel,
+                                    )
+
+                    # The physical variant gets one bounded upstream seat first.
+                    # If an extended pack still projects into its own machine, the
+                    # absolute frame latitude remains pack-dependent: forbid this
+                    # complete assignment once and let CP-SAT move it.  The bound
+                    # belongs to the height/arrangement retry boundary, not to the
+                    # assignment identity: every successful no-good necessarily
+                    # produces a distinct assignment, so identity alone can never
+                    # make a second W4 exhaustion terminal.
+                    staged_retry_key = (height, arrangement)
+                    if (
+                        clearance_exhausted
+                        and exc.failure is not None
+                        and staged_retry_key not in staged_static_exact_retries
+                        and projection_retry_affordable()
                     ):
+                        no_good = ExactPackNoGood(
+                            height=pack.height,
+                            outline=tuple(_box(strip) for strip in strips),
+                            width=pack.width,
+                            origins=tuple(pack.at[index] for index in range(len(strips))),
+                            evidence=exc.failures,
+                        )
+                        if exact_no_good_state.remember(no_good):
+                            staged_static_exact_retries.add(staged_retry_key)
+                            retry_promoted = True
+
+                    if pending_clearance is not None:
+                        relation, required_west_channel = pending_clearance
+                        minimum_staged_static_clearance[relation] = required_west_channel
+                        replan_strips_for_learned_geometry()
+                    if retry_promoted:
                         candidate_packs.insert(
                             candidate_index,
                             (height, arrangement, True),
                         )
-                continue
-            except _Unseatable as exc:
-                # A pack that cannot seat one of its Spray Coaters is not a
-                # pack, for the same reason one that cannot be powered is not:
-                # the spec asked for proliferation and this height cannot
-                # deliver it. Discarding the height is the search doing its job;
-                # what is NOT allowed is emitting the pack with the coater left
-                # out, which is what this replaced.
-                if rejected is not None:
-                    _retain_refusal(
-                        rejected,
-                        exc.failure or "prolif.sprayed_cargo_reaches_machines",
-                    )
-
-                retry_promoted = False
-                evidence = exc.exact_retry_evidence
-                if evidence is not None and exc.failure is not None:
-                    no_good = ExactPackNoGood(
+                    continue
+                # The measured routing span of THIS evaluation, which is what an
+                # operator choice is billed for when its repair is credited.
+                route_seconds = time.monotonic() - route_started
+                # THE CHOICE THIS CANDIDATE ARRIVED WITH, held by identity.  A
+                # window launched further down stores a choice under this same
+                # key, and that one belongs to the repair it queued -- a
+                # candidate this turn has not evaluated and must not be paid
+                # for.  Membership alone cannot tell the two apart, because a
+                # queued repair that fails again settles its own credit and
+                # then immediately stores a fresh choice under the key it just
+                # cleared.
+                inbound_choice = window_choices.get((height, arrangement))
+                try:
+                    failed = result.routing.failed_count
+                    attempt = PackAttempt(
+                        origins=tuple(pack.at[index] for index in range(len(pack.at))),
+                        compact_width=pack.width,
                         height=pack.height,
                         outline=tuple(_box(strip) for strip in strips),
-                        width=pack.width,
-                        origins=tuple(pack.at[index] for index in range(len(strips))),
-                        evidence=exc.failures,
-                    )
-                    retry_key = _ExactRetryKey(height, arrangement, evidence)
-                    retry_promoted = exact_no_good_state.admit_retry(
-                        retry_key,
-                        no_good,
-                        affordable=projection_retry_affordable(),
-                    )
-
-                pending_clearance: tuple[StagedStaticClearanceKey, int] | None = None
-
-                clearance_exhausted = False
-                requirement = exc.clearance_requirement
-                if requirement is not None:
-                    selected_strip = next(
-                        (
-                            strip
-                            for strip in strips
-                            if strip.family_id == requirement.instance_id.family_id
-                            and strip.machine_start == requirement.instance_id.machine_start
-                            and strip.machines == requirement.instance_id.machine_count
+                        routing=result.routing,
+                        budget_stage=result.budget_stage,
+                        static_access=tuple(
+                            failure
+                            for failure in result.routing.failures
+                            if failure.kind is RouteFailureKind.STATIC_ACCESS
                         ),
-                        None,
+                        promised_direct=result.promised_direct,
+                        realized_direct=result.realized_direct,
+                        direct_candidates=direct_candidate_snapshot,
                     )
-                    if (
-                        selected_strip is not None
-                        and selected_strip.physical_variant is not None
-                        and selected_strip.staged_static_variant_id == requirement.variant_id
-                    ):
-                        if requirement.required_west_channel > _COATER_WEST_CHANNEL + 1:
-                            clearance_exhausted = True
-                        else:
-                            retained_clearance = minimum_staged_static_clearance.get(
-                                requirement.relation,
-                                selected_strip.west_channel,
+
+                    def retain_attempt(
+                        stage: _BuildBudgetStage | None = None,
+                        *,
+                        current: PackAttempt = attempt,
+                    ) -> None:
+                        if attempts is not None:
+                            attempts.append(
+                                current if stage is None else replace(current, budget_stage=stage)
                             )
-                            if requirement.required_west_channel > retained_clearance:
-                                pending_clearance = (
-                                    requirement.relation,
-                                    requirement.required_west_channel,
-                                )
 
-                # The physical variant gets one bounded upstream seat first.
-                # If an extended pack still projects into its own machine, the
-                # absolute frame latitude remains pack-dependent: forbid this
-                # complete assignment once and let CP-SAT move it.  The bound
-                # belongs to the height/arrangement retry boundary, not to the
-                # assignment identity: every successful no-good necessarily
-                # produces a distinct assignment, so identity alone can never
-                # make a second W4 exhaustion terminal.
-                staged_retry_key = (height, arrangement)
-                if (
-                    clearance_exhausted
-                    and exc.failure is not None
-                    and staged_retry_key not in staged_static_exact_retries
-                    and projection_retry_affordable()
-                ):
-                    no_good = ExactPackNoGood(
-                        height=pack.height,
-                        outline=tuple(_box(strip) for strip in strips),
-                        width=pack.width,
-                        origins=tuple(pack.at[index] for index in range(len(strips))),
-                        evidence=exc.failures,
-                    )
-                    if exact_no_good_state.remember(no_good):
-                        staged_static_exact_retries.add(staged_retry_key)
-                        retry_promoted = True
-
-                if pending_clearance is not None:
-                    relation, required_west_channel = pending_clearance
-                    minimum_staged_static_clearance[relation] = required_west_channel
-                    replan_strips_for_learned_geometry()
-                if retry_promoted:
-                    candidate_packs.insert(
-                        candidate_index,
-                        (height, arrangement, True),
-                    )
-                continue
-            # The measured routing span of THIS evaluation, which is what an
-            # operator choice is billed for when its repair is credited.
-            route_seconds = time.monotonic() - route_started
-            failed = result.routing.failed_count
-            attempt = PackAttempt(
-                origins=tuple(pack.at[index] for index in range(len(pack.at))),
-                compact_width=pack.width,
-                height=pack.height,
-                outline=tuple(_box(strip) for strip in strips),
-                routing=result.routing,
-                budget_stage=result.budget_stage,
-                static_access=tuple(
-                    failure
-                    for failure in result.routing.failures
-                    if failure.kind is RouteFailureKind.STATIC_ACCESS
-                ),
-                promised_direct=result.promised_direct,
-                realized_direct=result.realized_direct,
-                direct_candidates=direct_candidate_snapshot,
-            )
-
-            def retain_attempt(
-                stage: _BuildBudgetStage | None = None,
-                *,
-                current: PackAttempt = attempt,
-            ) -> None:
-                if attempts is not None:
-                    attempts.append(
-                        current if stage is None else replace(current, budget_stage=stage)
-                    )
-
-            if failed:
-                retain_attempt()
-            if failed:
-                local_no_goods, exact_no_good, cluster_no_goods = _proof_scoped_no_goods(
-                    attempt,
-                    strips,
-                )
-                learned = False
-                for relation_no_good in local_no_goods:
-                    if relation_no_good in direct_relation_no_good_keys:
-                        continue
-                    direct_relation_no_good_keys.add(relation_no_good)
-                    direct_relation_no_goods.append(relation_no_good)
-                    learned = True
-                for cluster_no_good in cluster_no_goods:
-                    if cluster_no_good in cluster_relation_no_good_keys:
-                        continue
-                    cluster_relation_no_good_keys.add(cluster_no_good)
-                    cluster_relation_no_goods.append(cluster_no_good)
-                    learned = True
-                if exact_no_good is not None and exact_no_good_state.remember(exact_no_good):
-                    learned = True
-
-                budget_failure = result.routing.status is DetailedRouteStatus.BUDGET or any(
-                    failure.kind is RouteFailureKind.BUDGET for failure in result.routing.failures
-                )
-                feedback_state: FeedbackState | None = None
-                if not budget_failure:
-                    feedback_state = _attempt_feedback_state(
-                        attempt,
-                        feedback_by_height.get(height),
-                    )
-                    feedback_by_height[height] = feedback_state
-
-                feedback_retry = feedback_state is not None and _feedback_retry_eligible(
-                    attempt, feedback_state
-                )
-                promote_retry = arrangement == 0 and (learned or feedback_retry)
-                #: A window launches where a retry was WANTED and refused, so
-                #: the two facts the block below already decides are recorded
-                #: rather than re-derived.
-                retry_slot_found = False
-                retry_admitted = False
-                if promote_retry:
-                    retry_candidate = (height, arrangement + 1)
-                    next_candidate = (*retry_candidate, False)
-                    try:
-                        next_index = candidate_packs.index(
-                            next_candidate,
-                            candidate_index,
+                    if failed:
+                        retain_attempt()
+                    if failed:
+                        local_no_goods, exact_no_good, cluster_no_goods = _proof_scoped_no_goods(
+                            attempt,
+                            strips,
                         )
-                    except ValueError:
-                        pass
-                    else:
-                        retry_slot_found = True
-                        current_candidate_s = (
-                            0.0 if started_at is None else time.monotonic() - started_at
-                        )
-                        retry_cost = max(
-                            dearest_candidate_s,
-                            current_candidate_s,
-                        )
-                        if feedback_retry or _room_for_another(
-                            deadline,
-                            soft,
-                            retry_cost,
+                        learned = False
+                        for relation_no_good in local_no_goods:
+                            if relation_no_good in direct_relation_no_good_keys:
+                                continue
+                            direct_relation_no_good_keys.add(relation_no_good)
+                            direct_relation_no_goods.append(relation_no_good)
+                            learned = True
+                        for cluster_no_good in cluster_no_goods:
+                            if cluster_no_good in cluster_relation_no_good_keys:
+                                continue
+                            cluster_relation_no_good_keys.add(cluster_no_good)
+                            cluster_relation_no_goods.append(cluster_no_good)
+                            learned = True
+                        if exact_no_good is not None and exact_no_good_state.remember(
+                            exact_no_good
                         ):
-                            if feedback_retry:
-                                # This exact failed assignment is not proved
-                                # infeasible, so its cut belongs only to the
-                                # promoted feedback draw. Never remember it in
-                                # the sweep-wide exact no-good state.
-                                routing_failure = attempt.routing.failures[0]
-                                feedback_retry_no_goods[retry_candidate] = ExactPackNoGood(
-                                    height=attempt.height,
-                                    outline=attempt.outline,
-                                    width=attempt.compact_width,
-                                    origins=attempt.origins,
-                                    evidence=(
-                                        finalize.ProjectionFailure(
-                                            check="route.feedback_retry",
-                                            buildings=(),
-                                            detail=(
-                                                f"{routing_failure.kind.value}: "
-                                                f"net={routing_failure.net_id!r}; "
-                                                f"wall={routing_failure.wall!r}; "
-                                                f"blockers={routing_failure.blocking_nets!r}; "
-                                                f"expansions={routing_failure.expansions}"
-                                            ),
-                                            band=0,
-                                        ),
-                                    ),
-                                )
-                            retry_admitted = True
-                            candidate_packs.pop(next_index)
-                            candidate_packs.insert(
-                                candidate_index,
-                                (height, arrangement + 1, True),
-                            )
-                # A queued repair that failed again settles its own credit
-                # here, on the outcome it actually produced, before this
-                # candidate is allowed to ask for another window.  The
-                # membership test only avoids ENCODING an outcome for the
-                # ordinary candidates that never had a choice behind them;
-                # `settle_window_credit` is a no-op for those anyway.
-                if (height, arrangement) in window_choices:
-                    settle_window_credit(
-                        height,
-                        arrangement,
-                        after=metrics_from_evaluation(
-                            attempt.routing,
-                            _decoded_from_pack(pack, strips, height),
-                            feedback_by_height.get(
-                                height,
-                                FeedbackState.empty((pack.width, height)),
-                            ),
-                            outline_height=height,
-                            band_target_width=finalize.band_target_width(
-                                projection_envelope,
-                                height=height,
-                                width=pack.width,
-                            ),
-                            validator_clean=False,
-                        ),
-                        routing_seconds=route_seconds,
-                    )
-                # A WINDOW REPLACES A RETRY THAT WAS WANTED AND COULD NOT BE
-                # AFFORDED, and nothing else.  Alongside an admitted retry it
-                # would be redundant -- the retry re-solves the whole pack --
-                # and with no retry to promote there is no learned evidence to
-                # aim a window at either.
-                if promote_retry and retry_slot_found and not retry_admitted:
-                    window_cost = _window_candidate_seconds(
-                        dearest_candidate_s=dearest_candidate_s,
-                        dearest_pack_s=dearest_pack_s,
-                    )
-                    if (
-                        (height, arrangement) not in window_packs
-                        and (height, arrangement) not in window_choices
-                        and _room_for_another(deadline, soft, window_cost)
-                    ):
-                        target = finalize.band_target_width(
-                            projection_envelope,
-                            height=height,
-                            width=pack.width,
-                        )
-                        relation_problem = _pack_relation_problem(pack, strips, height)
-                        relation_decoded = _decoded_from_pack(pack, strips, height)
-                        feedback_state_now = feedback_by_height.get(
-                            height,
-                            FeedbackState.empty((pack.width, height)),
-                        )
-                        before_metrics = metrics_from_evaluation(
-                            attempt.routing,
-                            relation_decoded,
-                            feedback_state_now,
-                            outline_height=height,
-                            band_target_width=target,
-                            validator_clean=False,
-                        )
-                        choice = session.select(
-                            OperatorContext(
-                                strip_count=len(strips),
-                                stagnation=0,
-                                remaining_fraction=remaining_fraction_bucket(
-                                    soft - time.monotonic(),
-                                    max(time_budget_s, 1e-6),
-                                ),
-                            )
-                        )
-                        try:
-                            window = destroy_strips(
-                                choice.destroy,
-                                scale=choice.scale,
-                                result=attempt.routing,
-                                pair=_pack_relation_pair(pack, strips, height),
-                                gaps=GapProfile.zero(len(strips)),
-                                problem=relation_problem,
-                                decoded=relation_decoded,
-                                band_target_width=target,
-                            )
-                        except ValueError:
-                            # The encoder refused this pack.  Impossible for a
-                            # `no_overlap_2d` result, so it is a bug detector.
-                            window_encode_errors += 1
-                            window = frozenset()
-                        window_key = (height, arrangement, window)
-                        if (
-                            not window
-                            or len(window) >= len(strips)
-                            or window_key in solved_windows
-                        ):
-                            session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
-                        else:
-                            solved_windows.add(window_key)
-                            window_solves += 1
-                            window_started = time.monotonic()
-                            repaired = _pack_window(
-                                strips,
-                                height=height,
-                                width_bound=pack.width,
-                                direct_candidates=net_candidates,
-                                window=window,
-                                fixed_at={
-                                    index: origin
-                                    for index, origin in pack.at.items()
-                                    if index not in window
-                                },
-                                seed=pack,
-                                width_target=target,
-                                arrangement=arrangement,
-                                projection_no_goods=tuple(projection_no_goods),
-                                exact_pack_no_goods=exact_pack_no_goods,
-                                direct_relation_no_goods=tuple(direct_relation_no_goods),
-                                feedback=feedback_by_height.get(height),
-                                on_skipped=_count_window_skips,
-                            )
-                            window_seconds += time.monotonic() - window_started
-                            if repaired is None or repaired.at == pack.at:
-                                session.observe(
-                                    choice,
-                                    (0.0,) * REWARD_RANKS,
-                                    applied=False,
-                                )
-                            else:
-                                window_accepted += 1
-                                window_packs[height, arrangement] = repaired
-                                window_choices[height, arrangement] = (
-                                    choice,
-                                    before_metrics,
-                                )
-                                window_queue.append((height, arrangement))
-                continue
-            if result.routing.status is not DetailedRouteStatus.ROUTED:
-                retain_attempt()
-                continue
-            assert result.promised_direct == result.realized_direct, (
-                "a routed pack may not retain an unrealized rewarded direct insert"
-            )
-            placement = result.placement
-            assert placement is not None
-            # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
-            #
-            # `lay_out` promises a valid `Placement` or `NoValidLayout`, and
-            # until now freeform ARGUED that promise while `spine` enforced it
-            # -- `spine._rejected` has called `validate.certify` all along and
-            # this did not. The gap is not theoretical: `quantum-chip`
-            # /free-proliferation power=1 emits, roughly one build in sixteen, a
-            # placement whose titanium-glass production is cut into islands, so
-            # eleven machines can reach 16/7 items/s of an item they consume
-            # 11/4 of. It pastes and then does not run, which is the one failure
-            # nobody discovers until they are standing in front of it in game.
-            #
-            # A rejected candidate is DISCARDED, not repaired and not returned
-            # with a warning, and the sweep goes on to the next height. That is
-            # the same trade `_build`'s `failed` already makes and it goes the
-            # same way: several separately solved and separately validated packs
-            # is a search, and refusing outright is honest, while an invalid
-            # blueprint is the worst outcome this program has.
-            #
-            # A fully routed incumbent still has to finish three exact completion
-            # transforms. Search stops at the caller's wall, but a wired candidate
-            # gets the fixed loaded-machine atomic grace: discarding a valid route
-            # halfway through projection makes load, rather than geometry, decide
-            # whether the same deterministic blueprint exists.
-            completion_deadline = None if deadline is None else deadline + ATOMIC_COMPLETION_GRACE_S
-            completion_cancelled = (
-                None
-                if completion_deadline is None
-                else lambda completion_deadline=completion_deadline: _expired(completion_deadline)
-            )
-            compaction_started = time.monotonic()
-            try:
-                compacted = finalize.compact_open_boundary_belts_certified(
-                    placement,
-                    spec,
-                    expect_power=True,
-                    cancelled=completion_cancelled,
-                )
-            except finalize.ProjectionCancelled:
-                retain_attempt(_BuildBudgetStage.CERTIFICATION)
-                break
-            if _expired(completion_deadline):
-                retain_attempt(_BuildBudgetStage.CERTIFICATION)
-                break
-            placement = compacted.placement
-            compaction_reserve_s = max(
-                compaction_reserve_s,
-                time.monotonic() - compaction_started,
-            )
-            finalize_started = time.monotonic()
-            try:
-                placement = finalize.finalize_placement(
-                    placement,
-                    self.band_policy,
-                    cancelled=completion_cancelled,
-                )
-            except finalize.ProjectionCancelled:
-                retain_attempt(_BuildBudgetStage.FINALIZATION)
-                break
-            except finalize.ProjectionRefusal as exc:
-                retain_attempt()
-                learned = False
-                exact_projection_pair: ExactProjectionPair | None = None
-                geometry_learned = False
-                exact_retry_evidence: _ExactRetryEvidence | None = None
-                pitch_requirements = _projection_pitch_requirements(
-                    placement,
-                    strips,
-                    exc.failures,
-                )
-                from flab2bp.layout.strip_variants import (
-                    StripInstanceId,
-                    strip_pose_id,
-                )
-
-                strips_by_instance: dict[StripInstanceId, Strip] = {}
-                for strip in strips:
-                    if strip.family_id is None:
-                        continue
-                    strips_by_instance.setdefault(
-                        StripInstanceId(
-                            strip.family_id,
-                            strip.machine_start,
-                            strip.machines,
-                        ),
-                        strip,
-                    )
-                for failure, pitch_requirement in zip(
-                    exc.failures,
-                    pitch_requirements,
-                    strict=True,
-                ):
-                    if rejected is not None:
-                        _retain_refusal(rejected, failure)
-
-                    strip_pair = _projection_strip_pair(placement, failure)
-                    projection_no_good = _projection_no_good(
-                        placement,
-                        pack,
-                        strips,
-                        failure,
-                        self.band_policy,
-                    )
-                    if strip_pair is not None and projection_no_good is None:
-                        if exact_projection_pair is None:
-                            exact_projection_pair = _exact_projection_pair(
-                                strips,
-                                strip_pair,
-                            )
-                        if exact_retry_evidence is None:
-                            exact_retry_evidence = _exact_retry_evidence(
-                                "finalizer",
-                                failure,
-                                dict(enumerate(placement.buildings)),
-                            )
-                    if projection_no_good is not None:
-                        projection_no_good_key = projection_no_good
-                        if projection_no_good_key not in projection_no_good_keys:
-                            projection_no_good_keys.add(projection_no_good_key)
-                            projection_no_goods.append(projection_no_good)
                             learned = True
 
-                    if pitch_requirement is None:
-                        continue
-                    selected_strip = strips_by_instance.get(pitch_requirement.instance_id)
-                    if (
-                        selected_strip is None
-                        or selected_strip.physical_variant is None
-                        or selected_strip.physical_variant.variant_id
-                        != pitch_requirement.variant_id
-                    ):
-                        continue
+                        budget_failure = result.routing.status is DetailedRouteStatus.BUDGET or any(
+                            failure.kind is RouteFailureKind.BUDGET
+                            for failure in result.routing.failures
+                        )
+                        feedback_state: FeedbackState | None = None
+                        if not budget_failure:
+                            feedback_state = _attempt_feedback_state(
+                                attempt,
+                                feedback_by_height.get(height),
+                            )
+                            feedback_by_height[height] = feedback_state
 
-                    pose_id = strip_pose_id(selected_strip.physical_variant)
-                    retained_pitch = minimum_pitch_x.get(
-                        pose_id,
-                        selected_strip.physical_variant.pitch_x,
-                    )
-                    if pitch_requirement.required_pitch <= retained_pitch:
+                        feedback_retry = feedback_state is not None and _feedback_retry_eligible(
+                            attempt, feedback_state
+                        )
+                        promote_retry = arrangement == 0 and (learned or feedback_retry)
+                        #: A window launches where a retry was WANTED and refused, so
+                        #: the two facts the block below already decides are recorded
+                        #: rather than re-derived.
+                        retry_slot_found = False
+                        retry_admitted = False
+                        if promote_retry:
+                            retry_candidate = (height, arrangement + 1)
+                            next_candidate = (*retry_candidate, False)
+                            try:
+                                next_index = candidate_packs.index(
+                                    next_candidate,
+                                    candidate_index,
+                                )
+                            except ValueError:
+                                pass
+                            else:
+                                retry_slot_found = True
+                                current_candidate_s = (
+                                    0.0 if started_at is None else time.monotonic() - started_at
+                                )
+                                retry_cost = max(
+                                    dearest_candidate_s,
+                                    current_candidate_s,
+                                )
+                                if feedback_retry or _room_for_another(
+                                    deadline,
+                                    soft,
+                                    retry_cost,
+                                ):
+                                    if feedback_retry:
+                                        # This exact failed assignment is not proved
+                                        # infeasible, so its cut belongs only to the
+                                        # promoted feedback draw. Never remember it in
+                                        # the sweep-wide exact no-good state.
+                                        routing_failure = attempt.routing.failures[0]
+                                        feedback_retry_no_goods[retry_candidate] = ExactPackNoGood(
+                                            height=attempt.height,
+                                            outline=attempt.outline,
+                                            width=attempt.compact_width,
+                                            origins=attempt.origins,
+                                            evidence=(
+                                                finalize.ProjectionFailure(
+                                                    check="route.feedback_retry",
+                                                    buildings=(),
+                                                    detail=(
+                                                        f"{routing_failure.kind.value}: "
+                                                        f"net={routing_failure.net_id!r}; "
+                                                        f"wall={routing_failure.wall!r}; "
+                                                        "blockers="
+                                                        f"{routing_failure.blocking_nets!r}; "
+                                                        f"expansions={routing_failure.expansions}"
+                                                    ),
+                                                    band=0,
+                                                ),
+                                            ),
+                                        )
+                                    retry_admitted = True
+                                    candidate_packs.pop(next_index)
+                                    candidate_packs.insert(
+                                        candidate_index,
+                                        (height, arrangement + 1, True),
+                                    )
+                        # A queued repair that failed again settles its own credit
+                        # here, on the outcome it actually produced, before this
+                        # candidate is allowed to ask for another window.  The
+                        # membership test only avoids ENCODING an outcome for the
+                        # ordinary candidates that never had a choice behind them;
+                        # `settle_window_credit` is a no-op for those anyway.
+                        if (height, arrangement) in window_choices:
+                            settle_window_credit(
+                                height,
+                                arrangement,
+                                after=metrics_from_evaluation(
+                                    attempt.routing,
+                                    _decoded_from_pack(pack, strips, height),
+                                    feedback_by_height.get(
+                                        height,
+                                        FeedbackState.empty((pack.width, height)),
+                                    ),
+                                    outline_height=height,
+                                    band_target_width=finalize.band_target_width(
+                                        projection_envelope,
+                                        height=height,
+                                        width=pack.width,
+                                    ),
+                                    validator_clean=False,
+                                ),
+                                routing_seconds=route_seconds,
+                            )
+                        # A WINDOW REPLACES A RETRY THAT WAS WANTED AND COULD NOT BE
+                        # AFFORDED, and nothing else.  Alongside an admitted retry it
+                        # would be redundant -- the retry re-solves the whole pack --
+                        # and with no retry to promote there is no learned evidence to
+                        # aim a window at either.
+                        if promote_retry and retry_slot_found and not retry_admitted:
+                            window_cost = _window_candidate_seconds(
+                                dearest_candidate_s=dearest_candidate_s,
+                                dearest_pack_s=dearest_pack_s,
+                            )
+                            if (
+                                (height, arrangement) not in window_packs
+                                and (height, arrangement) not in window_choices
+                                and _room_for_another(deadline, soft, window_cost)
+                            ):
+                                target = finalize.band_target_width(
+                                    projection_envelope,
+                                    height=height,
+                                    width=pack.width,
+                                )
+                                relation_problem = _pack_relation_problem(pack, strips, height)
+                                relation_decoded = _decoded_from_pack(pack, strips, height)
+                                feedback_state_now = feedback_by_height.get(
+                                    height,
+                                    FeedbackState.empty((pack.width, height)),
+                                )
+                                before_metrics = metrics_from_evaluation(
+                                    attempt.routing,
+                                    relation_decoded,
+                                    feedback_state_now,
+                                    outline_height=height,
+                                    band_target_width=target,
+                                    validator_clean=False,
+                                )
+                                choice = session.select(
+                                    OperatorContext(
+                                        strip_count=len(strips),
+                                        stagnation=0,
+                                        remaining_fraction=remaining_fraction_bucket(
+                                            soft - time.monotonic(),
+                                            max(time_budget_s, 1e-6),
+                                        ),
+                                    )
+                                )
+                                try:
+                                    window = destroy_strips(
+                                        choice.destroy,
+                                        scale=choice.scale,
+                                        result=attempt.routing,
+                                        pair=_pack_relation_pair(pack, strips, height),
+                                        gaps=GapProfile.zero(len(strips)),
+                                        problem=relation_problem,
+                                        decoded=relation_decoded,
+                                        band_target_width=target,
+                                    )
+                                except ValueError:
+                                    # The encoder refused this pack.  Impossible for a
+                                    # `no_overlap_2d` result, so it is a bug detector.
+                                    window_encode_errors += 1
+                                    window = frozenset()
+                                window_key = (height, arrangement, window)
+                                if (
+                                    not window
+                                    or len(window) >= len(strips)
+                                    or window_key in solved_windows
+                                ):
+                                    session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+                                else:
+                                    solved_windows.add(window_key)
+                                    window_solves += 1
+                                    window_started = time.monotonic()
+                                    repaired = _pack_window(
+                                        strips,
+                                        height=height,
+                                        width_bound=pack.width,
+                                        direct_candidates=net_candidates,
+                                        window=window,
+                                        fixed_at={
+                                            index: origin
+                                            for index, origin in pack.at.items()
+                                            if index not in window
+                                        },
+                                        seed=pack,
+                                        width_target=target,
+                                        arrangement=arrangement,
+                                        projection_no_goods=tuple(projection_no_goods),
+                                        exact_pack_no_goods=exact_pack_no_goods,
+                                        direct_relation_no_goods=tuple(direct_relation_no_goods),
+                                        feedback=feedback_by_height.get(height),
+                                        on_skipped=_count_window_skips,
+                                    )
+                                    window_seconds += time.monotonic() - window_started
+                                    if repaired is None or repaired.at == pack.at:
+                                        session.observe(
+                                            choice,
+                                            (0.0,) * REWARD_RANKS,
+                                            applied=False,
+                                        )
+                                    else:
+                                        # NOT counted here.  `alns_window_accepted`
+                                        # means INSTALLED into the candidate stream
+                                        # -- the `_pack` site above, where the queue
+                                        # drains -- and not "CP-SAT handed back a
+                                        # different assignment".  A repair the sweep
+                                        # never gets to is not an acceptance.  This
+                                        # mirrors the sequence-pair arm so the gate
+                                        # reads one number across both; ADOPTION, a
+                                        # repair that routed and certified, is
+                                        # `alns_applied`.
+                                        window_packs[height, arrangement] = repaired
+                                        window_choices[height, arrangement] = (
+                                            choice,
+                                            before_metrics,
+                                        )
+                                        window_queue.append((height, arrangement))
                         continue
-                    minimum_pitch_x[pose_id] = pitch_requirement.required_pitch
-                    learned = True
-                    geometry_learned = True
-                retry_promoted = False
-                if exact_retry_evidence is not None:
-                    exact_no_good = ExactPackNoGood(
-                        height=pack.height,
-                        outline=tuple(_box(strip) for strip in strips),
-                        width=pack.width,
-                        origins=tuple(pack.at[index] for index in range(len(strips))),
-                        evidence=exc.failures,
-                        projection_pair=exact_projection_pair,
+                    if result.routing.status is not DetailedRouteStatus.ROUTED:
+                        retain_attempt()
+                        continue
+                    assert result.promised_direct == result.realized_direct, (
+                        "a routed pack may not retain an unrealized rewarded direct insert"
                     )
-                    retry_key = _ExactRetryKey(
-                        height,
-                        arrangement,
-                        exact_retry_evidence,
+                    placement = result.placement
+                    assert placement is not None
+                    # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
+                    #
+                    # `lay_out` promises a valid `Placement` or `NoValidLayout`, and
+                    # until now freeform ARGUED that promise while `spine` enforced it
+                    # -- `spine._rejected` has called `validate.certify` all along and
+                    # this did not. The gap is not theoretical: `quantum-chip`
+                    # /free-proliferation power=1 emits, roughly one build in sixteen, a
+                    # placement whose titanium-glass production is cut into islands, so
+                    # eleven machines can reach 16/7 items/s of an item they consume
+                    # 11/4 of. It pastes and then does not run, which is the one failure
+                    # nobody discovers until they are standing in front of it in game.
+                    #
+                    # A rejected candidate is DISCARDED, not repaired and not returned
+                    # with a warning, and the sweep goes on to the next height. That is
+                    # the same trade `_build`'s `failed` already makes and it goes the
+                    # same way: several separately solved and separately validated packs
+                    # is a search, and refusing outright is honest, while an invalid
+                    # blueprint is the worst outcome this program has.
+                    #
+                    # A fully routed incumbent still has to finish three exact completion
+                    # transforms. Search stops at the caller's wall, but a wired candidate
+                    # gets the fixed loaded-machine atomic grace: discarding a valid route
+                    # halfway through projection makes load, rather than geometry, decide
+                    # whether the same deterministic blueprint exists.
+                    completion_deadline = (
+                        None if deadline is None else deadline + ATOMIC_COMPLETION_GRACE_S
                     )
-                    retry_promoted = exact_no_good_state.admit_retry(
-                        retry_key,
-                        exact_no_good,
-                        affordable=projection_retry_affordable(),
+                    completion_cancelled = (
+                        None
+                        if completion_deadline is None
+                        else lambda completion_deadline=completion_deadline: _expired(
+                            completion_deadline
+                        )
                     )
-                learned_retry_affordable = (
-                    learned and not retry_promoted and projection_retry_affordable()
-                )
-                if geometry_learned:
-                    replan_strips_for_learned_geometry()
-                if learned_retry_affordable:
-                    retry_promoted = True
-                if retry_promoted:
-                    candidate_packs.insert(
-                        candidate_index,
-                        (height, arrangement, True),
+                    compaction_started = time.monotonic()
+                    try:
+                        compacted = finalize.compact_open_boundary_belts_certified(
+                            placement,
+                            spec,
+                            expect_power=True,
+                            cancelled=completion_cancelled,
+                        )
+                    except finalize.ProjectionCancelled:
+                        retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                        break
+                    if _expired(completion_deadline):
+                        retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                        break
+                    placement = compacted.placement
+                    compaction_reserve_s = max(
+                        compaction_reserve_s,
+                        time.monotonic() - compaction_started,
                     )
-                continue
-            if _expired(completion_deadline):
-                retain_attempt(_BuildBudgetStage.FINALIZATION)
-                break
-            finalize_reserve_s = max(
-                finalize_reserve_s,
-                time.monotonic() - finalize_started,
-            )
-            certify_started = time.monotonic()
-            report = validate.certify(placement, spec, expect_power=True)
-            if (height, arrangement) in window_choices:
-                settle_window_credit(
-                    height,
-                    arrangement,
-                    after=metrics_from_evaluation(
-                        result.routing,
-                        _decoded_from_pack(pack, strips, height),
-                        feedback_by_height.get(
+                    finalize_started = time.monotonic()
+                    try:
+                        placement = finalize.finalize_placement(
+                            placement,
+                            self.band_policy,
+                            cancelled=completion_cancelled,
+                        )
+                    except finalize.ProjectionCancelled:
+                        retain_attempt(_BuildBudgetStage.FINALIZATION)
+                        break
+                    except finalize.ProjectionRefusal as exc:
+                        retain_attempt()
+                        learned = False
+                        exact_projection_pair: ExactProjectionPair | None = None
+                        geometry_learned = False
+                        exact_retry_evidence: _ExactRetryEvidence | None = None
+                        pitch_requirements = _projection_pitch_requirements(
+                            placement,
+                            strips,
+                            exc.failures,
+                        )
+                        from flab2bp.layout.strip_variants import (
+                            StripInstanceId,
+                            strip_pose_id,
+                        )
+
+                        strips_by_instance: dict[StripInstanceId, Strip] = {}
+                        for strip in strips:
+                            if strip.family_id is None:
+                                continue
+                            strips_by_instance.setdefault(
+                                StripInstanceId(
+                                    strip.family_id,
+                                    strip.machine_start,
+                                    strip.machines,
+                                ),
+                                strip,
+                            )
+                        for failure, pitch_requirement in zip(
+                            exc.failures,
+                            pitch_requirements,
+                            strict=True,
+                        ):
+                            if rejected is not None:
+                                _retain_refusal(rejected, failure)
+
+                            strip_pair = _projection_strip_pair(placement, failure)
+                            projection_no_good = _projection_no_good(
+                                placement,
+                                pack,
+                                strips,
+                                failure,
+                                self.band_policy,
+                            )
+                            if strip_pair is not None and projection_no_good is None:
+                                if exact_projection_pair is None:
+                                    exact_projection_pair = _exact_projection_pair(
+                                        strips,
+                                        strip_pair,
+                                    )
+                                if exact_retry_evidence is None:
+                                    exact_retry_evidence = _exact_retry_evidence(
+                                        "finalizer",
+                                        failure,
+                                        dict(enumerate(placement.buildings)),
+                                    )
+                            if projection_no_good is not None:
+                                projection_no_good_key = projection_no_good
+                                if projection_no_good_key not in projection_no_good_keys:
+                                    projection_no_good_keys.add(projection_no_good_key)
+                                    projection_no_goods.append(projection_no_good)
+                                    learned = True
+
+                            if pitch_requirement is None:
+                                continue
+                            selected_strip = strips_by_instance.get(pitch_requirement.instance_id)
+                            if (
+                                selected_strip is None
+                                or selected_strip.physical_variant is None
+                                or selected_strip.physical_variant.variant_id
+                                != pitch_requirement.variant_id
+                            ):
+                                continue
+
+                            pose_id = strip_pose_id(selected_strip.physical_variant)
+                            retained_pitch = minimum_pitch_x.get(
+                                pose_id,
+                                selected_strip.physical_variant.pitch_x,
+                            )
+                            if pitch_requirement.required_pitch <= retained_pitch:
+                                continue
+                            minimum_pitch_x[pose_id] = pitch_requirement.required_pitch
+                            learned = True
+                            geometry_learned = True
+                        retry_promoted = False
+                        if exact_retry_evidence is not None:
+                            exact_no_good = ExactPackNoGood(
+                                height=pack.height,
+                                outline=tuple(_box(strip) for strip in strips),
+                                width=pack.width,
+                                origins=tuple(pack.at[index] for index in range(len(strips))),
+                                evidence=exc.failures,
+                                projection_pair=exact_projection_pair,
+                            )
+                            retry_key = _ExactRetryKey(
+                                height,
+                                arrangement,
+                                exact_retry_evidence,
+                            )
+                            retry_promoted = exact_no_good_state.admit_retry(
+                                retry_key,
+                                exact_no_good,
+                                affordable=projection_retry_affordable(),
+                            )
+                        learned_retry_affordable = (
+                            learned and not retry_promoted and projection_retry_affordable()
+                        )
+                        if geometry_learned:
+                            replan_strips_for_learned_geometry()
+                        if learned_retry_affordable:
+                            retry_promoted = True
+                        if retry_promoted:
+                            candidate_packs.insert(
+                                candidate_index,
+                                (height, arrangement, True),
+                            )
+                        continue
+                    if _expired(completion_deadline):
+                        retain_attempt(_BuildBudgetStage.FINALIZATION)
+                        break
+                    finalize_reserve_s = max(
+                        finalize_reserve_s,
+                        time.monotonic() - finalize_started,
+                    )
+                    certify_started = time.monotonic()
+                    report = validate.certify(placement, spec, expect_power=True)
+                    if (height, arrangement) in window_choices:
+                        settle_window_credit(
                             height,
-                            FeedbackState.empty((pack.width, height)),
-                        ),
-                        outline_height=height,
-                        band_target_width=finalize.band_target_width(
-                            projection_envelope,
-                            height=height,
-                            width=pack.width,
-                        ),
-                        validator_clean=not report.errors,
-                    ),
-                    routing_seconds=route_seconds,
+                            arrangement,
+                            after=metrics_from_evaluation(
+                                result.routing,
+                                _decoded_from_pack(pack, strips, height),
+                                feedback_by_height.get(
+                                    height,
+                                    FeedbackState.empty((pack.width, height)),
+                                ),
+                                outline_height=height,
+                                band_target_width=finalize.band_target_width(
+                                    projection_envelope,
+                                    height=height,
+                                    width=pack.width,
+                                ),
+                                validator_clean=not report.errors,
+                            ),
+                            routing_seconds=route_seconds,
+                        )
+                    validation_reserve_s = max(
+                        validation_reserve_s,
+                        time.monotonic() - certify_started,
+                    )
+                    if report.errors and rejected is not None:
+                        for finding in report.errors:
+                            _retain_refusal(rejected, finding)
+                    if _expired(completion_deadline):
+                        retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                        break
+                    if report.errors:
+                        retain_attempt()
+                        continue
+                    if placement.frame is not None:
+                        placement = replace(
+                            placement,
+                            completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+                        )
+                    retain_attempt()
+                    # Area, then belt count. Two packs of equal area are not equally
+                    # good: the one with fewer belt tiles is fewer buildings to paste,
+                    # and a direct insert shows up here as exactly that. Without the
+                    # second key, ties fell to whichever height the sweep tried first,
+                    # which silently discarded direct-inserted packs.
+                    key = (placement.area, float(placement.stats["belt_tiles"]))
+                    if best_key is None or key < best_key:
+                        placement.stats["solver_status"] = 1.0 if pack.status == "OPTIMAL" else 0.5
+                        placement.stats["hit_time_budget"] = float(pack.hit_budget)
+                        placement.stats["fallback_used"] = 0.0
+                        placement.stats["direct_insert_candidates"] = float(len(candidates))
+                        placement.stats["area"] = float(placement.area)
+                        best, best_key = placement, key
+                finally:
+                    # SPEC 5.7: a queued repair is paid on the metrics THIS
+                    # routing pass measured, and `validator_clean` is False for
+                    # any candidate that never reaches `validate.certify`.
+                    # EVERY post-routing exit passes through here -- the
+                    # unrouted `continue`, the two completion breaks, the
+                    # projection/pitch refusal -- so none of them can fall
+                    # through to the post-loop drain and be paid `after=None`,
+                    # which is a zero reward for a repair that was measured.
+                    # The two settles inside the body have already popped the
+                    # choice by the time control reaches here: the failure block
+                    # must settle BEFORE it is allowed to ask for another
+                    # window, and the acceptance path is the only place a
+                    # `validator_clean=True` outcome exists at all.
+                    if (
+                        inbound_choice is not None
+                        and window_choices.get((height, arrangement)) is inbound_choice
+                    ):
+                        settle_window_credit(
+                            height,
+                            arrangement,
+                            after=metrics_from_evaluation(
+                                result.routing,
+                                _decoded_from_pack(pack, strips, height),
+                                feedback_by_height.get(
+                                    height,
+                                    FeedbackState.empty((pack.width, height)),
+                                ),
+                                outline_height=height,
+                                band_target_width=finalize.band_target_width(
+                                    projection_envelope,
+                                    height=height,
+                                    width=pack.width,
+                                ),
+                                validator_clean=False,
+                            ),
+                            routing_seconds=route_seconds,
+                        )
+        finally:
+            # A choice whose candidate never produced a routing evaluation --
+            # the wall arrived before its turn, or an exception took the sweep
+            # out from under it -- is a cost with no reward, and the ledger has
+            # to see it as one.  In a `finally` because an escaping exception
+            # must not hand an operator a free turn: the session outlives this
+            # call and the arm it credits is chosen from what the ledger holds.
+            for outstanding_height, outstanding_arrangement in list(window_choices):
+                settle_window_credit(
+                    outstanding_height,
+                    outstanding_arrangement,
+                    after=None,
+                    routing_seconds=0.0,
                 )
-            validation_reserve_s = max(
-                validation_reserve_s,
-                time.monotonic() - certify_started,
-            )
-            if report.errors and rejected is not None:
-                for finding in report.errors:
-                    _retain_refusal(rejected, finding)
-            if _expired(completion_deadline):
-                retain_attempt(_BuildBudgetStage.CERTIFICATION)
-                break
-            if report.errors:
-                retain_attempt()
-                continue
-            if placement.frame is not None:
-                placement = replace(
-                    placement,
-                    completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
-                )
-            retain_attempt()
-            # Area, then belt count. Two packs of equal area are not equally
-            # good: the one with fewer belt tiles is fewer buildings to paste,
-            # and a direct insert shows up here as exactly that. Without the
-            # second key, ties fell to whichever height the sweep tried first,
-            # which silently discarded direct-inserted packs.
-            key = (placement.area, float(placement.stats["belt_tiles"]))
-            if best_key is None or key < best_key:
-                placement.stats["solver_status"] = 1.0 if pack.status == "OPTIMAL" else 0.5
-                placement.stats["hit_time_budget"] = float(pack.hit_budget)
-                placement.stats["fallback_used"] = 0.0
-                placement.stats["direct_insert_candidates"] = float(len(candidates))
-                placement.stats["area"] = float(placement.area)
-                best, best_key = placement, key
-        # A choice whose candidate never finished -- the wall arrived first --
-        # is a cost with no reward, and the ledger has to see it as one.
-        for outstanding_height, outstanding_arrangement in list(window_choices):
-            settle_window_credit(
-                outstanding_height,
-                outstanding_arrangement,
-                after=None,
-                routing_seconds=0.0,
-            )
         # `stats["route_backend"]` is stamped in `lay_out`, where none of these
         # locals exist, so the operator telemetry is stamped here instead --
         # guarded, because a sweep that refuses has no placement to carry it.
