@@ -17252,22 +17252,32 @@ class FreeformLayout:
                 projection_failures=projection_failures,
             )
         # "every pack the sweep produced left nets unrouted" is false when no
-        # pack was ever produced -- every candidate height's greedy seed can be
-        # skipped as over-band before `_pack` runs (see `skipped_heights`
-        # above), and that leaves `attempts` empty with nothing to blame the
-        # packer for.
-        base = (
-            f"no packing of {len(strips)} strips could be wired at any candidate "
-            "height; every pack the sweep produced left nets unrouted. That is a "
-            "PACKER defect -- it is producing packs its own router cannot wire -- "
-            "and it is reported rather than papered over with a looser packing"
-            if attempts
-            else (
+        # pack was ever produced. `attempts` is empty whenever `_sweep` never
+        # got as far as a routed-or-refused candidate, and that has more than
+        # one cause: every candidate height's greedy seed skipped as over-band
+        # (`skipped_heights`) is one, but `_pack` returning `None` or repeating
+        # an already-seen assignment (both `continue`, recording nothing) is
+        # another -- and that second kind is a packer failure the seed-gate
+        # sentence would misname.  Only claim the seed gate when EVERY
+        # candidate that reached it was skipped; otherwise stay neutral and let
+        # `over_band` supply whatever skip count there was.
+        if attempts:
+            base = (
+                f"no packing of {len(strips)} strips could be wired at any candidate "
+                "height; every pack the sweep produced left nets unrouted. That is a "
+                "PACKER defect -- it is producing packs its own router cannot wire -- "
+                "and it is reported rather than papered over with a looser packing"
+            )
+        elif skipped_heights and len(skipped_heights) == len(
+            _band_policy_candidate_heights(strips, self.band_policy)
+        ):
+            base = (
                 f"no packing of {len(strips)} strips was ever attempted at any "
                 "candidate height; every candidate's greedy seed was skipped before "
                 "a pack could be produced"
             )
-        )
+        else:
+            base = f"no pack of {len(strips)} strips was ever produced at any candidate height"
         raise NoValidLayout(
             (_port_seating_refusal(attempts) or base) + over_band,
             spec_label=spec.label,

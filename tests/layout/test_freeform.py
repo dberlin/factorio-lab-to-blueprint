@@ -20490,3 +20490,119 @@ def test_a_pack_that_never_routed_is_reported_as_a_port_seating_defect() -> None
 def test_a_pack_the_router_ran_on_is_not_reported_as_port_seating() -> None:
     assert freeform._port_seating_refusal([_port_seating_attempt(1, expansions=1200)]) is None
     assert freeform._port_seating_refusal([]) is None
+
+
+def test_lay_out_names_the_skipped_seed_gate_when_every_height_was_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When EVERY candidate height's greedy seed was skipped as over-band,
+
+    `attempts` stays empty and `_pack` never ran, so the refusal must not say a
+    pack was produced ("wired") or blame the packer ("PACKER").  Both
+    `_band_policy_candidate_heights` and the `_sweep` stub report exactly one
+    candidate height, so the equality check that gates the seed-gate sentence
+    (skipped count == candidate-height count) holds.
+    """
+    monkeypatch.setattr(
+        freeform, "_band_policy_candidate_heights", lambda _strips, _policy: (20,)
+    )
+
+    def skip_every_height(
+        self: FreeformLayout,
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        _time_budget_s: float,
+        _deadline: float | None = None,
+        _budget: dict[str, int] | None = None,
+        rejected: list[freeform._RefusalFinding] | None = None,
+        attempts: list[freeform.PackAttempt] | None = None,
+        skipped_heights: list[int] | None = None,
+        **_kwargs: object,
+    ) -> Placement | None:
+        if skipped_heights is not None:
+            skipped_heights.append(20)
+        return None
+
+    monkeypatch.setattr(FreeformLayout, "_sweep", skip_every_height)
+
+    with pytest.raises(NoValidLayout) as caught:
+        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+            two_stage_spec(), time_budget_s=1.0
+        )
+
+    message = str(caught.value)
+    assert "every candidate's greedy seed was skipped" in message
+    assert "1 candidate heights were skipped as over-band" in message
+    assert "wired" not in message
+    assert "PACKER" not in message
+
+
+def test_lay_out_reports_a_neutral_refusal_when_no_pack_and_no_skip_explain_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`attempts` and `skipped_heights` can both stay empty: `_pack` returning
+
+    `None` or repeating an already-seen assignment retains nothing either.
+    Neither the seed-gate sentence nor the PACKER sentence is true here, so the
+    refusal must fall back to a neutral one.
+    """
+
+    def produce_nothing(
+        self: FreeformLayout,
+        *_args: object,
+        **_kwargs: object,
+    ) -> Placement | None:
+        return None
+
+    monkeypatch.setattr(FreeformLayout, "_sweep", produce_nothing)
+
+    with pytest.raises(NoValidLayout) as caught:
+        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+            two_stage_spec(), time_budget_s=1.0
+        )
+
+    message = str(caught.value)
+    assert "was ever produced at any candidate height" in message
+    assert "wired" not in message
+    assert "PACKER" not in message
+    assert "skipped" not in message
+
+
+def test_lay_out_still_names_the_packer_defect_for_a_routed_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retained attempt whose router actually ran and left nets unrouted is
+
+    the ORIGINAL failure mode this refusal names: `_port_seating_refusal`
+    returns `None` for it (a SEALED_POCKET failure is not STATIC_ACCESS-only),
+    so the PACKER-defect wording must still fire.
+    """
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+
+    def report_one_stranded_attempt(
+        self: FreeformLayout,
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        _time_budget_s: float,
+        _deadline: float | None = None,
+        _budget: dict[str, int] | None = None,
+        rejected: list[freeform._RefusalFinding] | None = None,
+        attempts: list[freeform.PackAttempt] | None = None,
+        skipped_heights: list[int] | None = None,
+        **_kwargs: object,
+    ) -> Placement | None:
+        if attempts is not None:
+            attempts.append(
+                _proof_attempt(_routing_failures(RouteFailureKind.SEALED_POCKET), strips)
+            )
+        return None
+
+    monkeypatch.setattr(FreeformLayout, "_sweep", report_one_stranded_attempt)
+
+    with pytest.raises(NoValidLayout) as caught:
+        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=1.0)
+
+    message = str(caught.value)
+    assert "PACKER defect" in message
+    assert "every pack the sweep produced left nets unrouted" in message
