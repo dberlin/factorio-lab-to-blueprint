@@ -1374,6 +1374,50 @@ def test_the_substitution_caps_the_destroy_set_once_the_portfolio_is_open() -> N
     assert 0 < len(capped) <= scale
 
 
+def test_the_exact_window_is_never_handed_a_capped_evidence_set() -> None:
+    """RULING AF: the scale cap is the reinsert's neighbourhood, not the window's.
+
+    The window is an EXACT solve over the evidence a routing failure produced,
+    and the D-UCB scale exists to keep the heuristic repair's neighbourhood
+    local.  Applying it to the window truncates the evidence set -- measured on
+    `universe-matrix/no-proliferator` as 43 strips capped to 6, an 18-strip set
+    cut to 6 -- so the solve is trivial, never moves the pack, earns no reward
+    and starves.  Both arms are checked here in one place: the cap is still on
+    for SEQUENCE_REINSERT, and off for LOCAL_EXACT_PACK, at the same
+    `cap_scale=True`.
+    """
+    fixture = _applied_substitution_fixture()
+    seen: list[frozenset[int]] = []
+
+    def _window_pack(
+        neighbourhood: frozenset[int],
+        _problem: PlacementProblem,
+        _state: AnnealState,
+        _decoded: DecodedPlacement,
+    ) -> EncodedPlacement | None:
+        seen.append(neighbourhood)
+        return None
+
+    _window_state, _window_neighbourhood = _run_alns(
+        fixture,
+        session=_window_arms(),
+        adapters=sequence_solver_module._RepairAdapters(window_pack=_window_pack),
+        cap_scale=True,
+    )
+    _reinsert_state, reinsert = _run_alns(
+        fixture,
+        session=_legacy_arms(),
+        adapters=sequence_solver_module._RepairAdapters(),
+        cap_scale=True,
+    )
+
+    # The whole evidence set, which is what the uncapped destroy operator
+    # produces for this fixture.
+    assert seen == [frozenset({0, 1, 2, 3, 4, 7, 9})]
+    # And the reinsert is still capped at the same call.
+    assert reinsert == frozenset({0, 1})
+
+
 def test_local_exact_pack_takes_the_encoding_the_window_adapter_measured() -> None:
     problem, state, decoded, routing = _applied_substitution_fixture()
     packed = SequencePair(

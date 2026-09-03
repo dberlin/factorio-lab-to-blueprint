@@ -3028,7 +3028,20 @@ def _alns_substitution(
         # False for bare-constructed and test solvers, which then reduce exactly
         # to the legacy rule -- destroy the whole neighbourhood
         # `select_lns_neighbourhood` returned.
-        scale=choice.scale if cap_scale else problem.size,
+        #
+        # THE WINDOW IS EXEMPT, and always was meant to be.  It is an EXACT solve
+        # over the evidence set a routing failure produced; the D-UCB scale is a
+        # locality bound for the HEURISTIC repair's neighbourhood, where a wider
+        # destroy means a longer random reinsert.  Capping the window instead
+        # truncates its evidence -- measured on `universe-matrix/no-proliferator`
+        # as 43 strips cut to 6 -- so CP-SAT answers a trivial question in under a
+        # millisecond, never moves the pack, earns a zero reward and starves the
+        # arm that asked for it.
+        scale=(
+            problem.size
+            if choice.repair is RepairOperator.LOCAL_EXACT_PACK
+            else (choice.scale if cap_scale else problem.size)
+        ),
         result=detailed,
         pair=selected_state.pair,
         gaps=selected_state.gaps,
