@@ -19091,6 +19091,17 @@ def _sweep_over_a_stranded_first_candidate(
         "_greedy_pack",
         lambda _strips, height: packs.get((height, 0), packs[heights[0], 0]),
     )
+    # The stub above hands `_band_policy_candidate_heights` a seed whose width is
+    # `pack_width` -- some callers set that to 5000+ to test a width the band
+    # scan will not target, which is unrelated to boundary reservation.  Since
+    # task-5 made the reservation witness `max(_minimum_pack_width, seed.width)`,
+    # such a seed now reads as "this height's band frame doesn't fit" and gets
+    # replaced with the fixed boundary core height, which this helper's callers
+    # never anticipate.  This helper already gives full, explicit control of the
+    # height schedule via `heights`; bypass reservation so that control holds.
+    monkeypatch.setattr(
+        freeform, "_band_policy_candidate_heights", lambda _strips, _policy: tuple(heights)
+    )
     monkeypatch.setattr(freeform, "_pack", pack)
     monkeypatch.setattr(freeform, "_build", build)
     monkeypatch.setattr(freeform, "_room_for_another", room_for_another)
@@ -20606,3 +20617,59 @@ def test_lay_out_still_names_the_packer_defect_for_a_routed_attempt(
     message = str(caught.value)
     assert "PACKER defect" in message
     assert "every pack the sweep produced left nets unrouted" in message
+
+
+def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R1 §2 and §3, E1 -- re-derived on evidence (task-5 brief Step 3).
+
+    R1 measured `universe-matrix/no-proliferator` (43 strips) scheduling
+    `(125, 160, 100, 80, 60)`, with height 160's greedy seed 258 wide, dying at
+    the pre-pack seed gate while `_minimum_pack_width` (92) let it through.
+    Task 2's strip re-seating (77898a9) changed this cell to 57 strips: its
+    tallest candidate height is now 161, not 160, and that height's real greedy
+    seed is 139 wide, not 258 -- well under the ~200 width where
+    `envelope.frame_candidates` starts refusing height 161 (measured directly:
+    empty at width 200, non-empty at width 150).  A corpus-wide scan (every
+    ``URL_CORPUS`` entry, every ``CandidatePolicy``, 36 buildable candidates)
+    found the fix changes `_band_policy_candidate_heights`'s output for NONE
+    of them post-Task-2: this specific defect no longer reproduces live
+    anywhere in the corpus, matching the reversion rule's "buys no coverage by
+    itself" (R4 §6 E2).
+
+    This restores R1's own measured number (258, the width its greedy seed for
+    this cell's tallest height actually packed) at the one height whose seed
+    narrowed under Task 2, holding every other height's real, unmodified seed.
+    That is the minimal patch that makes the historical defect observable
+    again: with only `_minimum_pack_width` (64) as witness, height 161
+    survives; with `max(_minimum_pack_width, seed.width)` (258) it dies at
+    `frame_candidates` and boundary height 154 takes its slot -- R1's §2/§3
+    mechanism, on real strips, with one real historical number substituted for
+    a value the corpus no longer produces.
+    """
+    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import CandidatePolicy, build_candidates
+
+    entry = next(e for e in URL_CORPUS if e.url_id == "universe-matrix")
+    spec = build_candidates(
+        load_vendored(),
+        parse_url(entry.url),
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    ).candidates[0]
+    strips = plan_strips(spec)
+
+    real_greedy_pack = freeform._greedy_pack
+
+    def widened_seed_at_161(strips_: list[Strip], height: int) -> freeform._Pack:
+        pack = real_greedy_pack(strips_, height)
+        return replace(pack, width=258) if height == 161 else pack
+
+    monkeypatch.setattr(freeform, "_greedy_pack", widened_seed_at_161)
+
+    heights = freeform._band_policy_candidate_heights(strips, BandPolicy("portable"))
+
+    assert 161 not in heights
+    assert 154 in heights

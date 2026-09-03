@@ -2100,6 +2100,38 @@ def test_portable_schedule_reserves_the_tallest_legal_core_boundary() -> None:
     assert len(scheduled) == len(ordered)
 
 
+def test_portable_schedule_reserves_a_boundary_when_only_rotation_admits_the_height() -> None:
+    """The gap the existing sibling hides: its witnesses are 380 to 522 wide.
+
+    `planet.band_for_extent` tries BOTH orientations, which is right for a real
+    placement and wrong as a feasibility witness for a HEIGHT.  At the 92-wide
+    witness `_minimum_pack_width` produced for
+    `universe-matrix/no-proliferator`, a 98x166 extent fits the 200-segment band
+    ROTATED (98 latitude rows of 160), so height 160 survives -- while every real
+    pack of those 43 strips is 258 wide and its 264x162 extent fits nothing
+    (R1 §2).
+    """
+    envelope = finalize.band_policy_search_envelope(
+        BandPolicy("portable"),
+        perimeter=3,
+    )
+    ordered = (125, 160, 100, 80, 60)
+
+    loose = envelope.reserve_boundary_height(
+        ordered,
+        minimum_width_for_height={125: 92, 160: 92, 100: 101, 80: 126, 60: 168},
+    )
+    achievable = envelope.reserve_boundary_height(
+        ordered,
+        minimum_width_for_height={125: 258, 160: 258, 100: 292, 80: 342, 60: 439},
+    )
+
+    assert envelope.boundary_core_height == 154
+    assert loose == ordered
+    assert achievable == (125, 154, 100, 80, 60)
+    assert len(achievable) == len(ordered)
+
+
 def test_projection_refusal_preserves_order_deduplicates_and_formats_evidence() -> None:
     first = finalize.ProjectionFailure("geom.collide", (4, 5), "overlap", 40)
     second = finalize.ProjectionFailure("game.inserter_paste", (9,), "too close", 60)
