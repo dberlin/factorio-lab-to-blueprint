@@ -2644,8 +2644,6 @@ class SequenceSolver[PreparedT]:
                 # This is an already-scheduled search candidate with exact local
                 # failure evidence, not another speculative retry. Close its LNS
                 # substitution before discovery advances to an unrelated height.
-                if self.alns_adapters.window_installed is not None:
-                    self.alns_adapters.window_installed(next_anneal)
                 height_state.feedback_restart = restart.restart
         split_count = 0
         merge_count = 0
@@ -2725,6 +2723,15 @@ class SequenceSolver[PreparedT]:
                         height_state.quality_stagnation = 0
                         height_state.narrowest_key = None
 
+        # Report the state actually being installed here, ungated: the
+        # assignment below is unconditional (a stage-boundary transform above
+        # may have replaced `next_anneal`), so a report gated the same way the
+        # install above is gated both under-counts a real install once the
+        # restart is past its stage ceiling and over-counts a pre-transform
+        # state a transform then discarded.  The closure's own pair-identity
+        # check makes every non-window install a no-op.
+        if self.alns_adapters.window_installed is not None:
+            self.alns_adapters.window_installed(next_anneal)
         restart.anneal = next_anneal
         height_state.stages += 1
         height_state.spent += spent
@@ -5239,11 +5246,7 @@ def _production_run(
                 index: origin for index, origin in pack.at.items() if index not in window
             },
             seed=pack,
-            width_target=finalize.band_target_width(
-                envelope,
-                height=problem.outline_height,
-                width=decoded.width,
-            ),
+            width_target=band_target_for(problem.outline_height, decoded.width),
             time_budget_s=min(
                 C_WINDOW_SECONDS, remaining - C_WINDOW_DEADLINE_SAFETY_SECONDS
             ),
