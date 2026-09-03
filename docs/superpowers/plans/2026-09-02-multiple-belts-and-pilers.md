@@ -29,7 +29,7 @@
 - The dev box is never idle and its load is disk I/O, not CPU; timing steps run without waiting and record `uptime` plus `vmstat 1 3`.
 - Evidence under `docs/superpowers/evidence/<date>-multiple-belts/`, `<date>-stacked-lanes/`, `<date>-pilers/`. The `.superpowers/sdd/` workspace holds briefs and reports.
 - Corpus gate (A, B, C): `uv run python scripts/audit.py --budget 30 --jobs 16 --json <round-file>`, both strategies, three rounds, compared with `scripts/audit_compare.py --regressions-only --expect-cells 72 --p95-seconds 31` against the previous rounds. A must not cost a clean cell; B and C must not cost a clean cell and must not change any cell whose URL has `ist=1` (compare in default mode on those cells: area ratio within noise).
-- Known test facts: `tests/test_pipeline.py::test_without_planetary_logistics_the_same_url_is_refused` pins the refusal A REMOVES (Task 4 rewrites it); `tests/layout/test_freeform.py:361 test_lay_out_threads_one_strip_families_tuple_through_every_planner_call` pins that `generate_strip_families` is called once, so no task may add a second call; `tests/dsp/test_catalog.py:861` pins `BELT_RATE` against the dataset and must not change; the two slow deuteron tests carry pytest-timeout budget comments and any new slow test budgets the same way.
+- Known test facts: `tests/test_pipeline.py::test_without_planetary_logistics_the_same_url_is_refused` pins the refusal A REMOVES (Task 4 rewrites it); `tests/layout/test_strip_variants.py:1343 test_repeated_stage_boundary_splits_conserve_every_machine_and_lane` merges instances past the default cap of 6 (Task 2 uncaps its family); `tests/layout/test_freeform.py:361 test_lay_out_threads_one_strip_families_tuple_through_every_planner_call` pins that `generate_strip_families` is called once, so no task may add a second call; `tests/dsp/test_catalog.py:861` pins `BELT_RATE` against the dataset and must not change; the two slow deuteron tests carry pytest-timeout budget comments and any new slow test budgets the same way.
 - A step whose measurement misses its stated goal is not committed as if it passed: record the numbers and report.
 
 ---
@@ -105,7 +105,7 @@ def test_a_single_machine_over_the_ceiling_is_refused_early_with_the_rate() -> N
         generate_strip_families(_rated_spec(Fraction(31)))
 ```
 
-`particle-collider` must be a catalog machine id that `_adapt` accepts; if the module's helpers use another machine for a two-input recipe, use that one and keep the rates. Import `NoValidLayout` from `flab2bp.layout.base`; its constructor is `NoValidLayout(reason, *, spec_label, budget_s, attempt_reasons, attempt_failures, projection_failures)` (`base.py:440-451`), and it prepends its own preamble to `reason`, so the regex above matches the numbers in the order the message emits them.
+`particle-collider` must be a catalog machine id that `_adapt` accepts; if the module's helpers use another machine for a two-input recipe, use that one and keep the rates. Add `MachineGroup` to the module's `from flab2bp.spec import ...` line (`:44`) if it is not already there, or build the group through the module's `_group` helper. Import `NoValidLayout` from `flab2bp.layout.base`; its constructor is `NoValidLayout(reason, *, spec_label, budget_s, attempt_reasons, attempt_failures, projection_failures)` (`base.py:440-451`), and it prepends its own preamble to `reason`, so the regex above matches the numbers in the order the message emits them.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -193,7 +193,7 @@ git commit -m "feat(layout): cap machines per strip by the effective lane capaci
 
 **Files:**
 - Modify: `src/flab2bp/layout/strip_variants.py` — `partition_strip_variant` (`:1589`)
-- Modify: `src/flab2bp/layout/sequence_pair.py` — `merge_strip_instances` (called at `:1711` from `merge_stage_boundary`)
+- Modify: `src/flab2bp/layout/strip_variants.py` — `merge_strip_instances` (`:1712-1737`, exported at `:1783`; called lazily from `sequence_pair.merge_stage_boundary` at `sequence_pair.py:1712`)
 - Modify: `src/flab2bp/layout/freeform.py` — the no-variant fallback in `plan_strips` (`:2157-2160`)
 - Test: `tests/layout/test_strip_variants.py`, `tests/layout/test_sequence_pair.py`, `tests/layout/test_freeform.py`, `tests/layout/test_sequence_solver.py`
 
@@ -260,7 +260,9 @@ In `partition_strip_variant`, immediately after the `max_machine_count <= 0` che
         max_machine_count = min(max_machine_count, family.machine_cap)
 ```
 
-In `sequence_pair.merge_strip_instances(family, left, right)` (`sequence_pair.py`, called from `merge_stage_boundary` at `:1711`; read its return convention with Serena, it returns the merged instance or the value its caller treats as "no merge"): before building the merged instance, return the no-merge value when `family.machine_cap > 0 and left.machine_count + right.machine_count > family.machine_cap`. Add the test above to `tests/layout/test_sequence_pair.py` if `merge_strip_instances` is not importable from `strip_variants`.
+In `strip_variants.merge_strip_instances(family, left, right) -> StripInstance | None` (`:1712-1737`; `merge_stage_boundary` treats `None` as "no merge"): before building the merged instance, `return None` when `family.machine_cap > 0 and left.machine_count + right.machine_count > family.machine_cap`. `merge_strip_instances` is already imported in `tests/layout/test_strip_variants.py:33`.
+
+KNOWN BREAKAGE TO FIX IN THIS STEP: `tests/layout/test_strip_variants.py:1343 test_repeated_stage_boundary_splits_conserve_every_machine_and_lane` is parametrised over `machine_count in range(1, 13)` and merges instances back to the full count asserting `merged is not None`; its family comes from `_family(_single_machine_spec(...))`, whose default spec caps at 6 (`belt_items_per_second=Fraction(6)`, 1 item/s per machine), so parameters 7-12 would now refuse. Rebuild that test's family with `replace(family, machine_cap=0)` (the test is about conservation, not capacity) and add a one-line comment saying so.
 
 In `plan_strips`' fallback branch (`freeform.py:2157-2160`), replace `max(1, strip_len)` with:
 
@@ -507,13 +509,13 @@ git commit -m "evidence: corpus gate for capacity-bounded strips"
 - Test: `tests/dsp/test_catalog.py`
 
 **Interfaces:**
-- Produces: `stacking.json` with the schema below; `catalog.SORTER_STACKING_LEVELS: int`; `catalog.sorter_pick_stack(item_id: int, level: int) -> int`; `catalog.sorter_place_stack(item_id: int, level: int) -> int`; `catalog.PILER_MAX_STACK: int`; `catalog.PILER_STACK_PARAMETER: int | None` (the parameter index, if the piler's stack is a per-building parameter).
+- Produces: `stacking.json` with the schema below; `catalog.SORTER_STACKING_LEVELS: int`; `catalog.sorter_pick_stack(item_id: int, level: int) -> int`; `catalog.sorter_place_stack(item_id: int, level: int) -> int`; `catalog.SORTER_STACK_RATE_FACTOR: bool` (a sorter carrying a stack of n moves n items per trip); `catalog.PILER_MAX_STACK: int`; `catalog.PILER_SINGLE_PASS: bool` (one piler takes an unstacked belt straight to its setting); `catalog.PILER_THROUGHPUT: Fraction` (cargo per second one piler processes); `catalog.PILER_STACK_PARAMETER: int | None` (the parameter index, if the piler's stack is a per-building parameter).
 
 **This task is a human-in-the-loop prerequisite.** If the numbers cannot be obtained, stop the deliverable here: commit nothing but the oracle change and the report, and record in the ledger that B waits for the export.
 
 - [ ] **Step 1: Extend the oracle to dump the upgrade table**
 
-In the plugin's probe, add a dump that writes, for every `TechProto` in `LDB.techs.dataArray` whose `Name` contains `Cargo Stacking` or `Pile Sorter`, the fields `ID, Name, Level, MaxLevel, UnlockFunctions, UnlockValues, UnlockRecipes, PropertyOverrideItems`, and for item 2040 every `PrefabDesc` field whose name contains `pile`, `stack` or `Stack` with its value, plus the `PilerComponent` (or the component the prefab attaches; discover it) default stack setting and which `BuildingParameters` slot serialises it. Follow the plugin's existing dump conventions (output path, JSON writer). Do not guess field names in the plan's code: the implementer reads the decompiled `Assembly-CSharp` the plugin already builds against.
+In the plugin's probe, add a dump that writes, for every `TechProto` in `LDB.techs.dataArray` whose `Name` contains `Cargo Stacking` or `Pile Sorter`, the fields `ID, Name, Level, MaxLevel, UnlockFunctions, UnlockValues, UnlockRecipes, PropertyOverrideItems`, and for item 2040 every `PrefabDesc` field whose name contains `pile`, `stack` or `Stack` with its value, plus the `PilerComponent` (or the component the prefab attaches; discover it) default stack setting, which `BuildingParameters` slot serialises it, its processing throughput (the per-tick cargo intake, converted to cargo per second; if the component processes whatever the belt delivers with no cap of its own, record `throughput = belt speed` and say why), and whether it stacks an unstacked belt straight to its setting in one pass (read the component's update loop; do not assume). Also record, from the sorter component, whether a carried stack of `n` counts as `n` items per trip (the `SORTER_STACK_RATE_FACTOR` fact). Follow the plugin's existing dump conventions (output path, JSON writer). Do not guess field names in the plan's code: the implementer reads the decompiled `Assembly-CSharp` the plugin already builds against.
 
 - [ ] **Step 2: Run the game with the plugin and capture the dump**
 
@@ -529,7 +531,9 @@ The user runs the game; the dump lands where the plugin writes. Transcribe into 
     "applies_to": ["sorter-1", "sorter-2", "sorter-3"],
     "pile_sorter": {"pick_stack": 4, "place_stack": 4, "needs_research": false}
   },
-  "piler": {"max_stack": 4, "parameter_index": 0, "parameter_values": {"1": 1, "2": 2, "3": 3, "4": 4}}
+  "sorter_stack_rate_factor": true,
+  "piler": {"max_stack": 4, "single_pass": true, "throughput_cargo_per_second": "30",
+            "parameter_index": 0, "parameter_values": {"1": 1, "2": 2, "3": 3, "4": 4}}
 }
 ```
 
@@ -751,7 +755,11 @@ Expected: FAIL — `planning_stack` returns 1 everywhere; `LogicalLane` has no `
         return stack
 ```
 
-The pick and place values are the fastest allowed tier's (`sorter_item_ids[-1]`): `_pick_sorter` chooses per lane from the rate, and Task 9's `flow.stack_pickable` judges the tier actually placed. `spec.py` importing `NoValidLayout` from `layout/base.py` must not create a cycle; check with Serena that `layout/base.py` does not import `spec` at module level (if it does, define the refusal as a `ValueError` subclass in `spec.py` and have `generate_strip_families` translate it).
+The pick and place values are the fastest allowed tier's (`sorter_item_ids[-1]`), the ceiling of what any tier can promise. `layout/base.py` imports only the standard library at runtime (`BuildSpec` is under `TYPE_CHECKING`), so `spec.py` may import `NoValidLayout` directly; no cycle.
+
+- [ ] **Step 3b: The sorter keeps the promise (spec §5.3)**
+
+`_pick_sorter(rate, span, machines, tiers=...)` (`freeform.py:4403`) takes the CHEAPEST tier that carries the rate, so a low-rate producer lane planned at stack 4 would be built with a `sorter-1` placing 1 and the validator would then judge the lane at 1. Give `_pick_sorter` two keyword-only parameters, `min_place_stack: int = 1` and `min_pick_stack: int = 1`, and skip any tier whose `spec`-derived place/pick stack is below them (the three callers, `_flank_lane` `:5089`, `_link_lane` `:5354`, `_bridge` `:14940`, pass the lane's `LogicalLane.stack` as `min_place_stack` for a producer-side sorter and `min_pick_stack` for a consumer-side sorter; the canvas already carries `sorter_tiers`, add the two stack tuples beside it from the spec). With `belt_stack == 1` every lane's stack is 1 and the parameters are inert. Test: a 1 item/s producer lane at stack 4 under `ist=2` with `sorter_place_stacks=(1, 1, 1, 4)` picks the Pile Sorter; the same at stack 1 picks `sorter-1`. Grep the quoted string `"_pick_sorter"` in tests for monkeypatch sites before changing the signature.
 
 - [ ] **Step 4: Lanes carry the stack; comparisons divide by it**
 
@@ -889,7 +897,7 @@ git commit -m "feat(validate): judge belt and sorter capacity at the cargo stack
 
 ```python
 @pytest.mark.slow
-def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch) -> None:
+def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch: pytest.MonkeyPatch) -> None:
     """``ist=2`` with every technology researched: 40 items/s is 20 cargo/s,
     so one Mk.III entry lane carries it and no strip is shortened.  Budget as
     the other slow tests."""
@@ -1005,8 +1013,10 @@ class MergePlan:
     pilers: tuple[PilerPlan, ...]         # one per lane whose planned stack was below `stack`
 
 def plan_merges(loads: Sequence[LaneLoad], *, lane_capacity: Fraction, max_stack: int,
-                sink_pick_stack: int) -> MergePlan: ...
+                sink_pick_stack: int, piler_throughput: Fraction | None = None) -> MergePlan: ...
 ```
+
+`piler_throughput` is `catalog.PILER_THROUGHPUT` (Task 6); when it is below `lane_capacity` it replaces `lane_capacity` as the bound a piled lane's cargo rate must respect (spec §6.2 step 5); `None` means "at least belt speed", which the tests use.
 
 - [ ] **Step 1: Tests**
 
@@ -1163,4 +1173,5 @@ git commit -m "feat(layout): report pilers and gate the piled build"
 - **Spec coverage.** §2 rules -> Tasks 9, 12, 14. §4.1-4.5 -> Tasks 1-4. §4.4 (lane multiplicity) is deliberately not a task: the spec defers it to the gate. §5.1 -> Task 6. §5.2 -> Task 7 (including the `rates/solve.py` Belts objective). §5.3-5.4 -> Task 8. §5.5 -> Task 9. §5.6 -> Task 10. §6.1-6.2 -> Task 12 and 13. §6.3 -> Tasks 11, 13. §6.4 -> Task 14. §6.5 and §7 -> Tasks 10, 15. §8 tests are distributed as listed. §9 sequencing -> the three gates.
 - **Type consistency.** `planning_stack(item, *, external=None)` is introduced in Task 1 with one positional parameter and gains the keyword in Task 8; Task 3's call uses the positional form and Task 9's the keyword form, both valid after Task 8. `belt_run_demands`' three-tuple is introduced in Task 10 and consumed there only. `PilerPlan(lane_id, stack)` and `MergePlan(stack, groups, pilers)` are defined in Task 12 and consumed in Task 13 by name. `LogicalLane` is `order=True`; `stack` is appended as a trailing field so ordering of existing lanes is unchanged.
 - **Placeholders.** Task 6's JSON and Task 11's literals are deliberately marked as shapes to be replaced by dump/fixture values; no code step says "add appropriate handling".
+- **Review round 2 (2026-09-03)** found and this revision fixed: `merge_strip_instances` lives in `strip_variants.py`; the conservation test at `test_strip_variants.py:1343` needs its family uncapped; the three piler/sorter facts are now in Task 6's dump, schema and Produces and `plan_merges` takes `piler_throughput`; `_pick_sorter` floors its tier by the planned stack (Task 8 Step 3b); `LogicalLane`, not `LanePlan`, carries the stack; §8's example count; §3 rule 3's edge; the pessimistic fit test is stated; `MachineGroup` import; typed `monkeypatch`.
 - **Review round 1 (2026-09-03)** found and this revision fixed: the leaf-only merge tree could not express the spec's own example (resolved by single-pass piling to the uniform stack, no trunk pilers); `merge_strip_instances` as a second cap seam; `stack_of` and `planning_stack` gated on `belt_stack > 1`; an unpickable bus is refused, not capped; `cat.item_name` does not exist; `tests/layout/test_junction.py` is created, not modified; the Phase C collision reason; typed test signatures; the refusal regex order; `_family` always caps.

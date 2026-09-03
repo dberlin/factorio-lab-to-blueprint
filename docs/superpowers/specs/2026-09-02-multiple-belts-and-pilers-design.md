@@ -142,8 +142,10 @@ Rules that bind all three:
    run's own capacity; B makes that capacity `BELT_RATE[tier] x stack_of(run)`.
    Nothing is argued at planning time that the validator does not confirm.
 3. **Refuse loudly at the one remaining edge.** A single machine whose single
-   ingredient or product exceeds `BELT_RATE[ceiling] x max_stack` is refused
-   with a message naming the rate, the belt, and the stack that would carry it.
+   ingredient or product exceeds `lane_capacity x planning_stack(item)` is
+   refused with a message naming the rate, the belt, and the stack that would
+   carry it (for an `ist=1` URL the planning stack is 1, so the edge is the
+   belt itself).
 
 ## 4. Deliverable A: capacity-aware strip sharding
 
@@ -173,9 +175,9 @@ unconditionally. A cap in `partition_strip_family` would miss freeform.
 There is one more way a strip grows after partitioning: the sequence-pair
 stage boundary merges two instances of one family with
 `sequence_pair.merge_strip_instances(family, left, right)`, summing their
-machine counts. That merge must refuse (return the pair unmerged) when the
-sum exceeds `family.machine_cap`; otherwise the cap holds at partition time
-and is undone at the boundary. Those two sites, and nothing else, bound both
+machine counts. That merge must refuse (return `None`, which its caller
+already treats as "no merge") when the sum exceeds `family.machine_cap`;
+otherwise the cap holds at partition time and is undone at the boundary. Those two sites, and nothing else, bound both
 strategies and every strip-length heuristic.
 
 `_coarsen_saturated_strip_plan` collapses a plan of more than
@@ -338,15 +340,21 @@ that item, and it is what 4.1's cap reads:
   place less.
 - For an **external output**: as a produced item, with no consumer to pick.
 
-Sorter tiers are chosen per lane by `_pick_sorter` from the rate, as today;
-the planner takes the fastest allowed tier's pick and place stacks as the
-planning value, and the validator's `flow.stack_pickable` judges the tier
-actually placed.
+Sorter tiers are chosen per lane by `_pick_sorter` from the rate, as today,
+which takes the CHEAPEST tier that carries the rate. A planned stack is
+therefore a promise the sorter must keep: when `belt_stack > 1`,
+`_pick_sorter` skips every tier whose place stack (for a producer lane) or
+pick stack (for a consumer lane) is below the lane's planned stack, so a
+low-rate lane planned at stack 4 is built with a sorter that places 4, not
+with a Mk.I that places 1. The planning value is the fastest allowed tier's
+stack (the ceiling of what any tier can promise), and the validator's
+`flow.stack_pickable` judges the tier actually placed.
 
 ### 5.4 Lanes carry a stack
 
-`LanePlan` gains `stack: int` (1 today). `_logical_strip_plans` sets it from
-`planning_stack` for entry lanes and output lanes, and internal lanes inherit
+`LogicalLane` (the demand carrier; `LanePlan` is the pose binding) gains
+`stack: int` (1 today) as a trailing field. `_logical_lanes` sets it from
+`planning_stack` for input lanes and output lanes, and internal lanes inherit
 the producing lane's stack. `input_lane_fits`, `_check_shared_lane_capacity`
 and `_merge_lanes` compare `demand / stack` against `lane_capacity`. A lane
 whose consumer sorter cannot pick its stack is not planned; the family is
@@ -415,7 +423,15 @@ strip's input lane, or the boundary), the planner decides, before routing:
    already provides the geometry for that.
 4. A lane whose planned stack already exceeds `s` keeps its stack (a Pile
    Sorter output at 4 into a stack-2 trunk is fine: the validator's minimum
-   rule judges the trunk at 2).
+   rule judges the trunk at 2). The fit test in step 2 charges every lane at
+   `s` even when its own stack is higher, so it is pessimistic against the
+   grouping arithmetic in step 3 (`demand / max(stack, s)`); that can choose
+   a larger `s` than the cargo strictly needs, never a smaller one, and it
+   stays that way on purpose: an optimistic fit test would be the one place
+   a belt could be overfilled.
+5. If the pinned piler throughput (5.1) is below the belt speed, that
+   throughput replaces `lane_capacity` as the bound a piled lane's cargo rate
+   must respect.
 
 The decision is deterministic: lanes are ordered by strip ordinal and the
 first stack that fits is taken. Its output is a set of `PilerPlan(lane,
@@ -519,9 +535,11 @@ the stack that would have carried the rate.
   builds with ONE hydrogen entry lane at 40 items/s and validates clean; the
   same URL with a technology set lacking the stacking research builds with
   two lanes (A's path) and says so in the report.
-- Unit (C): the merge tree on hand-built lane sets: the 4 x 30 example
-  yields six pilers and three merges; a tree that cannot fit at stack 4 leaves
-  parallel belts; ordering is deterministic across input permutations.
+- Unit (C): the merge decision on hand-built lane sets: the 4 x 30 example
+  yields four pilers to stack 4 and one shared trunk; two 20s yield two pilers
+  to stack 2; five 30s yield a group of four and a group of one; a sink whose
+  sorters pick only 1 forces parallel belts; ordering is deterministic across
+  input permutations.
 - Validator (C): each new check has a fires case and a clean case on
   hand-built placements; a piler fed above belt speed refuses.
 - Codec (C): the piler fixture re-encodes byte-identically and its port
