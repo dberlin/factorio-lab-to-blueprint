@@ -1336,6 +1336,34 @@ def test_an_explicit_strategy_never_races_even_when_asked_to(
     assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
 
 
+def test_racing_rejects_sequence_islands_outside_the_serial_range_before_submitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raced build must refuse an out-of-range island count before any child
+
+    is submitted, exactly as the serial path already does at construction.
+    ``run_strategy_race`` (real, not stubbed here) is what must raise: this
+    test stubs only ``_pool_submit``, the actual submission call, to prove the
+    ``ValueError`` fires before it -- a race that submitted first would report
+    two crashed arms instead of raising.
+    """
+
+    def _never_submitted(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("no race may be submitted for an out-of-range island count")
+
+    monkeypatch.setattr(strategy_race, "_pool_submit", _never_submitted)
+
+    with pytest.raises(ValueError, match="islands must be an integer from 1 to"):
+        pipeline.build(
+            SMALL_URL,
+            strategy="best",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=STUB_RACE_BUDGET_S,
+            race=True,
+            sequence_islands=99,
+        )
+
+
 def test_the_serial_path_settles_each_pair_before_starting_the_next(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

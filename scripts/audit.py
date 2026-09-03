@@ -364,10 +364,6 @@ def run_cell(job: Job) -> Result:
             # rejected -- so the attempt spent its whole budget and the row is
             # honest carrying a wall and an overshoot, unlike the NoValidLayout
             # refusal above (which never had a placement to charge for).
-            # A placement WAS produced here -- it is what got projected and
-            # rejected -- so the attempt spent its whole budget and the row is
-            # honest carrying a wall and an overshoot, unlike the NoValidLayout
-            # refusal above (which never had a placement to charge for).
             now = time.monotonic()
             attempt_wall_s = now - attempt_started
             wall_overshoot_s = max(0.0, attempt_wall_s - job.budget - grace)
