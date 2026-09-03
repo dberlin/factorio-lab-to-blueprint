@@ -1436,7 +1436,11 @@ def _machine_cap(group: _Group, spec: BuildSpec) -> int:
     is the floor of capacity over the largest per-machine single-item rate.
     A machine whose one rate exceeds the capacity cannot be served by any
     strip length; that is refused here, early and with the numbers, instead
-    of late by ``flow.belt_capacity``.
+    of late by ``flow.belt_capacity``. This cap is computed per single item, so
+    a merged lane carrying several items at once can still exceed capacity
+    even when every one of those items is individually under the cap --
+    ``flow.belt_capacity`` at validation is the backstop for that case. A
+    group with neither inputs nor outputs returns 0 (uncapped).
     """
     cap: int | None = None
     for item, rate in (*group.inputs.items(), *group.outputs.items()):
