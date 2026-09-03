@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import dataclasses
 import json
+import subprocess
+import sys
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from flab2bp.bench.corpus import URL_CORPUS
-from flab2bp.layout import finalize
+from flab2bp.layout import finalize, route_kernel
 from flab2bp.layout.base import (
     AreaFrame,
     LayoutAttemptFailure,
@@ -455,7 +458,7 @@ def test_every_audit_row_carries_the_routing_backend_and_the_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(audit, "_COMMIT", "0123456789abcdef0123456789abcdef01234567")
-    audit._JSONL.clear()
+    monkeypatch.setattr(audit, "_JSONL", [])
     job = audit.Job(
         strategy="freeform",
         url_id=URL_CORPUS[0].url_id,
@@ -477,12 +480,81 @@ def test_every_audit_row_carries_the_routing_backend_and_the_commit(
 
     assert tallies["freeform"].total == 2
     assert len(audit._JSONL) == 2
+    # Equality against the real selector, not membership in its two-value
+    # range: a `Result.route_backend` field hard-coded to a literal "cython"
+    # default would still pass a membership check but is not what shipped --
+    # it is not a live read of the process's actual routing kernel.
+    expected_backend = route_kernel.selected_backend()
     for row in audit._JSONL:
         assert row["commit"] == "0123456789abcdef0123456789abcdef01234567"
-        assert row["route_backend"] in ("python", "cython")
+        assert row["route_backend"] == expected_backend
+
+
+def test_result_route_backend_field_defaults_via_the_live_selector_not_a_literal() -> (
+    None
+):
+    # This box has a compiled kernel, so `route_kernel.selected_backend()` and a
+    # field hard-coded to `"cython"` are the SAME string right now -- a test
+    # that only compares the constructed value (even against a fresh call to
+    # `selected_backend()`) cannot tell them apart on this box. Assert on the
+    # field's wiring instead: a `default_factory` identical to the live
+    # selector function is present only when the field calls it; a baked-in
+    # default has no `default_factory` at all (`dataclasses.MISSING`).
+    fields = {f.name: f for f in dataclasses.fields(audit.Result)}
+    assert fields["route_backend"].default_factory is route_kernel.selected_backend
 
 
 def test_head_commit_is_a_hash_or_the_word_unknown() -> None:
     commit = audit._head_commit()
 
     assert commit == "unknown" or (len(commit) == 40 and int(commit, 16) >= 0)
+
+
+def test_head_commit_falls_back_to_unknown_when_git_cannot_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise(*args: object, **kwargs: object) -> None:
+        raise OSError("git not found")
+
+    monkeypatch.setattr(subprocess, "run", _raise)
+
+    assert audit._head_commit() == "unknown"
+
+
+def test_main_resolves_and_stamps_the_commit_it_reads_at_call_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Drives `main()` itself rather than `record()` directly, so that deleting
+    # the `global _COMMIT; _COMMIT = _head_commit()` line inside `main` --
+    # which would leave every row silently stamped "unknown" -- is caught.
+    # `build_jobs` and `run_cell` are replaced with a single canned job/result
+    # so the test exercises `main`'s wiring without running a real solve.
+    monkeypatch.setattr(audit, "_JSONL", [])
+    monkeypatch.setattr(audit, "_COMMIT", "unknown")
+    resolved_commit = "f" * 40
+    monkeypatch.setattr(audit, "_head_commit", lambda: resolved_commit)
+    job = audit.Job(
+        strategy="freeform",
+        url_id=URL_CORPUS[0].url_id,
+        url=URL_CORPUS[0].url,
+        tier=URL_CORPUS[0].tier.value,
+        spec_index=0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        budget=1.0,
+        workers=1,
+    )
+    monkeypatch.setattr(audit, "build_jobs", lambda *args, **kwargs: [job])
+    monkeypatch.setattr(
+        audit,
+        "run_cell",
+        lambda j: audit.Result(j, "CLEAN", "no-proliferator", "", (), 0.01),
+    )
+    monkeypatch.setattr(sys, "argv", ["audit.py", "--jobs", "1"])
+
+    exit_code = audit.main()
+
+    assert exit_code == 0
+    assert len(audit._JSONL) == 1
+    assert audit._JSONL[0]["commit"] == resolved_commit
+    assert audit._JSONL[0]["commit"] != "unknown"
+    assert audit._JSONL[0]["commit"] == audit._head_commit()
