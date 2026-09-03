@@ -643,7 +643,8 @@ Phase C adds one measured quantity, one branch, and an explicit re-visit queue:
   dearest_pack_s)` — the cost of a window solve plus the measured cost of everything after packing.
   It is a measurement, like `dearest_candidate_s`, not a tuned constant.
 - In the `if failed:` block, after the `promote_retry` branch and before `continue`
-  (`freeform.py:16700-16755`): when the full retry was not admitted and
+  (`freeform.py:16700-16755`): when a full retry was WANTED (`promote_retry`), had a slot
+  (`retry_slot_found`), and the clock refused it (`not retry_admitted`), and
   `_room_for_another(deadline, soft, window_candidate_s)`, run `LOCAL_EXACT_PACK` on the failed
   pack — destroy set from the same selector, `fixed_at` for everything else,
   `width_target = band_target_width(projection_envelope, height=height, width=pack.width)`.
@@ -654,9 +655,16 @@ Phase C adds one measured quantity, one branch, and an explicit re-visit queue:
   separate `window_queue: list[tuple[int, int]]`. The candidate loop's head drains `window_queue`
   before advancing `candidate_index`: a queued entry is evaluated with its stored pack instead of
   calling `_pack`, and is removed whether it succeeds or fails. `candidate_packs` is not touched.
-- **Windows are deduped per `lay_out` call** by `(height, arrangement, window)` in a
+- **Windows are deduped per `_sweep` call** by `(height, arrangement, window)` in a
   `solved_windows: set[tuple[int, int, frozenset[int]]]`. Without it, a pack that fails the same way
   twice asks CP-SAT the identical question twice and spends `C_WINDOW_SECONDS` for a known answer.
+  The set is per sweep, not per `lay_out`, because `replan_strips_for_learned_geometry` renumbers the
+  strip indices the key is built from between sweeps.
+- **Consequence at budget 30 (measured in Task 13).** The trigger fires only where the clock refuses
+  a wanted retry; on the current corpus freeform exhausts its candidate list well inside the budget,
+  so no freeform window fires on any of the 36 cells. That is the rule working as written, not a
+  defect. Whether to widen the trigger (for example to any routing failure with a slot and clock to
+  spare) is decided at the gate from the sequence-pair arm's evidence, not by the implementer.
 
 **Credit is keyed by the candidate it belongs to.** The `OperatorSession` is constructed in
 `FreeformLayout.lay_out` before the sweep, so it lives for the whole call and survives a
