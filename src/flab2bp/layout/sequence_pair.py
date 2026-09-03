@@ -350,7 +350,7 @@ class EliteCategory(Enum):
 #: transition, far dearer than ``time.monotonic()``, so the stride exists to keep
 #: the poll off the hot path rather than to save the syscall; 256 of 2,000 moves
 #: bounds the overrun at an eighth of a stage.
-ANNEAL_DEADLINE_CHECK_MOVES = 256
+ANNEAL_DEADLINE_CHECK_MOVES: int = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -815,6 +815,10 @@ class AnnealStageResult:
     #: ``compare=False`` for the same reason ``backend`` is: two stages that
     #: reached the same state are the same result however they got there.
     cancelled: bool = field(default=False, compare=False)
+    #: The move index reached: ``config.moves_per_stage`` unless ``cancelled``,
+    #: in which case it is however far the stage got before the poll that
+    #: stopped it.  ``compare=False`` like ``cancelled``, which it mirrors.
+    moves_made: int = field(default=0, compare=False)
 
     def __post_init__(self) -> None:
         if not self.archive:
@@ -1674,6 +1678,8 @@ def anneal_stage(
             current = candidate
             accepted_moves += 1
 
+    moves_made = move_index if stopped else config.moves_per_stage
+
     final_state = AnnealState(
         pair=current.state.pair,
         gaps=current.state.gaps,
@@ -1689,6 +1695,7 @@ def anneal_stage(
         archive=archive_builder.archive,
         backend=kernel.backend,
         cancelled=stopped,
+        moves_made=moves_made,
     )
 
 

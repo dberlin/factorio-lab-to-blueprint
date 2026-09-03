@@ -2083,7 +2083,7 @@ class SequenceSolver[PreparedT]:
                     restart=restart,
                     stage_start=stage_start,
                     result=result,
-                    move_count=self.config.moves_per_stage,
+                    move_count=result.moves_made,
                 )
             )
         return tuple(results)
