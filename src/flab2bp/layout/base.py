@@ -215,6 +215,7 @@ class PlacementStats(TypedDict, total=False):
     archive_categories: list[str]
     archive_category: str
     area: float
+    attempt_wall_s: float
     backend: str
     belt_runs_upgraded: float
     belt_tiles: float
@@ -353,6 +354,7 @@ class PlacementStats(TypedDict, total=False):
     validation_time_s: float
     validator_clean: float
     variant_moves: float
+    wall_overshoot_s: float
     weighted_hpwl: float
     winner_island_id: int
     winner_island_seed: int
