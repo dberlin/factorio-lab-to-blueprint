@@ -963,6 +963,13 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         "_PACK_SHARE: CP-SAT's share of a sweep's clock, set by measurement",
     ),
     LintException(
+        "flab2bp.layout.strategy_race",
+        "<module>",
+        0.75,
+        "RACE_FREEFORM_WORKER_SHARE: freeform's share of CP-SAT search workers; "
+        "not MAX_BELT_SLOPE",
+    ),
+    LintException(
         "flab2bp.layout.sequence_pair",
         "SearchEnergy",
         0.35,
