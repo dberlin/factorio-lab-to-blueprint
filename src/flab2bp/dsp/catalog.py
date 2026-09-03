@@ -605,6 +605,214 @@ def belt_rules_for_technologies(
     )
 
 
+# --- cargo stacking --------------------------------------------------------
+#
+# Read out of the game files on this box, never from a live dump: the
+# behavioural facts come from an ``ilspycmd`` decompile of ``Assembly-CSharp``
+# and the per-level unlock values from ``resources.assets`` via
+# ``scripts/extract_dsp_tables.py``.  ``data/stacking.json`` carries the file
+# and line for every number; nothing here restates a rule the game owns.
+#
+# Two things about DSP stacking are easy to get backwards, so they are written
+# down here rather than left to the reader of the tables:
+#
+#   * ``pick_stack`` counts CARGOS, not items.  A sorter picks until
+#     ``stackCount == stackInput`` and each pick adds the picked cargo's own
+#     stack byte to ``itemCount`` (``InserterComponent.cs:358``, ``:313``,
+#     ``:392``).  A Pile Sorter at pick 4 fed a stack-4 belt carries 16 items
+#     per swing.  ``place_stack`` is the largest stack it may FORM on the
+#     output belt (``:443-448``), and is not consulted at all when inserting
+#     into a building (``:471-474``).
+#
+#   * Only the Pile Sorter's ladder is live.  ``Sorter Cargo Stacking``
+#     (techs 3301-3305) carries ``IsObsolete = 1``, which is what hides a tech
+#     from the tree (``UITechNode.cs:914``), so ``inserterStackCountObsolete``
+#     never leaves its new-game 1 on this build and Mk.III stacks nothing.
+
+_STACKING = Path(__file__).parent / "data" / "stacking.json"
+
+
+@cache
+def _stacking() -> Mapping[object, object]:
+    return _mapping(_json(_STACKING), str(_STACKING))
+
+
+def _level_key(key: object, path: str) -> int:
+    """A stacking table's keys are research levels spelt as JSON object keys."""
+    text = _string(key, f"{path} key")
+    if not text.isdigit():
+        raise _CatalogDataError(f"{path} key {text!r} is not a research level")
+    return int(text)
+
+
+def _level_table(value: object, path: str, levels: int) -> dict[int, int]:
+    row = _mapping(value, path)
+    table = {
+        _level_key(key, path): _integer(entry, f"{path}.{key}")
+        for key, entry in row.items()
+    }
+    absent = [level for level in range(levels + 1) if level not in table]
+    if absent:
+        raise _CatalogDataError(f"{path} has no entry for levels {absent}")
+    return table
+
+
+@cache
+def _sorter_stacking() -> tuple[int, dict[int, tuple[dict[int, int], dict[int, int]]]]:
+    """``(levels, {item id: (pick by level, place by level)})``.
+
+    Every sorter tier gets an entry: the ones the shared table covers point at
+    the same two dicts, and the Pile Sorter points at its own.
+    """
+    path = f"{_STACKING}.sorter_cargo_stacking"
+    row = _mapping(_required(_stacking(), "sorter_cargo_stacking", str(_STACKING)), path)
+    levels = _integer(_required(row, "levels", path), f"{path}.levels")
+
+    def pick_and_place(
+        entry: Mapping[object, object], where: str
+    ) -> tuple[dict[int, int], dict[int, int]]:
+        def table(kind: str) -> dict[int, int]:
+            key = f"{kind}_stack_by_level"
+            return _level_table(_required(entry, key, where), f"{where}.{key}", levels)
+
+        return table("pick"), table("place")
+
+    shared = pick_and_place(row, path)
+
+    pile_path = f"{path}.pile_sorter"
+    pile = _mapping(_required(row, "pile_sorter", path), pile_path)
+    pile_id = _integer(_required(pile, "item_id", pile_path), f"{pile_path}.item_id")
+    own = pick_and_place(pile, pile_path)
+
+    applies_path = f"{path}.applies_to"
+    applies = _mapping(_required(row, "applies_to", path), applies_path)
+    entries = _array(_required(applies, "items", applies_path), f"{applies_path}.items")
+    tables: dict[int, tuple[dict[int, int], dict[int, int]]] = {}
+    for index, value in enumerate(entries):
+        entry_path = f"{path}.applies_to.items[{index}]"
+        entry = _mapping(value, entry_path)
+        item_id = _integer(_required(entry, "item_id", entry_path), f"{entry_path}.item_id")
+        tables[item_id] = own if item_id == pile_id else shared
+    if pile_id not in tables:
+        raise _CatalogDataError(
+            f"{pile_path}.item_id {pile_id} is absent from {applies_path}.items"
+        )
+    return levels, tables
+
+
+#: Research levels the live cargo-stacking ladder has.  ``0`` means nothing
+#: researched, so a table covers ``0..SORTER_STACKING_LEVELS`` inclusive.
+SORTER_STACKING_LEVELS: int = _sorter_stacking()[0]
+
+
+def _stack_table(item_id: int, level: int) -> tuple[dict[int, int], dict[int, int]]:
+    levels, tables = _sorter_stacking()
+    if item_id not in tables:
+        raise ValueError(f"item {item_id} is not a sorter with a stacking table")
+    if level < 0 or level > levels:
+        raise ValueError(f"research level {level} outside 0..{levels}")
+    return tables[item_id]
+
+
+def sorter_pick_stack(item_id: int, level: int) -> int:
+    """Belt cargos a sorter of this tier accumulates per swing at ``level``.
+
+    ``history.inserterStackInput`` for the Pile Sorter,
+    ``history.inserterStackCountObsolete`` for Mk.III, 1 for the rest -- the
+    grade rule in ``GameData.OnInserterTechChange``.  Cargos, not items: the
+    items carried are this many cargos times the stack riding on them.
+    """
+    return _stack_table(item_id, level)[0][level]
+
+
+def sorter_place_stack(item_id: int, level: int) -> int:
+    """Largest stack it may form on the OUTPUT BELT at ``level``.
+
+    ``history.inserterStackOutput``, passed straight to
+    ``TryInsertItemToBeltWithStackIncreasement``.  Inserting into a building
+    splits the load evenly instead and never reads it.
+    """
+    return _stack_table(item_id, level)[1][level]
+
+
+@cache
+def _sorter_stack_rate_factor() -> bool:
+    path = f"{_STACKING}.sorter_stack_rate_factor"
+    row = _mapping(_required(_stacking(), "sorter_stack_rate_factor", str(_STACKING)), path)
+    return _boolean(_required(row, "value", path), f"{path}.value")
+
+
+#: Whether a sorter carrying a stack of ``n`` moves ``n`` items on that trip.
+#: True: every pick does ``itemCount += stack`` and the Inserting stage
+#: delivers ``itemCount`` items, so sorter throughput scales with the stack.
+SORTER_STACK_RATE_FACTOR: bool = _sorter_stack_rate_factor()
+
+
+@cache
+def _piler() -> Mapping[object, object]:
+    return _mapping(_required(_stacking(), "piler", str(_STACKING)), f"{_STACKING}.piler")
+
+
+#: Largest stack an Automatic Piler emits.
+PILER_MAX_STACK: int = _integer(
+    _required(_piler(), "max_stack", f"{_STACKING}.piler"), f"{_STACKING}.piler.max_stack"
+)
+
+#: Whether ONE piler takes an unstacked belt straight to :data:`PILER_MAX_STACK`.
+#:
+#: False.  ``PilerComponent`` caches at most two cargos and emits their sum, so
+#: it DOUBLES: an unstacked belt leaves the first piler at stack 2 and reaching
+#: 4 needs a second one in series.  Any plan that budgets one piler per belt is
+#: wrong by a factor of two in piler count.
+PILER_SINGLE_PASS: bool = _boolean(
+    _required(_piler(), "single_pass", f"{_STACKING}.piler"), f"{_STACKING}.piler.single_pass"
+)
+
+
+def piler_output_stack(input_stack: int) -> int:
+    """Stack one piler emits when fed a belt of uniform ``input_stack`` cargos."""
+    if input_stack < 1:
+        raise ValueError(f"input stack {input_stack} must be at least 1")
+    return min(2 * input_stack, PILER_MAX_STACK)
+
+
+@cache
+def _piler_throughput() -> Fraction:
+    path = f"{_STACKING}.piler.throughput_cargo_per_second"
+    row = _mapping(_required(_piler(), "throughput_cargo_per_second", f"{_STACKING}.piler"), path)
+    return Fraction(_integer(_required(row, "per_belt_speed", path), f"{path}.per_belt_speed"))
+
+
+#: Cargo per second one piler passes, PER UNIT of ``PrefabDesc.beltSpeed``.
+#:
+#: Stored per unit speed rather than as one belt's number because the piler has
+#: no rate of its own: it charges ``beltSpeed * 1000`` per tick and spends
+#: 10000 per cargo, so its timed branch alone runs at ``6 * beltSpeed`` cargo
+#: per second -- and ``PILER_THROUGHPUT * beltSpeed`` reproduces
+#: :data:`BELT_RATE` exactly for all three tiers.  A caller that wants an
+#: absolute rate on a given belt should read ``BELT_RATE``; this constant is
+#: what says the two agree.  It is also a LOWER bound: the untimed pick branch
+#: takes cargo without charging ``timeSpend`` at all.
+PILER_THROUGHPUT: Fraction = _piler_throughput()
+
+@cache
+def _piler_stack_parameter() -> int | None:
+    """``null`` is a FINDING here, so the key must be present to say it."""
+    path = f"{_STACKING}.piler"
+    value = _required(_piler(), "parameter_index", path)
+    if value is None:
+        return None
+    return _integer(value, f"{path}.parameter_index")
+
+
+#: Which ``BuildingParameters`` slot carries a piler's stack setting.  ``None``
+#: because there is no such setting: ``PilerDesc`` declares no fields, nothing
+#: in ``BuildingParameters`` handles a ``PilerComponent``, and Pile-vs-Split is
+#: derived from which belt is wired as the output.  A blueprint cannot ask a
+#: piler for a stack, so a plan must place pilers in series instead.
+PILER_STACK_PARAMETER: int | None = _piler_stack_parameter()
+
+
 #: Default ceiling on belt altitude, in blueprint z.
 #:
 #: Derived from the game, not from the corpus.  The corpus said 1.0 and the
