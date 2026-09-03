@@ -2719,6 +2719,20 @@ def test_flow_belt_capacity_clean_within_the_tier() -> None:
     assert not fired(r, "flow.belt_capacity")
 
 
+def test_flow_belt_capacity_uses_the_slowest_tile_in_a_mixed_run() -> None:
+    # A run can end up with a Mk.III head and a Mk.II tail once compaction
+    # merges two runs that were retiered differently; capacity must be judged
+    # by the slowest tile, not the head's, or an overloaded tail goes uncaught.
+    p = place(
+        belt(2, 0, item_id=2003, out=1),  # Mk.III, 30/s
+        belt(3, 0, item_id=2002),  # Mk.II, 12/s
+        machine(4, 0, recipe_id=6),
+        sorter(3, 0, 4, 0, inp=1, out=2, item_id=PILE),
+    )
+    r = validate(p, hungry_spec(Fraction(20)), ids=TWO_INPUT_IDS)
+    assert fired(r, "flow.belt_capacity")
+
+
 def test_flow_sorter_capacity_fires_beyond_the_sorter_rate() -> None:
     # Sorter Mk.III sustains 6/s at one tile; this machine wants 20/s
     r = validate(fed_machine(), hungry_spec(Fraction(20)), ids=TWO_INPUT_IDS)
@@ -5086,3 +5100,81 @@ def test_internal_seeds_counts_a_port_dock_on_both_sides() -> None:
     drains, seeds = _internal_seeds(ctx)
     assert seeds == {ctx.run_of[1]}
     assert drains == {ctx.run_of[3]}
+
+
+# --- researched tiers -------------------------------------------------------
+
+
+def _tiered_spec(*upgrades: str) -> BuildSpec:
+    from flab2bp.spec import BeltTier
+
+    speeds = {"conveyor-belt-3": Fraction(30)}
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(1)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+        ),
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+        belt_upgrades=tuple(BeltTier(item_id=u, items_per_second=speeds[u]) for u in upgrades),
+        sorter_item_ids=("sorter-1", "sorter-2", "sorter-3"),
+    )
+
+
+def test_belt_tier_allowed_fires_on_a_belt_the_save_cannot_build() -> None:
+    p = place(
+        belt(3, 0, item_id=2003), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
+    r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
+    assert fired(r, "belt.tier_allowed")
+
+
+def test_belt_tier_allowed_clean_inside_the_researched_set() -> None:
+    p = place(
+        belt(3, 0, item_id=2003), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
+    r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
+    assert not fired(r, "belt.tier_allowed")
+
+
+def test_belt_tier_allowed_fires_below_the_floor_too() -> None:
+    p = place(
+        belt(3, 0, item_id=2001), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
+    r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
+    assert fired(r, "belt.tier_allowed")
+
+
+def test_belt_tier_allowed_fires_on_a_disallowed_tile_in_an_otherwise_allowed_run() -> None:
+    # An allowed head must not hide a disallowed tail: retiering plus the
+    # finalizer's compaction can leave one run mixed, so the check must judge
+    # every tile rather than trusting the run's first tile.
+    p = place(
+        belt(2, 0, item_id=2003, out=1),  # allowed upgrade
+        belt(3, 0, item_id=2001),  # below the floor -- disallowed
+        machine(4, 0, recipe_id=6),
+        sorter(3, 0, 4, 0, inp=1, out=2),
+    )
+    r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
+    assert fired(r, "belt.tier_allowed")
+
+
+def test_sorter_tier_allowed_fires_on_a_pile_sorter_the_save_cannot_build() -> None:
+    p = place(
+        belt(3, 0), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1, item_id=PILE)
+    )
+    r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
+    assert fired(r, "sorter.tier_allowed")
+
+
+def test_sorter_tier_allowed_clean_inside_the_researched_set() -> None:
+    p = place(
+        belt(3, 0), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1, item_id=SORTER3)
+    )
+    r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
+    assert not fired(r, "sorter.tier_allowed")

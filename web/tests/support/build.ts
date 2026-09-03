@@ -34,6 +34,12 @@ export function anAttemptDetail(overrides: Partial<AttemptDetail> = {}): Attempt
     external_inputs: { 'magnetic-coil': { exact: '5/6', per_minute: 50 } },
     input_markers: 1,
     unmarked_inputs: [],
+    belt_tiers: {
+      floor: 'conveyor-belt-1',
+      ceiling: 'conveyor-belt-1',
+      runs_upgraded: 0,
+      upgrade_tiers: [],
+    },
     report: { ok: true, checks_run: ['power'], skipped: [], errors: [], warnings: [] },
     ...overrides,
   };
@@ -74,6 +80,12 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
     flow_pinned: false,
     flow_findings: [] as string[],
     belt_rules: { max_z: 26.55, lab_level: 9, vertical_construction: true, from_url: false },
+    belt_tiers: {
+      floor: 'conveyor-belt-1',
+      ceiling: 'conveyor-belt-1',
+      runs_upgraded: 0,
+      upgrade_tiers: [],
+    },
     refused: [] as BuildResult['refused'],
     report: { ok: true, checks_run: ['power'], skipped: [], errors: [], warnings: [] },
   };
@@ -96,6 +108,7 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
           external_inputs: merged.external_inputs,
           input_markers: merged.input_markers,
           unmarked_inputs: merged.unmarked_inputs,
+          belt_tiers: merged.belt_tiers,
           report: merged.report,
         }),
       }),

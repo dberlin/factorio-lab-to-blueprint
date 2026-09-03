@@ -89,6 +89,7 @@ export function BuildReportPanel({
     external_inputs: result.external_inputs,
     input_markers: result.input_markers,
     unmarked_inputs: result.unmarked_inputs,
+    belt_tiers: result.belt_tiers,
     report: result.report,
   };
   const strategy = selectedAttempt?.strategy ?? result.strategy;
@@ -130,6 +131,15 @@ export function BuildReportPanel({
         <dd>
           {inputs.length > 0 ? inputs.join(', ') : 'nothing'}
           {inputs.length > 0 && ` (${shown.input_markers} marked with icons)`}
+        </dd>
+        <dt>Belts</dt>
+        <dd>
+          {shown.belt_tiers.floor}
+          {shown.belt_tiers.ceiling !== shown.belt_tiers.floor
+            ? `, ${shown.belt_tiers.runs_upgraded} run(s) raised to ${
+                shown.belt_tiers.upgrade_tiers.join(', ') || 'nothing'
+              } (ceiling ${shown.belt_tiers.ceiling})`
+            : ' (the URL unlocks nothing faster)'}
         </dd>
         {elapsedS !== undefined && (
           <>

@@ -216,7 +216,9 @@ class PlacementStats(TypedDict, total=False):
     archive_category: str
     area: float
     backend: str
+    belt_runs_upgraded: float
     belt_tiles: float
+    belt_upgrade_tiers: list[str]
     best_overflow: float
     best_stranded: float
     boundary_belts_removed: float

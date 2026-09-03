@@ -23,10 +23,12 @@ from flab2bp.lab.flow import (
     canonicalize_request,
 )
 from flab2bp.lab.schema import Dataset
+from flab2bp.lab.techs import logistics_tiers_for_request
 from flab2bp.lab.url import LabRequest
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.solve import RateSolution, solve, target_producer_ids, target_rates
 from flab2bp.spec import (
+    BeltTier,
     BuildSpec,
     BuildSpecSet,
     CoproductBufferProof,
@@ -183,6 +185,12 @@ def _to_build_spec(
     }
 
     belt_id = request.belt_id or "conveyor-belt-1"
+    tiers = logistics_tiers_for_request(request, data)
+    belt_upgrades = tuple(
+        BeltTier(item_id=item_id, items_per_second=data.belt_speed(item_id))
+        for item_id in tiers.belt_item_ids
+        if item_id != belt_id
+    )
     spec = BuildSpec(
         groups=tuple(groups),
         external_inputs=dict(solution.external_inputs),
@@ -190,6 +198,8 @@ def _to_build_spec(
         surplus_outputs=surplus_outputs,
         belt_item_id=belt_id,
         belt_items_per_second=data.belt_speed(belt_id),
+        belt_upgrades=belt_upgrades,
+        sorter_item_ids=tiers.sorter_item_ids,
         label=label,
         belt_required_edges=frozenset(belt_required),
         spray_lanes=spray_lanes,

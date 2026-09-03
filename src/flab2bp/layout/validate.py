@@ -5081,9 +5081,19 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
     assert ctx.spec is not None
     for ridx, per_item in sorted(_run_demand(ctx).items()):
         run = ctx.runs[ridx]
-        capacity = cat.BELT_RATE.get(run.tier_item_id)
+        # A run can be mixed after the finalizer's compaction merges two runs
+        # whose tiles were retiered differently, so the run's capacity is the
+        # SLOWEST tile in it -- that tile is what actually throttles the lane.
+        rates = [
+            r
+            for i in run.indices
+            if (r := cat.BELT_RATE.get(ctx.placement.buildings[i].item_id)) is not None
+        ]
+        if not rates:
+            continue
+        capacity = min(rates)
         required = sum(per_item.values(), Fraction(0))
-        if capacity is None or required <= capacity:
+        if required <= capacity:
             continue
         breakdown = {
             (k or "unattributed"): str(v)
@@ -5142,6 +5152,62 @@ def _sorter_capacity(ctx: Context) -> Iterable[Finding]:
                 "required": str(required),
                 "capacity": str(capacity),
             },
+        )
+
+
+@check("belt.tier_allowed", needs_spec=True)
+def _belt_tier_allowed(ctx: Context) -> Iterable[Finding]:
+    """Every belt tile is one the save can build: the URL's belt or a researched upgrade.
+
+    The floor is FactorioLab's choice and the ceiling is the technology set,
+    both carried on the spec; a tile outside that set pastes in the game and
+    then cannot be built by the player.  Below the floor is reported too --
+    nothing emits a slower belt on purpose, so one is a defect.
+
+    Judged per tile rather than per run: the finalizer's compaction can merge
+    two runs after retiering, leaving one run with tiles at different tiers,
+    so a run-level check could miss a disallowed tile hiding behind an
+    allowed head.
+    """
+    assert ctx.spec is not None
+    allowed = {
+        numeric
+        for tier in ctx.spec.belt_tiers
+        if (numeric := cat.get_item_id(tier.item_id)) is not None
+    }
+    names = [tier.item_id for tier in ctx.spec.belt_tiers]
+    for i, b in ctx.of_kind(Kind.BELT):
+        if b.item_id in allowed:
+            continue
+        yield Finding(
+            "belt.tier_allowed",
+            Severity.ERROR,
+            f"belt tile {i} is tier {b.item_id}, which this save cannot "
+            f"build; allowed: {', '.join(names)}",
+            (i,),
+            {"tile": i, "run": ctx.run_of.get(i), "tier": b.item_id, "allowed": names},
+        )
+
+
+@check("sorter.tier_allowed", needs_spec=True)
+def _sorter_tier_allowed(ctx: Context) -> Iterable[Finding]:
+    """Every sorter is a tier the save has researched."""
+    assert ctx.spec is not None
+    allowed = {
+        numeric
+        for item_id in ctx.spec.sorter_item_ids
+        if (numeric := cat.get_item_id(item_id)) is not None
+    }
+    for i, s in ctx.of_kind(Kind.SORTER):
+        if s.item_id in allowed:
+            continue
+        yield Finding(
+            "sorter.tier_allowed",
+            Severity.ERROR,
+            f"sorter {i} is tier {s.item_id}, which this save cannot build; "
+            f"allowed: {', '.join(ctx.spec.sorter_item_ids)}",
+            (i,),
+            {"sorter": i, "tier": s.item_id, "allowed": list(ctx.spec.sorter_item_ids)},
         )
 
 
@@ -5637,6 +5703,26 @@ def id_map(spec: BuildSpec) -> IdMap:
         if got is not None:
             items[item] = got
     return IdMap(recipes=recipes, items=items)
+
+
+def belt_run_demands(
+    placement: Placement, spec: BuildSpec
+) -> tuple[tuple[BeltRun, ...], dict[int, dict[str | None, Fraction]]]:
+    """Each belt run and the items/second it must carry, by item.
+
+    The same runs ``_build_runs`` chains and the same demand ``_run_demand``
+    computes for ``flow.belt_capacity`` -- exposed so the belt-tier pass in
+    ``layout/belt_tiers.py`` and the judge can never disagree about what a run
+    carries.  Runs no checks.  When a machine cannot be resolved to a spec
+    group the demand is empty: the flow is unknowable, and
+    ``machine.group_resolved`` reports the placement anyway.
+    """
+    ctx = _context(
+        placement, spec, id_map(spec), 256, cat.DEFAULT_MAX_BELT_Z, True
+    )
+    if ctx.unresolved_machines():
+        return ctx.runs, {}
+    return ctx.runs, _run_demand(ctx)
 
 
 def certify(placement: Placement, spec: BuildSpec, *, expect_power: bool) -> Report:

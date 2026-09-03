@@ -125,7 +125,7 @@ from flab2bp.layout.strip_variants import (
     projection_pitch_requirement,
     strip_pose_id,
 )
-from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
+from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode
 
 type SpecFactory = Callable[[], BuildSpec]
 
@@ -17288,6 +17288,102 @@ def test_freeform_placement_records_route_backend() -> None:
         two_stage_spec(), time_budget_s=4.0
     )
     assert placement.stats["route_backend"] == route_kernel.selected_backend()
+
+
+def test_lay_out_raises_a_lane_that_needs_a_faster_belt() -> None:
+    """One machine drawing 14/s on a Mk.II floor: the input lane must come out
+    as Mk.III, everything else may stay Mk.II, and the result validates."""
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": F(14)},
+                outputs_per_machine={"magnetic-coil": F(1)},
+            ),
+        ),
+        external_inputs={"copper-ingot": F(14)},
+        outputs={"magnetic-coil": F(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        belt_upgrades=(BeltTier(item_id="conveyor-belt-3", items_per_second=F(30)),),
+    )
+    layout = FreeformLayout(band_policy=BandPolicy("portable"), workers=1)
+    placement = layout.lay_out(spec, time_budget_s=15.0)
+    tiers = {b.item_id for b in placement.buildings if catalog.is_belt(b.item_id)}
+    assert 2003 in tiers
+    assert placement.stats["belt_runs_upgraded"] >= 1
+    assert validate.certify(placement, spec, expect_power=True).ok
+
+
+def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> None:
+    """Two ingredients at 8/s each cannot share a 12/s floor belt, but the
+    save can build a 30/s belt and the retier pass will give the lane one."""
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": F(8), "iron-ingot": F(8)},
+                outputs_per_machine={"magnetic-coil": F(1)},
+            ),
+        ),
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        belt_upgrades=(BeltTier(item_id="conveyor-belt-3", items_per_second=F(30)),),
+    )
+    group = next(iter(freeform._adapt(spec).values()))
+    freeform._check_shared_lane_capacity(group, (("copper-ingot", "iron-ingot"),), 1, spec)
+
+    floor_only = spec.model_copy(update={"belt_upgrades": ()})
+    group = next(iter(freeform._adapt(floor_only).values()))
+    with pytest.raises(ValueError, match="cannot share a belt"):
+        freeform._check_shared_lane_capacity(
+            group, (("copper-ingot", "iron-ingot"),), 1, floor_only
+        )
+
+
+def test_pick_sorter_never_leaves_the_allowed_tiers() -> None:
+    tier, _ = freeform._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013))
+    assert tier == 2013, "the fastest ALLOWED tier, not the Pile Sorter"
+    tier, _ = freeform._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013, 2014))
+    assert tier == 2014
+    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers=(2012, 2013))
+    assert tier == 2012, "the cheapest allowed tier that carries the rate"
+
+
+def test_sorter_tiers_for_spec_maps_ids_and_keeps_catalog_order() -> None:
+    spec = single_recipe_spec().model_copy(update={"sorter_item_ids": ("sorter-2", "sorter-1")})
+    assert freeform._sorter_tiers_for(spec) == (2011, 2012)
+    assert freeform._sorter_tiers_for(single_recipe_spec()) == catalog.SORTER_TIERS
+
+
+def test_prepared_problem_hands_the_spec_sorter_tiers_to_the_workspace() -> None:
+    """A spec that allows only Mk.I and Mk.II sorters must be routed with only
+    those, so the workspace canvas has to know."""
+    # The smallest real one: every field has a default except the geometry
+    # tuples, which may be empty.
+    prepared = freeform._PreparedRoutingProblem(
+        building_templates=(),
+        blocked=(),
+        solid=frozenset(),
+        reserved=(),
+        port_corridors=(),
+        keep_out=frozenset(),
+        guard=frozenset(),
+        nets=(),
+        core=(0, 0, 0, 0),
+        route_bounds=(0, 0, 0, 0),
+        limit=None,
+        power_sites=(),
+        sorters=0,
+        coaters=0,
+        direct_inserts=0,
+        sorter_tiers=(2011, 2012),
+    )
+    assert prepared.new_workspace().canvas.sorter_tiers == (2011, 2012)
 
 
 def _last_mile_belt_net(

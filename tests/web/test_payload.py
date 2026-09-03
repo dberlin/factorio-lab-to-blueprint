@@ -272,3 +272,19 @@ def test_a_refusal_keeps_structured_projection_records_inside_attempt_boundaries
             },
         ],
     }
+
+
+def test_belt_tiers_travel_on_the_build_and_each_attempt(small_build: pipeline.Build) -> None:
+    body = describe(small_build)
+    tiers = body["belt_tiers"]
+    assert isinstance(tiers, dict)
+    assert set(tiers) == {"floor", "ceiling", "runs_upgraded", "upgrade_tiers"}
+    assert tiers["floor"] == small_build.spec.belt_item_id
+    assert tiers["ceiling"] == small_build.spec.belt_tiers[-1].item_id
+    attempts = body["attempts"]
+    assert isinstance(attempts, list)
+    attempt = attempts[0]
+    assert isinstance(attempt, dict)
+    detail = attempt["detail"]
+    assert isinstance(detail, dict)
+    assert set(detail["belt_tiers"]) == {"floor", "ceiling", "runs_upgraded", "upgrade_tiers"}

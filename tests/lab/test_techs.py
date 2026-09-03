@@ -5,8 +5,9 @@ from dataclasses import replace
 import pytest
 
 from flab2bp.dsp import catalog
+from flab2bp.lab import params as P
 from flab2bp.lab import techs
-from flab2bp.lab.data import load_vendored
+from flab2bp.lab.data import load_vendored, load_vendored_hash_index
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import parse_url
 
@@ -72,3 +73,104 @@ def test_only_default_dataset_uses_the_bounded_cache() -> None:
         assert info.currsize == 512
     finally:
         helper.cache_clear()
+
+
+def _url_with_techs(tech_ids: list[str], belt: str = "conveyor-belt-2") -> str:
+    techs_table = load_vendored_hash_index().technologies
+    tre = P.ZFIELDSEP.join(P.n_to_id(techs_table.index(t)) for t in tech_ids)
+    return f"https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe={belt}&tre={tre}&v=11"
+
+
+def test_no_technology_set_unlocks_every_belt_and_sorter_above_the_floor() -> None:
+    data = load_vendored()
+    request = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe=conveyor-belt-2&v=11")
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.belt_item_ids == ("conveyor-belt-2", "conveyor-belt-3")
+    assert tiers.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
+    assert tiers.from_url is False
+
+
+def test_belt_one_floor_lists_every_belt() -> None:
+    data = load_vendored()
+    request = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.belt_item_ids == ("conveyor-belt-1", "conveyor-belt-2", "conveyor-belt-3")
+
+
+def test_without_planetary_logistics_there_is_no_belt_three() -> None:
+    data = load_vendored()
+    request = parse_url(
+        _url_with_techs(
+            [
+                "basic-logistics-system",
+                "improved-logistics-system",
+                "high-efficiency-logistics-system",
+            ]
+        )
+    )
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.belt_item_ids == ("conveyor-belt-2",)
+    assert tiers.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3")
+    assert tiers.from_url is True
+
+
+def test_without_integrated_logistics_there_is_no_pile_sorter() -> None:
+    data = load_vendored()
+    request = parse_url(
+        _url_with_techs(
+            [
+                "basic-logistics-system",
+                "improved-logistics-system",
+                "high-efficiency-logistics-system",
+                "planetary-logistics-system",
+            ]
+        )
+    )
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.belt_item_ids == ("conveyor-belt-2", "conveyor-belt-3")
+    assert "sorter-4" not in tiers.sorter_item_ids
+
+
+def test_the_floor_is_present_even_when_unresearched() -> None:
+    """FactorioLab's belt choice is authoritative, researched or not."""
+    data = load_vendored()
+    request = parse_url(_url_with_techs(["basic-logistics-system"], belt="conveyor-belt-3"))
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.belt_item_ids == ("conveyor-belt-3",)
+
+
+def test_a_belt_at_the_floors_exact_speed_is_not_listed_as_an_upgrade() -> None:
+    """``>`` not ``>=``: a second belt at the floor's own speed must never be
+    admitted as an upgrade.  If it were, `_to_build_spec` would list it in
+    `belt_upgrades` right next to the floor and `BuildSpec._tiers_are_ordered`
+    would reject the spec, since two tiers of equal speed are not "strictly
+    faster than the one before"."""
+    data = load_vendored()
+    floor_item = next(item for item in data.items if item.id == "conveyor-belt-1")
+    twin = replace(floor_item, id="conveyor-belt-1-twin", name="Conveyor Belt Twin")
+    items = tuple(
+        replace(
+            item,
+            technology=replace(
+                item.technology, recipe_unlock=(*item.technology.recipe_unlock, twin.id)
+            ),
+        )
+        if item.id == "basic-logistics-system" and item.technology is not None
+        else item
+        for item in data.items
+    )
+    data = replace(data, items=(*items, twin))
+    request = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert twin.id not in tiers.belt_item_ids
+
+
+def test_an_empty_technology_set_falls_back_to_sorter_one() -> None:
+    data = load_vendored()
+    # `_url_with_techs([])` produces a `tre=` that decodes to `None` (no
+    # technology set at all, meaning everything researched) rather than an
+    # explicit empty set, so build the empty-set request directly.
+    request = replace(parse_url(_url_with_techs([])), researched_technology_ids=set())
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.belt_item_ids == ("conveyor-belt-2",)
+    assert tiers.sorter_item_ids == ("sorter-1",)

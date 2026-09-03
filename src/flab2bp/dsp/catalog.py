@@ -495,6 +495,27 @@ class BeltAltitudeRules:
     from_url: bool
 
 
+@dataclass(frozen=True, slots=True)
+class LogisticsTiers:
+    """Which belts and sorters a particular SAVE can build.
+
+    Both come from the player's researched technologies, read from the
+    dataset's ``recipeUnlock`` lists, so they are derived from the FactorioLab
+    URL rather than defaulted or asked for on the command line -- the same
+    rule as :class:`BeltAltitudeRules`.
+    """
+
+    #: FactorioLab belt item ids, slowest first.  Never empty and never
+    #: slower than the URL's own belt, which is always a member: FactorioLab's
+    #: choice is authoritative whether or not the technology set unlocks it.
+    belt_item_ids: tuple[str, ...]
+    #: FactorioLab sorter item ids, slowest first.  Never empty.
+    sorter_item_ids: tuple[str, ...]
+    #: False when the URL carried no technology set at all, in which case
+    #: every technology is taken as researched -- FactorioLab's own default.
+    from_url: bool
+
+
 def _technology_level(technology_ids: Set[str], prefix: str) -> int:
     """Highest numeric suffix researched for one levelled technology."""
     levels = (

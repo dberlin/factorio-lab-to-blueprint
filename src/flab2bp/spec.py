@@ -45,6 +45,13 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class BeltTier(_Frozen):
+    """One belt the build may use, by FactorioLab id and throughput."""
+
+    item_id: str
+    items_per_second: Fraction = Field(gt=0)
+
+
 class MachineGroup(_Frozen):
     """``count`` machines all running ``recipe_id`` under the same settings."""
 
@@ -111,8 +118,19 @@ class BuildSpec(_Frozen):
     outputs: dict[str, Fraction] = Field(default_factory=dict)
     #: Unavoidable non-target production that must also leave the block.
     surplus_outputs: dict[str, Fraction] = Field(default_factory=dict)
+    #: The belt FactorioLab chose (``ibe``).  The FLOOR: no emitted belt is
+    #: ever slower, and a run that fits it keeps it.
     belt_item_id: str = "conveyor-belt-1"
     belt_items_per_second: Fraction = Field(default=Fraction(6), gt=0)
+    #: Faster belts the save can build, slowest first.  Empty means the floor
+    #: is also the ceiling -- what every hand-built spec gets.  The layout
+    #: sizes lanes against the fastest of these and raises a run to the
+    #: cheapest one that carries its measured demand; see
+    #: ``layout/belt_tiers.py``.
+    belt_upgrades: tuple[BeltTier, ...] = ()
+    #: Sorter tiers the save can build, slowest first.  Every tier by default
+    #: so a spec built without a request keeps today's behaviour.
+    sorter_item_ids: tuple[str, ...] = ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
     #: What this candidate optimises, for the bake-off report.
     label: str = ""
 
@@ -137,6 +155,25 @@ class BuildSpec(_Frozen):
     #: Startup-liveness certificates derived from exact recipe batches and the
     #: selected machine's game-defined internal output capacity.
     coproduct_buffer_proofs: tuple[CoproductBufferProof, ...] = ()
+
+    @model_validator(mode="after")
+    def _tiers_are_ordered(self) -> BuildSpec:
+        previous = self.belt_items_per_second
+        for tier in self.belt_upgrades:
+            if tier.items_per_second <= previous:
+                raise ValueError(
+                    f"{self.label or 'spec'}: belt upgrade {tier.item_id!r} at "
+                    f"{tier.items_per_second}/s is not faster than the tier before it "
+                    f"({previous}/s); upgrades must be strictly faster than the floor "
+                    "and listed slowest first"
+                )
+            previous = tier.items_per_second
+        if not self.sorter_item_ids:
+            raise ValueError(
+                f"{self.label or 'spec'}: no sorter tier is allowed; a build with no "
+                "sorter at all cannot feed a machine"
+            )
+        return self
 
     @model_validator(mode="after")
     def _no_dangling_demand(self) -> BuildSpec:
@@ -193,6 +230,19 @@ class BuildSpec(_Frozen):
     @property
     def is_proliferated(self) -> bool:
         return any(g.is_proliferated for g in self.groups)
+
+    @property
+    def belt_tiers(self) -> tuple[BeltTier, ...]:
+        """Every belt the build may use, floor first."""
+        floor = BeltTier(item_id=self.belt_item_id, items_per_second=self.belt_items_per_second)
+        return (floor, *self.belt_upgrades)
+
+    @property
+    def lane_capacity(self) -> Fraction:
+        """Items/second the fastest allowed belt sustains: the planner's bound."""
+        if self.belt_upgrades:
+            return self.belt_upgrades[-1].items_per_second
+        return self.belt_items_per_second
 
 
 class BuildSpecSet(_Frozen):

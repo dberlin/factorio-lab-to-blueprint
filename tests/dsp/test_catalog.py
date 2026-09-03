@@ -856,3 +856,23 @@ def test_the_poseless_buildings_a_spec_group_can_reach() -> None:
         catalog.item_id("orbital-collector")
     ).takes_belt_ports, "an Orbital Collector is fed in orbit, not by belt"
     assert all(b.prefab != "ray-receiver-pro" for b in catalog.all_buildings())
+
+
+def test_belt_rate_matches_the_dataset_belt_speed() -> None:
+    """``retier_belts`` measures demand against the dataset; the validator judges
+    capacity against ``catalog.BELT_RATE``.  They must never disagree, or a
+    dataset bump could desync the pass from the judge without either side
+    noticing.
+    """
+    from flab2bp.lab.data import load_vendored
+
+    dataset = load_vendored()
+    checked = 0
+    for item in dataset.items:
+        if item.belt is None:
+            continue
+        item_id = catalog.get_item_id(item.id)
+        assert item_id is not None, item.id
+        assert catalog.BELT_RATE[item_id] == dataset.belt_speed(item.id)
+        checked += 1
+    assert checked, "the vendored dataset must have at least one belt item"

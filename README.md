@@ -12,7 +12,9 @@ uv run flab2bp 'https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60&
 The whole recipe chain from the FactorioLab flow, minus mining. Ores, water, oil and
 proliferator arrive on input belts at one edge; the target item leaves on an output belt at the
 other. Everything between is built, wired and throughput-correct: no belt lane carries more than
-its tier allows, no sorter is asked to exceed its rate, and every machine is fed at the rate its
+its tier allows; belts start at the tier the URL chose and a run that needs more is raised to the
+cheapest faster belt the URL's technologies unlock; sorters likewise stay within the researched
+tiers, no sorter is asked to exceed its rate, and every machine is fed at the rate its
 recipe demands.
 
 Density is the objective. The layout may use direct insertion between adjacent machines, long
