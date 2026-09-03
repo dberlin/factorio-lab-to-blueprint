@@ -903,7 +903,13 @@ class RacingLayout:
         time_budget_s: float = 15.0,
         absolute_deadline: float | None = None,
     ) -> Placement:
-        del absolute_deadline  # a race owns its own children's walls
+        """Race both strategies for one budget and return the single best result.
+
+        ``absolute_deadline`` is accepted to satisfy ``LayoutStrategy`` and then
+        ignored: a race owns its children's walls, and forwarding a wall someone
+        else started would hand both children a deadline older than the pool.
+        """
+        del absolute_deadline
         return self._merge(
             run_strategy_race(
                 spec,
