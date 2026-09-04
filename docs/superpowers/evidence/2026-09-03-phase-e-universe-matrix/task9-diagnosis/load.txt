@@ -1,0 +1,126 @@
+== round 1 arm A budget 30
+ 22:01:55 up 19 days,  3:47, 10 users,  load average: 20.26, 10.46, 10.28
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+17  8      0 1029801356  0 15180592  0    0 48942 15362 23348   4  5  2 93  0  0  0
+134 1      0 1029781456  0 15180624  0    0   684 115548 33420 50635 27 2 70 0 0  0
+131 0      0 1029771476  0 15180624  0    0     0 119188 49527 43034 74 2 23 0 0  0
+== round 1 arm B budget 30
+ 22:02:32 up 19 days,  3:48, 10 users,  load average: 14.44, 10.24, 10.21
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 4  2      0 1029589840  0 15184700  0    0 48941 15364 23348   4  5  2 93  0  0  0
+57  0      0 1029508848  0 15184700  0    0     0 120772 25203 67397 3 4 92 1  0  0
+ 4  1      0 1029564192  0 15184704  0    0     0 39788 32126 33384 9 3 88  0  0  0
+== round 1 arm C budget 30
+ 22:03:05 up 19 days,  3:49, 10 users,  load average: 10.99, 9.80, 10.06
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 3  0      0 1030424024  0 15175612  0    0 48940 15364 23348   4  5  2 93  0  0  0
+ 4  0      0 1030424556  0 15175612  0    0     4   228 13575 24083 1 1 97  0  0  0
+73  0      0 1030396212  0 15175612  0    0     0     8 15618 28077 3 1 97  0  0  0
+== round 1 arm D budget 30
+ 22:03:39 up 19 days,  3:49, 10 users,  load average: 8.38, 9.27, 9.87
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+11  0      0 1030388996  0 15177488  0    0 48939 15364 23348   4  5  2 93  0  0  0
+ 3  0      0 1030388992  0 15177488  0    0     0   320 13872 25161 1 1 98  0  0  0
+ 4  0      0 1030390540  0 15177488  0    0     0     0 15508 29985 1 1 98  0  0  0
+== round 1 arm E budget 30
+ 22:04:12 up 19 days,  3:50, 10 users,  load average: 12.81, 10.15, 10.14
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+15  0      0 1030322536  0 15179900  0    0 48938 15364 23348   4  5  2 93  0  0  0
+ 6  0      0 1030325284  0 15179900  0    0     0   184 16363 44626 8 1 91  0  0  0
+ 2  0      0 1030333784  0 15179900  0    0     0  1132 14577 26700 1 1 98  0  0  0
+== round 1 arm F budget 60
+ 22:04:45 up 19 days,  3:50, 10 users,  load average: 9.93, 9.70, 9.99
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 9  0      0 1030293776  0 15181960  0    0 48937 15363 23348   4  5  2 93  0  0  0
+ 4  0      0 1030351548  0 15181960  0    0     0 18480 19504 43789 2 2 96  0  0  0
+ 2  0      0 1030325824  0 15181960  0    0     0   104 13873 25572 1 1 97  0  0  0
+== round 2 arm A budget 30
+ 22:05:54 up 19 days,  3:51, 10 users,  load average: 12.11, 10.19, 10.12
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 5  1      0 1030241020  0 15185220  0    0 48936 15365 23348   4  5  2 93  0  0  0
+ 4  1      0 1030191008  0 15185224  0    0 20576   436 21877 165045 7 3 89 0  0  1
+ 4  1      0 1030110328  0 15185224  0    0 18340 84828 32588 65090 9 4 86  0  0  1
+== round 2 arm B budget 30
+ 22:06:29 up 19 days,  3:52, 10 users,  load average: 10.93, 10.16, 10.12
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 4  0      0 1031048148  0 15185356  0    0 48936 15366 23348   4  5  2 93  0  0  0
+16  1      0 1031073152  0 15185356  0    0  5940 11448 23947 67078 5 1 93  1  0  0
+17  1      0 1031072548  0 15185356  0    0  1932  5276 18985 54092 10 1 88 1  0  0
+== round 2 arm C budget 30
+ 22:07:04 up 19 days,  3:53, 10 users,  load average: 10.55, 10.21, 10.14
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 1  0      0 1031104288  0 15185556  0    0 48935 15366 23348   4  5  2 93  0  0  0
+ 1  0      0 1031107040  0 15185556  0    0     0   645 13279 27004 1 1 98  0  0  0
+ 0  1      0 1031109832  0 15185556  0    0   952  1864 17742 37136 1 1 97  1  0  0
+== round 2 arm D budget 30
+ 22:07:35 up 19 days,  3:53, 10 users,  load average: 9.04, 9.88, 10.03
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 6  0      0 1031094440  0 15185580  0    0 48934 15366 23348   4  5  2 93  0  0  0
+ 1  0      0 1031099372  0 15185580  0    0     0     0 17379 34227 1 1 98  0  0  0
+ 1  0      0 1031095520  0 15185572  0    0     0   648 15409 28516 1 1 98  0  0  0
+== round 2 arm E budget 30
+ 22:08:09 up 19 days,  3:54, 10 users,  load average: 7.32, 9.38, 9.86
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 3  0      0 1031062284  0 15185588  0    0 48933 15366 23348   4  5  2 93  0  0  0
+ 6  0      0 1031066612  0 15185588  0    0     0 16900 23384 160488 7 2 92 0  0  0
+ 4  0      0 1031065436  0 15185588  0    0     0     8 14142 30410 2 1 97  0  0  0
+== round 2 arm F budget 60
+ 22:08:42 up 19 days,  3:54, 10 users,  load average: 6.15, 8.87, 9.67
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 0  0      0 1031086784  0 15185636  0    0 48932 15366 23348   4  5  2 93  0  0  0
+ 0  0      0 1031086688  0 15185636  0    0     0    72 13759 25467 1 1 99  0  0  0
+ 2  0      0 1031087624  0 15185636  0    0     4    40 13744 27726 1 1 98  0  0  0
+== round 3 arm A budget 30
+ 22:09:49 up 19 days,  3:55, 10 users,  load average: 5.88, 8.18, 9.37
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 0  0      0 1030710248  0 15562508  0    0 48930 15365 23347   4  5  2 93  0  0  0
+ 3  0      0 1030664436  0 15562508  0    0     0   484 17777 34818 1 1 98  0  0  0
+ 1  0      0 1030563648  0 15563472  0    0     0     0 12899 23941 2 1 97  0  0  0
+== round 3 arm B budget 30
+ 22:10:20 up 19 days,  3:56, 10 users,  load average: 6.20, 8.02, 9.28
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 6  1      0 1029921572  0 15648932  0    0 48929 15365 23347   4  5  2 93  0  0  0
+ 2  5      0 1029910440  0 15649544  0    0  2044 73404 35992 85748 2 2 94  2  0  0
+ 9 13      0 1030369536  0 15617736  0    0   868 112180 37663 89945 2 3 88 6  0  0
+== round 3 arm C budget 30
+ 22:10:54 up 19 days,  3:56, 10 users,  load average: 5.64, 7.69, 9.12
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 4 11      0 1030150160  0 15617764  0    0 48928 15366 23347   4  5  2 93  0  0  0
+ 9  2      0 1030151948  0 15617764  0    0 16636 48344 33202 76903 1 2 89  8  0  0
+ 4  0      0 1030142892  0 15617764  0    0 13712 32640 35265 74628 1 1 96  1  0  0
+== round 3 arm D budget 30
+ 22:11:27 up 19 days,  3:57, 10 users,  load average: 5.48, 7.41, 8.97
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 1  8      0 1030107164  0 15617796  0    0 48927 15366 23347   4  5  2 93  0  0  0
+ 3  1      0 1030109076  0 15617796  0    0  5364 75724 43622 95542 2 3 90  5  0  0
+ 1  0      0 1030102632  0 15617800  0    0   332  8648 17062 34525 1 1 98  0  0  0
+== round 3 arm E budget 30
+ 22:12:01 up 19 days,  3:58, 10 users,  load average: 17.78, 10.62, 10.01
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 8  0      0 1029634844  0 15617840  0    0 48926 15366 23348   4  5  2 93  0  0  0
+ 7  0      0 1029631496  0 15617840  0    0   256     0 45965 78787 3 2 96  0  0  0
+ 2  0      0 1029629680  0 15617840  0    0   776     0 30977 49670 2 1 97  0  0  0
+== round 3 arm F budget 60
+ 22:12:35 up 19 days,  3:58, 10 users,  load average: 14.13, 10.42, 9.96
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 4  0      0 1030048828  0 15617860  0    0 48925 15366 23348   4  5  2 93  0  0  0
+ 3  0      0 1030049244  0 15617860  0    0  3344  1016 41339 58718 2 2 96  0  0  0
+ 7  0      0 1030050776  0 15617860  0    0 12708 14928 54629 75579 2 2 96  0  0  0
