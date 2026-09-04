@@ -11,7 +11,7 @@
     "test": "rstest run",
     "test:watch": "rstest watch",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint . && oxfmt --check . && eslint .",
+    "lint": "oxlint . && oxfmt --check .",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "extract-assets": "uv run scripts/extract_assets.py"
@@ -26,24 +26,21 @@
     "zod": "4.5.4"
   },
   "devDependencies": {
-    "@rsbuild/core": "latest",
+    "@rsbuild/core": "^2.2.3",
     "@rsbuild/plugin-react": "2.1.0",
-    "@rstest/core": "latest",
-    "@testing-library/jest-dom": "latest",
+    "@rstest/core": "^0.11.12",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/bun": "^1.4.0",
-    "@types/node": "^26.4.0",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
+    "@types/react-dom": "^19.2.7",
     "@types/three": "^0.185.4",
-    "@typescript-eslint/parser": "latest",
     "concurrently": "^10.0.5",
-    "eslint": "^10.9.1",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "happy-dom": "^20.12.0",
-    "oxfmt": "0.65.0",
-    "oxlint": "1.80.0",
-    "typescript": "^5.9.3",
+    "happy-dom": "^20.14.0",
+    "oxfmt": "0.66.0",
+    "oxlint": "1.81.0",
+    "typescript": "^7.0.2",
     "wait-on": "^9.1.0"
   }
 }
