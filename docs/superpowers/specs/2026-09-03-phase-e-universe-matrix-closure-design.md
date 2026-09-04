@@ -1,8 +1,36 @@
 # Phase E: Universe-Matrix Closure
 
-**Status:** Designed 2026-09-03 on master `e0bf432` after four instrumented research passes
-(R1 height ceiling, R2 sweep exhaustion, R3 sequence-pair window arm, R4 stranded nets), copied
-under `docs/superpowers/evidence/2026-09-03-phase-e-universe-matrix/research/`. Not yet executed.
+**Status:** Executed 2026-09-03–04 on branch `phase-e-universe-matrix`; Tasks 1–14 reviewed.
+Gate E1 **PASSED** all five clauses
+(`docs/superpowers/evidence/2026-09-03-phase-e-universe-matrix/gate-e1.md`): all four target
+`universe-matrix/{output-products,all-products}` cells were CLEAN under both strategies in every
+round, with 70/72 CLEAN, zero regressions, area ratios 1.0009 / 0.9994 / 0.9983, and p95 wall
+29.07 / 28.45 / 28.36 s. The §5.2.1 witness reversion condition did not fire, so Task 5 is kept.
+Gate E2 **FAILED**
+(`docs/superpowers/evidence/2026-09-03-phase-e-universe-matrix/gate-e2.md`), and Gate E3 was not
+run: `universe-matrix/no-proliferator` remained REFUSED under both strategies in all three rounds,
+leaving every round at 70/72 CLEAN. Clause 2 nevertheless passed with INVALID 0, CRASH 0, no
+regressions, area ratios 0.9990 / 0.9977 / 1.0004, p95 28.24 / 28.67 / 28.40 s, and maxima
+28.72 / 29.90 / 31.89 s. Freeform made six distinct assignments and six evaluations per round,
+launched and accepted one window per round, and recorded zero stale draws, but still refused with
+the forbidden `PACKER defect` wording. Sequence-pair recorded 5 / 4 / 5 stages,
+`destroy:failed-endpoints` 4 / 3 / 4 and `repair:local-exact-pack` 1 on the refusing rows, but zero
+window solves; all nine sequence-pair `universe-matrix` rows had zero window solves, and
+`all-products` also had zero local-exact-pack repairs. Thus Gate E2 clauses 1, 3 and 4 failed.
+
+**Delivery-order deviation:** §§5.4.1 and 5.4.2 landed in the reverse of the planned order. The
+continuation landed first because the diversification cut was unreachable behind the old gate. It
+was bounded immediately by `C_SWEEP_STALE_DRAWS`: three duplicate draws cost only 0.06–0.09 s.
+Both changes landed before Gate E1.
+
+**Final branch validation and smoke:** the full Python suite passed; Ruff was clean; mypy reported
+the exact merged baseline of 178 findings. `uv run --with build python -m build` produced the sdist
+and CPython 3.14 wheel with both Cython kernels (bare `python -m build` lacked the build frontend).
+The frozen web install, lint, typecheck, 289 tests and production build passed. The actual CLI entry
+point is `uv run flab2bp` (the package has no `__main__`); budget-30 `universe-matrix` smokes for
+freeform and sequence-pair both exited 0 with blueprints and no traceback, producing 153,976 and
+131,034 bytes respectively. The product probe remains production-default-off per Ruling E11.
+
 **Companion specs:** `docs/superpowers/specs/2026-09-01-zero-refusal-reliability-design.md` (the
 program), `2026-09-02-phase-c-alns-window-repair-design.md` (Phase C, whose status note ranks the
 levers this phase consumes), `2026-09-02-phase-d-portfolio-racing-design.md` (Phase D, whose
@@ -10,8 +38,8 @@ Ruling AN and lever 2 this phase touches).
 **Predecessor state:** 66/72 CLEAN at budget 30 in every round of Phases C and D. All six refusing
 cells are `universe-matrix` (three policies, both strategies).
 
-Every `file:line` in this document was read at `e0bf432` on 2026-09-03. Line numbers are hints;
-resolve each target by symbol name with Serena.
+Every `file:line` in this document is a design-time hint from `e0bf432`; Phase E was verified
+against shipped symbols and gate evidence. Resolve current targets by symbol with LSP, not by line number.
 
 ## 1. Decision
 
@@ -201,12 +229,11 @@ item is seated south, it takes the south outermost row.
 property: the lane head has at least as many free 4-neighbours on a canvas containing only that strip
 as the number of independent feeds the lane accepts.
 
-**Docstring correction.** The prose to rewrite is the `twice` paragraph in **`_reserve_port_access`'s
-docstring** (`freeform.py:10092`), which explains the demand through a MIXED lane; the line hint this
-document originally gave, `freeform.py:14188-14196`, is `hold_ports`' `shared_feed` construction,
-which carries a comment rather than the docstring. Both sites are corrected to say what the code
-does: a lane fed from both the boundary and from inside the block needs two approaches, whatever the
-lane's cardinality. The predicate is not narrowed.
+**Docstring correction.** The prose to rewrite is the `twice` paragraph in
+**`_reserve_port_access`'s docstring**; the original `freeform.py:14188-14196` hint points instead
+to the `shared_feed` construction and comment in `_prepare_routing_problem.hold_ports`. Both sites
+are corrected to say what the code does: a lane fed from both the boundary and from inside the block
+needs two approaches, whatever the lane's cardinality. The predicate is not narrowed.
 
 **Tests (pure, no clock, no solver):**
 1. Build the `universe-matrix` `no-proliferator` candidate, call `freeform.plan_strips(spec)`,
@@ -317,15 +344,20 @@ drawing; stop when `C_SWEEP_STALE_DRAWS` consecutive draws add no new entry to
 one `OperatorSession` (constructed at `freeform.py:16974`) so the ledger spans the re-sweeps; it
 keeps calling `_portfolio_soft_deadline` per turn (`freeform.py:17593`) and never rebinds `soft`.
 
-**5.4.3 Trigger widening (Phase C lever 2).** `_feedback_retry_eligible`
-(`freeform.py:14900-14913`) drops the "exactly one failure" conjunct and `promote_retry`
-(`freeform.py:18225`) drops the `arrangement == 0 and (learned or feedback_retry)` conjunct, keeping
-`retry_slot_found and not retry_admitted`; the window is posed against the failing nets' strips of
-the best-failing pack the sweep has seen **so far**, implemented as a LAUNCH GUARD — `_sweep` retains
-no earlier pack, and re-posing against one would queue a repair at a candidate slot already consumed.
-The comparison is strict: a pack that merely ties the fewest unrouted nets seen so far offers no
-better evidence than the solve already spent, and R3 §4.2 prices one window solve at a hard 1.006 s.
-This is a spec change to Phase C's §5.7, recorded there when this phase executes.
+**5.4.3 Trigger widening (Phase C lever 2; Ruling E12).** `_feedback_retry_eligible` drops the
+"exactly one failure" conjunct and admits any non-exhaustive, non-empty `STRANDED` result with at
+least one failure whose net has both a feedback weight and endpoint offsets. That broader predicate
+means "aimable", not "take the old exact retry". The old exact feedback retry remains distinct and
+single-failure-only: `single_failure_feedback_retry` is the path that consumes and bypasses the next
+arrangement slot unconditionally; learned proof evidence may still consume it when a full retry is
+affordable. An aimable multi-failure pack leaves the slot available. The window launch guard is
+`retry_slot_found and not retry_admitted and best_failing`, so it is posed against the failing nets'
+strips of the best-failing pack the sweep has seen **so far**. `_sweep` retains no earlier pack, and
+re-posing against one would queue a repair at a candidate slot already consumed. The comparison is
+strict: a pack that merely ties the fewest unrouted nets seen so far offers no better evidence than
+the solve already spent, and R3 §4.2 prices one window solve at a hard 1.006 s. The
+`_room_for_another` affordability calculation is unchanged. This execution change is recorded in
+Phase C §5.7.
 
 **Refusal text:** with more evaluations, the deadline branch at `freeform.py:17037-17122` applies and
 already says "N packs were routed and the best of them still left M nets unrouted"; a stale stop says
@@ -345,23 +377,28 @@ wires.
 
 ### 5.5 Sequence-pair: probe the product, count the drops
 
-**5.5.1 Product probe.** In `OperatorSession.select` (`sequence_alns.py:490-504`), while
-`len(self._choices) < len(destroy.order) * len(repair.order)`, the pairing is
+**5.5.1 Product probe.** Ruling E11 changed the execution contract after measurement:
+`OperatorSession(..., probe_product=False)` is the default, and both production factories use that
+default. Production therefore keeps master's discounted-UCB pairing. With `probe_product=True`,
+while `len(self._choices) < len(destroy.order) * len(repair.order)`, `OperatorSession.select`
+(`sequence_alns.py:500-575`) pairs
 `(destroy.order[probe // len(repair)], repair.order[probe % len(repair)])` — destroy-major, with the
 repair order **as declared** — still subject to `_affordable_repairs` (a probe naming
 `LOCAL_EXACT_PACK` below `C_WINDOW_FRACTION_FLOOR` falls through to the D-UCB). Since
-`SHIPPED_REPAIR = (SEQUENCE_REINSERT, LOCAL_EXACT_PACK)`, draw 0 stays master's own
+`SHIPPED_REPAIR = (SEQUENCE_REINSERT, LOCAL_EXACT_PACK)`, explicit-probe draw 0 stays master's own
 `(FAILED_ENDPOINTS, SEQUENCE_REINSERT)` and draw 1 is `(FAILED_ENDPOINTS, LOCAL_EXACT_PACK)`: the
-window is still posed against the routing-failure set, one ordinal later. Keeping draw 0 identical is
+window is posed against the routing-failure set, one ordinal later. Keeping draw 0 identical is
 deliberate and measured — reversing the repair axis to reach the window on draw 0 moved six
-`tests/layout/test_sequence_solver.py` behaviour tests, because it changes the FIRST repair the
-production solver makes; in declaration order those six are untouched and exactly ten pinned
-expectations across the two selector suites are re-derived. After the probe the two ledgers are
-genuinely desynchronised and all four pairings stay reachable. Two ledgers are kept; the product is probed, not learned
-(`OperatorSession.__doc__`, `sequence_alns.py:411-418`, still holds). `observe`, `reward_vector`,
-`operator_scale` and the dropped-proposal accounting (`sequence_solver.py:3120`, `3153`,
-`3161-3163`: zero reward, `applied=False`) are untouched. Cost: two extra exploration draws per
-session, one of them a window draw at about 1 s; Gate E2 carries a stage-cost clause for it.
+`tests/layout/test_sequence_solver.py` behaviour tests. Those six production-behaviour tests remain
+untouched; the selector expectations exercise the explicit probe. After the probe the two ledgers
+are genuinely desynchronised and all four pairings stay reachable. Two ledgers are kept; the product
+is probed, not learned (`OperatorSession.__doc__` still holds). `observe`, `reward_vector`,
+`operator_scale` and dropped-proposal accounting are untouched.
+
+The probe remains available for tests and future measurement, but does not ship on the production
+path: with it enabled, Ruling E11 measured sequence-pair `universe-matrix/output-products`
+REFUSED in 3/3 budget-30 runs and needing about 54 s at budget 60, versus about 25 s under master's
+pairing. Gate E2 consequently measured the production-default-off path.
 
 **5.5.2 Drop counters.** `_ProductionTelemetry` (`sequence_solver.py:4340-4346`) gains
 `alns_window_dropped_empty`, `alns_window_dropped_whole`, `alns_window_unchanged`, incremented at
@@ -389,8 +426,15 @@ Named so the plan's stop conditions can point at them:
    solver's own cluster no-goods across restarts. It needs none of Ruling AN's cross-process identity
    vector. It is out of this phase.
 2. **Warm-start sequence-pair from the freeform placement through the race.** Out of this phase.
-3. **The program's deterministic fallback spike (item 8).** Scheduled only if Gate E2 leaves
+3. **The program's deterministic fallback spike (item 8).** Now scheduled because Gate E2 left
    `universe-matrix/no-proliferator` refusing under sequence-pair.
+
+**Post-gate order:** Gate E2 fixes the remaining levers in this exact §5.6 order: (1) the intra-arm
+no-good receiver — a relation-exclusion collection in sequence-pair fed by the solver's own cluster
+no-goods across restarts, with no Ruling AN cross-process identity vector; (2) warm-start
+sequence-pair from the freeform placement through the race; (3) program item 8, the deterministic
+feasibility fallback. Item 8 is scheduled now because sequence-pair still refuses
+`universe-matrix/no-proliferator`.
 
 ## 6. Public Interfaces
 
@@ -398,8 +442,9 @@ Named so the plan's stop conditions can point at them:
   keyword callers are unchanged. The value type admits `str` for `alns_operators` (see §5.3.2).
 - `scripts/audit.py` `Result.stats: dict[str, float | str] = {}`; JSONL rows gain a `stats` object on
   CLEAN and REFUSED rows; rows without it read as empty.
-- `sequence_alns.OperatorSession.select` keeps its signature; its first `|D| x |R|` draws change
-  value.
+- `sequence_alns.OperatorSession.select` keeps its signature; the optional
+  `OperatorSession(..., probe_product=True)` mode changes its first `|D| x |R|` draws, while
+  production uses the default `False`.
 - New named constants, each with a docstring naming the measurement behind it:
   `freeform.C_SWEEP_STALE_DRAWS`, `sequence_solver.C_CEILING_APPROACH_STEP`, and the three
   telemetry keys of 5.5.2. Any constant whose value collides with a linted game value is declared

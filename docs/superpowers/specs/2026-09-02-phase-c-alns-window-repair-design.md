@@ -705,6 +705,25 @@ that field and its source are part of that operator's task.
 `select_lns_neighbourhood`'s gap-rectangle branch never fires in freeform — the neighbourhood there
 is failure endpoints plus sequence neighbours only.
 
+**Phase E status (Ruling E12; executed 2026-09-03–04):** Phase E deliberately broadened
+`_feedback_retry_eligible` to any non-exhaustive, non-empty `STRANDED` routing result with at least
+one failure whose net has both a feedback weight and endpoint offsets. That eligibility is only
+"aimable evidence"; it does **not** collapse the older retry and the window into one path. The old
+single-failure exact feedback retry remains distinct: only `single_failure_feedback_retry` consumes
+and bypasses the next arrangement slot unconditionally, while newly learned proof evidence may
+still admit an affordable full retry. An aimable multi-failure pack leaves the slot free, and only a
+strictly better best-failing pack seen so far may launch `_pack_window` under
+`retry_slot_found and not retry_admitted and best_failing`. Ties do not launch, and the existing
+`_room_for_another` affordability calculation is unchanged.
+
+Gate E2
+(`docs/superpowers/evidence/2026-09-03-phase-e-universe-matrix/gate-e2.md`) measured that widened
+path honestly: freeform `universe-matrix/no-proliferator` made six distinct assignments and six
+evaluations, launched and accepted one window in every round, and had zero stale draws, but still
+refused with the forbidden `PACKER defect` wording. Sequence-pair still refused the same cell, with
+zero window solves in all nine `universe-matrix` rows. Gate E2 therefore failed clauses 1, 3 and 4;
+Gate E3 was not run.
+
 ### 5.8 Determinism
 
 - **The selector's ledgers are a pure function of the reward vectors it has seen.** No wall clock,
