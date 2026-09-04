@@ -114,8 +114,44 @@ def logistics_tiers_for_request(
     if not sorter_item_ids:
         sorter_item_ids = ("sorter-1",)
 
+    # DSP 0.10.34 has two cargo-stacking research ladders and only ONE is
+    # reachable.  `sorter-cargo-stacking-{n}` (game techs 3301-3305) carries
+    # IsObsolete = 1, which is what hides a tech from the tree
+    # (`UITechNode.cs:914`), so it cannot be researched and moves nothing; the
+    # live ladder is `pile-sorter-{n}` (game techs 3311-3316).  Reading the
+    # obsolete ids here would grant stacks the game never grants.  See
+    # `dsp/data/stacking.json`'s `obsolete_ladder`.
+    #
+    # Both ladders are `category: upgrades` with no `recipeUnlock`, so a level
+    # is tested by id membership in `researched` rather than through
+    # `unlocked`.  `integrated-logistics-system` is the sole `recipeUnlock` for
+    # both `automatic-piler` and `sorter-4`, which is why a save without it has
+    # no stacking at all: no Pile Sorter to stack with, and no piler either.
+    level = (
+        catalog.SORTER_STACKING_LEVELS
+        if researched is None
+        else max(
+            (
+                n
+                for n in range(1, catalog.SORTER_STACKING_LEVELS + 1)
+                if f"pile-sorter-{n}" in researched
+            ),
+            default=0,
+        )
+    )
+
     return catalog.LogisticsTiers(
         belt_item_ids=belt_item_ids,
         sorter_item_ids=sorter_item_ids,
         from_url=researched is not None,
+        piler="automatic-piler" in unlocked,
+        # `catalog.item_id` is the non-optional resolver, and `sorter_item_ids`
+        # is always a subset of the sorters the catalog knows, so it cannot
+        # raise here.  The tuples are as long as `sorter_item_ids`.
+        sorter_pick_stacks=tuple(
+            catalog.sorter_pick_stack(catalog.item_id(s), level) for s in sorter_item_ids
+        ),
+        sorter_place_stacks=tuple(
+            catalog.sorter_place_stack(catalog.item_id(s), level) for s in sorter_item_ids
+        ),
     )

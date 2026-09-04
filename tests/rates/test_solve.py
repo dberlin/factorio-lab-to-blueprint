@@ -14,7 +14,7 @@ from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
 
 from flab2bp.lab.data import load_dataset
 from flab2bp.lab.schema import Dataset
-from flab2bp.lab.url import parse_url
+from flab2bp.lab.url import LabRequest, Objective, ObjectiveType, ObjectiveUnit, parse_url
 from flab2bp.rates.adjust import AdjustedRecipe, ProliferatorTier
 from flab2bp.rates.solve import (
     InfeasibleError,
@@ -24,6 +24,7 @@ from flab2bp.rates.solve import (
     _exact_rates,
     _excluded_recipes,
     solve,
+    supplied_rates,
     target_rates,
 )
 from flab2bp.spec import ProliferatorMode
@@ -1203,3 +1204,46 @@ def test_deuterium_is_crafted_from_collected_hydrogen_as_factoriolab_does(
     assert machines["deuterium"] == 5
     assert plan.external_inputs["hydrogen"] == Fraction(20)
     assert "deuterium" not in plan.external_inputs
+
+
+# --- the URL's cargo stack on a Belts objective ----------------------------
+
+
+def _one_belt_of(request: LabRequest, *, type_: ObjectiveType) -> LabRequest:
+    objective = Objective(
+        id="1",
+        target_id="super-magnetic-ring",
+        value=Fraction(1),
+        unit=ObjectiveUnit.Belts,
+        type=type_,
+    )
+    return replace(request, belt_id="conveyor-belt-3", objectives=(objective,))
+
+
+@pytest.mark.parametrize(
+    ("stack", "expected"),
+    (
+        (None, 30),        # design rule 1: no `ist` is judged exactly as today
+        (Fraction(1), 30),
+        (Fraction(2), 60),
+        (Fraction(4), 120),
+        (Fraction(9), 120),  # never above the game's largest pile
+    ),
+)
+def test_a_belts_objective_counts_cargo_not_items(
+    data: Dataset, stack: Fraction | None, expected: int
+) -> None:
+    """One Mk.III belt is 30 CARGO/s; at ``ist=2`` that is 60 items/s."""
+    request = _one_belt_of(parse_url(EXAMPLE_URL), type_=ObjectiveType.Output)
+    rates = target_rates(data, replace(request, stack=stack))
+    assert rates == {"super-magnetic-ring": Fraction(expected)}
+
+
+def test_a_belts_input_objective_counts_cargo_too(data: Dataset) -> None:
+    """The declared external supply is the same belt, so it stacks the same
+    way; leaving this branch unstacked would under-declare the bus."""
+    request = _one_belt_of(parse_url(EXAMPLE_URL), type_=ObjectiveType.Input)
+    assert supplied_rates(data, request) == {"super-magnetic-ring": Fraction(30)}
+    assert supplied_rates(data, replace(request, stack=Fraction(2))) == {
+        "super-magnetic-ring": Fraction(60)
+    }

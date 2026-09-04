@@ -26,7 +26,13 @@ from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import logistics_tiers_for_request
 from flab2bp.lab.url import LabRequest
 from flab2bp.rates.adjust import ProliferatorTier
-from flab2bp.rates.solve import RateSolution, solve, target_producer_ids, target_rates
+from flab2bp.rates.solve import (
+    RateSolution,
+    cargo_stack,
+    solve,
+    target_producer_ids,
+    target_rates,
+)
 from flab2bp.spec import (
     BeltTier,
     BuildSpec,
@@ -200,6 +206,10 @@ def _to_build_spec(
         belt_items_per_second=data.belt_speed(belt_id),
         belt_upgrades=belt_upgrades,
         sorter_item_ids=tiers.sorter_item_ids,
+        belt_stack=cargo_stack(request),
+        sorter_pick_stacks=tiers.sorter_pick_stacks,
+        sorter_place_stacks=tiers.sorter_place_stacks,
+        piler_unlocked=tiers.piler,
         label=label,
         belt_required_edges=frozenset(belt_required),
         spray_lanes=spray_lanes,
