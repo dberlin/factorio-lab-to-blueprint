@@ -21,10 +21,12 @@ rate, which deletes the throughput branch. Sections 1, 2, 8, 9 and 10 carry the
 consequential corrections; nothing else changed.
 
 Revision 4 removes the live-fixture prerequisite from C. The Automatic Piler
-record is derivable from shipped 0.10.34 code: the generic blueprint branch
-leaves the piler's own slot fields at zero, null object references serialize as
-`-1`, adjacent belts carry port references 1 and 0, and the empty generic
-parameter path emits `int[0]`. The shipped catalog fixes model, footprint,
+record is derivable from shipped 0.10.34 code: its catalog row has
+`multiLevel = 1`, so the blueprint generator assigns `inputToSlot = 14`,
+`outputFromSlot = 15`, `inputFromSlot = 15`, and `outputToSlot = 14`; null
+object references serialize as `-1`, adjacent belts carry port references 1
+and 0, and the empty generic parameter path emits `int[0]`. The shipped catalog
+fixes model, footprint,
 centre, yaw rotation, and ordered port poses. Sections 6.3, 8, 9, and 10 and
 plan Task 11 now cite that conformance evidence rather than claiming that an
 uncaptured player blueprint blocks C.
@@ -585,11 +587,12 @@ A new `junction.make_piler(x, y, z, *, yaw)` builds the record from the catalog
 
 It takes no stack argument and writes no parameter block:
 `PILER_STACK_PARAMETER = None`. `BlueprintUtils.GenerateBlueprintData`
-0.10.34 lines 1181-1182 and 1222-1306 leave a generic piler's object
-references null and all four own-slot integers at zero;
-`BlueprintBuilding.Export` lines 294-295 serializes the null references as
-`-1`; and `BuildingParameters.ToParamsArray` lines 83-363 falls through with a
-zero parameter count, normalized to `int[0]` at
+0.10.34 lines 1181-1182 and 1222-1306 leave the piler's object references
+null; its shipped catalog row has `multiLevel = 1`, so the multilevel branch
+assigns `inputToSlot = 14`, `outputFromSlot = 15`, `inputFromSlot = 15`, and
+`outputToSlot = 14`. `BlueprintBuilding.Export` lines 294-295 serializes the
+null references as `-1`; and `BuildingParameters.ToParamsArray` lines 83-363
+falls through with a zero parameter count, normalized to `int[0]` at
 `BlueprintUtils.decompiled.cs:1297-1306`.
 
 The connections live on the neighbouring belts.
@@ -689,8 +692,9 @@ the stack that would have carried the rate.
 - Validator (C): each new check has a fires case and a clean case on
   hand-built placements; a piler fed above belt speed refuses.
 - Codec (C): an originated piler-between-belts placement encodes and decodes
-  with null piler links represented as `-1`, four zero piler slot fields, an
-  empty parameter tuple, and adjacent belt references to ordered ports 1 and 0.
+  with null piler links represented as `-1`, multilevel slot sentinels
+  `(inputFrom, inputTo, outputFrom, outputTo) = (15, 14, 15, 14)`, an empty
+  parameter tuple, and adjacent belt references to ordered ports 1 and 0.
   Separate yaw-0/yaw-90 assertions pin the catalog footprint and emitted centre.
 - Corpus gate before and after each deliverable, evidence committed under
   `docs/superpowers/evidence/<date>-multiple-belts/`, `<date>-stacked-lanes/`

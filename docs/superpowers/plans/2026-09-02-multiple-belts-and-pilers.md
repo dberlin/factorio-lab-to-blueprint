@@ -1224,8 +1224,8 @@ git commit -m "feat(layout): retier and report belt runs at their cargo stack"
 - Modify: this plan and `docs/superpowers/specs/2026-09-02-multiple-belts-and-pilers-design.md`
 
 **Conformance evidence (DSP 0.10.34 shipped code, not a player fixture):**
-- `BlueprintUtils.decompiled.cs:1181-1182,1222-1306` initializes both object references to null. The Automatic Piler takes none of the inserter, belt, multilevel, or storage record branches, so its four slot integers retain the C# default `0`.
-- `BlueprintBuilding.decompiled.cs:294-295` serializes null object references as `-1`. The layer-specific invariants are therefore `PlacedBuilding.input_obj/output_obj is None`, decoded `BlueprintBuilding.input_obj_idx/output_obj_idx == -1`, and four decoded slot integers equal to `0`.
+- `BlueprintUtils.decompiled.cs:1181-1182,1222-1306` initializes both object references to null. The Automatic Piler's shipped catalog row has `multiLevel = 1`, so it takes the multilevel branch and receives `inputToSlot = 14`, `outputFromSlot = 15`, `inputFromSlot = 15`, and `outputToSlot = 14`.
+- `BlueprintBuilding.decompiled.cs:294-295` serializes null object references as `-1`. The layer-specific invariants are therefore `PlacedBuilding.input_obj/output_obj is None`, decoded `BlueprintBuilding.input_obj_idx/output_obj_idx == -1`, and the four sentinel slot integers above.
 - `BlueprintUtils.decompiled.cs:1248-1272` puts the connections on the adjacent belts: a feeding belt's `outputObj/outputToSlot` names piler port 1; a drawing belt's `inputObj/inputFromSlot` names piler port 0.
 - `CargoTraffic.decompiled.cs:938-974` reads piler slots 0 and 1 and selects `PilerState.Pile` when slot 0 is output and slot 1 is input. Wiring, not a building parameter, selects the mode.
 - `BuildingParameters.cs:83-363` has no piler case; `ToParamsArray` falls through with `_paramCount = 0`, and `BlueprintUtils.decompiled.cs:1297-1306` normalizes null parameters to `new int[0]`.
@@ -1238,8 +1238,8 @@ git commit -m "feat(layout): retier and report belt runs at their cargo stack"
 Create `tests/layout/test_junction.py` with:
 
 1. catalog assertions for `PILER_ID`, model 257, footprint 1x3 at yaw 0 and 3x1 at yaw 90, empty sorter slots, and the two ordered port poses above;
-2. `make_piler` field assertions for item/model, oriented footprint, yaw, null `PlacedBuilding` references, zero own-slot fields, and empty parameters;
-3. an originated encode/decode check proving the piler decodes with object indices `(-1, -1)`, slot fields `(0, 0, 0, 0)`, and `parameters == ()`, while its feeding belt names `(piler index, port 1)` and its drawing belt names `(piler index, port 0)`;
+2. `make_piler` field assertions for item/model, oriented footprint, yaw, null `PlacedBuilding` references, sentinel own-slot fields `inputToSlot = 14`, `outputFromSlot = 15`, `inputFromSlot = 15`, `outputToSlot = 14`, and empty parameters;
+3. an originated encode/decode check proving the piler decodes with object indices `(-1, -1)`, `(input_from_slot, input_to_slot, output_from_slot, output_to_slot) == (15, 14, 15, 14)`, and `parameters == ()`, while its feeding belt names `(piler index, port 1)` and its drawing belt names `(piler index, port 0)`;
 4. yaw-0 and yaw-90 centre checks derived from the footprint, not copied from a fabricated game-authored blueprint.
 
 The test comments cite the exact decompiled paths and lines above. It deliberately adds no fixture and does not claim byte identity with a capture that does not exist.
@@ -1257,7 +1257,7 @@ def make_piler(
     """An Automatic Piler at ``(x, y, z)`` facing ``yaw``."""
 ```
 
-Read model 257 from `catalog.building(PILER_ID)` and read the yaw-oriented dimensions from `catalog.oriented_footprint(PILER_ID, yaw)`. Leave `input_obj`, `output_obj`, all four slot fields, and `parameters` at `PlacedBuilding`'s generic defaults. `BELT_INTEGRATED_IDS` gains `PILER_ID` so occupancy logic recognizes this inline belt device.
+Read model 257 from `catalog.building(PILER_ID)` and read the yaw-oriented dimensions from `catalog.oriented_footprint(PILER_ID, yaw)`. Leave `input_obj`, `output_obj`, and `parameters` at `PlacedBuilding`'s generic defaults; set `input_to_slot = 14`, `output_from_slot = 15`, `input_from_slot = 15`, and `output_to_slot = 14` from the multilevel branch contract. `BELT_INTEGRATED_IDS` gains `PILER_ID` so occupancy logic recognizes this inline belt device.
 
 - [ ] **Step 3: Commit**
 

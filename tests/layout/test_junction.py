@@ -65,8 +65,10 @@ def test_piler_and_adjacent_belt_records_follow_game_wiring_literals() -> None:
     """Originate and decode the record shape derived from shipped game code.
 
     ``BlueprintUtils.GenerateBlueprintData`` 0.10.34 lines 1181-1182 and
-    1222-1306 leave a generic piler's object references null and its four slot
-    integers at zero. ``BlueprintBuilding.Export`` lines 294-295 writes those
+    1222-1306 see the piler's ``multiLevel = 1`` and assign the four sentinel
+    slot integers ``inputToSlot = 14``, ``outputFromSlot = 15``,
+    ``inputFromSlot = 15``, and ``outputToSlot = 14`` while leaving its object
+    references null. ``BlueprintBuilding.Export`` lines 294-295 writes those
     null references as -1. The belt branch at lines 1248-1272 carries the
     connections: the belt before names piler port 1, and the belt after names
     piler port 0. ``BuildingParameters.ToParamsArray`` lines 83-363 falls
@@ -98,7 +100,7 @@ def test_piler_and_adjacent_belt_records_follow_game_wiring_literals() -> None:
         piler.input_to_slot,
         piler.output_from_slot,
         piler.output_to_slot,
-    ) == (0, 0, 0, 0)
+    ) == (15, 14, 15, 14)
     assert piler.parameters == ()
 
     decoded = codec.decode(
@@ -118,7 +120,7 @@ def test_piler_and_adjacent_belt_records_follow_game_wiring_literals() -> None:
         piler_record.input_to_slot,
         piler_record.output_from_slot,
         piler_record.output_to_slot,
-    ) == (0, 0, 0, 0)
+    ) == (15, 14, 15, 14)
     assert piler_record.parameters == ()
     assert (before_record.output_obj_idx, before_record.output_to_slot) == (1, 1)
     assert (after_record.input_obj_idx, after_record.input_from_slot) == (1, 0)
