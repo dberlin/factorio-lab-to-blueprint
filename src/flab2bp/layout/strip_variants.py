@@ -24,7 +24,7 @@ from flab2bp.layout.finalize import (
     ProjectionFailure,
     projection_safe_machine_pitch_x,
 )
-from flab2bp.spec import BuildSpec
+from flab2bp.spec import MAX_CARGO_STACK, BuildSpec
 
 if TYPE_CHECKING:
     from flab2bp.layout.freeform import _Group
@@ -194,8 +194,19 @@ class LogicalLane:
     cargo_domain: CargoDomain
     side: LaneSide
     side_index: int
+    #: Items per cargo unit this lane's belt carries (multiple-belts design,
+    #: section 5.3).  1 unless the URL stacks, so every family a hand-built
+    #: spec produces is unchanged.  A lane carrying several items carries ONE
+    #: stack -- the smallest its items were planned at -- because a belt has
+    #: one cargo size and the smallest is the only one all of them fit in.
+    stack: int = 1
 
     def __post_init__(self) -> None:
+        if not 1 <= self.stack <= MAX_CARGO_STACK:
+            raise ValueError(
+                f"logical lane stack {self.stack} is outside 1..{MAX_CARGO_STACK}; a "
+                "cargo holds at least one item and never more than the game's largest pile"
+            )
         if not self.lane_id or not self.items or any(not item for item in self.items):
             raise ValueError("logical lanes require an id and at least one named item")
         if len(set(self.items)) != len(self.items):
@@ -789,11 +800,27 @@ def lane_reach_profiles(
     return tuple(profiles)
 
 
+def _input_stack(items: tuple[str, ...], spec: BuildSpec | None) -> int:
+    """The one stack an input lane carrying ``items`` can be planned at.
+
+    The minimum over its items: a belt has one cargo size, and the smallest is
+    the only one every item on the lane fits in.  ``None`` means no spec was
+    supplied -- a seating feasibility probe rather than a real plan -- and
+    those lanes are unstacked.
+    """
+    if spec is None:
+        return 1
+    # `default` guards a lane with no items: `LogicalLane` rejects one, but
+    # `input_lane_fits` is handed candidate lanes before any lane exists.
+    return min((spec.planning_stack(item) for item in items), default=1)
+
+
 def _input_logical_lanes(
     in_above: Sequence[tuple[str, ...]],
     in_below: Sequence[tuple[str, ...]],
     cargo_domain: CargoDomain,
     output_count: int,
+    spec: BuildSpec | None = None,
 ) -> tuple[LogicalLane, ...]:
     return tuple(
         LogicalLane(
@@ -804,6 +831,7 @@ def _input_logical_lanes(
             cargo_domain=cargo_domain,
             side="south",
             side_index=index,
+            stack=_input_stack(items, spec),
         )
         for index, items in enumerate(in_above)
     ) + tuple(
@@ -815,6 +843,7 @@ def _input_logical_lanes(
             side="north",
             cargo_domain=cargo_domain,
             side_index=output_count + index,
+            stack=_input_stack(items, spec),
         )
         for index, items in enumerate(in_below)
     )
@@ -828,6 +857,7 @@ def _output_side_assignments(count: int) -> Iterable[tuple[LaneSide, ...]]:
 def _output_logical_lanes(
     plan: _LogicalStripPlan,
     sides: tuple[LaneSide, ...],
+    spec: BuildSpec | None = None,
 ) -> tuple[LogicalLane, ...]:
     from flab2bp.layout.freeform import _dests
 
@@ -842,6 +872,9 @@ def _output_logical_lanes(
             cargo_domain=cargo_domain,
             side=side,
             side_index=index,
+            # An output lane is PRODUCED even for an item the spec also belts
+            # in: it leaves the machine on a sorter, whatever the bus does.
+            stack=1 if spec is None else spec.planning_stack(item, external=False),
         )
         for index, ((item, destination, cargo_domain), side) in enumerate(
             zip(plan.out_lanes, sides, strict=True)
@@ -945,8 +978,11 @@ def _logical_strip_plans(
                     destination
                     for destination in destinations
                     if not groups[destination].proliferated
+                    # An output lane, so the item is PRODUCED whatever the bus
+                    # also does with it: it is judged at the stack its own
+                    # sorter places.
                     and surplus + _sink_demand(groups, spec, item, destination)
-                    <= spec.lane_capacity
+                    <= spec.lane_capacity * spec.planning_stack(item, external=False)
                 ]
                 if shareable:
                     shared_boundary = min(
@@ -996,7 +1032,9 @@ def _logical_strip_plans(
                 ),
                 spec.lane_capacity * 0,
             )
-            return total <= spec.lane_capacity
+            # One belt, one cargo size: a shared lane is judged at the smallest
+            # stack any of its items was planned at (`_input_stack`).
+            return total <= spec.lane_capacity * _input_stack(lane, spec)
 
         probe = slots.probe_building(group.item_id, group.yaw)
         columns = len(slots.attachable_columns(probe, -1)) or 1
@@ -1101,6 +1139,12 @@ def _logical_strip_plans(
                     out_capacity,
                     demand,
                     spec.lane_capacity,
+                    # Output lanes, so every item is PRODUCED: judged at the
+                    # stack its own sorter places, not at what the bus carries.
+                    {
+                        item: spec.planning_stack(item, external=False)
+                        for item, _destination, _cargo_domain in shard
+                    },
                 )
                 for shard in shards
             ]
@@ -1140,7 +1184,16 @@ def _legacy_side_lane_caps(item_id: int, yaw: float, band_rows: int) -> tuple[in
 def _logical_lanes(
     plan: _LogicalStripPlan,
     output_sides: tuple[LaneSide, ...] | None = None,
+    *,
+    spec: BuildSpec,
 ) -> tuple[tuple[LogicalLane, ...], tuple[LogicalLane, ...]]:
+    """Every lane this plan owns, each carrying the stack it is planned at.
+
+    ``spec`` is keyword-only and required: a lane whose stack silently
+    defaulted to 1 on a stacked save would be sized for a quarter of the flow
+    it actually carries, and that is not a mistake a default should be able to
+    make.
+    """
     default_output_side: LaneSide = "north"
     sides = output_sides or (default_output_side,) * len(plan.out_lanes)
     return (
@@ -1149,8 +1202,9 @@ def _logical_lanes(
             plan.in_below,
             plan.cargo_domain,
             len(plan.out_lanes),
+            spec,
         ),
-        _output_logical_lanes(plan, sides),
+        _output_logical_lanes(plan, sides, spec),
     )
 
 
@@ -1477,7 +1531,7 @@ def generate_strip_families(
     ):
         family_id = StripFamilyId(plan.group_key, plan.shard_index)
         building = catalog.building(plan.item_id)
-        input_lanes, output_lanes = _logical_lanes(plan)
+        input_lanes, output_lanes = _logical_lanes(plan, spec=spec)
         generated: tuple[StripVariant, ...]
         if plan.flank_outputs:
             generated = ()
@@ -1497,7 +1551,7 @@ def generate_strip_families(
         else:
             generated = ()
             for sides in _output_side_assignments(len(plan.out_lanes)):
-                candidate_inputs, candidate_outputs = _logical_lanes(plan, sides)
+                candidate_inputs, candidate_outputs = _logical_lanes(plan, sides, spec=spec)
                 candidates = tuple(
                     candidate
                     for yaw in _CARDINAL_YAWS

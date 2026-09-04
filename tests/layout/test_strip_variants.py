@@ -1503,3 +1503,70 @@ def test_every_strip_length_heuristic_survives_the_cap(requested: int) -> None:
     instances = partition_strip_family(family, max_machine_count=requested)
     assert max(instance.machine_count for instance in instances) <= 3
     assert sum(instance.machine_count for instance in instances) == 9
+
+
+# --- lanes carry a stack (multiple-belts design, section 5.3) ---------------
+
+
+def _stacked_rated_spec(
+    rate: Fraction = Fraction(4),
+    *,
+    count: int = 8,
+    belt_stack: int = 2,
+    pick: tuple[int, ...] = (1, 1, 1, 2),
+    place: tuple[int, ...] = (1, 1, 1, 1),
+) -> BuildSpec:
+    """``_rated_spec`` on a save whose bus stacks.  Level 0 of the real table."""
+    base = _rated_spec(rate, count=count)
+    return BuildSpec(
+        groups=base.groups,
+        external_inputs=dict(base.external_inputs),
+        outputs=dict(base.outputs),
+        belt_item_id=base.belt_item_id,
+        belt_items_per_second=base.belt_items_per_second,
+        belt_stack=belt_stack,
+        sorter_pick_stacks=pick,
+        sorter_place_stacks=place,
+    )
+
+
+def test_an_unstacked_spec_plans_every_lane_at_one() -> None:
+    """Design rule 1: an `ist=1` save is planned exactly as it was."""
+    (family,) = generate_strip_families(_rated_spec(Fraction(4)))
+    assert {lane.stack for lane in family.input_lanes + family.output_lanes} == {1}
+    assert family.machine_cap == 7  # floor(30 / 4), unchanged
+
+
+def test_a_stacked_spec_plans_its_entry_lane_at_the_bus_stack() -> None:
+    """Hydrogen arrives on the player's stack-2 bus; deuterium leaves at what
+    an unresearched Pile Sorter places, which is 1."""
+    (family,) = generate_strip_families(_stacked_rated_spec())
+    hydrogen = [lane for lane in family.input_lanes if "hydrogen" in lane.items]
+    assert hydrogen and {lane.stack for lane in hydrogen} == {2}
+    assert {lane.stack for lane in family.output_lanes} == {1}
+    # 30/s of belt carrying 2 items per cargo is 60 items/s, and one machine
+    # draws 4: floor(30 * 2 / 4).
+    assert family.machine_cap == 15
+
+
+def test_a_stacked_output_lane_follows_the_place_stack() -> None:
+    (family,) = generate_strip_families(
+        _stacked_rated_spec(pick=(1, 1, 1, 4), place=(1, 1, 1, 4))
+    )
+    assert {lane.stack for lane in family.output_lanes} == {4}
+
+
+def test_a_logical_lane_stack_outside_the_games_range_is_refused() -> None:
+    lane = LogicalLane(
+        lane_id="input:south:0",
+        kind="input",
+        items=("hydrogen",),
+        destination_group_keys=(),
+        cargo_domain=CargoDomain.UNSPRAYED,
+        side="south",
+        side_index=0,
+    )
+    assert lane.stack == 1
+    for bad in (0, 5):
+        with pytest.raises(ValueError, match="lane stack"):
+            replace(lane, stack=bad)
