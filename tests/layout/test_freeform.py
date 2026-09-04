@@ -17454,6 +17454,76 @@ def test_pick_sorter_returns_the_fastest_tier_when_no_tier_keeps_the_promise() -
     assert tier == 2013
 
 
+def _both_fed_stacked_spec() -> BuildSpec:
+    """Hydrogen belted in at stack 2 AND made inside, on a save that places 3.
+
+    Level 4 of the real table: the Pile Sorter picks 4 and places 3, and the
+    URL's `ist` is 2.  This is the one shape where an item's two lanes are
+    planned at DIFFERENT stacks.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=1,
+                inputs_per_machine={"hydrogen": F(4)},
+                outputs_per_machine={"deuterium": F(1, 2)},
+            ),
+            MachineGroup(
+                recipe_id="hydrogen-cracking",
+                machine_item_id="oil-refinery",
+                count=1,
+                inputs_per_machine={"refined-oil": F(1)},
+                outputs_per_machine={"hydrogen": F(3)},
+            ),
+        ),
+        external_inputs={"hydrogen": F(1), "refined-oil": F(1)},
+        outputs={"deuterium": F(1, 2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        belt_stack=2,
+        sorter_pick_stacks=(1, 1, 1, 4),
+        sorter_place_stacks=(1, 1, 1, 3),
+    )
+
+
+def test_a_both_fed_item_keeps_a_stack_for_each_side_of_the_strip() -> None:
+    """An item's entry lane and its output lane are not the same lane.
+
+    The bus arrives at 2 and the producer's sorter places 3, so the merged
+    ENTRY lane carries min(2, 3) = 2 while the OUTPUT lane carries 3.  One
+    number per item cannot say both, and the producer's sorter has to be asked
+    for the lane it actually feeds.
+    """
+    spec = _both_fed_stacked_spec()
+    assert spec.planning_stack("hydrogen") == 2
+    assert spec.planning_stack("hydrogen", external=False) == 3
+
+    stacks = freeform._lane_stacks_for(spec)
+    assert stacks.into("hydrogen") == 2, "the lane a consumer picks from"
+    assert stacks.out_of("hydrogen") == 3, "the lane the producer places onto"
+    # An item with only one lane answers the same on both sides.
+    assert stacks.into("deuterium") == stacks.out_of("deuterium") == 3
+
+
+def test_the_producer_sorter_is_asked_for_the_stack_its_output_lane_promises() -> None:
+    """The consequence of the two-sided map, at the picker.
+
+    Asked for the entry lane's 2, a tier that places 2 would be accepted for a
+    lane that promises 3, and the lane would be built a tier too small.
+    """
+    spec = _both_fed_stacked_spec()
+    lanes = freeform._lane_stacks_for(spec)
+    sorter_stacks = freeform._sorter_stacks_for(spec)
+    tiers = freeform._sorter_tiers_for(spec)
+    tier, _ = freeform._pick_sorter(
+        F(1), 1, 1, tiers, stacks=sorter_stacks, min_place_stack=lanes.out_of("hydrogen")
+    )
+    assert sorter_stacks.place(tier) >= 3
+    assert tier == 2014, "only the Pile Sorter places 3 on this save"
+
+
 def test_pick_sorter_never_leaves_the_allowed_tiers() -> None:
     tier, _ = freeform._pick_sorter(F(10), 1, 1, tiers=(2011, 2012, 2013))
     assert tier == 2013, "the fastest ALLOWED tier, not the Pile Sorter"

@@ -4534,6 +4534,40 @@ class _SorterStacks:
 _NO_SORTER_STACKS = _SorterStacks()
 
 
+@dataclass(frozen=True, slots=True)
+class _LaneStacks:
+    """The stack each item's lanes are planned at, one map per SIDE of a strip.
+
+    Two maps rather than one, because one number per item cannot describe both
+    lanes of an item that is BOTH belted in and produced (universe-matrix's
+    hydrogen is the corpus shape).  Its entry lane carries ``min(bus, place)``
+    -- a merge is judged at its minimum -- while its output lane carries
+    ``place``, because a lane leaving a machine on a sorter is produced
+    whatever the bus also does.  Ask the producer's sorter for the entry
+    lane's number and a tier that places 2 is accepted for a lane that
+    promises 3, which is a lane built a tier too small for what it carries.
+
+    An absent item is unstacked, which is every item on a save without `ist`.
+    """
+
+    #: Item -> the stack of the lane a CONSUMER picks from.
+    consumed: Mapping[str, int] = field(default_factory=dict)
+    #: Item -> the stack of the lane a PRODUCER places onto.
+    produced: Mapping[str, int] = field(default_factory=dict)
+
+    def into(self, item: str) -> int:
+        """The lane a sorter picks off, feeding a machine or a junction."""
+        return self.consumed.get(item, 1)
+
+    def out_of(self, item: str) -> int:
+        """The lane a sorter places onto, leaving a machine."""
+        return self.produced.get(item, 1)
+
+
+#: Every lane unstacked: the answer for a save without `ist`, and the default.
+_NO_LANE_STACKS = _LaneStacks()
+
+
 @dataclass
 class _Canvas:
     """Buildings under construction, plus what occupies each cell."""
@@ -4551,9 +4585,9 @@ class _Canvas:
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
     #: What each of those tiers may promise about cargo stacks.
     sorter_stacks: _SorterStacks = _NO_SORTER_STACKS
-    #: Item -> the stack its lane is planned at, so an emitter can ask for a
+    #: The stack each item's lanes are planned at, so an emitter can ask for a
     #: sorter that keeps the promise the plan made (design 5.3).
-    lane_stacks: Mapping[str, int] = field(default_factory=dict)
+    lane_stacks: _LaneStacks = _NO_LANE_STACKS
 
     buildings: list[PlacedBuilding] = field(default_factory=list)
     #: ``(x, y, level)`` -> building index, for cells that block routing.
@@ -4834,15 +4868,8 @@ def _sorter_stacks_for(spec: BuildSpec) -> _SorterStacks:
     return _SorterStacks(pick_by_tier=pick, place_by_tier=place)
 
 
-def _lane_stacks_for(spec: BuildSpec) -> Mapping[str, int]:
-    """Item -> the stack the lane carrying it is planned at (design 5.3).
-
-    One number per item rather than per lane because that is what the emitters
-    have in hand.  It is the spec's OWN classification, which for an item both
-    belted in and produced is ``min(bus, place)`` -- exactly what the merged
-    lane carries, so a sorter asked to keep this promise is asked for the lane
-    it actually feeds and not for a stack that lane never holds.
-    """
+def _lane_stacks_for(spec: BuildSpec) -> _LaneStacks:
+    """The stack each item's lanes are planned at, per side (design 5.3)."""
     items = (
         {item for group in spec.groups for item in group.inputs_per_machine}
         | {item for group in spec.groups for item in group.outputs_per_machine}
@@ -4850,7 +4877,12 @@ def _lane_stacks_for(spec: BuildSpec) -> Mapping[str, int]:
         | set(spec.outputs)
         | set(spec.surplus_outputs)
     )
-    return {item: spec.planning_stack(item) for item in sorted(items)}
+    return _LaneStacks(
+        consumed={item: spec.planning_stack(item) for item in sorted(items)},
+        produced={
+            item: spec.planning_stack(item, external=False) for item in sorted(items)
+        },
+    )
 
 
 def _pick_sorter(
@@ -5555,15 +5587,16 @@ def _flank_lane(
         for a, b in zip(column, column[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
         canvas.buildings[column[-1]] = _relink(canvas.buildings[column[-1]], output_obj=tail)
-        # Producer side: this sorter PLACES onto the lane, so it has to be a
-        # tier that can place the stack the lane was planned at.
+        # Producer side: this sorter PLACES onto an OUTPUT lane, so it is the
+        # produced-side stack it has to keep -- not the entry lane's, which for
+        # an item that is also belted in is the smaller of the two.
         tier, _count = _pick_sorter(
             rate,
             got.span,
             1,
             canvas.sorter_tiers,
             stacks=canvas.sorter_stacks,
-            min_place_stack=canvas.lane_stacks.get(item, 1),
+            min_place_stack=canvas.lane_stacks.out_of(item),
         )
         canvas.buildings.append(
             PlacedBuilding(
@@ -5831,15 +5864,14 @@ def _link_lane(
             raise NoValidLayout(f"lane for {planned.item!r} omits precomputed column {column}")
         # `into_machine` says which end of the lane this sorter is on: it
         # PICKS the lane's cargo on the way in and PLACES it on the way out.
-        lane_stack = canvas.lane_stacks.get(planned.item, 1)
         tier, _count = _pick_sorter(
             rate,
             planned.span,
             1,
             canvas.sorter_tiers,
             stacks=canvas.sorter_stacks,
-            min_pick_stack=lane_stack if into_machine else 1,
-            min_place_stack=1 if into_machine else lane_stack,
+            min_pick_stack=canvas.lane_stacks.into(planned.item) if into_machine else 1,
+            min_place_stack=1 if into_machine else canvas.lane_stacks.out_of(planned.item),
         )
         model_index = catalog.building(tier).model_index
         facing = Facing.SOUTH.value if lane_y < expected_cell[1] else Facing.NORTH.value
@@ -7330,7 +7362,7 @@ class _PreparedRoutingProblem:
     external_output_nets: tuple[_PreparedNet, ...] = ()
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
     sorter_stacks: _SorterStacks = _NO_SORTER_STACKS
-    lane_stacks: Mapping[str, int] = field(default_factory=dict)
+    lane_stacks: _LaneStacks = _NO_LANE_STACKS
 
     def new_workspace(self) -> _RoutingWorkspace:
         buildings = list(self.building_templates)
@@ -7338,7 +7370,7 @@ class _PreparedRoutingProblem:
             ramped=self.ramped,
             sorter_tiers=self.sorter_tiers,
             sorter_stacks=self.sorter_stacks,
-            lane_stacks=dict(self.lane_stacks),
+            lane_stacks=self.lane_stacks,
             buildings=buildings,
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
@@ -14085,7 +14117,7 @@ def _prepare_routing_problem(
         ramped=ramped,
         sorter_tiers=_sorter_tiers_for(spec),
         sorter_stacks=_sorter_stacks_for(spec),
-        lane_stacks=dict(_lane_stacks_for(spec)),
+        lane_stacks=_lane_stacks_for(spec),
     )
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
@@ -14832,7 +14864,7 @@ def _prepare_routing_problem(
         ramped=canvas.ramped,
         sorter_tiers=canvas.sorter_tiers,
         sorter_stacks=canvas.sorter_stacks,
-        lane_stacks=dict(canvas.lane_stacks),
+        lane_stacks=canvas.lane_stacks,
         world_taken=frozenset(canvas.world_taken),
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())
@@ -15437,17 +15469,17 @@ def _bridge(
     if span < 1 or span > catalog.SORTER_MAX_REACH:
         return None
 
-    # A bridge is belt-to-belt: it picks the source lane's cargo and places
-    # it on the destination lane, so it must keep the promise at both ends.
-    bridge_stack = canvas.lane_stacks.get(item, 1)
+    # A bridge is belt-to-belt: it picks the source lane's cargo and places it
+    # on the destination lane, so it keeps a promise at BOTH ends -- the entry
+    # lane's on the way in and the output lane's on the way out.
     tier, _ = _pick_sorter(
         rates.get(item, Fraction(1)),
         span,
         1,
         canvas.sorter_tiers,
         stacks=canvas.sorter_stacks,
-        min_pick_stack=bridge_stack,
-        min_place_stack=bridge_stack,
+        min_pick_stack=canvas.lane_stacks.into(item),
+        min_place_stack=canvas.lane_stacks.out_of(item),
     )
     for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
         if (column, src.y, 0) not in canvas.blocked:
