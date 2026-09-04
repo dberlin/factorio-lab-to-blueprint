@@ -3,9 +3,20 @@
 Turn a [FactorioLab](https://factoriolab.github.io/dsp) URL for Dyson Sphere Program into a
 dense, pasteable DSP blueprint.
 
+## Requirements and setup
+
+- Python 3.14 or newer
+- [uv](https://docs.astral.sh/uv/)
+- [Bun](https://bun.sh/) for the browser interface and TypeScript cross-validation
+
 ```bash
+uv sync
 uv run flab2bp 'https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60&ibe=conveyor-belt-2&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&mps=proliferator-2-products&v=11'
 ```
+
+The command prints the blueprint string to standard output. Use `-o FILE` to write it to a
+file, and `uv run flab2bp --help` for the full strategy, candidate-policy, latitude-band,
+flow-provenance, and validation options.
 
 ## What it builds
 
@@ -24,11 +35,17 @@ choosing per recipe between *extra products* mode, which compounds savings up th
 
 ## Latitude portability
 
-`--band portable` is the default for both layout strategies and for the web UI. The complete
-selection is:
+`--band portable` is the default for both layout strategies and the web interface. The
+available selections are:
 
 ```text
---band portable|4|8|16|20|32|40|60|80|100|120|160|200
+portable
+5x20 5x40 5x80 5x100
+10x160 10x200
+15x300 15x400
+25x500 25x600
+50x800
+160x1000
 ```
 
 Portable mode starts with the globally smallest band in which the unpadded layout fits (`B0`)
@@ -43,10 +60,10 @@ passing frame, or refuses the layout rather than emitting a blueprint with a wea
 A refusal retains structured evidence for each distinct projection failure: band, check,
 building indices, and the authoritative detail.
 
-An explicit numeric selection certifies only that requested band, using the same search of up
-to four latitude rows. If the layout does not fit the band or fails at any legal anchor, the
-build refuses. Successful CLI reports and web results expose both `primary_band` and the
-literal `certified_bands` tuple.
+An explicit named selection certifies only that requested band, using the same search of up to
+four latitude rows. If the layout does not fit the band or fails at any legal anchor, the build
+refuses. Successful CLI reports and web results expose both `primary_band` and the literal
+`certified_bands` tuple.
 
 Latitude certification does not change the validator's `flow.external_entry_points` warning:
 multiple reachable external lanes for one item remain valid, but the player must connect a
@@ -83,7 +100,7 @@ downstream is geometry with no rate reasoning.
 ## Correctness
 
 The DSP blueprint format is unforgiving — a checksum mismatch or a byte out of place and the game
-silently refuses the paste. Three independent guards:
+silently refuses the paste. Four independent guards:
 
 1. **Byte-identical re-encode.** All 11 real game blueprints in `tests/fixtures/` decode and
    re-encode to exactly their original string, checksum included. This proves the writer emits
@@ -106,66 +123,64 @@ round constants, not derivable from `sin()`. See `dsp/md5f.py`.
 
 ## In a browser
 
-Same solver, same options, plus the blueprint rendered in 3D on the page that built it.
+The browser interface runs the same solver and renders the generated blueprint in 3D.
+
+The viewer's item names, icons, recipes, and building geometry are extracted from the game and
+are not stored in Git. Populate `web/public/assets/` once from a local Dyson Sphere Program
+installation, or copy an already-generated directory from another installation:
 
 ```bash
-uv run flab2bp-web        # http://127.0.0.1:8000
+cd web
+bun install --frozen-lockfile
+bun run extract-assets "/path/to/Dyson Sphere Program"
+cd ..
+uv run flab2bp-web
 ```
 
-That is the whole command. It builds the front end with `bun` on first run — `bun install &&
-bun run build` in `web/` — and then serves it, so the only prerequisites are `uv sync` and
-`bun` on `PATH`. Pass `--build` to force a rebuild after changing the TypeScript, `--no-build`
-to never shell out to bun, or `--port`/`--host` to move it.
+Open <http://127.0.0.1:8000>. Skip asset extraction when `web/public/assets/` is already
+populated. `flab2bp-web` builds the front end when necessary; pass `--build` to force a rebuild,
+`--no-build` to serve an existing build, or `--host` and `--port` to change the listener.
 
-Paste a FactorioLab URL, pick the strategy, named candidate-policy checkbox subset and per-layout budget, and press
-Build. The blueprint string is there to copy when it is done, and the viewer renders it in the
-same page without a second step.
+Paste a FactorioLab URL, choose the strategy, candidate policies, and per-layout budget, then
+press **Build**. The page exposes the resulting blueprint for copying and renders it without a
+second tool.
 
 **A build is a job, not a request.** `--budget` is per layout and `best` lays out every
-candidate with both strategies, so a build runs for seconds to minutes; `POST /api/build`
+candidate with both strategies, so a build can run for seconds to minutes. `POST /api/build`
 returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
-each (candidate, strategy) pair as it starts and as it settles, so the bar counts pairs
-finished and the line above it names the pair currently in CP-SAT. Before the layout loop —
-parsing the URL, solving the rates — there is nothing to count, and the panel says so rather
-than inventing a fraction. A submitted job may ask for at most 300s of solving; over that is
-refused with the arithmetic spelled out rather than quietly clamped.
+each candidate/strategy pair as it starts and settles. A submitted job may request at most 300
+seconds of solving; larger requests are refused rather than silently clamped.
 
-**A refusal is a result.** A spec that cannot be laid out reports one line per strategy and
-candidate saying why each gave up, and the page shows that as the answer rather than as a
-failure. So is an invalid build: if validation fails, the string is withheld and the errors are
-listed, exactly as the CLI refuses to emit without `--allow-invalid` — the page has a button
-that says what you are asking for.
+**A refusal is a result.** A spec that cannot be laid out reports why each strategy and
+candidate gave up. An invalid build withholds the blueprint and lists the validation errors,
+matching the CLI unless `--allow-invalid` is explicitly requested.
 
 Flow provenance is explicit. `--flow FILE` pins a FactorioLab CSV export; `--fetch-flow` is
-opt-in (off by default) and drives the installed Chromium to export FactorioLab's own solved
-flow. A capture failure refuses the build instead of silently deriving a different recipe
-selection. The web checkbox offers the same capture only for
-`https://factoriolab.github.io/dsp/list` and `/dsp/flow` pages with no nonstandard port.
-Automatic fetch and pasted/uploaded CSV are mutually exclusive in web requests.
+opt-in and drives installed Chromium to export FactorioLab's solved flow. Capture failure
+refuses the build instead of silently deriving a different recipe selection. Automatic fetch
+and pasted or uploaded CSV are mutually exclusive.
 
-`nodriver` is intentionally pinned to 0.47.0, the newest verified release with importable
-UTF-8 Python source; newer published wheels remain unsuitable until an importable upgrade is
-verified.
+For TypeScript development, `cd web && bun run dev` starts and supervises both the Python API
+on port 8000 and Rsbuild on port 3001. `web/README.md` documents remote access, external API
+configuration, asset extraction, and the individual web commands.
 
-For working on the TypeScript, `cd web && bun run dev` starts rsbuild on port 3001 with `/api`
-proxied to `flab2bp-web` on 8000 — the solver is Python, so that process has to be running
-either way.
-
-`web/` is the former `dsp-blueprint-viewer` — React, rsbuild and three.js — taken in-tree and
-taken over rather than vendored. Its own gates still apply to it: `cd web && bun run typecheck
-&& bun run lint && bun run test`.
-
-`uv run scripts/web_smoke.py` drives the whole thing in a real browser and decodes the string
-the Copy button actually put on the clipboard. **[docs/WEB_UI.md](docs/WEB_UI.md)** has the
-options, the API, and the list of what this does not do.
+`uv run scripts/web_smoke.py` drives the integrated server in a real browser and decodes the
+blueprint copied by the page. [docs/WEB_UI.md](docs/WEB_UI.md) documents the UI and API.
 
 ## Development
 
+Run the Python and web gates relevant to the files changed:
+
 ```bash
-uv sync
-uv run pytest          # ~25s, deliberately fast enough for an edit loop
-uv run ruff check
-uv run mypy --strict src tests
+uv run pytest
+uv run ruff check .
+uv run mypy
+
+cd web
+bun install --frozen-lockfile
+bun run typecheck
+bun run lint
+bun run test
 ```
 
 ### Does it actually work?
