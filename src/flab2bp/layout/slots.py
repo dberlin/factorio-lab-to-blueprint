@@ -107,6 +107,7 @@ __all__ = [
     "attachable_rows",
     "attachment",
     "belt_tile_hits_collider",
+    "drain_dock_count",
     "lane_facing",
     "lane_orientation",
     "machine_slot",
@@ -969,6 +970,27 @@ def port_docks(machine: PlacedBuilding) -> dict[int, PortDock]:
         if got is not None:
             out[k] = got
     return out
+
+
+def drain_dock_count(item_id: int, yaw: float) -> int:
+    """How many of ``item_id``'s ports face the lane band (draw from the north) at ``yaw``.
+
+    The exact question ``strip_variants._logical_strip_plans``'s output-lane cap
+    and ``freeform._drainable_by_port`` both ask, of the same type-level probe --
+    ``dock.facing.delta[1] > 0`` over :func:`port_docks`.  Before this they
+    computed that expression at two separate call sites; sharing one removes the
+    chance of the two silently drifting, even though today neither divergence
+    would be *visible* -- both paths end in a refusal at a 0-dock yaw, so the
+    duplication was inert rather than wrong.
+
+    Returns the raw count, including zero.  A caller that wants "at least one
+    lane, even with none to give" applies that floor itself at its own call
+    site -- :func:`strip_variants._logical_strip_plans` does; a bare capacity
+    check like ``_drainable_by_port`` must not, since ``0 <= 0`` would then read
+    as drainable.
+    """
+    probe = probe_building(item_id, yaw)
+    return sum(dock.facing.delta[1] > 0 for dock in port_docks(probe).values())
 
 
 #: How many belt tiles inside a host's build collider the game lets off.

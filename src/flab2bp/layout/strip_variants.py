@@ -1048,10 +1048,17 @@ def _logical_strip_plans(
 
         building = catalog.building(group.item_id)
         if building.takes_belt_ports and not building.slot_poses:
-            # A host with no insert pose drains through PORTS, not sorters, so
-            # the sorter reach and the south face's attachable columns are the
-            # wrong question: what bounds its lanes is how many ports face the
-            # lane band, and an Energy Exchanger has exactly ONE at every yaw.
+            # EVERY belt-port host with no insert pose is capped here, not only
+            # the Energy Exchanger -- all twelve `takes_belt_ports` buildings
+            # (2301, 2306, 2307, 2314, 2316, 2208, 2209, ...) have falsy
+            # `slot_poses`, so all twelve take this branch.  What bounds a
+            # belt-port host's lanes is how many of its ports face the lane
+            # band FOR THIS YAW, not the sorter reach or the south face's
+            # attachable columns -- and that count varies by host AND by yaw:
+            # 2209 is 1 at every yaw, but 2316 (measured: 3/3/0/3 across yaw
+            # 0/90/180/270) is 3 at three of the four and 0 at the fourth, and
+            # 2208 is 1/0/1/0.  `drain_dock_count` reads it fresh each time
+            # rather than assuming a host has exactly one.
             #
             # Capping here is what removes the whole defect class rather than
             # coping with it downstream: `_merge_lanes` then folds this cargo's
@@ -1061,9 +1068,18 @@ def _logical_strip_plans(
             # measured four ways -- every one either failed to attach, emitted
             # splitters our own validator convicts, or turned the collision
             # into a refusal.
+            #
+            # The `or 1` floor belongs HERE, not inside `drain_dock_count`: a
+            # bare capacity check like `_drainable_by_port` must never floor a
+            # true zero, or `0 <= 0` would read as drainable.  This planner
+            # always wants at least one lane to try, even for a host with no
+            # drain-facing port at this yaw -- `_shard_sinks` rejects a true
+            # zero outright ("no room left on the south side"), and a strip
+            # with nothing to drain is refused honestly downstream, by
+            # `_drainable_by_port` asking the real, unfloored count again.
             out_capacity = min(
                 out_capacity,
-                sum(dock.facing.delta[1] > 0 for dock in slots.port_docks(probe).values()) or 1,
+                slots.drain_dock_count(group.item_id, group.yaw) or 1,
             )
 
         cargo_count = len(_cargo_keys(sinks))
