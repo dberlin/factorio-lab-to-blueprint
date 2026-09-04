@@ -926,45 +926,118 @@ def _seat_both_fed_outermost(
     in_above: tuple[tuple[str, ...], ...],
     in_below: tuple[tuple[str, ...], ...],
     both_fed: frozenset[str],
+    *,
+    above_cap: int | None = None,
+    below_cap: int | None = None,
+    columns: int | None = None,
+    n_sinks: int = 0,
+    flank_outputs: bool = False,
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
-    """Move every lane carrying a both-fed ingredient to its side's outermost row.
+    """Put up to two both-fed lanes on the two true outer rows.
 
     A lane fed from the boundary AND from an internal producer needs TWO belt
-    approaches, and only the outermost lane of a side has two free 4-neighbours.
-    Measured (R4 §1.2): the head tile of a MIDDLE lane has its own lane's second
-    tile east, a sibling lane head north, a sibling lane head or its own machine
-    band south, and the strip's `WEST_CHANNEL` column west -- one free side for
-    two claims, at every height, in every pack, under every arrangement.
+    approaches.  A strip has exactly two rows that expose a second neighbour:
+    the first north lane and the last south lane.  Stable ordering within each
+    side is not enough when `_seat_inputs` puts two both-fed lanes north, so this
+    function moves one to the other side while preserving the row and insert-pose
+    limits that made the original seating legal.
 
-    THE UNWRITTEN COUPLING THIS RELIES ON, written down here because a packer
-    change could silently remove it: the row directly north of every strip is
-    free.  `freeform._box` charges each strip `height + MARGIN` with
-    `MARGIN = 1`, and `freeform._greedy_pack` seats each strip at the TOP of its
-    slot, so the outermost `in_above` lane head can always step north.  If that
-    margin row ever goes away, `casimir-crystal#1` and `energy-matrix#12` strand
-    again; the router-side pin in `tests/layout/test_freeform.py` and the corpus
-    invariant in `tests/layout/test_strip_variants.py` are the tripwires.
+    The unit of demand is a LANE, not an item: a shared lane that contains two
+    both-fed items still names one port cell and one additional approach.  More
+    than two separately seated both-fed lanes cannot all occupy a true outer row
+    and are refused here; a staircase remains the recorded future mechanism.
 
     The two sides count rows in OPPOSITE directions -- `Strip.row_of_input`
     returns `in_above.index(lane)` for an `in_above` lane and
     `first_row_below_band + len(out_lanes) + in_below.index(lane)` for an
-    `in_below` one -- so `in_above` wants the both-fed lanes FIRST and `in_below`
-    wants them LAST.  Ordering `input_items` alone gets `in_above` right and
-    `in_below` exactly wrong, which is why the rule is expressed here, on the
-    seated rows.
+    `in_below` one -- so north wants the both-fed lane FIRST and south wants it
+    LAST.
 
-    Both sorts are STABLE, so a side with no both-fed lane is returned unchanged
-    and every strip without one is byte-identical to today's.
+    Defaults make direct helper calls unconstrained.  Production supplies the
+    exact caps and face-column count used by `_seat_inputs`, including the one
+    south output row and column where applicable.
     """
     if not both_fed:
         return in_above, in_below
-    above = tuple(
-        sorted(in_above, key=lambda lane: not (both_fed & frozenset(lane)))
-    )
-    below = tuple(
-        sorted(in_below, key=lambda lane: bool(both_fed & frozenset(lane)))
-    )
-    return above, below
+
+    def carries_both(lane: tuple[str, ...]) -> bool:
+        return bool(both_fed & frozenset(lane))
+
+    def ordered(
+        above: tuple[tuple[str, ...], ...],
+        below: tuple[tuple[str, ...], ...],
+    ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
+        return (
+            tuple(sorted(above, key=lambda lane: not carries_both(lane))),
+            tuple(sorted(below, key=carries_both)),
+        )
+
+    above, below = ordered(in_above, in_below)
+    above_both = tuple(index for index, lane in enumerate(above) if carries_both(lane))
+    below_both = tuple(index for index, lane in enumerate(below) if carries_both(lane))
+    both_lane_count = len(above_both) + len(below_both)
+    if both_lane_count > 2:
+        raise ValueError(
+            f"{both_lane_count} both-fed lanes need outer rows, but a strip has only two"
+        )
+    if both_lane_count < 2 or (above_both and below_both):
+        return above, below
+
+    total_lanes = len(above) + len(below)
+    total_items = sum(len(lane) for lane in (*above, *below))
+    north_cap = total_lanes if above_cap is None else above_cap
+    south_cap = total_lanes if below_cap is None else below_cap
+    face_columns = total_items + (1 if n_sinks and not flank_outputs else 0)
+    if columns is not None:
+        face_columns = columns
+    south_output_rows = 1 if n_sinks else 0
+    south_output_columns = 1 if n_sinks and not flank_outputs else 0
+
+    def fits(
+        candidate_above: tuple[tuple[str, ...], ...],
+        candidate_below: tuple[tuple[str, ...], ...],
+    ) -> bool:
+        return (
+            len(candidate_above) <= north_cap
+            and len(candidate_below) + south_output_rows <= south_cap
+            and sum(len(lane) for lane in candidate_above) <= face_columns
+            and sum(len(lane) for lane in candidate_below) + south_output_columns
+            <= face_columns
+        )
+
+    candidates: list[
+        tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]
+    ] = []
+    if len(above_both) == 2:
+        moving_index = above_both[1]
+        moving = above[moving_index]
+        candidates.append((above[:moving_index] + above[moving_index + 1 :], (*below, moving)))
+        candidates.extend(
+            (
+                (*above[:moving_index], lane, *above[moving_index + 1 :]),
+                (*below[:index], moving, *below[index + 1 :]),
+            )
+            for index, lane in enumerate(below)
+            if not carries_both(lane)
+        )
+    else:
+        moving_index = below_both[0]
+        moving = below[moving_index]
+        candidates.append(((*above, moving), below[:moving_index] + below[moving_index + 1 :]))
+        candidates.extend(
+            (
+                (*above[:index], moving, *above[index + 1 :]),
+                (*below[:moving_index], lane, *below[moving_index + 1 :]),
+            )
+            for index, lane in enumerate(above)
+            if not carries_both(lane)
+        )
+
+    for candidate_above, candidate_below in candidates:
+        candidate_above, candidate_below = ordered(candidate_above, candidate_below)
+        if fits(candidate_above, candidate_below):
+            return candidate_above, candidate_below
+    raise ValueError("two both-fed lanes cannot be placed on opposite outer rows within the caps")
 
 
 def _logical_strip_plans(
@@ -1147,7 +1220,19 @@ def _logical_strip_plans(
         # only `universe-matrix` has a both-fed item and both of its affected
         # strips keep `box_height` and `width` (R4 §6 E6) -- but a reviewer
         # should know the prover is downstream of the reorder on purpose.
-        in_above, in_below = _seat_both_fed_outermost(in_above, in_below, both_fed)
+        try:
+            in_above, in_below = _seat_both_fed_outermost(
+                in_above,
+                in_below,
+                both_fed,
+                above_cap=above_cap,
+                below_cap=below_cap,
+                columns=columns,
+                n_sinks=len(sinks),
+                flank_outputs=flank,
+            )
+        except ValueError as exc:
+            raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
 
         south_columns = len(slots.attachable_columns(probe, group.pitch_h))
         out_capacity = below_cap - len(in_below)
