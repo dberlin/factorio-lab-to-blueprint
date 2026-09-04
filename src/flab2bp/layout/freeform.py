@@ -142,7 +142,7 @@ from flab2bp.layout.sequence_pair import (
     encode_placement,
 )
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
-from flab2bp.layout.strip_variants import CargoDomain
+from flab2bp.layout.strip_variants import CargoDomain, StripFamilyId, StripInstanceId
 from flab2bp.spec import BuildSpec
 
 if TYPE_CHECKING:
@@ -154,8 +154,6 @@ if TYPE_CHECKING:
         LaneSorterAttachment,
         ProjectionPitchRequirement,
         StripFamily,
-        StripFamilyId,
-        StripInstanceId,
         StripPoseId,
         StripVariant,
         StripVariantId,
@@ -14713,22 +14711,63 @@ def _prepare_routing_problem(
             failed_ports=unreachable_ports,
             demands=demands,
         )
-        owner = {
-            (port.x, port.y, port.z): (item, strips[strip_index].sid)
-            for strip_index, ports in enumerate(strip_in_ports)
-            for item, port in ports.items()
-        }
-        stranded_ports.extend(
-            StrandedPort(
-                cell=cell,
-                item=owner.get(cell, ("?", "?"))[0],
-                strip_label=owner.get(cell, ("?", "?"))[1],
-                held=demands[cell][0],
-                wants=demands[cell][1],
-                options=demands[cell][2],
+        owner: dict[
+            Cell,
+            tuple[str, str, StripInstanceId, str],
+        ] = {}
+        for strip_index, ports in enumerate(strip_in_ports):
+            strip = strips[strip_index]
+            family_id = strip.family_id or StripFamilyId(strip.group_key, 0)
+            instance_id = StripInstanceId(
+                family_id,
+                strip.machine_start,
+                strip.machines,
             )
-            for cell in sorted(unreachable_ports)
+            input_plans = (*strip.attachment_plan, *strip.port_dock_plan)
+            for item, port in ports.items():
+                lane_id = next(
+                    (
+                        plan.lane.lane_id
+                        for plan in input_plans
+                        if plan.lane.kind == "input" and item in plan.lane.items
+                    ),
+                    "",
+                )
+                if not lane_id:
+                    lane = strip.lane_of_input(item)
+                    if lane in strip.in_above:
+                        lane_id = f"input:south:{strip.in_above.index(lane)}"
+                    else:
+                        lane_id = (
+                            f"input:north:"
+                            f"{len(strip.out_lanes) + strip.in_below.index(lane)}"
+                        )
+                owner[port.x, port.y, port.z] = (
+                    item,
+                    strip.sid,
+                    instance_id,
+                    lane_id,
+                )
+        unknown_owner = (
+            "?",
+            "?",
+            StripInstanceId(StripFamilyId("?", 0), 0, 1),
+            "?",
         )
+        for cell in sorted(unreachable_ports):
+            item, strip_label, instance_id, lane_id = owner.get(cell, unknown_owner)
+            stranded_ports.append(
+                StrandedPort(
+                    cell=cell,
+                    item=item,
+                    strip_label=strip_label,
+                    instance_id=instance_id,
+                    lane_id=lane_id,
+                    held=demands[cell][0],
+                    wants=demands[cell][1],
+                    options=demands[cell][2],
+                )
+            )
 
     if _reserve_ports:
         hold_ports()
@@ -15251,6 +15290,10 @@ class StrandedPort:
     cell: tuple[int, int, int]
     item: str
     strip_label: str
+    #: Stable physical strip range; unlike coordinates it survives repacking.
+    instance_id: StripInstanceId
+    #: Placement-independent lane identity within ``instance_id``.
+    lane_id: str
     #: Corridors the matching actually reserved for this port.
     held: int
     #: Corridors it needed: one per role, plus one when the port is in ``twice``.
@@ -17282,10 +17325,12 @@ def _port_seating_refusal(attempts: Sequence[PackAttempt]) -> str | None:
     nothing was routed and the packer is blameless.  Measured on all three
     freeform `universe-matrix` cells at `e0bf432` (R2 §3, R4 §1).
 
-    Logical identity is ``(strip_label, item)``: a strip plan assigns each input
-    item once, while packing may move its port cell on every attempt.  The first
-    attempt is the representative for held/wants/options detail, so the
-    diagnostic stays reproducible without multiplying one lane by coordinates.
+    Logical identity is ``(instance_id, lane_id)``.  ``instance_id`` is the
+    stable family/machine-range identity of one physical strip, so two shards of
+    the same group remain distinct; ``lane_id`` is placement-independent, so
+    moving that lane's port cell on another attempt does not multiply it.  The
+    first attempt is the representative for held/wants/options detail, keeping
+    the diagnostic reproducible.
     """
     if not attempts:
         return None
@@ -17299,10 +17344,10 @@ def _port_seating_refusal(attempts: Sequence[PackAttempt]) -> str | None:
             for failure in attempt.routing.failures
         ):
             return None
-    ports: dict[tuple[str, str], StrandedPort] = {}
+    ports: dict[tuple[StripInstanceId, str], StrandedPort] = {}
     for attempt in attempts:
         for port in attempt.stranded_ports:
-            ports.setdefault((port.strip_label, port.item), port)
+            ports.setdefault((port.instance_id, port.lane_id), port)
     if not ports:
         return None
     named = ", ".join(
@@ -17310,11 +17355,17 @@ def _port_seating_refusal(attempts: Sequence[PackAttempt]) -> str | None:
         f"(wants {port.wants}, held {port.held}, {port.options} free side(s))"
         for port in sorted(
             ports.values(),
-            key=lambda port: (port.strip_label, port.item, port.cell),
+            key=lambda port: (
+                port.strip_label,
+                port.item,
+                port.instance_id,
+                port.lane_id,
+                port.cell,
+            ),
         )[:3]
     )
     counts = {
-        len({(port.strip_label, port.item) for port in attempt.stranded_ports})
+        len({(port.instance_id, port.lane_id) for port in attempt.stranded_ports})
         for attempt in attempts
     }
     same = (

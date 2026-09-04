@@ -121,7 +121,9 @@ from flab2bp.layout.strip_variants import (
     CargoDomain,
     ProjectionPitchRequirement,
     StripFamily,
+    StripFamilyId,
     StripInstance,
+    StripInstanceId,
     StripPoseId,
     StripVariant,
     default_strip_variant,
@@ -21379,20 +21381,22 @@ def _port_seating_attempt(count: int, *, expansions: int = 0) -> freeform.PackAt
         DetailedRouteStatus.STRANDED, (), failures, 0, expansions
     )
     attempt = _proof_attempt(routing, strips)
-    return replace(
-        attempt,
-        stranded_ports=tuple(
+    ports = []
+    for index in range(count):
+        strip_label = f"casimir-crystal#{index + 1}"
+        ports.append(
             freeform.StrandedPort(
                 cell=(1, 10 + index, 0),
                 item="hydrogen",
-                strip_label=f"casimir-crystal#{index + 1}",
+                strip_label=strip_label,
+                instance_id=StripInstanceId(StripFamilyId(strip_label, 0), 0, 1),
+                lane_id="input:south:0",
                 held=1,
                 wants=2,
                 options=1,
             )
-            for index in range(count)
-        ),
-    )
+        )
+    return replace(attempt, stranded_ports=tuple(ports))
 
 
 def test_a_pack_that_never_routed_is_reported_as_a_port_seating_defect() -> None:
@@ -21432,6 +21436,30 @@ def test_a_moving_logical_port_is_counted_as_one_lane_head() -> None:
     assert "2 lane heads" not in message
     assert "at (1, 10, 0)" in message
     assert "wants 2, held 1, 1 free side(s)" in message
+
+
+def test_two_physical_strip_instances_with_the_same_label_and_item_stay_distinct(
+) -> None:
+    """Machine-range identity distinguishes two strips of the same recipe group."""
+    first = _port_seating_attempt(1)
+    first_port = first.stranded_ports[0]
+    second_port = replace(
+        first_port,
+        cell=(2, 20, 0),
+        instance_id=StripInstanceId(
+            first_port.instance_id.family_id,
+            first_port.instance_id.machine_start + first_port.instance_id.machine_count,
+            first_port.instance_id.machine_count,
+        ),
+    )
+    second = replace(first, stranded_ports=(second_port,))
+
+    message = freeform._port_seating_refusal([first, second])
+
+    assert message is not None
+    assert "2 lane heads" in message
+    assert "at (1, 10, 0)" in message
+    assert "at (2, 20, 0)" in message
 
 
 def test_a_pack_the_router_ran_on_is_not_reported_as_port_seating() -> None:
