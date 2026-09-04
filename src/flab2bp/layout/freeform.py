@@ -18017,6 +18017,21 @@ class FreeformLayout:
         minimum_staged_static_clearance: dict[StagedStaticClearanceKey, int] = {}
         exact_no_good_state = _ExactPackNoGoodState()
         feedback_retry_no_goods: dict[tuple[int, int], ExactPackNoGood] = {}
+        #: Per-candidate DIVERSIFICATION cuts: the assignments already drawn at
+        #: one height, excluded from that height's NEXT arrangement.  Deliberately
+        #: NOT in `_ExactPackNoGoodState`: that class is sweep-wide by
+        #: construction (`_sweep` reads `tuple(exact_no_good_state.no_goods)` for
+        #: every candidate) and its entries are infeasibility PROOFS.  A pack that
+        #: failed to route is not proved infeasible -- the same argument the
+        #: feedback-retry cut makes for itself -- so the cut lives beside that
+        #: state, keyed by `(height, arrangement)`, and never inside it.
+        #:
+        #: Never applied once a placement exists, so no cell that wires can see
+        #: one.  The tuple carries every earlier draw at that height, so
+        #: arrangement N + 1 cannot return arrangement N - 1's pack either.
+        diversification_no_goods: dict[
+            tuple[int, int], tuple[ExactPackNoGood, ...]
+        ] = {}
         staged_static_exact_retries: set[tuple[int, int]] = set()
         direct_relation_no_goods: list[_DirectRelationNoGood] = []
         direct_relation_no_good_keys: set[_DirectRelationNoGood] = set()
@@ -18523,6 +18538,17 @@ class FreeformLayout:
                 exact_pack_no_goods = tuple(exact_no_good_state.no_goods)
                 if retry_no_good is not None:
                     exact_pack_no_goods += (retry_no_good,)
+                diversification_cuts = diversification_no_goods.pop(
+                    (height, arrangement),
+                    (),
+                )
+                if best is not None:
+                    # An improvement arrangement draws exactly what it drew
+                    # before. The cut exists to escape a repeated FAILING draw;
+                    # applying it to a cell that already wired would move area on
+                    # a cell that never asked for a second draw.
+                    diversification_cuts = ()
+                exact_pack_no_goods += diversification_cuts
                 # A window repair IS this candidate's pack.  Re-solving it here
                 # would throw away the bounded solve that was just paid for and
                 # hand routing the same assignment that stranded a net.
@@ -18585,6 +18611,30 @@ class FreeformLayout:
                     continue
                 routed_assignments.add(assignment)
                 stale_draws = 0
+                if best is None:
+                    diversification_no_goods[height, arrangement + 1] = (
+                        *diversification_cuts,
+                        ExactPackNoGood(
+                            height=pack.height,
+                            outline=tuple(_box(strip) for strip in strips),
+                            width=pack.width,
+                            origins=tuple(
+                                pack.at[index] for index in range(len(strips))
+                            ),
+                            evidence=(
+                                finalize.ProjectionFailure(
+                                    check="pack.diversification",
+                                    buildings=(),
+                                    detail=(
+                                        f"assignment already drawn at height {height} "
+                                        f"arrangement {arrangement}; excluded from "
+                                        f"arrangement {arrangement + 1} at this height only"
+                                    ),
+                                    band=0,
+                                ),
+                            ),
+                        ),
+                    )
                 if (
                     deadline is not None
                     and deadline - time.monotonic()
