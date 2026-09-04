@@ -78,6 +78,7 @@ from flab2bp.layout.freeform import (
     _power_plan,
     _prepare_routing_problem,
     _proliferator_supply_tree,
+    _place_shared_external_input_trunks,
     _relink,
     _reserve_port_access,
     _room_for_another,
@@ -87,6 +88,7 @@ from flab2bp.layout.freeform import (
     _shard_sinks,
     _sink_for,
     _source_for,
+    _tap_source,
     _Unpowerable,
     fallback_placement,
     plan_strips,
@@ -20536,3 +20538,81 @@ def test_the_sweep_publishes_every_incumbent_it_certifies(
     assert keys == sorted(keys, reverse=True) or len(keys) == 1, (
         "each published incumbent must improve on the last"
     )
+
+
+def test_three_destination_shared_external_bucket_commits_one_physical_root() -> None:
+    """Prepared taps respect the exact model-38 splitter collider at commit."""
+    canvas = _Canvas()
+    belt_id = catalog.get_item_id("conveyor-belt-3") or 2003
+    belt_model = catalog.building(belt_id).model_index
+    destinations = tuple(
+        _Port(
+            10_000 + offset,
+            20 + offset,
+            20,
+            20 + offset,
+            20 + offset,
+            (10_000 + offset,),
+            cargo_domain=CargoDomain.UNSPRAYED,
+        )
+        for offset in range(3)
+    )
+
+    nets, roots = _place_shared_external_input_trunks(
+        canvas,
+        (("ore", CargoDomain.UNSPRAYED, destinations),),
+        belt_id=belt_id,
+        belt_model=belt_model,
+        bounds=(0, 0, 8, 8),
+    )
+
+    assert len(roots) == 1
+    assert roots[0][0] == "ore"
+    assert len(nets) == 3
+    root = roots[0][1]
+    canvas.add(
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=belt_model,
+            x=root.x - 1,
+            y=root.y,
+            width=1,
+            height=1,
+            output_obj=root.belt,
+            carries_item="ore",
+        ),
+        level=0,
+    )
+    trunk_run = {
+        (building.x, building.y, int(building.z))
+        for building in canvas.buildings
+        if catalog.is_belt(building.item_id) and building.z.denominator == 1
+    }
+
+    for offset, net in enumerate(nets):
+        source = net.source
+        branch = canvas.add(
+            PlacedBuilding(
+                item_id=belt_id,
+                model_index=belt_model,
+                x=source.x,
+                y=source.y + 1,
+                width=1,
+                height=1,
+                carries_item="ore",
+            ),
+            level=0,
+        )
+        rejected: list[str] = []
+        assert _tap_source(
+            canvas,
+            source.belt,
+            branch,
+            belt_id,
+            belt_model,
+            trunk_run | {(source.x, source.y + 1, 0)},
+            rejected_reason=rejected,
+        ), rejected
+        if offset == 0:
+            assert not canvas.junction_is_clear(source.x + 1, source.y, 0)
+            assert canvas.junction_is_clear(source.x + 2, source.y, 0)

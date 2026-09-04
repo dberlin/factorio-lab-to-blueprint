@@ -14213,6 +14213,12 @@ def _plan_shared_external_inputs(
     return roots, carried, tuple(sharing)
 
 
+# Ground-level taps use model 38 at yaw 0.  Its exact collider overlaps another
+# model 38 one plan tile away and clears it at two; the three-destination commit
+# regression checks both predicates through ``junction_is_clear``.
+_SHARED_EXTERNAL_TAP_SPACING = 2
+
+
 def _place_shared_external_input_trunks(
     canvas: _Canvas,
     groups: Sequence[tuple[str, CargoDomain, tuple[_Port, ...]]],
@@ -14232,19 +14238,19 @@ def _place_shared_external_input_trunks(
     nets: list[_Net] = []
     roots: list[tuple[str, _Port]] = []
     for item, cargo_domain, destinations in groups:
-        length = len(destinations)
+        tap_span = 1 + (len(destinations) - 1) * _SHARED_EXTERNAL_TAP_SPACING
         segment = next(
             (
-                side[start : start + length]
+                side[start : start + tap_span]
                 for side in sides
-                for start in range(len(side) - length + 1)
-                if all(canvas.free(cell) for cell in side[start : start + length])
+                for start in range(len(side) - tap_span + 1)
+                if all(canvas.free(cell) for cell in side[start : start + tap_span])
             ),
             None,
         )
         if segment is None:
             raise _Unseatable(
-                f"no {length}-tile perimeter trunk fits the shared external input {item!r}"
+                f"no {tap_span}-tile perimeter trunk fits the shared external input {item!r}"
             )
 
         indices = [
@@ -14279,7 +14285,11 @@ def _place_shared_external_input_trunks(
                 (index,),
                 cargo_domain=cargo_domain,
             )
-            for index, (x, y, _level) in zip(indices, segment, strict=True)
+            for index, (x, y, _level) in zip(
+                indices[::_SHARED_EXTERNAL_TAP_SPACING],
+                segment[::_SHARED_EXTERNAL_TAP_SPACING],
+                strict=True,
+            )
         )
         roots.append((item, ports[0]))
         for source, destination in zip(ports, destinations, strict=True):
