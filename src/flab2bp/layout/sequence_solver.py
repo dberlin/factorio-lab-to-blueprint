@@ -4673,6 +4673,7 @@ def _production_run(
         )
         seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
         coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+        narrowest_greedy_height = coarse_heights[0]
         coarse_height_count = len(coarse_heights)
         neighbor_heights: list[int] = []
         for height in coarse_heights:
@@ -4695,6 +4696,13 @@ def _production_run(
             },
         )
         boundary_height = envelope.boundary_core_height
+        # `reserve_boundary_height` (pre-existing) already had its own chance to
+        # replace index 0.  If it did, the narrowest-greedy-pack role is GONE --
+        # that is the pre-existing fallback `_large_sparse_compact_seed_height`
+        # relies on, and the ceiling bound must not silently resurrect it.  Only
+        # when the reserve left index 0 alone does the ceiling get to relocate
+        # the role, by following the SAME index through its own replacement.
+        reserved_narrowest_slot = heights[0] != narrowest_greedy_height
         # THE CEILING BINDS HERE.  `reserve_boundary_height` replaces at most ONE
         # height and only one it can prove infeasible, against a witness that is
         # an area lower bound; R3 §3 measured a schedule that kept TWO heights
@@ -4704,11 +4712,16 @@ def _production_run(
             seeds.setdefault(height, _greedy_pack(strips, height))
         coarse_heights = heights[:coarse_height_count]
         protected_followup_heights = heights[coarse_height_count:]
-        # Read AFTER the bound, not off the pre-bound `seeds`-sorted tuple: the
-        # ceiling (and `reserve_boundary_height` before it) can replace index 0,
-        # and `_large_sparse_compact_seed_height`'s `narrowest_height in
-        # scheduled_heights` guard needs the height that is actually scheduled.
-        narrowest_greedy_height = coarse_heights[0]
+        # The height the large-sparse compact-seed role should be checked
+        # against: the ORIGINAL greedy narrowest height when the reserve already
+        # swapped it out (so the guard below correctly finds it absent and
+        # falls back), otherwise index 0's CEILING-mapped value (which is
+        # `narrowest_greedy_height` itself when the ceiling never touched it
+        # either).  This is a role, not necessarily still the narrowest pack by
+        # width, hence the name.
+        narrowest_role_height = (
+            narrowest_greedy_height if reserved_narrowest_slot else coarse_heights[0]
+        )
         topology_beam_height = _topology_beam_height(
             seeds,
             coarse_heights,
@@ -4751,7 +4764,7 @@ def _production_run(
             template_problem = problems[heights[0]]
             compact_height = _large_sparse_compact_seed_height(
                 _balanced_compact_seed_height(template_problem),
-                narrowest_height=narrowest_greedy_height,
+                narrowest_height=narrowest_role_height,
                 scheduled_heights=coarse_heights,
                 machine_count=spec.machine_count,
                 strip_count=len(strips),
