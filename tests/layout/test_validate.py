@@ -1514,6 +1514,7 @@ def test_game_addon_supply_uses_rotated_elevated_pose(yaw: float, supply: tuple[
         f.message for f in elevated.by_check("game.addon_supply")
     ]
 
+
 def test_game_addon_supply_rejects_broke4_horizontal_raised_bus() -> None:
     """The area-to-belt gap is 0.3142 world units, above the strict 0.3 gate."""
     placement = place(
@@ -3352,8 +3353,7 @@ def test_junction_stack_support_link_is_valid_and_support_may_be_idle() -> None:
     assert not fired(report, "junction.stack_support")
     assert not fired(report, "junction.records_no_links")
     assert not any(
-        finding.detail.get("junction") == 0
-        for finding in report.by_check("belt.continuity")
+        finding.detail.get("junction") == 0 for finding in report.by_check("belt.continuity")
     )
 
 
@@ -3519,6 +3519,7 @@ def test_geom_belt_single_occupancy_allows_belts_stacked_on_a_junction() -> None
     would flag a blueprint the game produced.
     """
     assert not fired(validate(junction_pair()), "geom.belt_single_occupancy")
+
 
 def test_geom_belt_single_occupancy_allows_model_40_elevated_carry() -> None:
     """Model 40's straight pair is one level above its Splitter anchor."""
@@ -5350,13 +5351,13 @@ def _merged_stacks(*, entry_stack: int, place: int) -> tuple[Placement, BuildSpe
     p = _placement(
         # Labelled, as a strategy labels its entry lane: that is what makes it
         # an entry run rather than a lane nothing fills.
-        belt(0, 0, out=1, item_id=BELT3, carries="copper-ingot"),   # 0: entry run
-        belt(1, 0, out=2, item_id=BELT3, carries="copper-ingot"),   # 1: into the splitter
-        splitter(2, 0),                            # 2
-        belt(3, 0, inp=2, out=4, item_id=BELT3),   # 3: TRUNK head, out of the splitter
-        belt(4, 0, item_id=BELT3),                 # 4: trunk tail
-        machine(0, 4, recipe_id=6),                # 5
-        belt(1, 2, out=2, item_id=BELT3),          # 6: machine-fed run, into the splitter
+        belt(0, 0, out=1, item_id=BELT3, carries="copper-ingot"),  # 0: entry run
+        belt(1, 0, out=2, item_id=BELT3, carries="copper-ingot"),  # 1: into the splitter
+        splitter(2, 0),  # 2
+        belt(3, 0, inp=2, out=4, item_id=BELT3),  # 3: TRUNK head, out of the splitter
+        belt(4, 0, item_id=BELT3),  # 4: trunk tail
+        machine(0, 4, recipe_id=6),  # 5
+        belt(1, 2, out=2, item_id=BELT3),  # 6: machine-fed run, into the splitter
         sorter(1, 3, 1, 4, inp=5, out=6, item_id=sorter_id),  # 7: places onto run 6
     )
     spec = _stacked_spec(Fraction(1), belt_stack=entry_stack, pick=4, place=place)
@@ -5574,7 +5575,10 @@ def _mis_stacked_output_lane() -> tuple[Placement, BuildSpec]:
     machines = [machine(i * width, 0, recipe_id=6) for i in range(count)]
     sorters = [
         sorter(
-            i * width, 3, i * width, 4,
+            i * width,
+            3,
+            i * width,
+            4,
             inp=tiles + i,
             out=i * width,
             item_id=SORTER3,

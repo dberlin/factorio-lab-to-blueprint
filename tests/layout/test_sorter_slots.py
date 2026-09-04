@@ -65,12 +65,8 @@ def _sorter_sides(
     for s in bp.buildings:
         if not cat.is_sorter(s.item_id):
             continue
-        rows.append(
-            (s, by_index.get(s.output_obj_idx), s.output_to_slot, (s.x2, s.y2), (s.x, s.y))
-        )
-        rows.append(
-            (s, by_index.get(s.input_obj_idx), s.input_from_slot, (s.x, s.y), (s.x2, s.y2))
-        )
+        rows.append((s, by_index.get(s.output_obj_idx), s.output_to_slot, (s.x2, s.y2), (s.x, s.y)))
+        rows.append((s, by_index.get(s.input_obj_idx), s.input_from_slot, (s.x, s.y), (s.x2, s.y2)))
     return rows
 
 
@@ -80,9 +76,7 @@ CORPUS = _factory_blueprints()
 def test_corpus_loaded() -> None:
     """Guard against a silently empty oracle."""
     assert len(CORPUS) == 10
-    total = sum(
-        1 for _, bp in CORPUS for b in bp.buildings if cat.is_sorter(b.item_id)
-    )
+    total = sum(1 for _, bp in CORPUS for b in bp.buildings if cat.is_sorter(b.item_id))
     assert total == 1288
 
 
@@ -357,9 +351,7 @@ def test_only_artificial_star_is_excluded() -> None:
         ((-1, 1), (1, 0), 11),
     ],
 )
-def test_unmirrored_ring(
-    offset: tuple[int, int], approach: tuple[int, int], expected: int
-) -> None:
+def test_unmirrored_ring(offset: tuple[int, int], approach: tuple[int, int], expected: int) -> None:
     assert S.machine_slot(2303, 0.0, offset, approach) == expected
 
 
@@ -381,9 +373,7 @@ def test_unmirrored_ring(
         ((2, 1), (-1, 0), 11),
     ],
 )
-def test_mirrored_ring(
-    offset: tuple[int, int], approach: tuple[int, int], expected: int
-) -> None:
+def test_mirrored_ring(offset: tuple[int, int], approach: tuple[int, int], expected: int) -> None:
     assert S.machine_slot(2901, 0.0, offset, approach) == expected
 
 
@@ -418,14 +408,17 @@ def test_yaw_rotates_the_ring(yaw: float) -> None:
 def test_coater_supply_cell_rotates_behind_host_at_next_level(
     yaw: float, expected: tuple[int, int, int]
 ) -> None:
-    assert S.addon_supply_cell(
-        cat.SPRAY_COATER_ID,
-        x=10,
-        y=20,
-        z=Fraction(2),
-        yaw=yaw,
-        area=1,
-    ) == expected
+    assert (
+        S.addon_supply_cell(
+            cat.SPRAY_COATER_ID,
+            x=10,
+            y=20,
+            z=Fraction(2),
+            yaw=yaw,
+            area=1,
+        )
+        == expected
+    )
 
 
 def test_wide_side_clamps_to_its_end_slot() -> None:
@@ -536,12 +529,8 @@ def test_chemical_lane_closer_uses_real_inner_anchor() -> None:
     attachments = S.attachable_columns(plant, lane_y)
 
     assert attachments
-    assert {attachment.cell[1] for attachment in attachments.values()} == {
-        plant.y + 1
-    }
-    assert max(attachment.span for attachment in attachments.values()) <= (
-        cat.SORTER_MAX_REACH
-    )
+    assert {attachment.cell[1] for attachment in attachments.values()} == {plant.y + 1}
+    assert max(attachment.span for attachment in attachments.values()) <= (cat.SORTER_MAX_REACH)
 
 
 def test_a_belt_addon_carries_the_pair_the_game_writes() -> None:
@@ -552,9 +541,7 @@ def test_a_belt_addon_carries_the_pair_the_game_writes() -> None:
         for b in bp.buildings:
             if b.item_id != cat.SPRAY_COATER_ID:
                 continue
-            seen[
-                (b.output_from_slot, b.output_to_slot, b.input_from_slot, b.input_to_slot)
-            ] += 1
+            seen[(b.output_from_slot, b.output_to_slot, b.input_from_slot, b.input_to_slot)] += 1
             links[(b.output_obj_idx, b.input_obj_idx)] += 1
     assert dict(seen) == {
         (S.ADDON_FROM_SLOT, S.ADDON_TO_SLOT, S.ADDON_FROM_SLOT, S.ADDON_TO_SLOT): 8
@@ -662,6 +649,7 @@ def test_the_chemical_plant_table_is_the_games_and_not_a_ring() -> None:
 OURS = FIXTURES / "ours" / "sorter-collide-freeform.txt"
 BUILT = FIXTURES / "ours" / "sorter-collide-built.txt"
 
+
 #: The built copy is a quarter turn and a translation off ours, solved against
 #: all 17 machines and exact to 2e-5.  Buildings are also REORDERED by the game,
 #: so nothing may be matched by index.
@@ -747,10 +735,7 @@ def _answer_key() -> list[tuple[PlacedBuilding, BlueprintBuilding, list[PlacedBu
     for b in mine:
         assert b.x2 is not None and b.y2 is not None
         e1, e2 = _as_built(b.x, b.y), _as_built(b.x2, b.y2)
-        d, c = min(
-            (max(math.dist(e1, (c.x, c.y)), math.dist(e2, (c.x2, c.y2))), c)
-            for c in theirs
-        )
+        d, c = min((max(math.dist(e1, (c.x, c.y)), math.dist(e2, (c.x2, c.y2))), c) for c in theirs)
         scored.append((d, b, c))
     out, used = [], set()
     for d, b, c in sorted(scored, key=lambda r: r[0]):
@@ -833,9 +818,7 @@ def _bench() -> tuple[list[PlacedBuilding], PlacedBuilding]:
         height=3,
     )
     belts = [
-        PlacedBuilding(
-            item_id=2001, model_index=cat.building(2001).model_index, x=5, y=y
-        )
+        PlacedBuilding(item_id=2001, model_index=cat.building(2001).model_index, x=5, y=y)
         for y in (2, 0, -2)
     ]
     into = PlacedBuilding(
@@ -998,9 +981,9 @@ def test_two_columns_of_one_machine_face_are_clear_of_each_other() -> None:
         S.emitted_sorter(feeder(4, 1), buildings).output_to_slot,
     }
     assert len(slots_named) == 2, "adjacent columns must name different slots"
-    assert S.sorter_seat_is_clear(
-        feeder(4, 1), buildings, S.sorter_seat_boxes(buildings)
-    )
+    assert S.sorter_seat_is_clear(feeder(4, 1), buildings, S.sorter_seat_boxes(buildings))
+
+
 # --- belt ports: the other array --------------------------------------------
 #
 # `slotPoses` in the prefab is `PrefabDesc.portPoses`, which is what a BELT is
@@ -1083,9 +1066,14 @@ def test_naming_a_port_that_does_not_exist_raises() -> None:
         S.port_offset(cat.RAY_RECEIVER_ID, 0.0, 2)
 
 
-@pytest.mark.parametrize("name", ["12-s-purple-science-from-smelted-refined-products",
-                                 "factory-heretical-smelter-block",
-                                 "falk-v7-mall-full"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "12-s-purple-science-from-smelted-refined-products",
+        "factory-heretical-smelter-block",
+        "falk-v7-mall-full",
+    ],
+)
 def test_the_game_s_own_docks_name_the_port_this_module_computes(name: str) -> None:
     """The oracle: real blueprints, read at their RAW coordinates.
 
@@ -1182,9 +1170,7 @@ def test_splitter_draw_reserves_belt_slot_one_from_an_upstream_feeder() -> None:
 def test_assign_belt_slots_rejects_a_foreign_four_port_splitter_model() -> None:
     belt = cat.building(2002)
     pose = cat.port_poses_for_model(121)[0]
-    outward_x, outward_y = (
-        round(value) for value in S.to_world((pose.fx, pose.fy), 0.0)
-    )
+    outward_x, outward_y = (round(value) for value in S.to_world((pose.fx, pose.fy), 0.0))
     height = Fraction(pose.dz / R.WORLD_UNITS_PER_LEVEL).limit_denominator(10_000)
     buildings = (
         PlacedBuilding(

@@ -29,6 +29,7 @@ from flab2bp.lab.url import LabRequest, parse_url
 
 __all__ = ["belt_rules_for_url", "logistics_tiers_for_request"]
 
+
 def _belt_rules(url: str, dataset: Dataset) -> catalog.BeltAltitudeRules:
     return catalog.belt_rules_for_technologies(
         parse_url(url).researched_technology_ids,
@@ -41,9 +42,7 @@ def _vendored_belt_rules_for_url(url: str) -> catalog.BeltAltitudeRules:
     return _belt_rules(url, load_vendored())
 
 
-def belt_rules_for_url(
-    url: str, dataset: Dataset | None = None
-) -> catalog.BeltAltitudeRules:
+def belt_rules_for_url(url: str, dataset: Dataset | None = None) -> catalog.BeltAltitudeRules:
     """The belt altitude rules this URL's save implies.
 
     How high a belt may go, and whether it may climb with no horizontal run at
@@ -63,9 +62,7 @@ def belt_rules_for_url(
     return _belt_rules(url, dataset)
 
 
-def logistics_tiers_for_request(
-    request: LabRequest, dataset: Dataset
-) -> catalog.LogisticsTiers:
+def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalog.LogisticsTiers:
     """The belts and sorters this request's save can build.
 
     Data-driven: a belt or sorter is buildable when some researched

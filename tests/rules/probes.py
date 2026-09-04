@@ -34,11 +34,7 @@ SMELTER = 2302
 CHEMICAL_PLANT = 2309
 BELT = 2001
 SORTER = 2012
-_SplitterProbeRow = (
-    tuple[int, int, int, str, int, int]
-    | tuple[int | None, int, int]
-    | str
-)
+_SplitterProbeRow = tuple[int, int, int, str, int, int] | tuple[int | None, int, int] | str
 
 
 def _b(item_id: int, x: int, y: int, *, z: int = 0, yaw: float = 0.0) -> PlacedBuilding:
@@ -132,7 +128,6 @@ def _junction_keepout() -> list[tuple[tuple[int, int, int], ...]]:
     return [junction.keepout_cells(0, 0, lvl) for lvl in (0, 1, 2)]
 
 
-
 def _tower_reach() -> tuple[list[int], list[int], bool]:
     radius = Fraction(catalog.building(catalog.TESLA_TOWER_ID).cover_radius)
     return (
@@ -145,10 +140,7 @@ def _tower_reach() -> tuple[list[int], list[int], bool]:
 def _tower_spacing() -> list[tuple[int, int, int]]:
     """The exact power-node keepout consumed by the surviving strategies."""
     tower = catalog.building(catalog.TESLA_TOWER_ID)
-    return sorted(
-        rules.power_node_keepout_offsets(tower.power_node, tower.power_node)
-    )
-
+    return sorted(rules.power_node_keepout_offsets(tower.power_node, tower.power_node))
 
 
 def _legal_links() -> list[tuple[str, int, bool, bool]]:
@@ -214,10 +206,7 @@ def _assigned_port_slots() -> list[tuple[int, int]]:
         input_from_slot=1,
     )
     wired = slots.assign_belt_slots((host, feeder, drawer))
-    return [
-        (b.output_from_slot, b.input_to_slot)
-        for b in wired[1:]
-    ]
+    return [(b.output_from_slot, b.input_to_slot) for b in wired[1:]]
 
 
 def _assigned_addon_slots() -> tuple[int, int, int, int]:
@@ -251,9 +240,7 @@ def _splitter_ports() -> list[_SplitterProbeRow]:
     return out
 
 
-def _footprints_and_clearance() -> list[
-    tuple[tuple[int, int], tuple[int, int]]
-]:
+def _footprints_and_clearance() -> list[tuple[tuple[int, int], tuple[int, int]]]:
     return [
         (catalog.footprint(i), catalog.clearance(i, yaw))
         for i in (ASSEMBLER, SMELTER, CHEMICAL_PLANT, BELT)

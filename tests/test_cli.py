@@ -73,9 +73,9 @@ def test_cli_names_the_stack_when_the_url_carries_one(
     """`ist` is the player's own setting, so the report says it back with the
     URL field named -- a reader who did not expect stacked belts has to be able
     to find where the number came from."""
-    stacked = dataclasses.replace(deuteron_build, spec=deuteron_build.spec.model_copy(
-        update={"belt_stack": 2}
-    ))
+    stacked = dataclasses.replace(
+        deuteron_build, spec=deuteron_build.spec.model_copy(update={"belt_stack": 2})
+    )
     cli._report(stacked, verbose=False)
     line = next(
         line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")

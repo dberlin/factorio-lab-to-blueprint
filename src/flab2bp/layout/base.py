@@ -404,8 +404,6 @@ class Placement:
         return (max_x - min_x + 1) * (max_y - min_y + 1)
 
 
-
-
 @dataclass(frozen=True, slots=True)
 class ProjectionFailureRecord:
     """Immutable, JSON-ready evidence for one authoritative projection refusal."""
@@ -496,6 +494,7 @@ class LayoutStrategy(Protocol):
     ``lay_out`` returns a placement that satisfies the constraints, or raises
     :class:`NoValidLayout`. It never returns a degraded one.
     """
+
     name: str
 
     def lay_out(

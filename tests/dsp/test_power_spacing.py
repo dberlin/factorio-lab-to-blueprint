@@ -217,9 +217,7 @@ def test_the_validator_check_convicts_the_committed_fixture() -> None:
         )
         for _i, b, _n in _nodes(THE_PASTE)
     ]
-    assert [(b.x, b.y) for b in placed] == [
-        (11, 10), (21, 15), (7, 18), (17, 3), (3, 0), (22, 16)
-    ]
+    assert [(b.x, b.y) for b in placed] == [(11, 10), (21, 15), (7, 18), (17, 3), (3, 0), (22, 16)]
     report = validate(Placement(buildings=tuple(placed)))
     findings = report.by_check("game.power_too_close")
     assert len(findings) == 1, [f.message for f in findings]
@@ -307,8 +305,7 @@ def test_the_gate_is_a_lookup_and_not_a_scalar() -> None:
     assert R.power_node_gate_sqr(geothermal=True) == R.GEOTHERMAL_TOO_CLOSE_SQR
     # geothermal wins the conditional, exactly as the ternary nests.
     assert (
-        R.power_node_gate_sqr(wind_forced_power=True, geothermal=True)
-        == R.GEOTHERMAL_TOO_CLOSE_SQR
+        R.power_node_gate_sqr(wind_forced_power=True, geothermal=True) == R.GEOTHERMAL_TOO_CLOSE_SQR
     )
 
 
@@ -320,6 +317,7 @@ def test_the_upper_tiers_need_the_flag_on_both_buildings() -> None:
     which it fails.  At four tiles it is over 3.5 and under 10.5 and is CLEAR,
     which is the case that distinguishes a tiered rule from a flattened one.
     """
+
     def gap2(tiles: float) -> float:
         g = R.world_gap(tiles, 0)
         return g * g

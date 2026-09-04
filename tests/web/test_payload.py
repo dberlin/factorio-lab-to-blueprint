@@ -48,6 +48,7 @@ def test_each_built_attempt_carries_its_real_blueprint(
     assert "blueprint" in attempt
     assert attempt["blueprint"] == small_build.blueprint
 
+
 def test_payload_reports_literal_certified_bands(
     small_build: pipeline.Build,
 ) -> None:

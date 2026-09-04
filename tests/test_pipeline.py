@@ -74,10 +74,7 @@ def test_exact_81_character_generated_title_abbreviates_the_second_product_first
             "proliferator-mk3-component": Fraction(1),
         }
     )
-    unbounded = (
-        "quantum-chemical-plant 1200/min, "
-        "proliferator-mk3-component 60/min (all products)"
-    )
+    unbounded = "quantum-chemical-plant 1200/min, proliferator-mk3-component 60/min (all products)"
 
     assert len(unbounded) == 81
     assert pipeline._title(spec) == unbounded
@@ -98,8 +95,7 @@ def test_first_product_is_abbreviated_only_after_the_second_is_not_enough() -> N
     )
 
     assert (
-        pipeline._generated_title(spec)
-        == "VLFPI 120/min, VLSPI 60/min +1 more (output products)"
+        pipeline._generated_title(spec) == "VLFPI 120/min, VLSPI 60/min +1 more (output products)"
     )
 
 
@@ -189,9 +185,7 @@ def test_pipeline_canonicalizes_once_before_internal_consumers(
 
     assert dataset_calls == 1
     assert request_calls == 1
-    assert [entry[0] for entry in seen] == (
-        ["pin", "candidates"] if pinned else ["candidates"]
-    )
+    assert [entry[0] for entry in seen] == (["pin", "candidates"] if pinned else ["candidates"])
 
 
 @pytest.mark.slow
@@ -351,9 +345,8 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
     assert len(result.attempts) == 1
     assert len(result.refused) == 1
     assert result.refused[0].strategy == "freeform"
-    assert result.refused[0].reason == (
-        "blueprint encoding failed: invalid splitter port anchor"
-    )
+    assert result.refused[0].reason == ("blueprint encoding failed: invalid splitter port anchor")
+
 
 @pytest.mark.slow
 def test_every_pair_reports_started_and_then_how_it_ended() -> None:
@@ -494,18 +487,15 @@ def test_projection_refusal_preserves_structured_exception_text(
         (item.band, item.check, item.buildings, item.detail)
         for item in caught.value.projection_failures
     ] == [
-        (item.band, item.check, item.buildings, item.detail)
-        for item in (failure, second_failure)
+        (item.band, item.check, item.buildings, item.detail) for item in (failure, second_failure)
     ]
     refused = steps[-1]
     assert refused.phase == "refused"
     assert refused.reason is not None
     assert [
-        (item.band, item.check, item.buildings, item.detail)
-        for item in refused.projection_failures
+        (item.band, item.check, item.buildings, item.detail) for item in refused.projection_failures
     ] == [
-        (item.band, item.check, item.buildings, item.detail)
-        for item in (failure, second_failure)
+        (item.band, item.check, item.buildings, item.detail) for item in (failure, second_failure)
     ]
 
 
@@ -528,9 +518,7 @@ def test_no_proliferator_keeps_only_unsprayed_candidates() -> None:
 
     from flab2bp.dsp import catalog
 
-    coaters = sum(
-        1 for b in build.placement.buildings if b.item_id == catalog.SPRAY_COATER_ID
-    )
+    coaters = sum(1 for b in build.placement.buildings if b.item_id == catalog.SPRAY_COATER_ID)
     assert coaters == 0
 
 
@@ -542,12 +530,11 @@ def test_no_proliferator_refuses_rather_than_quietly_spraying() -> None:
     the fallback would be worse than usual because it is silent -- the caller
     asked for no coaters and would get coaters.
     """
+
     def only_sprayed(*args: object, **kwargs: object) -> BuildSpecSet:
         """Hand back only the candidates that DO spray, so none survives."""
         spec_set = _build_candidates_canonical(*args, **kwargs)  # type: ignore[arg-type]
-        sprayed = tuple(
-            s for s in spec_set.candidates if any(g.is_proliferated for g in s.groups)
-        )
+        sprayed = tuple(s for s in spec_set.candidates if any(g.is_proliferated for g in s.groups))
         assert sprayed, "this URL produced no sprayed candidate to filter down to"
         return BuildSpecSet(candidates=sprayed)
 
@@ -603,9 +590,7 @@ def test_graphene_output_products_sequence_pair_reports_its_continuation_batches
         parse_url(entry.url),
         candidate_policies=DEFAULT_CANDIDATE_POLICIES,
     )
-    spec = next(
-        candidate for candidate in built.candidates if candidate.label == "output-products"
-    )
+    spec = next(candidate for candidate in built.candidates if candidate.label == "output-products")
     placement = SequencePairLayout(band_policy=BandPolicy("portable")).lay_out(
         spec, time_budget_s=30.0
     )
@@ -657,6 +642,7 @@ class TestFlowText:
                 flow=GRAPHENE_FLOW,
                 flow_text=GRAPHENE_FLOW.read_text(encoding="utf-8-sig"),
             )
+
 
 @pytest.mark.slow
 def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
@@ -949,8 +935,7 @@ def test_the_deadline_refusal_reason_pins_wall_budget_and_grace(
 
     reason = exc_info.value.attempt_failures[0].reason
     assert reason == (
-        "attempt deadline exhausted during finalization after 8.4s "
-        "(budget 3s + grace 5s)"
+        "attempt deadline exhausted during finalization after 8.4s (budget 3s + grace 5s)"
     )
 
 
@@ -1071,12 +1056,21 @@ def test_without_planetary_logistics_hydrogen_arrives_on_four_lanes(
     Budget: 45 s on a sequence-pair build at ~30 s plus preparation keeps this
     under pytest-timeout's 120 s backstop even on a loaded box.
     """
-    _with_belt(monkeypatch, "conveyor-belt-2", researched={
-        "basic-logistics-system", "improved-logistics-system",
-        "high-efficiency-logistics-system",
-    })
-    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=45.0,
-                           candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
+    _with_belt(
+        monkeypatch,
+        "conveyor-belt-2",
+        researched={
+            "basic-logistics-system",
+            "improved-logistics-system",
+            "high-efficiency-logistics-system",
+        },
+    )
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        time_budget_s=45.0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
     assert build.report.ok
     findings = build.report.by_check("flow.external_entry_points")
     # super-magnetic-ring is also belted in on two lanes (two assembler strips,
@@ -1096,8 +1090,11 @@ def test_at_mk3_hydrogen_above_the_ceiling_arrives_on_two_lanes() -> None:
     of 7 is inert); this pins that the new ``lanes_needed`` detail agrees with
     the lanes actually built.  Fast (about 2 s at the default budget): not
     slow, no budget bump."""
-    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair",
-                           candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
     assert build.report.ok
     findings = build.report.by_check("flow.external_entry_points")
     (finding,) = [f for f in findings if f.detail["item"] == "hydrogen"]
@@ -1139,9 +1136,7 @@ def _install_stub_race(
     between ``race_started`` and the settlement, or a grace cannot be tested.
     """
 
-    def record(
-        spec: BuildSpec, **kwargs: object
-    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+    def record(spec: BuildSpec, **kwargs: object) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
         calls.append({"spec": spec, **kwargs})
         if on_call is not None:
             on_call()
@@ -1504,9 +1499,7 @@ def test_every_raced_attempt_reports_its_wall_and_its_overshoot(
     _install_stub_race(
         monkeypatch,
         (
-            strategy_race._StrategyRaceOutcome(
-                "freeform", "completed", placement=_finished(2, 3)
-            ),
+            strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(2, 3)),
             strategy_race._StrategyRaceOutcome(
                 "sequence-pair", "completed", placement=_finished(3, 3)
             ),
@@ -1559,9 +1552,7 @@ def test_a_raced_attempt_reports_overshoot_against_the_races_own_grace(
     _install_stub_race(
         monkeypatch,
         (
-            strategy_race._StrategyRaceOutcome(
-                "freeform", "completed", placement=_finished(2, 3)
-            ),
+            strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(2, 3)),
             strategy_race._StrategyRaceOutcome(
                 "sequence-pair", "completed", placement=_finished(3, 3)
             ),
@@ -1670,11 +1661,7 @@ def test_a_race_that_loses_an_arm_refuses_rather_than_reporting_a_full_build(
     calls: list[dict[str, object]] = []
     _install_stub_race(
         monkeypatch,
-        (
-            strategy_race._StrategyRaceOutcome(
-                "freeform", "completed", placement=_finished(2, 3)
-            ),
-        ),
+        (strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(2, 3)),),
         calls,
     )
 

@@ -30,9 +30,7 @@ from flab2bp.rates.candidates import build_candidates
 from flab2bp.spec import BuildSpec
 
 _REFINED_OIL_FLOW = Path(__file__).parent / "fixtures" / "flow_refined_oil_self_feedback.csv"
-_REFINED_OIL_URL = (
-    "https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11"
-)
+_REFINED_OIL_URL = "https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11"
 
 
 @pytest.fixture(scope="session")

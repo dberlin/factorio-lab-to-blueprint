@@ -220,7 +220,9 @@ def test_the_game_rescues_the_dock_and_the_two_belts_behind_it() -> None:
     convicted = {belt for belt, _other in colliders.belt_collisions(previews)}
     assert convicted == {2, 3}
     inside = [
-        i for i, b in enumerate(buildings) if i and slots.belt_tile_hits_collider(buildings[0], b.x, b.y)
+        i
+        for i, b in enumerate(buildings)
+        if i and slots.belt_tile_hits_collider(buildings[0], b.x, b.y)
     ]
     assert len(inside) - len(convicted) == slots.MAX_RESCUED_COLLIDER_TILES
 ```
@@ -283,17 +285,14 @@ def belt_tile_hits_collider(
     Raw overlap only.  Whether a hit is then rescued is a property of the
     belt's RUN, not of the tile -- see :data:`MAX_RESCUED_COLLIDER_TILES`.
     """
-    pose_args = codec.tile_to_local_offset(
-        host.x, host.y, host.z, host.width, host.height
-    )
+    pose_args = codec.tile_to_local_offset(host.x, host.y, host.z, host.width, host.height)
     preview = colliders.Preview(host.model_index, *pose_args, host.yaw)
     boxes = colliders.target_boxes(
         preview, *colliders.flat_pose(preview.x, preview.y, preview.z, preview.yaw)
     )
     probe = colliders.belt_probe(*codec.tile_to_local_offset(x, y, z, 1, 1))
     return any(
-        colliders.sphere_box_overlap(probe, colliders.BELT_PROBE_RADIUS, box)
-        for box in boxes
+        colliders.sphere_box_overlap(probe, colliders.BELT_PROBE_RADIUS, box) for box in boxes
     )
 ```
 
@@ -307,12 +306,14 @@ If it reports `3` at `flab2bp.layout.slots` as a bare literal, add to
 `src/flab2bp/dsp/registry.py`'s `LintException` list:
 
 ```python
+(
     LintException(
         module="flab2bp.layout.slots",
         where="MAX_RESCUED_COLLIDER_TILES",
         value=3.0,
         why="CheckBuildConditions 147443's hop budget, not SORTER_MAX_REACH",
     ),
+)
 ```
 
 - [ ] **Step 5: Run the tests and the suite**
@@ -471,9 +472,7 @@ def _port_approach(
         cells += [(x, dock.cell[1]) for x in range(tap_x - 1, dock.cell[0] - 1, -1)]
         if not cells or cells[-1] != dock.cell:
             continue
-        hits = [
-            i for i, (x, y) in enumerate(cells) if slots.belt_tile_hits_collider(machine, x, y)
-        ]
+        hits = [i for i, (x, y) in enumerate(cells) if slots.belt_tile_hits_collider(machine, x, y)]
         if hits and hits != list(range(len(cells) - len(hits), len(cells))):
             continue
         if len(hits) <= slots.MAX_RESCUED_COLLIDER_TILES:
@@ -481,9 +480,7 @@ def _port_approach(
     return None
 
 
-def _port_approach_offset(
-    probe: PlacedBuilding, dock: slots.PortDock, pitch_w: int
-) -> int | None:
+def _port_approach_offset(probe: PlacedBuilding, dock: slots.PortDock, pitch_w: int) -> int | None:
     """How far east of ``dock`` a lane must reach, in the PROBE frame.
 
     ``Strip.input_lane_tiles`` and ``_feedable_by_port`` both need the answer
@@ -494,9 +491,7 @@ def _port_approach_offset(
     here would answer a different question from the one the emitter asks and
     could pass a strip the emitter then refuses.
     """
-    got = _port_approach(
-        probe, dock, probe.height + 1, range(-pitch_w, 2 * pitch_w), pitch_w
-    )
+    got = _port_approach(probe, dock, probe.height + 1, range(-pitch_w, 2 * pitch_w), pitch_w)
     return None if got is None else got[1] - dock.cell[0]
 ```
 
@@ -673,11 +668,10 @@ constant has nothing to do with a belt tap column.
 Replace with
 
 ```python
-    capacity = sum(
-        dock.facing is Facing.EAST
-        and _port_approach_offset(probe, dock, strip.pw) is not None
-        for dock in docks
-    )
+capacity = sum(
+    dock.facing is Facing.EAST and _port_approach_offset(probe, dock, strip.pw) is not None
+    for dock in docks
+)
 ```
 
 `probe` is already bound on the line above. The old `strip.pw` was a width used
@@ -743,8 +737,7 @@ def test_a_ray_receiver_strip_is_byte_identical_after_the_approach_change() -> N
         spec, time_budget_s=4.0
     )
     shape = [
-        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj)
-        for b in placement.buildings
+        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
     ]
     assert shape == RAY_RECEIVER_SHAPE
 ```
@@ -959,10 +952,20 @@ def _two_sink_exchanger_spec(count: int = 3) -> BuildSpec:
     """
     return BuildSpec(
         groups=(
-            group("accumulator-full", "energy-exchanger", count,
-                  {"accumulator": F(1)}, {"accumulator-full": F(1)}),
-            group("accumulator-discharge", "energy-exchanger", 1,
-                  {"accumulator-full": F(1)}, {"accumulator": F(1)}),
+            group(
+                "accumulator-full",
+                "energy-exchanger",
+                count,
+                {"accumulator": F(1)},
+                {"accumulator-full": F(1)},
+            ),
+            group(
+                "accumulator-discharge",
+                "energy-exchanger",
+                1,
+                {"accumulator-full": F(1)},
+                {"accumulator": F(1)},
+            ),
         ),
         external_inputs={"accumulator": F(2)},
         outputs={"accumulator-full": F(2)},
@@ -1101,8 +1104,7 @@ def test_a_ray_receiver_drain_is_byte_identical_after_the_lane_cap() -> None:
         spec, time_budget_s=4.0
     )
     shape = [
-        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj)
-        for b in placement.buildings
+        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
     ]
     assert shape == RAY_RECEIVER_SHAPE
 ```
@@ -1230,9 +1232,7 @@ def test_the_exemption_never_covers_a_building_we_place() -> None:
 def test_only_the_energy_exchanger_becomes_newly_checked() -> None:
     """2208 was never exempt, so the Ray Receiver's behaviour does not move."""
     assert catalog.RAY_RECEIVER_ID not in catalog.LOW_CONFIDENCE_FOOTPRINTS
-    newly_checked = (
-        catalog.LOW_CONFIDENCE_FOOTPRINTS - catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS
-    )
+    newly_checked = catalog.LOW_CONFIDENCE_FOOTPRINTS - catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS
     assert newly_checked == {catalog.ENERGY_EXCHANGER_ID}
     assert catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS == {2101, 2104, 2203, 2205, 2210, 2212}
 
@@ -1312,6 +1312,7 @@ In `src/flab2bp/dsp/registry.py`, after
 `_e("catalog.MODE_DRIVEN_MACHINE", Kind.DATA),` (`:367`):
 
 ```python
+(
     _e(
         "catalog.MODE_DRIVEN_MACHINE_ITEM_IDS",
         Kind.DERIVED,
@@ -1320,6 +1321,8 @@ In `src/flab2bp/dsp/registry.py`, after
         "producers.  Derived so a new mode-driven building cannot silently "
         "keep a footprint exemption it should lose.",
     ),
+)
+(
     _e(
         "catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS",
         Kind.DERIVED,
@@ -1328,6 +1331,7 @@ In `src/flab2bp/dsp/registry.py`, after
         note="The belt-collider exemption actually consulted by validate.  The "
         "unnarrowed set suppressed convictions on an Energy Exchanger we place.",
     ),
+)
 ```
 
 `tests/rules/test_rule_registry.py:120-124` requires a `DERIVED` entry's

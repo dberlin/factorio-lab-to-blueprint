@@ -116,8 +116,9 @@ class BeltTier(_Frozen):
     item_id: str
     items_per_second: Fraction = Field(gt=0)
 
+
 class BuildSpec(_Frozen):
-    belt_item_id: str = "conveyor-belt-1"          # the floor, unchanged
+    belt_item_id: str = "conveyor-belt-1"  # the floor, unchanged
     belt_items_per_second: Fraction = Fraction(6)  # the floor's speed, unchanged
     #: Faster belts the save can build, slowest first. Empty means the floor
     #: is also the ceiling, which is what every existing test and every

@@ -135,7 +135,7 @@ def _head_commit() -> str:
             check=True,
             timeout=10.0,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return "unknown"
     return finished.stdout.strip() or "unknown"
 
@@ -352,24 +352,24 @@ def _variant_direct_eligibility(
 In `_production_run`, replace the `direct_eligibility = (...)` expression that follows `compact_deadline`:
 
 ```python
-                def compact_deadline_reached() -> bool:
-                    return time.monotonic() >= compact_deadline
+def compact_deadline_reached() -> bool:
+    return time.monotonic() >= compact_deadline
 
-                direct_eligibility = (
-                    _variant_direct_eligibility(
-                        spec,
-                        strips,
-                        problems[compact_height],
-                        band_policy=band_policy,
-                        cancelled=compact_deadline_reached,
-                    )
-                    if (
-                        ceiling >= _COMPACT_SEED_DIRECT_MIN_BUDGET_S
-                        and compact_deadline - time.monotonic()
-                        >= _DIRECT_ELIGIBILITY_MIN_REMAINING_S
-                    )
-                    else ()
-                )
+
+direct_eligibility = (
+    _variant_direct_eligibility(
+        spec,
+        strips,
+        problems[compact_height],
+        band_policy=band_policy,
+        cancelled=compact_deadline_reached,
+    )
+    if (
+        ceiling >= _COMPACT_SEED_DIRECT_MIN_BUDGET_S
+        and compact_deadline - time.monotonic() >= _DIRECT_ELIGIBILITY_MIN_REMAINING_S
+    )
+    else ()
+)
 ```
 
 `compact_deadline` is `min(deadline, compact_started + ceiling * _COMPACT_SEED_WALL_SHARE)`, already computed on the lines above; the scan is an input to the compact seed, so the compact seed's own wall share is the right bound. The old `not deadline_reached()` term is subsumed, because `compact_deadline <= deadline`.
@@ -443,9 +443,7 @@ def test_cold_stage_admission_refuses_the_last_quarter_of_the_budget() -> None:
     def clock() -> float:
         return now
 
-    admission = _MeasuredStageAdmission(
-        deadline=100.0, monotonic=clock, total_budget_s=100.0
-    )
+    admission = _MeasuredStageAdmission(deadline=100.0, monotonic=clock, total_budget_s=100.0)
 
     now = 10.0
     assert admission.try_start(_MeasuredStageRole.ORDINARY) == 10.0
@@ -472,11 +470,11 @@ def test_an_unmigrated_admission_keeps_a_quarter_second_floor() -> None:
 
     admission = _MeasuredStageAdmission(deadline=100.0, monotonic=clock)
 
-    now = 80.0   # 20.0 remaining, over the 0.25 floor
+    now = 80.0  # 20.0 remaining, over the 0.25 floor
     assert admission.try_start(_MeasuredStageRole.ORDINARY) == 80.0
     admission.finish(80.0, _MeasuredStageRole.ORDINARY)
 
-    now = 99.9   # 0.1 remaining, under the 0.25 floor
+    now = 99.9  # 0.1 remaining, under the 0.25 floor
     assert admission.try_start(_MeasuredStageRole.COMPACT) is None
 
 
@@ -499,9 +497,7 @@ def test_warm_stage_admission_is_unchanged_by_the_cold_cap() -> None:
     def clock() -> float:
         return now
 
-    admission = _MeasuredStageAdmission(
-        deadline=100.0, monotonic=clock, total_budget_s=100.0
-    )
+    admission = _MeasuredStageAdmission(deadline=100.0, monotonic=clock, total_budget_s=100.0)
     started = admission.try_start(_MeasuredStageRole.ORDINARY)
     assert started == 0.0
     now = 8.0
@@ -512,7 +508,7 @@ def test_warm_stage_admission_is_unchanged_by_the_cold_cap() -> None:
     assert admission.try_start(_MeasuredStageRole.ORDINARY) == 90.0
     admission.finish(90.0, _MeasuredStageRole.ORDINARY)
 
-    now = 93.0   # 7.0 remaining, under the measured 8.0
+    now = 93.0  # 7.0 remaining, under the measured 8.0
     assert admission.try_start(_MeasuredStageRole.ORDINARY) is None
 ```
 
@@ -971,20 +967,19 @@ In `src/flab2bp/layout/base.py`, inside `class PlacementStats(TypedDict, total=F
 In `pipeline.py`, add `ATOMIC_COMPLETION_GRACE_S` to the existing `from flab2bp.layout.base import (...)` block and `import time` if absent. In `build`, immediately after `layout = _new_layout(...)` and before the `try:` around `lay_out`:
 
 ```python
-            attempt_started = time.monotonic()
-            # A HARD wall per attempt, in the one place that can see the whole
-            # cost.  A strategy's own budget covers its search; compaction,
-            # projection, validation and encoding all run AFTER it and are
-            # charged to nobody.  `validate.validate` takes no cancellation
-            # parameter at all, so this cancels where a hook exists and REPORTS
-            # everywhere else -- a number the gate can fail on beats a number
-            # nobody produced.
-            attempt_deadline = (
-                attempt_started + time_budget_s + ATOMIC_COMPLETION_GRACE_S
-            )
+attempt_started = time.monotonic()
+# A HARD wall per attempt, in the one place that can see the whole
+# cost.  A strategy's own budget covers its search; compaction,
+# projection, validation and encoding all run AFTER it and are
+# charged to nobody.  `validate.validate` takes no cancellation
+# parameter at all, so this cancels where a hook exists and REPORTS
+# everywhere else -- a number the gate can fail on beats a number
+# nobody produced.
+attempt_deadline = attempt_started + time_budget_s + ATOMIC_COMPLETION_GRACE_S
 
-            def attempt_expired(_deadline: float = attempt_deadline) -> bool:
-                return time.monotonic() >= _deadline
+
+def attempt_expired(_deadline: float = attempt_deadline) -> bool:
+    return time.monotonic() >= _deadline
 ```
 
 Pass the cancel into the re-finalization call:
@@ -1255,7 +1250,7 @@ def test_channels_publish_drain_and_drop() -> None:
 
     channels.publish_incumbent(first)
     channels.publish_incumbent(second)
-    channels.publish_incumbent(third)   # queue is full: dropped, not raised
+    channels.publish_incumbent(third)  # queue is full: dropped, not raised
 
     assert channels.dropped == 1
 
@@ -1287,9 +1282,7 @@ def test_drain_is_bounded_per_poll() -> None:
         (128, (96, 32)),
     ],
 )
-def test_the_worker_split_never_hands_a_racer_zero(
-    total: int, expected: tuple[int, int]
-) -> None:
+def test_the_worker_split_never_hands_a_racer_zero(total: int, expected: tuple[int, int]) -> None:
     # ortools reads num_search_workers == 0 as ALL CORES, so a split that ever
     # produced 0 would hand one racer the whole box.
     split = race_worker_split(total)
@@ -1395,8 +1388,7 @@ def race_worker_split(total: int) -> tuple[int, int]:
         return (RACE_MIN_WORKERS, RACE_MIN_WORKERS)
     freeform = max(
         RACE_MIN_WORKERS,
-        total * RACE_FREEFORM_WORKER_SHARE.numerator
-        // RACE_FREEFORM_WORKER_SHARE.denominator,
+        total * RACE_FREEFORM_WORKER_SHARE.numerator // RACE_FREEFORM_WORKER_SHARE.denominator,
     )
     return (freeform, max(RACE_MIN_WORKERS, total - freeform))
 
@@ -1956,9 +1948,7 @@ def test_share_false_creates_no_channels() -> None:
         futures = {}
         for request in requests:
             future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(
-                _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x")
-            )
+            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
             futures[future] = request.strategy
         return futures, _NoopExecutor()
 
@@ -1986,9 +1976,7 @@ def test_the_worker_split_reaches_the_requests() -> None:
         for request in requests:
             seen[request.strategy] = request.workers
             future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(
-                _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x")
-            )
+            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
             futures[future] = request.strategy
         return futures, _NoopExecutor()
 
@@ -2276,8 +2264,7 @@ def run_strategy_race(
                         name,
                         "crashed",
                         refusal_reason=(
-                            f"{name} strategy process failed: "
-                            f"{type(error).__name__}: {error}"
+                            f"{name} strategy process failed: {type(error).__name__}: {error}"
                         ),
                     )
                 )
@@ -2288,9 +2275,7 @@ def run_strategy_race(
         # thread, and a held feeder thread holds this process open.
         for side in channels.values():
             side.close()
-    if first_error is not None and all(
-        outcome.status == "crashed" for outcome in outcomes
-    ):
+    if first_error is not None and all(outcome.status == "crashed" for outcome in outcomes):
         raise first_error
     return _ordered(outcomes)
 ```
@@ -2471,21 +2456,23 @@ Decision rule, in order:
    improvement value:
 
 ```python
-    calls: list[tuple[float, float]] = []
-    original_rule = freeform_module._portfolio_soft_deadline
+calls: list[tuple[float, float]] = []
+original_rule = freeform_module._portfolio_soft_deadline
 
-    def recording(soft, external_key, best_key, now):
-        result = original_rule(soft, external_key, best_key, now)
-        calls.append((soft, result))
-        return result
 
-    monkeypatch.setattr(freeform_module, "_portfolio_soft_deadline", recording)
-    # ... run lay_out as above ...
-    assert calls, "the improvement deadline must be computed at least once"
-    assert all(result <= soft for soft, result in calls)
-    assert any(soft in seen for soft, _result in calls), (
-        "the sweep's own soft must still reach _room_for_another unpulled"
-    )
+def recording(soft, external_key, best_key, now):
+    result = original_rule(soft, external_key, best_key, now)
+    calls.append((soft, result))
+    return result
+
+
+monkeypatch.setattr(freeform_module, "_portfolio_soft_deadline", recording)
+# ... run lay_out as above ...
+assert calls, "the improvement deadline must be computed at least once"
+assert all(result <= soft for soft, result in calls)
+assert any(soft in seen for soft, _result in calls), (
+    "the sweep's own soft must still reach _room_for_another unpulled"
+)
 ```
 
 Record which of the three the run took, and the counts, in the commit message.
@@ -2623,8 +2610,8 @@ def _portfolio_soft_deadline(
 In `FreeformLayout.__init__`, add two keyword-only parameters and store them:
 
 ```python
-        portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
-        publish_incumbent: Callable[[Placement], None] | None = None,
+portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = (None,)
+publish_incumbent: Callable[[Placement], None] | None = (None,)
 ```
 
 ```python
@@ -2684,8 +2671,8 @@ At the incumbent update, publish after the assignment:
 In `SequenceSolver.__init__`, add keyword-only parameters and store them:
 
 ```python
-        portfolio_area: Callable[[], int | None] | None = None,
-        publish_incumbent: Callable[[Placement], None] | None = None,
+portfolio_area: Callable[[], int | None] | None = (None,)
+publish_incumbent: Callable[[Placement], None] | None = (None,)
 ```
 
 ```python
@@ -2765,12 +2752,10 @@ In `_complete_routing_stage`, publish where the incumbent is already recorded, i
 `SequencePairLayout.__init__` gains `portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None` and `publish_incumbent: Callable[[Placement], None] | None = None`, stores them, and `lay_out` passes both into `_production_run`, which gains matching keyword-only parameters and forwards them into its `SequenceSolver(...)` construction:
 
 ```python
-        portfolio_area=(
-            None
-            if portfolio_incumbent is None
-            else lambda: _area_of(portfolio_incumbent())
-        ),
-        publish_incumbent=publish_incumbent,
+portfolio_area = (
+    (None if portfolio_incumbent is None else lambda: _area_of(portfolio_incumbent())),
+)
+publish_incumbent = (publish_incumbent,)
 ```
 
 with, beside `_exact_key`:
@@ -2786,46 +2771,46 @@ def _area_of(exact_key: tuple[int, int] | None) -> int | None:
 In `strategy_race._run_race_leg`, build the two callables and validate before publishing:
 
 ```python
-    from flab2bp.layout import validate
+from flab2bp.layout import validate
 
-    seen_keys: list[tuple[int, int]] = []
-    published = 0
-    consumed = 0
+seen_keys: list[tuple[int, int]] = []
+published = 0
+consumed = 0
 
-    def portfolio_incumbent() -> tuple[int, int] | None:
-        nonlocal consumed
-        if channels is None:
-            return None
-        for message in channels.drain():
-            if isinstance(message, IncumbentMessage):
-                consumed += 1
-                seen_keys.append(message.exact_key)
-        return min(seen_keys) if seen_keys else None
 
-    def publish(placement: Placement) -> None:
-        nonlocal published
-        if channels is None:
-            return
-        # The PARENT's standard of proof, run in the child.  Freeform's in-sweep
-        # report and sequence-pair's `validate.certify` are not it, and a bound
-        # the parent will reject would prune the other arm on a promise nobody
-        # keeps.  One extra validation per PUBLISHED incumbent, off the parent's
-        # critical path.
-        report = validate.validate(
-            placement,
-            request.spec,
-            ids=validate.id_map(request.spec),
-            expect_power=True,
-            max_belt_z=request.max_belt_z,
-            belt_vertical_construction=request.belt_vertical_construction,
-        )
-        if not report.ok:
-            return
-        belt_tiles = int(placement.stats.get("belt_tiles", 0))
-        channels.publish_incumbent(
-            IncumbentMessage(request.strategy, (placement.area, belt_tiles))
-        )
-        published += 1
+def portfolio_incumbent() -> tuple[int, int] | None:
+    nonlocal consumed
+    if channels is None:
+        return None
+    for message in channels.drain():
+        if isinstance(message, IncumbentMessage):
+            consumed += 1
+            seen_keys.append(message.exact_key)
+    return min(seen_keys) if seen_keys else None
+
+
+def publish(placement: Placement) -> None:
+    nonlocal published
+    if channels is None:
+        return
+    # The PARENT's standard of proof, run in the child.  Freeform's in-sweep
+    # report and sequence-pair's `validate.certify` are not it, and a bound
+    # the parent will reject would prune the other arm on a promise nobody
+    # keeps.  One extra validation per PUBLISHED incumbent, off the parent's
+    # critical path.
+    report = validate.validate(
+        placement,
+        request.spec,
+        ids=validate.id_map(request.spec),
+        expect_power=True,
+        max_belt_z=request.max_belt_z,
+        belt_vertical_construction=request.belt_vertical_construction,
+    )
+    if not report.ok:
+        return
+    belt_tiles = int(placement.stats.get("belt_tiles", 0))
+    channels.publish_incumbent(IncumbentMessage(request.strategy, (placement.area, belt_tiles)))
+    published += 1
 ```
 
 Pass `portfolio_incumbent=portfolio_incumbent, publish_incumbent=publish` into both constructions in `_build_layout` — which therefore takes the two callables as parameters — and carry `published_incumbents=published, consumed_incumbents=consumed` into both the `completed` and the `refused` return of `_run_race_leg`.
@@ -2902,12 +2887,8 @@ def test_a_no_good_from_a_different_shard_or_family_is_dropped() -> None:
     from flab2bp.layout.strategy_race import applicable_no_good
 
     planned = frozenset({_instance("iron-ingot", 0, 8)})
-    differently_sharded = NoGoodMessage(
-        "freeform", (_instance("iron-ingot", 0, 4),), no_good="a"
-    )
-    different_family = NoGoodMessage(
-        "freeform", (_instance("copper-ingot", 0, 8),), no_good="b"
-    )
+    differently_sharded = NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good="a")
+    different_family = NoGoodMessage("freeform", (_instance("copper-ingot", 0, 8),), no_good="b")
 
     assert applicable_no_good(differently_sharded, planned) is False
     assert applicable_no_good(different_family, planned) is False
@@ -2965,9 +2946,7 @@ def test_the_inbox_is_bounded_and_evicts_the_oldest() -> None:
     inbox = _NoGoodInbox()
     planned = frozenset({_instance("iron-ingot", 0, 4)})
     for index in range(NOGOOD_INBOX_MAX + 3):
-        inbox.offer(
-            NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good=index)
-        )
+        inbox.offer(NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good=index))
 
     applicable = inbox.applicable(planned)
 
@@ -3046,9 +3025,7 @@ class _NoGoodInbox:
 
     def applicable(self, planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
         return tuple(
-            message.no_good
-            for message in self._held
-            if applicable_no_good(message, planned)
+            message.no_good for message in self._held if applicable_no_good(message, planned)
         )
 ```
 
@@ -3057,36 +3034,38 @@ class _NoGoodInbox:
 In `_run_race_leg`, replace the `portfolio_incumbent` closure with one that routes both kinds, and add the two no-good callables:
 
 ```python
-    inbox = _NoGoodInbox()
-    published_no_goods = 0
+inbox = _NoGoodInbox()
+published_no_goods = 0
 
-    def _drain() -> None:
-        nonlocal consumed
-        if channels is None:
-            return
-        for message in channels.drain():
-            if isinstance(message, IncumbentMessage):
-                consumed += 1
-                seen_keys.append(message.exact_key)
-            else:
-                inbox.offer(message)
 
-    def portfolio_incumbent() -> tuple[int, int] | None:
-        _drain()
-        return min(seen_keys) if seen_keys else None
+def _drain() -> None:
+    nonlocal consumed
+    if channels is None:
+        return
+    for message in channels.drain():
+        if isinstance(message, IncumbentMessage):
+            consumed += 1
+            seen_keys.append(message.exact_key)
+        else:
+            inbox.offer(message)
 
-    def external_no_goods(planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
-        _drain()
-        return inbox.applicable(planned)
 
-    def publish_no_good(
-        no_good: object, instances: tuple[StripInstanceId, ...]
-    ) -> None:
-        nonlocal published_no_goods
-        if channels is None:
-            return
-        channels.publish_no_good(NoGoodMessage(request.strategy, instances, no_good))
-        published_no_goods += 1
+def portfolio_incumbent() -> tuple[int, int] | None:
+    _drain()
+    return min(seen_keys) if seen_keys else None
+
+
+def external_no_goods(planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
+    _drain()
+    return inbox.applicable(planned)
+
+
+def publish_no_good(no_good: object, instances: tuple[StripInstanceId, ...]) -> None:
+    nonlocal published_no_goods
+    if channels is None:
+        return
+    channels.publish_no_good(NoGoodMessage(request.strategy, instances, no_good))
+    published_no_goods += 1
 ```
 
 `external_no_goods` **takes the receiver's current strip set** — that is the whole point of Task 11 — so Task 12's receivers call it with their live strips rather than registering a snapshot.
@@ -3094,9 +3073,9 @@ In `_run_race_leg`, replace the `portfolio_incumbent` closure with one that rout
 Carry the counters into both returns of `_run_race_leg`:
 
 ```python
-        published_no_goods=published_no_goods,
-        consumed_no_goods=len(inbox.applicable(frozenset())),
-        dropped_messages=(0 if channels is None else channels.dropped) + inbox.dropped,
+published_no_goods = (published_no_goods,)
+consumed_no_goods = (len(inbox.applicable(frozenset())),)
+dropped_messages = ((0 if channels is None else channels.dropped) + inbox.dropped,)
 ```
 
 `consumed_no_goods` is reported against the empty set — which is always `0` — until Task 12 gives the leg a live strip set to count against; leave the expression here so the field has exactly one writer, and Task 12 replaces the argument, not the line's shape.
@@ -3208,12 +3187,8 @@ Expected: both FAIL with `TypeError: __init__() got an unexpected keyword argume
 `FreeformLayout.__init__` and `SequencePairLayout.__init__` each gain, keyword-only:
 
 ```python
-        external_no_goods: (
-            Callable[[frozenset[StripInstanceId]], tuple[object, ...]] | None
-        ) = None,
-        publish_no_good: (
-            Callable[[object, tuple[StripInstanceId, ...]], None] | None
-        ) = None,
+external_no_goods: Callable[[frozenset[StripInstanceId]], tuple[object, ...]] | None = (None,)
+publish_no_good: Callable[[object, tuple[StripInstanceId, ...]], None] | None = (None,)
 ```
 
 stored on `self` under the same names.
@@ -3257,10 +3232,8 @@ At the Phase C consumption site Step 1 located in `freeform.py`, immediately bef
 and at the sequence-pair site:
 
 ```python
-        if external_no_goods is not None:
-            relation_no_goods = tuple(relation_no_goods) + external_no_goods(
-                _problem_instance_ids(problem)
-            )
+if external_no_goods is not None:
+    relation_no_goods = tuple(relation_no_goods) + external_no_goods(_problem_instance_ids(problem))
 ```
 
 Substitute the real collection names from Step 1 for `cluster_no_goods` and `relation_no_goods`, and `strips` / `problem` for whichever live variables hold the current plan at each site. If a site's collection is a `frozenset`, union instead of concatenating; if it is a `list`, `extend`.
@@ -3281,13 +3254,14 @@ with `<IDS>` the field name Step 1 printed. `_production_run` gains matching key
 In `strategy_race._build_layout`, pass `external_no_goods=external_no_goods, publish_no_good=publish_no_good` into both constructions alongside the Task 10 pair, and in `_run_race_leg` replace the placeholder counter with one that counts what was actually handed out:
 
 ```python
-    applied_no_goods: set[int] = set()
+applied_no_goods: set[int] = set()
 
-    def external_no_goods(planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
-        _drain()
-        applicable = inbox.applicable(planned)
-        applied_no_goods.update(id(item) for item in applicable)
-        return applicable
+
+def external_no_goods(planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
+    _drain()
+    applicable = inbox.applicable(planned)
+    applied_no_goods.update(id(item) for item in applicable)
+    return applicable
 ```
 
 and `consumed_no_goods=len(applied_no_goods)` in both returns.
@@ -3465,9 +3439,7 @@ class RacingLayout:
         )
         raise NoValidLayout(
             "both raced strategies refused" + (f": {details}" if details else ""),
-            spec_label=next(
-                (o.refusal_spec_label for o in outcomes if o.refusal_spec_label), ""
-            ),
+            spec_label=next((o.refusal_spec_label for o in outcomes if o.refusal_spec_label), ""),
             budget_s=next((o.refusal_budget_s for o in outcomes if o.refusal_budget_s), 0.0),
             projection_failures=tuple(
                 dict.fromkeys(
@@ -3618,18 +3590,18 @@ from flab2bp.layout import strategy_race
 Add three keyword-only parameters to `build`:
 
 ```python
-    #: CP-SAT search workers.  ``None`` is every core for an explicit strategy
-    #: and ``strategy_race.race_worker_split(every core)`` when racing.  It is
-    #: surfaced here because racing puts TWO CP-SAT users on one box and the
-    #: split has to be decided by whoever knows both arms exist.
-    workers: int | None = None,
-    #: Race the two strategies for ONE budget instead of running them serially
-    #: for one budget EACH.  OFF by default until the flip commit: a change this
-    #: large in wall time and process count opts in before it opts everyone in.
-    race: bool = False,
-    #: Exchange certified incumbents and cluster no-goods between the racers.
-    #: Meaningless unless ``race`` is true.
-    share: bool = True,
+#: CP-SAT search workers.  ``None`` is every core for an explicit strategy
+#: and ``strategy_race.race_worker_split(every core)`` when racing.  It is
+#: surfaced here because racing puts TWO CP-SAT users on one box and the
+#: split has to be decided by whoever knows both arms exist.
+workers: int | None = (None,)
+#: Race the two strategies for ONE budget instead of running them serially
+#: for one budget EACH.  OFF by default until the flip commit: a change this
+#: large in wall time and process count opts in before it opts everyone in.
+race: bool = (False,)
+#: Exchange certified incumbents and cluster no-goods between the racers.
+#: Meaningless unless ``race`` is true.
+share: bool = (True,)
 ```
 
 Relax the guard:
@@ -3646,25 +3618,23 @@ Add `workers: int | None = None` to `_new_layout`'s keyword-only parameters and 
 Immediately above the `for spec in spec_set.candidates:` loop, define the serial path so both modes produce the same shape:
 
 ```python
-    def _solve_one(
-        candidate: BuildSpec, sname: ExplicitStrategyName
-    ) -> Placement | NoValidLayout:
-        """The pre-racing path, returning the refusal instead of raising it.
+def _solve_one(candidate: BuildSpec, sname: ExplicitStrategyName) -> Placement | NoValidLayout:
+    """The pre-racing path, returning the refusal instead of raising it.
 
-        The loop body below branches on the RESULT rather than catching, so one
-        shape handles a raced pair and a serial one.
-        """
-        layout = _new_layout(
-            sname,
-            belt_vertical_construction=belt_rules.vertical_construction,
-            sequence_islands=sequence_islands,
-            band_policy=policy,
-            workers=workers,
-        )
-        try:
-            return layout.lay_out(candidate, time_budget_s=time_budget_s)
-        except NoValidLayout as exc:
-            return exc
+    The loop body below branches on the RESULT rather than catching, so one
+    shape handles a raced pair and a serial one.
+    """
+    layout = _new_layout(
+        sname,
+        belt_vertical_construction=belt_rules.vertical_construction,
+        sequence_islands=sequence_islands,
+        band_policy=policy,
+        workers=workers,
+    )
+    try:
+        return layout.lay_out(candidate, time_budget_s=time_budget_s)
+    except NoValidLayout as exc:
+        return exc
 ```
 
 Inside `for spec in spec_set.candidates:`, replace the `for sname in wanted:` header with a resolution step and then the same loop over resolved results:
@@ -3800,9 +3770,7 @@ def test_the_two_explicit_factories_ignore_the_belt_ceiling() -> None:
     from flab2bp.layout.freeform import FreeformLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
 
-    assert isinstance(
-        audit._STRATEGIES["freeform"](4, True, Fraction(171, 20)), FreeformLayout
-    )
+    assert isinstance(audit._STRATEGIES["freeform"](4, True, Fraction(171, 20)), FreeformLayout)
     assert isinstance(
         audit._STRATEGIES["sequence-pair"](4, True, Fraction(171, 20)),
         SequencePairLayout,
@@ -4196,7 +4164,7 @@ def test_a_best_request_now_costs_one_budget_per_candidate() -> None:
     options = Options(url=URL, strategy="best", budget_s=100.0)
 
     assert len(DEFAULT_CANDIDATE_POLICIES) == 3
-    assert options.solver_ceiling_s == 300.0   # was 600.0: racing halved it
+    assert options.solver_ceiling_s == 300.0  # was 600.0: racing halved it
 ```
 
 - [ ] **Step 3: Run them to verify they fail**
@@ -4209,11 +4177,11 @@ Expected: the six edited assertions FAIL against the current `solver_ceiling_s` 
 In `pipeline.build`, change the parameter and its comment:
 
 ```python
-    #: Race the two strategies for ONE budget instead of running them serially
-    #: for one budget EACH.  Default since the Gate D2 commit; ``race=False``
-    #: restores the serial loop exactly, for A/B and for boxes where two
-    #: concurrent CP-SAT users are not wanted.
-    race: bool = True,
+#: Race the two strategies for ONE budget instead of running them serially
+#: for one budget EACH.  Default since the Gate D2 commit; ``race=False``
+#: restores the serial loop exactly, for A/B and for boxes where two
+#: concurrent CP-SAT users are not wanted.
+race: bool = (True,)
 ```
 
 In `web/jobs.py`:
@@ -4246,13 +4214,12 @@ and the admission message loses its strategy term:
 In `cli.py`, replace `--race` with its inverse so the flag still matches the default:
 
 ```python
-    ap.add_argument(
-        "--no-race",
-        dest="race",
-        action="store_false",
-        help="run --strategy best serially, one full budget per strategy, as it "
-        "worked before racing",
-    )
+ap.add_argument(
+    "--no-race",
+    dest="race",
+    action="store_false",
+    help="run --strategy best serially, one full budget per strategy, as it worked before racing",
+)
 ```
 
 - [ ] **Step 5: Repair the two pipeline tests named by the spec**

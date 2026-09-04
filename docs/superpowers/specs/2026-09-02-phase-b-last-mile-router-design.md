@@ -665,8 +665,8 @@ both `last_mile.py` and `freeform.py` can import it without a cycle:
 class ClusterRelationNoGood:
     height: int
     outline: tuple[tuple[int, int], ...]
-    strips: tuple[int, ...]                 # ascending, at least two
-    deltas: tuple[tuple[int, int], ...]     # origin[s] - origin[strips[0]]
+    strips: tuple[int, ...]  # ascending, at least two
+    deltas: tuple[tuple[int, int], ...]  # origin[s] - origin[strips[0]]
     evidence: tuple[str, ...]
 ```
 
@@ -708,8 +708,11 @@ values: list[int] = []
 for position, strip_index in enumerate(no_good.strips[1:], start=1):
     dx = model.new_int_var(-width_bound, width_bound, f"cluster_ng{n}_dx{position}")
     dy = model.new_int_var(-height, height, f"cluster_ng{n}_dy{position}")
-    model.add(dx == (xs[strip_index] + strips[strip_index].west_channel)
-                  - (xs[anchor] + strips[anchor].west_channel))
+    model.add(
+        dx
+        == (xs[strip_index] + strips[strip_index].west_channel)
+        - (xs[anchor] + strips[anchor].west_channel)
+    )
     model.add(dy == ys[strip_index] - ys[anchor])
     variables.extend((dx, dy))
     values.extend(no_good.deltas[position])
@@ -841,35 +844,41 @@ B_UNROUTED_COST: int = 1_000_000
 #: through ``lay_out``, ``_sweep``, ``_build`` and ``_build_prepared``.
 CAPTURE: Callable[[ClusterCapture], None] | None = None
 
+
 class ClusterOutcome(StrEnum):
-    SOLVED = "solved"          # every cluster net has a disjoint path
-    PROVED = "proved"          # tree closed, no search cut short, no solution
-    BOUNDED = "bounded"        # a bound fired; nothing is claimed
+    SOLVED = "solved"  # every cluster net has a disjoint path
+    PROVED = "proved"  # tree closed, no search cut short, no solution
+    BOUNDED = "bounded"  # a bound fired; nothing is claimed
+
 
 class ClusterBound(StrEnum):
-    NONE = ""                  # the run reached a decision on its own
+    NONE = ""  # the run reached a decision on its own
     NODES = "nodes"
     CONSTRAINTS = "constraints"
-    BUDGET = "budget"          # the shared floor, or a cut low-level search
+    BUDGET = "budget"  # the shared floor, or a cut low-level search
     WALL = "wall"
+
 
 @dataclass(frozen=True, slots=True)
 class ClusterProblem:
-    nets: tuple[int, ...]                       # ascending net indices
-    stranded: tuple[int, ...]                   # ascending, subset of nets
+    nets: tuple[int, ...]  # ascending net indices
+    stranded: tuple[int, ...]  # ascending, subset of nets
     truncated: bool
-    sibling_closed: bool                        # telemetry only, see 5.4
+    sibling_closed: bool  # telemetry only, see 5.4
+
 
 @dataclass(frozen=True, slots=True)
 class ClusterResult:
     outcome: ClusterOutcome
-    paths: Mapping[int, tuple[Cell, ...]]       # empty unless SOLVED
+    paths: Mapping[int, tuple[Cell, ...]]  # empty unless SOLVED
     nodes: int
     expansions: int
     seconds: float
     bound: ClusterBound = ClusterBound.NONE
 
+
 _Offers = tuple[Mapping[Cell, Cell], Mapping[Cell, Cell], Mapping[Cell, Cell]]
+
 
 @dataclass(frozen=True, slots=True)
 class ClusterEnvironment:
@@ -885,13 +894,14 @@ class ClusterEnvironment:
     max_nodes: int = B_MAX_CBS_NODES
     max_constraints: int = B_MAX_CONSTRAINTS
 
+
 @dataclass(frozen=True, slots=True)
 class ClusterCapture:
     """Everything a replay needs to re-run one live cluster search."""
 
-    run: int                                    # 1 environment, 2 relaxed
-    canvas: object                              # freeform._Canvas; opaque here
-    grid: object                                # freeform._Grid; opaque here
+    run: int  # 1 environment, 2 relaxed
+    canvas: object  # freeform._Canvas; opaque here
+    grid: object  # freeform._Grid; opaque here
     history: Mapping[Cell, float]
     pressure: float
     bounds: tuple[int, int, int, int]
@@ -900,6 +910,7 @@ class ClusterCapture:
     budget_left: int
     budget_floor: int
     deadline_remaining: float | None
+
 
 def build_cluster(
     stranded: Sequence[int],
@@ -914,15 +925,18 @@ def build_cluster(
     max_cluster: int = B_MAX_CLUSTER,
 ) -> ClusterProblem: ...
 
+
 def solve_cluster(
     problem: ClusterProblem,
     environment: ClusterEnvironment,
 ) -> ClusterResult: ...
 
+
 def cluster_strips(
     problem: ClusterProblem,
     net_strips: Mapping[int, tuple[int | None, int | None]],
 ) -> tuple[int, ...]: ...
+
 
 def relation_no_good(
     *,
@@ -961,6 +975,7 @@ class ClusterRelationNoGood:
     deltas: tuple[tuple[int, int], ...]
     evidence: tuple[str, ...]
 
+
 @dataclass(frozen=True, slots=True)
 class LastMileReport:
     invocations: int
@@ -979,11 +994,12 @@ class LastMileReport:
     relation_strips: tuple[int, ...] = ()
     relation_evidence: str = ""
 
+
 @dataclass(frozen=True, slots=True)
 class DetailedRouteResult:
-    ...                                     # unchanged fields
-    exhaustive: bool = False                # unchanged
-    last_mile: LastMileReport | None = None # new
+    ...  # unchanged fields
+    exhaustive: bool = False  # unchanged
+    last_mile: LastMileReport | None = None  # new
 ```
 
 ### 6.3 `src/flab2bp/layout/freeform.py`
@@ -1016,9 +1032,7 @@ module-level `last_mile.CAPTURE` hook rather than through a parameter.
 ### 6.4 `src/flab2bp/layout/sequence_solver.py`
 
 ```python
-type _ProjectionPackNoGood = (
-    finalize.ProjectionNoGood | ExactPackNoGood | ClusterRelationNoGood
-)
+type _ProjectionPackNoGood = finalize.ProjectionNoGood | ExactPackNoGood | ClusterRelationNoGood
 ```
 
 `_projection_feedback_matches` and `_projection_feedback_stage_update` gain a
@@ -1046,8 +1060,8 @@ uv run python scripts/route_bench.py --capture universe-matrix \
 {
     "kind": "cluster",
     "run": 1 | 2,
-    "canvas": shot_canvas,   # _snapshot's copy semantics, unchanged
-    "grid": shot_grid,       # cluster paths already released from occ
+    "canvas": shot_canvas,  # _snapshot's copy semantics, unchanged
+    "grid": shot_grid,  # cluster paths already released from occ
     "history": shot_hist,
     "problem": ClusterProblem,
     # per cluster net, from _ends: starts, goals, and the net's own routing
@@ -1058,7 +1072,7 @@ uv run python scripts/route_bench.py --capture universe-matrix \
     "budget_left": int,
     "budget_floor": int,
     "deadline_remaining": float | None,
-    "result": ClusterResult,                    # what the live pass returned
+    "result": ClusterResult,  # what the live pass returned
 }
 ```
 

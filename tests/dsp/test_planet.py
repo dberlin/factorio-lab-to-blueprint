@@ -96,9 +96,7 @@ def test_the_band_table_is_the_game_for_a_terrestrial_planet() -> None:
         for b in planet.bands(SEGMENT)
     )
     assert got == TERRESTRIAL
-    assert [b.columns for b in planet.bands(SEGMENT)] == [
-        b[0] * 5 for b in TERRESTRIAL
-    ]
+    assert [b.columns for b in planet.bands(SEGMENT)] == [b[0] * 5 for b in TERRESTRIAL]
 
 
 def test_the_equatorial_band_has_160_square_capacity() -> None:
@@ -271,7 +269,9 @@ def test_the_projection_uses_the_bands_own_step() -> None:
         for anchor in band.anchors(1):
             assert planet.longitude_segment_count(anchor, SEGMENT) == band.area_segments
         projection = planet.Projection(
-            band=band, anchor_row=band.grid_lo, segment=SEGMENT,
+            band=band,
+            anchor_row=band.grid_lo,
+            segment=SEGMENT,
             radius=colliders.PLANET_RADIUS,
         )
         assert projection.longitude_step == pytest.approx(
@@ -289,7 +289,9 @@ def test_a_column_is_a_tile_at_the_equator_and_narrower_everywhere_else() -> Non
     survive its smallest band is really up against.
     """
     equator = planet.Projection(
-        band=planet.bands(SEGMENT)[0], anchor_row=0, segment=SEGMENT,
+        band=planet.bands(SEGMENT)[0],
+        anchor_row=0,
+        segment=SEGMENT,
         radius=colliders.PLANET_RADIUS,
     )
     # GRID_ARC assumes a shell of exactly ``radius``; a build sits 0.2 above it.
@@ -323,9 +325,7 @@ def test_a_column_is_a_tile_at_the_equator_and_narrower_everywhere_else() -> Non
     # the flat model IS the supremum, and the worst case is 0.876 of a tile.
     band200 = min(v for (seg, _row), v in ratios.items() if seg == 200)
     # Row 1, not row 0: ``grid_lo`` is 1, and cos of one row is 0.99998.
-    assert max(v for (seg, _row), v in ratios.items() if seg == 200) == pytest.approx(
-        1.0, abs=1e-4
-    )
+    assert max(v for (seg, _row), v in ratios.items() if seg == 200) == pytest.approx(1.0, abs=1e-4)
     assert band200 == pytest.approx(0.8763, abs=5e-4)
 
 
@@ -334,8 +334,19 @@ def test_a_column_is_a_tile_at_the_equator_and_narrower_everywhere_else() -> Non
 
 def _sorter(**kw: float | bool) -> planet.Sorter:
     base: dict[str, float | bool] = dict(
-        x=0.0, y=0.0, z=0.0, x2=0.0, y2=0.0, z2=0.0, yaw=0.0, yaw2=0.0,
-        input_belt=False, output_belt=False, ref_x=0.0, ref_y=0.0, ref_z=0.0,
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        x2=0.0,
+        y2=0.0,
+        z2=0.0,
+        yaw=0.0,
+        yaw2=0.0,
+        input_belt=False,
+        output_belt=False,
+        ref_x=0.0,
+        ref_y=0.0,
+        ref_z=0.0,
     )
     base.update(kw)
     return planet.Sorter(**base)  # type: ignore[arg-type]
@@ -343,7 +354,9 @@ def _sorter(**kw: float | bool) -> planet.Sorter:
 
 def test_calc_segments_across_counts_grid_cells_at_the_equator() -> None:
     projection = planet.Projection(
-        band=planet.bands(SEGMENT)[0], anchor_row=0, segment=SEGMENT,
+        band=planet.bands(SEGMENT)[0],
+        anchor_row=0,
+        segment=SEGMENT,
         radius=colliders.PLANET_RADIUS,
     )
     for span in (1, 2, 3, 4):
@@ -395,7 +408,9 @@ def test_a_four_cell_sorter_passes_the_ported_length_test_and_the_game_refuses_i
     the world-unit test cannot.
     """
     projection = planet.Projection(
-        band=planet.bands(SEGMENT)[0], anchor_row=0, segment=SEGMENT,
+        band=planet.bands(SEGMENT)[0],
+        anchor_row=0,
+        segment=SEGMENT,
         radius=colliders.PLANET_RADIUS,
     )
     sorter = _sorter(x=0.0, y=0.0, x2=0.0, y2=4.0, ref_y=2.0)
@@ -412,7 +427,9 @@ def test_a_four_cell_sorter_passes_the_ported_length_test_and_the_game_refuses_i
 
 def test_the_sorter_ladder_reports_each_condition_by_name() -> None:
     projection = planet.Projection(
-        band=planet.bands(SEGMENT)[0], anchor_row=0, segment=SEGMENT,
+        band=planet.bands(SEGMENT)[0],
+        anchor_row=0,
+        segment=SEGMENT,
         radius=colliders.PLANET_RADIUS,
     )
     # TooClose on world length: two coincident ends.
@@ -441,10 +458,7 @@ def test_a_sorter_legal_at_the_equator_can_be_refused_poleward_in_its_own_band()
             band=band, anchor_row=row, segment=SEGMENT, radius=colliders.PLANET_RADIUS
         )
 
-    lengths = [
-        math.dist(at(row).position(0, 0, 0), at(row).position(1, 0, 0))
-        for row in (0, 80)
-    ]
+    lengths = [math.dist(at(row).position(0, 0, 0), at(row).position(1, 0, 0)) for row in (0, 80)]
     lift = (colliders.PLANET_RADIUS + 0.2) / colliders.PLANET_RADIUS
     # ``rel`` covers chord-against-arc over one tile, which is (step^2)/24 = 1.6e-6.
     assert lengths[0] == pytest.approx(colliders.GRID_ARC * lift, rel=5e-6)
@@ -478,7 +492,9 @@ def test_collisions_at_the_equator_reproduce_the_flat_model() -> None:
     """
     machine = cat.building(2303).model_index  # Assembling Machine Mk.I
     projection = planet.Projection(
-        band=planet.bands(SEGMENT)[0], anchor_row=0, segment=SEGMENT,
+        band=planet.bands(SEGMENT)[0],
+        anchor_row=0,
+        segment=SEGMENT,
         radius=colliders.PLANET_RADIUS,
     )
     for pitch, expected in ((3, [(0, 1)]), (4, [])):
@@ -488,7 +504,6 @@ def test_collisions_at_the_equator_reproduce_the_flat_model() -> None:
         ]
         assert colliders.collisions(pair) == expected, pitch
         assert planet.collisions_at(pair, projection) == expected, pitch
-
 
 
 def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band() -> None:
@@ -524,8 +539,6 @@ def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band() -
     assert planet.collisions_at(six, poleward) == []
 
 
-
-
 def test_collider_radius_is_the_exact_farthest_collider_corner() -> None:
     model = cat.building(2303).model_index
     expected = max(
@@ -545,10 +558,7 @@ def test_candidate_focused_broad_phase_matches_all_pairs_without_peer_pair_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = cat.building(2303).model_index
-    buildings = tuple(
-        colliders.Placed(model, 0.0, 0.0, 0.0, 0.0)
-        for _ in range(32)
-    )
+    buildings = tuple(colliders.Placed(model, 0.0, 0.0, 0.0, 0.0) for _ in range(32))
     band = planet.bands(SEGMENT)[0]
     _ = planet.collider_radius(model)
     square_roots = 0
@@ -577,10 +587,7 @@ def test_candidate_focused_broad_phase_matches_all_pairs_without_peer_pair_work(
         candidate_position=candidate_position,
     )
 
-    assert focused == [
-        pair for pair in all_pairs
-        if candidate_position in pair
-    ]
+    assert focused == [pair for pair in all_pairs if candidate_position in pair]
     assert all_pair_roots == len(buildings) * (len(buildings) - 1) // 2
     assert square_roots == len(buildings) - 1
 
@@ -621,10 +628,7 @@ def test_candidate_focused_pairs_preserve_near_edge_exact_verdict(
         candidate_position=candidate_position,
     )
 
-    assert focused == [
-        pair for pair in all_pairs
-        if candidate_position in pair
-    ]
+    assert focused == [pair for pair in all_pairs if candidate_position in pair]
     assert planet.collisions_at(buildings, projection, focused) == [
         pair
         for pair in planet.collisions_at(buildings, projection, all_pairs)
@@ -634,10 +638,7 @@ def test_candidate_focused_pairs_preserve_near_edge_exact_verdict(
 
 def test_candidate_pairs_cancels_inside_focused_peer_scan() -> None:
     model = cat.building(2303).model_index
-    buildings = tuple(
-        colliders.Placed(model, float(index), 0.0, 0.0, 0.0)
-        for index in range(32)
-    )
+    buildings = tuple(colliders.Placed(model, float(index), 0.0, 0.0, 0.0) for index in range(32))
     checks = 0
 
     def cancelled() -> bool:
@@ -662,10 +663,7 @@ def test_collisions_at_cancels_inside_obb_products_without_box_cache_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = cat.building(2303).model_index
-    buildings = tuple(
-        colliders.Placed(model, 0.0, 0.0, 0.0, 0.0)
-        for _ in range(3)
-    )
+    buildings = tuple(colliders.Placed(model, 0.0, 0.0, 0.0, 0.0) for _ in range(3))
     projection = planet.Projection(
         planet.bands(SEGMENT)[0],
         0,

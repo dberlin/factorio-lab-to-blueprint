@@ -671,8 +671,7 @@ def parse_flow_csv(text: str) -> FlowSelection:
         # column, so a short row is normal and pads with blanks.
         cell = dict(zip(columns, record, strict=False))
         parsed = {
-            name: _number(cell.get(name, ""), f"line {lineno}, column {name}")
-            for name in _NUMERIC
+            name: _number(cell.get(name, ""), f"line {lineno}, column {name}") for name in _NUMERIC
         }
         original_item_id = cell.get("Item", "").strip()
         rows.append(
@@ -1023,14 +1022,11 @@ def cross_check(
         if recipe is not None and (recipe.is_mining or recipe.is_technology):
             continue  # extraction happens outside; its output is an input belt
         findings.append(
-            f"{recipe_id}: the flow runs {by_recipe[recipe_id].machines} machine(s); "
-            "we build none"
+            f"{recipe_id}: the flow runs {by_recipe[recipe_id].machines} machine(s); we build none"
         )
 
     supplied = flow.external_items(data)
-    findings.extend(
-        _rate_findings(flow, supplied, external_inputs, per_second, "belt in", "uses")
-    )
+    findings.extend(_rate_findings(flow, supplied, external_inputs, per_second, "belt in", "uses"))
     for item_id in sorted(set(supplied) - set(external_inputs)):
         findings.append(
             f"{item_id}: the flow belts in {supplied[item_id]} but this build needs none"

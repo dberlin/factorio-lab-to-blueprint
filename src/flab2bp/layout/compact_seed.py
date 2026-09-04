@@ -402,9 +402,9 @@ class CompactTopologyBeam:
                     target.producer_span - 1,
                     f"direct_origin_delta{target.producer}_{target.consumer}",
                 )
-                model.add(
-                    origin_delta == x[target.consumer] - x[target.producer]
-                ).only_enforce_if(direct)
+                model.add(origin_delta == x[target.consumer] - x[target.producer]).only_enforce_if(
+                    direct
+                )
                 model.add_allowed_assignments(
                     [origin_delta],
                     [(delta,) for delta in target.origin_deltas],
@@ -460,6 +460,7 @@ class CompactTopologyBeam:
             if remaining <= _DEADLINE_SAFETY_SECONDS:
                 return None
             solver.parameters.max_time_in_seconds = remaining - _DEADLINE_SAFETY_SECONDS
+
         class WidthAdmission(cp_model.CpSolverSolutionCallback):
             """Stop once the exact incumbent admits already-routed evidence."""
 
@@ -919,9 +920,9 @@ def _build_model(
                 target.producer_span - 1,
                 f"direct_origin_delta_{direct_index}_{combo_index}",
             )
-            model.add(
-                origin_delta == x[target.consumer] - x[target.producer]
-            ).only_enforce_if(success)
+            model.add(origin_delta == x[target.consumer] - x[target.producer]).only_enforce_if(
+                success
+            )
             model.add_allowed_assignments(
                 [origin_delta],
                 [(delta,) for delta in target.origin_deltas],
@@ -1298,8 +1299,7 @@ def _target_is_direct(decoded: DecodedPlacement, target: DirectInsertTarget) -> 
     )
     return (
         1 <= row_gap <= catalog.SORTER_MAX_REACH
-        and decoded.x[target.consumer] - decoded.x[target.producer]
-        in target.origin_deltas
+        and decoded.x[target.consumer] - decoded.x[target.producer] in target.origin_deltas
     )
 
 

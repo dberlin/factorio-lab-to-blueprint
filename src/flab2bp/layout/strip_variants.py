@@ -110,7 +110,6 @@ class MachinePlacementGeometry:
             east_halo=self.east_halo + required - self.pitch_x,
         )
 
-
     @property
     def identity(self) -> tuple[int, ...]:
         return (
@@ -572,8 +571,7 @@ def _is_machine_building(building: PlacedBuilding) -> bool:
     if info.cover_radius <= 0:
         return True
     return any(
-        entry.machine_item_id == building.item_id
-        for entry in catalog.MODE_DRIVEN_MACHINE.values()
+        entry.machine_item_id == building.item_id for entry in catalog.MODE_DRIVEN_MACHINE.values()
     )
 
 
@@ -628,8 +626,7 @@ def projection_pitch_requirements(
         variant = variants[owner]
         if (
             yaw != variant.yaw
-            or (width, height)
-            != (variant.footprint_width, variant.footprint_height)
+            or (width, height) != (variant.footprint_width, variant.footprint_height)
             or len(owned_positions) != len(variant.machine_origins_x)
         ):
             continue
@@ -693,10 +690,8 @@ def projection_pitch_requirements(
             (left.item_id, left.model_index, left.yaw)
             != (right.item_id, right.model_index, right.yaw)
             or left.yaw != variant.yaw
-            or (left.width, left.height)
-            != (variant.footprint_width, variant.footprint_height)
-            or (right.width, right.height)
-            != (variant.footprint_width, variant.footprint_height)
+            or (left.width, left.height) != (variant.footprint_width, variant.footprint_height)
+            or (right.width, right.height) != (variant.footprint_width, variant.footprint_height)
             or abs(left.x - right.x) != variant.pitch_x
             or ordinals is None
             or left_position not in ordinals
@@ -914,10 +909,7 @@ def _has_exact_two_face_seating(
             for index, side in enumerate(sides)
         )
         lanes = inputs + outputs
-        if any(
-            _attachment_plan_seatings(item_id, yaw, lanes)
-            for yaw in _CARDINAL_YAWS
-        ):
+        if any(_attachment_plan_seatings(item_id, yaw, lanes) for yaw in _CARDINAL_YAWS):
             return True
     return False
 
@@ -1001,13 +993,10 @@ def _seat_both_fed_outermost(
             len(candidate_above) <= north_cap
             and len(candidate_below) + south_output_rows <= south_cap
             and sum(len(lane) for lane in candidate_above) <= face_columns
-            and sum(len(lane) for lane in candidate_below) + south_output_columns
-            <= face_columns
+            and sum(len(lane) for lane in candidate_below) + south_output_columns <= face_columns
         )
 
-    candidates: list[
-        tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]
-    ] = []
+    candidates: list[tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]] = []
     if len(above_both) == 2:
         moving_index = above_both[1]
         moving = above[moving_index]
@@ -1097,9 +1086,7 @@ def _logical_strip_plans(
         # reproducible +27.2% on `sequence-pair|quantum-chip|2`.  Restricting the
         # key to items that actually raise the corridor demand changed 2 of 66
         # cells for +0.11%, inside the measured 12%-per-cell noise floor.
-        input_items = tuple(
-            sorted(group.inputs, key=lambda item: (item not in both_fed, item))
-        )
+        input_items = tuple(sorted(group.inputs, key=lambda item: (item not in both_fed, item)))
         sinks: list[tuple[str, str, CargoDomain]] = []
         for item in sorted(group.outputs):
             destinations = consumers.get((key, item), [])
@@ -1146,9 +1133,7 @@ def _logical_strip_plans(
                 sinks.append((item, "", CargoDomain.UNSPRAYED))
 
         prefer_shared_inputs = (
-            prefer_shared_proliferation
-            and group.proliferated
-            and len(input_items) >= 3
+            prefer_shared_proliferation and group.proliferated and len(input_items) >= 3
         )
         group_input_rates = tuple(group.inputs.items())
 
@@ -1158,11 +1143,7 @@ def _logical_strip_plans(
             machine_count: int = group.count,
         ) -> bool:
             total = sum(
-                (
-                    rate * machine_count
-                    for item, rate in input_rates
-                    if item in lane
-                ),
+                (rate * machine_count for item, rate in input_rates if item in lane),
                 spec.lane_capacity * 0,
             )
             # One belt, one cargo size: a shared lane is judged at the smallest
@@ -1184,11 +1165,7 @@ def _logical_strip_plans(
                 lane_fits=input_lane_fits if prefer_shared_inputs else None,
             )
         except ValueError as exc:
-            seat = (
-                _flank_seat(group.item_id, group.yaw, group.pitch_w)
-                if len(sinks) == 1
-                else None
-            )
+            seat = _flank_seat(group.item_id, group.yaw, group.pitch_w) if len(sinks) == 1 else None
             if seat is None:
                 raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
             try:
@@ -1281,11 +1258,7 @@ def _logical_strip_plans(
             )
 
         cargo_count = len(_cargo_keys(sinks))
-        input_domain = (
-            CargoDomain.REQUIRES_SPRAY
-            if group.proliferated
-            else CargoDomain.UNSPRAYED
-        )
+        input_domain = CargoDomain.REQUIRES_SPRAY if group.proliferated else CargoDomain.UNSPRAYED
         if (
             not flank
             and cargo_count > out_capacity
@@ -1299,11 +1272,7 @@ def _logical_strip_plans(
         ):
             out_capacity = cargo_count
 
-        shards = (
-            _shard_sinks(sinks, cap=out_capacity, max_shards=group.count)
-            if sinks
-            else [[]]
-        )
+        shards = _shard_sinks(sinks, cap=out_capacity, max_shards=group.count) if sinks else [[]]
         demand = {
             (item, destination, cargo_domain): _sink_demand(
                 groups,

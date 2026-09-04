@@ -564,9 +564,20 @@ def _search_relaxed(
         path_indices, kernel_expansions, kernel_exhausted, kernel_cancelled = cast(
             "tuple[Sequence[int] | None, int, bool, bool]",
             route_kernel._compiled_relaxed(
-                flags, present, history_buffer, weight, targets, vias, costs,
-                array("q", starts), array("q", sorted_goals), goal_xy,
-                grid.gh, LEVELS, budget, cancelled,
+                flags,
+                present,
+                history_buffer,
+                weight,
+                targets,
+                vias,
+                costs,
+                array("q", starts),
+                array("q", sorted_goals),
+                goal_xy,
+                grid.gh,
+                LEVELS,
+                budget,
+                cancelled,
             ),
         )
         if path_indices is None:

@@ -48,17 +48,32 @@ LINE = re.compile(
 
 def once(extra: list[str]) -> tuple[int, int, int, int, float]:
     out = subprocess.run(
-        [sys.executable, str(HERE / "audit.py"), "--strategy", "freeform",
-         "--budget", "4", "--jobs", "16", "--max-seconds", "250", "--quiet",
-         *extra],
-        capture_output=True, text=True,
+        [
+            sys.executable,
+            str(HERE / "audit.py"),
+            "--strategy",
+            "freeform",
+            "--budget",
+            "4",
+            "--jobs",
+            "16",
+            "--max-seconds",
+            "250",
+            "--quiet",
+            *extra,
+        ],
+        capture_output=True,
+        text=True,
     ).stdout
     m = LINE.search(out)
     if not m:
         raise SystemExit(f"unparsable audit output:\n{out[-3000:]}")
     wall = re.search(r"^(\d+)s wall", out, re.M)
     return (
-        int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5)),
+        int(m.group(2)),
+        int(m.group(3)),
+        int(m.group(4)),
+        int(m.group(5)),
         float(wall.group(1)) if wall else 0.0,
     )
 
@@ -107,9 +122,11 @@ def main() -> int:
                     shutil.copyfile(arms[name][0], LIVE)
                     got = once(args.extra)
                     tallies[name].append(got)
-                    print(f"round {r + 1} {name}: {got[0]}/{got[1]} clean  "
-                          f"refused {got[2]}  INVALID {got[3]}  {got[4]:.0f}s wall",
-                          flush=True)
+                    print(
+                        f"round {r + 1} {name}: {got[0]}/{got[1]} clean  "
+                        f"refused {got[2]}  INVALID {got[3]}  {got[4]:.0f}s wall",
+                        flush=True,
+                    )
         finally:
             LIVE.write_bytes(keep)
 
@@ -118,9 +135,11 @@ def main() -> int:
             if not rows:
                 continue
             clean = [r[0] for r in rows]
-            print(f"{name}: clean {clean}  mean {sum(clean) / len(clean):.2f}  "
-                  f"INVALID {sum(r[3] for r in rows)}  "
-                  f"mean wall {sum(r[4] for r in rows) / len(rows):.1f}s")
+            print(
+                f"{name}: clean {clean}  mean {sum(clean) / len(clean):.2f}  "
+                f"INVALID {sum(r[3] for r in rows)}  "
+                f"mean wall {sum(r[4] for r in rows) / len(rows):.1f}s"
+            )
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return 0

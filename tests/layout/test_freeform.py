@@ -320,6 +320,7 @@ def test_prepared_net_ids_are_stable() -> None:
 
     assert tuple(net.net_id for net in a.nets) == tuple(net.net_id for net in b.nets)
 
+
 def test_prepare_routing_problem_does_not_deepcopy_buildings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -350,7 +351,6 @@ def test_prepare_routing_problem_does_not_deepcopy_buildings(
     second = prepared.new_workspace()
     assert first.buildings is not second.buildings
     assert first.buildings == second.buildings
-
 
 
 def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
@@ -931,11 +931,7 @@ def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
         policy=BandPolicy("portable"),
         power=False,
     )
-    surplus = next(
-        net
-        for net in prepared.external_output_nets
-        if net.net_id.item == "refined-oil"
-    )
+    surplus = next(net for net in prepared.external_output_nets if net.net_id.item == "refined-oil")
     assert surplus.src is not None
     assert any(
         net.src is not None
@@ -954,10 +950,7 @@ def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
         if catalog.is_belt(building.item_id)
         and building.carries_item == "refined-oil"
         and building.output_obj is None
-        and (
-            building.x in (min_x, max_x)
-            or building.y in (min_y, max_y)
-        )
+        and (building.x in (min_x, max_x) or building.y in (min_y, max_y))
     ]
     assert boundary_surplus
 
@@ -1311,9 +1304,7 @@ def test_detailed_router_never_groups_different_items_at_one_endpoint(
             net_id=NetId(1, 2, "copper", NetRole.INTERNAL, 0),
         ),
     ]
-    observed: list[
-        tuple[Mapping[int, tuple[int, ...]], Mapping[int, tuple[int, ...]]]
-    ] = []
+    observed: list[tuple[Mapping[int, tuple[int, ...]], Mapping[int, tuple[int, ...]]]] = []
 
     def accept_paths(
         _canvas: _Canvas,
@@ -2368,6 +2359,7 @@ class TestPlanStrips:
 
         assert strips[0].in_above == (("gear", "iron-ingot", "magnetic-coil"),)
         assert strips[0].in_below == ()
+
     def test_shared_proliferation_preference_leaves_wide_lab_plan_unchanged(
         self,
     ) -> None:
@@ -3068,6 +3060,7 @@ class TestDirectInsertion:
             assert 1 <= span <= catalog.SORTER_MAX_REACH
             assert b.z == (b.z2 or 0), "sorters never span altitudes"
 
+
 def test_promised_direct_candidates_have_an_occupied_collision_clear_alignment() -> None:
     spec = two_stage_spec()
     candidates = _direct_net_candidates(plan_strips(spec, strip_len=6), spec)
@@ -3178,8 +3171,7 @@ def test_pack_attempt_retains_complete_failed_attempt_identity(
     assert isinstance(attempt, freeform.PackAttempt)
     expected_strips = plan_strips(two_stage_spec())
     assert attempt.origins == tuple(
-        (index * 10 + strip.west_channel, 0)
-        for index, strip in enumerate(expected_strips)
+        (index * 10 + strip.west_channel, 0) for index, strip in enumerate(expected_strips)
     )
     assert attempt.compact_width == 20
     assert attempt.height == 20
@@ -3311,6 +3303,7 @@ def _proof_attempt(
         ),
     )
 
+
 def _feedback_for(routing: DetailedRouteResult) -> FeedbackState:
     """A `FeedbackState` that knows every one of `routing`'s failing nets.
 
@@ -3325,7 +3318,6 @@ def _feedback_for(routing: DetailedRouteResult) -> FeedbackState:
         cell_history={},
         endpoint_offsets={net: ((0, 0, 0), (0, 0, 0)) for net in nets},
     )
-
 
 
 def test_a_multi_failure_attempt_is_now_retry_eligible() -> None:
@@ -3347,9 +3339,7 @@ def test_a_routing_failure_with_no_feedback_is_still_not_retry_eligible() -> Non
     routing = _feedback_bearing_routing(count=3)
     attempt = _proof_attempt(routing, plan_strips(two_stage_spec()))
 
-    assert not freeform._feedback_retry_eligible(
-        attempt, FeedbackState.empty((10, 10))
-    )
+    assert not freeform._feedback_retry_eligible(attempt, FeedbackState.empty((10, 10)))
 
 
 def test_the_window_launches_on_a_best_failing_pack_with_three_failures(
@@ -3368,6 +3358,7 @@ def test_the_window_launches_on_a_best_failing_pack_with_three_failures(
         lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
     )
     launched: list[object] = []
+
     def record_window(*_args: object, **kwargs: object) -> None:
         launched.append(kwargs)
 
@@ -3418,6 +3409,7 @@ def test_the_window_is_withheld_on_a_pack_that_only_ties_the_best_failing_one(
         lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
     )
     launched: list[object] = []
+
     def record_window(*_args: object, **kwargs: object) -> None:
         launched.append(kwargs)
 
@@ -3450,6 +3442,7 @@ def test_the_window_is_withheld_on_a_pack_worse_than_the_best_failing_one(
         lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
     )
     launched: list[object] = []
+
     def record_window(*_args: object, **kwargs: object) -> None:
         launched.append(kwargs)
 
@@ -3813,9 +3806,10 @@ def test_a_budget_failure_never_becomes_a_proof(
     )
 
     assert calls, "the last-mile pass never ran; raise the budget"
-    assert any(
-        failure.kind is RouteFailureKind.BUDGET for failure in result.failures
-    ) or result.status is DetailedRouteStatus.BUDGET
+    assert (
+        any(failure.kind is RouteFailureKind.BUDGET for failure in result.failures)
+        or result.status is DetailedRouteStatus.BUDGET
+    )
     assert result.exhaustive is False
 
 
@@ -3913,9 +3907,7 @@ def test_a_proof_from_a_later_round_is_not_exhaustive_for_an_earlier_incumbent(
     rounds_begun = 0
     original_refresh = freeform._Grid.refresh_history
 
-    def counting_refresh(
-        grid_self: freeform._Grid, history: Mapping[Cell, float]
-    ) -> None:
+    def counting_refresh(grid_self: freeform._Grid, history: Mapping[Cell, float]) -> None:
         nonlocal rounds_begun
         rounds_begun += 1
         original_refresh(grid_self, history)
@@ -4143,6 +4135,7 @@ def _sweep_after_first_routing(
     )
     return result, seen, attempts
 
+
 def test_a_repeated_draw_becomes_a_diversification_cut_at_the_next_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4238,10 +4231,7 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
         assert exact_pack_no_goods == (), "diversification is local, never global proof state"
         repaired = replace(
             seed,
-            at={
-                index: (x + (5 if index == 0 else 0), y)
-                for index, (x, y) in seed.at.items()
-            },
+            at={index: (x + (5 if index == 0 else 0), y) for index, (x, y) in seed.at.items()},
         )
         packed_candidates[id(repaired)] = (20, 0)
         repaired_origins.append(tuple(repaired.at[index] for index in range(len(strips))))
@@ -4334,9 +4324,7 @@ def _lay_out_with_injected_packs(
         heights=heights,
         distinct_arrangements=distinct_arrangements,
     )
-    absolute_deadline = (
-        None if deadline_after is None else time.monotonic() + deadline_after
-    )
+    absolute_deadline = None if deadline_after is None else time.monotonic() + deadline_after
     return FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
@@ -4817,6 +4805,7 @@ def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launched: list[object] = []
+
     def record_window(*_args: object, **kwargs: object) -> None:
         launched.append(kwargs)
 
@@ -4838,8 +4827,7 @@ def test_feedback_retry_does_not_reroute_the_same_assignment(
     excluded: list[freeform.ExactPackNoGood] = []
     prior_strips = plan_strips(two_stage_spec())
     prior_origins = tuple(
-        (index * 10 + strip.west_channel, 0)
-        for index, strip in enumerate(prior_strips)
+        (index * 10 + strip.west_channel, 0) for index, strip in enumerate(prior_strips)
     )
     prior_outline = tuple(_box(strip) for strip in prior_strips)
 
@@ -5377,9 +5365,7 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
     exact_no_goods = calls[1]["exact_pack_no_goods"]
     assert isinstance(exact_no_goods, tuple)
     route_no_goods = tuple(
-        no_good
-        for no_good in exact_no_goods
-        if no_good.evidence[0].check != "pack.diversification"
+        no_good for no_good in exact_no_goods if no_good.evidence[0].check != "pack.diversification"
     )
     assert len(route_no_goods) == 1
     rejected = route_no_goods[0]
@@ -7778,10 +7764,7 @@ def test_window_candidate_cost_charges_the_window_plus_the_measured_remainder() 
         freeform._window_candidate_seconds(dearest_remainder_s=4.0)
         == freeform.C_WINDOW_SECONDS + 4.0
     )
-    assert (
-        freeform._window_candidate_seconds(dearest_remainder_s=0.0)
-        == freeform.C_WINDOW_SECONDS
-    )
+    assert freeform._window_candidate_seconds(dearest_remainder_s=0.0) == freeform.C_WINDOW_SECONDS
 
 
 def test_window_candidate_cost_is_monotone_and_never_below_the_window() -> None:
@@ -7796,8 +7779,7 @@ def test_window_candidate_cost_is_monotone_and_never_below_the_window() -> None:
     """
     grid = (0.0, 0.5, 1.0, 2.0, 7.5, 130.0)
     charges = [
-        freeform._window_candidate_seconds(dearest_remainder_s=remainder_s)
-        for remainder_s in grid
+        freeform._window_candidate_seconds(dearest_remainder_s=remainder_s) for remainder_s in grid
     ]
     assert all(charge >= freeform.C_WINDOW_SECONDS for charge in charges)
     assert charges == sorted(charges)
@@ -10121,8 +10103,7 @@ def test_a_ray_receiver_drain_is_byte_identical_after_the_lane_cap() -> None:
         spec, time_budget_s=4.0
     )
     shape = [
-        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj)
-        for b in placement.buildings
+        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
     ]
     assert shape == RAY_RECEIVER_SHAPE
 
@@ -10702,9 +10683,7 @@ class TestPortAccessIsReservedForEveryRole:
 
         assert set(matched) == {(first, 0), (second, 0)}
         occupied = {
-            cell
-            for corridor in matched.values()
-            for cell in (corridor.access, corridor.exit)
+            cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)
         }
         assert len(occupied) == 4
 
@@ -10973,7 +10952,6 @@ class TestProliferatorSupplyIsOneReachableTree:
         assert expanded == (-1, 0, 231, 148)
         assert already_tall == (0, 0, 20, 8)
 
-
     def test_small_proliferated_factory_certifies_with_splitter_fanout(self) -> None:
         spec = proliferated_spec()
         placement = FreeformLayout(
@@ -11064,8 +11042,7 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
 
         assert terminals
         assert all(
-            building.x in (min_x, max_x) or building.y in (min_y, max_y)
-            for building in terminals
+            building.x in (min_x, max_x) or building.y in (min_y, max_y) for building in terminals
         )
 
     def test_the_proliferator_entry_sits_on_the_block_boundary(self) -> None:
@@ -14106,7 +14083,6 @@ class TestDetailedRoutingDiagnostics:
         assert failure.blocking_nets == (first_id,)
         assert failure.blocking_endpoints == (((0, 0, 0), (4, -2, 0)),)
 
-
     @pytest.mark.usefixtures("_without_the_last_mile_pass")
     def test_first_fanout_route_bounds_future_tap_keepout_detours(
         self, monkeypatch: pytest.MonkeyPatch
@@ -14356,7 +14332,6 @@ class TestDetailedRoutingDiagnostics:
         failure = next(f for f in result.failures if f.net_id == failed_id)
         assert failure.blocking_nets == (proliferator_id, internal_id)
 
-
     def test_proliferator_backbones_route_before_long_cargo_runs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -14395,7 +14370,6 @@ class TestDetailedRoutingDiagnostics:
             "short spray backbones routed after cargo and lost the fixed "
             "perimeter corridors that every proliferated machine depends on"
         )
-
 
     def test_shared_source_branches_route_as_one_contiguous_family(
         self, monkeypatch: pytest.MonkeyPatch
@@ -18692,6 +18666,7 @@ def test_a_cluster_solution_is_staked_and_routes_the_pack() -> None:
     assert result.last_mile.solved == 1
     assert result.last_mile.commit_rejected == 0
 
+
 def test_an_unsorted_reservation_tuple_is_not_a_restore_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -18785,9 +18760,7 @@ def test_an_unsorted_reservation_tuple_is_not_a_restore_mismatch(
     assert result.last_mile.proved == 1
 
 
-def _shared_blocked_source_fixture() -> tuple[
-    _Canvas, list[_Net], tuple[int, int, int, int]
-]:
+def _shared_blocked_source_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
     """Two nets on ONE source lane whose splitter site is banned, both walled in.
 
     The ``universe-matrix/output-products`` shape reduced to its bones: cluster
@@ -19071,12 +19044,8 @@ def test_an_exhausted_expansion_budget_never_reaches_the_cluster_search(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A pass with nothing left to spend cannot start a search that spends."""
-    reference = _last_mile_route(
-        pinned_off=True, monkeypatch=monkeypatch, budget={"left": 0}
-    )
-    result = _last_mile_route(
-        pinned_off=False, monkeypatch=monkeypatch, budget={"left": 0}
-    )
+    reference = _last_mile_route(pinned_off=True, monkeypatch=monkeypatch, budget={"left": 0})
+    result = _last_mile_route(pinned_off=False, monkeypatch=monkeypatch, budget={"left": 0})
     # The control: the SAME fixture with a budget runs the pass, so the zero
     # above is this gate and not the fixture declining to strand anything.
     control = _last_mile_route(pinned_off=False, monkeypatch=monkeypatch)
@@ -19098,9 +19067,7 @@ def test_an_expired_deadline_never_reaches_the_cluster_search(
     already had.
     """
     expired = time.monotonic() - 1.0
-    reference = _last_mile_route(
-        pinned_off=True, monkeypatch=monkeypatch, deadline=expired
-    )
+    reference = _last_mile_route(pinned_off=True, monkeypatch=monkeypatch, deadline=expired)
     result = _last_mile_route(pinned_off=False, monkeypatch=monkeypatch, deadline=expired)
     # The control: the same deadline, far enough out to be affordable.
     control = _last_mile_route(
@@ -19324,9 +19291,7 @@ def test_a_relaxed_run_that_closes_records_the_cluster_strips(
     assert result.last_mile.relation_evidence
 
 
-def _served_corridor_stranded_fixture() -> tuple[
-    _Canvas, list[_Net], tuple[int, int, int, int]
-]:
+def _served_corridor_stranded_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
     """`_two_strip_stranded_fixture` plus a net that ROUTES and stays outside.
 
     The extra net sits far from the walled pocket, so it owns none of the
@@ -19446,9 +19411,7 @@ def _capture_can_junction(
     return captured
 
 
-def _tapped_spare_stranded_fixture() -> tuple[
-    _Canvas, list[_Net], tuple[int, int, int, int]
-]:
+def _tapped_spare_stranded_fixture() -> tuple[_Canvas, list[_Net], tuple[int, int, int, int]]:
     """`_two_strip_stranded_fixture` plus a SIBLING PAIR that plants a tap.
 
     The pair shares one source lane far from the walled pocket, so the second
@@ -20816,6 +20779,7 @@ def test_a_queued_repair_is_credited_at_a_width_the_band_scan_will_not_target(
     """
     session = OperatorSession()
     widths: list[object] = []
+
     def recording(*args: object, **kwargs: object) -> OperatorMetrics:
         widths.append(kwargs["band_target_width"])
         return metrics_from_evaluation(*args, **kwargs)  # type: ignore[arg-type]
@@ -21187,13 +21151,10 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
     # is finding until a local best exists and improvement work thereafter. The
     # fourth improvement read is `time.monotonic() >= improvement_soft`.
     assert sorted(clocks) == (
-        ["improvement_soft"] * 2
-        + ["soft"] * 3
-        + ["soft-if-no-best-else-improvement"]
+        ["improvement_soft"] * 2 + ["soft"] * 3 + ["soft-if-no-best-else-improvement"]
     )
     assert (
-        clocks.count("improvement_soft")
-        + clocks.count("soft-if-no-best-else-improvement")
+        clocks.count("improvement_soft") + clocks.count("soft-if-no-best-else-improvement")
         == improvement_loads - 1
     )
 
@@ -21261,9 +21222,7 @@ def test_a_portfolio_bound_never_costs_the_placement(
 
     assert placement.area > 0, "an external bound must never cost the placement"
     assert calls, "the improvement deadline must be computed at least once"
-    assert len(calls) > 1, (
-        "the improvement deadline is recomputed each turn, not sampled once"
-    )
+    assert len(calls) > 1, "the improvement deadline is recomputed each turn, not sampled once"
     assert all(result <= soft for soft, result in calls), "it may only ever shorten"
     assert any(result < soft for soft, result in calls), (
         "a bound better than anything this sweep holds must actually pull the "
@@ -21335,9 +21294,7 @@ def test_an_over_band_seed_is_skipped_and_never_reported_as_wired(
     """
     spec = two_stage_spec()
     strips = plan_strips(spec)
-    monkeypatch.setattr(
-        freeform, "_band_policy_candidate_heights", lambda _strips, _policy: (20,)
-    )
+    monkeypatch.setattr(freeform, "_band_policy_candidate_heights", lambda _strips, _policy: (20,))
     monkeypatch.setattr(
         finalize.BandPolicySearchEnvelope,
         "frame_candidates",
@@ -21377,9 +21334,7 @@ def _port_seating_attempt(count: int, *, expansions: int = 0) -> freeform.PackAt
         )
         for index in range(count)
     )
-    routing = DetailedRouteResult(
-        DetailedRouteStatus.STRANDED, (), failures, 0, expansions
-    )
+    routing = DetailedRouteResult(DetailedRouteStatus.STRANDED, (), failures, 0, expansions)
     attempt = _proof_attempt(routing, strips)
     ports = []
     for index in range(count):
@@ -21438,8 +21393,7 @@ def test_a_moving_logical_port_is_counted_as_one_lane_head() -> None:
     assert "wants 2, held 1, 1 free side(s)" in message
 
 
-def test_two_physical_strip_instances_with_the_same_label_and_item_stay_distinct(
-) -> None:
+def test_two_physical_strip_instances_with_the_same_label_and_item_stay_distinct() -> None:
     """Machine-range identity distinguishes two strips of the same recipe group."""
     first = _port_seating_attempt(1)
     first_port = first.stranded_ports[0]
@@ -21478,9 +21432,7 @@ def test_lay_out_names_the_skipped_seed_gate_when_every_height_was_skipped(
     candidate height, so the equality check that gates the seed-gate sentence
     (skipped count == candidate-height count) holds.
     """
-    monkeypatch.setattr(
-        freeform, "_band_policy_candidate_heights", lambda _strips, _policy: (20,)
-    )
+    monkeypatch.setattr(freeform, "_band_policy_candidate_heights", lambda _strips, _policy: (20,))
 
     def skip_every_height(
         self: FreeformLayout,
@@ -21707,6 +21659,8 @@ def test_a_freeform_refusal_carries_the_sweep_s_telemetry_end_to_end(
 
     assert caught.value.stats["evaluations"] == 3.0
     assert caught.value.stats["distinct_assignments"] == 2.0
+
+
 def test_three_destination_shared_external_bucket_commits_one_physical_root() -> None:
     """Prepared taps respect the exact model-38 splitter collider at commit."""
     canvas = _Canvas()

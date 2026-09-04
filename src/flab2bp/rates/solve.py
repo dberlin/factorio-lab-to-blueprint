@@ -164,15 +164,7 @@ def _objective_coefficients(
     machine_cost = _cost(request.costs.machine, 1)
     footprint_cost = _cost(request.costs.footprint, 1)
     surplus_cost = _cost(request.costs.surplus, 0)
-    items = tuple(
-        sorted(
-            {
-                item_id
-                for column in columns
-                for item_id in column.outputs_per_craft
-            }
-        )
-    )
+    items = tuple(sorted({item_id for column in columns for item_id in column.outputs_per_craft}))
 
     machine: list[Fraction] = []
     surplus: list[Fraction] = []
@@ -183,10 +175,13 @@ def _objective_coefficients(
         if override is not None and override.cost is not None:
             per_machine = override.cost
         elif recipe.cost is not None:
-            output_rate = sum(
-                column.outputs_per_craft.values(),
-                Fraction(),
-            ) * column.crafts_per_second
+            output_rate = (
+                sum(
+                    column.outputs_per_craft.values(),
+                    Fraction(),
+                )
+                * column.crafts_per_second
+            )
             per_machine = output_rate * recipe.cost * factor_cost
         else:
             per_machine = machine_cost
@@ -215,9 +210,7 @@ def _objective_coefficients(
         )
         machine.append(per_machine)
         surplus.append(surplus_per_craft)
-        continuous.append(
-            per_machine / column.crafts_per_second + surplus_per_craft
-        )
+        continuous.append(per_machine / column.crafts_per_second + surplus_per_craft)
 
     return _ObjectiveCoefficients(
         machine=tuple(machine),
@@ -236,8 +229,7 @@ def _default_objective(
         machine=machine,
         surplus=surplus,
         continuous=tuple(
-            cost / column.crafts_per_second
-            for cost, column in zip(machine, columns, strict=True)
+            cost / column.crafts_per_second for cost, column in zip(machine, columns, strict=True)
         ),
         items=(),
     )
@@ -395,9 +387,7 @@ def _buildable_producers(
     return tuple(
         recipe
         for recipe in data.recipes_producing(item_id)
-        if "mining" not in recipe.flags
-        and not recipe.is_technology
-        and recipe.id not in excluded
+        if "mining" not in recipe.flags and not recipe.is_technology and recipe.id not in excluded
     )
 
 
@@ -489,11 +479,7 @@ def _resolve_chain(
     io_recipes: dict[str, list[Recipe]] = {}
     if include_consumers:
         for recipe in data.recipes:
-            if (
-                "mining" in recipe.flags
-                or recipe.is_technology
-                or recipe.id in excluded
-            ):
+            if "mining" in recipe.flags or recipe.is_technology or recipe.id in excluded:
                 continue
             for item_id in recipe.inputs:
                 io_recipes.setdefault(item_id, []).append(recipe)
@@ -524,9 +510,7 @@ def _resolve_chain(
         else:
             external.add(item_id)
 
-        matches: Iterable[Recipe] = (
-            io_recipes.get(item_id, ()) if include_consumers else crafting
-        )
+        matches: Iterable[Recipe] = io_recipes.get(item_id, ()) if include_consumers else crafting
         for recipe in matches:
             for ingredient in recipe.inputs:
                 if ingredient not in seen:
@@ -633,8 +617,7 @@ def _run_continuous_lp(
         raise InfeasibleError("no recipes available to build the objective")
     model.Minimize(
         model.Sum(
-            float(cost) * craft
-            for cost, craft in zip(objective.continuous, crafts, strict=True)
+            float(cost) * craft for cost, craft in zip(objective.continuous, crafts, strict=True)
         )
     )
     status = model.Solve()
@@ -699,15 +682,11 @@ def _run_milp(
             [
                 *(
                     float(cost) * machine
-                    for cost, machine in zip(
-                        objective.machine, machines, strict=True
-                    )
+                    for cost, machine in zip(objective.machine, machines, strict=True)
                 ),
                 *(
                     float(cost) * craft
-                    for cost, craft in zip(
-                        objective.surplus, crafts, strict=True
-                    )
+                    for cost, craft in zip(objective.surplus, crafts, strict=True)
                 ),
             ]
         )
@@ -736,9 +715,7 @@ def _run_milp(
             stacklevel=2,
         )
     elif status != pywraplp.Solver.OPTIMAL:
-        raise InfeasibleError(
-            f"the production solve did not reach optimality (status: {status})"
-        )
+        raise InfeasibleError(f"the production solve did not reach optimality (status: {status})")
     return (
         [c.solution_value() for c in crafts],
         [m.solution_value() for m in machines],
@@ -805,9 +782,7 @@ def _solve_exact_lp(
     if machine_caps is not None:
         if len(machine_caps) != len(active):
             raise ValueError("machine_caps must align with active columns")
-        for position, (index, machines) in enumerate(
-            zip(active, machine_caps, strict=True)
-        ):
+        for position, (index, machines) in enumerate(zip(active, machine_caps, strict=True)):
             if machines is None:
                 # Extraction columns are never capped: they never buy integer
                 # machines, so there is nothing to cap.
@@ -993,9 +968,7 @@ def solve(
         raise InfeasibleError("no buildable recipes reach the requested item")
     objective = _objective_coefficients(data, request, columns)
     balance_items = (
-        sorted(set(internal_items) | set(objective.items))
-        if has_surplus_cost
-        else internal_items
+        sorted(set(internal_items) | set(objective.items)) if has_surplus_cost else internal_items
     )
 
     crafts: list[Fraction] = []

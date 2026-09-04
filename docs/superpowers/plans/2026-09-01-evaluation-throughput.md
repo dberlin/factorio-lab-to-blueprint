@@ -396,39 +396,40 @@ from flab2bp.layout import finalize, global_router, validate
 In `install`, after the existing shims and before `freeform._astar = astar`, add a generic timing wrapper and apply it:
 
 ```python
-    def timed(target: str, key: str, module: object) -> Callable[[], None]:
-        original = getattr(module, target)
+def timed(target: str, key: str, module: object) -> Callable[[], None]:
+    original = getattr(module, target)
 
-        def shim(*args: object, **kwargs: object) -> object:
-            t0 = time.perf_counter()
-            try:
-                return original(*args, **kwargs)
-            finally:
-                dt = time.perf_counter() - t0
-                tally.add(key, dt)
-                if key == "prepare":
-                    tally.prepare_calls.append(dt)
+    def shim(*args: object, **kwargs: object) -> object:
+        t0 = time.perf_counter()
+        try:
+            return original(*args, **kwargs)
+        finally:
+            dt = time.perf_counter() - t0
+            tally.add(key, dt)
+            if key == "prepare":
+                tally.prepare_calls.append(dt)
 
-        setattr(module, target, shim)
+    setattr(module, target, shim)
 
-        def undo() -> None:
-            setattr(module, target, original)
+    def undo() -> None:
+        setattr(module, target, original)
 
-        return undo
+    return undo
 
-    phase_undo = [
-        timed("_prepare_routing_problem", "prepare", freeform),
-        timed("_place_coaters", "place_coaters", freeform),
-        timed("_projected_coater_junction_bans_by_frame", "coater_frame_bans", freeform),
-        timed("_prepared_junction_ban", "junction_ban", freeform),
-        timed("_power_plan", "power_plan", freeform),
-        timed("_staged_static_relation_projection_risks_uncached", "static_risks", freeform),
-        timed("plan_strips", "plan_strips", freeform),
-        timed("generate_strip_families", "strip_families", freeform),
-        timed("_search_relaxed", "relaxed_search", global_router),
-        timed("finalize_placement", "finalize", finalize),
-        timed("validate", "validate", validate),
-    ]
+
+phase_undo = [
+    timed("_prepare_routing_problem", "prepare", freeform),
+    timed("_place_coaters", "place_coaters", freeform),
+    timed("_projected_coater_junction_bans_by_frame", "coater_frame_bans", freeform),
+    timed("_prepared_junction_ban", "junction_ban", freeform),
+    timed("_power_plan", "power_plan", freeform),
+    timed("_staged_static_relation_projection_risks_uncached", "static_risks", freeform),
+    timed("plan_strips", "plan_strips", freeform),
+    timed("generate_strip_families", "strip_families", freeform),
+    timed("_search_relaxed", "relaxed_search", global_router),
+    timed("finalize_placement", "finalize", finalize),
+    timed("validate", "validate", validate),
+]
 ```
 
 In `restore()`, add `for undo in phase_undo: undo()`.
@@ -437,8 +438,17 @@ Define the phase name tuple once at module level:
 
 ```python
 PHASES = (
-    "plan_strips", "strip_families", "prepare", "place_coaters", "coater_frame_bans",
-    "junction_ban", "power_plan", "static_risks", "relaxed_search", "finalize", "validate",
+    "plan_strips",
+    "strip_families",
+    "prepare",
+    "place_coaters",
+    "coater_frame_bans",
+    "junction_ban",
+    "power_plan",
+    "static_risks",
+    "relaxed_search",
+    "finalize",
+    "validate",
 )
 ```
 
@@ -456,12 +466,14 @@ In `main`, inside the `if args.json:` dict, add:
 In the human-readable branch, after the `_route_all` breakdown loop, print the same phases:
 
 ```python
-        for key in PHASES:
-            if key in tally.t:
-                print(f"      {key:<22} {tally.t[key]:7.2f}s  n={tally.n[key]:<7} "
-                      f"{100 * tally.t[key] / max(wall, 1e-9):5.1f}% of wall")
-        if tally.prepare_calls:
-            print("      prepare per call: " + ", ".join(f"{s:.2f}" for s in tally.prepare_calls))
+for key in PHASES:
+    if key in tally.t:
+        print(
+            f"      {key:<22} {tally.t[key]:7.2f}s  n={tally.n[key]:<7} "
+            f"{100 * tally.t[key] / max(wall, 1e-9):5.1f}% of wall"
+        )
+if tally.prepare_calls:
+    print("      prepare per call: " + ", ".join(f"{s:.2f}" for s in tally.prepare_calls))
 ```
 
 `plan_strips` looks `generate_strip_families` up in the `freeform` module globals at call time (`tuple(generate_strip_families(spec)) if families is None else ...`), so the `strip_families` shim sees those calls.
@@ -646,21 +658,21 @@ _JUNCTION_BAN_OFFSET_CACHE: dict[JunctionOffsetKey, frozenset[Cell]] = {}
 Keep the `@lru_cache(maxsize=256)` on `_junction_ban_offsets` and make its body consult the shared dict first and store on exit:
 
 ```python
-    key: JunctionOffsetKey = (item_id, model_index, width, height, yaw, z)
-    cached = _JUNCTION_BAN_OFFSET_CACHE.get(key)
-    if cached is not None:
-        return cached
-    obstacle = PlacedBuilding(...)          # unchanged
-    ...                                     # unchanged radius / centre computation
-    banned = frozenset(
-        (x, y, level)
-        for x in range(...)                 # unchanged ranges
-        for y in range(...)
-        for level in range(LEVELS)
-        if not _junction_site_is_clear((obstacle,), x, y, level)
-    )
-    _JUNCTION_BAN_OFFSET_CACHE[key] = banned
-    return banned
+key: JunctionOffsetKey = (item_id, model_index, width, height, yaw, z)
+cached = _JUNCTION_BAN_OFFSET_CACHE.get(key)
+if cached is not None:
+    return cached
+obstacle = PlacedBuilding(...)  # unchanged
+...  # unchanged radius / centre computation
+banned = frozenset(
+    (x, y, level)
+    for x in range(...)  # unchanged ranges
+    for y in range(...)
+    for level in range(LEVELS)
+    if not _junction_site_is_clear((obstacle,), x, y, level)
+)
+_JUNCTION_BAN_OFFSET_CACHE[key] = banned
+return banned
 ```
 
 In `_cancellable_junction_ban_offsets`, add the same `key` and lookup at the top (return the cached set immediately when present), and store `_JUNCTION_BAN_OFFSET_CACHE[key] = result` just before the final `return`, after the last `cancelled()` check, so a cancelled computation never stores a partial set:
@@ -738,13 +750,20 @@ def test_coater_frame_bans_prefilter_is_exact_and_materializes_less(
 
     counts.append(0)
     slow = freeform_module._projected_coater_junction_bans_by_frame(
-        coaters, frames, prepared.route_bounds, already_banned=set(),
-        splitter_index=len(prepared.building_templates), _prefilter=False,
+        coaters,
+        frames,
+        prepared.route_bounds,
+        already_banned=set(),
+        splitter_index=len(prepared.building_templates),
+        _prefilter=False,
     )
     slow_calls = counts[-1]
     counts.append(0)
     fast = freeform_module._projected_coater_junction_bans_by_frame(
-        coaters, frames, prepared.route_bounds, already_banned=set(),
+        coaters,
+        frames,
+        prepared.route_bounds,
+        already_banned=set(),
         splitter_index=len(prepared.building_templates),
     )
     fast_calls = counts[-1]
@@ -763,50 +782,49 @@ Expected: FAIL with `TypeError: ... got an unexpected keyword argument '_prefilt
 Add `_prefilter: bool = True` to the keyword parameters of `_projected_coater_junction_bans_by_frame`. Inside the cell loop, replace the block that begins `materialized_key = (cell, frame.bounds, frame.candidate)` and ends with `materialized_splitters[materialized_key] = materialized_stack` with:
 
 ```python
-                        materialized_key = (
-                            cell,
-                            frame.bounds,
-                            frame.candidate,
-                        )
-                        materialized_stack = materialized_splitters.get(materialized_key)
-                        if materialized_stack is None and _prefilter:
-                            probe = _collision_pose(
-                                finalize.materialize_frame_building(
-                                    splitter_stack[0],
-                                    bounds=frame.bounds,
-                                    candidate=frame.candidate,
-                                )
-                            )
-                            probe_dx = abs(probe.x - materialized_coater[1].x)
-                            probe_dy = abs(probe.y - materialized_coater[1].y)
-                            if all(
-                                probe_dx * x_step > tangent_reach_x
-                                or probe_dy * y_step > tangent_reach_y
-                                for (
-                                    _projection,
-                                    x_step,
-                                    y_step,
-                                    _boxes,
-                                    _coater,
-                                    _context,
-                                ) in frame_projection_states
-                            ):
-                                # Every projection state would `continue` for
-                                # every member of this stack, because the whole
-                                # stack shares one materialized x/y.
-                                continue
-                        if materialized_stack is None:
-                            materialized_stack = tuple(
-                                _collision_pose(
-                                    finalize.materialize_frame_building(
-                                        stack_member,
-                                        bounds=frame.bounds,
-                                        candidate=frame.candidate,
-                                    )
-                                )
-                                for stack_member in splitter_stack
-                            )
-                            materialized_splitters[materialized_key] = materialized_stack
+materialized_key = (
+    cell,
+    frame.bounds,
+    frame.candidate,
+)
+materialized_stack = materialized_splitters.get(materialized_key)
+if materialized_stack is None and _prefilter:
+    probe = _collision_pose(
+        finalize.materialize_frame_building(
+            splitter_stack[0],
+            bounds=frame.bounds,
+            candidate=frame.candidate,
+        )
+    )
+    probe_dx = abs(probe.x - materialized_coater[1].x)
+    probe_dy = abs(probe.y - materialized_coater[1].y)
+    if all(
+        probe_dx * x_step > tangent_reach_x or probe_dy * y_step > tangent_reach_y
+        for (
+            _projection,
+            x_step,
+            y_step,
+            _boxes,
+            _coater,
+            _context,
+        ) in frame_projection_states
+    ):
+        # Every projection state would `continue` for
+        # every member of this stack, because the whole
+        # stack shares one materialized x/y.
+        continue
+if materialized_stack is None:
+    materialized_stack = tuple(
+        _collision_pose(
+            finalize.materialize_frame_building(
+                stack_member,
+                bounds=frame.bounds,
+                candidate=frame.candidate,
+            )
+        )
+        for stack_member in splitter_stack
+    )
+    materialized_splitters[materialized_key] = materialized_stack
 ```
 
 Everything after that point in the loop stays as it is.
@@ -887,16 +905,16 @@ Expected: FAIL with `assert list not in [...]`
 In the `_PreparedRoutingProblem(...)` construction at the end of `_prepare_routing_problem`, change
 
 ```python
-        building_templates=tuple(deepcopy(canvas.buildings)),
+building_templates = (tuple(deepcopy(canvas.buildings)),)
 ```
 
 to
 
 ```python
-        # `PlacedBuilding` is frozen; the tuple is a fresh container and every
-        # workspace copies the container again.  Deep-copying 300 frozen
-        # dataclasses per candidate cost 0.38 s on `universe-matrix`.
-        building_templates=tuple(canvas.buildings),
+# `PlacedBuilding` is frozen; the tuple is a fresh container and every
+# workspace copies the container again.  Deep-copying 300 frozen
+# dataclasses per candidate cost 0.38 s on `universe-matrix`.
+building_templates = (tuple(canvas.buildings),)
 ```
 
 If `deepcopy` is no longer referenced anywhere in `freeform.py`, remove it from the imports.
@@ -932,12 +950,15 @@ git commit -m "perf(layout): stop deep-copying frozen building templates"
 ```python
 # src/flab2bp/layout/geometry_memo.py
 class MemoStats(NamedTuple):
-    tables: dict[str, int]          # entries per dict field
+    tables: dict[str, int]  # entries per dict field
     broad_phase_queries: int
     broad_phase_hits: int
     exact_static_queries: int
 
+
 MEMO_SPECS_RETAINED: int = 4
+
+
 def for_spec(spec: BuildSpec) -> _StagedStaticCache: ...
 def stats_for_spec(spec: BuildSpec) -> MemoStats: ...
 def clear() -> None: ...
@@ -995,9 +1016,7 @@ def test_registry_evicts_least_recently_used_spec() -> None:
     assert geometry_memo.for_spec(specs[-1]) is caches[-1]
 
 
-@pytest.mark.parametrize(
-    "make_spec", [two_stage_spec, plastic_spec, captured_output_products_spec]
-)
+@pytest.mark.parametrize("make_spec", [two_stage_spec, plastic_spec, captured_output_products_spec])
 def test_shared_cache_does_not_change_the_prepared_problem(
     make_spec: Callable[[], BuildSpec],
 ) -> None:
@@ -1169,23 +1188,24 @@ git commit -m "perf(layout): share staged static geometry across candidates per 
 from array import array
 from collections.abc import Callable
 
+
 def astar_flat(
     flags: bytearray,
-    hist: array[float],              # zero-length when there is no history this round
+    hist: array[float],  # zero-length when there is no history this round
     pressure: float,
-    alt_flat: array[int],            # landmark fields concatenated, band-major; zero-length when none
+    alt_flat: array[int],  # landmark fields concatenated, band-major; zero-length when none
     band_count: int,
     goal_flag: bytearray,
-    goal_columns: array[int],        # deduplicated (x, y) local pairs, flattened
-    exact_goals: bool,               # len(goal_list) <= _EXACT_HEURISTIC_GOALS, on the undeduplicated list
+    goal_columns: array[int],  # deduplicated (x, y) local pairs, flattened
+    exact_goals: bool,  # len(goal_list) <= _EXACT_HEURISTIC_GOALS, on the undeduplicated list
     goal_box: tuple[int, int, int, int],
-    starts: array[int],              # admitted start cell indices
+    starts: array[int],  # admitted start cell indices
     gh: int,
     xstep: int,
     levels: int,
     level_toll: array[float],
     max_expansions: int,
-    budget_left: int,                # 1 << 62 when there is no shared budget
+    budget_left: int,  # 1 << 62 when there is no shared budget
     deadline_every: int,
     deadline: float | None,
     expired: Callable[[float | None], bool],
@@ -1195,9 +1215,14 @@ def astar_flat(
     settled cell indices in index order when sealed, else empty;
     budget_left after the same write-back rules as the Python loop)."""
 
+
 # src/flab2bp/layout/route_kernel.py
 BackendName = Literal["python", "cython"]
-_compiled_astar: Callable[..., object] | None      # None when the extension is absent or FLAB2BP_ROUTE_KERNEL=python
+_compiled_astar: (
+    Callable[..., object] | None
+)  # None when the extension is absent or FLAB2BP_ROUTE_KERNEL=python
+
+
 def compiled_available() -> bool: ...
 def selected_backend() -> BackendName: ...
 ```
@@ -1218,7 +1243,12 @@ import pytest
 import flab2bp.layout.freeform as freeform_module
 from flab2bp.layout import route_kernel
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.freeform import FreeformLayout, NoValidLayout, RouteFailureKind, _PathSearchResult
+from flab2bp.layout.freeform import (
+    FreeformLayout,
+    NoValidLayout,
+    RouteFailureKind,
+    _PathSearchResult,
+)
 from flab2bp.spec import BuildSpec
 from scripts.route_bench import _snapshot
 from tests.layout.test_freeform import plastic_spec, two_stage_spec
@@ -1265,8 +1295,20 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
             }
         )
         return original(
-            canvas, starts, goals, history, pressure, bounds, budget, deadline, blame,
-            grid, owned_starts, released_starts, forbidden, blocking_owners,
+            canvas,
+            starts,
+            goals,
+            history,
+            pressure,
+            bounds,
+            budget,
+            deadline,
+            blame,
+            grid,
+            owned_starts,
+            released_starts,
+            forbidden,
+            blocking_owners,
         )
 
     freeform_module._astar = spy
@@ -1283,9 +1325,19 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
 
 def _replay(case: Case, budget: dict[str, int] | None = None) -> _PathSearchResult:
     return freeform_module._astar(
-        case["canvas"], case["starts"], case["goals"], case["history"], case["pressure"],
-        case["bounds"], {"left": 1 << 40} if budget is None else budget, None, {},
-        case["grid"], case["owned_starts"], case["released_starts"], case["forbidden"],
+        case["canvas"],
+        case["starts"],
+        case["goals"],
+        case["history"],
+        case["pressure"],
+        case["bounds"],
+        {"left": 1 << 40} if budget is None else budget,
+        None,
+        {},
+        case["grid"],
+        case["owned_starts"],
+        case["released_starts"],
+        case["forbidden"],
         case["blocking_owners"],
     )
 
@@ -1753,10 +1805,12 @@ Two points the implementer must keep exactly:
 Write the `.pyi` stub with the signature shown in Interfaces, and add the extension to `setup.py`:
 
 ```python
-            Extension(
-                "flab2bp.layout._route_kernel",
-                ["src/flab2bp/layout/_route_kernel.pyx"],
-            ),
+(
+    Extension(
+        "flab2bp.layout._route_kernel",
+        ["src/flab2bp/layout/_route_kernel.pyx"],
+    ),
+)
 ```
 
 Write `src/flab2bp/layout/route_kernel.py`:
@@ -1839,44 +1893,69 @@ Its body is the moved code with three mechanical changes: it pushes `start_indic
 In `_astar`, after `goal_flag` is built, compute the admitted start indices once (the same filter the old push loop used):
 
 ```python
-    start_indices = [
-        (s[0] - gx0) * xstep + (s[1] - gy0) * ystep + s[2]
-        for s in starts
-        if not (s in forbidden_cells or (not canvas.free(s) and s not in owned and s not in released))
-    ]
-    if not start_indices:
-        return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
-    start_left = budget["left"] if budget is not None else 1 << 62
-    from flab2bp.layout import route_kernel
+start_indices = [
+    (s[0] - gx0) * xstep + (s[1] - gy0) * ystep + s[2]
+    for s in starts
+    if not (s in forbidden_cells or (not canvas.free(s) and s not in owned and s not in released))
+]
+if not start_indices:
+    return _PathSearchResult(None, RouteFailureKind.DYNAMIC_ACCESS, (), 0)
+start_left = budget["left"] if budget is not None else 1 << 62
+from flab2bp.layout import route_kernel
 
-    if route_kernel._compiled_astar is not None:
-        near = tuple({(c[0] - gx0, c[1] - gy0) for c in goal_list})
-        goal_columns = array("q", [v for pair in near for v in pair])
-        goal_box = (
-            min(c[0] for c in goal_list) - gx0,
-            min(c[1] for c in goal_list) - gy0,
-            max(c[0] for c in goal_list) - gx0,
-            max(c[1] for c in goal_list) - gy0,
-        )
-        if not negotiating:
-            hist_buffer = array("d")
-        elif isinstance(hist, array):
-            hist_buffer = hist
-        else:
-            hist_buffer = array("d", hist)
-        path_indices, expansions, kind, settled, left = route_kernel._compiled_astar(
-            flags, hist_buffer, pressure, flat.alt_flat, len(flat.alt), goal_flag,
-            goal_columns, len(goal_list) <= _EXACT_HEURISTIC_GOALS, goal_box,
-            array("q", start_indices), gh, xstep, LEVELS, array("d", _LEVEL_TOLL),
-            _MAX_EXPANSIONS, start_left, _DEADLINE_CHECK_EVERY, deadline, _expired,
-        )
-        if budget is not None:
-            budget["left"] = left
+if route_kernel._compiled_astar is not None:
+    near = tuple({(c[0] - gx0, c[1] - gy0) for c in goal_list})
+    goal_columns = array("q", [v for pair in near for v in pair])
+    goal_box = (
+        min(c[0] for c in goal_list) - gx0,
+        min(c[1] for c in goal_list) - gy0,
+        max(c[0] for c in goal_list) - gx0,
+        max(c[1] for c in goal_list) - gy0,
+    )
+    if not negotiating:
+        hist_buffer = array("d")
+    elif isinstance(hist, array):
+        hist_buffer = hist
     else:
-        path_indices, expansions, kind, settled = _astar_python_loop(
-            flags, hist if negotiating else None, pressure, goal_flag, start_indices, h,
-            size, gh, xstep, budget, start_left, deadline,
-        )
+        hist_buffer = array("d", hist)
+    path_indices, expansions, kind, settled, left = route_kernel._compiled_astar(
+        flags,
+        hist_buffer,
+        pressure,
+        flat.alt_flat,
+        len(flat.alt),
+        goal_flag,
+        goal_columns,
+        len(goal_list) <= _EXACT_HEURISTIC_GOALS,
+        goal_box,
+        array("q", start_indices),
+        gh,
+        xstep,
+        LEVELS,
+        array("d", _LEVEL_TOLL),
+        _MAX_EXPANSIONS,
+        start_left,
+        _DEADLINE_CHECK_EVERY,
+        deadline,
+        _expired,
+    )
+    if budget is not None:
+        budget["left"] = left
+else:
+    path_indices, expansions, kind, settled = _astar_python_loop(
+        flags,
+        hist if negotiating else None,
+        pressure,
+        goal_flag,
+        start_indices,
+        h,
+        size,
+        gh,
+        xstep,
+        budget,
+        start_left,
+        deadline,
+    )
 ```
 
 Then the common tail: on `kind == 1` return `_PathSearchResult(None, RouteFailureKind.BUDGET, (), expansions)`; on `kind == 0` decode each index with `q, lvl = divmod(index, LEVELS); px, py = divmod(q, gh)` to `(px + gx0, py + gy0, lvl)` and return `_PathSearchResult(tuple(_cut_loops(cells)), None, (), expansions)`; on `kind == 2` run the existing sealed-pocket wall computation iterating `settled` instead of `enumerate(best)`: the `blocking_owners` branch iterates `settled`, and the pocket branch becomes `if len(settled) <= _BLAME_MAX_POCKET:` over `settled`. The heuristic closures (`h`) stay in the wrapper because the Python loop still uses them.
@@ -2143,39 +2222,51 @@ Exactness notes: Python computes `weight * (_PRESENT_COST * present + historical
 In `global_router._search_relaxed`, keep the early returns and, after `weight` is computed, branch on the backend:
 
 ```python
-    from flab2bp.layout import route_kernel
+from flab2bp.layout import route_kernel
 
-    if route_kernel._compiled_relaxed is not None:
-        present = array("d", bytes(8 * grid.size))
-        for index in ledger.units:
-            present[index] = _PRESENT_COST * ledger.present_cost(index, compatible)
-        targets = array("q")
-        vias = array("q")
-        costs = array("d")
-        for level_transitions in _routing_transitions(grid.xstep):
-            targets.append(len(level_transitions))
-            vias.append(len(level_transitions))
-            costs.append(0.0)
-            for target_offset, via_offset, _dx, _dy, base_cost in level_transitions:
-                targets.append(target_offset)
-                vias.append(via_offset)
-                costs.append(base_cost)
-        sorted_goals = sorted(goal_set)
-        goal_xy = array("q", [value for goal in sorted_goals for value in _local_xy(grid, goal)])
-        if history is None:
-            history_buffer = array("d")
-        elif isinstance(history, array):
-            history_buffer = history
-        else:
-            history_buffer = array("d", history)
-        path_indices, expansions, exhausted, was_cancelled = route_kernel._compiled_relaxed(
-            flags, present, history_buffer, weight, targets, vias, costs,
-            array("q", starts), array("q", sorted_goals), goal_xy, grid.gh, LEVELS, budget, cancelled,
-        )
-        if path_indices is None:
-            return _SearchResult(None, expansions, exhausted, was_cancelled)
-        cells = [_decode_cell(grid, index) for index in path_indices]
-        return _SearchResult(tuple(_cut_loops(cells)), expansions, exhausted, was_cancelled)
+if route_kernel._compiled_relaxed is not None:
+    present = array("d", bytes(8 * grid.size))
+    for index in ledger.units:
+        present[index] = _PRESENT_COST * ledger.present_cost(index, compatible)
+    targets = array("q")
+    vias = array("q")
+    costs = array("d")
+    for level_transitions in _routing_transitions(grid.xstep):
+        targets.append(len(level_transitions))
+        vias.append(len(level_transitions))
+        costs.append(0.0)
+        for target_offset, via_offset, _dx, _dy, base_cost in level_transitions:
+            targets.append(target_offset)
+            vias.append(via_offset)
+            costs.append(base_cost)
+    sorted_goals = sorted(goal_set)
+    goal_xy = array("q", [value for goal in sorted_goals for value in _local_xy(grid, goal)])
+    if history is None:
+        history_buffer = array("d")
+    elif isinstance(history, array):
+        history_buffer = history
+    else:
+        history_buffer = array("d", history)
+    path_indices, expansions, exhausted, was_cancelled = route_kernel._compiled_relaxed(
+        flags,
+        present,
+        history_buffer,
+        weight,
+        targets,
+        vias,
+        costs,
+        array("q", starts),
+        array("q", sorted_goals),
+        goal_xy,
+        grid.gh,
+        LEVELS,
+        budget,
+        cancelled,
+    )
+    if path_indices is None:
+        return _SearchResult(None, expansions, exhausted, was_cancelled)
+    cells = [_decode_cell(grid, index) for index in path_indices]
+    return _SearchResult(tuple(_cut_loops(cells)), expansions, exhausted, was_cancelled)
 ```
 
 The Python loop below it is unchanged. In `route_kernel.py`, add beside `_compiled_astar`:

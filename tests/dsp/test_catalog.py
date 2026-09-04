@@ -86,13 +86,7 @@ def test_catalog_validates_bundled_slot_pose_json(
 ) -> None:
     malformed = tmp_path / "slot_poses.json"
     _ = malformed.write_text(
-        json.dumps(
-            {
-                "bad": {
-                    "slotPoses": [{"pos": [0.0, 0.0], "fwd": [0.0, 0.0, 1.0]}]
-                }
-            }
-        )
+        json.dumps({"bad": {"slotPoses": [{"pos": [0.0, 0.0], "fwd": [0.0, 0.0, 1.0]}]}})
     )
     monkeypatch.setattr(catalog, "_SLOT_POSES", malformed)
     catalog._load.cache_clear()
@@ -198,14 +192,10 @@ def test_the_corpus_puts_sorter_ends_three_tiles_from_an_oil_refinery_centre() -
         (FIXTURES / "factory-quick-start-step-3-red-cube.txt").read_text(encoding="utf-8").strip()
     )
     belts = {
-        (round(b.x), round(b.y), round(b.z))
-        for b in bp.buildings
-        if catalog.is_belt(b.item_id)
+        (round(b.x), round(b.y), round(b.z)) for b in bp.buildings if catalog.is_belt(b.item_id)
     }
     refineries = [
-        (round(b.x), round(b.y), round(b.z), b.yaw)
-        for b in bp.buildings
-        if b.item_id == 2308
+        (round(b.x), round(b.y), round(b.z), b.yaw) for b in bp.buildings if b.item_id == 2308
     ]
     machines = [
         (round(b.x), round(b.y), round(b.z))
@@ -548,10 +538,7 @@ def test_table_covers_every_recipe_real_blueprints_use() -> None:
     means the extraction missed something -- which no amount of internal
     consistency would reveal.
     """
-    known = {
-        row.id
-        for row in _NAMED_ID_ROWS_ADAPTER.validate_json(catalog._RECIPES.read_bytes())
-    }
+    known = {row.id for row in _NAMED_ID_ROWS_ADAPTER.validate_json(catalog._RECIPES.read_bytes())}
     used: set[int] = set()
     for path in sorted(pathlib.Path("tests/fixtures").glob("*.txt")):
         try:
@@ -579,9 +566,7 @@ class TestBeltAltitudeRulesComeFromTheGame:
         assert catalog.belt_max_z(13) == Fraction(771, 20)  # 38.55
         # At lab 15 the formula changes branch: labLevel*4 + 4.
         assert catalog.belt_max_z(15) == Fraction(48)
-        assert catalog.belt_max_z(
-            catalog.DEFAULT_LAB_LEVEL
-        ) == catalog.DEFAULT_MAX_BELT_Z
+        assert catalog.belt_max_z(catalog.DEFAULT_LAB_LEVEL) == catalog.DEFAULT_MAX_BELT_Z
         assert catalog.DEFAULT_MAX_BELT_Z > 1, (
             "a ceiling of 1 is the corpus habit, not the game's rule"
         )
@@ -650,9 +635,7 @@ class TestBeltRulesComeFromTheUrlsTechnologies:
     def test_the_slope_unlock_is_super_magnetic_field_generator(self) -> None:
         """From the locale: TooSteep hints "Need to unlock Super Magnetic Field
         Generator", not Vertical Construction."""
-        without = catalog.belt_rules_for_technologies(
-            {"vertical-construction-1"}, self._all()
-        )
+        without = catalog.belt_rules_for_technologies({"vertical-construction-1"}, self._all())
         assert without.vertical_construction is False
         with_it = catalog.belt_rules_for_technologies(
             {"super-magnetic-field-generator"}, self._all()
@@ -687,14 +670,10 @@ class TestBeltRulesComeFromTheUrlsTechnologies:
             "vertical-construction-2",
         ]
         tre = P.ZFIELDSEP.join(P.n_to_id(techs.index(t)) for t in wanted)
-        req = parse_url(
-            f"https://factoriolab.github.io/dsp/list?o=processor*60&tre={tre}&v=11"
-        )
+        req = parse_url(f"https://factoriolab.github.io/dsp/list?o=processor*60&tre={tre}&v=11")
         assert req.researched_technology_ids == set(wanted)
 
-        rules = catalog.belt_rules_for_technologies(
-            req.researched_technology_ids, self._all()
-        )
+        rules = catalog.belt_rules_for_technologies(req.researched_technology_ids, self._all())
         assert rules.from_url is True
         assert rules.vertical_construction is True
         assert rules.lab_level == 5  # 3 base + 2 vertical-construction levels
@@ -707,9 +686,7 @@ class TestBeltRulesComeFromTheUrlsTechnologies:
 
         req = parse_url("https://factoriolab.github.io/dsp/list?o=processor*60&v=11")
         assert req.researched_technology_ids is None
-        rules = catalog.belt_rules_for_technologies(
-            req.researched_technology_ids, self._all()
-        )
+        rules = catalog.belt_rules_for_technologies(req.researched_technology_ids, self._all())
         assert rules.from_url is False
         assert rules.vertical_construction is True
 
@@ -756,9 +733,9 @@ def test_clearance_uses_non_footprint_collider_extent() -> None:
     """Collider clearance must not silently collapse to the footprint."""
     item_id = 2303  # Assembling Machine Mk.II
     assert catalog.oriented_footprint(item_id, 0.0) == (3, 3)
-    assert colliders.own_centre_extent(
-        catalog.building(item_id).model_index, 0.0
-    ) == pytest.approx((3.82, 3.82))
+    assert colliders.own_centre_extent(catalog.building(item_id).model_index, 0.0) == pytest.approx(
+        (3.82, 3.82)
+    )
     assert catalog.clearance(item_id, 0.0) == (4, 4)
     for b in catalog.all_buildings():
         cw, ch = catalog.clearance(b.item_id, 0.0)
@@ -876,9 +853,7 @@ def test_the_poseless_buildings_a_spec_group_can_reach() -> None:
         for producer in recipe.producers
         if (item_id := catalog.get_item_id(producer)) is not None
     }
-    machine_ids.update(
-        entry.machine_item_id for entry in catalog.MODE_DRIVEN_MACHINE.values()
-    )
+    machine_ids.update(entry.machine_item_id for entry in catalog.MODE_DRIVEN_MACHINE.values())
     poseless = sorted(
         catalog.building(item_id).prefab
         for item_id in machine_ids
@@ -894,9 +869,9 @@ def test_the_poseless_buildings_a_spec_group_can_reach() -> None:
         "ray-receiver",
         "water-pump",
     ]
-    assert not catalog.building(
-        catalog.item_id("orbital-collector")
-    ).takes_belt_ports, "an Orbital Collector is fed in orbit, not by belt"
+    assert not catalog.building(catalog.item_id("orbital-collector")).takes_belt_ports, (
+        "an Orbital Collector is fed in orbit, not by belt"
+    )
     assert all(b.prefab != "ray-receiver-pro" for b in catalog.all_buildings())
 
 
@@ -1057,13 +1032,10 @@ class _TechRow(TypedDict):
 def _stacking_techs() -> dict[int, _TechRow]:
     """``data/stacking_techs.json`` keyed by tech id."""
     rows = json.loads(
-        (
-            pathlib.Path(catalog.__file__).parent / "data" / "stacking_techs.json"
-        ).read_text()
+        (pathlib.Path(catalog.__file__).parent / "data" / "stacking_techs.json").read_text()
     )
     by_id: dict[int, _TechRow] = {row["ID"]: row for row in rows}
-    assert sorted(by_id) == [3301, 3302, 3303, 3304, 3305, 3306,
-                             3311, 3312, 3313, 3314, 3315, 3316]
+    assert sorted(by_id) == [3301, 3302, 3303, 3304, 3305, 3306, 3311, 3312, 3313, 3314, 3315, 3316]
     return by_id
 
 

@@ -848,9 +848,7 @@ def _alignment_variant_problem(
         consumer_row=0,
         producer_span=selected_sizes[0][0],
         consumer_span=selected_sizes[1][0],
-        origin_deltas=tuple(
-            range(-(selected_sizes[1][0] - 1), selected_sizes[0][0])
-        ),
+        origin_deltas=tuple(range(-(selected_sizes[1][0] - 1), selected_sizes[0][0])),
     )
     return problem, decoded, target
 
@@ -887,8 +885,7 @@ def _stage_boundary_variant_problem() -> tuple[PlacementProblem, AnnealState, St
     variants = variants_for_count(family, 2)
     problem = PlacementProblem(
         sizes=tuple(
-            (variants[0].box_width + padding, variants[0].box_height + 1)
-            for padding in (2, 3)
+            (variants[0].box_width + padding, variants[0].box_height + 1) for padding in (2, 3)
         ),
         nets=((0, 1),),
         outline_height=40,
@@ -957,9 +954,7 @@ def test_enable_variant_stage_boundary_is_idempotent_for_selected_variant() -> N
     assert repeated.state is enabled.state
 
 
-def test_enable_variant_stage_boundary_supersedes_padded_variant_and_rebases_siblings() -> (
-    None
-):
+def test_enable_variant_stage_boundary_supersedes_padded_variant_and_rebases_siblings() -> None:
     problem, state, padded = _stage_boundary_variant_problem()
     enabled = enable_variant_stage_boundary(
         problem,
@@ -1630,9 +1625,7 @@ def test_quality_archive_key_prefers_scored_projected_area_over_width() -> None:
     narrower = sequence_pair_module._score_state(problem, vertical, context)
 
     assert (
-        area_aligned.breakdown.box_area
-        == narrower.breakdown.box_area
-        == problem.area_lower_bound
+        area_aligned.breakdown.box_area == narrower.breakdown.box_area == problem.area_lower_bound
     )
     assert (
         area_aligned.breakdown.width,
@@ -1758,8 +1751,6 @@ def test_elite_archive_substitutes_one_redundant_relation_under_fixed_cap() -> N
         (sequence_pair_module.EliteCategory.BLENDED,),
         (sequence_pair_module.EliteCategory.BLENDED,),
     )
-
-
 
 
 def test_incremental_archive_matches_batch_for_variant_distinct_keys() -> None:
@@ -2039,8 +2030,6 @@ def test_fixed_seed_reproduces_stage_incumbent_and_accepted_move_count() -> None
     assert a.final_state == b.final_state
     assert a.elites == b.elites
     assert a.archive == b.archive
-
-
 
 
 def test_archive_capacity_does_not_change_the_annealing_walk_or_blended_incumbent() -> None:
@@ -2412,12 +2401,8 @@ def test_encode_is_never_wider_or_taller_than_its_input() -> None:
         for index in range(len(sizes)):
             assert encoded.decoded.x[index] <= xs[index], (sizes, xs, ys, index)
             assert encoded.decoded.y[index] <= ys[index], (sizes, xs, ys, index)
-        assert encoded.decoded.width <= max(
-            xs[i] + sizes[i][0] for i in range(len(sizes))
-        )
-        assert encoded.decoded.used_height <= max(
-            ys[i] + sizes[i][1] for i in range(len(sizes))
-        )
+        assert encoded.decoded.width <= max(xs[i] + sizes[i][0] for i in range(len(sizes)))
+        assert encoded.decoded.used_height <= max(ys[i] + sizes[i][1] for i in range(len(sizes)))
 
 
 def test_encode_produces_vertical_relations_on_a_multi_row_placement() -> None:

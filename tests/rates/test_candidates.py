@@ -82,9 +82,7 @@ def test_coproduct_hydrogen_is_internally_balanced_by_buffered_recipe(
         assert proof.consumer_batch == 10
         assert proof.required_capacity == 10
         assert proof.intrinsic_capacity == 20
-        graphene_produced = (
-            advanced.outputs_per_machine["graphene"] * advanced.count
-        )
+        graphene_produced = advanced.outputs_per_machine["graphene"] * advanced.count
         graphene_consumed = sum(
             group.inputs_per_machine.get("graphene", Fraction()) * group.count
             for group in spec.groups
@@ -102,6 +100,7 @@ def data() -> Dataset:
 @pytest.fixture(scope="module")
 def candidates(data: Dataset) -> BuildSpecSet:
     return build_candidates(data, parse_url(EXAMPLE_URL), tier=ProliferatorTier.MK3)
+
 
 def test_direct_candidate_adapter_canonicalizes_exactly_once(
     data: Dataset,
@@ -225,19 +224,17 @@ def test_output_products_sprays_only_final_output_recipes(candidates: BuildSpecS
     spec = next(
         candidate for candidate in candidates.candidates if candidate.label == "output-products"
     )
-    assert {
-        group.recipe_id for group in spec.groups if group.is_proliferated
-    } == {"super-magnetic-ring"}
-    assert {
-        group.proliferator_mode for group in spec.groups if group.is_proliferated
-    } == {ProliferatorMode.PRODUCTS}
+    assert {group.recipe_id for group in spec.groups if group.is_proliferated} == {
+        "super-magnetic-ring"
+    }
+    assert {group.proliferator_mode for group in spec.groups if group.is_proliferated} == {
+        ProliferatorMode.PRODUCTS
+    }
 
 
 def test_no_proliferator_candidate_is_unproliferated(candidates: BuildSpecSet) -> None:
     baseline = next(
-        candidate
-        for candidate in candidates.candidates
-        if candidate.label == "no-proliferator"
+        candidate for candidate in candidates.candidates if candidate.label == "no-proliferator"
     )
     assert not baseline.is_proliferated
     assert baseline.belt_required_edges == frozenset()
@@ -245,6 +242,7 @@ def test_no_proliferator_candidate_is_unproliferated(candidates: BuildSpecSet) -
 
 
 # --- invariants every candidate must hold ---------------------------------
+
 
 def test_diagnosed_url_has_exact_fixed_policy_counts_and_rates(data: Dataset) -> None:
     """The MILP takes FactorioLab's route for this URL, at FactorioLab's cost.
@@ -273,8 +271,7 @@ def test_diagnosed_url_has_exact_fixed_policy_counts_and_rates(data: Dataset) ->
     }
     assert {
         spec.label: sum(
-            machine_footprint(group.machine_item_id) * group.count
-            for group in spec.groups
+            machine_footprint(group.machine_item_id) * group.count for group in spec.groups
         )
         for spec in specs
     } == {
@@ -388,15 +385,11 @@ def test_split_field_is_populated_on_every_candidate(data: Dataset) -> None:
 
 
 def test_explicit_policies_report_their_lane_splits(candidates: BuildSpecSet) -> None:
-    assert {
-        spec.label: spec.lanes_requiring_split for spec in candidates.candidates
-    } == {
+    assert {spec.label: spec.lanes_requiring_split for spec in candidates.candidates} == {
         "all-products": frozenset(),
         "output-products": frozenset({"magnet"}),
         "no-proliferator": frozenset(),
     }
-
-
 
 
 def test_split_lanes_are_always_a_subset_of_sprayed_lanes(data: Dataset) -> None:
@@ -519,9 +512,7 @@ def test_a_url_naming_no_proliferator_keeps_the_whole_frontier(data: Dataset) ->
 
 def test_an_explicit_tier_still_overrides_the_url(data: Dataset) -> None:
     """The argument wins, so callers that know better are not second-guessed."""
-    specs = build_candidates(
-        data, parse_url(BARE_MK2), tier=ProliferatorTier.MK3
-    ).candidates
+    specs = build_candidates(data, parse_url(BARE_MK2), tier=ProliferatorTier.MK3).candidates
     sprayed = {k for s in specs for k in s.external_inputs if k.startswith("proliferator-")}
     assert sprayed == {"proliferator-3"}, sprayed
 

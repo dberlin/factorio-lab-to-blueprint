@@ -133,9 +133,7 @@ class CompiledSequenceKernel:
         self._targets: dict[
             tuple[sequence_pair.DirectInsertTarget, ...],
             tuple[array[int], array[int]],
-        ] = {
-            context.direct_targets: _target_buffers(context.direct_targets)
-        }
+        ] = {context.direct_targets: _target_buffers(context.direct_targets)}
         size = problem.size
         adjacency_size = size * size
         self._workspace_buffers = (

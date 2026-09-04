@@ -458,8 +458,7 @@ class SearchEnergy:
                 breakdown.width
                 * (
                     breakdown.used_height
-                    if breakdown.missed_direct_inserts > 0
-                    and net_scale <= 32
+                    if breakdown.missed_direct_inserts > 0 and net_scale <= 32
                     else breakdown.outline_height
                 )
                 / area_scale
@@ -590,11 +589,7 @@ def enable_variant_stage_boundary(
     if variant.pitch_x <= minimum_pitch:
         raise ValueError("enabled variant must increase the ordinary pose pitch")
     exact_index = next(
-        (
-            index
-            for index in matching_indices
-            if table[index].variant_id == variant.variant_id
-        ),
+        (index for index in matching_indices if table[index].variant_id == variant.variant_id),
         None,
     )
     selected_index = state.variant_indices[strip]
@@ -620,9 +615,7 @@ def enable_variant_stage_boundary(
         candidate for index, candidate in enumerate(table) if index not in superseded
     ) + (variant,)
     rebuilt_tables = (
-        problem.variant_tables[:strip]
-        + (rebuilt_table,)
-        + problem.variant_tables[strip + 1 :]
+        problem.variant_tables[:strip] + (rebuilt_table,) + problem.variant_tables[strip + 1 :]
     )
     width_padding = problem.sizes[strip][0] - table[0].box_width
     height_padding = problem.sizes[strip][1] - table[0].box_height
@@ -2114,10 +2107,7 @@ def build_elite_archive(
     redundant_index: int | None = None
     for index, key in enumerate(order):
         signature = _archive_relation_signature(distinct[key])
-        if (
-            signature in selected_signatures
-            and categories_by_key[key] == [EliteCategory.BLENDED]
-        ):
+        if signature in selected_signatures and categories_by_key[key] == [EliteCategory.BLENDED]:
             redundant_index = index
         else:
             selected_signatures.add(signature)

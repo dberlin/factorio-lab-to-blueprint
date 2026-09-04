@@ -76,7 +76,6 @@ def test_cli_passes_exact_explicit_strategy_name(
     assert received["band"] == "portable"
 
 
-
 @pytest.mark.parametrize(
     ("policy_args", "expected"),
     (
@@ -180,6 +179,7 @@ def test_cli_rejects_invalid_candidate_policy_selections(
 
     assert exc_info.value.code == 2
     assert diagnostic in capsys.readouterr().err
+
 
 @pytest.mark.parametrize(("affinity", "expected"), ((3, 3), (64, 8)))
 def test_cli_sequence_pair_uses_affinity_capped_auto_islands(
@@ -289,6 +289,7 @@ def test_cli_rejects_removed_no_power_option(
     assert exc_info.value.code == 2
     assert "--no-power" in capsys.readouterr().err
 
+
 def test_cli_band_choices_are_exact_and_reach_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -310,7 +311,6 @@ def test_cli_band_choices_are_exact_and_reach_pipeline(
     assert tuple(received) == BAND_SELECTIONS
     assert cli.main(["iron-ingot", "--band", "160"]) == 0
     assert received[-1] == "50x800"
-
 
     with pytest.raises(SystemExit) as exc_info:
         cli.main(["iron-ingot", "--band", "240"])
@@ -349,6 +349,7 @@ def test_cli_reports_literal_band_evidence(
     assert f"primary_band: {certified[0]}" in report
     assert f"certified_bands: {', '.join(map(str, certified))}" in report
 
+
 def test_cli_reports_structured_projection_evidence_without_parsing_prose(
     band_build: pipeline.Build,
     capsys: pytest.CaptureFixture[str],
@@ -369,13 +370,9 @@ def test_cli_reports_structured_projection_evidence_without_parsing_prose(
     cli._report(dataclasses.replace(band_build, refused=(refused,)), verbose=False)
 
     report = capsys.readouterr().err
+    assert "sequence-pair/no-proliferator: exact projection refused; after routing" in report
     assert (
-        "sequence-pair/no-proliferator: exact projection refused; after routing"
-        in report
-    )
-    assert (
-        "band 160 geom.collide buildings (4, 9): "
-        "first collision; left machine; right machine"
+        "band 160 geom.collide buildings (4, 9): first collision; left machine; right machine"
     ) in report
 
 
@@ -406,9 +403,9 @@ def test_terminal_cli_refusal_prints_structured_projection_evidence(
 
     report = capsys.readouterr().err
     assert (
-        "band 200 game.power_too_close buildings (2, 7): "
-        "power envelopes; north; south"
+        "band 200 game.power_too_close buildings (2, 7): power envelopes; north; south"
     ) in report
+
 
 def test_cli_refuses_success_without_band_evidence(
     band_build: pipeline.Build,
@@ -439,9 +436,7 @@ def test_the_cli_offers_racing_as_an_opt_in() -> None:
     assert args.share is True
     assert args.workers is None
 
-    opted_in = parser.parse_args(
-        ["https://example/x", "--race", "--no-share", "--workers", "8"]
-    )
+    opted_in = parser.parse_args(["https://example/x", "--race", "--no-share", "--workers", "8"])
     assert opted_in.race is True
     assert opted_in.share is False
     assert opted_in.workers == 8
@@ -463,9 +458,7 @@ def test_the_cli_forwards_every_race_knob_to_the_pipeline(
     monkeypatch.setattr(pipeline, "build", fake_build)
     monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
 
-    assert (
-        cli.main(["iron-ingot", "--race", "--no-share", "--workers", "9"]) == 0
-    )
+    assert cli.main(["iron-ingot", "--race", "--no-share", "--workers", "9"]) == 0
 
     assert received["workers"] == 9
     assert received["race"] is True
@@ -516,9 +509,7 @@ def test_sequence_islands_are_legal_with_best_and_reach_the_pipeline(
     monkeypatch.setattr(pipeline, "build", fake_build)
     monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
 
-    assert (
-        cli.main(["iron-ingot", "--strategy", "best", "--sequence-islands", "4"]) == 0
-    )
+    assert cli.main(["iron-ingot", "--strategy", "best", "--sequence-islands", "4"]) == 0
 
     assert received["sequence_islands"] == 4
 

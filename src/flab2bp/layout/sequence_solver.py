@@ -319,10 +319,7 @@ def _dense_spray_initial_strip_len(
     direct_candidates: int,
 ) -> int:
     """Coarsen only a dense-spray plan with no direct-insert structure."""
-    if (
-        sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD
-        and direct_candidates == 0
-    ):
+    if sprayed_lanes >= _DENSE_SPRAY_LANE_THRESHOLD and direct_candidates == 0:
         return max(requested, _DENSE_SPRAY_ZERO_DIRECT_STRIP_LEN)
     return requested
 
@@ -364,9 +361,7 @@ def _mid_unsprayed_initial_strip_len(
         and _MID_NO_SPRAY_COMPACT_MIN_MACHINES
         <= machine_count
         <= _MID_NO_SPRAY_COMPACT_MAX_MACHINES
-        and _MID_NO_SPRAY_COMPACT_MIN_STRIPS
-        <= strip_count
-        <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
+        and _MID_NO_SPRAY_COMPACT_MIN_STRIPS <= strip_count <= _MID_NO_SPRAY_COMPACT_MAX_STRIPS
     ):
         return requested
     if direct_candidates >= strip_count:
@@ -1009,12 +1004,9 @@ class SequenceSolver[PreparedT]:
                 "protected follow-up heights must be unique scheduled integers in a tuple"
             )
         if routing_seed_allowance_cap is not None and (
-            type(routing_seed_allowance_cap) is not int
-            or routing_seed_allowance_cap < 0
+            type(routing_seed_allowance_cap) is not int or routing_seed_allowance_cap < 0
         ):
-            raise ValueError(
-                "routing seed allowance cap must be a non-negative integer or None"
-            )
+            raise ValueError("routing seed allowance cap must be a non-negative integer or None")
         if type(borrow_first_discovery) is not bool:
             raise ValueError("borrow-first-discovery mode must be a bool")
         if type(stop_on_stable_exact) is not bool:
@@ -1036,9 +1028,7 @@ class SequenceSolver[PreparedT]:
         #: Remaining wall as a bucket index.  A solver built without one -- a
         #: test or a probe -- reports "all the time in the world", which is the
         #: honest answer when there is no deadline to divide by.
-        self._remaining_fraction = remaining_fraction or (
-            lambda: C_CONTEXT_FRACTION_STEPS
-        )
+        self._remaining_fraction = remaining_fraction or (lambda: C_CONTEXT_FRACTION_STEPS)
         #: Widest core BAND_BOUNDARY should treat as fitting.  A solver built
         #: without a band policy -- every existing test construction -- has no
         #: band to overflow, so the default returns the input width unchanged,
@@ -1083,7 +1073,6 @@ class SequenceSolver[PreparedT]:
         #: Called with each placement this search certifies, so the other racer
         #: can use it as a bound.
         self.publish_incumbent = publish_incumbent
-
 
     def _start_measured_stage(
         self,
@@ -1185,8 +1174,7 @@ class SequenceSolver[PreparedT]:
         one.
         """
         stage_limit = (
-            (1 + (self.config.stages - 1) * self.config.restarts_per_height)
-            * len(self._heights)
+            (1 + (self.config.stages - 1) * self.config.restarts_per_height) * len(self._heights)
             if max_stages is None
             else max_stages
         )
@@ -1198,10 +1186,7 @@ class SequenceSolver[PreparedT]:
         termination = "stage-limit"
         feasibility_restart_batches = 0
         while True:
-            if (
-                sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats)
-                >= stage_limit
-            ):
+            if sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats) >= stage_limit:
                 # Each stop keeps its own attribution: a continuation that runs
                 # out of clock or of ledger is a deadline or a budget refusal,
                 # exactly as it would have been without the continuation.  Only
@@ -1239,19 +1224,11 @@ class SequenceSolver[PreparedT]:
                 termination = "exact-stable"
                 break
             deferred_feedback_height = next(
-                (
-                    height
-                    for height in self._heights
-                    if height.deferred_feedback_budget is not None
-                ),
+                (height for height in self._heights if height.deferred_feedback_budget is not None),
                 None,
             )
             compact_height = next(
-                (
-                    height
-                    for height in self._heights
-                    if height.pending_compact_seed is not None
-                ),
+                (height for height in self._heights if height.pending_compact_seed is not None),
                 None,
             )
             measured_role = (
@@ -1281,13 +1258,9 @@ class SequenceSolver[PreparedT]:
                     None,
                 )
                 if restart is None:
-                    raise ValueError(
-                        "deferred routing feedback must retain its restart"
-                    )
+                    raise ValueError("deferred routing feedback must retain its restart")
                 if feedback_budget is _DeferredFeedbackBudget.DETAILED_DISCOVERY:
-                    allowance = self.budget.detailed_discovery_allowance(
-                        height_state.height
-                    )
+                    allowance = self.budget.detailed_discovery_allowance(height_state.height)
                     spent, cancelled = self._run_feedback_closure(
                         height_state,
                         restart,
@@ -1325,9 +1298,7 @@ class SequenceSolver[PreparedT]:
                 compact_seed = height_state.pending_compact_seed
                 assert compact_seed is not None
                 height_state.pending_compact_seed = None
-                detailed_allowance = self.budget.detailed_discovery_allowance(
-                    height_state.height
-                )
+                detailed_allowance = self.budget.detailed_discovery_allowance(height_state.height)
                 compact_allowance = (
                     detailed_allowance
                     if self.routing_seed_allowance_cap is None
@@ -1482,9 +1453,7 @@ class SequenceSolver[PreparedT]:
                         and height_state.feedback_restart is not None
                         and not height_state.projection_feedback_pending
                     ):
-                        height_state.deferred_feedback_budget = (
-                            _DeferredFeedbackBudget.DISCOVERY
-                        )
+                        height_state.deferred_feedback_budget = _DeferredFeedbackBudget.DISCOVERY
                         self.budget.charge_discovery(height_state.height, spent)
                     else:
                         self.budget.settle_discovery(height_state.height, spent)
@@ -1552,8 +1521,7 @@ class SequenceSolver[PreparedT]:
                 "budget": "expansion budget exhausted before finding an exact layout",
                 "candidates": "all scheduled candidates were exhausted",
                 "portfolio-bound": (
-                    "every scheduled height's area lower bound is above the "
-                    "portfolio incumbent"
+                    "every scheduled height's area lower bound is above the portfolio incumbent"
                 ),
                 "cancelled": "routing was cancelled before detailed emission",
                 "stage-limit": "no scheduled stage produced an exact layout",
@@ -1565,20 +1533,14 @@ class SequenceSolver[PreparedT]:
             }[termination]
             validation_checks = tuple(
                 dict.fromkeys(
-                    check
-                    for stage in self._stage_stats
-                    for check in stage.validation_failures
+                    check for stage in self._stage_stats for check in stage.validation_failures
                 )
             )
             if validation_checks:
-                reason += "; exact validation failures: " + ", ".join(
-                    validation_checks
-                )
+                reason += "; exact validation failures: " + ", ".join(validation_checks)
             projection_failures = tuple(
                 dict.fromkeys(
-                    failure
-                    for stage in self._stage_stats
-                    for failure in stage.projection_failures
+                    failure for stage in self._stage_stats for failure in stage.projection_failures
                 )
             )
             if projection_failures:
@@ -1669,9 +1631,7 @@ class SequenceSolver[PreparedT]:
                 if best is None
                 else replace(best.state, base_seed=seed, stage_index=0)
             )
-            height_state.restarts.append(
-                _RestartState(restart=ordinal, seed=seed, anneal=anneal)
-            )
+            height_state.restarts.append(_RestartState(restart=ordinal, seed=seed, anneal=anneal))
             appended = True
         return appended
 
@@ -1707,7 +1667,6 @@ class SequenceSolver[PreparedT]:
         )
         height_state.quality_restart = restart.restart
         return restart
-
 
     def _run_discovery(
         self,
@@ -1808,9 +1767,7 @@ class SequenceSolver[PreparedT]:
             height_state.estimated_area = incumbent.decoded.width * height_state.height
         restart = height_state.restarts[0]
         if not height_state.projection_feedback_pending:
-            band_target = self._band_target_for(
-                problem.outline_height, incumbent.decoded.width
-            )
+            band_target = self._band_target_for(problem.outline_height, incumbent.decoded.width)
             next_anneal, neighbourhood = _alns_substitution(
                 detailed.routing,
                 incumbent.state,
@@ -1853,8 +1810,6 @@ class SequenceSolver[PreparedT]:
                 restart.anneal,
                 stage_index=restart.anneal.stage_index + 1,
             )
-
-
 
     def close_exact_decoded(
         self,
@@ -1974,24 +1929,19 @@ class SequenceSolver[PreparedT]:
         closure_allowance: int | None = None,
         allow_projection_at_stage_limit: bool = False,
     ) -> tuple[int, bool]:
-        effective_detailed_allowance = (
-            allowance if closure_allowance is None else closure_allowance
-        )
+        effective_detailed_allowance = allowance if closure_allowance is None else closure_allowance
         feedback_restart = next(
             (
                 restart
                 for restart in height_state.restarts
                 if restart.restart == height_state.feedback_restart
                 and (
-                    restart.stages < self.config.stages
-                    or height_state.projection_feedback_pending
+                    restart.stages < self.config.stages or height_state.projection_feedback_pending
                 )
             ),
             None,
         )
-        scheduled_stages = sum(
-            _counts_as_scheduled_stage(stage) for stage in self._stage_stats
-        )
+        scheduled_stages = sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats)
         if (
             prior_cancelled
             or effective_detailed_allowance == 0
@@ -1999,8 +1949,7 @@ class SequenceSolver[PreparedT]:
             or (
                 scheduled_stages >= stage_limit
                 and not (
-                    allow_projection_at_stage_limit
-                    and height_state.projection_feedback_pending
+                    allow_projection_at_stage_limit and height_state.projection_feedback_pending
                 )
             )
             or self.deadline_reached()
@@ -2045,9 +1994,7 @@ class SequenceSolver[PreparedT]:
                     incumbent.state,
                     base_seed=state.base_seed,
                     stage_index=(
-                        state.stage_index
-                        if projection_closure
-                        else state.stage_index + 1
+                        state.stage_index if projection_closure else state.stage_index + 1
                     ),
                 ),
                 incumbent=incumbent,
@@ -2067,9 +2014,7 @@ class SequenceSolver[PreparedT]:
                 height_state,
                 annealed,
                 allowance,
-                closure_allowance=(
-                    allowance if closure_allowance is None else closure_allowance
-                ),
+                closure_allowance=(allowance if closure_allowance is None else closure_allowance),
             )
             if projection_closure:
                 observation = self._stage_stats[-1]
@@ -2083,7 +2028,6 @@ class SequenceSolver[PreparedT]:
                 # Exact projection closure gets its own observation but is not
                 # another anneal stage and cannot spend the stage count twice.
                 height_state.stages = prior_height_stages
-
 
     def _run_stage(
         self,
@@ -2195,11 +2139,7 @@ class SequenceSolver[PreparedT]:
                 # Archive union retains an input object, so identity carries its restart.
                 source_by_incumbent.setdefault(id(tagged.incumbent), source)
         merged = build_elite_archive(
-            (
-                tagged.incumbent
-                for source in candidate_sources
-                for tagged in source.result.archive
-            ),
+            (tagged.incumbent for source in candidate_sources for tagged in source.result.archive),
             self.config.global_elites,
         )
         narrowest = next(
@@ -2347,9 +2287,8 @@ class SequenceSolver[PreparedT]:
             prepared_candidates.append(prepared_candidate)
             if proxy_left == 0:
                 break
-            if (
-                self.stage_admission is not None
-                and not self.stage_admission.can_proxy(_MeasuredStageRole.ORDINARY)
+            if self.stage_admission is not None and not self.stage_admission.can_proxy(
+                _MeasuredStageRole.ORDINARY
             ):
                 completion_reserve_stop = True
                 break
@@ -2562,9 +2501,7 @@ class SequenceSolver[PreparedT]:
                 True,
             )
             if transformed is not None:
-                seed_sibling_updates: list[
-                    tuple[_RestartState, StageBoundaryUpdate]
-                ] = []
+                seed_sibling_updates: list[tuple[_RestartState, StageBoundaryUpdate]] = []
                 for other in height_state.restarts:
                     if other is primary_restart:
                         continue
@@ -2726,9 +2663,7 @@ class SequenceSolver[PreparedT]:
         )
         neighbourhood = frozenset[int]()
         if starting_mode is ObjectiveMode.EXPLORATION:
-            band_target = self._band_target_for(
-                problem.outline_height, selected.decoded.width
-            )
+            band_target = self._band_target_for(problem.outline_height, selected.decoded.width)
             next_anneal, neighbourhood = _alns_substitution(
                 detailed.routing,
                 selected.state,
@@ -2764,8 +2699,7 @@ class SequenceSolver[PreparedT]:
         merge_count = 0
         topology_changed = False
         if self.stage_boundary_transform is not None and (
-            projection_failures
-            or (starting_mode is ObjectiveMode.EXPLORATION and signature)
+            projection_failures or (starting_mode is ObjectiveMode.EXPLORATION and signature)
         ):
             transformed = self.stage_boundary_transform(
                 height_state.height,
@@ -3011,9 +2945,7 @@ def _routing_feedback_substitution(
         problem,
         decoded,
     )
-    if not neighbourhood or (
-        problem.size > 1 and len(neighbourhood) == problem.size
-    ):
+    if not neighbourhood or (problem.size > 1 and len(neighbourhood) == problem.size):
         return unchanged, frozenset()
     repaired = repair_neighbourhood(
         selected_state.pair,
@@ -3172,10 +3104,7 @@ def _alns_substitution(
     if not neighbourhood or (problem.size > 1 and len(neighbourhood) == problem.size):
         # Credit it now, as unapplied.  Leaving it pending would charge the next
         # evaluation's outcome to a choice that never ran.
-        if (
-            choice.repair is RepairOperator.LOCAL_EXACT_PACK
-            and adapters.window_dropped is not None
-        ):
+        if choice.repair is RepairOperator.LOCAL_EXACT_PACK and adapters.window_dropped is not None:
             # Counted only for the window arm: these counters exist to say why
             # `alns_window_solves` is zero, and a SEQUENCE_REINSERT proposal that
             # finds nothing to destroy is a different fact.
@@ -3221,9 +3150,7 @@ def _alns_substitution(
     )
 
 
-type _ProjectionPackNoGood = (
-    finalize.ProjectionNoGood | ExactPackNoGood | ClusterRelationNoGood
-)
+type _ProjectionPackNoGood = finalize.ProjectionNoGood | ExactPackNoGood | ClusterRelationNoGood
 
 
 def _projection_feedback_matches(
@@ -3264,8 +3191,7 @@ def _projection_feedback_matches(
         pack.height == no_good.height
         and problem.selected_sizes(state.variant_indices) == no_good.outline
         and pack.width == no_good.width
-        and tuple(pack.at[index] for index in range(problem.size))
-        == no_good.origins
+        and tuple(pack.at[index] for index in range(problem.size)) == no_good.origins
         and (
             pair is None
             or (
@@ -3388,8 +3314,7 @@ def _stage_projection_pitch_requirement(
     if placement is None or not problem.variant_tables:
         return None
     selected_variants = tuple(
-        problem.variant(strip, variant)
-        for strip, variant in enumerate(state.variant_indices)
+        problem.variant(strip, variant) for strip, variant in enumerate(state.variant_indices)
     )
     return next(
         (
@@ -3589,6 +3514,7 @@ def _variant_search_inputs(
     if strip_index != len(strips):
         raise ValueError("physical strip plan contains unmatched compatibility strips")
     return tuple(instance_ids), tuple(variant_tables)
+
 
 def _sequence_reservation_strips(strips: Sequence[Strip]) -> list[Strip]:
     """Reserve W4 so a later exact pose swap cannot outgrow its proxy box."""
@@ -3955,7 +3881,6 @@ def _protected_topology_candidates(
     return 3 if sprayed_lanes > 0 else 2
 
 
-
 def _topology_closure_allowance(
     allowance: int,
     *,
@@ -3988,9 +3913,7 @@ def _refinement_direct_targets(
                     target,
                     producer_span=producer_span,
                     consumer_span=consumer_span,
-                    origin_deltas=tuple(
-                        delta + origin_shift for delta in target.origin_deltas
-                    ),
+                    origin_deltas=tuple(delta + origin_shift for delta in target.origin_deltas),
                 )
             )
     return tuple(adjusted)
@@ -4459,6 +4382,8 @@ def _empty_global_result(*, exhausted: bool, cancelled: bool = False) -> GlobalR
         hot_regions=(),
         cancelled=cancelled,
     )
+
+
 def _closed_detailed_result(
     status: DetailedRouteStatus,
     *,
@@ -4621,9 +4546,7 @@ def _production_run(
             or len(strips) >= _TOPOLOGY_BEAM_MAX_STRIPS
         )
         initial_direct_candidates = (
-            len(_direct_net_candidates(strips, spec))
-            if needs_initial_direct_count
-            else 1
+            len(_direct_net_candidates(strips, spec)) if needs_initial_direct_count else 1
         )
         initial_strip_len = _dense_spray_initial_strip_len(
             planned_strip_len,
@@ -4712,8 +4635,7 @@ def _production_run(
         heights = envelope.reserve_boundary_height(
             legacy_heights,
             minimum_width_for_height={
-                height: _minimum_pack_width(strips, height)
-                for height in legacy_heights
+                height: _minimum_pack_width(strips, height) for height in legacy_heights
             },
         )
         boundary_height = envelope.boundary_core_height
@@ -4961,9 +4883,7 @@ def _production_run(
         if targets is None:
             selected = selected_strips(problem, variant_indices)
             targets = _refinement_direct_targets(
-                _direct_alignment_targets(
-                    selected_direct_candidates(problem, variant_indices)
-                ),
+                _direct_alignment_targets(selected_direct_candidates(problem, variant_indices)),
                 selected,
             )
             direct_cache[key] = targets
@@ -5012,20 +4932,16 @@ def _production_run(
                 selected_strips=selected,
             )
         try:
-            preparation_parameters = inspect.signature(
-                _prepare_routing_problem
-            ).parameters
+            preparation_parameters = inspect.signature(_prepare_routing_problem).parameters
             accepts_preparation_keywords = any(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in preparation_parameters.values()
             )
             accepts_static_cache = (
-                "staged_static_cache" in preparation_parameters
-                or accepts_preparation_keywords
+                "staged_static_cache" in preparation_parameters or accepts_preparation_keywords
             )
             accepts_cancelled = (
-                "cancelled" in preparation_parameters
-                or accepts_preparation_keywords
+                "cancelled" in preparation_parameters or accepts_preparation_keywords
             )
             if accepts_static_cache and accepts_cancelled:
                 prepared = _prepare_routing_problem(
@@ -5067,7 +4983,7 @@ def _production_run(
                     policy=band_policy,
                     ramped=not belt_vertical_construction,
                 )
-        except (_PreparationDeadline, finalize.ProjectionCancelled):
+        except _PreparationDeadline, finalize.ProjectionCancelled:
             return _ProductionCandidate(
                 height=height,
                 problem=problem,
@@ -5218,9 +5134,7 @@ def _production_run(
             return time.monotonic() >= completion_deadline
 
         def project(candidate: Placement) -> Placement:
-            finalizer_parameters = inspect.signature(
-                finalize.finalize_placement
-            ).parameters
+            finalizer_parameters = inspect.signature(finalize.finalize_placement).parameters
             if "cancelled" in finalizer_parameters or any(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in finalizer_parameters.values()
@@ -5365,9 +5279,7 @@ def _production_run(
                             height=pack.height,
                             outline=problem.selected_sizes(state.variant_indices),
                             width=pack.width,
-                            origins=tuple(
-                                pack.at[index] for index in range(len(selected))
-                            ),
+                            origins=tuple(pack.at[index] for index in range(len(selected))),
                             evidence=projection_failures,
                             projection_pair=_exact_projection_pair(
                                 selected,
@@ -5386,9 +5298,7 @@ def _production_run(
                     if report is not None and report.relation_strips:
                         cluster_no_good = last_mile.relation_no_good(
                             strips=report.relation_strips,
-                            origins=tuple(
-                                pack.at[index] for index in range(len(selected))
-                            ),
+                            origins=tuple(pack.at[index] for index in range(len(selected))),
                             outline=problem.selected_sizes(state.variant_indices),
                             height=pack.height,
                             evidence=report.relation_evidence,
@@ -5411,9 +5321,7 @@ def _production_run(
                 )
 
         if projection_relation_feedback is not None:
-            feedback_problem, feedback_failures, feedback_no_good = (
-                projection_relation_feedback
-            )
+            feedback_problem, feedback_failures, feedback_no_good = projection_relation_feedback
             if feedback_problem == problem and feedback_failures == projection_failures:
                 selected = _selected_strips(
                     strips,
@@ -5515,14 +5423,10 @@ def _production_run(
             width_bound=decoded.width,
             direct_candidates=window_candidates,
             window=window,
-            fixed_at={
-                index: origin for index, origin in pack.at.items() if index not in window
-            },
+            fixed_at={index: origin for index, origin in pack.at.items() if index not in window},
             seed=pack,
             width_target=band_target_for(problem.outline_height, decoded.width),
-            time_budget_s=min(
-                C_WINDOW_SECONDS, remaining - C_WINDOW_DEADLINE_SAFETY_SECONDS
-            ),
+            time_budget_s=min(C_WINDOW_SECONDS, remaining - C_WINDOW_DEADLINE_SAFETY_SECONDS),
             on_skipped=_count_skipped_no_goods,
         )
         telemetry.alns_window_seconds += time.monotonic() - started_window
@@ -5589,6 +5493,7 @@ def _production_run(
         expansion_total,
         speculative_candidates=(1 + _TOPOLOGY_BEAM_CANDIDATES + _TOPOLOGY_REFINEMENT_CANDIDATES),
     )
+
     def band_target_for(height: int, width: int) -> int:
         """Widest core BAND_BOUNDARY should treat as fitting, guarded.
 
@@ -5613,14 +5518,11 @@ def _production_run(
             validate=certify,
             prepare_exact=prepare_exact,
             feedback_origins=lambda candidate: tuple(
-                candidate.pack.at[index]
-                for index in range(len(candidate.selected_strips))
+                candidate.pack.at[index] for index in range(len(candidate.selected_strips))
             ),
         ),
         expansion_budget=ExpansionBudget(expansion_total),
-        borrow_first_discovery=(
-            bool(initial_states) or use_topology_beam or use_shared_pack
-        ),
+        borrow_first_discovery=(bool(initial_states) or use_topology_beam or use_shared_pack),
         protected_followup_heights=protected_followup_heights,
         config=config,
         deadline_reached=deadline_reached,
@@ -5673,11 +5575,7 @@ def _production_run(
         )
         shared_height = coarse_heights[min(shared_height_rank, len(coarse_heights) - 1)]
         shared_seed = seeds[shared_height]
-        shared_left = (
-            0.0
-            if shared_stage_started is None
-            else seed_deadline - time.monotonic()
-        )
+        shared_left = 0.0 if shared_stage_started is None else seed_deadline - time.monotonic()
         shared_pack = (
             _pack(
                 strips,
@@ -5800,9 +5698,7 @@ def _production_run(
         refinement_attempted = False
         prior_budget_signature: int | None = None
         for topology_index in range(beam.config.max_candidates):
-            topology_stage_started = stage_admission.try_start(
-                _MeasuredStageRole.TOPOLOGY
-            )
+            topology_stage_started = stage_admission.try_start(_MeasuredStageRole.TOPOLOGY)
             if topology_stage_started is None:
                 break
             candidate = beam.solve_next(
@@ -5849,16 +5745,12 @@ def _production_run(
             )
             budget_signature = _topology_budget_signature(closed)
             repeated_budget = (
-                budget_signature is not None
-                and budget_signature == prior_budget_signature
+                budget_signature is not None and budget_signature == prior_budget_signature
             )
             prior_budget_signature = budget_signature
-            broad_budget = (
-                budget_signature is not None
-                and _topology_budget_is_broad(
-                    budget_signature,
-                    strip_count=beam_problem.size,
-                )
+            broad_budget = budget_signature is not None and _topology_budget_is_broad(
+                budget_signature,
+                strip_count=beam_problem.size,
             )
             if tall_topology_role:
                 refinement_hint = _retain_refinement_hint(
@@ -5972,9 +5864,7 @@ def _decoded_pack(
         width=decoded.width,
         height=height,
         status="sequence-pair",
-        direct=frozenset(
-            _direct_id_from_pair(pair, direct_candidates) for pair in decoded.direct
-        ),
+        direct=frozenset(_direct_id_from_pair(pair, direct_candidates) for pair in decoded.direct),
     )
 
 

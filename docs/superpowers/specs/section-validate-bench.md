@@ -44,23 +44,26 @@ debuggable from the report alone.
 
 ```python
 class Severity(StrEnum):
-    ERROR = "error"      # the blueprint is wrong; must not ship
+    ERROR = "error"  # the blueprint is wrong; must not ship
     WARNING = "warning"  # legal but suspect (e.g. wrapping risk, slack capacity)
-    INFO = "info"        # informational metrics for the bench
+    INFO = "info"  # informational metrics for the bench
+
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    check: str                        # stable dotted id, e.g. "flow.belt_capacity"
+    check: str  # stable dotted id, e.g. "flow.belt_capacity"
     severity: Severity
-    message: str                      # human-readable, names the actual numbers
-    buildings: tuple[int, ...] = ()    # indices into Placement.buildings
+    message: str  # human-readable, names the actual numbers
+    buildings: tuple[int, ...] = ()  # indices into Placement.buildings
     detail: Mapping[str, object] = field(default_factory=dict)
+
 
 @dataclass(frozen=True, slots=True)
 class Report:
     findings: tuple[Finding, ...]
+
     @property
-    def ok(self) -> bool: ...          # no ERROR findings
+    def ok(self) -> bool: ...  # no ERROR findings
     def by_check(self, check: str) -> tuple[Finding, ...]: ...
 ```
 
@@ -79,14 +82,16 @@ This is what makes them individually testable: a unit test constructs a tiny
 Check = Callable[[ValidationContext], Iterable[Finding]]
 CHECKS: dict[str, Check] = {}
 
+
 def check(cid: str) -> Callable[[Check], Check]:  # decorator, registers into CHECKS
     ...
 
+
 def validate(placement, spec, catalog, *, only=None, soft_width=256) -> Report:
     ctx = ValidationContext.build(placement, spec, catalog, soft_width=soft_width)
-    return Report(tuple(f for cid, c in CHECKS.items()
-                        if only is None or cid in only
-                        for f in c(ctx)))
+    return Report(
+        tuple(f for cid, c in CHECKS.items() if only is None or cid in only for f in c(ctx))
+    )
 ```
 
 `ValidationContext` is built once and shared, so no check pays to rederive
@@ -97,12 +102,12 @@ indices:
 class ValidationContext:
     placement: Placement
     spec: BuildSpec
-    catalog: Catalog                       # footprints, sorter reach/rates, belt rates
-    occupancy: Mapping[tuple[int,int,int], int]   # cell -> building index
-    kind: Sequence[BuildingKind]           # per building: MACHINE | BELT | SORTER | OTHER
-    belt_runs: Sequence[BeltRun]           # maximal forward-linked belt chains
-    run_of: Mapping[int, int]              # belt building index -> run index
-    sorters_of: Mapping[int, list[int]]    # machine index -> attached sorter indices
+    catalog: Catalog  # footprints, sorter reach/rates, belt rates
+    occupancy: Mapping[tuple[int, int, int], int]  # cell -> building index
+    kind: Sequence[BuildingKind]  # per building: MACHINE | BELT | SORTER | OTHER
+    belt_runs: Sequence[BeltRun]  # maximal forward-linked belt chains
+    run_of: Mapping[int, int]  # belt building index -> run index
+    sorters_of: Mapping[int, list[int]]  # machine index -> attached sorter indices
     soft_width: int
 ```
 
@@ -282,20 +287,20 @@ class BenchResult:
     strategy: str
     url_id: str
     # density
-    area: int                 # Placement.area — the headline number
-    used_tiles: int           # occupied cells; area/used_tiles = packing efficiency
+    area: int  # Placement.area — the headline number
+    used_tiles: int  # occupied cells; area/used_tiles = packing efficiency
     width: int
     height: int
     # composition
     machines: int
     belt_tiles: int
     sorters: int
-    direct_inserts: int       # sorters with both ends on machines
-    altitude_levels: int      # max z used
+    direct_inserts: int  # sorters with both ends on machines
+    altitude_levels: int  # max z used
     # cost
     solve_seconds: float
     hit_time_budget: bool
-    solver_status: str        # OPTIMAL | FEASIBLE | INFEASIBLE | UNKNOWN
+    solver_status: str  # OPTIMAL | FEASIBLE | INFEASIBLE | UNKNOWN
     # correctness
     valid: bool
     errors: int
@@ -453,8 +458,7 @@ path: `$DSP_VIEWER_PATH` → `../dsp-blueprint-viewer` relative to the repo root
 ```python
 viewer_available = pytest.mark.skipif(
     not _viewer_path() or not shutil.which("bun"),
-    reason="cross-validation needs `bun` and a dsp-blueprint-viewer checkout "
-           "(set DSP_VIEWER_PATH)",
+    reason="cross-validation needs `bun` and a dsp-blueprint-viewer checkout (set DSP_VIEWER_PATH)",
 )
 ```
 

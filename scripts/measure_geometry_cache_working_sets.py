@@ -95,9 +95,7 @@ class _Report(TypedDict):
 _FUNCTIONS: dict[str, _CacheFunction] = {
     "catalog.collider_span": cast(_CacheFunction, cast(object, catalog.collider_span)),
     "catalog.clearance": cast(_CacheFunction, cast(object, catalog.clearance)),
-    "colliders.own_centre_extent": cast(
-        _CacheFunction, cast(object, colliders.own_centre_extent)
-    ),
+    "colliders.own_centre_extent": cast(_CacheFunction, cast(object, colliders.own_centre_extent)),
     "colliders.belt_keepout_offsets": cast(
         _CacheFunction, cast(object, colliders.belt_keepout_offsets)
     ),
@@ -217,9 +215,7 @@ def _collect_case_traces(root: Path) -> tuple[CaseTraces, list[str]]:
             )
             contains_splitter = contains_splitter or building.item_id == catalog.SPLITTER_ID
         if contains_splitter:
-            traces["colliders.belt_keepout_offsets"].append(
-                (splitter_model,)
-            )
+            traces["colliders.belt_keepout_offsets"].append((splitter_model,))
         cases[case_name] = traces
 
     for path in sorted((root / "tests" / "fixtures" / "projection").glob("*.json")):
@@ -227,18 +223,14 @@ def _collect_case_traces(root: Path) -> tuple[CaseTraces, list[str]]:
         decoded = cast(object, json.loads(path.read_text(encoding="utf-8")))
         raw = _object(decoded, label=case_name)
         placement = _object(raw["placement"], label=f"{case_name}.placement")
-        buildings = _array(
-            placement["buildings"], label=f"{case_name}.placement.buildings"
-        )
+        buildings = _array(placement["buildings"], label=f"{case_name}.placement.buildings")
         traces = _empty_function_traces()
         contains_splitter = False
         for index, value in enumerate(buildings):
             label = f"{case_name}.placement.buildings[{index}]"
             raw_building = _object(value, label=label)
             item_id = _integer(raw_building["item_id"], label=f"{label}.item_id")
-            model_index = _integer(
-                raw_building["model_index"], label=f"{label}.model_index"
-            )
+            model_index = _integer(raw_building["model_index"], label=f"{label}.model_index")
             yaw = _number(raw_building["yaw"], label=f"{label}.yaw")
             known_model = known_models.get(item_id)
             if known_model is not None:
@@ -252,9 +244,7 @@ def _collect_case_traces(root: Path) -> tuple[CaseTraces, list[str]]:
             if not catalog.is_belt(item_id) and not catalog.is_sorter(item_id):
                 traces["planet.collider_radius"].append((model_index,))
         if contains_splitter:
-            traces["colliders.belt_keepout_offsets"].append(
-                (splitter_model,)
-            )
+            traces["colliders.belt_keepout_offsets"].append((splitter_model,))
         cases[case_name] = traces
 
     return cases, skipped
@@ -296,9 +286,7 @@ def _build_report_and_traces(root: Path) -> tuple[_Report, CaseTraces]:
     cases, skipped = _collect_case_traces(root)
     functions: dict[str, _FunctionReport] = {}
     for name in _FUNCTION_NAMES:
-        functions[name] = _function_report(
-            name, [case[name] for case in cases.values()]
-        )
+        functions[name] = _function_report(name, [case[name] for case in cases.values()])
     return _Report(skipped_blueprints=skipped, functions=functions), cases
 
 
@@ -345,9 +333,7 @@ def _required_mapping(value: object, *, label: str) -> Mapping[str, object]:
 def _compare(report: _Report, prior_path: Path) -> list[str]:
     prior_value = cast(object, json.loads(prior_path.read_text(encoding="utf-8")))
     prior = _required_mapping(prior_value, label=str(prior_path))
-    prior_functions = _required_mapping(
-        prior["functions"], label=f"{prior_path}.functions"
-    )
+    prior_functions = _required_mapping(prior["functions"], label=f"{prior_path}.functions")
     failures: list[str] = []
     for name in _FUNCTION_NAMES:
         current = report["functions"][name]

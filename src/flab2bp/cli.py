@@ -218,9 +218,7 @@ def candidate_policies_from_args(
             if policy in selected:
                 ap.error(f"duplicate candidate policy: {policy.value}")
             selected.add(policy)
-    return tuple(
-        policy for policy in DEFAULT_CANDIDATE_POLICIES if policy in selected
-    )
+    return tuple(policy for policy in DEFAULT_CANDIDATE_POLICIES if policy in selected)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -386,7 +384,6 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, KeyError) as exc:
         print(f"flab2bp: {exc}", file=sys.stderr)
         return 2
-
 
     if build.report.errors and not args.allow_invalid:
         print(

@@ -397,12 +397,8 @@ def _seat_both_fed_outermost(
     """
     if not both_fed:
         return in_above, in_below
-    above = tuple(
-        sorted(in_above, key=lambda lane: not (both_fed & frozenset(lane)))
-    )
-    below = tuple(
-        sorted(in_below, key=lambda lane: bool(both_fed & frozenset(lane)))
-    )
+    above = tuple(sorted(in_above, key=lambda lane: not (both_fed & frozenset(lane))))
+    below = tuple(sorted(in_below, key=lambda lane: bool(both_fed & frozenset(lane))))
     return above, below
 ```
 
@@ -421,14 +417,12 @@ Inside `_logical_strip_plans`, immediately after the `consumers` loop and before
 Replace the `input_items` assignment inside the per-group loop:
 
 ```python
-        # SURGICAL, not broad.  Sorting every external input first was measured
-        # too (R4 §7, `LANEORDER=1`): same coverage, +0.78% total area and a
-        # reproducible +27.2% on `sequence-pair|quantum-chip|2`.  Restricting the
-        # key to items that actually raise the corridor demand changed 2 of 66
-        # cells for +0.11%, inside the measured 12%-per-cell noise floor.
-        input_items = tuple(
-            sorted(group.inputs, key=lambda item: (item not in both_fed, item))
-        )
+# SURGICAL, not broad.  Sorting every external input first was measured
+# too (R4 §7, `LANEORDER=1`): same coverage, +0.78% total area and a
+# reproducible +27.2% on `sequence-pair|quantum-chip|2`.  Restricting the
+# key to items that actually raise the corridor demand changed 2 of 66
+# cells for +0.11%, inside the measured 12%-per-cell noise floor.
+input_items = tuple(sorted(group.inputs, key=lambda item: (item not in both_fed, item)))
 ```
 
 After the `try` / `except ValueError` block that resolves `in_above, in_below` (the block that ends by setting `flank = True`), and before `south_columns = ...`:
@@ -585,9 +579,7 @@ def test_an_over_band_seed_is_skipped_and_never_reported_as_wired(
     """
     spec = two_stage_spec()
     strips = plan_strips(spec)
-    monkeypatch.setattr(
-        freeform, "_band_policy_candidate_heights", lambda _strips, _policy: (20,)
-    )
+    monkeypatch.setattr(freeform, "_band_policy_candidate_heights", lambda _strips, _policy: (20,))
     monkeypatch.setattr(
         finalize.BandPolicySearchEnvelope,
         "frame_candidates",
@@ -620,7 +612,7 @@ Expected: FAIL with `TypeError: _sweep() got an unexpected keyword argument 'ski
 Add the out-parameter to `FreeformLayout._sweep`'s signature, after `attempts`:
 
 ```python
-        skipped_heights: list[int] | None = None,
+skipped_heights: list[int] | None = (None,)
 ```
 
 Document it in the docstring, after the `rejected` paragraph:
@@ -737,9 +729,7 @@ def _port_seating_attempt(count: int, *, expansions: int = 0) -> freeform.PackAt
         )
         for index in range(count)
     )
-    routing = DetailedRouteResult(
-        DetailedRouteStatus.STRANDED, (), failures, 0, expansions
-    )
+    routing = DetailedRouteResult(DetailedRouteStatus.STRANDED, (), failures, 0, expansions)
     attempt = _proof_attempt(routing, strips)
     return replace(
         attempt,
@@ -840,15 +830,12 @@ Append to its docstring:
 and replace the `missing` block at the tail:
 
 ```python
-    missing = {key for key in order if held[key] < wants[key]}
-    if failed_ports is not None:
-        failed_ports.update(missing)
-    if demands is not None:
-        demands.update(
-            (key, (held[key], wants[key], len(options.get(key, ()))))
-            for key in missing
-        )
-    return len(missing)
+missing = {key for key in order if held[key] < wants[key]}
+if failed_ports is not None:
+    failed_ports.update(missing)
+if demands is not None:
+    demands.update((key, (held[key], wants[key], len(options.get(key, ())))) for key in missing)
+return len(missing)
 ```
 
 Resolve the `options` local with `find_symbol` first: R4 §1.4 read it as `options[key]`, the port's free 4-neighbours, built where the corridor sets are. If the local is named differently, use the local — do not rename it, and do not invent a second computation of the free-neighbour count.
@@ -899,7 +886,7 @@ Add the same defaulted field to `_BuildResult`, and set `stranded_ports=prepared
 Add the same defaulted field to `PackAttempt`, and fill it where `_sweep` constructs the attempt, beside `static_access=...`:
 
 ```python
-                        stranded_ports=result.stranded_ports,
+stranded_ports = (result.stranded_ports,)
 ```
 
 - [ ] **Step 5: Add the refusal helper**
@@ -969,17 +956,20 @@ In `lay_out`'s deadline branch, immediately before its `raise`, after `note` is 
 and replace the final unconditional raise:
 
 ```python
-        raise NoValidLayout(
-            (_port_seating_refusal(attempts) or (
-                f"no packing of {len(strips)} strips could be wired at any candidate "
-                "height; every pack the sweep produced left nets unrouted. That is a "
-                "PACKER defect -- it is producing packs its own router cannot wire -- "
-                "and it is reported rather than papered over with a looser packing"
-            ))
-            + over_band,
-            spec_label=spec.label,
-            budget_s=budgets[-1],
+raise NoValidLayout(
+    (
+        _port_seating_refusal(attempts)
+        or (
+            f"no packing of {len(strips)} strips could be wired at any candidate "
+            "height; every pack the sweep produced left nets unrouted. That is a "
+            "PACKER defect -- it is producing packs its own router cannot wire -- "
+            "and it is reported rather than papered over with a looser packing"
         )
+    )
+    + over_band,
+    spec_label=spec.label,
+    budget_s=budgets[-1],
+)
 ```
 
 - [ ] **Step 7: Grep the quoted names for stubs**
@@ -1375,23 +1365,22 @@ def _ceiling_bounded_schedule(
 Replace the block from `heights = envelope.reserve_boundary_height(` through the two re-split lines with:
 
 ```python
-        heights = envelope.reserve_boundary_height(
-            legacy_heights,
-            minimum_width_for_height={
-                height: _minimum_pack_width(strips, height)
-                for height in legacy_heights
-            },
-        )
-        boundary_height = envelope.boundary_core_height
-        # THE CEILING BINDS HERE.  `reserve_boundary_height` replaces at most ONE
-        # height and only one it can prove infeasible, against a witness that is
-        # an area lower bound; R3 §3 measured a schedule that kept TWO heights
-        # over the boundary (160 and 162) and routed only the illegal one.
-        heights = _ceiling_bounded_schedule(heights, boundary=boundary_height)
-        for height in heights:
-            seeds.setdefault(height, _greedy_pack(strips, height))
-        coarse_heights = heights[:coarse_height_count]
-        protected_followup_heights = heights[coarse_height_count:]
+heights = envelope.reserve_boundary_height(
+    legacy_heights,
+    minimum_width_for_height={
+        height: _minimum_pack_width(strips, height) for height in legacy_heights
+    },
+)
+boundary_height = envelope.boundary_core_height
+# THE CEILING BINDS HERE.  `reserve_boundary_height` replaces at most ONE
+# height and only one it can prove infeasible, against a witness that is
+# an area lower bound; R3 §3 measured a schedule that kept TWO heights
+# over the boundary (160 and 162) and routed only the illegal one.
+heights = _ceiling_bounded_schedule(heights, boundary=boundary_height)
+for height in heights:
+    seeds.setdefault(height, _greedy_pack(strips, height))
+coarse_heights = heights[:coarse_height_count]
+protected_followup_heights = heights[coarse_height_count:]
 ```
 
 This replaces the existing `if boundary_height is not None and boundary_height in heights: seeds.setdefault(...)` guard: the loop covers that case and every height the bounding introduced.
@@ -1425,16 +1414,16 @@ def test_the_portable_band_core_boundary_is_the_number_the_helper_is_given() -> 
     from flab2bp.layout import freeform
     from flab2bp.layout.finalize import band_policy_search_envelope
 
-    envelope = band_policy_search_envelope(
-        BandPolicy("portable"), perimeter=freeform._ENTRY_RING
-    )
+    envelope = band_policy_search_envelope(BandPolicy("portable"), perimeter=freeform._ENTRY_RING)
 
     assert freeform._ENTRY_RING == 3
     assert envelope.boundary_core_height == 154
     assert (
-        max(sequence_solver._ceiling_bounded_schedule(
-            (125, 160, 100), boundary=envelope.boundary_core_height
-        ))
+        max(
+            sequence_solver._ceiling_bounded_schedule(
+                (125, 160, 100), boundary=envelope.boundary_core_height
+            )
+        )
         <= 154
     )
 ```
@@ -1618,7 +1607,7 @@ Without it, `from __future__ import annotations` keeps the module importable whi
 Add the keyword to `NoValidLayout.__init__` after `projection_failures` and set the attribute:
 
 ```python
-        stats: Mapping[str, float | str] | None = None,
+stats: Mapping[str, float | str] | None = (None,)
 ```
 
 ```python
@@ -2067,9 +2056,7 @@ def test_every_shipped_pairing_is_reachable_inside_the_probe() -> None:
         seen.add((choice.destroy, choice.repair))
         session.observe(choice, reward, applied=True)
 
-    assert seen == {
-        (destroy, repair) for destroy in SHIPPED_DESTROY for repair in SHIPPED_REPAIR
-    }
+    assert seen == {(destroy, repair) for destroy in SHIPPED_DESTROY for repair in SHIPPED_REPAIR}
 
 
 def test_the_probe_walks_the_product_destroy_major() -> None:
@@ -2115,6 +2102,7 @@ def test_the_probe_is_a_pure_function_of_the_draw_ordinal() -> None:
     the D-UCB and MUST differ between the two reward streams, which is what
     proves the equality on draws 0 to 3 is the probe's doing.
     """
+
     def run(rewards: list[tuple[float, ...]]) -> list[tuple[str, str]]:
         session = OperatorSession()
         pairs: list[tuple[str, str]] = []
@@ -2162,8 +2150,7 @@ def test_a_dropped_window_proposal_is_charged_a_count_and_no_reward() -> None:
     assert window.repair is RepairOperator.LOCAL_EXACT_PACK
     assert math.isclose(session.credit["count:local-exact-pack"], 1.0, rel_tol=1e-12)
     assert all(
-        session.credit[f"reward:local-exact-pack:{rank}"] == 0.0
-        for rank in range(REWARD_RANKS)
+        session.credit[f"reward:local-exact-pack:{rank}"] == 0.0 for rank in range(REWARD_RANKS)
     )
     assert session.applied == 0
 
@@ -2372,19 +2359,16 @@ Add to `_RepairAdapters`:
 In `_alns_substitution`, replace the empty-or-whole guard:
 
 ```python
-    if not neighbourhood or (problem.size > 1 and len(neighbourhood) == problem.size):
-        # Credit it now, as unapplied.  Leaving it pending would charge the next
-        # evaluation's outcome to a choice that never ran.
-        if (
-            choice.repair is RepairOperator.LOCAL_EXACT_PACK
-            and adapters.window_dropped is not None
-        ):
-            # Counted only for the window arm: these counters exist to say why
-            # `alns_window_solves` is zero, and a SEQUENCE_REINSERT proposal that
-            # finds nothing to destroy is a different fact.
-            adapters.window_dropped("empty" if not neighbourhood else "whole")
-        session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
-        return unchanged, frozenset()
+if not neighbourhood or (problem.size > 1 and len(neighbourhood) == problem.size):
+    # Credit it now, as unapplied.  Leaving it pending would charge the next
+    # evaluation's outcome to a choice that never ran.
+    if choice.repair is RepairOperator.LOCAL_EXACT_PACK and adapters.window_dropped is not None:
+        # Counted only for the window arm: these counters exist to say why
+        # `alns_window_solves` is zero, and a SEQUENCE_REINSERT proposal that
+        # finds nothing to destroy is a different fact.
+        adapters.window_dropped("empty" if not neighbourhood else "whole")
+    session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+    return unchanged, frozenset()
 ```
 
 In `_production_run.window_pack`, split the combined early return so an unchanged assignment is distinguishable from an infeasible solve:
@@ -2406,7 +2390,7 @@ In `_production_run.window_pack`, split the combined early return so an unchange
 Wire the callback where `_RepairAdapters` is constructed in `_production_run` (beside `window_pack=window_pack, window_installed=window_installed`):
 
 ```python
-            window_dropped=_count_window_drop,
+window_dropped = (_count_window_drop,)
 ```
 
 with, beside the other closures in `_production_run`:
@@ -2467,9 +2451,7 @@ def test_the_exploration_bonus_never_outvotes_even_the_last_mean() -> None:
     # `leader` is now the MORE-played arm and so carries the SMALLER bonus, and
     # the other arm's every mean is zero; the rank-4 mean still wins.
     other = next(arm for arm in SHIPPED_DESTROY if arm is not leader.destroy)
-    assert session.credit[f"count:{other.value}"] < session.credit[
-        f"count:{leader.destroy.value}"
-    ]
+    assert session.credit[f"count:{other.value}"] < session.credit[f"count:{leader.destroy.value}"]
     assert session.select(_context()).destroy is leader.destroy
 ```
 
@@ -2763,34 +2745,29 @@ Add `stale_stop = False` beside `stale_draws = 0` in `_sweep`'s counter block. R
 with:
 
 ```python
-                # A SECOND ARRANGEMENT WITH NOTHING TO IMPROVE USED TO BE A HARD
-                # STOP, and it stopped the sweep at slot 6 of 15 with 25 to 28 s
-                # of a 30 s ceiling still in hand (R2 §3).  That was right while
-                # every later draw was a byte-identical copy of the first; with a
-                # diversification cut behind it, a later draw is a genuinely
-                # different pack, and the honest stop condition is that the draws
-                # have stopped being new.
-                #
-                # `_room_for_another(deadline, improvement_soft, turn_cost)`, the
-                # `completion_reserve_s` check and the hard `remaining <= 0`
-                # break all sit immediately BELOW this gate and are unchanged, so
-                # a draw this gate now lets through still has to buy its clock
-                # from them: it can only ever extend a sweep INSIDE clock it
-                # already had.  (The `_room_for_another` call ABOVE this gate is
-                # the improvement one, guarded by `best is not None`; it never
-                # fires on this path.)
-                #
-                # `--arrangements` remains the hard cap: `candidate_packs` is not
-                # re-seeded, so the continuation cannot draw a slot the caller
-                # did not ask for.
-                if (
-                    not projection_retry
-                    and arrangement
-                    and best is None
-                    and stale_draws >= C_SWEEP_STALE_DRAWS
-                ):
-                    stale_stop = True
-                    break
+# A SECOND ARRANGEMENT WITH NOTHING TO IMPROVE USED TO BE A HARD
+# STOP, and it stopped the sweep at slot 6 of 15 with 25 to 28 s
+# of a 30 s ceiling still in hand (R2 §3).  That was right while
+# every later draw was a byte-identical copy of the first; with a
+# diversification cut behind it, a later draw is a genuinely
+# different pack, and the honest stop condition is that the draws
+# have stopped being new.
+#
+# `_room_for_another(deadline, improvement_soft, turn_cost)`, the
+# `completion_reserve_s` check and the hard `remaining <= 0`
+# break all sit immediately BELOW this gate and are unchanged, so
+# a draw this gate now lets through still has to buy its clock
+# from them: it can only ever extend a sweep INSIDE clock it
+# already had.  (The `_room_for_another` call ABOVE this gate is
+# the improvement one, guarded by `best is not None`; it never
+# fires on this path.)
+#
+# `--arrangements` remains the hard cap: `candidate_packs` is not
+# re-seeded, so the continuation cannot draw a slot the caller
+# did not ask for.
+if not projection_retry and arrangement and best is None and stale_draws >= C_SWEEP_STALE_DRAWS:
+    stale_stop = True
+    break
 ```
 
 Maintain the counter at the two places a draw can fail to be new:
@@ -3139,9 +3116,7 @@ def test_a_routing_failure_with_no_feedback_is_still_not_retry_eligible() -> Non
     routing = _feedback_bearing_routing(count=3)
     attempt = _proof_attempt(routing, plan_strips(two_stage_spec()))
 
-    assert not freeform._feedback_retry_eligible(
-        attempt, freeform.FeedbackState.empty((10, 10))
-    )
+    assert not freeform._feedback_retry_eligible(attempt, freeform.FeedbackState.empty((10, 10)))
 
 
 def test_the_window_launches_on_a_best_failing_pack_with_three_failures(
@@ -3260,49 +3235,45 @@ def _feedback_retry_eligible(
 Restructure the retry block in `_sweep` so the SLOT is always resolved and only the ADMISSION stays gated:
 
 ```python
-                        feedback_retry = feedback_state is not None and _feedback_retry_eligible(
-                            attempt, feedback_state
-                        )
-                        promote_retry = arrangement == 0 and (learned or feedback_retry)
-                        #: A window launches where a retry SLOT exists and was not
-                        #: taken.  It used to also require `promote_retry`, which
-                        #: is exactly the conjunct that never held on a refusing
-                        #: cell (R2 §4): `learned` is false whenever a preparation
-                        #: failure forces `routing.exhaustive` false, and the
-                        #: feedback retry demanded a single failure.  The
-                        #: affordability check below is untouched and is what
-                        #: still bounds the cost.
-                        retry_slot_found = False
-                        retry_admitted = False
-                        retry_candidate = (height, arrangement + 1)
-                        try:
-                            next_index = candidate_packs.index(
-                                (*retry_candidate, False),
-                                candidate_index,
-                            )
-                        except ValueError:
-                            pass
-                        else:
-                            retry_slot_found = True
-                            if promote_retry:
-                                current_candidate_s = (
-                                    0.0 if started_at is None else time.monotonic() - started_at
-                                )
-                                retry_cost = max(dearest_candidate_s, current_candidate_s)
-                                if feedback_retry or _room_for_another(
-                                    deadline,
-                                    soft,
-                                    retry_cost,
-                                ):
-                                    if feedback_retry:
-                                        ...  # the existing feedback_retry_no_goods
-                                             # block, verbatim and unchanged
-                                    retry_admitted = True
-                                    candidate_packs.pop(next_index)
-                                    candidate_packs.insert(
-                                        candidate_index,
-                                        (height, arrangement + 1, True),
-                                    )
+feedback_retry = feedback_state is not None and _feedback_retry_eligible(attempt, feedback_state)
+promote_retry = arrangement == 0 and (learned or feedback_retry)
+#: A window launches where a retry SLOT exists and was not
+#: taken.  It used to also require `promote_retry`, which
+#: is exactly the conjunct that never held on a refusing
+#: cell (R2 §4): `learned` is false whenever a preparation
+#: failure forces `routing.exhaustive` false, and the
+#: feedback retry demanded a single failure.  The
+#: affordability check below is untouched and is what
+#: still bounds the cost.
+retry_slot_found = False
+retry_admitted = False
+retry_candidate = (height, arrangement + 1)
+try:
+    next_index = candidate_packs.index(
+        (*retry_candidate, False),
+        candidate_index,
+    )
+except ValueError:
+    pass
+else:
+    retry_slot_found = True
+    if promote_retry:
+        current_candidate_s = 0.0 if started_at is None else time.monotonic() - started_at
+        retry_cost = max(dearest_candidate_s, current_candidate_s)
+        if feedback_retry or _room_for_another(
+            deadline,
+            soft,
+            retry_cost,
+        ):
+            if feedback_retry:
+                ...  # the existing feedback_retry_no_goods
+                # block, verbatim and unchanged
+            retry_admitted = True
+            candidate_packs.pop(next_index)
+            candidate_packs.insert(
+                candidate_index,
+                (height, arrangement + 1, True),
+            )
 ```
 
 Keep the `feedback_retry_no_goods[retry_candidate] = ExactPackNoGood(...)` body exactly as it is; it reads `attempt.routing.failures[0]`, which is still a valid representative now that more than one failure can reach it.

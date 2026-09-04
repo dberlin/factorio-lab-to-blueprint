@@ -433,12 +433,21 @@ def test_without_planetary_logistics_hydrogen_arrives_on_four_lanes(
     Budget: 45 s on a sequence-pair build at ~30 s plus preparation keeps this
     under pytest-timeout's 120 s backstop even on a loaded box.
     """
-    _with_belt(monkeypatch, "conveyor-belt-2", researched={
-        "basic-logistics-system", "improved-logistics-system",
-        "high-efficiency-logistics-system",
-    })
-    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=45.0,
-                           candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
+    _with_belt(
+        monkeypatch,
+        "conveyor-belt-2",
+        researched={
+            "basic-logistics-system",
+            "improved-logistics-system",
+            "high-efficiency-logistics-system",
+        },
+    )
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        time_budget_s=45.0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
     assert build.report.ok
     findings = build.report.by_check("flow.external_entry_points")
     # super-magnetic-ring is also belted in on two lanes (two assembler strips,
@@ -453,8 +462,11 @@ def test_at_mk3_hydrogen_above_the_ceiling_arrives_on_two_lanes() -> None:
     of 7 is inert); this pins that the new ``lanes_needed`` detail agrees with
     the lanes actually built.  Fast (about 2 s at the default budget): not
     slow, no budget bump."""
-    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair",
-                           candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
     assert build.report.ok
     findings = build.report.by_check("flow.external_entry_points")
     (finding,) = [f for f in findings if f.detail["item"] == "hydrogen"]
@@ -574,6 +586,7 @@ In `catalog.py`, load the file next to the other data files and expose:
 def sorter_pick_stack(item_id: int, level: int) -> int:
     """Largest cargo stack a sorter of this tier picks off a belt at research ``level``."""
 
+
 def sorter_place_stack(item_id: int, level: int) -> int:
     """Largest stack it places on a belt from a machine buffer at ``level``."""
 ```
@@ -622,8 +635,15 @@ def test_stack_tuples_align_with_sorter_tiers() -> None:
 def test_max_stack_is_four_with_the_piler_else_the_largest_place_stack() -> None:
     assert BuildSpec(groups=(), piler_unlocked=True).max_stack == 4
     assert BuildSpec(groups=(), sorter_place_stacks=(1, 1, 1, 4)).max_stack == 4
-    assert BuildSpec(groups=(), sorter_item_ids=("sorter-1",), sorter_pick_stacks=(1,),
-                     sorter_place_stacks=(2,)).max_stack == 2
+    assert (
+        BuildSpec(
+            groups=(),
+            sorter_item_ids=("sorter-1",),
+            sorter_pick_stacks=(1,),
+            sorter_place_stacks=(2,),
+        ).max_stack
+        == 2
+    )
 
 
 def test_the_defaults_are_the_level_zero_row_of_the_pinned_table() -> None:
@@ -641,7 +661,7 @@ def test_the_defaults_are_the_level_zero_row_of_the_pinned_table() -> None:
 def test_no_technology_set_means_everything_is_researched() -> None:
     tiers = logistics_tiers_for_request(_request(researched=None))
     assert tiers.piler is True
-    assert tiers.sorter_pick_stacks == (1, 1, 1, 4)   # level 6
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 4)  # level 6
     assert tiers.sorter_place_stacks == (1, 1, 1, 4)
 
 
@@ -658,16 +678,17 @@ def test_without_the_integrated_logistics_system_nothing_stacks() -> None:
 def test_the_level_is_the_highest_researched_pile_sorter_tech() -> None:
     researched = frozenset({"integrated-logistics-system", "pile-sorter-1", "pile-sorter-2"})
     tiers = logistics_tiers_for_request(_request(researched=researched))
-    assert tiers.sorter_pick_stacks == (1, 1, 1, 3)   # level 2
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 3)  # level 2
     assert tiers.sorter_place_stacks == (1, 1, 1, 2)
 
 
 def test_the_obsolete_cargo_stacking_ladder_is_ignored() -> None:
     """3301-3305 carry IsObsolete=1; researching them must move nothing."""
-    researched = frozenset({"integrated-logistics-system"} |
-                           {f"sorter-cargo-stacking-{n}" for n in range(1, 6)})
+    researched = frozenset(
+        {"integrated-logistics-system"} | {f"sorter-cargo-stacking-{n}" for n in range(1, 6)}
+    )
     tiers = logistics_tiers_for_request(_request(researched=researched))
-    assert tiers.sorter_pick_stacks == (1, 1, 1, 2)   # level 0, unmoved
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 2)  # level 0, unmoved
     assert tiers.sorter_place_stacks == (1, 1, 1, 1)
 ```
 
@@ -716,23 +737,26 @@ Extend `_tiers_are_ordered` (or add `_stacks_align`) so both tuples have `len(so
 `catalog.LogisticsTiers` gains `piler: bool = False`, `sorter_pick_stacks: tuple[int, ...] = ()`, `sorter_place_stacks: tuple[int, ...] = ()` (defaults keep every constructor in the tests valid). In `logistics_tiers_for_request`, after `unlocked` is known:
 
 ```python
-    piler = "automatic-piler" in unlocked
-    # DSP 0.10.34 has two cargo-stacking ladders and only ONE is reachable.
-    # `sorter-cargo-stacking-{n}` (techs 3301-3305) carries IsObsolete = 1, so
-    # it is hidden from the tree and moves nothing; the live ladder is
-    # `pile-sorter-{n}` (techs 3311-3316).  Reading the obsolete ids here would
-    # grant stacks the game never grants.  See stacking.json.obsolete_ladder.
-    level = (
-        catalog.SORTER_STACKING_LEVELS
-        if researched_ids is None
-        else max(
-            (n for n in range(1, catalog.SORTER_STACKING_LEVELS + 1)
-             if f"pile-sorter-{n}" in researched_ids),
-            default=0,
-        )
+piler = "automatic-piler" in unlocked
+# DSP 0.10.34 has two cargo-stacking ladders and only ONE is reachable.
+# `sorter-cargo-stacking-{n}` (techs 3301-3305) carries IsObsolete = 1, so
+# it is hidden from the tree and moves nothing; the live ladder is
+# `pile-sorter-{n}` (techs 3311-3316).  Reading the obsolete ids here would
+# grant stacks the game never grants.  See stacking.json.obsolete_ladder.
+level = (
+    catalog.SORTER_STACKING_LEVELS
+    if researched_ids is None
+    else max(
+        (
+            n
+            for n in range(1, catalog.SORTER_STACKING_LEVELS + 1)
+            if f"pile-sorter-{n}" in researched_ids
+        ),
+        default=0,
     )
-    pick = tuple(catalog.sorter_pick_stack(catalog.item_id(s), level) for s in sorter_item_ids)
-    place = tuple(catalog.sorter_place_stack(catalog.item_id(s), level) for s in sorter_item_ids)
+)
+pick = tuple(catalog.sorter_pick_stack(catalog.item_id(s), level) for s in sorter_item_ids)
+place = tuple(catalog.sorter_place_stack(catalog.item_id(s), level) for s in sorter_item_ids)
 ```
 
 `piler_unlocked` stays exactly what it was, the Automatic Piler recipe unlock. The `pile-sorter-{n}` entries are `category: upgrades` with no `recipeUnlock` (verified in `src/flab2bp/lab/vendored/data.json`: each has only `technology.prerequisites`), so they are tested by id membership in `researched`, not through `unlocked`; `integrated-logistics-system` is the sole `recipeUnlock` for both `automatic-piler` and `sorter-4`, which is why a save without it has no stacking at all. `catalog.item_id` (`catalog.py:946`) is the non-optional resolver and keeps mypy quiet where `get_item_id` (`:959`) would return `int | None`; `sorter_item_ids` is always a subset of the known sorters, so it cannot raise. Note the tuples are as long as `sorter_item_ids`, which is SHORTER than four on a save without the Pile Sorter — no index may be hard-coded, only `[-1]` for the fastest tier.
@@ -785,13 +809,23 @@ def _stacked(
     ids: tuple[str, ...] = ("sorter-1", "sorter-2", "sorter-3", "sorter-4"),
 ) -> BuildSpec:
     return BuildSpec(
-        groups=(MachineGroup(recipe_id="deuterium", machine_item_id="miniature-particle-collider", count=1,
-                             inputs_per_machine={"hydrogen": Fraction(4)},
-                             outputs_per_machine={"deuterium": Fraction(1, 2)}),),
-        external_inputs={"hydrogen": Fraction(4)}, outputs={"deuterium": Fraction(1, 2)},
-        belt_item_id="conveyor-belt-3", belt_items_per_second=Fraction(30),
+        groups=(
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=1,
+                inputs_per_machine={"hydrogen": Fraction(4)},
+                outputs_per_machine={"deuterium": Fraction(1, 2)},
+            ),
+        ),
+        external_inputs={"hydrogen": Fraction(4)},
+        outputs={"deuterium": Fraction(1, 2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=Fraction(30),
         sorter_item_ids=ids,
-        belt_stack=belt_stack, sorter_pick_stacks=pick, sorter_place_stacks=place,
+        belt_stack=belt_stack,
+        sorter_pick_stacks=pick,
+        sorter_place_stacks=place,
         piler_unlocked=piler,
     )
 
@@ -802,8 +836,14 @@ def test_planning_stack_is_one_when_the_url_does_not_stack() -> None:
 
 
 def test_an_external_input_is_planned_at_the_bus_stack() -> None:
-    assert _stacked(belt_stack=2, pick=(1, 1, 1, 2), place=(1, 1, 1, 1)).planning_stack("hydrogen") == 2   # level 0
-    assert _stacked(belt_stack=4, pick=(1, 1, 1, 4), place=(1, 1, 1, 3)).planning_stack("hydrogen") == 4   # level 4
+    assert (
+        _stacked(belt_stack=2, pick=(1, 1, 1, 2), place=(1, 1, 1, 1)).planning_stack("hydrogen")
+        == 2
+    )  # level 0
+    assert (
+        _stacked(belt_stack=4, pick=(1, 1, 1, 4), place=(1, 1, 1, 3)).planning_stack("hydrogen")
+        == 4
+    )  # level 4
 
 
 def test_a_bus_without_a_pile_sorter_is_refused_not_capped() -> None:
@@ -812,31 +852,61 @@ def test_a_bus_without_a_pile_sorter_is_refused_not_capped() -> None:
     # THREE ids and three-entry tuples: `integrated-logistics-system` is the
     # sole unlock for sorter-4, so a save without it has no Pile Sorter tier at
     # all, and Task 7's validator requires the tuples to match the ids.
-    spec = _stacked(belt_stack=2, pick=(1, 1, 1), place=(1, 1, 1),
-                    ids=("sorter-1", "sorter-2", "sorter-3"))
+    spec = _stacked(
+        belt_stack=2, pick=(1, 1, 1), place=(1, 1, 1), ids=("sorter-1", "sorter-2", "sorter-3")
+    )
     with pytest.raises(NoValidLayout, match=r"stack 2.*pick only 1.*Integrated Logistics System"):
         spec.planning_stack("hydrogen")
 
 
 def test_a_bus_above_the_researched_pick_stack_is_refused() -> None:
-    spec = _stacked(belt_stack=4, pick=(1, 1, 1, 3), place=(1, 1, 1, 2))   # level 2
+    spec = _stacked(belt_stack=4, pick=(1, 1, 1, 3), place=(1, 1, 1, 2))  # level 2
     with pytest.raises(NoValidLayout, match=r"stack 4.*pick only 3.*Pile Sorter Upgrade"):
         spec.planning_stack("hydrogen")
 
 
 def test_a_produced_item_is_planned_at_the_place_stack() -> None:
-    assert _stacked(belt_stack=2, place=(1, 1, 1, 4), pick=(1, 1, 1, 4)).planning_stack("deuterium") == 4
-    assert _stacked(belt_stack=2, place=(1, 1, 1, 2), pick=(1, 1, 1, 2)).planning_stack("deuterium") == 2
-    assert _stacked(belt_stack=2, place=(1, 1, 1, 1), pick=(1, 1, 1, 2)).planning_stack("deuterium") == 1
+    assert (
+        _stacked(belt_stack=2, place=(1, 1, 1, 4), pick=(1, 1, 1, 4)).planning_stack("deuterium")
+        == 4
+    )
+    assert (
+        _stacked(belt_stack=2, place=(1, 1, 1, 2), pick=(1, 1, 1, 2)).planning_stack("deuterium")
+        == 2
+    )
+    assert (
+        _stacked(belt_stack=2, place=(1, 1, 1, 1), pick=(1, 1, 1, 2)).planning_stack("deuterium")
+        == 1
+    )
 
 
 def test_the_piler_raises_a_produced_lane_along_the_doubling_ladder() -> None:
     # A piler doubles, so the reachable targets are 1, 2 and 4 -- never 3 --
     # and piling is elective, so it stops at what the sink can pick.
-    assert _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 1), pick=(1, 1, 1, 2)).planning_stack("deuterium") == 2
-    assert _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 2), pick=(1, 1, 1, 3)).planning_stack("deuterium") == 2
-    assert _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 3), pick=(1, 1, 1, 4)).planning_stack("deuterium") == 4
-    assert _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 4), pick=(1, 1, 1, 4)).planning_stack("deuterium") == 4
+    assert (
+        _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 1), pick=(1, 1, 1, 2)).planning_stack(
+            "deuterium"
+        )
+        == 2
+    )
+    assert (
+        _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 2), pick=(1, 1, 1, 3)).planning_stack(
+            "deuterium"
+        )
+        == 2
+    )
+    assert (
+        _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 3), pick=(1, 1, 1, 4)).planning_stack(
+            "deuterium"
+        )
+        == 4
+    )
+    assert (
+        _stacked(belt_stack=2, piler=True, place=(1, 1, 1, 4), pick=(1, 1, 1, 4)).planning_stack(
+            "deuterium"
+        )
+        == 4
+    )
 
 
 def test_a_place_stack_the_consumer_cannot_pick_is_refused_not_capped() -> None:
@@ -851,11 +921,20 @@ def test_an_item_fed_from_the_bus_and_from_inside_is_planned_at_the_smaller_stac
     # Level 4: the Pile Sorter picks 4 and places 3.  The bus arrives at 4, the
     # internal producer's sorter places 3, and a merge is judged at its minimum.
     spec = _stacked(belt_stack=4, place=(1, 1, 1, 3), pick=(1, 1, 1, 4))
-    both_fed = spec.model_copy(update={"groups": (*spec.groups, MachineGroup(
-        recipe_id="hydrogen-cracking", machine_item_id="oil-refinery", count=1,
-        inputs_per_machine={"refined-oil": Fraction(1)},
-        outputs_per_machine={"hydrogen": Fraction(3)},
-    ))})
+    both_fed = spec.model_copy(
+        update={
+            "groups": (
+                *spec.groups,
+                MachineGroup(
+                    recipe_id="hydrogen-cracking",
+                    machine_item_id="oil-refinery",
+                    count=1,
+                    inputs_per_machine={"refined-oil": Fraction(1)},
+                    outputs_per_machine={"hydrogen": Fraction(3)},
+                ),
+            )
+        }
+    )
     assert both_fed.planning_stack("hydrogen") == 3
     assert spec.planning_stack("hydrogen") == 4
 ```
@@ -969,12 +1048,20 @@ Using the module's `place`, `belt`, `machine`, `sorter`, `splitter`, `fired`, `h
 ```python
 def test_flow_belt_capacity_passes_a_stacked_entry_run() -> None:
     # entry belt at the URL's stack 2: 40 items/s is 20 cargo/s on a 30/s belt
-    r = validate(fed_machine(item_id=2003), _stacked_spec(Fraction(40), belt_stack=2, pick=2), ids=TWO_INPUT_IDS)
+    r = validate(
+        fed_machine(item_id=2003),
+        _stacked_spec(Fraction(40), belt_stack=2, pick=2),
+        ids=TWO_INPUT_IDS,
+    )
     assert not fired(r, "flow.belt_capacity")
 
 
 def test_flow_belt_capacity_refuses_the_same_run_at_stack_one() -> None:
-    r = validate(fed_machine(item_id=2003), _stacked_spec(Fraction(40), belt_stack=1, pick=2), ids=TWO_INPUT_IDS)
+    r = validate(
+        fed_machine(item_id=2003),
+        _stacked_spec(Fraction(40), belt_stack=1, pick=2),
+        ids=TWO_INPUT_IDS,
+    )
     assert fired(r, "flow.belt_capacity")
 
 
@@ -995,12 +1082,20 @@ def test_stack_of_a_merge_is_the_minimum_over_its_sources() -> None:
 def test_flow_stack_pickable_fires_for_any_sorter_below_a_pile_sorter() -> None:
     # Mk.I to Mk.III pick 1 at every research level (spec §5.1), so a stacked
     # bus over any of them is a refusal, not a slow build.
-    r = validate(fed_machine(item_id=2003, sorter_id=2013), _stacked_spec(Fraction(4), belt_stack=2, pick=2), ids=TWO_INPUT_IDS)
+    r = validate(
+        fed_machine(item_id=2003, sorter_id=2013),
+        _stacked_spec(Fraction(4), belt_stack=2, pick=2),
+        ids=TWO_INPUT_IDS,
+    )
     assert fired(r, "flow.stack_pickable")
 
 
 def test_flow_stack_pickable_is_quiet_for_a_pile_sorter() -> None:
-    r = validate(fed_machine(item_id=2003, sorter_id=PILE), _stacked_spec(Fraction(4), belt_stack=4, pick=4), ids=TWO_INPUT_IDS)
+    r = validate(
+        fed_machine(item_id=2003, sorter_id=PILE),
+        _stacked_spec(Fraction(4), belt_stack=4, pick=4),
+        ids=TWO_INPUT_IDS,
+    )
     assert not fired(r, "flow.stack_pickable")
 ```
 
@@ -1082,12 +1177,19 @@ def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch: pytest.MonkeyP
     so one Mk.III entry lane carries it and no strip is shortened.  Budget as
     the other slow tests."""
     _with_belt(monkeypatch, "conveyor-belt-3", stack=Fraction(2))
-    build = pipeline.build(DEUTERON_URL, strategy="sequence-pair", time_budget_s=45.0,
-                           candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,))
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        time_budget_s=45.0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
     assert build.report.ok
     assert build.spec.belt_stack == 2
-    hydrogen = [f for f in build.report.by_check("flow.external_entry_points")
-                if f.detail["item"] == "hydrogen"]
+    hydrogen = [
+        f
+        for f in build.report.by_check("flow.external_entry_points")
+        if f.detail["item"] == "hydrogen"
+    ]
     assert not hydrogen  # super-magnetic-ring's two lanes are unrelated to stacking
 ```
 
@@ -1203,23 +1305,29 @@ git commit -m "feat(dsp): decode, build, and re-encode an Automatic Piler byte f
 class LaneLoad:
     lane_id: str
     strip_ordinal: int
-    demand: Fraction       # items/s
-    stack: int             # planned stack the lane carries before piling
+    demand: Fraction  # items/s
+    stack: int  # planned stack the lane carries before piling
+
 
 @dataclass(frozen=True, slots=True)
 class PilerPlan:
     lane_id: str
-    count: int             # pilers IN SERIES at the lane's tail; a piler doubles
-    stack: int             # the stack the LAST of them emits
+    count: int  # pilers IN SERIES at the lane's tail; a piler doubles
+    stack: int  # the stack the LAST of them emits
+
 
 @dataclass(frozen=True, slots=True)
 class MergePlan:
-    stack: int                            # the uniform stack every belt into the sink carries
-    groups: tuple[tuple[str, ...], ...]   # lane ids sharing one belt each; a group of one is a parallel belt
-    pilers: tuple[PilerPlan, ...]         # one per lane whose planned stack was below `stack`
+    stack: int  # the uniform stack every belt into the sink carries
+    groups: tuple[
+        tuple[str, ...], ...
+    ]  # lane ids sharing one belt each; a group of one is a parallel belt
+    pilers: tuple[PilerPlan, ...]  # one per lane whose planned stack was below `stack`
 
-def plan_merges(loads: Sequence[LaneLoad], *, lane_capacity: Fraction, max_stack: int,
-                sink_pick_stack: int) -> MergePlan: ...
+
+def plan_merges(
+    loads: Sequence[LaneLoad], *, lane_capacity: Fraction, max_stack: int, sink_pick_stack: int
+) -> MergePlan: ...
 ```
 
 **Facts this task follows (Ruling P12):**
@@ -1235,7 +1343,9 @@ def _load(i: int, demand: int, stack: int = 1) -> LaneLoad:
 
 
 def _plan(loads: list[LaneLoad], *, sink_pick_stack: int = 4) -> MergePlan:
-    return plan_merges(loads, lane_capacity=Fraction(30), max_stack=4, sink_pick_stack=sink_pick_stack)
+    return plan_merges(
+        loads, lane_capacity=Fraction(30), max_stack=4, sink_pick_stack=sink_pick_stack
+    )
 
 
 def test_four_full_lanes_pile_to_four_through_two_pilers_each() -> None:
@@ -1251,7 +1361,10 @@ def test_two_twenties_pile_to_the_smallest_stack_that_fits() -> None:
     plan = _plan([_load(0, 20), _load(1, 20)], sink_pick_stack=2)
     assert plan.stack == 2
     assert plan.groups == (("lane-0", "lane-1"),)
-    assert plan.pilers == (PilerPlan("lane-0", count=1, stack=2), PilerPlan("lane-1", count=1, stack=2))
+    assert plan.pilers == (
+        PilerPlan("lane-0", count=1, stack=2),
+        PilerPlan("lane-1", count=1, stack=2),
+    )
 
 
 def test_a_lane_that_starts_stacked_needs_one_piler_where_an_unstacked_one_needs_two() -> None:
@@ -1269,7 +1382,10 @@ def test_a_lane_at_stack_three_reaches_four_in_one_piler() -> None:
     # A level-3 Pile Sorter places 3; 2 x 3 caps at PILER_MAX_STACK.
     plan = _plan([_load(0, 40, stack=3), _load(1, 40, stack=3)])
     assert plan.stack == 4
-    assert plan.pilers == (PilerPlan("lane-0", count=1, stack=4), PilerPlan("lane-1", count=1, stack=4))
+    assert plan.pilers == (
+        PilerPlan("lane-0", count=1, stack=4),
+        PilerPlan("lane-1", count=1, stack=4),
+    )
 
 
 def test_lanes_that_already_fit_share_a_belt_without_a_piler() -> None:

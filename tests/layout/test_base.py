@@ -74,9 +74,7 @@ def test_area_frame_requires_primary_band_first() -> None:
 
 def test_finalized_placement_area_comes_from_immutable_frame() -> None:
     placement = Placement(
-        buildings=(
-            PlacedBuilding(item_id=2302, model_index=62, x=0, y=0, width=3, height=3),
-        )
+        buildings=(PlacedBuilding(item_id=2302, model_index=62, x=0, y=0, width=3, height=3),)
     )
     frame = AreaFrame(12, 7, 40, (40, 60, 80), False)
 

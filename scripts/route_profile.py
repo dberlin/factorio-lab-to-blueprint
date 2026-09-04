@@ -55,9 +55,7 @@ from flab2bp.spec import BuildSpec  # noqa: E402
 
 
 class _Layout(Protocol):
-    def lay_out(
-        self, spec: BuildSpec, *, time_budget_s: float = 15.0
-    ) -> Placement: ...
+    def lay_out(self, spec: BuildSpec, *, time_budget_s: float = 15.0) -> Placement: ...
 
 
 class _Strategy(Protocol):
@@ -102,9 +100,18 @@ def _spec(url_id: str, candidate_policy: CandidatePolicy) -> BuildSpec:
 
 
 PHASES = (
-    "plan_strips", "strip_families", "prepare", "place_coaters", "coater_frame_bans",
-    "junction_ban", "power_plan", "static_risks", "relaxed_search", "last_mile",
-    "finalize", "validate",
+    "plan_strips",
+    "strip_families",
+    "prepare",
+    "place_coaters",
+    "coater_frame_bans",
+    "junction_ban",
+    "power_plan",
+    "static_risks",
+    "relaxed_search",
+    "last_mile",
+    "finalize",
+    "validate",
 )
 
 
@@ -131,9 +138,7 @@ def _last_mile_row(stats: Mapping[str, object]) -> dict[str, float]:
     run never entered the pass, which is a fact worth printing rather than a
     zero worth inventing.
     """
-    return {
-        key: float(str(stats[key])) for key in _LAST_MILE_KEYS if key in stats
-    }
+    return {key: float(str(stats[key])) for key in _LAST_MILE_KEYS if key in stats}
 
 
 class Tally:
@@ -212,9 +217,7 @@ def install(tally: Tally) -> Callable[[], None]:
         else:
             tally.astar_hit += 1
             tally.path_cells += len(out.path)
-        tally.calls.append(
-            (out.expansions, dt, -1 if out.path is None else len(out.path))
-        )
+        tally.calls.append((out.expansions, dt, -1 if out.path is None else len(out.path)))
         return out
 
     def route_all(
@@ -307,9 +310,7 @@ def install(tally: Tally) -> Callable[[], None]:
         demands: dict[Cell, tuple[int, int, int]] | None = None,
     ) -> int:
         t0 = time.perf_counter()
-        out = orig_reserve(
-            canvas, nets, twice=twice, failed_ports=failed_ports, demands=demands
-        )
+        out = orig_reserve(canvas, nets, twice=twice, failed_ports=failed_ports, demands=demands)
         tally.add("reserve_port_access", time.perf_counter() - t0)
         return out
 
@@ -381,27 +382,42 @@ def install(tally: Tally) -> Callable[[], None]:
         return undo
 
     phase_undo = [
-        timed("prepare", [
-            (freeform, "_prepare_routing_problem"),
-            (sequence_solver, "_prepare_routing_problem"),
-        ]),
+        timed(
+            "prepare",
+            [
+                (freeform, "_prepare_routing_problem"),
+                (sequence_solver, "_prepare_routing_problem"),
+            ],
+        ),
         timed("place_coaters", [(freeform, "_place_coaters")]),
-        timed("coater_frame_bans", [
-            (freeform, "_projected_coater_junction_bans_by_frame"),
-        ]),
+        timed(
+            "coater_frame_bans",
+            [
+                (freeform, "_projected_coater_junction_bans_by_frame"),
+            ],
+        ),
         timed("junction_ban", [(freeform, "_prepared_junction_ban")]),
         timed("power_plan", [(freeform, "_power_plan")]),
-        timed("static_risks", [
-            (freeform, "_staged_static_relation_projection_risks_uncached"),
-        ]),
-        timed("plan_strips", [
-            (freeform, "plan_strips"),
-            (sequence_solver, "plan_strips"),
-        ]),
-        timed("strip_families", [
-            (strip_variants, "generate_strip_families"),
-            (sequence_solver, "generate_strip_families"),
-        ]),
+        timed(
+            "static_risks",
+            [
+                (freeform, "_staged_static_relation_projection_risks_uncached"),
+            ],
+        ),
+        timed(
+            "plan_strips",
+            [
+                (freeform, "plan_strips"),
+                (sequence_solver, "plan_strips"),
+            ],
+        ),
+        timed(
+            "strip_families",
+            [
+                (strip_variants, "generate_strip_families"),
+                (sequence_solver, "generate_strip_families"),
+            ],
+        ),
         timed("relaxed_search", [(global_router, "_search_relaxed")]),
         timed("finalize", [(finalize, "finalize_placement")]),
         timed("validate", [(validate, "validate")]),
@@ -508,13 +524,13 @@ def heights(
         verdict = f"REFUSED: {exc.reason[:80]}"
     finally:
         freeform._build = orig_build
-    print(
-        f"=== {url_id} ceiling={ceiling}s  {time.perf_counter() - t0:.1f}s  {verdict}"
-    )
+    print(f"=== {url_id} ceiling={ceiling}s  {time.perf_counter() - t0:.1f}s  {verdict}")
     for i, row in enumerate(seen):
-        print(f"  #{i:<2} height {row['height']:>5}  w={str(row['width']):>5}  "
-              f"route {-1.0 if row['route_s'] is None else row['route_s']:6.1f}s "
-              f" failed {row['failed']}")
+        print(
+            f"  #{i:<2} height {row['height']:>5}  w={str(row['width']):>5}  "
+            f"route {-1.0 if row['route_s'] is None else row['route_s']:6.1f}s "
+            f" failed {row['failed']}"
+        )
     return 0
 
 
@@ -569,67 +585,95 @@ def main() -> int:
         routing = tally.t.get("route_all", 0.0)
         inner = tally.t.get("astar", 0.0)
         if args.json:
-            print(json.dumps({
-                "url_id": args.url_id,
-                "strategy": args.strategy,
-                "power": True,
-                "budget_s": args.budget,
-                "run": run + 1,
-                "repeat": args.repeat,
-                "verdict": verdict,
-                "wall_s": wall,
-                "route_all_s": routing,
-                "astar_s": inner,
-                "astar_routing_share": inner / max(routing, 1e-9),
-                "astar_wall_share": inner / max(wall, 1e-9),
-                "expansions": tally.expansions,
-                "hits": tally.astar_hit,
-                "misses": tally.astar_none,
-                "phases": {
-                    key: {"s": tally.t[key], "n": tally.n[key]}
-                    for key in PHASES
-                    if key in tally.t
-                },
-                "prepare_calls_s": list(tally.prepare_calls),
-                "route_backend": route_kernel.selected_backend(),
-                "last_mile_stats": (
-                    {} if placement is None else _last_mile_row(placement.stats)
-                ),
-            }, separators=(",", ":"), sort_keys=True))
+            print(
+                json.dumps(
+                    {
+                        "url_id": args.url_id,
+                        "strategy": args.strategy,
+                        "power": True,
+                        "budget_s": args.budget,
+                        "run": run + 1,
+                        "repeat": args.repeat,
+                        "verdict": verdict,
+                        "wall_s": wall,
+                        "route_all_s": routing,
+                        "astar_s": inner,
+                        "astar_routing_share": inner / max(routing, 1e-9),
+                        "astar_wall_share": inner / max(wall, 1e-9),
+                        "expansions": tally.expansions,
+                        "hits": tally.astar_hit,
+                        "misses": tally.astar_none,
+                        "phases": {
+                            key: {"s": tally.t[key], "n": tally.n[key]}
+                            for key in PHASES
+                            if key in tally.t
+                        },
+                        "prepare_calls_s": list(tally.prepare_calls),
+                        "route_backend": route_kernel.selected_backend(),
+                        "last_mile_stats": (
+                            {} if placement is None else _last_mile_row(placement.stats)
+                        ),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            )
             continue
 
-        print(
-            f"=== {args.url_id} budget={args.budget} run {run + 1}/{args.repeat}"
-        )
+        print(f"=== {args.url_id} budget={args.budget} run {run + 1}/{args.repeat}")
         print(f"    {verdict}")
-        print(f"    wall {wall:.2f}s   routing passes {tally.passes}   "
-              f"rip-up rounds {tally.rounds}")
+        print(
+            f"    wall {wall:.2f}s   routing passes {tally.passes}   rip-up rounds {tally.rounds}"
+        )
         print(f"    _route_all total {routing:.2f}s ({100 * routing / wall:.0f}% of wall)")
-        for key in ("astar", "commit_paths", "make_grid", "refresh_history",
-                    "build_landmarks", "reserve_port_access", "merge_frontier"):
+        for key in (
+            "astar",
+            "commit_paths",
+            "make_grid",
+            "refresh_history",
+            "build_landmarks",
+            "reserve_port_access",
+            "merge_frontier",
+        ):
             if key in tally.t:
-                print(f"      {key:<22} {tally.t[key]:7.2f}s  "
-                      f"n={tally.n[key]:<7} "
-                      f"{100 * tally.t[key] / max(routing, 1e-9):5.1f}% of routing")
+                print(
+                    f"      {key:<22} {tally.t[key]:7.2f}s  "
+                    f"n={tally.n[key]:<7} "
+                    f"{100 * tally.t[key] / max(routing, 1e-9):5.1f}% of routing"
+                )
         other = routing - sum(
             tally.t.get(k, 0.0)
-            for k in ("astar", "commit_paths", "make_grid", "refresh_history",
-                      "build_landmarks", "reserve_port_access")
+            for k in (
+                "astar",
+                "commit_paths",
+                "make_grid",
+                "refresh_history",
+                "build_landmarks",
+                "reserve_port_access",
+            )
         )
-        print(f"      {'(route_all itself)':<22} {other:7.2f}s  "
-              f"{100 * other / max(routing, 1e-9):5.1f}% of routing")
+        print(
+            f"      {'(route_all itself)':<22} {other:7.2f}s  "
+            f"{100 * other / max(routing, 1e-9):5.1f}% of routing"
+        )
         for key in PHASES:
             if key in tally.t:
-                print(f"      {key:<22} {tally.t[key]:7.2f}s  n={tally.n[key]:<7} "
-                      f"{100 * tally.t[key] / max(wall, 1e-9):5.1f}% of wall")
+                print(
+                    f"      {key:<22} {tally.t[key]:7.2f}s  n={tally.n[key]:<7} "
+                    f"{100 * tally.t[key] / max(wall, 1e-9):5.1f}% of wall"
+                )
         if tally.prepare_calls:
             print("      prepare per call: " + ", ".join(f"{s:.2f}" for s in tally.prepare_calls))
-        print(f"    A*: {tally.astar_hit} found / {tally.astar_none} none, "
-              f"{tally.expansions:,} expansions, "
-              f"{tally.path_cells:,} path cells")
+        print(
+            f"    A*: {tally.astar_hit} found / {tally.astar_none} none, "
+            f"{tally.expansions:,} expansions, "
+            f"{tally.path_cells:,} path cells"
+        )
         if tally.expansions:
-            print(f"    {tally.expansions / max(inner, 1e-9):,.0f} expansions/s, "
-                  f"{1e6 * inner / tally.expansions:.2f} us/expansion")
+            print(
+                f"    {tally.expansions / max(inner, 1e-9):,.0f} expansions/s, "
+                f"{1e6 * inner / tally.expansions:.2f} us/expansion"
+            )
         # WHERE THE EXPANSIONS GO -- a search that finds nothing still spends
         # them, and a cap-sized failure spends `_MAX_EXPANSIONS` of them.
         found = [c for c in tally.calls if c[2] >= 0]
@@ -639,19 +683,25 @@ def main() -> int:
                 continue
             exp = sum(r[0] for r in rows)
             sec = sum(r[1] for r in rows)
-            print(f"      {name}: n={len(rows):<5} {exp:>10,} exp "
-                  f"({100 * exp / max(tally.expansions, 1):4.1f}%)  {sec:6.2f}s "
-                  f"({100 * sec / max(inner, 1e-9):4.1f}%)")
+            print(
+                f"      {name}: n={len(rows):<5} {exp:>10,} exp "
+                f"({100 * exp / max(tally.expansions, 1):4.1f}%)  {sec:6.2f}s "
+                f"({100 * sec / max(inner, 1e-9):4.1f}%)"
+            )
         if found:
             ratio = sorted(r[0] / max(r[2], 1) for r in found)
             exps = sorted(r[0] for r in found)
             mid = len(found) // 2
-            print(f"      found: median {exps[mid]:,} exp, p90 "
-                  f"{exps[int(0.9 * len(exps))]:,}, max {exps[-1]:,}; "
-                  f"median exp/cell {ratio[mid]:.1f}")
+            print(
+                f"      found: median {exps[mid]:,} exp, p90 "
+                f"{exps[int(0.9 * len(exps))]:,}, max {exps[-1]:,}; "
+                f"median exp/cell {ratio[mid]:.1f}"
+            )
         top = sorted(tally.calls, key=lambda r: -r[0])[:10]
-        print("      ten dearest searches (exp, s, len): "
-              + ", ".join(f"({e:,},{s:.2f},{n})" for e, s, n in top))
+        print(
+            "      ten dearest searches (exp, s, len): "
+            + ", ".join(f"({e:,},{s:.2f},{n})" for e, s, n in top)
+        )
         if prof is not None:
             buf = io.StringIO()
             pstats.Stats(prof, stream=buf).sort_stats("tottime").print_stats(25)

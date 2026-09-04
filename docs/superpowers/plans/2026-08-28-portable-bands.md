@@ -175,14 +175,37 @@ In `layout/band_policy.py`:
 
 ```python
 type BandSelection = Literal[
-    "portable", "4", "8", "16", "20", "32", "40",
-    "60", "80", "100", "120", "160", "200",
+    "portable",
+    "4",
+    "8",
+    "16",
+    "20",
+    "32",
+    "40",
+    "60",
+    "80",
+    "100",
+    "120",
+    "160",
+    "200",
 ]
 
 BAND_SELECTIONS: tuple[BandSelection, ...] = (
-    "portable", "4", "8", "16", "20", "32", "40",
-    "60", "80", "100", "120", "160", "200",
+    "portable",
+    "4",
+    "8",
+    "16",
+    "20",
+    "32",
+    "40",
+    "60",
+    "80",
+    "100",
+    "120",
+    "160",
+    "200",
 )
+
 
 @dataclass(frozen=True, slots=True)
 class BandPolicy:
@@ -629,7 +652,7 @@ Parse `pipeline.build(..., band: BandSelection = "portable")` once, pass policy 
 
 ```python
 # Add to build()'s keyword-only parameters.
-band: BandSelection = "portable",
+band: BandSelection = ("portable",)
 
 policy = BandPolicy.parse(band)
 layout = _new_layout(

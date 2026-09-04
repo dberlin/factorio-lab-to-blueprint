@@ -247,8 +247,12 @@ which is what stacks them into a wall.
 `_side_seatings` (`strip_variants.py:1210-1232`) is the decisive one:
 
 ```python
-side_lanes = tuple(sorted((lane for lane in lanes if lane.side == side),
-                          key=lambda lane: (lane.side_index, lane.lane_id)))
+side_lanes = tuple(
+    sorted(
+        (lane for lane in lanes if lane.side == side),
+        key=lambda lane: (lane.side_index, lane.lane_id),
+    )
+)
 ...
 for selected in combinations(side_profiles, len(side_lanes)):
     ordered = tuple(sorted(selected, key=lambda profile: profile.lane_y))
@@ -336,16 +340,18 @@ a pack**; `internal_routing.last_mile` is `None`, and `_power_plan` is skipped t
 The combined result at `freeform.py:15141-15147` sets
 
 ```python
-exhaustive=(not prepared.preparation_failures and external_routing.exhaustive and ...)
+exhaustive = not prepared.preparation_failures and external_routing.exhaustive and ...
 ```
 
 so `routing.exhaustive is False`. `_proof_scoped_no_goods` (`freeform.py:14791-14883`) opens with
 
 ```python
-if (not routing.exhaustive
+if (
+    not routing.exhaustive
     or routing.status is not DetailedRouteStatus.STRANDED
     or not routing.failures
-    or any(failure.kind is RouteFailureKind.BUDGET for failure in routing.failures)):
+    or any(failure.kind is RouteFailureKind.BUDGET for failure in routing.failures)
+):
     return (), None, ()
 ```
 
@@ -419,8 +425,7 @@ headline (R1 option (a)) and nothing else: 0/3 clean.
 `PHASE_E_LANEORDER=1`, at `strip_variants.py:928`:
 
 ```python
-input_items = tuple(sorted(group.inputs,
-                           key=lambda item: (item not in spec.external_inputs, item)))
+input_items = tuple(sorted(group.inputs, key=lambda item: (item not in spec.external_inputs, item)))
 ```
 
 ```
@@ -589,8 +594,7 @@ need two access corridors"*:
 ```python
 internally_produced = {item for other in groups.values() for item in other.outputs}
 needs_two_approaches = set(spec.external_inputs) & internally_produced
-input_items = tuple(sorted(group.inputs,
-                           key=lambda item: (item not in needs_two_approaches, item)))
+input_items = tuple(sorted(group.inputs, key=lambda item: (item not in needs_two_approaches, item)))
 ```
 
 * **Exactness.** No geometry rule is relaxed. `_seat_inputs` still enforces the row caps and the

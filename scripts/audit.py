@@ -276,9 +276,7 @@ _SPECS: dict[
 
 def _specs_for(
     url: str,
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
 ) -> tuple[BuildSpec, ...]:
     key = (url, candidate_policies)
     if key not in _SPECS:
@@ -533,9 +531,7 @@ def build_jobs(
     tiers: set[Tier],
     budgets: list[float],
     workers: int,
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     only: set[str] | None = None,
     skip: set[str] | None = None,
     arrangements: int | None = None,
@@ -598,7 +594,7 @@ def _head_commit() -> str:
             check=True,
             timeout=10.0,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return "unknown"
     return finished.stdout.strip() or "unknown"
 
@@ -613,34 +609,28 @@ _JSONL: list[dict[str, object]] = []
 
 
 def record(tallies: dict[str, Tally], r: Result) -> None:
-    row: dict[str, object] = (
-        {
-            "strategy": r.job.strategy,
-            "commit": _COMMIT,
-            "route_backend": r.route_backend,
-            "url_id": r.job.url_id,
-            "spec_index": r.job.spec_index,
-            "spec_label": r.spec_label,
-            "power": r.job.power,
-            "budget": r.job.budget,
-            "status": r.status,
-            "area": r.area,
-            "seconds": r.seconds,
-            "build_wall_time_s": r.seconds,
-            "projection_frame_candidates": r.projection_frame_candidates,
-            "projection_count": r.projection_count,
-            "projection_collider_pairs": r.projection_collider_pairs,
-            "projection_power_pairs": r.projection_power_pairs,
-            "projection_sorters": r.projection_sorters,
-            "attempt_failures": tuple(
-                asdict(failure) for failure in r.attempt_failures
-            ),
-            "projection_failures": tuple(
-                asdict(failure) for failure in r.projection_failures
-            ),
-            "detail": r.detail,
-        }
-    )
+    row: dict[str, object] = {
+        "strategy": r.job.strategy,
+        "commit": _COMMIT,
+        "route_backend": r.route_backend,
+        "url_id": r.job.url_id,
+        "spec_index": r.job.spec_index,
+        "spec_label": r.spec_label,
+        "power": r.job.power,
+        "budget": r.job.budget,
+        "status": r.status,
+        "area": r.area,
+        "seconds": r.seconds,
+        "build_wall_time_s": r.seconds,
+        "projection_frame_candidates": r.projection_frame_candidates,
+        "projection_count": r.projection_count,
+        "projection_collider_pairs": r.projection_collider_pairs,
+        "projection_power_pairs": r.projection_power_pairs,
+        "projection_sorters": r.projection_sorters,
+        "attempt_failures": tuple(asdict(failure) for failure in r.attempt_failures),
+        "projection_failures": tuple(asdict(failure) for failure in r.projection_failures),
+        "detail": r.detail,
+    }
     # Present exactly where a placement was measured.  A reader takes them with
     # `row.get`: a REFUSED or CRASH row never had a placement, so it carries no
     # wall to compare and no overshoot to report.

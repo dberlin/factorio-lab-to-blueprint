@@ -54,6 +54,7 @@ def test_benchmark_result_has_stable_cases_and_counters() -> None:
         assert case["addon_result_cache_hits"] >= 0
         assert case["addon_splitter_result_cache_hits"] >= 0
 
+
 def test_fixture_loader_returns_unfinalized_geometry() -> None:
     for name in ("small", "medium", "large"):
         placement = benchmark_projection._load_case(name)
@@ -427,12 +428,8 @@ def test_cli_combines_projection_and_build_per_case_comparisons(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    projection_baseline = BenchmarkResult(
-        cases={"small": _case(median_s=1.0, p95_s=2.0, area=100)}
-    )
-    projection_after = BenchmarkResult(
-        cases={"small": _case(median_s=1.1, p95_s=2.2, area=101)}
-    )
+    projection_baseline = BenchmarkResult(cases={"small": _case(median_s=1.0, p95_s=2.0, area=100)})
+    projection_after = BenchmarkResult(cases={"small": _case(median_s=1.1, p95_s=2.2, area=101)})
     monkeypatch.setattr(
         benchmark_projection,
         "run_benchmark",
@@ -460,13 +457,11 @@ def test_cli_combines_projection_and_build_per_case_comparisons(
     build_after_path = tmp_path / "portable-band-build-after.json"
     comparison_path = tmp_path / "portable-band-comparison.json"
     build_baseline_path.write_text(
-        json.dumps(_build_record(strategy="freeform", wall_time_s=10.0, area=100.0))
-        + "\n",
+        json.dumps(_build_record(strategy="freeform", wall_time_s=10.0, area=100.0)) + "\n",
         encoding="utf-8",
     )
     build_after_path.write_text(
-        json.dumps(_build_record(strategy="freeform", wall_time_s=12.0, area=101.0))
-        + "\n",
+        json.dumps(_build_record(strategy="freeform", wall_time_s=12.0, area=101.0)) + "\n",
         encoding="utf-8",
     )
 
@@ -496,12 +491,8 @@ def test_projection_only_cli_writes_failed_gate_before_nonzero_exit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    baseline = BenchmarkResult(
-        cases={"small": _case(median_s=1.0, p95_s=2.0, area=100)}
-    )
-    regressed = BenchmarkResult(
-        cases={"small": _case(median_s=1.0, p95_s=3.1, area=100)}
-    )
+    baseline = BenchmarkResult(cases={"small": _case(median_s=1.0, p95_s=2.0, area=100)})
+    regressed = BenchmarkResult(cases={"small": _case(median_s=1.0, p95_s=3.1, area=100)})
     monkeypatch.setattr(benchmark_projection, "run_benchmark", lambda samples: regressed)
     baseline_path = tmp_path / "baseline.json"
     output_path = tmp_path / "after.json"

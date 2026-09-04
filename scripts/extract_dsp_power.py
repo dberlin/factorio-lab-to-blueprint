@@ -141,9 +141,7 @@ def main() -> int:
         # starts from `isPowerNode`, so a consumer's block would be dead weight.
         block = None
         if desc is not None and desc["node"]:
-            block = {
-                key: bool(desc[src]) if flag else desc[src] for key, src, flag in FIELDS
-            }
+            block = {key: bool(desc[src]) if flag else desc[src] for key, src, flag in FIELDS}
         if row.get("power", "absent") != block:
             changed += 1
         row["power"] = block

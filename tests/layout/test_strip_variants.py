@@ -143,8 +143,7 @@ def test_sequence_families_keep_same_group_feedback_destination(
         lane
         for family in families
         for lane in family.output_lanes
-        if lane.items == ("refined-oil",)
-        and family.group_key in lane.destination_group_keys
+        if lane.items == ("refined-oil",) and family.group_key in lane.destination_group_keys
     ]
     assert feedback
 
@@ -196,8 +195,7 @@ def test_repeated_machine_variants_reserve_projection_safe_pitch(
     assert family.variants
     assert {variant.pitch_x for variant in family.variants} == {expected_pitch}
     assert all(
-        variant.machine_origins_x
-        == tuple(range(0, count * expected_pitch, expected_pitch))
+        variant.machine_origins_x == tuple(range(0, count * expected_pitch, expected_pitch))
         and variant.box_width == count * expected_pitch
         for variant in family.variants
     )
@@ -221,9 +219,7 @@ def test_variant_with_minimum_pitch_regenerates_physical_identity() -> None:
 
 
 def test_variant_with_minimum_pitch_is_idempotent_at_or_below_current_pitch() -> None:
-    ordinary = default_strip_variant(
-        _family(_single_machine_spec("chemical-plant", count=2))
-    )
+    ordinary = default_strip_variant(_family(_single_machine_spec("chemical-plant", count=2)))
 
     assert variant_with_minimum_pitch(ordinary, ordinary.pitch_x) is ordinary
     assert variant_with_minimum_pitch(ordinary, ordinary.pitch_x - 1) is ordinary
@@ -233,9 +229,7 @@ def test_variant_with_minimum_pitch_is_idempotent_at_or_below_current_pitch() ->
 def test_variant_with_minimum_pitch_rejects_non_positive_or_non_integer_requirements(
     required_pitch_x: object,
 ) -> None:
-    ordinary = default_strip_variant(
-        _family(_single_machine_spec("chemical-plant", count=2))
-    )
+    ordinary = default_strip_variant(_family(_single_machine_spec("chemical-plant", count=2)))
 
     with pytest.raises(ValueError, match="positive integer"):
         variant_with_minimum_pitch(ordinary, required_pitch_x)  # type: ignore[arg-type]
@@ -390,6 +384,7 @@ def test_projection_pitch_requirement_rejects_every_malformed_index_shape(
         is None
     )
 
+
 def _brute_force_projection_origin_ordinals(
     local_origins_x: tuple[int, ...],
     owned_positions: set[tuple[int, int]],
@@ -403,9 +398,7 @@ def _brute_force_projection_origin_ordinals(
     for local_x in local_origins_x:
         box_x = anchor[0] - local_x
         box_y = anchor[1] - machine_row
-        expected = {
-            (box_x + origin_x, box_y + machine_row) for origin_x in local_origins_x
-        }
+        expected = {(box_x + origin_x, box_y + machine_row) for origin_x in local_origins_x}
         if expected == owned_positions:
             return {
                 (box_x + origin_x, box_y + machine_row): ordinal
@@ -465,8 +458,7 @@ def test_projection_pitch_requirement_matches_brute_force_origin_oracle_exhausti
     for positions in combinations_with_replacement(candidates, machine_count):
         placement = Placement(
             buildings=tuple(
-                _projection_machine(variant, x=x, y=y, machine=machine)
-                for x, y in positions
+                _projection_machine(variant, x=x, y=y, machine=machine) for x, y in positions
             )
         )
         owned_positions = set(positions)
@@ -645,8 +637,7 @@ def _adversarial_projection_fixture(
     )
     machine_y = 17 + variant.lane_plan.machine_row
     positions = tuple(
-        (_OriginArithmeticCounter(13 + origin_x), machine_y)
-        for origin_x in adversarial_origins
+        (_OriginArithmeticCounter(13 + origin_x), machine_y) for origin_x in adversarial_origins
     )
     return instance, positions
 
@@ -655,9 +646,7 @@ def _adversarial_projection_origin_operations(machine_count: int) -> int:
     instance, positions = _adversarial_projection_fixture(machine_count)
     variant = instance.variant
     placement = Placement(
-        buildings=tuple(
-            _projection_machine(variant, x=x, y=y) for x, y in positions
-        )
+        buildings=tuple(_projection_machine(variant, x=x, y=y) for x, y in positions)
     )
     failure = ProjectionFailure(
         "geom.collide",
@@ -703,6 +692,7 @@ def test_projection_pitch_origin_matching_has_linear_structural_growth() -> None
     assert large_count <= 128 * 10
     assert brute_large_count >= brute_small_count * 12
     assert brute_large_count >= 2 * 128**2
+
 
 class _VariantScanCounter(tuple[StripVariant, ...]):
     scans: ClassVar[int] = 0
@@ -860,9 +850,7 @@ def test_projection_failure_batch_preserves_duplicate_reversed_and_unrelated_ord
 def test_projection_failure_batch_matches_randomized_small_scanning_oracle() -> None:
     rng = random.Random(0xF1AB2)
     for machine_count in range(2, 6):
-        family = _family(
-            _single_machine_spec("chemical-plant", count=machine_count)
-        )
+        family = _family(_single_machine_spec("chemical-plant", count=machine_count))
         variant = default_strip_variant(family)
         (instance,) = partition_strip_family(
             family,
@@ -879,14 +867,10 @@ def test_projection_failure_batch_matches_randomized_small_scanning_oracle() -> 
         for _case in range(32):
             positions = tuple(rng.choice(candidates) for _ in range(machine_count))
             placement = Placement(
-                buildings=tuple(
-                    _projection_machine(variant, x=x, y=y)
-                    for x, y in positions
-                )
+                buildings=tuple(_projection_machine(variant, x=x, y=y) for x, y in positions)
             )
             pairs = tuple(
-                (rng.randrange(machine_count), rng.randrange(machine_count))
-                for _ in range(8)
+                (rng.randrange(machine_count), rng.randrange(machine_count)) for _ in range(8)
             )
             first = ProjectionFailure(
                 "geom.collide",
@@ -899,10 +883,7 @@ def test_projection_failure_batch_matches_randomized_small_scanning_oracle() -> 
                 replace(first),
                 replace(first, buildings=tuple(reversed(pairs[0]))),
                 replace(first, check="game.power_too_close"),
-                *(
-                    replace(first, buildings=pair)
-                    for pair in pairs[1:]
-                ),
+                *(replace(first, buildings=pair) for pair in pairs[1:]),
             )
             owned_positions = set(positions)
             expected: list[ProjectionPitchRequirement | None] = []
@@ -922,15 +903,10 @@ def test_projection_failure_batch_matches_randomized_small_scanning_oracle() -> 
                 )
                 matches = (
                     ordinals is not None
-                    and abs(positions[indices[0]][0] - positions[indices[1]][0])
-                    == variant.pitch_x
+                    and abs(positions[indices[0]][0] - positions[indices[1]][0]) == variant.pitch_x
                     and positions[indices[0]] in ordinals
                     and positions[indices[1]] in ordinals
-                    and abs(
-                        ordinals[positions[indices[0]]]
-                        - ordinals[positions[indices[1]]]
-                    )
-                    == 1
+                    and abs(ordinals[positions[indices[0]]] - ordinals[positions[indices[1]]]) == 1
                 )
                 expected.append(
                     ProjectionPitchRequirement(
@@ -952,7 +928,6 @@ def test_projection_failure_batch_matches_randomized_small_scanning_oracle() -> 
                 (variant,),
                 failures,
             ) == tuple(expected)
-
 
 
 def test_lane_profiles_exclude_collider_halo_rows() -> None:
@@ -1035,7 +1010,6 @@ def test_multi_lane_assembler_uses_globally_unique_slots_deterministically() -> 
         assert len(set(assigned)) == len(assigned)
 
 
-
 def test_collider_coproduct_domains_use_both_faces_with_exact_unique_slots() -> None:
     """One machine may drain distinct cargo domains across both reachable faces.
 
@@ -1098,14 +1072,9 @@ def test_collider_coproduct_domains_use_both_faces_with_exact_unique_slots() -> 
         if family.recipe_id == "mass-energy-storage"
     )
     variant = default_strip_variant(family)
-    cargo = {
-        (lane.items[0], lane.cargo_domain)
-        for lane in family.output_lanes
-    }
+    cargo = {(lane.items[0], lane.cargo_domain) for lane in family.output_lanes}
     attachments = tuple(
-        attachment
-        for plan in variant.attachment_plan
-        for attachment in plan.attachments
+        attachment for plan in variant.attachment_plan for attachment in plan.attachments
     )
 
     assert cargo == {
@@ -1119,13 +1088,11 @@ def test_collider_coproduct_domains_use_both_faces_with_exact_unique_slots() -> 
         profile.lane_y: profile.side
         for profile in lane_reach_profiles(family.machine_item_id, variant.yaw)
     }
-    assert all(
-        profile_side[plan.lane_y] == plan.lane.side
-        for plan in variant.attachment_plan
-    )
+    assert all(profile_side[plan.lane_y] == plan.lane.side for plan in variant.attachment_plan)
     assert len(attachments) == 5
     assert len({attachment.slot for attachment in attachments}) == 5
     assert all(attachment.span <= catalog.SORTER_MAX_REACH for attachment in attachments)
+
 
 def test_impossible_global_slot_matching_produces_no_variant() -> None:
     lanes = (
@@ -1284,15 +1251,14 @@ def test_explicit_padded_variant_instance_partition_conserves_family_ranges() ->
     )
 
     assert all(variant.variant_id != padded.variant_id for variant in family.variants)
-    assert [
-        (instance.machine_start, instance.machine_stop) for instance in instances
-    ] == [(0, 2), (2, 4), (4, 5)]
+    assert [(instance.machine_start, instance.machine_stop) for instance in instances] == [
+        (0, 2),
+        (2, 4),
+        (4, 5),
+    ]
     assert all(instance.family_id == family.family_id for instance in instances)
     assert all(instance.variant.pitch_x == padded.pitch_x for instance in instances)
-    assert all(
-        strip_pose_id(instance.variant) == strip_pose_id(ordinary)
-        for instance in instances
-    )
+    assert all(strip_pose_id(instance.variant) == strip_pose_id(ordinary) for instance in instances)
     assert tuple(
         machine_ordinal
         for instance in instances
@@ -1333,7 +1299,6 @@ def test_contracted_same_pose_variant_is_rejected_by_partition_and_validation() 
             family,
             (replace(ordinary_instance, variant=contracted),),
         )
-
 
 
 def test_realized_variant_order_and_geometry_are_stable_for_every_count() -> None:
@@ -1539,8 +1504,7 @@ def test_two_both_fed_ingredients_take_opposite_true_outer_rows() -> None:
     target = next(
         plan
         for plan in _logical_strip_plans(spec)
-        if {"alpha", "beta"}
-        == {item for lane in (*plan.in_above, *plan.in_below) for item in lane}
+        if {"alpha", "beta"} == {item for lane in (*plan.in_above, *plan.in_below) for item in lane}
     )
     both_fed = {"alpha", "beta"}
 
@@ -1764,9 +1728,7 @@ def test_a_stacked_spec_plans_its_entry_lane_at_the_bus_stack() -> None:
 
 
 def test_a_stacked_output_lane_follows_the_place_stack() -> None:
-    (family,) = generate_strip_families(
-        _stacked_rated_spec(pick=(1, 1, 1, 4), place=(1, 1, 1, 4))
-    )
+    (family,) = generate_strip_families(_stacked_rated_spec(pick=(1, 1, 1, 4), place=(1, 1, 1, 4)))
     assert {lane.stack for lane in family.output_lanes} == {4}
 
 
@@ -1784,6 +1746,8 @@ def test_a_logical_lane_stack_outside_the_games_range_is_refused() -> None:
     for bad in (0, 5):
         with pytest.raises(ValueError, match="lane stack"):
             replace(lane, stack=bad)
+
+
 # --- a belt-port host is planned one output lane per drain port -------------
 
 

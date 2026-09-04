@@ -383,16 +383,17 @@ class _StrategyRaceRequest:
     #: error rather than a message nobody reads.
     strategy: RaceStrategyName
     time_budget_s: float
-    soft_deadline: float            # absolute time.monotonic() from the parent
+    soft_deadline: float  # absolute time.monotonic() from the parent
     band_policy: BandPolicy
     belt_vertical_construction: bool
-    max_belt_z: Fraction            # for the child's own validate before publishing
+    max_belt_z: Fraction  # for the child's own validate before publishing
     workers: int
     arrangements: int | None
     sequence_islands: int
     config: SequenceSolverConfig
     compact_seed_config: CompactSeedConfig
     share: bool
+
 
 @dataclass(frozen=True, slots=True)
 class _StrategyRaceOutcome:
@@ -469,6 +470,7 @@ cores. `strategy_race.race_worker_split(total)` returns
 RACE_FREEFORM_WORKER_SHARE = Fraction(3, 4)
 RACE_MIN_WORKERS = 1
 
+
 def race_worker_split(total: int) -> tuple[int, int]:
     if type(total) is not int or total < 1:
         raise ValueError("racing worker total must be a positive integer")
@@ -476,8 +478,7 @@ def race_worker_split(total: int) -> tuple[int, int]:
         return (RACE_MIN_WORKERS, RACE_MIN_WORKERS)
     freeform = max(
         RACE_MIN_WORKERS,
-        total * RACE_FREEFORM_WORKER_SHARE.numerator
-        // RACE_FREEFORM_WORKER_SHARE.denominator,
+        total * RACE_FREEFORM_WORKER_SHARE.numerator // RACE_FREEFORM_WORKER_SHARE.denominator,
     )
     return (freeform, max(RACE_MIN_WORKERS, total - freeform))
 ```
@@ -511,15 +512,18 @@ direction; each carries both message kinds, tagged by type.
 @dataclass(frozen=True, slots=True)
 class IncumbentMessage:
     """A validator-clean placement one arm proved, as a bound for the other."""
+
     strategy: str
     #: ``(area, belt_tiles)``.  One field, not three: ``area`` and ``belt_tiles``
     #: as separate fields would be the same two numbers a second time, and
     #: ``height`` had no reader at all.
     exact_key: tuple[int, int]
 
+
 @dataclass(frozen=True, slots=True)
 class NoGoodMessage:
     """A Phase B cluster no-good, with the identity the receiver must match."""
+
     strategy: str
     instance_ids: tuple[StripInstanceId, ...]
     #: Phase B's ``ClusterRelationNoGood``, typed ``object`` on purpose:
@@ -623,7 +627,7 @@ message is a lost hint and is counted, never an error.
       if external_key is None:
           return soft
       if best_key is not None and external_key > best_key:
-          return soft       # the portfolio's is worse than ours: it says nothing
+          return soft  # the portfolio's is worse than ours: it says nothing
       return min(soft, now)
   ```
 
@@ -750,15 +754,17 @@ The claim this design does make, and tests:
 ```python
 # flab2bp.layout.strategy_race
 RACE_STRATEGIES: tuple[Literal["freeform", "sequence-pair"], ...]
-RACE_COMPLETION_GRACE_S: float          # measured spawn cost + 5.0; see 5.2
-RACE_QUEUE_MAXSIZE: int                 # 64
-RACE_DRAIN_MAX_MESSAGES: int            # 32
-NOGOOD_INBOX_MAX: int                   # 256
-RACE_FREEFORM_WORKER_SHARE: Fraction    # Fraction(3, 4)
-RACE_MIN_WORKERS: int                   # 1
-DEFAULT_RACE_MAX_BELT_Z: Fraction       # catalog.DEFAULT_MAX_BELT_Z
+RACE_COMPLETION_GRACE_S: float  # measured spawn cost + 5.0; see 5.2
+RACE_QUEUE_MAXSIZE: int  # 64
+RACE_DRAIN_MAX_MESSAGES: int  # 32
+NOGOOD_INBOX_MAX: int  # 256
+RACE_FREEFORM_WORKER_SHARE: Fraction  # Fraction(3, 4)
+RACE_MIN_WORKERS: int  # 1
+DEFAULT_RACE_MAX_BELT_Z: Fraction  # catalog.DEFAULT_MAX_BELT_Z
+
 
 def race_worker_split(total: int) -> tuple[int, int]: ...
+
 
 class _MessageQueue(Protocol):
     """The two methods this module needs from a queue.
@@ -767,31 +773,41 @@ class _MessageQueue(Protocol):
     no base class, so this is what lets one ``RaceChannels`` serve the real race
     and the in-process tests without an ``Any`` or a ``type: ignore``.
     """
+
     def put_nowait(self, item: object, /) -> None: ...
     def get_nowait(self) -> object: ...
 
+
 @dataclass(frozen=True, slots=True)
 class IncumbentMessage: ...
+
+
 @dataclass(frozen=True, slots=True)
 class NoGoodMessage: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _StrategyRaceRequest: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _StrategyRaceOutcome: ...
+
 
 class RaceChannels:
     publish: _MessageQueue
     consume: _MessageQueue
+
     def publish_incumbent(self, message: IncumbentMessage) -> None: ...
     def publish_no_good(self, message: NoGoodMessage) -> None: ...
     def drain(self) -> tuple[IncumbentMessage | NoGoodMessage, ...]: ...
-    def close(self) -> None: ...             # cancel_join_thread on the publish end
+    def close(self) -> None: ...  # cancel_join_thread on the publish end
     @property
     def dropped(self) -> int: ...
 
-def applicable_no_good(
-    message: NoGoodMessage, planned: frozenset[StripInstanceId]
-) -> bool: ...
+
+def applicable_no_good(message: NoGoodMessage, planned: frozenset[StripInstanceId]) -> bool: ...
+
 
 class _NoGoodInbox:
     """Holds UNDECIDED messages; the predicate runs at application time.
@@ -803,10 +819,12 @@ class _NoGoodInbox:
     proved earlier is the one most likely to name strips a later replan has
     already invalidated.
     """
+
     def offer(self, message: NoGoodMessage) -> None: ...
     def applicable(self, planned: frozenset[StripInstanceId]) -> tuple[object, ...]: ...
     @property
     def dropped(self) -> int: ...
+
 
 def run_strategy_race(
     spec: BuildSpec,
@@ -821,24 +839,33 @@ def run_strategy_race(
     config: SequenceSolverConfig | None = None,
     compact_seed_config: CompactSeedConfig | None = None,
     share: bool = True,
-    submit: RaceSubmit | None = None,        # test seam; None uses the pool
-    monotonic: Callable[[], float] = time.monotonic,   # test seam for the wall
+    submit: RaceSubmit | None = None,  # test seam; None uses the pool
+    monotonic: Callable[[], float] = time.monotonic,  # test seam for the wall
 ) -> tuple[_StrategyRaceOutcome, ...]: ...
 
-class RacingLayout:                          # satisfies base.LayoutStrategy
+
+class RacingLayout:  # satisfies base.LayoutStrategy
     name: str = "best"
+
     def __init__(
-        self, band_policy: BandPolicy, *, workers: int | None = None,
-        arrangements: int | None = None, belt_vertical_construction: bool = True,
-        sequence_islands: int = 1, share: bool = True,
+        self,
+        band_policy: BandPolicy,
+        *,
+        workers: int | None = None,
+        arrangements: int | None = None,
+        belt_vertical_construction: bool = True,
+        sequence_islands: int = 1,
+        share: bool = True,
         max_belt_z: Fraction = DEFAULT_RACE_MAX_BELT_Z,
     ) -> None: ...
     def _merge(self, outcomes: Sequence[_StrategyRaceOutcome]) -> Placement: ...
     def lay_out(
-        self, spec: BuildSpec, *,
+        self,
+        spec: BuildSpec,
+        *,
         time_budget_s: float = 15.0,
-        absolute_deadline: float | None = None,   # accepted and ignored: a race
-    ) -> Placement: ...                           # owns its own children's walls
+        absolute_deadline: float | None = None,  # accepted and ignored: a race
+    ) -> Placement: ...  # owns its own children's walls
 ```
 
 `max_belt_z` defaults to `validate.validate`'s own default, which is what
@@ -971,7 +998,9 @@ factor:
 
 ```python
 # flab2bp.web.jobs, AFTER the flip
-MAX_SOLVER_SECONDS = 300.0                    # unchanged
+MAX_SOLVER_SECONDS = 300.0  # unchanged
+
+
 @property
 def solver_ceiling_s(self) -> float:
     return self.effective_candidate_count * self.budget_s

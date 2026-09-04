@@ -52,16 +52,10 @@ def _best(cells: Sequence[CellResult], strategy: str) -> dict[str, CellResult]:
     return best
 
 
-def matrix_report(
-    cells: Sequence[CellResult], baseline: str, challenger: str
-) -> MatrixReport:
+def matrix_report(cells: Sequence[CellResult], baseline: str, challenger: str) -> MatrixReport:
     out: dict[bool, MatrixCell] = {}
     for proliferated in (True, False):
-        subset = [
-            c
-            for c in cells
-            if c.power is True and _is_proliferated(c) is proliferated
-        ]
+        subset = [c for c in cells if c.power is True and _is_proliferated(c) is proliferated]
         a = _best(subset, baseline)
         b = _best(subset, challenger)
         shared = sorted(set(a) & set(b))
@@ -89,9 +83,7 @@ def _fmt(value: float) -> str:
     return "--" if value != value else f"{value:.2f}"
 
 
-def render_markdown(
-    cells: Sequence[CellResult], *, matrix: MatrixReport | None = None
-) -> str:
+def render_markdown(cells: Sequence[CellResult], *, matrix: MatrixReport | None = None) -> str:
     cells = tuple(c for c in cells if c.power is True)
     lines: list[str] = ["# Bake-off", ""]
 
@@ -196,23 +188,15 @@ def _render_matrix(matrix: MatrixReport) -> list[str]:
     return lines
 
 
-def _render_verdict(
-    cells: Sequence[CellResult], matrix: MatrixReport | None
-) -> list[str]:
+def _render_verdict(cells: Sequence[CellResult], matrix: MatrixReport | None) -> list[str]:
     baseline = matrix.baseline if matrix else "sequence-pair"
     challenger = matrix.challenger if matrix else "freeform"
     verdict = compare(cells, baseline, challenger)
     lines = ["## Verdict", "", verdict.summary(), ""]
 
-    ratios = [
-        c.area
-        for c in cells
-        if c.strategy == baseline and c.valid
-    ]
+    ratios = [c.area for c in cells if c.strategy == baseline and c.valid]
     if ratios:
-        lines.append(
-            f"Geometric-mean area ratio: {geometric_mean([verdict.area_ratio]):.3f}"
-        )
+        lines.append(f"Geometric-mean area ratio: {geometric_mean([verdict.area_ratio]):.3f}")
     lines += [
         "",
         "A valid placement is not a working factory: the validator checks "

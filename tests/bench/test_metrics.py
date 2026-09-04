@@ -31,9 +31,7 @@ def _assembler(x: int, y: int, *, recipe: int = 1) -> PlacedBuilding:
     )
 
 
-def _belt(
-    x: int, y: int, *, z: Fraction | int = 0, out: int | None = None
-) -> PlacedBuilding:
+def _belt(x: int, y: int, *, z: Fraction | int = 0, out: int | None = None) -> PlacedBuilding:
     return PlacedBuilding(item_id=2002, model_index=36, x=x, y=y, z=Fraction(z), output_obj=out)
 
 

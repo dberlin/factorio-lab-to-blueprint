@@ -153,9 +153,7 @@ class _LayoutCall:
 
 def specs_for(
     entry: CorpusEntry,
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
 ) -> tuple[BuildSpec, ...]:
     """Resolve a URL to its candidate frontier, once, shared by both strategies.
 
@@ -210,9 +208,7 @@ def collect(
     *,
     budgets: list[float],
     repeat: int,
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     a_name: str = A_NAME,
     b_name: str = B_NAME,
 ) -> list[Sample]:
@@ -268,9 +264,7 @@ def collect(
                                 strategy=name,
                                 budget_s=budget,
                                 trial=trial,
-                                attempt=isolated_attempt(
-                                    _LayoutCall(name, vertical, spec, budget)
-                                ),
+                                attempt=isolated_attempt(_LayoutCall(name, vertical, spec, budget)),
                                 judge=judge,
                                 encode=encode,
                                 power=True,

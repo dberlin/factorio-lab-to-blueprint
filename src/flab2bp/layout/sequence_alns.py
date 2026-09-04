@@ -307,9 +307,7 @@ def _band_boundary(
         ),
     )
     over = [
-        strip
-        for strip in ranked
-        if decoded.x[strip] + problem.sizes[strip][0] > band_target_width
+        strip for strip in ranked if decoded.x[strip] + problem.sizes[strip][0] > band_target_width
     ]
     # Nothing over the width but the outline still overflows: the extent problem
     # is vertical, and the widest strips are still the ones with room to move.

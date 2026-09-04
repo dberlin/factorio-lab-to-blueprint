@@ -136,9 +136,7 @@ class TestPinnedFrontier:
             for spec in unpinned.candidates
         )
 
-    def test_selected_derived_subset_cannot_rewrite_a_pinned_flow(
-        self, data: Dataset
-    ) -> None:
+    def test_selected_derived_subset_cannot_rewrite_a_pinned_flow(self, data: Dataset) -> None:
         flow = _flow(*_UNSPRAYED)
         pinned = build_candidates(
             data,

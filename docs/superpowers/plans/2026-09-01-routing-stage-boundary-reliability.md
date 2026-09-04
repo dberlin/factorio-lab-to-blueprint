@@ -169,7 +169,9 @@ Cover: two claims competing for one access cell; two claims with distinct access
 def test_joint_matching_moves_access_claim_to_preserve_both_exits() -> None:
     corridors = _match_access_corridors(claims, blocked=frozenset())
     assert set(corridors) == set(claims)
-    occupied = {cell for corridor in corridors.values() for cell in (corridor.access, corridor.exit)}
+    occupied = {
+        cell for corridor in corridors.values() for cell in (corridor.access, corridor.exit)
+    }
     assert len(occupied) == 2 * len(corridors)
 ```
 

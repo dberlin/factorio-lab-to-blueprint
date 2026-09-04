@@ -63,9 +63,7 @@ _CARDINAL_YAW: dict[tuple[int, int], float] = {
 
 @lru_cache(maxsize=16)
 def _keepout(model_index: int, yaw: float) -> tuple[tuple[int, int, int], ...]:
-    return tuple(
-        sorted(dsp_colliders.belt_keepout_offsets(model_index, yaw))
-    )
+    return tuple(sorted(dsp_colliders.belt_keepout_offsets(model_index, yaw)))
 
 
 def keepout_cells(
@@ -83,14 +81,9 @@ def keepout_cells(
     anchor and its orthogonal branch on the anchor plane.
     """
     model = (
-        catalog.building(catalog.SPLITTER_ID).model_index
-        if model_index is None
-        else model_index
+        catalog.building(catalog.SPLITTER_ID).model_index if model_index is None else model_index
     )
-    return tuple(
-        (x + dx, y + dy, level + dz)
-        for dx, dy, dz in _keepout(model, yaw)
-    )
+    return tuple((x + dx, y + dy, level + dz) for dx, dy, dz in _keepout(model, yaw))
 
 
 def site_is_clear(buildings: Sequence[PlacedBuilding], x: int, y: int) -> bool:
@@ -170,9 +163,7 @@ def make_splitter(
     straight run while the two lower ports provide an orthogonal branch.
     """
     model = (
-        catalog.building(catalog.SPLITTER_ID).model_index
-        if model_index is None
-        else model_index
+        catalog.building(catalog.SPLITTER_ID).model_index if model_index is None else model_index
     )
     if model not in catalog.SPLITTER_MODEL_INDICES:
         raise ValueError(f"model {model} is not a DSP Splitter model")

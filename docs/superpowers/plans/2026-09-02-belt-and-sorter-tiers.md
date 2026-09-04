@@ -70,7 +70,9 @@ def _url_with_techs(tech_ids: list[str], belt: str = "conveyor-belt-2") -> str:
 
 def test_no_technology_set_unlocks_every_belt_and_sorter_above_the_floor() -> None:
     data = load_vendored()
-    request = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe=conveyor-belt-2&v=11")
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe=conveyor-belt-2&v=11"
+    )
     tiers = techs.logistics_tiers_for_request(request, data)
     assert tiers.belt_item_ids == ("conveyor-belt-2", "conveyor-belt-3")
     assert tiers.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
@@ -146,8 +148,6 @@ Expected: FAIL with `AttributeError: module 'flab2bp.lab.techs' has no attribute
 Use `insert_after_symbol` on `BeltAltitudeRules` in `src/flab2bp/dsp/catalog.py`:
 
 ```python
-
-
 @dataclass(frozen=True, slots=True)
 class LogisticsTiers:
     """Which belts and sorters a particular SAVE can build.
@@ -174,11 +174,7 @@ class LogisticsTiers:
 Use `insert_after_symbol` on `belt_rules_for_url` in `src/flab2bp/lab/techs.py`, and add `from flab2bp.lab.url import LabRequest, parse_url` to the imports (replace the existing `from flab2bp.lab.url import parse_url` line) and extend `__all__` to `["belt_rules_for_url", "logistics_tiers_for_request"]`:
 
 ```python
-
-
-def logistics_tiers_for_request(
-    request: LabRequest, dataset: Dataset
-) -> catalog.LogisticsTiers:
+def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalog.LogisticsTiers:
     """The belts and sorters this request's save can build.
 
     Data-driven: a belt or sorter is buildable when some researched
@@ -204,9 +200,7 @@ def logistics_tiers_for_request(
     belts = {
         item.id
         for item in dataset.items
-        if item.belt is not None
-        and item.id in unlocked
-        and item.belt.speed >= floor_speed
+        if item.belt is not None and item.id in unlocked and item.belt.speed >= floor_speed
     }
     belts.add(floor_id)
     belt_item_ids = tuple(sorted(belts, key=lambda item_id: (dataset.belt_speed(item_id), item_id)))
@@ -216,7 +210,9 @@ def logistics_tiers_for_request(
         numeric = catalog.get_item_id(item.id)
         if numeric in catalog.SORTER_RATE_AT_1 and item.id in unlocked:
             sorter_rates[item.id] = catalog.SORTER_RATE_AT_1[numeric]
-    sorter_item_ids = tuple(sorted(sorter_rates, key=lambda item_id: (sorter_rates[item_id], item_id)))
+    sorter_item_ids = tuple(
+        sorted(sorter_rates, key=lambda item_id: (sorter_rates[item_id], item_id))
+    )
     if not sorter_item_ids:
         sorter_item_ids = ("sorter-1",)
 
@@ -282,7 +278,9 @@ def _group() -> MachineGroup:
 
 
 def test_no_upgrades_means_the_floor_is_the_ceiling() -> None:
-    spec = BuildSpec(groups=(_group(),), belt_item_id="conveyor-belt-2", belt_items_per_second=Fraction(12))
+    spec = BuildSpec(
+        groups=(_group(),), belt_item_id="conveyor-belt-2", belt_items_per_second=Fraction(12)
+    )
     assert spec.belt_tiers == (BeltTier(item_id="conveyor-belt-2", items_per_second=Fraction(12)),)
     assert spec.lane_capacity == Fraction(12)
     assert spec.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
@@ -347,8 +345,6 @@ class BeltTier(_Frozen):
 
     item_id: str
     items_per_second: Fraction = Field(gt=0)
-
-
 ```
 
 Then with `replace_content` (literal) replace
@@ -379,41 +375,40 @@ with
 Then use `insert_before_symbol` on `BuildSpec/_no_dangling_demand` to add the validator:
 
 ```python
-    @model_validator(mode="after")
-    def _tiers_are_ordered(self) -> BuildSpec:
-        previous = self.belt_items_per_second
-        for tier in self.belt_upgrades:
-            if tier.items_per_second <= previous:
-                raise ValueError(
-                    f"{self.label or 'spec'}: belt upgrade {tier.item_id!r} at "
-                    f"{tier.items_per_second}/s is not faster than the tier before it "
-                    f"({previous}/s); upgrades must be strictly faster than the floor "
-                    "and listed slowest first"
-                )
-            previous = tier.items_per_second
-        if not self.sorter_item_ids:
+@model_validator(mode="after")
+def _tiers_are_ordered(self) -> BuildSpec:
+    previous = self.belt_items_per_second
+    for tier in self.belt_upgrades:
+        if tier.items_per_second <= previous:
             raise ValueError(
-                f"{self.label or 'spec'}: no sorter tier is allowed; a build with no "
-                "sorter at all cannot feed a machine"
+                f"{self.label or 'spec'}: belt upgrade {tier.item_id!r} at "
+                f"{tier.items_per_second}/s is not faster than the tier before it "
+                f"({previous}/s); upgrades must be strictly faster than the floor "
+                "and listed slowest first"
             )
-        return self
-
+        previous = tier.items_per_second
+    if not self.sorter_item_ids:
+        raise ValueError(
+            f"{self.label or 'spec'}: no sorter tier is allowed; a build with no "
+            "sorter at all cannot feed a machine"
+        )
+    return self
 ```
 
 And use `insert_after_symbol` on `BuildSpec/is_proliferated` to add the properties:
 
 ```python
+@property
+def belt_tiers(self) -> tuple[BeltTier, ...]:
+    """Every belt the build may use, floor first."""
+    floor = BeltTier(item_id=self.belt_item_id, items_per_second=self.belt_items_per_second)
+    return (floor, *self.belt_upgrades)
 
-    @property
-    def belt_tiers(self) -> tuple[BeltTier, ...]:
-        """Every belt the build may use, floor first."""
-        floor = BeltTier(item_id=self.belt_item_id, items_per_second=self.belt_items_per_second)
-        return (floor, *self.belt_upgrades)
 
-    @property
-    def lane_capacity(self) -> Fraction:
-        """Items/second the fastest allowed belt sustains: the planner's bound."""
-        return self.belt_tiers[-1].items_per_second
+@property
+def lane_capacity(self) -> Fraction:
+    """Items/second the fastest allowed belt sustains: the planner's bound."""
+    return self.belt_tiers[-1].items_per_second
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
@@ -557,7 +552,9 @@ def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> No
     floor_only = spec.model_copy(update={"belt_upgrades": ()})
     group = next(iter(freeform._adapt(floor_only).values()))
     with pytest.raises(ValueError, match="cannot share a belt"):
-        freeform._check_shared_lane_capacity(group, (("copper-ingot", "iron-ingot"),), 1, floor_only)
+        freeform._check_shared_lane_capacity(
+            group, (("copper-ingot", "iron-ingot"),), 1, floor_only
+        )
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -700,8 +697,6 @@ def _sorter_tiers_for(spec: BuildSpec) -> tuple[int, ...]:
     """
     allowed = {catalog.get_item_id(item_id) for item_id in spec.sorter_item_ids}
     return tuple(tier for tier in catalog.SORTER_TIERS if tier in allowed) or catalog.SORTER_TIERS
-
-
 ```
 
 In `_prepare_routing_problem`, replace `    canvas = _Canvas(ramped=ramped)` with `    canvas = _Canvas(ramped=ramped, sorter_tiers=_sorter_tiers_for(spec))`.
@@ -789,7 +784,8 @@ def _spec(rate: Fraction, *upgrades: tuple[str, int]) -> BuildSpec:
         belt_item_id="conveyor-belt-2",
         belt_items_per_second=Fraction(12),
         belt_upgrades=tuple(
-            BeltTier(item_id=item_id, items_per_second=Fraction(speed)) for item_id, speed in upgrades
+            BeltTier(item_id=item_id, items_per_second=Fraction(speed))
+            for item_id, speed in upgrades
         ),
     )
 
@@ -819,7 +815,9 @@ def test_a_run_over_the_floor_takes_the_cheapest_upgrade_that_fits() -> None:
     assert _tiers(out) == [BELT3, BELT3]
     assert out.stats["belt_runs_upgraded"] == 1.0
     assert out.stats["belt_upgrade_tiers"] == ["conveyor-belt-3"]
-    assert not fired(validate(out, _spec(Fraction(14), ("conveyor-belt-3", 30)), ids=IDS), "flow.belt_capacity")
+    assert not fired(
+        validate(out, _spec(Fraction(14), ("conveyor-belt-3", 30)), ids=IDS), "flow.belt_capacity"
+    )
 
 
 def test_model_index_follows_the_tier() -> None:
@@ -889,8 +887,6 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'flab2bp.layout.belt_t
 Use `insert_after_symbol` on `id_map` in `src/flab2bp/layout/validate.py`:
 
 ```python
-
-
 def belt_run_demands(
     placement: Placement, spec: BuildSpec
 ) -> tuple[tuple[BeltRun, ...], dict[int, dict[str | None, Fraction]]]:
@@ -903,9 +899,7 @@ def belt_run_demands(
     group the demand is empty: the flow is unknowable, and
     ``machine.group_resolved`` reports the placement anyway.
     """
-    ctx = _context(
-        placement, spec, id_map(spec), 256, cat.DEFAULT_MAX_BELT_Z, True
-    )
+    ctx = _context(placement, spec, id_map(spec), 256, cat.DEFAULT_MAX_BELT_Z, True)
     if ctx.unresolved_machines():
         return ctx.runs, {}
     return ctx.runs, _run_demand(ctx)
@@ -1124,31 +1118,41 @@ def _tiered_spec(*upgrades: str) -> BuildSpec:
 
 
 def test_belt_tier_allowed_fires_on_a_belt_the_save_cannot_build() -> None:
-    p = place(belt(3, 0, item_id=2003), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1))
+    p = place(
+        belt(3, 0, item_id=2003), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
     r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
     assert fired(r, "belt.tier_allowed")
 
 
 def test_belt_tier_allowed_clean_inside_the_researched_set() -> None:
-    p = place(belt(3, 0, item_id=2003), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1))
+    p = place(
+        belt(3, 0, item_id=2003), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
     r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
     assert not fired(r, "belt.tier_allowed")
 
 
 def test_belt_tier_allowed_fires_below_the_floor_too() -> None:
-    p = place(belt(3, 0, item_id=2001), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1))
+    p = place(
+        belt(3, 0, item_id=2001), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1)
+    )
     r = validate(p, _tiered_spec("conveyor-belt-3"), ids=TWO_INPUT_IDS)
     assert fired(r, "belt.tier_allowed")
 
 
 def test_sorter_tier_allowed_fires_on_a_pile_sorter_the_save_cannot_build() -> None:
-    p = place(belt(3, 0), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1, item_id=PILE))
+    p = place(
+        belt(3, 0), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1, item_id=PILE)
+    )
     r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
     assert fired(r, "sorter.tier_allowed")
 
 
 def test_sorter_tier_allowed_clean_inside_the_researched_set() -> None:
-    p = place(belt(3, 0), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1, item_id=SORTER3))
+    p = place(
+        belt(3, 0), machine(4, 0, recipe_id=6), sorter(3, 0, 4, 0, inp=0, out=1, item_id=SORTER3)
+    )
     r = validate(p, _tiered_spec(), ids=TWO_INPUT_IDS)
     assert not fired(r, "sorter.tier_allowed")
 ```
@@ -1165,8 +1169,6 @@ Expected: FAIL on the `fired(...)` assertions (unknown check never fires)
 Use `insert_after_symbol` on `_sorter_capacity` in `src/flab2bp/layout/validate.py`:
 
 ```python
-
-
 @check("belt.tier_allowed", needs_spec=True)
 def _belt_tier_allowed(ctx: Context) -> Iterable[Finding]:
     """Every belt is one the save can build: the URL's belt or a researched upgrade.

@@ -582,6 +582,7 @@ SLOT_ALIGN_COS = math.cos(math.radians(SKEW_AXIS_DEG))
 ADDON_LINE_MAX_DISTANCE = 0.3
 ADDON_AREA_RADIUS = 1.0
 
+
 def addon_line_distance(
     point: tuple[float, float, float],
     line_a: tuple[float, float, float],
@@ -592,15 +593,18 @@ def addon_line_distance(
     length2 = sum(component * component for component in axis)
     if length2 == 0.0:
         return math.dist(point, line_a)
-    scale = sum(
-        (coordinate - origin) * component
-        for coordinate, origin, component in zip(point, line_a, axis, strict=True)
-    ) / length2
+    scale = (
+        sum(
+            (coordinate - origin) * component
+            for coordinate, origin, component in zip(point, line_a, axis, strict=True)
+        )
+        / length2
+    )
     closest = tuple(
-        origin + scale * component
-        for origin, component in zip(line_a, axis, strict=True)
+        origin + scale * component for origin, component in zip(line_a, axis, strict=True)
     )
     return math.dist(point, closest)
+
 
 #: How far off an addon's own axis the belt it rides may travel, in DEGREES.
 #: ``BuildTool_Addon.CheckBuildConditions``, the hand tool, over every belt its

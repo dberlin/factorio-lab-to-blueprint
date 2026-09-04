@@ -41,9 +41,7 @@ class StrategyHandle:
     strategy: LayoutStrategy
 
 
-def available_strategies(
-    *, belt_vertical_construction: bool = True
-) -> tuple[StrategyHandle, ...]:
+def available_strategies(*, belt_vertical_construction: bool = True) -> tuple[StrategyHandle, ...]:
     """Return both implemented production strategies."""
     return (
         StrategyHandle(
@@ -160,9 +158,7 @@ def _run_cell(
 def specs_for(
     entry: CorpusEntry,
     *,
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
 ) -> tuple[BuildSpec, ...]:
     """Compute the candidate frontier once, to be shared by every strategy."""
     dataset = lab_data.load_vendored()
@@ -182,9 +178,7 @@ def run_corpus(
     entries: Sequence[CorpusEntry] = URL_CORPUS,
     *,
     time_budget_s: float | None = None,
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
 ) -> list[CellResult]:
     """Run one powered matrix.
 

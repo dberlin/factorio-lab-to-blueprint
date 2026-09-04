@@ -260,17 +260,18 @@ A new module with no dependency on `sequence_solver`, so it is testable in isola
 
 ```python
 class DestroyOperator(StrEnum):
-    FAILED_ENDPOINTS = "failed-endpoints"     # ships
-    BAND_BOUNDARY = "band-boundary"           # ships
-    BLOCKER_COMPONENT = "blocker-component"   # follow-up, no dispatch branch
-    CONGESTED_CUT = "congested-cut"           # follow-up, no dispatch branch
-    RELATED_CARGO = "related-cargo"           # follow-up, no dispatch branch
-    DIVERSIFY = "diversify"                   # follow-up, no dispatch branch
+    FAILED_ENDPOINTS = "failed-endpoints"  # ships
+    BAND_BOUNDARY = "band-boundary"  # ships
+    BLOCKER_COMPONENT = "blocker-component"  # follow-up, no dispatch branch
+    CONGESTED_CUT = "congested-cut"  # follow-up, no dispatch branch
+    RELATED_CARGO = "related-cargo"  # follow-up, no dispatch branch
+    DIVERSIFY = "diversify"  # follow-up, no dispatch branch
+
 
 class RepairOperator(StrEnum):
-    SEQUENCE_REINSERT = "sequence-reinsert"   # ships
-    LOCAL_EXACT_PACK = "local-exact-pack"     # ships
-    ROUTING_REGRET = "routing-regret"         # follow-up, no dispatch branch
+    SEQUENCE_REINSERT = "sequence-reinsert"  # ships
+    LOCAL_EXACT_PACK = "local-exact-pack"  # ships
+    ROUTING_REGRET = "routing-regret"  # follow-up, no dispatch branch
 ```
 
 `SHIPPED_DESTROY` and `SHIPPED_REPAIR` are module constants naming the members that have a dispatch
@@ -282,9 +283,9 @@ defaults its arms to the shipped tuples, so a follow-up member can never be sele
 ```python
 @dataclass(frozen=True, slots=True)
 class OperatorContext:
-    strip_count: int          # read by operator_scale
-    stagnation: int           # read by operator_scale
-    remaining_fraction: int   # read by OperatorSession.select: gates LOCAL_EXACT_PACK
+    strip_count: int  # read by operator_scale
+    stagnation: int  # read by operator_scale
+    remaining_fraction: int  # read by OperatorSession.select: gates LOCAL_EXACT_PACK
 ```
 
 - `OperatorChoice(destroy, repair, scale, ordinal)` — `scale` is the destroy cardinality,
@@ -498,7 +499,7 @@ the freeform sweep dedupes windows before solving so it never asks the same ques
 ```python
 C_WINDOW_WORKERS = 1
 C_WINDOW_SECONDS = 1.0
-C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK      # 0.5
+C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK  # 0.5
 ```
 
 `_DETERMINISTIC_PACK_WORK = 0.02` (`freeform.py:318`) is what a *full* pack of 15 or more strips
@@ -535,11 +536,11 @@ specifies one from the decode.
 
 ```python
 for first_position, first in enumerate(pair.positive):
-    for second in pair.positive[first_position + 1:]:
+    for second in pair.positive[first_position + 1 :]:
         if negative_position[first] < negative_position[second]:
-            horizontal[first].append(second)      # first is west of second
+            horizontal[first].append(second)  # first is west of second
         else:
-            vertical[second].append(first)        # first is ABOVE second
+            vertical[second].append(first)  # first is ABOVE second
 ```
 
 and then takes earliest coordinates by `_earliest_coordinates` (`:2150`), a longest-path sweep in

@@ -186,15 +186,18 @@ Script (`watched_clause.py`, using the real field names confirmed above --
 ```python
 import json
 
+
 def cells(path):
     out = {}
     for line in open(path):
         r = json.loads(line)
         if r.get("url_id") == "universe-matrix":
             out[(r["strategy"], r["spec_index"], r["spec_label"])] = (
-                r.get("status"), r.get("area")
+                r.get("status"),
+                r.get("area"),
             )
     return out
+
 
 base = cells("/tmp/broke6-baseline-1.jsonl")
 for round in (1, 2, 3):

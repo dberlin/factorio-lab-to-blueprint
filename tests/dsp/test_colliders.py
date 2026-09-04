@@ -294,9 +294,7 @@ def test_real_blueprints_fly_belts_over_buildings_and_always_clear_them() -> Non
     for name in SINGLE_AREA_FIXTURES:
         raw = decode(fixture_text(name)).buildings
         belts = [
-            C.Placed(b.model_index, b.x, b.y, b.z, b.yaw)
-            for b in raw
-            if cat.is_belt(b.item_id)
+            C.Placed(b.model_index, b.x, b.y, b.z, b.yaw) for b in raw if cat.is_belt(b.item_id)
         ]
         others = [
             (b, C.Placed(b.model_index, b.x, b.y, b.z, b.yaw))
@@ -312,8 +310,7 @@ def test_real_blueprints_fly_belts_over_buildings_and_always_clear_them() -> Non
                     continue
                 pose = C.flat_pose(other.x, other.y, other.z, other.yaw)
                 if not any(
-                    C.probe_inside_footprint(probe, box)
-                    for box in C.target_boxes(other, *pose)
+                    C.probe_inside_footprint(probe, box) for box in C.target_boxes(other, *pose)
                 ):
                     continue
                 if not C.belt_crossings([belt], [other], directly_over_only=True):
@@ -425,17 +422,13 @@ def test_a_belt_is_excused_three_hops_from_what_its_run_reaches_and_no_further()
     where = {1: (1, 0), 2: (1, 1), 3: (0, 1), 4: (-1, 1), 5: (-1, 0)}
     previews = [C.Preview(_SPLITTER, 0.0, 0.0, 0.0, is_splitter=True)]
     for n, (x, y) in where.items():
-        previews.append(
-            C.Preview(_BELT_MK3, float(x), float(y), 0.0, is_belt=True, output=n - 1)
-        )
+        previews.append(C.Preview(_BELT_MK3, float(x), float(y), 0.0, is_belt=True, output=n - 1))
     assert C.belt_collisions(previews) == [(5, 0)]
 
     # Every one of the three that touches it is a hit without the links: that is
     # what the chain is doing, and 1 and 3 are not simply out of range.
     stripped = [
-        C.Preview(
-            p.model_index, p.x, p.y, p.z, is_belt=p.is_belt, is_splitter=p.is_splitter
-        )
+        C.Preview(p.model_index, p.x, p.y, p.z, is_belt=p.is_belt, is_splitter=p.is_splitter)
         for p in previews
     ]
     assert C.belt_collisions(stripped) == [(1, 0), (3, 0), (5, 0)]
@@ -469,13 +462,8 @@ def test_exact_paste_order_reproduces_the_last_merge_feeder_winning() -> None:
 @pytest.mark.parametrize("branch_first", [True, False])
 def test_order_stable_collision_rejects_every_serialization(branch_first: bool) -> None:
     """Any feeder may become the reverse link after blueprint canonicalization."""
-    hits = C.stable_belt_collisions(
-        _model40_perpendicular_merge(branch_first=branch_first)
-    )
-    assert [
-        (hit.belt, hit.collider, hit.unstable_merges)
-        for hit in hits
-    ] == [(3, 0, (3,))]
+    hits = C.stable_belt_collisions(_model40_perpendicular_merge(branch_first=branch_first))
+    assert [(hit.belt, hit.collider, hit.unstable_merges) for hit in hits] == [(3, 0, (3,))]
 
 
 def test_order_stable_rescue_accepts_an_ordinary_single_feeder() -> None:
@@ -533,10 +521,7 @@ def test_belt_overlap_broadphase_visits_only_geometrically_near_colliders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     count = 100
-    previews = [
-        C.Preview(_ASSEMBLER_2, float(index * 5), 0.0, 0.0)
-        for index in range(count)
-    ] + [
+    previews = [C.Preview(_ASSEMBLER_2, float(index * 5), 0.0, 0.0) for index in range(count)] + [
         C.Preview(
             _BELT_MK3,
             float(index * 5 + 1),
@@ -614,11 +599,10 @@ def test_a_raw_sorter_box_test_convicts_blueprints_the_game_wrote() -> None:
         duplicated += sum(1 for v in shared.values() if v > 1)
         for i, a in enumerate(here):
             for b2 in here[i + 1 :]:
-                if min(
-                    sum((u[k] - v[k]) ** 2 for k in range(3)) ** 0.5
-                    for u in a
-                    for v in b2
-                ) < 2 * radius:
+                if (
+                    min(sum((u[k] - v[k]) ** 2 for k in range(3)) ** 0.5 for u in a for v in b2)
+                    < 2 * radius
+                ):
                     close += 1
 
     assert len(anchors) == 1132, "the sample is the whole single-area corpus"
@@ -633,6 +617,7 @@ def test_a_raw_sorter_box_test_convicts_blueprints_the_game_wrote() -> None:
         f"only {close} pairs under {2 * radius} units; if this ever reaches 0 the "
         "raw box test is no longer refuted and the sorter check can be ported"
     )
+
 
 def test_the_splitter_keep_out_is_the_plus_shape_and_one_level_up() -> None:
     """`belt_keepout_offsets`, against the rule read off the C#.
@@ -652,8 +637,7 @@ def test_the_splitter_keep_out_is_the_plus_shape_and_one_level_up() -> None:
     """
     got = C.belt_keepout_offsets(_SPLITTER)
     assert got == frozenset(
-        {(dx, dy, dz) for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1))
-         for dz in (0, 1)}
+        {(dx, dy, dz) for dx, dy in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)) for dz in (0, 1)}
     ), sorted(got)
 
 
@@ -672,9 +656,7 @@ def test_the_keep_out_agrees_with_the_verdict_it_is_derived_from() -> None:
                 hits = C.belt_collisions(
                     [
                         C.Preview(_SPLITTER, 0.0, 0.0, 0.0, is_splitter=True),
-                        C.Preview(
-                            _BELT_MK3, float(dx), float(dy), float(dz), is_belt=True
-                        ),
+                        C.Preview(_BELT_MK3, float(dx), float(dy), float(dz), is_belt=True),
                     ]
                 )
                 assert bool(hits) == ((dx, dy, dz) in keep), (dx, dy, dz, hits)
@@ -703,6 +685,7 @@ FAILING_PASTE = _OURS / "sorter-collide-freeform.txt"
 #: 347 buildings against our 352: every belt and every machine, and 33 of
 #: the 38 sorters.  The five it dropped are the answer key.
 BUILT_RESULT = _OURS / "sorter-collide-built.txt"
+
 
 #: The built blueprint was copied at a different rotation and anchor.  The
 #: transform is exact and was solved against all 17 machines:
@@ -733,7 +716,12 @@ def _sorter_previews(
             b.index,
             C.SorterPreview(
                 cat.building(b.item_id).model_index,
-                b.x, b.y, b.z, b.x2, b.y2, b.z2,
+                b.x,
+                b.y,
+                b.z,
+                b.x2,
+                b.y2,
+                b.z2,
                 is_open(b.input_obj_idx),
                 is_open(b.output_obj_idx),
             ),
@@ -772,8 +760,7 @@ def test_sorter_collisions_are_absent_from_the_games_own_blueprints() -> None:
             x2, y2 = round(b.x2), round(b.y2)
             steps = max(abs(x2 - x1), abs(y2 - y1)) or 1
             return {
-                (x1 + (x2 - x1) * k // steps, y1 + (y2 - y1) * k // steps)
-                for k in range(steps + 1)
+                (x1 + (x2 - x1) * k // steps, y1 + (y2 - y1) * k // steps) for k in range(steps + 1)
             }
 
         bodies = [body(b) for b in sorters]
@@ -795,12 +782,9 @@ def test_the_paste_the_game_refused_is_convicted() -> None:
     21/55/162, and this predicate names all three pairs and nothing else out of
     38 sorters.
     """
-    previews = _sorter_previews(
-        decode(FAILING_PASTE.read_text(encoding="utf-8")).buildings
-    )
+    previews = _sorter_previews(decode(FAILING_PASTE.read_text(encoding="utf-8")).buildings)
     named = [
-        (previews[i][0], previews[j][0])
-        for i, j in C.sorter_collisions([p for _i, p in previews])
+        (previews[i][0], previews[j][0]) for i, j in C.sorter_collisions([p for _i, p in previews])
     ]
     assert len(previews) == 38
     assert named == [(21, 162), (46, 163), (55, 162)]
@@ -808,9 +792,7 @@ def test_the_paste_the_game_refused_is_convicted() -> None:
 
 def _straight(span: float, offset: float, *, open_ends: bool) -> C.SorterPreview:
     """A sorter running north from ``(offset, 0)``, ``span`` tiles long."""
-    return C.SorterPreview(
-        41, offset, 0.0, 0.0, offset, span, 0.0, open_ends, open_ends
-    )
+    return C.SorterPreview(41, offset, 0.0, 0.0, offset, span, 0.0, open_ends, open_ends)
 
 
 def test_the_sorter_box_spans_its_two_ends_and_not_its_record() -> None:
@@ -899,9 +881,7 @@ def test_the_check_names_exactly_the_sorters_the_game_refused_to_build() -> None
 
     previews = _sorter_previews(ours)
     convicted = {
-        previews[k][0]
-        for pair in C.sorter_collisions([p for _i, p in previews])
-        for k in pair
+        previews[k][0] for pair in C.sorter_collisions([p for _i, p in previews]) for k in pair
     }
     assert convicted == refused
 
@@ -936,7 +916,23 @@ def test_the_longitude_segment_count_is_quantised_through_the_whole_table() -> N
     """
     assert len(C._SEGMENT_TABLE) == 512
     assert set(C._SEGMENT_TABLE) == {
-        1, 4, 8, 16, 20, 32, 40, 60, 80, 100, 120, 160, 200, 240, 300, 400, 500
+        1,
+        4,
+        8,
+        16,
+        20,
+        32,
+        40,
+        60,
+        80,
+        100,
+        120,
+        160,
+        200,
+        240,
+        300,
+        400,
+        500,
     }
     # The equator is untouched: this is the control for the whole change.
     assert C._SEGMENT_TABLE[200] == 200

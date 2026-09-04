@@ -50,7 +50,6 @@ class BenchmarkResult(TypedDict):
     cases: dict[str, CaseResult]
 
 
-
 class ProjectionCaseComparison(TypedDict):
     baseline: CaseResult
     after: CaseResult
@@ -103,6 +102,7 @@ class BuildCaseComparison(TypedDict):
     measured_wall_s: float
     gate_passed: bool
 
+
 class BuildComparison(TypedDict):
     passed: bool
     cases: list[BuildCaseComparison]
@@ -140,6 +140,7 @@ _BUILD_COUNTERS = (
     "projection_sorters",
 )
 _BuildKey = tuple[str, str, int, str, bool, float]
+
 
 def _object(value: object, *, label: str) -> Mapping[str, object]:
     if not isinstance(value, dict):
@@ -202,13 +203,9 @@ def _case_result(value: object, *, label: str) -> CaseResult:
     return CaseResult(
         median_s=_number(raw["median_s"], label=f"{label}.median_s"),
         p95_s=_number(raw["p95_s"], label=f"{label}.p95_s"),
-        frame_candidates=_integer(
-            raw["frame_candidates"], label=f"{label}.frame_candidates"
-        ),
+        frame_candidates=_integer(raw["frame_candidates"], label=f"{label}.frame_candidates"),
         projections=_integer(raw["projections"], label=f"{label}.projections"),
-        collider_pairs=_integer(
-            raw["collider_pairs"], label=f"{label}.collider_pairs"
-        ),
+        collider_pairs=_integer(raw["collider_pairs"], label=f"{label}.collider_pairs"),
         power_pairs=_integer(raw["power_pairs"], label=f"{label}.power_pairs"),
         sorters=_integer(raw["sorters"], label=f"{label}.sorters"),
         area=_integer(raw["area"], label=f"{label}.area"),
@@ -254,8 +251,7 @@ def _benchmark_result(value: object, *, label: str) -> BenchmarkResult:
     cases = _object(raw["cases"], label=f"{label}.cases")
     return BenchmarkResult(
         cases={
-            name: _case_result(case, label=f"{label}.cases.{name}")
-            for name, case in cases.items()
+            name: _case_result(case, label=f"{label}.cases.{name}") for name, case in cases.items()
         }
     )
 
@@ -333,8 +329,7 @@ def _load_case(name: str) -> Placement:
         numeric_stats[key] = _number(value, label=f"{name}.placement.stats.{key}")
     return Placement(
         buildings=tuple(
-            _building(building, index=index)
-            for index, building in enumerate(building_values)
+            _building(building, index=index) for index, building in enumerate(building_values)
         ),
         description=_string(placement["description"], label=f"{name}.placement.description"),
         short_desc=_string(placement["short_desc"], label=f"{name}.placement.short_desc"),
@@ -578,15 +573,12 @@ def compare_build_results(
         after_wall_time = after_metrics["build_wall_time_s"]
         delta = after_wall_time - baseline_wall_time
         ratio = delta / baseline_wall_time
-        historical_limit = baseline_wall_time * (
-            1.0 + _BUILD_WALL_TIME_THRESHOLD_RATIO
-        )
+        historical_limit = baseline_wall_time * (1.0 + _BUILD_WALL_TIME_THRESHOLD_RATIO)
         historical_regression = after_wall_time > historical_limit
         semantic_change_reasons: list[str] = []
         if baseline_metrics["status"] != after_metrics["status"]:
             semantic_change_reasons.append(
-                "status: "
-                f"{baseline_metrics['status']} -> {after_metrics['status']}"
+                f"status: {baseline_metrics['status']} -> {after_metrics['status']}"
             )
         if baseline_metrics["area"] != after_metrics["area"]:
             semantic_change_reasons.append(
@@ -637,9 +629,7 @@ def _read_json_lines(path: Path, *, label: str) -> list[Mapping[str, object]]:
 def _projection_after_path(build_after: Path) -> Path:
     projection_name = build_after.name.replace("-build-", "-", 1)
     if projection_name == build_after.name:
-        raise ValueError(
-            "after-build filename must contain '-build-' to locate projection results"
-        )
+        raise ValueError("after-build filename must contain '-build-' to locate projection results")
     return build_after.with_name(projection_name)
 
 

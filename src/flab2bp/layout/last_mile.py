@@ -399,9 +399,7 @@ _Node = tuple[tuple[int, int, int], _Constraints, dict[int, tuple[Cell, ...]]]
 
 
 def _cost(problem: ClusterProblem, paths: Mapping[int, tuple[Cell, ...]]) -> int:
-    return sum(
-        len(paths[index]) if index in paths else B_UNROUTED_COST for index in problem.nets
-    )
+    return sum(len(paths[index]) if index in paths else B_UNROUTED_COST for index in problem.nets)
 
 
 def _first_conflict(
@@ -550,8 +548,7 @@ def relation_no_good(
         return None
     anchor = origins[chosen[0]]
     deltas = tuple(
-        (origins[strip][0] - anchor[0], origins[strip][1] - anchor[1])
-        for strip in chosen
+        (origins[strip][0] - anchor[0], origins[strip][1] - anchor[1]) for strip in chosen
     )
     return ClusterRelationNoGood(
         height=height,
@@ -566,9 +563,9 @@ def relation_no_good(
 class ClusterCapture:
     """Everything a replay needs to re-run one live cluster search."""
 
-    run: int                       # 1 environment run, 2 relaxed run
-    canvas: object                 # freeform._Canvas, opaque here
-    grid: object                   # freeform._Grid, opaque here
+    run: int  # 1 environment run, 2 relaxed run
+    canvas: object  # freeform._Canvas, opaque here
+    grid: object  # freeform._Grid, opaque here
     history: Mapping[Cell, float]
     pressure: float
     bounds: tuple[int, int, int, int]

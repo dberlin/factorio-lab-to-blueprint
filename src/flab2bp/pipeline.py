@@ -177,9 +177,7 @@ def _ellipsize_utf16(
 def _product_initials(product_id: str) -> str:
     """Uppercase word initials, preserving whole numeric hyphen tokens."""
     initials = "".join(
-        part if part.isdigit() else part[0].upper()
-        for part in product_id.split("-")
-        if part
+        part if part.isdigit() else part[0].upper() for part in product_id.split("-") if part
     )
     return initials or product_id.upper()
 
@@ -400,9 +398,7 @@ def build(
     *,
     strategy: StrategyName = "best",
     band: BandSelection = "portable",
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
     #: Legal with ``best`` as well as ``sequence-pair``, because islands live
@@ -600,9 +596,7 @@ def build(
                 )
             )
 
-    def _solve_one(
-        candidate: BuildSpec, sname: ExplicitStrategyName
-    ) -> Placement | NoValidLayout:
+    def _solve_one(candidate: BuildSpec, sname: ExplicitStrategyName) -> Placement | NoValidLayout:
         """The pre-racing path, returning the refusal instead of raising it.
 
         The loop below branches on the RESULT rather than catching, so one shape
@@ -894,9 +888,7 @@ def build(
             attempt_failures=tuple(refused),
             projection_failures=tuple(
                 dict.fromkeys(
-                    projection
-                    for failure in refused
-                    for projection in failure.projection_failures
+                    projection for failure in refused for projection in failure.projection_failures
                 )
             ),
         )

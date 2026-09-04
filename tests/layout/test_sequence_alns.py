@@ -244,9 +244,10 @@ def test_the_exploration_bonus_never_outvotes_even_the_last_mean() -> None:
     session.observe(second, (0.0, 0.0, 0.0, 0.0, 1.0), applied=True)
     # `first` is now the less-played arm and so carries the larger bonus, but
     # `second` leads on the lowest-priority mean; the mean still wins.
-    assert session.credit[f"count:{first.destroy.value}"] < session.credit[
-        f"count:{second.destroy.value}"
-    ]
+    assert (
+        session.credit[f"count:{first.destroy.value}"]
+        < session.credit[f"count:{second.destroy.value}"]
+    )
     assert session.select(_context()).destroy is second.destroy
 
 
@@ -294,9 +295,7 @@ def test_discounting_decays_every_arm_on_every_observation() -> None:
         session.observe(played, (0.0,) * REWARD_RANKS, applied=True)
     # 1 + 0.9 + 0.81 + 0.729, written out rather than derived from the module, so
     # that retuning the discount has to come here and change the number.
-    assert math.isclose(
-        session.credit[f"count:{played.destroy.value}"], 3.439, rel_tol=1e-12
-    )
+    assert math.isclose(session.credit[f"count:{played.destroy.value}"], 3.439, rel_tol=1e-12)
 
 
 def test_discounting_decays_the_reward_sums_and_not_only_the_counts() -> None:
@@ -386,9 +385,7 @@ def test_a_clean_placement_outranks_every_other_improvement() -> None:
 
 def test_area_credit_requires_a_clean_placement() -> None:
     assert reward_vector(_outcome(_metrics(), _metrics(area=500)))[4] == 0.0
-    assert reward_vector(
-        _outcome(_metrics(), _metrics(validator_clean=True, area=500))
-    )[4] == 0.5
+    assert reward_vector(_outcome(_metrics(), _metrics(validator_clean=True, area=500)))[4] == 0.5
 
 
 def test_regressions_never_produce_negative_reward() -> None:
@@ -411,12 +408,8 @@ def test_observe_and_select_credits_the_pending_choice_before_choosing() -> None
     first = session.observe_and_select(_metrics(), _context())
     assert session.pending == first
     # The first call has no baseline to compare against, so it credits nothing.
-    assert all(
-        value == 0.0 for key, value in session.credit.items() if key.startswith("count:")
-    )
-    second = session.observe_and_select(
-        _metrics(failed_nets=1), _context(), routing_seconds=1.5
-    )
+    assert all(value == 0.0 for key, value in session.credit.items() if key.startswith("count:"))
+    second = session.observe_and_select(_metrics(failed_nets=1), _context(), routing_seconds=1.5)
     assert session.pending == second
     assert session.credit[f"count:{first.destroy.value}"] == 1.0
     assert session.choices == (first, second)
@@ -427,9 +420,7 @@ def test_observe_and_select_with_no_baseline_only_selects() -> None:
     session = OperatorSession()
     choice = session.observe_and_select(_metrics(), _context())
     assert session.choices == (choice,)
-    assert all(
-        value == 0.0 for key, value in session.credit.items() if key.startswith("count:")
-    )
+    assert all(value == 0.0 for key, value in session.credit.items() if key.startswith("count:"))
 
 
 # --- shared helpers ----------------------------------------------------------
@@ -545,9 +536,7 @@ def test_metrics_read_failed_nets_overflow_congestion_and_realized_area() -> Non
         validator_clean=False,
     )
     assert metrics.failed_nets == 1
-    assert metrics.band_overflow == (
-        max(0, decoded.used_height - problem.outline_height) + 2
-    )
+    assert metrics.band_overflow == (max(0, decoded.used_height - problem.outline_height) + 2)
     assert metrics.congestion == 4.0
     assert metrics.area == decoded.width * decoded.used_height
 
@@ -626,7 +615,7 @@ def test_band_boundary_falls_back_to_the_widest_edges_when_nothing_exceeds() -> 
 
 
 def test_band_boundary_excludes_a_strip_that_ends_exactly_on_the_target() -> None:
-    """"Exceeds" is strict: a right edge that lands on the target is inside it."""
+    """ "Exceeds" is strict: a right edge that lands on the target is inside it."""
     problem = _problem()
     decoded = decode_state(problem, AnnealState.initial(problem.size, 7))
     edges = [decoded.x[strip] + problem.sizes[strip][0] for strip in range(problem.size)]
@@ -634,9 +623,7 @@ def test_band_boundary_excludes_a_strip_that_ends_exactly_on_the_target() -> Non
     # The fixture must straddle the boundary or the assertion below is vacuous.
     assert max(edges) > target
     selected = _band_destroy(band_target_width=target)
-    assert selected == frozenset(
-        strip for strip in range(problem.size) if edges[strip] > target
-    )
+    assert selected == frozenset(strip for strip in range(problem.size) if edges[strip] > target)
 
 
 def test_band_boundary_keeps_the_worst_offenders_when_it_is_capped() -> None:
@@ -646,8 +633,7 @@ def test_band_boundary_keeps_the_worst_offenders_when_it_is_capped() -> None:
     worst_two = {
         strip
         for _edge, strip in sorted(
-            (-(decoded.x[strip] + problem.sizes[strip][0]), strip)
-            for strip in range(problem.size)
+            (-(decoded.x[strip] + problem.sizes[strip][0]), strip) for strip in range(problem.size)
         )[:2]
     }
     selected = _band_destroy(band_target_width=1, scale=2)
@@ -711,9 +697,7 @@ def test_every_shipped_pairing_is_reachable_inside_the_probe() -> None:
         seen.add((choice.destroy, choice.repair))
         session.observe(choice, reward, applied=True)
 
-    assert seen == {
-        (destroy, repair) for destroy in SHIPPED_DESTROY for repair in SHIPPED_REPAIR
-    }
+    assert seen == {(destroy, repair) for destroy in SHIPPED_DESTROY for repair in SHIPPED_REPAIR}
 
 
 def test_the_probe_walks_the_product_destroy_major() -> None:
@@ -759,6 +743,7 @@ def test_the_probe_is_a_pure_function_of_the_draw_ordinal() -> None:
     the D-UCB and MUST differ between the two reward streams, which is what
     proves the equality on draws 0 to 3 is the probe's doing.
     """
+
     def run(rewards: list[tuple[float, ...]]) -> list[tuple[str, str]]:
         session = OperatorSession(probe_product=True)
         pairs: list[tuple[str, str]] = []
@@ -806,8 +791,7 @@ def test_a_dropped_window_proposal_is_charged_a_count_and_no_reward() -> None:
     assert window.repair is RepairOperator.LOCAL_EXACT_PACK
     assert math.isclose(session.credit["count:local-exact-pack"], 1.0, rel_tol=1e-12)
     assert all(
-        session.credit[f"reward:local-exact-pack:{rank}"] == 0.0
-        for rank in range(REWARD_RANKS)
+        session.credit[f"reward:local-exact-pack:{rank}"] == 0.0 for rank in range(REWARD_RANKS)
     )
     assert session.applied == 0
 
@@ -838,9 +822,7 @@ def test_a_single_repair_arm_session_is_unchanged_by_the_probe() -> None:
     ledger and alternating destroy ledger already produced.  Measured: the first
     four draws are FE/BB/FE/BB, all with LOCAL_EXACT_PACK.
     """
-    session = OperatorSession(
-        repair_arms=(RepairOperator.LOCAL_EXACT_PACK,), probe_product=True
-    )
+    session = OperatorSession(repair_arms=(RepairOperator.LOCAL_EXACT_PACK,), probe_product=True)
     pairs = []
     for _ in range(4):
         choice = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))

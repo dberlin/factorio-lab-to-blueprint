@@ -560,9 +560,7 @@ def test_direct_origin_delta_interval_union_matches_randomized_cartesian_oracle(
 
     for _ in range(256):
         source_columns = frozenset(column for column in domain if rng.getrandbits(1))
-        destination_columns = frozenset(
-            column for column in domain if rng.getrandbits(1)
-        )
+        destination_columns = frozenset(column for column in domain if rng.getrandbits(1))
 
         assert _direct_origin_delta_result(
             monkeypatch,

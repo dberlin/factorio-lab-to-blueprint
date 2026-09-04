@@ -353,10 +353,9 @@ def test_the_thinning_does_not_depend_on_the_order_the_seeds_arrive() -> None:
         for order in ([2, 4, 6, 7], [7, 6, 4, 2], [6, 2, 7, 4])
     ]
 
-    assert [
-        (answer.nets, answer.stranded, answer.same_source_dropped)
-        for answer in answers
-    ] == [((2, 6, 7), (2, 6, 7), 1)] * 3
+    assert [(answer.nets, answer.stranded, answer.same_source_dropped) for answer in answers] == [
+        ((2, 6, 7), (2, 6, 7), 1)
+    ] * 3
 
 
 def _offers_stub(_index: int) -> last_mile._Offers:
@@ -445,9 +444,7 @@ def test_two_crossing_nets_are_solved_jointly() -> None:
         nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
     )
 
-    result = last_mile.solve_cluster(
-        problem, _grid_environment(canvas, bounds, _CROSSING_ENDS)
-    )
+    result = last_mile.solve_cluster(problem, _grid_environment(canvas, bounds, _CROSSING_ENDS))
 
     assert result.outcome is last_mile.ClusterOutcome.SOLVED
     assert set(result.paths) == {0, 1}
@@ -465,9 +462,7 @@ def test_a_gap_that_cannot_hold_two_nets_is_proved_infeasible() -> None:
         nets=(0, 1), stranded=(0, 1), truncated=False, sibling_closed=True
     )
 
-    result = last_mile.solve_cluster(
-        problem, _grid_environment(canvas, bounds, _GAP_ENDS)
-    )
+    result = last_mile.solve_cluster(problem, _grid_environment(canvas, bounds, _GAP_ENDS))
 
     assert result.outcome is last_mile.ClusterOutcome.PROVED
     assert result.paths == {}

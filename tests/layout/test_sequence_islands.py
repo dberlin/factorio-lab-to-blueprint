@@ -54,10 +54,7 @@ def _placement(*, area: int, belt_tiles: int) -> Placement:
 def test_island_count_is_bounded_and_solver_factory_stays_serial() -> None:
     for islands in (0, 17, True):
         with pytest.raises(ValueError, match="islands must be an integer from 1 to 16"):
-            SequencePairLayout(
-                band_policy=BandPolicy("portable"),
-                islands=islands
-            )
+            SequencePairLayout(band_policy=BandPolicy("portable"), islands=islands)
 
     def factory(
         spec: BuildSpec,
@@ -71,10 +68,7 @@ def test_island_count_is_bounded_and_solver_factory_stays_serial() -> None:
         raise AssertionError("factory must not be called")
 
     with pytest.raises(ValueError, match="solver factory requires exactly one island"):
-        SequencePairLayout(
-            band_policy=BandPolicy("portable"),
-            islands=2, solver_factory=factory
-        )
+        SequencePairLayout(band_policy=BandPolicy("portable"), islands=2, solver_factory=factory)
 
 
 def test_island_seed_plan_preserves_base_then_derives_stable_distinct_seeds() -> None:
@@ -233,10 +227,7 @@ def test_compact_portfolio_uses_root_seed_once_while_search_seeds_stay_distinct(
     _ImmediateExecutor.raised = None
     monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _ImmediateExecutor)
 
-    SequencePairLayout(
-        band_policy=BandPolicy("portable"),
-        islands=8, config=config
-    ).lay_out(
+    SequencePairLayout(band_policy=BandPolicy("portable"), islands=8, config=config).lay_out(
         two_stage_spec(),
         time_budget_s=2.0,
     )
@@ -288,10 +279,9 @@ def test_worker_failure_or_interrupt_terminates_and_propagates(
     monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _ImmediateExecutor)
 
     with pytest.raises(type(raised), match=str(raised) or None):
-        SequencePairLayout(
-            band_policy=BandPolicy("portable"),
-            islands=2
-        ).lay_out(two_stage_spec(), time_budget_s=2.0)
+        SequencePairLayout(band_policy=BandPolicy("portable"), islands=2).lay_out(
+            two_stage_spec(), time_budget_s=2.0
+        )
 
     executor = _ImmediateExecutor.instances[-1]
     assert executor.terminated
@@ -311,10 +301,9 @@ def test_parent_deadline_terminates_active_workers_and_refuses_without_an_exact(
     )
 
     with pytest.raises(NoValidLayout, match="deadline exhausted"):
-        SequencePairLayout(
-            band_policy=BandPolicy("portable"),
-            islands=2
-        ).lay_out(two_stage_spec(), time_budget_s=2.0)
+        SequencePairLayout(band_policy=BandPolicy("portable"), islands=2).lay_out(
+            two_stage_spec(), time_budget_s=2.0
+        )
 
     executor = _ImmediateExecutor.instances[-1]
     assert executor.terminated
@@ -586,8 +575,6 @@ def test_deadline_split_preserves_the_parent_ceiling(
         soft_deadline,
         hard_deadline,
     )
-
-
 
 
 def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> None:

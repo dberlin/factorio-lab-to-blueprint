@@ -1334,6 +1334,7 @@ Assembly-CSharp.dll alone cannot resolve netstandard / UnityEngine.CoreModule.
 
 Usage: uv run scripts/extract_assets.py [GAME_DIR]
 """
+
 from __future__ import annotations
 
 import glob
@@ -1495,36 +1496,42 @@ def main() -> None:
         entries[nm] = [col, row]
         colors[nm] = dominant_color(images[nm])
     atlas.save(os.path.join(OUT, "icons", "atlas.png"))
-    write(os.path.join(OUT, "icons", "atlas.json"),
-          {"cell": ICON_CELL, "cols": cols, "rows": max(rows, 1), "entries": entries})
+    write(
+        os.path.join(OUT, "icons", "atlas.json"),
+        {"cell": ICON_CELL, "cols": cols, "rows": max(rows, 1), "entries": entries},
+    )
 
     # ---- items / recipes --------------------------------------------------
     items = []
     for it in items_raw:
         icon = (it.get("IconPath") or "").split("/")[-1]
-        items.append({
-            "id": it["ID"],
-            "name": en(it.get("Name") or ""),
-            "iconName": icon,
-            "gridIndex": it.get("GridIndex", 0),
-            "modelIndex": it.get("ModelIndex", 0),
-            "canBuild": bool(it.get("CanBuild")),
-            "color": colors.get(icon, 0xDDDDDD),
-        })
+        items.append(
+            {
+                "id": it["ID"],
+                "name": en(it.get("Name") or ""),
+                "iconName": icon,
+                "gridIndex": it.get("GridIndex", 0),
+                "modelIndex": it.get("ModelIndex", 0),
+                "canBuild": bool(it.get("CanBuild")),
+                "color": colors.get(icon, 0xDDDDDD),
+            }
+        )
     write(os.path.join(OUT, "items.json"), items)
 
     recipes = []
     for rc in recipes_raw:
-        recipes.append({
-            "id": rc["ID"],
-            "name": en(rc.get("Name") or ""),
-            "iconName": (rc.get("IconPath") or "").split("/")[-1],
-            "items": list(rc.get("Items") or []),
-            "itemCounts": list(rc.get("ItemCounts") or []),
-            "results": list(rc.get("Results") or []),
-            "resultCounts": list(rc.get("ResultCounts") or []),
-            "timeSpend": rc.get("TimeSpend", 0),
-        })
+        recipes.append(
+            {
+                "id": rc["ID"],
+                "name": en(rc.get("Name") or ""),
+                "iconName": (rc.get("IconPath") or "").split("/")[-1],
+                "items": list(rc.get("Items") or []),
+                "itemCounts": list(rc.get("ItemCounts") or []),
+                "results": list(rc.get("Results") or []),
+                "resultCounts": list(rc.get("ResultCounts") or []),
+                "timeSpend": rc.get("TimeSpend", 0),
+            }
+        )
     write(os.path.join(OUT, "recipes.json"), recipes)
     write(os.path.join(OUT, "models.json"), models)
 

@@ -64,12 +64,10 @@ def _report_block(report: validate.Report) -> Json:
         "checks_run": _array(report.checks_run),
         "skipped": _array(report.skipped),
         "errors": [
-            {"check": finding.check, "message": finding.message}
-            for finding in report.errors
+            {"check": finding.check, "message": finding.message} for finding in report.errors
         ],
         "warnings": [
-            {"check": finding.check, "message": finding.message}
-            for finding in report.warnings
+            {"check": finding.check, "message": finding.message} for finding in report.warnings
         ],
     }
 
@@ -126,6 +124,7 @@ def _attempt_detail(attempt: pipeline.Attempt) -> Json:
         "report": _report_block(attempt.report),
     }
 
+
 def projection_failure(failure: ProjectionFailureRecord) -> Json:
     """One exact projection refusal without flattening its evidence."""
     return {
@@ -143,11 +142,9 @@ def attempt_failure(attempt: LayoutAttemptFailure) -> Json:
         "strategy": attempt.strategy,
         "reason": attempt.reason,
         "projection_failures": _array(
-            projection_failure(failure)
-            for failure in attempt.projection_failures
+            projection_failure(failure) for failure in attempt.projection_failures
         ),
     }
-
 
 
 def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
@@ -185,8 +182,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
             "ok": attempt.ok,
             "errors": len(attempt.report.errors),
             "chosen": (
-                attempt.candidate == build.spec.label
-                and attempt.strategy == build.strategy
+                attempt.candidate == build.spec.label and attempt.strategy == build.strategy
             ),
             "blueprint": attempt.blueprint if (attempt.ok or allow_invalid) else None,
             "detail": _attempt_detail(attempt),

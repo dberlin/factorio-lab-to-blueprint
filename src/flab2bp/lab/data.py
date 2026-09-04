@@ -78,7 +78,7 @@ def _read_etag(body_path: Path) -> str | None:
     try:
         raw: object = json.loads(_meta_path(body_path).read_text(encoding="utf-8"))
         return _CACHE_METADATA_ADAPTER.validate_python(raw).etag
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
 
 

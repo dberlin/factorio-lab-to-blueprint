@@ -39,8 +39,7 @@ Adds two proto tables to the extractor so tag ids outside the item band can reso
 In `main()`, change the `want` set (currently `{"ItemProtoSet", "ModelProtoSet", "RecipeProtoSet"}`):
 
 ```python
-    want = {"ItemProtoSet", "ModelProtoSet", "RecipeProtoSet",
-            "SignalProtoSet", "VeinProtoSet"}
+want = {"ItemProtoSet", "ModelProtoSet", "RecipeProtoSet", "SignalProtoSet", "VeinProtoSet"}
 ```
 
 - [ ] **Step 2: Include their icons in the atlas**
@@ -64,14 +63,15 @@ Find the `wanted_icons` set comprehension (it currently unions `items_raw` and `
 Next to where `items.json` / `recipes.json` / `models.json` are written, add:
 
 ```python
-    def basename(proto: dict) -> str:
-        return (proto.get("IconPath") or "").split("/")[-1]
+def basename(proto: dict) -> str:
+    return (proto.get("IconPath") or "").split("/")[-1]
 
-    tags = {
-        "signals": {str(s["ID"]): basename(s) for s in signals_raw if basename(s)},
-        "veins": {str(v["ID"]): basename(v) for v in veins_raw if basename(v)},
-    }
-    write(os.path.join(OUT, "tags.json"), tags)
+
+tags = {
+    "signals": {str(s["ID"]): basename(s) for s in signals_raw if basename(s)},
+    "veins": {str(v["ID"]): basename(v) for v in veins_raw if basename(v)},
+}
+write(os.path.join(OUT, "tags.json"), tags)
 ```
 
 - [ ] **Step 4: Assert the new tables did not silently vanish**

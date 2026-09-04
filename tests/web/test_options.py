@@ -207,9 +207,7 @@ def test_the_candidate_policy_ceiling_is_on_the_product_not_the_budget() -> None
         parse_options(
             {
                 "url": URL,
-                "candidate_policies": [
-                    policy.value for policy in DEFAULT_CANDIDATE_POLICIES
-                ],
+                "candidate_policies": [policy.value for policy in DEFAULT_CANDIDATE_POLICIES],
                 "budget_s": best_budget + 1.0,
             }
         )

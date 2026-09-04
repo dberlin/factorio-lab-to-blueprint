@@ -437,6 +437,7 @@ def test_topology_beam_enumerates_distinct_deterministic_relation_signatures() -
     assert first_run == second_run
     assert first_run[0][2] != first_run[1][2]
 
+
 def test_topology_beam_can_stop_at_the_first_width_admitted_incumbent() -> None:
     problem = _fixed_problem(
         sizes=((3, 2), (2, 2), (1, 2), (2, 1)),
@@ -498,6 +499,7 @@ def test_topology_beam_outline_width_cannot_exceed_its_coordinate_extent() -> No
 
     assert beam.solve_next(stop_when_width_admits=lambda _width: True) is None
 
+
 def test_topology_refinement_validates_config_and_direct_target_types() -> None:
     problem = _fixed_problem(sizes=((2, 2), (2, 2)), nets=((0, 1),))
     target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (-1, 0, 1))
@@ -523,9 +525,7 @@ def test_topology_refinement_validates_config_and_direct_target_types() -> None:
             width_bound=4,
             base_seed=3,
             coordinate_hint=None,
-            direct_targets=(
-                DirectInsertTarget((0, 2), 0, 2, 0, 0, 2, 2, (-1, 0, 1)),
-            ),
+            direct_targets=(DirectInsertTarget((0, 2), 0, 2, 0, 0, 2, 2, (-1, 0, 1)),),
             config=config,
         )
 
@@ -717,10 +717,7 @@ def test_normal_compact_seed_requires_allowed_direct_origin_delta(
     )
 
     assert cp_direct == expected
-    assert (
-        compact_seed_module._decoded_direct_keys(decoded, (0, 0), eligibility)
-        == expected
-    )
+    assert compact_seed_module._decoded_direct_keys(decoded, (0, 0), eligibility) == expected
 
 
 def test_cp_coordinate_direct_success_is_not_accepted_as_zero_gap_decoded_truth() -> None:

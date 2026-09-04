@@ -1113,9 +1113,7 @@ def _belt_single(ctx: Context) -> Iterable[Finding]:
         if len(belts) < 2:
             continue
         junctions = [
-            i
-            for i, splitter in ctx.of_kind(Kind.SPLITTER)
-            if (splitter.x, splitter.y) == cell[:2]
+            i for i, splitter in ctx.of_kind(Kind.SPLITTER) if (splitter.x, splitter.y) == cell[:2]
         ]
         attached = {b for j in junctions for b in ctx.junction_attachments(j)}
         loose = [i for i in belts if i not in attached]
@@ -2081,6 +2079,7 @@ def _belt_in_addon_area(
     ctx.cache.addon_area_belts[key] = selected
     return selected
 
+
 def _addon_belt_line_distance(
     ctx: Context,
     addon: PlacedBuilding,
@@ -2231,10 +2230,7 @@ def _addon_supply(ctx: Context) -> Iterable[Finding]:
                 area=pose.area,
                 belt_index=selected,
             )
-            if (
-                line_distance is not None
-                and line_distance >= rules.ADDON_LINE_MAX_DISTANCE
-            ):
+            if line_distance is not None and line_distance >= rules.ADDON_LINE_MAX_DISTANCE:
                 yield Finding(
                     "game.addon_supply",
                     Severity.ERROR,
@@ -2611,8 +2607,7 @@ def _addon_crossing_tile_reach(ctx: Context, addon: PlacedBuilding) -> int:
     anchor_to_centre = max((addon.width - 1) / 2.0, (addon.height - 1) / 2.0)
     collider_radius = max(
         (
-            math.dist((0.0, 0.0, 0.0), position)
-            + math.dist((0.0, 0.0, 0.0), half_extents)
+            math.dist((0.0, 0.0, 0.0), position) + math.dist((0.0, 0.0, 0.0), half_extents)
             for position, half_extents, _rotation in dsp_colliders.build_colliders(
                 addon.model_index
             )
@@ -2620,8 +2615,7 @@ def _addon_crossing_tile_reach(ctx: Context, addon: PlacedBuilding) -> int:
         default=0.0,
     )
     got = math.ceil(
-        anchor_to_centre
-        + (collider_radius + dsp_colliders.BELT_PROBE_RADIUS) / colliders.GRID_ARC
+        anchor_to_centre + (collider_radius + dsp_colliders.BELT_PROBE_RADIUS) / colliders.GRID_ARC
     )
     ctx.cache.addon_crossing_reach[key] = got
     return got
@@ -5972,9 +5966,7 @@ def belt_run_demands(
     anyway.  The stacks are still returned in that case -- they do not depend on
     the group resolution -- so a caller need not special-case the shape.
     """
-    ctx = _context(
-        placement, spec, id_map(spec), 256, cat.DEFAULT_MAX_BELT_Z, True
-    )
+    ctx = _context(placement, spec, id_map(spec), 256, cat.DEFAULT_MAX_BELT_Z, True)
     stacks = {index: ctx.stack_of(index) for index in range(len(ctx.runs))}
     if ctx.unresolved_machines():
         return ctx.runs, {}, stacks
