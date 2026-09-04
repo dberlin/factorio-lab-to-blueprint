@@ -209,8 +209,7 @@ def test_no_mining_machines_are_built(plain: RateSolution, data: Dataset) -> Non
     mining = {r.id for r in data.mining_recipes()}
     assert not {g.recipe_id for g in plain.groups} & mining
     assert not any(
-        g.machine_item_id in {"mining-machine", "oil-extractor", "water-pump"}
-        for g in plain.groups
+        g.machine_item_id in {"mining-machine", "oil-extractor", "water-pump"} for g in plain.groups
     )
 
 
@@ -367,9 +366,7 @@ EXACT_MACHINES = {
 }
 
 
-def test_machine_counts_are_exact_not_snapped_floats(
-    data: Dataset, plain: RateSolution
-) -> None:
+def test_machine_counts_are_exact_not_snapped_floats(data: Dataset, plain: RateSolution) -> None:
     """Guards a bug that ``isinstance(x, Fraction)`` cannot see.
 
     The solver works in floats.  An earlier derivation took its craft rates
@@ -407,8 +404,7 @@ def test_products_policy_rates_are_exact_balanced_and_within_capacity(
     assert result.groups
     assert all(isinstance(group.crafts_per_second, Fraction) for group in result.groups)
     assert all(
-        group.crafts_per_second
-        <= group.machines * group.adjusted.crafts_per_second
+        group.crafts_per_second <= group.machines * group.adjusted.crafts_per_second
         for group in result.groups
     )
     produced: dict[str, Fraction] = {}
@@ -445,18 +441,17 @@ def test_omitted_costs_match_factoriolab_defaults(
     assert solve(data, parse_url(explicit_defaults)) == plain
 
 
-
 def test_surplus_cost_reaches_downstream_coproduct_consumers(
     data: Dataset,
 ) -> None:
     request = parse_url(
-        "https://factoriolab.github.io/dsp/flow"
-        "?o=antimatter*60&cma=0&cfp=0&csu=1&v=11"
+        "https://factoriolab.github.io/dsp/flow?o=antimatter*60&cma=0&cfp=0&csu=1&v=11"
     )
 
     result = solve(data, request, prove_minimal=False)
 
     assert sum(result.surplus.values(), Fraction()) < 1
+
 
 def test_factoriolab_costs_weight_machine_footprint_and_surplus(
     data: Dataset,
@@ -480,10 +475,7 @@ def test_factoriolab_costs_weight_machine_footprint_and_surplus(
         None,
     )
     coefficients = _objective_coefficients(data, request, columns)
-    index = next(
-        i for i, column in enumerate(columns)
-        if column.recipe_id == "super-magnetic-ring"
-    )
+    index = next(i for i, column in enumerate(columns) if column.recipe_id == "super-magnetic-ring")
     column = columns[index]
 
     # cma=100 and cfp=100, but ``adjustCosts`` applies the footprint factor
@@ -502,8 +494,7 @@ def test_factoriolab_costs_weight_machine_footprint_and_surplus(
     )
     assert coefficients.surplus[index] == 100 * net_items
     assert coefficients.continuous[index] == (
-        coefficients.machine[index] / column.crafts_per_second
-        + coefficients.surplus[index]
+        coefficients.machine[index] / column.crafts_per_second + coefficients.surplus[index]
     )
 
 
@@ -513,9 +504,7 @@ def test_factoriolab_recipe_factor_scales_declared_recipe_cost(
     from flab2bp.rates.adjust import adjust, select_machine
     from flab2bp.rates.solve import _objective_coefficients
 
-    request = parse_url(
-        "https://factoriolab.github.io/dsp/flow?o=antimatter*1&cfa=100&v=11"
-    )
+    request = parse_url("https://factoriolab.github.io/dsp/flow?o=antimatter*1&cfa=100&v=11")
     recipe = data.recipe("mass-energy-storage")
     column = adjust(
         data,
@@ -531,7 +520,6 @@ def test_factoriolab_recipe_factor_scales_declared_recipe_cost(
         * recipe.cost
         * 100,
     )
-
 
 
 def test_derivation_ignores_solver_float_noise(data: Dataset) -> None:
@@ -631,8 +619,7 @@ def test_derived_counts_are_exact_physical_ceilings(cycle: RateSolution) -> None
         exact = group.exact_machines
         ceiling = -((-exact.numerator) // exact.denominator)
         assert group.machines == ceiling, (
-            f"{group.recipe_id}: {group.machines} machines against an exact "
-            f"requirement of {exact}"
+            f"{group.recipe_id}: {group.machines} machines against an exact requirement of {exact}"
         )
         assert group.machines >= 1
 
@@ -699,7 +686,8 @@ def test_two_recipe_cycle_balances_in_every_capacity_regime() -> None:
     exactly the configuration the reporting URL lands in.
     """
     plasma = _column(
-        "plasma-refining", {"crude": Fraction(2)},
+        "plasma-refining",
+        {"crude": Fraction(2)},
         {"refined": Fraction(2), "hydrogen": Fraction(1)},
     )
     reform = _column(
@@ -728,7 +716,8 @@ def test_the_capped_regime_puts_the_reformer_to_work() -> None:
     all is the case the old code could not do arithmetic on.
     """
     plasma = _column(
-        "plasma-refining", {"crude": Fraction(2)},
+        "plasma-refining",
+        {"crude": Fraction(2)},
         {"refined": Fraction(2), "hydrogen": Fraction(1)},
     )
     reform = _column(
@@ -874,7 +863,6 @@ def test_unrecoverable_continuous_pass_falls_back_to_fixed_charge(
         group.crafts_per_second <= group.machines * group.adjusted.crafts_per_second
         for group in solution.groups
     )
-
 
 
 def test_default_solve_uses_the_fixed_charge_oracle(
@@ -1223,7 +1211,7 @@ def _one_belt_of(request: LabRequest, *, type_: ObjectiveType) -> LabRequest:
 @pytest.mark.parametrize(
     ("stack", "expected"),
     (
-        (None, 30),        # design rule 1: no `ist` is judged exactly as today
+        (None, 30),  # design rule 1: no `ist` is judged exactly as today
         (Fraction(1), 30),
         (Fraction(2), 60),
         (Fraction(4), 120),

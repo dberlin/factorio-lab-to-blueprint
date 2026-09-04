@@ -174,9 +174,7 @@ def test_geometry_corpus_is_derived_not_assumed() -> None:
 def test_rejected_fixtures_are_rejected_for_a_stated_reason() -> None:
     """Every excluded fixture fails on alignment, on collapse, or on both."""
     reasons = {
-        name: _geometry_report(bp)
-        for name, bp in _decoded().items()
-        if name not in GEOMETRY_CORPUS
+        name: _geometry_report(bp) for name, bp in _decoded().items() if name not in GEOMETRY_CORPUS
     }
     assert reasons, "expected some fixtures to be latitude-distorted"
     for name, (considered, off_grid, collapsed) in reasons.items():
@@ -286,8 +284,7 @@ def test_corner_rules_bury_belts_inside_machines() -> None:
             inside += sum(
                 1
                 for b in bp.buildings
-                if catalog.is_belt(b.item_id)
-                and (round(b.x), round(b.y), round(b.z)) in occ
+                if catalog.is_belt(b.item_id) and (round(b.x), round(b.y), round(b.z)) in occ
             )
         assert inside > 100, f"{min_tile.__name__} buries only {inside} belts"
 

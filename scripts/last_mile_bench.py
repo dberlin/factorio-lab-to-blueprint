@@ -152,8 +152,10 @@ def bench(path: Path, rounds: int, check: bool) -> int:
     if check:
         want = digest([case["result"] for case in replayable])
         same = digest(got)
-        print(f"captured digest {want}   replay digest {same}   "
-              f"{'MATCH' if want == same else 'DIFFER'}")
+        print(
+            f"captured digest {want}   replay digest {same}   "
+            f"{'MATCH' if want == same else 'DIFFER'}"
+        )
         # Say what a MATCH is worth.  `offers` is a stub here and the commit
         # path (`_stake` + `commit_once`) is outside the capture entirely, so
         # this proves the SEARCH is unchanged and says nothing about whether

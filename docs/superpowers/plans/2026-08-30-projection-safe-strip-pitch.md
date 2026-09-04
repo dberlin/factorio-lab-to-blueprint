@@ -99,7 +99,9 @@ Use the captured Chemical Plant pair: same owner, same model/yaw, adjacent origi
 
 ```python
 def test_same_strip_adjacent_machine_collision_requires_next_pitch() -> None:
-    failure = ProjectionFailure("geom.collide", (left_index, right_index), "build colliders intersect", 160)
+    failure = ProjectionFailure(
+        "geom.collide", (left_index, right_index), "build colliders intersect", 160
+    )
     requirement = projection_pitch_requirement(
         placement,
         instance_ids=(instance.instance_id,),

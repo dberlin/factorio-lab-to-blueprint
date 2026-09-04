@@ -288,9 +288,7 @@ class _NoGoodInbox:
 
     def applicable(self, planned: frozenset[StripInstanceId]) -> tuple[object, ...]:
         return tuple(
-            message.no_good
-            for message in self._held
-            if applicable_no_good(message, planned)
+            message.no_good for message in self._held if applicable_no_good(message, planned)
         )
 
 
@@ -506,9 +504,7 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         # OVER-OPTIMISTIC key -- the other arm would prune against a belt count
         # nothing achieved.  A missing stat is a defect and reads as one.
         belt_tiles = int(placement.stats["belt_tiles"])
-        channels.publish_incumbent(
-            IncumbentMessage(request.strategy, (placement.area, belt_tiles))
-        )
+        channels.publish_incumbent(IncumbentMessage(request.strategy, (placement.area, belt_tiles)))
         published += 1
 
     # No `external_no_goods` / `publish_no_good` closures here: neither
@@ -872,9 +868,7 @@ class RacingLayout:
         )
         raise NoValidLayout(
             "both raced strategies refused" + (f": {details}" if details else ""),
-            spec_label=next(
-                (o.refusal_spec_label for o in outcomes if o.refusal_spec_label), ""
-            ),
+            spec_label=next((o.refusal_spec_label for o in outcomes if o.refusal_spec_label), ""),
             budget_s=next((o.refusal_budget_s for o in outcomes if o.refusal_budget_s), 0.0),
             # Both arms refuse over the same spec and the same band policy, so
             # the same projection failure can arrive twice; reporting it twice

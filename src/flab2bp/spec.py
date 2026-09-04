@@ -254,10 +254,7 @@ class BuildSpec(_Frozen):
         produced = {item for g in self.groups for item in g.outputs_per_machine}
         supplied = produced | set(self.external_inputs)
         missing = {
-            item
-            for g in self.groups
-            for item in g.inputs_per_machine
-            if item not in supplied
+            item for g in self.groups for item in g.inputs_per_machine if item not in supplied
         }
         if missing:
             raise ValueError(

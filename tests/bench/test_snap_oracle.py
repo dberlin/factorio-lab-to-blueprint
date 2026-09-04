@@ -13,12 +13,8 @@ def _case() -> snaporacle.Case:
     return snaporacle.Case(name="typed", lpos=(0.0, 0.0, 0.0), lpos2=(1.0, 0.0, 0.0))
 
 
-def _returning(
-    monkeypatch: pytest.MonkeyPatch, payload: object
-) -> None:
-    def run(
-        args: list[str], _stdin: str, _timeout_s: float
-    ) -> subprocess.CompletedProcess[str]:
+def _returning(monkeypatch: pytest.MonkeyPatch, payload: object) -> None:
+    def run(args: list[str], _stdin: str, _timeout_s: float) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
             args=args,
             returncode=0,

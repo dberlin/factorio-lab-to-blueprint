@@ -97,9 +97,7 @@ def test_specs_for_default_emits_the_three_canonical_candidate_identities(
         del data, request
         received["candidate_policies"] = candidate_policies
         return SimpleNamespace(
-            candidates=tuple(
-                SimpleNamespace(label=policy.value) for policy in candidate_policies
-            )
+            candidates=tuple(SimpleNamespace(label=policy.value) for policy in candidate_policies)
         )
 
     monkeypatch.setattr("flab2bp.bench.runner.lab_data.load_vendored", object)

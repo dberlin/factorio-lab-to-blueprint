@@ -25,7 +25,6 @@ from flab2bp.spec import BuildSpec
 _ISLAND_COMPLETION_GRACE_S = 90.0
 
 
-
 @dataclass(frozen=True, slots=True)
 class _SequenceIslandRequest:
     """Plain pickleable inputs for one complete production solve."""
@@ -105,8 +104,6 @@ def _sequence_island_seeds(base_seed: int, islands: int) -> tuple[int, ...]:
     )
 
 
-
-
 def _sequence_island_deadlines(
     time_budget_s: float,
     *,
@@ -154,9 +151,7 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
 def _completed_placement(outcome: _SequenceIslandOutcome) -> Placement:
     placement = outcome.placement
     if placement is None:
-        raise RuntimeError(
-            f"completed sequence island {outcome.island_id} returned no placement"
-        )
+        raise RuntimeError(f"completed sequence island {outcome.island_id} returned no placement")
     return placement
 
 
@@ -196,9 +191,7 @@ def _merge_sequence_island_outcomes(
     )
     projection_failures = tuple(
         dict.fromkeys(
-            failure
-            for outcome in refused
-            for failure in outcome.refusal_projection_failures
+            failure for outcome in refused for failure in outcome.refusal_projection_failures
         )
     )
     raise NoValidLayout(

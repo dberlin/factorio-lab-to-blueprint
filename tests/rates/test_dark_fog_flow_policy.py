@@ -82,8 +82,7 @@ def test_alias_only_url_uses_catalog_recipe_ids(data: Dataset) -> None:
 
 def test_canonical_and_alias_objectives_merge_into_one_demand(data: Dataset) -> None:
     url = (
-        "https://factoriolab.github.io/dsp/list?"
-        "o=df-combustible-unit*30&o=combustible-unit*30&v=11"
+        "https://factoriolab.github.io/dsp/list?o=df-combustible-unit*30&o=combustible-unit*30&v=11"
     )
     (spec,) = build_candidates(
         data,
@@ -144,7 +143,6 @@ def test_captured_alias_and_canonical_rows_produce_the_same_selection() -> None:
 
     assert alias == canonical
     assert alias.source_url == url
-
 
 
 def test_alias_and_canonical_flow_rows_merge_rates() -> None:
@@ -252,9 +250,7 @@ def test_df_only_output_is_refused_even_when_the_flow_lists_it(data: Dataset) ->
 
 def test_df_only_non_demand_row_does_not_authorize_an_input(data: Dataset) -> None:
     custom = _with_df_only_logistics_input(data)
-    text = _df_only_flow(include_source=True).replace(
-        "df-only-resource,=60", "df-only-resource,=0"
-    )
+    text = _df_only_flow(include_source=True).replace("df-only-resource,=60", "df-only-resource,=0")
     flow = flow_from_text(text, url=LOGISTICS_URL)
     request = pin_request(parse_url(LOGISTICS_URL), custom, flow)
 
@@ -265,6 +261,7 @@ def test_df_only_non_demand_row_does_not_authorize_an_input(data: Dataset) -> No
             candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
             flow=flow,
         )
+
 
 def test_df_only_internal_product_is_refused(data: Dataset) -> None:
     logistics = replace(

@@ -61,7 +61,7 @@ def _int(value: str | None, what: str) -> int:
 def _decode_text(s: str) -> str:
     try:
         return unquote(s)
-    except (UnicodeDecodeError, ValueError):
+    except UnicodeDecodeError, ValueError:
         return s
 
 

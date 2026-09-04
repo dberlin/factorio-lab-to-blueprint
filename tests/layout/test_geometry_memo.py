@@ -45,9 +45,7 @@ def test_registry_evicts_least_recently_used_spec() -> None:
     assert geometry_memo.for_spec(specs[-1]) is caches[-1]
 
 
-@pytest.mark.parametrize(
-    "make_spec", [two_stage_spec, plastic_spec, captured_output_products_spec]
-)
+@pytest.mark.parametrize("make_spec", [two_stage_spec, plastic_spec, captured_output_products_spec])
 def test_shared_cache_does_not_change_the_prepared_problem(
     make_spec: Callable[[], BuildSpec],
 ) -> None:

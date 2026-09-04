@@ -71,6 +71,7 @@ REAL_URL = (
     "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
 )
 
+
 def test_declared_nodriver_imports_on_the_supported_runtime() -> None:
     module = importlib.import_module("nodriver")
     assert callable(getattr(module, "start", None))
@@ -130,7 +131,6 @@ class _RedirectingSolvePage:
         return json.dumps({"rows": 0, "csv": False})
 
 
-
 class _NavigationPage:
     def __init__(self, locations: list[str], ready_states: list[str]) -> None:
         self.locations = locations
@@ -145,6 +145,7 @@ class _NavigationPage:
         ready = self.ready_states[min(self.index, len(self.ready_states) - 1)]
         self.index += 1
         return ready
+
 
 class _FakeFetch:
     class RequestPaused:
@@ -246,6 +247,7 @@ class _InterceptPage:
             return "complete"
         return None
 
+
 class _DetachedInterceptPage(_InterceptPage):
     async def send(self, command: object) -> object:
         typed = cast(tuple[object, ...], command)
@@ -304,6 +306,7 @@ def test_allowed_main_frame_redirects_are_continued() -> None:
     assert seen == [REAL_URL, redirected]
     assert [command[0] for command in page.commands].count("continue") == 2
 
+
 def test_detached_allowed_handler_advances_navigation_before_location_validation() -> None:
     redirected = REAL_URL.replace("/list?", "/flow?")
     page = _DetachedInterceptPage([REAL_URL, redirected])
@@ -349,6 +352,7 @@ def test_detached_forbidden_handler_aborts_before_load_side_effect() -> None:
     assert unsafe not in page.loaded
     assert ("fail", "request-1", "BlockedByClient") in page.commands
 
+
 def test_final_navigation_is_checked_before_page_probes() -> None:
     seen: list[str] = []
 
@@ -358,9 +362,7 @@ def test_final_navigation_is_checked_before_page_probes() -> None:
             raise CaptureError("outside allowlist")
 
     with pytest.raises(CaptureError, match="outside allowlist"):
-        asyncio.run(
-            _validate_page_location(_LocationPage("http://127.0.0.1/private"), validate)
-        )
+        asyncio.run(_validate_page_location(_LocationPage("http://127.0.0.1/private"), validate))
     assert seen == ["http://127.0.0.1/private"]
 
 
@@ -386,12 +388,9 @@ def test_solve_poll_revalidates_location_before_each_page_probe(
 
     monkeypatch.setattr("flab2bp.lab.capture._POLL_S", 0.0)
     with pytest.raises(CaptureError, match="outside allowlist"):
-        asyncio.run(
-            _await_solve(page, REAL_URL, deadline_s=1.0, url_validator=validate)
-        )
+        asyncio.run(_await_solve(page, REAL_URL, deadline_s=1.0, url_validator=validate))
     assert seen == [REAL_URL, unsafe]
     assert page.probe_calls == 1
-
 
 
 def test_navigation_settle_rejects_a_later_redirect(
@@ -410,6 +409,8 @@ def test_navigation_settle_rejects_a_later_redirect(
     with pytest.raises(CaptureError, match="outside allowlist"):
         asyncio.run(_await_navigation(page, validate, deadline_s=1.0))
     assert seen == [REAL_URL, unsafe]
+
+
 def test_requested_url_validation_refuses_before_browser_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -510,9 +511,7 @@ class TestWaitConditions:
         assert REAL_URL in message
 
     def test_invalid_probe_payload_refuses_at_the_browser_boundary(self) -> None:
-        page = _FakePage[_InvalidSolveProbeState](
-            [_InvalidSolveProbeState(rows="four", csv=True)]
-        )
+        page = _FakePage[_InvalidSolveProbeState]([_InvalidSolveProbeState(rows="four", csv=True)])
         with pytest.raises(CaptureError, match="invalid solve probe"):
             asyncio.run(_await_solve(page, REAL_URL, deadline_s=0.6))
 
@@ -584,22 +583,23 @@ class TestRealCapture:
         assert dict(pinned.external_inputs) == dict(derived.external_inputs)
         assert unsupplied_inputs(flow, data, pinned.external_inputs) == ()
 
-    def test_the_exact_cross_check_agrees(
-        self, data: Dataset, flow: FlowSelection
-    ) -> None:
+    def test_the_exact_cross_check_agrees(self, data: Dataset, flow: FlowSelection) -> None:
         """Both sides exact rationals, and they match -- machines and rates.
 
         This is the check the JSON export could not support at all.
         """
         plan = solve(data, pin_request(parse_url(REAL_URL), data, flow))
-        assert cross_check(
-            flow,
-            data,
-            machines={g.recipe_id: g.machines for g in plan.groups},
-            machine_items={g.recipe_id: g.machine_item_id for g in plan.groups},
-            external_inputs=plan.external_inputs,
-            outputs=dict(plan.outputs),
-        ) == ()
+        assert (
+            cross_check(
+                flow,
+                data,
+                machines={g.recipe_id: g.machines for g in plan.groups},
+                machine_items={g.recipe_id: g.machine_item_id for g in plan.groups},
+                external_inputs=plan.external_inputs,
+                outputs=dict(plan.outputs),
+            )
+            == ()
+        )
 
 
 # --------------------------------------------------------------------------
@@ -619,11 +619,14 @@ def test_live_capture_round_trip(data: Dataset) -> None:
     assert flow.chosen_recipe_ids
     plan = solve(data, pin_request(parse_url(REAL_URL), data, flow))
     assert unsupplied_inputs(flow, data, plan.external_inputs) == ()
-    assert cross_check(
-        flow,
-        data,
-        machines={g.recipe_id: g.machines for g in plan.groups},
-        machine_items={g.recipe_id: g.machine_item_id for g in plan.groups},
-        external_inputs=plan.external_inputs,
-        outputs=dict(plan.outputs),
-    ) == ()
+    assert (
+        cross_check(
+            flow,
+            data,
+            machines={g.recipe_id: g.machines for g in plan.groups},
+            machine_items={g.recipe_id: g.machine_item_id for g in plan.groups},
+            external_inputs=plan.external_inputs,
+            outputs=dict(plan.outputs),
+        )
+        == ()
+    )

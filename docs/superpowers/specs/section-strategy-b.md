@@ -40,13 +40,13 @@ exactly this much of it; if the final shape differs, adapt in one place
 (`freeform._read_spec`).
 
 ```python
-spec.machines      # list[MachineDemand]: recipe_id, machine_item_id, count:int,
-                   #   proliferator_mode, footprint (w,h), per-machine in/out rates
-spec.flows         # list[Flow]: item_id, source (recipe_id | EXTERNAL),
-                   #   sink (recipe_id | EXTERNAL), rate: Fraction (items/s)
+spec.machines  # list[MachineDemand]: recipe_id, machine_item_id, count:int,
+#   proliferator_mode, footprint (w,h), per-machine in/out rates
+spec.flows  # list[Flow]: item_id, source (recipe_id | EXTERNAL),
+#   sink (recipe_id | EXTERNAL), rate: Fraction (items/s)
 spec.belt_item_id  # chosen belt tier
-spec.belt_capacity # Fraction items/s for that tier
-spec.externals     # inputs (ores, proliferator) and the output product
+spec.belt_capacity  # Fraction items/s for that tier
+spec.externals  # inputs (ores, proliferator) and the output product
 ```
 
 **Heterogeneous footprints are the norm, not the exception.** Arc smelter 3×3
@@ -510,10 +510,10 @@ build into an existing planetary grid.
 All numeric constants are parameterised; the catalog agent owns the real values.
 
 ```python
-POWER_TOWER_ITEM_ID   # Tesla Tower item id
-TOWER_W, TOWER_H      # footprint (expected 1x1)
-SUPPLY_RADIUS  = R    # tiles; machines within R are powered
-LINK_RADIUS    = L    # tiles; towers within L connect to each other
+POWER_TOWER_ITEM_ID  # Tesla Tower item id
+TOWER_W, TOWER_H  # footprint (expected 1x1)
+SUPPLY_RADIUS = R  # tiles; machines within R are powered
+LINK_RADIUS = L  # tiles; towers within L connect to each other
 ```
 
 ### 5.1 What "covered" must mean

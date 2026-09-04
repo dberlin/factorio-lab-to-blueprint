@@ -59,9 +59,7 @@ In `tests/conftest.py`, add imports for `Path`, `load_vendored`, `flow_from_text
 
 ```python
 _REFINED_OIL_FLOW = Path(__file__).parent / "fixtures" / "flow_refined_oil_self_feedback.csv"
-_REFINED_OIL_URL = (
-    "https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11"
-)
+_REFINED_OIL_URL = "https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11"
 
 
 @pytest.fixture(scope="session")
@@ -108,8 +106,7 @@ def test_sequence_families_keep_same_group_feedback_destination(
         lane
         for family in families
         for lane in family.output_lanes
-        if lane.items == ("refined-oil",)
-        and family.group_key in lane.destination_group_keys
+        if lane.items == ("refined-oil",) and family.group_key in lane.destination_group_keys
     ]
     assert feedback
 ```

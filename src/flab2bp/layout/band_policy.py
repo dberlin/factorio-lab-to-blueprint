@@ -55,9 +55,7 @@ BAND_SELECTIONS: tuple[BandSelection, ...] = (
 _DIMENSION_BY_SELECTION = {
     f"{height}x{width}": (height, width) for height, width in BAND_DIMENSIONS
 }
-_SELECTION_BY_SEGMENTS = {
-    str(width // 5): f"{height}x{width}" for height, width in BAND_DIMENSIONS
-}
+_SELECTION_BY_SEGMENTS = {str(width // 5): f"{height}x{width}" for height, width in BAND_DIMENSIONS}
 
 
 def _canonical_selection(value: str) -> BandSelection | None:

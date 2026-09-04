@@ -62,9 +62,7 @@ def _perturb_callable[**P](fn: Callable[P, object]) -> Callable[P, object]:
     return wrapped
 
 
-def _scale_callable[**P](
-    fn: Callable[P, object], factor: Fraction
-) -> Callable[P, object]:
+def _scale_callable[**P](fn: Callable[P, object], factor: Fraction) -> Callable[P, object]:
     @functools.wraps(fn)
     def wrapped(*args: P.args, **kwargs: P.kwargs) -> object:
         got = _scale(fn(*args, **kwargs), factor)
@@ -195,9 +193,7 @@ def perturbed(entry: Entry, value: object = _MISSING) -> Iterator[object]:
     original: object = getattr(home, entry.name)
     replacement: object = perturb(original) if value is _MISSING else value
 
-    holders = [
-        m for m in _flab2bp_modules() if getattr(m, entry.name, _MISSING) is original
-    ]
+    holders = [m for m in _flab2bp_modules() if getattr(m, entry.name, _MISSING) is original]
     for module in holders:
         setattr(module, entry.name, replacement)
     _clear_caches()
@@ -215,9 +211,7 @@ def rebinding_modules(entry: Entry) -> tuple[str, ...]:
     original: object = getattr(home, entry.name)
     return tuple(
         sorted(
-            m.__name__
-            for m in _flab2bp_modules()
-            if getattr(m, entry.name, _MISSING) is original
+            m.__name__ for m in _flab2bp_modules() if getattr(m, entry.name, _MISSING) is original
         )
     )
 
@@ -297,9 +291,7 @@ def outcome(fn: Callable[[], None]) -> str:
     return "<passed>"
 
 
-def first_changed(
-    pool: Sequence[Witness], baseline: dict[str, str]
-) -> str | None:
+def first_changed(pool: Sequence[Witness], baseline: dict[str, str]) -> str | None:
     """First witness whose outcome changes from its unperturbed outcome."""
     for name, fn in pool:
         if name not in baseline:

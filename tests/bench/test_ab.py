@@ -160,7 +160,7 @@ def test_demotion_drops_the_area_with_the_verdict() -> None:
 
 
 def test_refused_invalid_and_error_are_counted_separately() -> None:
-    """"B refused" and "B blew up" call for different investigations."""
+    """ "B refused" and "B blew up" call for different investigations."""
     cell = Cell(
         "u",
         "freeform",
@@ -311,10 +311,7 @@ def _cell(name: str, areas: list[int]) -> Cell:
         "u",
         name,
         1.0,
-        tuple(
-            _trial(Outcome.VALID, strategy=name, area=x, trial=i)
-            for i, x in enumerate(areas)
-        ),
+        tuple(_trial(Outcome.VALID, strategy=name, area=x, trial=i) for i, x in enumerate(areas)),
     )
 
 
@@ -438,8 +435,7 @@ def test_a_stable_winner_says_so() -> None:
         _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=1000, budget=b)
         for b in (1.0, 10.0)
     ] + [
-        _trial(Outcome.VALID, url="a", strategy="freeform", area=600, budget=b)
-        for b in (1.0, 10.0)
+        _trial(Outcome.VALID, url="a", strategy="freeform", area=600, budget=b) for b in (1.0, 10.0)
     ]
     comparisons = [
         compare(trials, a_name="sequence-pair", b_name="freeform", budget_s=b, url_ids=["a"])
@@ -475,9 +471,7 @@ def test_a_missing_toolchain_reads_as_skipped_not_as_a_pass(
         (CrossCheck(ok=True, hash_valid=True, buildings=3), ""),
     ],
 )
-def test_cross_verdict_rejects_what_the_game_format_would(
-    check: CrossCheck, expected: str
-) -> None:
+def test_cross_verdict_rejects_what_the_game_format_would(check: CrossCheck, expected: str) -> None:
     """A building count mismatch is invisible to our own validator.
 
     We validate the ``Placement``; the decoder validates the bytes. Only the
@@ -531,9 +525,7 @@ def _placement() -> Placement:
 
 
 def _process_identity_placement() -> Placement:
-    return Placement(
-        buildings=(PlacedBuilding(item_id=2304, model_index=66, x=os.getpid(), y=0),)
-    )
+    return Placement(buildings=(PlacedBuilding(item_id=2304, model_index=66, x=os.getpid(), y=0),))
 
 
 def test_isolated_attempt_runs_in_a_fresh_process() -> None:
@@ -543,9 +535,7 @@ def test_isolated_attempt_runs_in_a_fresh_process() -> None:
     assert attempt.placement.buildings[0].x != os.getpid()
 
 
-def _grade(
-    lay_out: object, judge: object = None, encode: object = None
-) -> Sample:
+def _grade(lay_out: object, judge: object = None, encode: object = None) -> Sample:
     return sample_once(
         url_id="u",
         candidate="c",
@@ -634,9 +624,7 @@ def test_a_covered_url_still_reports_a_mostly_broken_candidate_frontier() -> Non
     cell = Cell("u", "sequence-pair", 1.0, (trial,))
     assert cell.always
     assert cell.candidate_health == "only 1/3 candidates laid out"
-    assert "only 1/3 candidates laid out" in "\n".join(
-        render_text(_comparison([trial], ["u"]))
-    )
+    assert "only 1/3 candidates laid out" in "\n".join(render_text(_comparison([trial], ["u"])))
 
 
 def test_the_table_names_the_failure_kind_per_strategy() -> None:
@@ -652,12 +640,22 @@ def test_the_table_names_the_failure_kind_per_strategy() -> None:
 def test_composition_is_reported_so_the_reason_for_a_win_is_visible() -> None:
     trials = [
         _trial(
-            Outcome.VALID, url="a", strategy="sequence-pair", area=1000,
-            belts=800, direct=0, buildings=900,
+            Outcome.VALID,
+            url="a",
+            strategy="sequence-pair",
+            area=1000,
+            belts=800,
+            direct=0,
+            buildings=900,
         ),
         _trial(
-            Outcome.VALID, url="a", strategy="freeform", area=900,
-            belts=300, direct=11, buildings=420,
+            Outcome.VALID,
+            url="a",
+            strategy="freeform",
+            area=900,
+            belts=300,
+            direct=11,
+            buildings=420,
         ),
     ]
     text = "\n".join(render_text(_comparison(trials, ["a"])))
@@ -746,5 +744,3 @@ def test_old_json_without_resource_metrics_still_parses() -> None:
 
     assert loaded[0].cpu_seconds is None
     assert loaded[0].peak_rss_mb is None
-
-

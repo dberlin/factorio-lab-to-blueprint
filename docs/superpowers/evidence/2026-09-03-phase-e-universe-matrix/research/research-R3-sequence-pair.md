@@ -55,9 +55,7 @@ a defect), but it is **not the lever that closes `universe-matrix`**. Section 6 
 choice = OperatorChoice(
     destroy=DestroyOperator(self._destroy.best(self._exploration)),
     repair=RepairOperator(
-        self._repair.best(
-            self._exploration, among=self._affordable_repairs(context)
-        )
+        self._repair.best(self._exploration, among=self._affordable_repairs(context))
     ),
     scale=operator_scale(context),
     ordinal=len(self._choices),
@@ -654,11 +652,12 @@ two independent probes:
 probe = len(self._choices)
 if probe < len(self._destroy.order) * len(self._repair.order):
     destroy = DestroyOperator(self._destroy.order[probe // len(self._repair.order)])
-    repair  = RepairOperator(self._repair.order[probe % len(self._repair.order)])
+    repair = RepairOperator(self._repair.order[probe % len(self._repair.order)])
 else:
     destroy = DestroyOperator(self._destroy.best(self._exploration))
-    repair  = RepairOperator(self._repair.best(self._exploration,
-                                               among=self._affordable_repairs(context)))
+    repair = RepairOperator(
+        self._repair.best(self._exploration, among=self._affordable_repairs(context))
+    )
 ```
 
 with the `_affordable_repairs` gate still applied to the probe (a probe that would name

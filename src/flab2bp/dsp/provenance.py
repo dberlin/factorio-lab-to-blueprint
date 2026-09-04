@@ -427,9 +427,7 @@ def consultation(graph: Graph | None = None) -> tuple[Consultation, ...]:
     """One row per declared RULE, with who reaches it."""
     g = graph if graph is not None else build_graph()
     per_check = {cid: g.closure([root]) for cid, root in _check_roots().items()}
-    per_strategy = {
-        m: g.closure(g.nodes_in(m), block=(VALIDATE_MODULE,)) for m in STRATEGY_MODULES
-    }
+    per_strategy = {m: g.closure(g.nodes_in(m), block=(VALIDATE_MODULE,)) for m in STRATEGY_MODULES}
     rows: list[Consultation] = []
     for entry in registry.rules():
         node = entry.dotted

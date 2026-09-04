@@ -68,9 +68,7 @@ _COUNT_ROW = re.compile(
 #: decompiled sources, but they DO have to consume the file slot, or a bare
 #: continuation after ``validate.py:1511-1514`` would inherit whatever ``.cs``
 #: file was named before it and resolve against the wrong file.
-_CITATION = re.compile(
-    r"(?:(?P<file>[\w./]+\.(?:cs|py|md)))?:(?P<line>\d+)(?:-(?P<end>\d+))?\b"
-)
+_CITATION = re.compile(r"(?:(?P<file>[\w./]+\.(?:cs|py|md)))?:(?P<line>\d+)(?:-(?P<end>\d+))?\b")
 #: The matrix declares which file a bare ``:2586`` belongs to rather than
 #: relying on the reader to infer it.
 _DEFAULT_MARKER = re.compile(r"<!-- CITATIONS DEFAULT (?P<file>[\w.]+\.cs) -->")
@@ -170,9 +168,7 @@ def test_the_enum_is_not_the_57_that_circulated(members: dict[str, int]) -> None
     assert sorted(v for v in members.values() if v > 54) == [100, 101, 201, 202]
 
 
-def test_every_condition_has_exactly_one_verdict(
-    members: dict[str, int], matrix: str
-) -> None:
+def test_every_condition_has_exactly_one_verdict(members: dict[str, int], matrix: str) -> None:
     table = _verdict_table(matrix)
     missing = sorted(set(members) - set(table))
     assert not missing, (
@@ -191,13 +187,9 @@ def test_no_verdict_names_a_condition_the_game_does_not_have(
     assert not unknown, f"verdict rows for values that are not in the enum: {unknown}"
 
 
-def test_every_verdict_row_agrees_with_the_enum(
-    members: dict[str, int], matrix: str
-) -> None:
+def test_every_verdict_row_agrees_with_the_enum(members: dict[str, int], matrix: str) -> None:
     for name, row in _verdict_table(matrix).items():
-        assert row.verdict in VERDICTS, (
-            f"{name} has verdict {row.verdict!r}, not one of {VERDICTS}"
-        )
+        assert row.verdict in VERDICTS, f"{name} has verdict {row.verdict!r}, not one of {VERDICTS}"
         assert members[name] == row.value, (
             f"{name} is {members[name]} in the enum but the matrix says {row.value}"
         )

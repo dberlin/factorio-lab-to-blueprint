@@ -207,14 +207,9 @@ def _machines_with_mixed_input_belts(placement: Placement) -> dict[int, set[str]
                 or sorter.carries_item is None
             ):
                 continue
-            items_by_component.setdefault(find(sorter.input_obj), set()).add(
-                sorter.carries_item
-            )
+            items_by_component.setdefault(find(sorter.input_obj), set()).add(sorter.carries_item)
         mixed_items = {
-            item
-            for items in items_by_component.values()
-            if len(items) > 1
-            for item in items
+            item for items in items_by_component.values() if len(items) > 1 for item in items
         }
         if mixed_items:
             mixed[machine_index] = mixed_items
@@ -257,8 +252,7 @@ def test_sequence_pair_routes_requested_outputs_to_the_boundary() -> None:
 
     assert terminals
     assert all(
-        building.x in (min_x, max_x) or building.y in (min_y, max_y)
-        for building in terminals
+        building.x in (min_x, max_x) or building.y in (min_y, max_y) for building in terminals
     )
     assert validate.certify(placement, spec, expect_power=True).ok
 
@@ -463,6 +457,7 @@ def test_absent_initial_state_keeps_exact_anneal_initial_and_mapping_is_validate
             initial_states={60: AnnealState.initial(1, 1)},
         )
 
+
 def test_validated_initial_state_routes_raw_before_any_anneal_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -525,9 +520,7 @@ def test_validated_initial_state_routes_raw_before_any_anneal_mutation(
         heights=(40,),
         problem_for_height=lambda _height: problem,
         adapters=StageAdapters(
-            prepare=lambda _height, _decoded: pytest.fail(
-                "compact seed used ordinary preparation"
-            ),
+            prepare=lambda _height, _decoded: pytest.fail("compact seed used ordinary preparation"),
             prepare_exact=prepare_exact,
             global_route=lambda _prepared, _feedback, _allowance: pytest.fail(
                 "compact seed used a global route"
@@ -650,6 +643,7 @@ def test_exhausted_compact_restart_does_not_defer_feedback_or_double_settle() ->
     assert height_state.feedback_restart is None
     assert budget.discovery_complete
 
+
 def test_compact_projection_refusal_closes_inside_its_replacement_stage() -> None:
     problem, state, refused, failure = _projection_pitch_stage_fixture()
     exact = _placement(area=20, belt_tiles=4)
@@ -708,10 +702,10 @@ def test_compact_projection_refusal_closes_inside_its_replacement_stage() -> Non
         "compact-seed",
         "projection-feedback",
     ]
-    assert sum(
-        sequence_solver_module._counts_as_scheduled_stage(stage)
-        for stage in result.stages
-    ) == 1
+    assert (
+        sum(sequence_solver_module._counts_as_scheduled_stage(stage) for stage in result.stages)
+        == 1
+    )
     assert solver._heights[0].stages == 1
     assert solver._heights[0].restarts[0].stages == 1
 
@@ -720,9 +714,7 @@ def test_compact_seed_consumes_grouped_stage_for_every_restart() -> None:
     exact = _placement(area=20, belt_tiles=4)
     solver = _solver(
         _FakeRouting(
-            detailed_results=(
-                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
-            )
+            detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
         ),
         heights=(40,),
         config=SequenceSolverConfig(
@@ -739,15 +731,7 @@ def test_compact_seed_consumes_grouped_stage_for_every_restart() -> None:
     assert result.placement is exact
     assert result.stages[0].anneal_stages == 0
     assert [restart.stages for restart in solver._heights[0].restarts] == [1, 1, 1]
-    assert [
-        restart.anneal.stage_index for restart in solver._heights[0].restarts
-    ] == [1, 1, 1]
-
-
-
-
-
-
+    assert [restart.anneal.stage_index for restart in solver._heights[0].restarts] == [1, 1, 1]
 
 
 def test_stable_exact_role_stops_before_a_third_non_improving_stage() -> None:
@@ -1018,8 +1002,6 @@ def test_exact_seed_routing_failure_becomes_shared_search_feedback() -> None:
     }
 
 
-
-
 def test_owned_geometric_failures_remain_local_feedback_above_three_nets() -> None:
     problem = PlacementProblem(((1, 1),) * 10, (), 10, 10)
     state = AnnealState.initial(problem.size, 7)
@@ -1054,6 +1036,7 @@ def test_owned_geometric_failures_remain_local_feedback_above_three_nets() -> No
     assert neighbourhood
     assert len(neighbourhood) < problem.size
     assert repaired.stage_index == 0
+
 
 def _substitution_fixture() -> tuple[
     PlacementProblem, AnnealState, DecodedPlacement, DetailedRouteResult
@@ -1132,9 +1115,7 @@ def _run_alns(
         seed=state.base_seed,
         stage_index=0,
         session=session,
-        context=OperatorContext(
-            strip_count=problem.size, stagnation=0, remaining_fraction=10
-        ),
+        context=OperatorContext(strip_count=problem.size, stagnation=0, remaining_fraction=10),
         metrics=metrics_from_evaluation(
             routing,
             decoded,
@@ -2134,8 +2115,6 @@ def test_stage_routes_preserve_the_final_twenty_five_percent() -> None:
     assert sum(fake.global_allowances) + sum(fake.detailed_allowances) == 75
 
 
-
-
 def test_detailed_discovery_borrows_future_slices_in_stable_height_order() -> None:
     budget = ExpansionBudget(total=100)
     budget.configure((40, 60, 80), Fraction(1, 4))
@@ -2341,11 +2320,11 @@ def test_an_unmigrated_admission_keeps_a_quarter_second_floor() -> None:
 
     admission = sequence_solver_module._MeasuredStageAdmission(deadline=100.0, monotonic=clock)
 
-    now = 80.0   # 20.0 remaining, over the 0.25 floor
+    now = 80.0  # 20.0 remaining, over the 0.25 floor
     assert admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY) == 80.0
     admission.finish(80.0, sequence_solver_module._MeasuredStageRole.ORDINARY)
 
-    now = 99.9   # 0.1 remaining, under the 0.25 floor
+    now = 99.9  # 0.1 remaining, under the 0.25 floor
     assert admission.try_start(sequence_solver_module._MeasuredStageRole.COMPACT) is None
 
 
@@ -2376,19 +2355,19 @@ def test_warm_stage_admission_is_unchanged_by_the_cold_cap() -> None:
     assert admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY) == 90.0
     admission.finish(90.0, sequence_solver_module._MeasuredStageRole.ORDINARY)
 
-    now = 93.0   # 7.0 remaining, under the measured 8.0
+    now = 93.0  # 7.0 remaining, under the measured 8.0
     assert admission.try_start(sequence_solver_module._MeasuredStageRole.ORDINARY) is None
 
 
 @pytest.mark.parametrize(
     ("speculative_s", "completion_s", "remaining", "admitted"),
     (
-        (2.0, 1.0, 3.0, False),          # remaining == required: refused
-        (2.0, 1.0, 3.0 + 1e-6, True),    # remaining == required + eps: admitted
-        (5.0, 3.0, 8.0, False),          # a second boundary at a different span
+        (2.0, 1.0, 3.0, False),  # remaining == required: refused
+        (2.0, 1.0, 3.0 + 1e-6, True),  # remaining == required + eps: admitted
+        (5.0, 3.0, 8.0, False),  # a second boundary at a different span
         (5.0, 3.0, 8.0 + 1e-6, True),
-        (5.0, 3.0, 20.0, True),          # well above the measured requirement
-        (5.0, 3.0, 4.0, False),          # well below the measured requirement
+        (5.0, 3.0, 20.0, True),  # well above the measured requirement
+        (5.0, 3.0, 4.0, False),  # well below the measured requirement
     ),
     ids=(
         "boundary-refused",
@@ -2603,9 +2582,7 @@ def test_pending_routing_feedback_uses_zero_anneal_feedback_admission(
     assert [stage.anneal_moves for stage in result.stages] == [1, 0]
     assert detailed_calls == 2
     assert now == pytest.approx(7.44)
-    feedback_history = admission._histories[
-        sequence_solver_module._MeasuredStageRole.FEEDBACK
-    ]
+    feedback_history = admission._histories[sequence_solver_module._MeasuredStageRole.FEEDBACK]
     assert feedback_history.completion_observed
 
 
@@ -2636,9 +2613,7 @@ def test_completion_reserve_stop_keeps_best_completed_global_candidate(
     now = 0.0
     exact = _placement(area=20, belt_tiles=4)
     fake = _FakeRouting(
-        detailed_results=(
-            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),
-        )
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
     )
     admission = sequence_solver_module._MeasuredStageAdmission(
         deadline=8.0,
@@ -3255,9 +3230,7 @@ def test_the_production_run_divides_the_remaining_wall_by_its_own_ceiling(
         lambda: run.started + run.ceiling,
     )
     assert run.solver._remaining_fraction() == 0
-    monkeypatch.setattr(
-        "flab2bp.layout.sequence_solver.time.monotonic", lambda: run.started
-    )
+    monkeypatch.setattr("flab2bp.layout.sequence_solver.time.monotonic", lambda: run.started)
     assert run.solver._remaining_fraction() == C_CONTEXT_FRACTION_STEPS
 
 
@@ -3311,9 +3284,7 @@ def _shifted_window_pack(strips: object, **kwargs: Any) -> Any:
     encoder sees a valid placement and the adapter's own accept path runs.
     """
     seed = kwargs["seed"]
-    return replace(
-        seed, at={index: (x + 1, y) for index, (x, y) in seed.at.items()}
-    )
+    return replace(seed, at={index: (x + 1, y) for index, (x, y) in seed.at.items()})
 
 
 def _selected_candidates(
@@ -3371,9 +3342,9 @@ def test_the_window_adapter_solves_under_the_deadline_margin_budget(
     state = _reselected_state(run, problem, planned_state, spec)
     decoded = decode_state(problem, state)
     expected_candidates = _selected_candidates(run, problem, state, spec)
-    assert expected_candidates != _selected_candidates(
-        run, problem, planned_state, spec
-    ), "the fixture must separate the selected mapping from the planned one"
+    assert expected_candidates != _selected_candidates(run, problem, planned_state, spec), (
+        "the fixture must separate the selected mapping from the planned one"
+    )
     west = tuple(
         strip.west_channel
         for strip in run.solver.adapters.prepare(
@@ -3449,8 +3420,7 @@ def test_the_window_budget_keeps_a_safety_margin_off_the_run_deadline(
     run = _window_adapter_run(deadline)
     adapter, problem, state, decoded = _window_adapter_pieces(run)
     remaining = (
-        freeform_module.C_WINDOW_SECONDS
-        + freeform_module.C_WINDOW_DEADLINE_SAFETY_SECONDS / 2
+        freeform_module.C_WINDOW_SECONDS + freeform_module.C_WINDOW_DEADLINE_SAFETY_SECONDS / 2
     )
     seen: list[float] = []
 
@@ -3514,9 +3484,7 @@ def test_the_window_adapter_drops_a_pack_that_did_not_move(
         now[0] += solve_seconds
         return kwargs["seed"]
 
-    monkeypatch.setattr(
-        sequence_solver_module, "_pack_window", unchanged_after_three_seconds
-    )
+    monkeypatch.setattr(sequence_solver_module, "_pack_window", unchanged_after_three_seconds)
     monkeypatch.setattr("flab2bp.layout.sequence_solver.time.monotonic", lambda: now[0])
     assert adapter(frozenset({0}), problem, state, decoded) is None
     assert run.telemetry.alns_window_solves == 1
@@ -4683,9 +4651,7 @@ def test_production_planning_generates_variant_families_once(
     monkeypatch.setattr(
         strip_variants_module,
         "generate_strip_families",
-        lambda _spec, **_kwargs: pytest.fail(
-            "strip planning regenerated carried families"
-        ),
+        lambda _spec, **_kwargs: pytest.fail("strip planning regenerated carried families"),
     )
 
     _production_run(
@@ -5994,9 +5960,7 @@ def _recorded_stage_update(
         seen.append(no_good)
         return original(problem, state, no_good, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(
-        sequence_solver_module, "_projection_feedback_stage_update", recording
-    )
+    monkeypatch.setattr(sequence_solver_module, "_projection_feedback_stage_update", recording)
     return seen
 
 
@@ -6217,8 +6181,6 @@ def test_projection_pitch_feedback_runs_before_the_next_height_discovery(
     assert [stage.height for stage in result.stages] == [40, 40, 41]
     assert result.stages[1].selected_variant_ids[0].placement_geometry[2] == padded.pitch_x
     assert len(global_allowances) == (1 if borrow_first_discovery else 2)
-
-
 
 
 @pytest.mark.parametrize("closure_allowance", [None, 0])
@@ -8452,9 +8414,7 @@ def _install_reporting_solver(
     solver = _never_certifying_solver(
         heights=(12,),
         deadline_reached=lambda: False,
-        alns_adapters=sequence_solver_module._RepairAdapters(
-            window_installed=window_installed
-        ),
+        alns_adapters=sequence_solver_module._RepairAdapters(window_installed=window_installed),
     )
 
     def stub(
@@ -8589,9 +8549,7 @@ def test_the_default_operator_session_arms_the_whole_repair_portfolio() -> None:
     """
     solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
     armed = {
-        key.removeprefix("count:")
-        for key in solver.alns_session.credit
-        if key.startswith("count:")
+        key.removeprefix("count:") for key in solver.alns_session.credit if key.startswith("count:")
     }
     assert armed == {
         DestroyOperator.FAILED_ENDPOINTS.value,
@@ -8692,9 +8650,7 @@ def test_the_stage_boundary_repair_runs_through_the_operator_session(
     # Both the destroy and the repair portfolio are open, so this pins the
     # armed set rather than a single pairing. What the test is for is the spy:
     # every choice came from the session.
-    assert {choice.destroy for choice in solver.alns_session.choices} <= set(
-        SHIPPED_DESTROY
-    )
+    assert {choice.destroy for choice in solver.alns_session.choices} <= set(SHIPPED_DESTROY)
     assert {choice.repair for choice in solver.alns_session.choices} <= set(SHIPPED_REPAIR)
 
 
@@ -9612,15 +9568,15 @@ def test_the_portable_band_core_boundary_is_the_number_the_helper_is_given() -> 
     from flab2bp.layout import freeform
     from flab2bp.layout.finalize import band_policy_search_envelope
 
-    envelope = band_policy_search_envelope(
-        BandPolicy("portable"), perimeter=freeform._ENTRY_RING
-    )
+    envelope = band_policy_search_envelope(BandPolicy("portable"), perimeter=freeform._ENTRY_RING)
 
     assert freeform._ENTRY_RING == 3
     assert envelope.boundary_core_height == 154
     assert (
-        max(sequence_solver._ceiling_bounded_schedule(
-            (125, 160, 100), boundary=envelope.boundary_core_height
-        ))
+        max(
+            sequence_solver._ceiling_bounded_schedule(
+                (125, 160, 100), boundary=envelope.boundary_core_height
+            )
+        )
         <= 154
     )

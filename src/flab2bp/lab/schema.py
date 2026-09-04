@@ -346,9 +346,7 @@ class Item:
             module=Module.parse(raw.id, raw.module) if raw.module is not None else None,
             belt=Belt.parse(raw.belt) if raw.belt is not None else None,
             fuel=Fuel.parse(raw.fuel) if raw.fuel is not None else None,
-            technology=(
-                Technology.parse(raw.technology) if raw.technology is not None else None
-            ),
+            technology=(Technology.parse(raw.technology) if raw.technology is not None else None),
         )
 
 
@@ -529,9 +527,7 @@ class Dataset:
         }
         return cls(
             version=MappingProxyType(dict(parsed.version or {})),
-            categories=tuple(
-                Category.parse(category) for category in parsed.categories or ()
-            ),
+            categories=tuple(Category.parse(category) for category in parsed.categories or ()),
             items=tuple(Item.parse(item) for item in parsed.items or ()),
             recipes=tuple(Recipe.parse(recipe) for recipe in parsed.recipes or ()),
             limitations=MappingProxyType(limitations),

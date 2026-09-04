@@ -159,9 +159,7 @@ def capture(
                     "owned_starts": tuple(owned_starts),
                     "released_starts": tuple(released_starts),
                     "forbidden": tuple(forbidden),
-                    "blocking_owners": (
-                        None if blocking_owners is None else dict(blocking_owners)
-                    ),
+                    "blocking_owners": (None if blocking_owners is None else dict(blocking_owners)),
                     "path": out_path,
                 }
             )
@@ -180,10 +178,13 @@ def capture(
     out.write_bytes(pickle.dumps(cases, protocol=5))
     # `_astar` returns a `_PathSearchResult`, whose `path` is the tuple of cells.
     lens = [0 if c["path"].path is None else len(c["path"].path) for c in cases]
-    print(f"captured {len(cases)} of {seen} searches -> {out} "
-          f"({out.stat().st_size / 1e6:.1f} MB); "
-          f"{sum(1 for n in lens if n)} found, "
-          f"{sum(lens):,} path cells")
+    print(
+        f"captured {len(cases)} of {seen} searches -> {out} "
+        f"({out.stat().st_size / 1e6:.1f} MB); "
+        f"{sum(1 for n in lens if n)} found, "
+        f"{sum(lens):,} path cells"
+    )
+
 
 def capture_clusters(
     url_id: str,
@@ -272,8 +273,7 @@ def capture_clusters(
         + ", ".join(f"{value}={outcomes.count(value)}" for value in sorted(set(outcomes)))
         + "; bounds "
         + ", ".join(
-            f"{value or 'none'}={bounds_hit.count(value)}"
-            for value in sorted(set(bounds_hit))
+            f"{value or 'none'}={bounds_hit.count(value)}" for value in sorted(set(bounds_hit))
         )
     )
 
@@ -340,18 +340,24 @@ def bench(path: Path, rounds: int, check: bool, landmarks: int | None) -> int:
         spent = (1 << 40) - budget["left"]
         if best is None or dt < best[0]:
             best = (dt, spent, got)
-        print(f"  round {r + 1}: {dt:.3f}s  {spent:,} expansions  "
-              f"{1e6 * dt / max(spent, 1):.3f} us/exp")
+        print(
+            f"  round {r + 1}: {dt:.3f}s  {spent:,} expansions  "
+            f"{1e6 * dt / max(spent, 1):.3f} us/exp"
+        )
     if best is None:
         raise ValueError("rounds must be positive")
     dt, spent, got = best
-    print(f"BEST {dt:.3f}s  {spent:,} expansions  "
-          f"{1e6 * dt / max(spent, 1):.3f} us/exp  digest {digest(got)}")
+    print(
+        f"BEST {dt:.3f}s  {spent:,} expansions  "
+        f"{1e6 * dt / max(spent, 1):.3f} us/exp  digest {digest(got)}"
+    )
     if check:
         want = digest(case["path"] for case in cases)
         same = digest(got)
-        print(f"captured digest {want}   replay digest {same}   "
-              f"{'MATCH' if want == same else 'DIFFER'}")
+        print(
+            f"captured digest {want}   replay digest {same}   "
+            f"{'MATCH' if want == same else 'DIFFER'}"
+        )
         return 0 if want == same else 1
     return 0
 

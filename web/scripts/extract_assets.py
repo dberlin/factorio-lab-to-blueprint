@@ -10,6 +10,7 @@ Assembly-CSharp.dll alone cannot resolve netstandard / UnityEngine.CoreModule.
 
 Usage: uv run scripts/extract_assets.py [GAME_DIR]
 """
+
 from __future__ import annotations
 
 import colorsys
@@ -95,8 +96,7 @@ def main() -> None:
 
     # ---- proto sets -------------------------------------------------------
     protos: dict[str, dict] = {}
-    want = {"ItemProtoSet", "ModelProtoSet", "RecipeProtoSet",
-            "SignalProtoSet", "VeinProtoSet"}
+    want = {"ItemProtoSet", "ModelProtoSet", "RecipeProtoSet", "SignalProtoSet", "VeinProtoSet"}
     gonames: dict[int, str] = {}
     slot_objs = []
     desc_objs: list[tuple] = []
@@ -297,28 +297,32 @@ def main() -> None:
     items = []
     for it in items_raw:
         icon = (it.get("IconPath") or "").split("/")[-1]
-        items.append({
-            "id": it["ID"],
-            "name": en(it.get("Name") or ""),
-            "iconName": icon,
-            "gridIndex": it.get("GridIndex", 0),
-            "modelIndex": it.get("ModelIndex", 0),
-            "canBuild": bool(it.get("CanBuild")),
-            "color": colors.get(icon, 0xDDDDDD),
-        })
+        items.append(
+            {
+                "id": it["ID"],
+                "name": en(it.get("Name") or ""),
+                "iconName": icon,
+                "gridIndex": it.get("GridIndex", 0),
+                "modelIndex": it.get("ModelIndex", 0),
+                "canBuild": bool(it.get("CanBuild")),
+                "color": colors.get(icon, 0xDDDDDD),
+            }
+        )
 
     recipes = []
     for rc in recipes_raw:
-        recipes.append({
-            "id": rc["ID"],
-            "name": en(rc.get("Name") or ""),
-            "iconName": (rc.get("IconPath") or "").split("/")[-1],
-            "items": list(rc.get("Items") or []),
-            "itemCounts": list(rc.get("ItemCounts") or []),
-            "results": list(rc.get("Results") or []),
-            "resultCounts": list(rc.get("ResultCounts") or []),
-            "timeSpend": rc.get("TimeSpend", 0),
-        })
+        recipes.append(
+            {
+                "id": rc["ID"],
+                "name": en(rc.get("Name") or ""),
+                "iconName": (rc.get("IconPath") or "").split("/")[-1],
+                "items": list(rc.get("Items") or []),
+                "itemCounts": list(rc.get("ItemCounts") or []),
+                "results": list(rc.get("Results") or []),
+                "resultCounts": list(rc.get("ResultCounts") or []),
+                "timeSpend": rc.get("TimeSpend", 0),
+            }
+        )
 
     buildable = [i for i in items if i["canBuild"]]
     missing = [i for i in buildable if str(i["modelIndex"]) not in models]
@@ -357,8 +361,10 @@ def main() -> None:
 
     # ---- write output -------------------------------------------------
     atlas.save(os.path.join(OUT, "icons", "atlas.png"))
-    write(os.path.join(OUT, "icons", "atlas.json"),
-          {"cell": ICON_CELL, "cols": cols, "rows": max(rows, 1), "entries": entries})
+    write(
+        os.path.join(OUT, "icons", "atlas.json"),
+        {"cell": ICON_CELL, "cols": cols, "rows": max(rows, 1), "entries": entries},
+    )
     write(os.path.join(OUT, "items.json"), items)
     write(os.path.join(OUT, "recipes.json"), recipes)
     write(os.path.join(OUT, "models.json"), models)
@@ -535,9 +541,7 @@ def dominant_color(img: Image.Image) -> int:
     for r, g, b, a in img.getdata():
         if a <= 128:
             continue
-        _hue, lightness, saturation = colorsys.rgb_to_hls(
-            r / 255, g / 255, b / 255
-        )
+        _hue, lightness, saturation = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
         midtone = 1 - abs(2 * lightness - 1)
         weight = saturation * midtone
         if weight <= 0:

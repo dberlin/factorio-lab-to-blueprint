@@ -152,9 +152,7 @@ def _tuple3(value: object, path: str) -> tuple[float, float, float]:
     )
 
 
-def _optional_integer(
-    row: Mapping[object, object], key: str, path: str, default: int
-) -> int:
+def _optional_integer(row: Mapping[object, object], key: str, path: str, default: int) -> int:
     if key not in row:
         return default
     return _integer(row[key], f"{path}.{key}")
@@ -176,19 +174,13 @@ def _parse_pose_table(value: object) -> _PoseTable:
         path = f"{_SLOT_POSES}.{prefab}"
         entry = _mapping(entry_value, path)
         slot_values = (
-            _array(entry["slotPoses"], f"{path}.slotPoses")
-            if "slotPoses" in entry
-            else []
+            _array(entry["slotPoses"], f"{path}.slotPoses") if "slotPoses" in entry else []
         )
         port_values = (
-            _array(entry["portPoses"], f"{path}.portPoses")
-            if "portPoses" in entry
-            else []
+            _array(entry["portPoses"], f"{path}.portPoses") if "portPoses" in entry else []
         )
         addon_values = (
-            _array(entry["addonAreas"], f"{path}.addonAreas")
-            if "addonAreas" in entry
-            else []
+            _array(entry["addonAreas"], f"{path}.addonAreas") if "addonAreas" in entry else []
         )
         table[prefab] = {
             "slotPoses": tuple(
@@ -207,17 +199,13 @@ def _parse_pose_table(value: object) -> _PoseTable:
     return table
 
 
-def _optional_number(
-    row: Mapping[object, object], key: str, path: str
-) -> float | None:
+def _optional_number(row: Mapping[object, object], key: str, path: str) -> float | None:
     if key not in row or row[key] is None:
         return None
     return _number(row[key], f"{path}.{key}")
 
 
-def _optional_boolean(
-    row: Mapping[object, object], key: str, path: str
-) -> bool:
+def _optional_boolean(row: Mapping[object, object], key: str, path: str) -> bool:
     if key not in row:
         return False
     return _boolean(row[key], f"{path}.{key}")
@@ -305,16 +293,15 @@ SORTER_MAX_REACH = 3
 #: ``stackSize / (2 * sttf * d)``, which reproduces the published DSP figures
 #: exactly.  Divide by span to get the rate at distance.
 SORTER_RATE_AT_1 = {
-    2011: Fraction(3, 2),   # Sorter Mk.I
-    2012: Fraction(3),      # Sorter Mk.II
-    2013: Fraction(6),      # Sorter Mk.III
-    2014: Fraction(20),     # Pile Sorter
+    2011: Fraction(3, 2),  # Sorter Mk.I
+    2012: Fraction(3),  # Sorter Mk.II
+    2013: Fraction(6),  # Sorter Mk.III
+    2014: Fraction(20),  # Pile Sorter
 }
 
 #: Sorter item ids ordered from cheapest/slowest to fastest.
-SORTER_TIERS = tuple(
-    sorted(SORTER_RATE_AT_1, key=SORTER_RATE_AT_1.__getitem__)
-)
+SORTER_TIERS = tuple(sorted(SORTER_RATE_AT_1, key=SORTER_RATE_AT_1.__getitem__))
+
 
 def sorter_rate(item_id: int, span: int) -> Fraction:
     """Items/second a sorter of this tier sustains across ``span`` tiles."""
@@ -358,6 +345,7 @@ BELT_Z_PER_WORLD_UNIT = Fraction(3, 4)
 #: ``tan(theta) <= 3/4``.  With the unlock the test is skipped entirely.
 MAX_BELT_SLOPE = Fraction(3, 4)
 
+
 def belt_slope_allowed(
     world_rise: Fraction | int,
     horizontal_run: Fraction | int,
@@ -370,6 +358,7 @@ def belt_slope_allowed(
     rise = abs(Fraction(world_rise))
     run = abs(Fraction(horizontal_run))
     return run > 0 and rise <= MAX_BELT_SLOPE * run
+
 
 #: A belt climbs this much per tile of run at the steepest slope the corpus
 #: uses.  NOT a cap: ``MAX_BELT_SLOPE`` allows up to ``9/16`` of blueprint z per
@@ -659,10 +648,7 @@ def _level_key(key: object, path: str) -> int:
 
 def _level_table(value: object, path: str, levels: int) -> dict[int, int]:
     row = _mapping(value, path)
-    table = {
-        _level_key(key, path): _integer(entry, f"{path}.{key}")
-        for key, entry in row.items()
-    }
+    table = {_level_key(key, path): _integer(entry, f"{path}.{key}") for key, entry in row.items()}
     absent = [level for level in range(levels + 1) if level not in table]
     if absent:
         raise _CatalogDataError(f"{path} has no entry for levels {absent}")
@@ -869,8 +855,6 @@ BELT_Z_QUANTUM = BELT_CLIMB_PER_TILE
 #: bound would have rejected that, so no constant replaces it.
 
 
-
-
 # --- fixtures safe for geometric validation --------------------------------
 
 #: The only fixtures whose geometry can be trusted.  Selected by measurement,
@@ -1037,9 +1021,7 @@ class ModeDriven:
 #: Receiver, doubling its yield, not a different setting on the building.
 MODE_DRIVEN_MACHINE = {
     "accumulator-full": ModeDriven(ENERGY_EXCHANGER_ID, "energy-exchanger", "charge"),
-    "accumulator-discharge": ModeDriven(
-        ENERGY_EXCHANGER_ID, "energy-exchanger", "discharge"
-    ),
+    "accumulator-discharge": ModeDriven(ENERGY_EXCHANGER_ID, "energy-exchanger", "discharge"),
     "critical-photon": ModeDriven(RAY_RECEIVER_ID, "ray-receiver", "photon"),
     "critical-photon-graviton": ModeDriven(RAY_RECEIVER_ID, "ray-receiver", "photon"),
 }
@@ -1255,7 +1237,6 @@ class SlotPose:
     fz: float
 
 
-
 @dataclass(frozen=True, slots=True)
 class AddonSupplyPose:
     """One game-extracted positional belt connection for an addon.
@@ -1269,6 +1250,7 @@ class AddonSupplyPose:
     dy: Fraction
     dz: Fraction
     area: int
+
 
 @dataclass(frozen=True, slots=True)
 class Building:
@@ -1594,17 +1576,11 @@ def vertical_construction_allowed(
         return True
     if item_id not in STORAGE_STACK_IDS and item_id not in MATRIX_LAB_IDS:
         return True
-    level = (
-        altitude_rules.lab_level
-        if item_id in MATRIX_LAB_IDS
-        else altitude_rules.storage_level
-    )
+    level = altitude_rules.lab_level if item_id in MATRIX_LAB_IDS else altitude_rules.storage_level
     return round(Fraction(z) / pitch) < level
 
 
-def _addon_areas_for(
-    prefab: str, table: _PoseTable
-) -> tuple[AddonSupplyPose, ...]:
+def _addon_areas_for(prefab: str, table: _PoseTable) -> tuple[AddonSupplyPose, ...]:
     """``prefab``'s addon areas, in tiles across and altitude levels up."""
     entry = table.get(prefab)
     if entry is None:
@@ -1631,8 +1607,7 @@ def _number_or_default(
 def _building_slot(value: object, path: str) -> dict[str, float]:
     row = _mapping(value, path)
     return {
-        key: _number(_required(row, key, path), f"{path}.{key}")
-        for key in ("x", "y", "z", "yaw")
+        key: _number(_required(row, key, path), f"{path}.{key}") for key in ("x", "y", "z", "yaw")
     }
 
 
@@ -1668,16 +1643,10 @@ def _load() -> dict[int, Building]:
         ex, ez = colliders.own_centre_extent(model_index, 0.0)
         w, h = derive_footprint(ex), derive_footprint(ez)
 
-        slot_values = (
-            _array(row["slots"], f"{path}.slots") if "slots" in row else []
-        )
+        slot_values = _array(row["slots"], f"{path}.slots") if "slots" in row else []
         stack_height = _optional_number(row, "stackHeight", path)
         power_value = row.get("power")
-        power = (
-            None
-            if power_value is None
-            else _mapping(power_value, f"{path}.power")
-        )
+        power = None if power_value is None else _mapping(power_value, f"{path}.power")
         power_path = f"{path}.power"
         building = Building(
             prefab=prefab,
@@ -1688,11 +1657,7 @@ def _load() -> dict[int, Building]:
             height=int(h),
             addon_type=_optional_integer(row, "addonType", path, 0),
             multi_level=_optional_integer(row, "multiLevel", path, 0),
-            stack_height=(
-                _asset_stack_height(stack_height)
-                if stack_height is not None
-                else None
-            ),
+            stack_height=(_asset_stack_height(stack_height) if stack_height is not None else None),
             slots=tuple(
                 _building_slot(slot, f"{path}.slots[{slot_index}]")
                 for slot_index, slot in enumerate(slot_values)
@@ -1701,34 +1666,22 @@ def _load() -> dict[int, Building]:
             slot_poses=_slot_poses_for(prefab, poses),
             addon_areas=_addon_areas_for(prefab, poses),
             cover_radius=Fraction(
-                _number_or_default(power, "coverRadius", power_path)
-                if power is not None
-                else 0
+                _number_or_default(power, "coverRadius", power_path) if power is not None else 0
             ).limit_denominator(100),
             connect_distance=Fraction(
-                _number_or_default(power, "connectDistance", power_path)
-                if power is not None
-                else 0
+                _number_or_default(power, "connectDistance", power_path) if power is not None else 0
             ).limit_denominator(100),
             is_power_node=(
-                _optional_boolean(power, "node", power_path)
-                if power is not None
-                else False
+                _optional_boolean(power, "node", power_path) if power is not None else False
             ),
             is_accumulator=(
-                _optional_boolean(power, "accumulator", power_path)
-                if power is not None
-                else False
+                _optional_boolean(power, "accumulator", power_path) if power is not None else False
             ),
             wind_forced_power=(
-                _optional_boolean(power, "wind", power_path)
-                if power is not None
-                else False
+                _optional_boolean(power, "wind", power_path) if power is not None else False
             ),
             geothermal=(
-                _optional_boolean(power, "geothermal", power_path)
-                if power is not None
-                else False
+                _optional_boolean(power, "geothermal", power_path) if power is not None else False
             ),
         )
         out[item_id] = building

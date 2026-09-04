@@ -296,11 +296,7 @@ class Band:
         (``BlueprintUtils.cs:2034``, ``num3``).  Enumerating both is what makes
         the flip unnecessary to model separately.
         """
-        return tuple(
-            anchor
-            for anchor_range in self.anchor_ranges(rows)
-            for anchor in anchor_range
-        )
+        return tuple(anchor for anchor_range in self.anchor_ranges(rows) for anchor in anchor_range)
 
 
 @lru_cache(maxsize=8)
@@ -1004,9 +1000,7 @@ def candidate_pairs(
             raise ProjectionCancelled
         radii.append(collider_radius(building.model_index))
     if candidate_position is not None:
-        if type(candidate_position) is not int or not (
-            0 <= candidate_position < len(buildings)
-        ):
+        if type(candidate_position) is not int or not (0 <= candidate_position < len(buildings)):
             raise ValueError("candidate position must index the collision buildings")
         candidate = buildings[candidate_position]
         candidate_radius = radii[candidate_position]

@@ -25,28 +25,16 @@ def test_blueprint_limit_is_selected_by_mass_construction_level() -> None:
     all_technologies = {f"mass-construction-{level}" for level in range(1, 6)}
     assert catalog.blueprint_limit_for_technologies(set(), all_technologies) == 0
     assert (
-        catalog.blueprint_limit_for_technologies(
-            {"mass-construction-1"}, all_technologies
-        )
-        == 150
+        catalog.blueprint_limit_for_technologies({"mass-construction-1"}, all_technologies) == 150
     )
     assert (
-        catalog.blueprint_limit_for_technologies(
-            {"mass-construction-3"}, all_technologies
-        )
-        == 900
+        catalog.blueprint_limit_for_technologies({"mass-construction-3"}, all_technologies) == 900
     )
     assert (
-        catalog.blueprint_limit_for_technologies(
-            {"mass-construction-4"}, all_technologies
-        )
-        == 3600
+        catalog.blueprint_limit_for_technologies({"mass-construction-4"}, all_technologies) == 3600
     )
     assert (
-        catalog.blueprint_limit_for_technologies(
-            {"mass-construction-5"}, all_technologies
-        )
-        is None
+        catalog.blueprint_limit_for_technologies({"mass-construction-5"}, all_technologies) is None
     )
     assert catalog.blueprint_limit_for_technologies(None, all_technologies) is None
 
@@ -158,10 +146,7 @@ def _sorter(**changes: float | bool) -> planet.Sorter:
 
 def test_sorter_segment_ceiling_has_a_boundary_control() -> None:
     projection = _projection()
-    assert (
-        planet.sorter_condition(_sorter(y2=4.0, ref_y=2.0), projection)
-        == "TooFar"
-    )
+    assert planet.sorter_condition(_sorter(y2=4.0, ref_y=2.0), projection) == "TooFar"
     assert planet.sorter_condition(_sorter(y2=3.0, ref_y=1.5), projection) is None
 
 
@@ -186,30 +171,19 @@ def test_sorter_parameter_bias_is_part_of_the_parameter_projection() -> None:
     projection = _projection()
 
     assert planet.sorter_parameter(sorter, projection) == 2
-    assert (
-        planet.sorter_parameter(
-            sorter, projection, bias={0: 0.0, 1: 0.0, 2: 0.0}
-        )
-        == 3
-    )
+    assert planet.sorter_parameter(sorter, projection, bias={0: 0.0, 1: 0.0, 2: 0.0}) == 3
 
 
 SORTER_CONTROLS = {
-    "planet.SORTER_SEGMENTS_MAX": (
-        test_sorter_segment_ceiling_has_a_boundary_control
-    ),
+    "planet.SORTER_SEGMENTS_MAX": (test_sorter_segment_ceiling_has_a_boundary_control),
     "planet.SORTER_COMBINED_MIN": (
         test_sorter_combined_floor_and_altitude_unit_have_boundary_controls
     ),
     "planet.SORTER_ALTITUDE_UNIT": (
         test_sorter_combined_floor_and_altitude_unit_have_boundary_controls
     ),
-    "planet.SORTER_PARAM_BIAS": (
-        test_sorter_parameter_bias_is_part_of_the_parameter_projection
-    ),
-    "planet.sorter_parameter": (
-        test_sorter_parameter_bias_is_part_of_the_parameter_projection
-    ),
+    "planet.SORTER_PARAM_BIAS": (test_sorter_parameter_bias_is_part_of_the_parameter_projection),
+    "planet.sorter_parameter": (test_sorter_parameter_bias_is_part_of_the_parameter_projection),
 }
 
 
@@ -217,8 +191,7 @@ def test_all_five_sorter_rules_have_real_controls() -> None:
     declared = {
         entry.symbol
         for entry in registry.rules()
-        if entry.symbol.startswith("planet.SORTER_")
-        or entry.symbol == "planet.sorter_parameter"
+        if entry.symbol.startswith("planet.SORTER_") or entry.symbol == "planet.sorter_parameter"
     }
     assert declared == set(SORTER_CONTROLS)
 
@@ -229,15 +202,9 @@ def test_all_five_sorter_rules_have_real_controls() -> None:
 # would inflate the mutation number without defending behavior.
 MUTATION_WITNESSES = {
     "catalog.MAX_BELT_SLOPE": (test_paste_slope_uses_the_three_quarters_tangent,),
-    "catalog.DEFAULT_LAB_LEVEL": (
-        test_vertical_rules_keep_splitter_and_lab_boundaries_tech_aware,
-    ),
-    "rules.BELT_PORT_FEED_FROM_SLOT": (
-        test_belt_port_own_slots_match_game_authored_records,
-    ),
-    "rules.BELT_PORT_DRAW_TO_SLOT": (
-        test_belt_port_own_slots_match_game_authored_records,
-    ),
+    "catalog.DEFAULT_LAB_LEVEL": (test_vertical_rules_keep_splitter_and_lab_boundaries_tech_aware,),
+    "rules.BELT_PORT_FEED_FROM_SLOT": (test_belt_port_own_slots_match_game_authored_records,),
+    "rules.BELT_PORT_DRAW_TO_SLOT": (test_belt_port_own_slots_match_game_authored_records,),
     "catalog.belt_slope_allowed": (test_paste_slope_uses_the_three_quarters_tangent,),
     "catalog.blueprint_limit_for_technologies": (
         test_blueprint_limit_is_selected_by_mass_construction_level,
@@ -246,9 +213,7 @@ MUTATION_WITNESSES = {
     "catalog.vertical_construction_allowed": (
         test_vertical_rules_keep_splitter_and_lab_boundaries_tech_aware,
     ),
-    "planet.SORTER_SEGMENTS_MAX": (
-        test_sorter_segment_ceiling_has_a_boundary_control,
-    ),
+    "planet.SORTER_SEGMENTS_MAX": (test_sorter_segment_ceiling_has_a_boundary_control,),
     "planet.SORTER_COMBINED_MIN": (
         test_sorter_combined_floor_and_altitude_unit_have_boundary_controls,
     ),
@@ -258,9 +223,7 @@ MUTATION_WITNESSES = {
     "rules.PASTE_BELT_LINK_MAX_SQR": (
         test_belt_link_distance_and_coater_reshape_have_positive_controls,
     ),
-    "rules.belt_link_too_far": (
-        test_belt_link_distance_and_coater_reshape_have_positive_controls,
-    ),
+    "rules.belt_link_too_far": (test_belt_link_distance_and_coater_reshape_have_positive_controls,),
     "rules.COATER_RESHAPE_MAX": (
         test_belt_link_distance_and_coater_reshape_have_positive_controls,
     ),

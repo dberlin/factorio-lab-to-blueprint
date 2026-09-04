@@ -197,9 +197,7 @@ def _vendored_belt_rules_for_url(url: str) -> catalog.BeltAltitudeRules:
     return _belt_rules(url, load_vendored())
 
 
-def belt_rules_for_url(
-    url: str, dataset: Dataset | None = None
-) -> catalog.BeltAltitudeRules:
+def belt_rules_for_url(url: str, dataset: Dataset | None = None) -> catalog.BeltAltitudeRules:
     """Keep the existing public documentation, including absent-technology semantics."""
     if dataset is None:
         return _vendored_belt_rules_for_url(url)
@@ -243,42 +241,43 @@ git commit -m "Fix dataset isolation in belt rule cache"
 Add `import json` to `tests/lab/test_params.py`, then append these methods to `TestModHash`:
 
 ```python
-    def test_explicit_path_is_reread_after_replacement(self, tmp_path: Path) -> None:
-        source = tmp_path / "hash.json"
-        source.write_text(json.dumps({"items": ["first"]}), encoding="utf-8")
-        first = P.load_mod_hash(path=source)
+def test_explicit_path_is_reread_after_replacement(self, tmp_path: Path) -> None:
+    source = tmp_path / "hash.json"
+    source.write_text(json.dumps({"items": ["first"]}), encoding="utf-8")
+    first = P.load_mod_hash(path=source)
 
-        source.write_text(json.dumps({"items": ["second"]}), encoding="utf-8")
-        second = P.load_mod_hash(path=source)
+    source.write_text(json.dumps({"items": ["second"]}), encoding="utf-8")
+    second = P.load_mod_hash(path=source)
 
-        assert first.items == ["first"]
-        assert second.items == ["second"]
-        assert second is not first
+    assert first.items == ["first"]
+    assert second.items == ["second"]
+    assert second is not first
 
-    def test_failed_vendored_load_is_retryable_and_success_is_cached(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        vendored = tmp_path / "vendored"
-        source = vendored / "retryable" / "hash.json"
-        source.parent.mkdir(parents=True)
-        monkeypatch.setattr(P, "_VENDORED", vendored)
 
-        helper = P._load_vendored_mod_hash
+def test_failed_vendored_load_is_retryable_and_success_is_cached(
+    self,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vendored = tmp_path / "vendored"
+    source = vendored / "retryable" / "hash.json"
+    source.parent.mkdir(parents=True)
+    monkeypatch.setattr(P, "_VENDORED", vendored)
+
+    helper = P._load_vendored_mod_hash
+    helper.cache_clear()
+    try:
+        source.write_text('{"items": [7]}', encoding="utf-8")
+        with pytest.raises(ValidationError):
+            P.load_mod_hash("retryable")
+
+        source.write_text(json.dumps({"items": ["repaired"]}), encoding="utf-8")
+        repaired = P.load_mod_hash("retryable")
+        assert repaired.items == ["repaired"]
+        assert P.load_mod_hash("retryable") is repaired
+        assert helper.cache_info().currsize == 1
+    finally:
         helper.cache_clear()
-        try:
-            source.write_text('{"items": [7]}', encoding="utf-8")
-            with pytest.raises(ValidationError):
-                P.load_mod_hash("retryable")
-
-            source.write_text(json.dumps({"items": ["repaired"]}), encoding="utf-8")
-            repaired = P.load_mod_hash("retryable")
-            assert repaired.items == ["repaired"]
-            assert P.load_mod_hash("retryable") is repaired
-            assert helper.cache_info().currsize == 1
-        finally:
-            helper.cache_clear()
 ```
 
 The explicit-path test is a characterization: it should already pass and guards against the tempting but incorrect `@cache` on public `load_mod_hash`. The retry test is RED because the required decorated helper does not exist; after conversion it also proves exceptions do not occupy a cache entry.
@@ -305,11 +304,11 @@ def _load_mod_hash_path(path: Path) -> ModHash:
 
 @cache
 def _load_vendored_mod_hash(mod_id: str) -> ModHash:
-    source = next((candidate for candidate in _candidate_paths(mod_id) if candidate.is_file()), None)
+    source = next(
+        (candidate for candidate in _candidate_paths(mod_id) if candidate.is_file()), None
+    )
     if source is None:
-        raise LabUrlError(
-            f"no vendored hash.json for dataset {mod_id!r}; looked under {_VENDORED}"
-        )
+        raise LabUrlError(f"no vendored hash.json for dataset {mod_id!r}; looked under {_VENDORED}")
     return _load_mod_hash_path(source)
 
 
@@ -318,9 +317,7 @@ def load_mod_hash(mod_id: str = "dsp", *, path: Path | None = None) -> ModHash:
     if path is None:
         return _load_vendored_mod_hash(mod_id)
     if not path.is_file():
-        raise LabUrlError(
-            f"no vendored hash.json for dataset {mod_id!r}; looked under {_VENDORED}"
-        )
+        raise LabUrlError(f"no vendored hash.json for dataset {mod_id!r}; looked under {_VENDORED}")
     return _load_mod_hash_path(path)
 ```
 

@@ -352,9 +352,7 @@ def _parse_objectives(
     return tuple(out)
 
 
-def _parse_items(
-    params: Mapping[str, P.ParamValue], mh: ModHash | None
-) -> dict[str, ItemSetting]:
+def _parse_items(params: Mapping[str, P.ParamValue], mh: ModHash | None) -> dict[str, ItemSetting]:
     out: dict[str, ItemSetting] = {}
     for entry in _as_list(params.get("i")):
         f = P.split_fields(entry)
@@ -455,9 +453,7 @@ def parse_url(url: str, *, mod_hash: ModHash | None = None) -> LabRequest:
     is_bare = zipped is None
 
     if zipped is not None:
-        params: dict[str, P.ParamValue] = dict(
-            P.to_params(P.inflate_query_value(zipped))
-        )
+        params: dict[str, P.ParamValue] = dict(P.to_params(P.inflate_query_value(zipped)))
         params["z"] = zipped
     else:
         params = dict(raw)

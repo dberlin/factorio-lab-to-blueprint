@@ -83,7 +83,9 @@ def _url_with_techs(tech_ids: list[str], belt: str = "conveyor-belt-2") -> str:
 
 def test_no_technology_set_unlocks_every_belt_and_sorter_above_the_floor() -> None:
     data = load_vendored()
-    request = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe=conveyor-belt-2&v=11")
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe=conveyor-belt-2&v=11"
+    )
     tiers = techs.logistics_tiers_for_request(request, data)
     assert tiers.belt_item_ids == ("conveyor-belt-2", "conveyor-belt-3")
     assert tiers.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
@@ -198,7 +200,7 @@ def test_no_technology_set_means_everything_is_researched() -> None:
     )
     tiers = techs.logistics_tiers_for_request(request, data)
     assert tiers.piler is True
-    assert tiers.sorter_pick_stacks == (1, 1, 1, 4)   # level 6
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 4)  # level 6
     assert tiers.sorter_place_stacks == (1, 1, 1, 4)
 
 
@@ -232,7 +234,7 @@ def test_the_level_is_the_highest_researched_pile_sorter_tech() -> None:
     tiers = techs.logistics_tiers_for_request(
         parse_url(_url_with_techs(researched)), load_vendored()
     )
-    assert tiers.sorter_pick_stacks == (1, 1, 1, 3)   # level 2
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 3)  # level 2
     assert tiers.sorter_place_stacks == (1, 1, 1, 2)
 
 
@@ -244,7 +246,7 @@ def test_a_gap_in_the_ladder_still_reads_the_highest_researched_level() -> None:
     tiers = techs.logistics_tiers_for_request(
         parse_url(_url_with_techs(researched)), load_vendored()
     )
-    assert tiers.sorter_pick_stacks == (1, 1, 1, 4)   # level 4
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 4)  # level 4
     assert tiers.sorter_place_stacks == (1, 1, 1, 3)
 
 
@@ -254,7 +256,7 @@ def test_the_obsolete_cargo_stacking_ladder_is_ignored() -> None:
     tiers = techs.logistics_tiers_for_request(
         parse_url(_url_with_techs(researched)), load_vendored()
     )
-    assert tiers.sorter_pick_stacks == (1, 1, 1, 2)   # level 0, unmoved
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 2)  # level 0, unmoved
     assert tiers.sorter_place_stacks == (1, 1, 1, 1)
 
 

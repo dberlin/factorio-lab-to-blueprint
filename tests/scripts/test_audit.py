@@ -68,7 +68,6 @@ def test_build_jobs_defaults_to_all_three_canonical_candidate_identities() -> No
     assert tuple(job.candidate_policies[job.spec_index] for job in jobs) == expected
 
 
-
 def test_run_cell_preserves_typed_refusal_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,6 +199,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
         "post-projection",
         lambda workers, vertical, _max_belt_z: SuccessfulStrategy(),
     )
+
     def compact_stub(result: object, spec: object, *, expect_power: bool) -> object:
         now[0] += 4.0
         return result
@@ -516,9 +516,7 @@ def test_every_audit_row_carries_the_routing_backend_and_the_commit(
         assert row["route_backend"] == expected_backend
 
 
-def test_result_route_backend_field_defaults_via_the_live_selector_not_a_literal() -> (
-    None
-):
+def test_result_route_backend_field_defaults_via_the_live_selector_not_a_literal() -> None:
     # This box has a compiled kernel, so `route_kernel.selected_backend()` and a
     # field hard-coded to `"cython"` are the SAME string right now -- a test
     # that only compares the constructed value (even against a fresh call to
@@ -610,9 +608,7 @@ def test_the_best_cell_builds_a_racing_layout_at_the_cells_belt_ceiling() -> Non
 
 
 def test_the_two_explicit_factories_ignore_the_belt_ceiling() -> None:
-    assert isinstance(
-        audit._STRATEGIES["freeform"](4, True, Fraction(171, 20)), FreeformLayout
-    )
+    assert isinstance(audit._STRATEGIES["freeform"](4, True, Fraction(171, 20)), FreeformLayout)
     assert isinstance(
         audit._STRATEGIES["sequence-pair"](4, True, Fraction(171, 20)),
         SequencePairLayout,
@@ -691,9 +687,7 @@ def test_a_clean_cell_reports_its_attempt_wall_and_the_overshoot_past_the_grace(
     now = [1000.0]
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
     completed = Placement(
-        buildings=(
-            PlacedBuilding(item_id=2303, model_index=65, x=0, y=0, width=2, height=3),
-        ),
+        buildings=(PlacedBuilding(item_id=2303, model_index=65, x=0, y=0, width=2, height=3),),
         frame=AreaFrame(2, 3, 4, (4,), False),
         completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
     )
@@ -749,9 +743,7 @@ def test_a_clean_cell_reports_its_attempt_wall_and_the_overshoot_past_the_grace(
     assert result.seconds == pytest.approx(23.0)
     assert result.attempt_wall_s == pytest.approx(20.0)
     # 20.0 - budget(5.0) - ATOMIC_COMPLETION_GRACE_S(5.0) == 10.0, clamped at 0.
-    assert result.wall_overshoot_s == pytest.approx(
-        20.0 - 5.0 - ATOMIC_COMPLETION_GRACE_S
-    )
+    assert result.wall_overshoot_s == pytest.approx(20.0 - 5.0 - ATOMIC_COMPLETION_GRACE_S)
 
 
 def test_only_a_row_with_a_placement_carries_a_wall_and_an_overshoot(
@@ -811,9 +803,7 @@ def test_a_raced_best_cell_is_judged_by_the_race_grace_not_the_atomic_one(
     now = [2000.0]
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
     completed = Placement(
-        buildings=(
-            PlacedBuilding(item_id=2303, model_index=65, x=0, y=0, width=2, height=3),
-        ),
+        buildings=(PlacedBuilding(item_id=2303, model_index=65, x=0, y=0, width=2, height=3),),
         frame=AreaFrame(2, 3, 4, (4,), False),
         completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
     )

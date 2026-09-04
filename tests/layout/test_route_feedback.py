@@ -57,6 +57,7 @@ def test_detailed_result_counts_real_failures() -> None:
     assert result.failed_count == 1
     assert result.stranded == (net,)
 
+
 def test_exhaustive_route_proof_must_be_explicit_and_non_budget() -> None:
     net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
     failure = NetFailure(
@@ -94,7 +95,6 @@ def test_exhaustive_route_proof_must_be_explicit_and_non_budget() -> None:
             expansions=41,
             exhaustive=True,
         )
-
 
 
 def _detailed_failure(
@@ -136,11 +136,10 @@ def test_genuine_geometric_failure_bumps_net_and_wall(
 
     assert updated.net_weight[failed.failures[0].net_id] == 1.0
     assert updated.cell_history[(4, 5, 0)] == 1.0
-    assert updated.net_cell_history[failed.failures[0].net_id] == {
-        (4, 5, 0): 1.0
-    }
+    assert updated.net_cell_history[failed.failures[0].net_id] == {(4, 5, 0): 1.0}
     assert state.net_weight == {}
     assert state.cell_history == {}
+
 
 def test_route_feedback_weights_exact_blocking_net_identities() -> None:
     failed_net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)
@@ -172,7 +171,6 @@ def test_route_feedback_weights_exact_blocking_net_identities() -> None:
     assert updated.net_cell_history == {
         failed_net: {(4, 5, 0): 1.0},
     }
-
 
 
 def test_route_feedback_retains_exact_local_endpoint_offsets() -> None:
@@ -207,6 +205,7 @@ def test_route_feedback_retains_exact_local_endpoint_offsets() -> None:
         failed_net: ((4, 2, 0), (1, 5, 0)),
         blocker: ((6, 3, 0), (3, 2, 0)),
     }
+
 
 @pytest.mark.parametrize("kind", (RouteFailureKind.BUDGET, RouteFailureKind.STATIC_ACCESS))
 def test_non_geometric_failure_is_an_exact_feedback_no_op(
@@ -248,6 +247,7 @@ def test_feedback_state_copies_and_freezes_input_mappings() -> None:
         cast(dict[NetId, Mapping[Cell, float]], state.net_cell_history)[net] = {}
     with pytest.raises(TypeError):
         cast(dict[Cell, float], state.net_cell_history[net])[(4, 5, 0)] = 4.0
+
 
 def test_shared_and_exact_history_both_retain_routing_levels() -> None:
     net = NetId(2, 7, "iron-ingot", NetRole.INTERNAL, 0)

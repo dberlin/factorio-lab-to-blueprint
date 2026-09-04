@@ -41,9 +41,7 @@ Add tests asserting these command-line contracts:
 
 ```python
 def test_parse_args_accepts_repeats_and_sequence_islands() -> None:
-    args = audit._parse_args(
-        ["--strategy", "both", "--repeats", "10", "--sequence-islands", "4"]
-    )
+    args = audit._parse_args(["--strategy", "both", "--repeats", "10", "--sequence-islands", "4"])
     assert args.repeats == 10
     assert args.sequence_islands == 4
 
@@ -89,9 +87,7 @@ Build work items in deterministic corpus order:
 
 ```python
 work = [
-    AuditWork(case=case, repeat=repeat)
-    for repeat in range(args.repeats)
-    for case in selected_cases
+    AuditWork(case=case, repeat=repeat) for repeat in range(args.repeats) for case in selected_cases
 ]
 ```
 

@@ -391,16 +391,8 @@ def _pinned_candidates(
     label = "flow-pinned" if tier is ProliferatorTier.NONE else f"flow-pinned-mk{tier.value}"
     spec = _to_build_spec(data, request, plan, label)
     forbidden = sorted(
-        {
-            item_id
-            for item_id in (*spec.outputs, *spec.surplus_outputs)
-            if item_id.startswith("df-")
-        }
-        | {
-            group.recipe_id
-            for group in spec.groups
-            if group.recipe_id.startswith("df-")
-        }
+        {item_id for item_id in (*spec.outputs, *spec.surplus_outputs) if item_id.startswith("df-")}
+        | {group.recipe_id for group in spec.groups if group.recipe_id.startswith("df-")}
         | {
             item_id
             for group in spec.groups
@@ -413,9 +405,7 @@ def _pinned_candidates(
             f"{forbidden[0]!r} is DF-only and cannot be a candidate output, "
             "internal product, or synthetic machine recipe"
         )
-    df_external = {
-        item_id for item_id in spec.external_inputs if item_id.startswith("df-")
-    }
+    df_external = {item_id for item_id in spec.external_inputs if item_id.startswith("df-")}
     authorized_external = set(flow.external_items(data))
     unlisted = sorted(df_external - authorized_external)
     if unlisted:
@@ -433,9 +423,7 @@ def build_candidates(
     request: LabRequest,
     *,
     tier: ProliferatorTier | None = None,
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
 ) -> BuildSpecSet:
@@ -455,9 +443,7 @@ def _build_candidates_canonical(
     request: LabRequest,
     *,
     tier: ProliferatorTier | None = None,
-    candidate_policies: tuple[
-        CandidatePolicy, ...
-    ] = DEFAULT_CANDIDATE_POLICIES,
+    candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
 ) -> BuildSpecSet:

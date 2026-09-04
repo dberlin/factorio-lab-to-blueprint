@@ -109,6 +109,7 @@ git commit -m "Measure projected power preparation"
 type _ProjectedPosition = tuple[float, float, float]
 type _ProjectedPositions = tuple[_ProjectedPosition, ...]
 
+
 class _ProjectedPowerEvaluator:
     @classmethod
     def prepare(

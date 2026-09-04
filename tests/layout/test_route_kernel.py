@@ -58,8 +58,20 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
             }
         )
         return original(
-            canvas, starts, goals, history, pressure, bounds, budget, deadline, blame,
-            grid, owned_starts, released_starts, forbidden, blocking_owners,
+            canvas,
+            starts,
+            goals,
+            history,
+            pressure,
+            bounds,
+            budget,
+            deadline,
+            blame,
+            grid,
+            owned_starts,
+            released_starts,
+            forbidden,
+            blocking_owners,
         )
 
     freeform_module._astar = spy
@@ -93,9 +105,19 @@ def _require_both_backends() -> Callable[..., object]:
 
 def _replay(case: Case, budget: dict[str, int] | None = None) -> _PathSearchResult:
     return freeform_module._astar(
-        case["canvas"], case["starts"], case["goals"], case["history"], case["pressure"],
-        case["bounds"], {"left": 1 << 40} if budget is None else budget, None, {},
-        case["grid"], case["owned_starts"], case["released_starts"], case["forbidden"],
+        case["canvas"],
+        case["starts"],
+        case["goals"],
+        case["history"],
+        case["pressure"],
+        case["bounds"],
+        {"left": 1 << 40} if budget is None else budget,
+        None,
+        {},
+        case["grid"],
+        case["owned_starts"],
+        case["released_starts"],
+        case["forbidden"],
         case["blocking_owners"],
     )
 
@@ -215,9 +237,7 @@ def test_a_start_in_the_pad_degrades_the_backend_and_keeps_the_grid(
     def search(cell: Cell) -> None:
         # Goal == start, so this terminates on the first pop and the assertion
         # is about which loop ran rather than about what it found.
-        freeform_module._astar(
-            canvas, [cell], {cell}, {}, 1.0, box, {"left": 1 << 20}, grid=grid
-        )
+        freeform_module._astar(canvas, [cell], {cell}, {}, 1.0, box, {"left": 1 << 20}, grid=grid)
 
     in_the_pad = (-2, 4, 0)
     assert not freeform_module._kernel_margin_holds(grid, [in_the_pad])

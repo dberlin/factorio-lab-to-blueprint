@@ -53,10 +53,7 @@ class CorpusEntry:
 
 
 def _list_url(target: str, *, belt: str = "conveyor-belt-2", rank: str = _RANK) -> str:
-    return (
-        f"https://factoriolab.github.io/dsp/list?o={target}*60"
-        f"&ibe={belt}&mmr={rank}&v=11"
-    )
+    return f"https://factoriolab.github.io/dsp/list?o={target}*60&ibe={belt}&mmr={rank}&v=11"
 
 
 URL_CORPUS: tuple[CorpusEntry, ...] = (

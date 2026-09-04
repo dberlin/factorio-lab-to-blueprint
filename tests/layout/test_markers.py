@@ -77,9 +77,7 @@ def test_marks_external_input_heads_and_output_tails_without_touching_other_belt
 
     marked = markers.mark_external_belts(placement, spec)
 
-    assert marked.buildings[6].parameters == catalog.belt_marker(
-        catalog.item_id("iron-ingot")
-    )
+    assert marked.buildings[6].parameters == catalog.belt_marker(catalog.item_id("iron-ingot"))
     assert marked.buildings[3].parameters == catalog.belt_marker(catalog.item_id("gear"))
     assert marked.buildings[2].parameters == ()
     assert marked.buildings[4].parameters == ()
@@ -128,9 +126,7 @@ def test_splitter_port_belts_are_not_encoded_as_external_endpoints() -> None:
     assert decoded.buildings[0].parameters == ()
     assert decoded.buildings[1].parameters == ()
     assert decoded.buildings[2].parameters == ()
-    assert decoded.buildings[3].parameters == catalog.belt_marker(
-        catalog.item_id("iron-ingot")
-    )
+    assert decoded.buildings[3].parameters == catalog.belt_marker(catalog.item_id("iron-ingot"))
     assert decoded.buildings[6].parameters == catalog.belt_marker(catalog.item_id("gear"))
     assert decoded.buildings[9].parameters == ()
     assert marked.stats.get("input_markers") == 1

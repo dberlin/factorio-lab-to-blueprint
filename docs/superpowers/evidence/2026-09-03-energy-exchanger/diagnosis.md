@@ -227,11 +227,22 @@ The test that was supposed to hold the premise,
 set that was never updated when mode-driven machines landed:
 
 ```python
-    generator_places = {
-        2302, 2303, 2304, 2305, 2308, 2309,
-        2310, 2314, 2315, 2318, 2319, 2901, 2902,
-    }
-    assert not (generator_places & catalog.LOW_CONFIDENCE_FOOTPRINTS)
+generator_places = {
+    2302,
+    2303,
+    2304,
+    2305,
+    2308,
+    2309,
+    2310,
+    2314,
+    2315,
+    2318,
+    2319,
+    2901,
+    2902,
+}
+assert not (generator_places & catalog.LOW_CONFIDENCE_FOOTPRINTS)
 ```
 
 So the check passes vacuously and the exemption silently suppresses real
@@ -308,7 +319,7 @@ box's `5.85`; the belt question never uses the 9x9 number.
 approach as an L: a vertical column at
 
 ```python
-        tap_x = dock.cell[0] + 1                      # freeform.py:5514
+tap_x = dock.cell[0] + 1  # freeform.py:5514
 ```
 
 running from the input-lane row up/down to the dock row, then one tile west into

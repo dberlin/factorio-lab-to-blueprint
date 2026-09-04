@@ -176,12 +176,10 @@ def _report_block(report: validate.Report) -> Json:
         "checks_run": _array(report.checks_run),
         "skipped": _array(report.skipped),
         "errors": [
-            {"check": finding.check, "message": finding.message}
-            for finding in report.errors
+            {"check": finding.check, "message": finding.message} for finding in report.errors
         ],
         "warnings": [
-            {"check": finding.check, "message": finding.message}
-            for finding in report.warnings
+            {"check": finding.check, "message": finding.message} for finding in report.warnings
         ],
     }
 

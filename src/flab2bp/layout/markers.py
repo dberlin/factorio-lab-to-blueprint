@@ -23,9 +23,7 @@ from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.spec import BuildSpec
 
 
-def _links_splitter(
-    buildings: tuple[PlacedBuilding, ...], belt: PlacedBuilding
-) -> bool:
+def _links_splitter(buildings: tuple[PlacedBuilding, ...], belt: PlacedBuilding) -> bool:
     """Whether either belt end is anchored to a Splitter port."""
     for peer in (belt.input_obj, belt.output_obj):
         if (

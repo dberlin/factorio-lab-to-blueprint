@@ -310,8 +310,6 @@ def test_the_probe_suite_is_healthy(baseline: dict[str, str]) -> None:
     )
 
 
-
-
 def test_the_perturbation_reaches_a_by_value_import() -> None:
     """Mutation check on R4's own machinery.
 
@@ -354,8 +352,6 @@ def test_every_declared_rule_has_a_verdict() -> None:
         f"  no verdict: {sorted(declared - set(VERDICTS))}\n"
         f"  no rule:    {sorted(set(VERDICTS) - declared)}"
     )
-
-
 
 
 @pytest.mark.parametrize(

@@ -215,7 +215,10 @@ B_LOW_LEVEL_EXPANSIONS: int = 50_000
 B_MIN_SECONDS: float = 0.35
 B_UNROUTED_COST: int = 1_000_000
 
-class ClusterOutcome(StrEnum): SOLVED, PROVED, BOUNDED
+
+class ClusterOutcome(StrEnum):
+    SOLVED, PROVED, BOUNDED
+
 
 @dataclass(frozen=True, slots=True)
 class ClusterProblem:
@@ -223,6 +226,7 @@ class ClusterProblem:
     stranded: tuple[int, ...]
     truncated: bool
     sibling_closed: bool
+
 
 def build_cluster(
     stranded: Sequence[int],
@@ -236,6 +240,7 @@ def build_cluster(
     dst_group: Mapping[int, tuple[int, ...]],
     max_cluster: int = B_MAX_CLUSTER,
 ) -> ClusterProblem: ...
+
 
 def cluster_strips(
     problem: ClusterProblem,
@@ -628,11 +633,12 @@ git commit -m "feat(layout): build a bounded conflict cluster from stranded nets
 
 ```python
 class ClusterBound(StrEnum):
-    NONE = ""                  # the run reached a decision on its own
+    NONE = ""  # the run reached a decision on its own
     NODES = "nodes"
     CONSTRAINTS = "constraints"
-    BUDGET = "budget"          # the shared floor, or a cut low-level search
+    BUDGET = "budget"  # the shared floor, or a cut low-level search
     WALL = "wall"
+
 
 @dataclass(frozen=True, slots=True)
 class ClusterResult:
@@ -642,6 +648,7 @@ class ClusterResult:
     expansions: int
     seconds: float
     bound: ClusterBound = ClusterBound.NONE
+
 
 @dataclass(frozen=True, slots=True)
 class ClusterEnvironment:
@@ -653,7 +660,9 @@ class ClusterEnvironment:
     max_nodes: int = B_MAX_CBS_NODES
     max_constraints: int = B_MAX_CONSTRAINTS
 
+
 _Offers = tuple[Mapping[Cell, Cell], Mapping[Cell, Cell], Mapping[Cell, Cell]]
+
 
 def solve_cluster(
     problem: ClusterProblem,
@@ -739,9 +748,7 @@ def test_two_crossing_nets_are_solved_jointly() -> None:
         nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
     )
 
-    result = last_mile.solve_cluster(
-        problem, _grid_environment(canvas, bounds, _CROSSING_ENDS)
-    )
+    result = last_mile.solve_cluster(problem, _grid_environment(canvas, bounds, _CROSSING_ENDS))
 
     assert result.outcome is last_mile.ClusterOutcome.SOLVED
     assert set(result.paths) == {0, 1}
@@ -829,9 +836,7 @@ def test_an_exhausted_expansion_floor_reports_bounded() -> None:
     problem = last_mile.ClusterProblem(
         nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
     )
-    environment = _grid_environment(
-        canvas, bounds, _CROSSING_ENDS, budget={"left": 0}
-    )
+    environment = _grid_environment(canvas, bounds, _CROSSING_ENDS, budget={"left": 0})
 
     result = last_mile.solve_cluster(problem, environment)
 
@@ -845,9 +850,7 @@ def test_constraints_keep_a_net_off_the_cell_it_was_split_on() -> None:
         nets=(0, 1), stranded=(0,), truncated=False, sibling_closed=True
     )
 
-    result = last_mile.solve_cluster(
-        problem, _grid_environment(canvas, bounds, _CROSSING_ENDS)
-    )
+    result = last_mile.solve_cluster(problem, _grid_environment(canvas, bounds, _CROSSING_ENDS))
 
     assert result.outcome is last_mile.ClusterOutcome.SOLVED
     crossing = (2, 2, 0)
@@ -942,9 +945,7 @@ class ClusterResult:
     def __post_init__(self) -> None:
         if self.outcome is not ClusterOutcome.SOLVED and self.paths:
             raise ValueError("only a solved cluster carries paths")
-        if (self.bound is ClusterBound.NONE) is (
-            self.outcome is ClusterOutcome.BOUNDED
-        ):
+        if (self.bound is ClusterBound.NONE) is (self.outcome is ClusterOutcome.BOUNDED):
             raise ValueError("a bounded run names its bound and no other does")
 
 
@@ -979,10 +980,7 @@ _Node = tuple[tuple[int, int, int], _Constraints, dict[int, tuple[Cell, ...]]]
 
 
 def _cost(problem: ClusterProblem, paths: Mapping[int, tuple[Cell, ...]]) -> int:
-    return sum(
-        len(paths[index]) if index in paths else B_UNROUTED_COST
-        for index in problem.nets
-    )
+    return sum(len(paths[index]) if index in paths else B_UNROUTED_COST for index in problem.nets)
 
 
 def _first_conflict(
@@ -1094,9 +1092,7 @@ def solve_cluster(
         for chosen in (left, right):
             child_constraints: _Constraints = (*constraints, (chosen, cell))
             if len(child_constraints) > environment.max_constraints:
-                return done(
-                    ClusterOutcome.BOUNDED, {}, nodes, ClusterBound.CONSTRAINTS
-                )
+                return done(ClusterOutcome.BOUNDED, {}, nodes, ClusterBound.CONSTRAINTS)
             if (bound := hit_bound()) is not ClusterBound.NONE:
                 return done(ClusterOutcome.BOUNDED, {}, nodes, bound)
             found = environment.search(chosen, _forbidden_for(child_constraints, chosen))
@@ -1163,6 +1159,7 @@ class LastMileReport:
     seconds: float
     relation_strips: tuple[int, ...] = ()
     relation_evidence: str = ""
+
 
 @dataclass(frozen=True, slots=True)
 class DetailedRouteResult:
@@ -1462,255 +1459,256 @@ and add the field to `DetailedRouteResult` after `exhaustive`:
 Add `from flab2bp.layout import last_mile` to `freeform.py`'s imports. Immediately after the `_repair` closure's definition (`freeform.py:7965`-`8130`), add:
 
 ```python
-    last_mile_counts = {
-        "invocations": 0,
-        "solved": 0,
-        "proved": 0,
-        "bounded": 0,
-        "commit_rejected": 0,
-        "restore_mismatch": 0,
-        "relation_skipped_siblings": 0,
-        "nodes": 0,
-        "expansions": 0,
-    }
-    last_mile_seconds = 0.0
-    last_mile_done = False
-    #: One expansion allowance for the whole pass, shared by both runs.  Set
-    #: once at pass entry so run 2 cannot re-derive a fresh quarter of whatever
-    #: run 1 left behind.
-    last_mile_floor = 0
-    proved_stranded: set[int] = set()
-    proved_round = -1
-    relation_strips: tuple[int, ...] = ()
-    relation_evidence = ""
+last_mile_counts = {
+    "invocations": 0,
+    "solved": 0,
+    "proved": 0,
+    "bounded": 0,
+    "commit_rejected": 0,
+    "restore_mismatch": 0,
+    "relation_skipped_siblings": 0,
+    "nodes": 0,
+    "expansions": 0,
+}
+last_mile_seconds = 0.0
+last_mile_done = False
+#: One expansion allowance for the whole pass, shared by both runs.  Set
+#: once at pass entry so run 2 cannot re-derive a fresh quarter of whatever
+#: run 1 left behind.
+last_mile_floor = 0
+proved_stranded: set[int] = set()
+proved_round = -1
+relation_strips: tuple[int, ...] = ()
+relation_evidence = ""
 
-    def _last_mile_report() -> LastMileReport:
-        return LastMileReport(
-            invocations=last_mile_counts["invocations"],
-            solved=last_mile_counts["solved"],
-            proved=last_mile_counts["proved"],
-            bounded=last_mile_counts["bounded"],
-            commit_rejected=last_mile_counts["commit_rejected"],
-            restore_mismatch=last_mile_counts["restore_mismatch"],
-            relation_skipped_siblings=last_mile_counts["relation_skipped_siblings"],
-            nodes=last_mile_counts["nodes"],
-            expansions=last_mile_counts["expansions"],
-            seconds=last_mile_seconds,
-            relation_strips=relation_strips,
-            relation_evidence=relation_evidence,
-        )
 
-    def _cluster_offers(index: int) -> tuple[
-        dict[Cell, Cell], dict[Cell, Cell], dict[Cell, Cell]
-    ]:
-        """This net's `_ends` offer maps, as of right now."""
-        _starts, _goals, offers = _ends(index)
-        canvas.routing_ports = frozenset()
-        return offers
+def _last_mile_report() -> LastMileReport:
+    return LastMileReport(
+        invocations=last_mile_counts["invocations"],
+        solved=last_mile_counts["solved"],
+        proved=last_mile_counts["proved"],
+        bounded=last_mile_counts["bounded"],
+        commit_rejected=last_mile_counts["commit_rejected"],
+        restore_mismatch=last_mile_counts["restore_mismatch"],
+        relation_skipped_siblings=last_mile_counts["relation_skipped_siblings"],
+        nodes=last_mile_counts["nodes"],
+        expansions=last_mile_counts["expansions"],
+        seconds=last_mile_seconds,
+        relation_strips=relation_strips,
+        relation_evidence=relation_evidence,
+    )
 
-    def _cluster_search(index: int, constraints: frozenset[Cell]) -> _PathSearchResult:
-        """One cluster net's search: the round's own call, capped and constrained.
 
-        The private budget is the deadline discipline.  `_MAX_EXPANSIONS` lets
-        one search run for a large fraction of a second, and this pass makes
-        hundreds of them at the end of an attempt that is already near its
-        budget, so a quarter of that cap bounds how far past the last bound
-        check the pass can travel.  Exhausting it returns
-        `RouteFailureKind.BUDGET`, which `solve_cluster` turns into BOUNDED --
-        which is correct: a capped search decided nothing.
-        """
-        starts, goals, _offers = _ends(index)
-        allowance = min(
-            last_mile.B_LOW_LEVEL_EXPANSIONS,
-            max(0, budget["left"] - last_mile_floor),
-        )
-        private = {"left": allowance}
-        found = _astar(
-            canvas,
-            starts,
-            goals,
-            history,
-            pressure,
-            bounds,
-            private,
-            deadline,
-            {},
-            grid,
-            owned_starts=owned_source_starts.get(index, ()),
-            forbidden=frozenset(rejected_path_cells.get(index, ())) | constraints,
-            blocking_owners=owner,
-        )
-        canvas.routing_ports = frozenset()
-        budget["left"] -= allowance - private["left"]
-        return found
+def _cluster_offers(index: int) -> tuple[dict[Cell, Cell], dict[Cell, Cell], dict[Cell, Cell]]:
+    """This net's `_ends` offer maps, as of right now."""
+    _starts, _goals, offers = _ends(index)
+    canvas.routing_ports = frozenset()
+    return offers
 
-    def _cluster_environment() -> last_mile.ClusterEnvironment:
-        return last_mile.ClusterEnvironment(
-            search=_cluster_search,
-            offers=_cluster_offers,
-            budget_left=lambda: budget["left"],
-            budget_floor=last_mile_floor,
-            expired=lambda: _expired(deadline),
-        )
 
-    def _round_state() -> tuple[object, ...]:
-        """Everything the pass borrows, in a form two snapshots can compare.
+def _cluster_search(index: int, constraints: frozenset[Cell]) -> _PathSearchResult:
+    """One cluster net's search: the round's own call, capped and constrained.
 
-        `grid.reserved` is in here because it is NOT constant across a pass:
-        `_retire_served_roles` filters it (`freeform.py:7606`-`7610`) and
-        `_restore_unserved_roles` rebuilds it (`:7624`-`7632`).  A role that
-        came back in the wrong order, or not at all, is precisely the silent
-        corruption this comparison exists to catch.
-        """
-        return (
-            dict(paths),
-            dict(owner),
-            bytes(grid.occ),
-            tuple(grid.reserved),
-            set(canvas.guard),
-            {cell for cell, holder in canvas.blocked.items() if holder == _TENTATIVE},
-            dict(path_tap),
-            {index: set(cells) for index, cells in path_guards.items()},
-            {cell: set(claims) for cell, claims in guard_claims.items()},
-            dict(canvas.reserved),
-            dict(canvas.port_corridors),
-        )
+    The private budget is the deadline discipline.  `_MAX_EXPANSIONS` lets
+    one search run for a large fraction of a second, and this pass makes
+    hundreds of them at the end of an attempt that is already near its
+    budget, so a quarter of that cap bounds how far past the last bound
+    check the pass can travel.  Exhausting it returns
+    `RouteFailureKind.BUDGET`, which `solve_cluster` turns into BOUNDED --
+    which is correct: a capped search decided nothing.
+    """
+    starts, goals, _offers = _ends(index)
+    allowance = min(
+        last_mile.B_LOW_LEVEL_EXPANSIONS,
+        max(0, budget["left"] - last_mile_floor),
+    )
+    private = {"left": allowance}
+    found = _astar(
+        canvas,
+        starts,
+        goals,
+        history,
+        pressure,
+        bounds,
+        private,
+        deadline,
+        {},
+        grid,
+        owned_starts=owned_source_starts.get(index, ()),
+        forbidden=frozenset(rejected_path_cells.get(index, ())) | constraints,
+        blocking_owners=owner,
+    )
+    canvas.routing_ports = frozenset()
+    budget["left"] -= allowance - private["left"]
+    return found
 
-    def _restore_staked(
-        order: Sequence[int],
-        staked: Mapping[int, tuple[Cell, ...]],
-        held: Mapping[int, tuple[Cell | None, Cell | None, Cell | None]],
-        before: tuple[object, ...],
-    ) -> bool:
-        """Re-stake in the original order and report whether it worked.
 
-        Used by BOTH releases -- the cluster release in `_last_mile` and the
-        whole-pack sweep in `_relaxed_cluster_result` -- so run 2 cannot skip
-        the check that run 1 must pass.  The order matters because
-        `_claim_junction_guard` computes its `excused` set from the sibling
-        paths already down (`freeform.py:7563`-`7568`).
+def _cluster_environment() -> last_mile.ClusterEnvironment:
+    return last_mile.ClusterEnvironment(
+        search=_cluster_search,
+        offers=_cluster_offers,
+        budget_left=lambda: budget["left"],
+        budget_floor=last_mile_floor,
+        expired=lambda: _expired(deadline),
+    )
 
-        It DEGRADES rather than asserts: an `AssertionError` inside
-        `_route_all` becomes a CRASH row in `scripts/audit.py` and fails the
-        corpus gate on the very condition the gate is measuring.
-        """
-        for index in order:
-            if index not in paths:
-                _stake(index, staked[index], hints=held[index])
-        if before == _round_state():
-            return True
-        last_mile_counts["restore_mismatch"] += 1
-        return False
 
-    def _tally(result: last_mile.ClusterResult) -> None:
-        nonlocal last_mile_seconds
-        last_mile_counts["nodes"] += result.nodes
-        last_mile_counts["expansions"] += result.expansions
-        last_mile_seconds += result.seconds
+def _round_state() -> tuple[object, ...]:
+    """Everything the pass borrows, in a form two snapshots can compare.
 
-    def _last_mile(round_stranded: list[int], round_index: int) -> list[int]:
-        """Search the conflict cluster once per pass; see the Phase B spec 5.6."""
-        nonlocal last_mile_done, last_mile_floor, proved_round
-        if (
-            last_mile_done
-            or not round_stranded
-            or len(round_stranded) > last_mile.B_MAX_STRANDED
-            or budget["left"] <= 0
-            or _expired(deadline)
-            or (
-                deadline is not None
-                and deadline - time.monotonic() < last_mile.B_MIN_SECONDS
-            )
-        ):
-            return round_stranded
-        last_mile_done = True
-        last_mile_counts["invocations"] += 1
-        last_mile_floor = budget["left"] - int(
-            last_mile.B_CBS_EXPANSION_SHARE * budget["left"]
-        )
-        index_by_id = {_net_id(index): index for index in range(len(nets))}
-        problem = last_mile.build_cluster(
-            sorted(round_stranded),
-            walls={
-                index: search_failures[index].wall
-                for index in round_stranded
-                if index in search_failures
-            },
-            blockers={
-                index: tuple(
-                    index_by_id[blocker]
-                    for blocker in search_blockers.get(index, ())
-                    if blocker in index_by_id
-                )
-                for index in round_stranded
-            },
-            owner=owner,
-            paths=paths,
-            endpoints={index: _endpoint_cells(nets[index]) for index in range(len(nets))},
-            src_group=src_group,
-            dst_group=dst_group,
-        )
-        # `paths` is insertion-ordered and only `_stake` writes it, so
-        # `list(paths)` IS the stake order -- which the restore has to replay,
-        # because `_claim_junction_guard` computes its `excused` set from the
-        # sibling paths already down.
-        order = [index for index in paths if index in set(problem.nets)]
-        released = {index: paths[index] for index in order}
-        held = {
-            index: (
-                source_hint.get(index),
-                sink_hint.get(index),
-                path_tap.get(index),
-            )
-            for index in order
-        }
-        before = _round_state()
-        environment = _cluster_environment()
+    `grid.reserved` is in here because it is NOT constant across a pass:
+    `_retire_served_roles` filters it (`freeform.py:7606`-`7610`) and
+    `_restore_unserved_roles` rebuilds it (`:7624`-`7632`).  A role that
+    came back in the wrong order, or not at all, is precisely the silent
+    corruption this comparison exists to catch.
+    """
+    return (
+        dict(paths),
+        dict(owner),
+        bytes(grid.occ),
+        tuple(grid.reserved),
+        set(canvas.guard),
+        {cell for cell, holder in canvas.blocked.items() if holder == _TENTATIVE},
+        dict(path_tap),
+        {index: set(cells) for index, cells in path_guards.items()},
+        {cell: set(claims) for cell, claims in guard_claims.items()},
+        dict(canvas.reserved),
+        dict(canvas.port_corridors),
+    )
 
-        for index in order:
-            _unstake(index)
-        _capture(1, problem)
-        result = last_mile.solve_cluster(problem, environment)
-        _tally(result)
 
-        if result.outcome is last_mile.ClusterOutcome.SOLVED:
-            # Stake in ascending index order, re-querying each net's offers
-            # THROUGH THE ENVIRONMENT as we go: the offers CBS saw were
-            # collected with NO cluster net staked, and every stake takes cells
-            # the next net's offers were computed against.  A stale hint is
-            # exactly the defect `_ends`' own docstring names.  Going through
-            # `environment.offers` rather than the closure keeps the field a
-            # live part of the contract the bench's stub also implements.
-            for index in problem.nets:
-                path = result.paths[index]
-                _stake(
-                    index,
-                    path,
-                    hints=_selected_hints(path, environment.offers(index)),
-                )
-            unlinked_now, _details_now = commit_once()
-            if not unlinked_now:
-                last_mile_counts["solved"] += 1
-                return []
-            # A commit-link rejection is exact static evidence about buildings,
-            # not a routing proof.  Put the round back and report a bound.
-            for index in problem.nets:
-                if index in paths:
-                    _unstake(index)
-            _restore_staked(order, released, held, before)
-            last_mile_counts["commit_rejected"] += 1
-            last_mile_counts["bounded"] += 1
-            return round_stranded
+def _restore_staked(
+    order: Sequence[int],
+    staked: Mapping[int, tuple[Cell, ...]],
+    held: Mapping[int, tuple[Cell | None, Cell | None, Cell | None]],
+    before: tuple[object, ...],
+) -> bool:
+    """Re-stake in the original order and report whether it worked.
 
-        restored = _restore_staked(order, released, held, before)
-        if result.outcome is last_mile.ClusterOutcome.PROVED and restored:
-            last_mile_counts["proved"] += 1
-            proved_round = round_index
-            proved_stranded.clear()
-            proved_stranded.update(round_stranded)
-        else:
-            last_mile_counts["bounded"] += 1
+    Used by BOTH releases -- the cluster release in `_last_mile` and the
+    whole-pack sweep in `_relaxed_cluster_result` -- so run 2 cannot skip
+    the check that run 1 must pass.  The order matters because
+    `_claim_junction_guard` computes its `excused` set from the sibling
+    paths already down (`freeform.py:7563`-`7568`).
+
+    It DEGRADES rather than asserts: an `AssertionError` inside
+    `_route_all` becomes a CRASH row in `scripts/audit.py` and fails the
+    corpus gate on the very condition the gate is measuring.
+    """
+    for index in order:
+        if index not in paths:
+            _stake(index, staked[index], hints=held[index])
+    if before == _round_state():
+        return True
+    last_mile_counts["restore_mismatch"] += 1
+    return False
+
+
+def _tally(result: last_mile.ClusterResult) -> None:
+    nonlocal last_mile_seconds
+    last_mile_counts["nodes"] += result.nodes
+    last_mile_counts["expansions"] += result.expansions
+    last_mile_seconds += result.seconds
+
+
+def _last_mile(round_stranded: list[int], round_index: int) -> list[int]:
+    """Search the conflict cluster once per pass; see the Phase B spec 5.6."""
+    nonlocal last_mile_done, last_mile_floor, proved_round
+    if (
+        last_mile_done
+        or not round_stranded
+        or len(round_stranded) > last_mile.B_MAX_STRANDED
+        or budget["left"] <= 0
+        or _expired(deadline)
+        or (deadline is not None and deadline - time.monotonic() < last_mile.B_MIN_SECONDS)
+    ):
         return round_stranded
+    last_mile_done = True
+    last_mile_counts["invocations"] += 1
+    last_mile_floor = budget["left"] - int(last_mile.B_CBS_EXPANSION_SHARE * budget["left"])
+    index_by_id = {_net_id(index): index for index in range(len(nets))}
+    problem = last_mile.build_cluster(
+        sorted(round_stranded),
+        walls={
+            index: search_failures[index].wall
+            for index in round_stranded
+            if index in search_failures
+        },
+        blockers={
+            index: tuple(
+                index_by_id[blocker]
+                for blocker in search_blockers.get(index, ())
+                if blocker in index_by_id
+            )
+            for index in round_stranded
+        },
+        owner=owner,
+        paths=paths,
+        endpoints={index: _endpoint_cells(nets[index]) for index in range(len(nets))},
+        src_group=src_group,
+        dst_group=dst_group,
+    )
+    # `paths` is insertion-ordered and only `_stake` writes it, so
+    # `list(paths)` IS the stake order -- which the restore has to replay,
+    # because `_claim_junction_guard` computes its `excused` set from the
+    # sibling paths already down.
+    order = [index for index in paths if index in set(problem.nets)]
+    released = {index: paths[index] for index in order}
+    held = {
+        index: (
+            source_hint.get(index),
+            sink_hint.get(index),
+            path_tap.get(index),
+        )
+        for index in order
+    }
+    before = _round_state()
+    environment = _cluster_environment()
+
+    for index in order:
+        _unstake(index)
+    _capture(1, problem)
+    result = last_mile.solve_cluster(problem, environment)
+    _tally(result)
+
+    if result.outcome is last_mile.ClusterOutcome.SOLVED:
+        # Stake in ascending index order, re-querying each net's offers
+        # THROUGH THE ENVIRONMENT as we go: the offers CBS saw were
+        # collected with NO cluster net staked, and every stake takes cells
+        # the next net's offers were computed against.  A stale hint is
+        # exactly the defect `_ends`' own docstring names.  Going through
+        # `environment.offers` rather than the closure keeps the field a
+        # live part of the contract the bench's stub also implements.
+        for index in problem.nets:
+            path = result.paths[index]
+            _stake(
+                index,
+                path,
+                hints=_selected_hints(path, environment.offers(index)),
+            )
+        unlinked_now, _details_now = commit_once()
+        if not unlinked_now:
+            last_mile_counts["solved"] += 1
+            return []
+        # A commit-link rejection is exact static evidence about buildings,
+        # not a routing proof.  Put the round back and report a bound.
+        for index in problem.nets:
+            if index in paths:
+                _unstake(index)
+        _restore_staked(order, released, held, before)
+        last_mile_counts["commit_rejected"] += 1
+        last_mile_counts["bounded"] += 1
+        return round_stranded
+
+    restored = _restore_staked(order, released, held, before)
+    if result.outcome is last_mile.ClusterOutcome.PROVED and restored:
+        last_mile_counts["proved"] += 1
+        proved_round = round_index
+        proved_stranded.clear()
+        proved_stranded.update(round_stranded)
+    else:
+        last_mile_counts["bounded"] += 1
+    return round_stranded
 ```
 
 Add the capture hook once, at `_route_all` scope beside `_cluster_environment`, so **both** runs can reach it (Task 9 fills in its body; a `pass` stub keeps this task green):
@@ -1745,23 +1743,19 @@ Beside `fewest_failed` (`freeform.py:7159`) add `best_round = -1`. In the incumb
 At the insertion point — immediately before `for path in paths.values():` (`freeform.py:8758`) — insert:
 
 ```python
-        if failed:
-            stranded = _last_mile(stranded, it)
-            failed = len(stranded)
-            round_failures = {
-                index: round_failures[index]
-                for index in stranded
-                if index in round_failures
-            }
-            if failed == 0:
-                return _finish(
-                    paths,
-                    {},
-                    source_hint,
-                    sink_hint,
-                    path_tap,
-                    budget_exhausted=False,
-                )
+if failed:
+    stranded = _last_mile(stranded, it)
+    failed = len(stranded)
+    round_failures = {index: round_failures[index] for index in stranded if index in round_failures}
+    if failed == 0:
+        return _finish(
+            paths,
+            {},
+            source_hint,
+            sink_hint,
+            path_tap,
+            budget_exhausted=False,
+        )
 ```
 
 That `_finish` is the identical return the round already takes at `freeform.py:8640` and `8750` when a round wires everything.
@@ -1784,14 +1778,12 @@ Thread the report and the claim through the three exits. In `_budget_result`'s a
 and, just before its `return DetailedRouteResult(...)`:
 
 ```python
-        exhaustive = (
-            exhaustive_claim
-            and status is DetailedRouteStatus.STRANDED
-            and set(failures) == proved_stranded
-            and not any(
-                failure.kind is RouteFailureKind.BUDGET for failure in ordered_failures
-            )
-        )
+exhaustive = (
+    exhaustive_claim
+    and status is DetailedRouteStatus.STRANDED
+    and set(failures) == proved_stranded
+    and not any(failure.kind is RouteFailureKind.BUDGET for failure in ordered_failures)
+)
 ```
 
 with `exhaustive=exhaustive` and `last_mile=_last_mile_report()` added to the constructor call. Leave `exhaustive_claim` false at every call site in this task; Task 5 supplies it.
@@ -1801,7 +1793,7 @@ with `exhaustive=exhaustive` and `last_mile=_last_mile_report()` added to the co
 In the combined `DetailedRouteResult(...)` at `freeform.py:13994`, add:
 
 ```python
-        last_mile=internal_routing.last_mile,
+last_mile = (internal_routing.last_mile,)
 ```
 
 - [ ] **Step 7: Run the tests to verify they pass**
@@ -1931,9 +1923,7 @@ def test_a_budget_failure_never_becomes_a_proof(
         environment: last_mile_module.ClusterEnvironment,
     ) -> last_mile_module.ClusterResult:
         calls.append(problem)
-        return last_mile_module.ClusterResult(
-            last_mile_module.ClusterOutcome.PROVED, {}, 1, 0, 0.0
-        )
+        return last_mile_module.ClusterResult(last_mile_module.ClusterOutcome.PROVED, {}, 1, 0, 0.0)
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", always_proved)
     canvas, nets, bounds = _one_stranded_net_fixture()
@@ -1949,9 +1939,10 @@ def test_a_budget_failure_never_becomes_a_proof(
     )
 
     assert calls, "the last-mile pass never ran; raise the budget"
-    assert any(
-        failure.kind is RouteFailureKind.BUDGET for failure in result.failures
-    ) or result.status is DetailedRouteStatus.BUDGET
+    assert (
+        any(failure.kind is RouteFailureKind.BUDGET for failure in result.failures)
+        or result.status is DetailedRouteStatus.BUDGET
+    )
     assert result.exhaustive is False
 ```
 
@@ -2268,8 +2259,7 @@ def relation_no_good(
         return None
     anchor = origins[chosen[0]]
     deltas = tuple(
-        (origins[strip][0] - anchor[0], origins[strip][1] - anchor[1])
-        for strip in chosen
+        (origins[strip][0] - anchor[0], origins[strip][1] - anchor[1]) for strip in chosen
     )
     return ClusterRelationNoGood(
         height=height,
@@ -2331,7 +2321,7 @@ def _add_cluster_relation_no_good(
 Add the parameter to `_pack` after `direct_relation_no_goods` (`freeform.py:3192`):
 
 ```python
-    cluster_relation_no_goods: tuple[ClusterRelationNoGood, ...] = (),
+cluster_relation_no_goods: tuple[ClusterRelationNoGood, ...] = ((),)
 ```
 
 and, immediately after the `exact_pack_no_goods` loop (`freeform.py:3252`-`3255`):
@@ -2408,9 +2398,7 @@ def test_a_relaxed_run_that_closes_records_the_cluster_strips(
         problem: last_mile_module.ClusterProblem,
         environment: last_mile_module.ClusterEnvironment,
     ) -> last_mile_module.ClusterResult:
-        return last_mile_module.ClusterResult(
-            last_mile_module.ClusterOutcome.PROVED, {}, 1, 0, 0.0
-        )
+        return last_mile_module.ClusterResult(last_mile_module.ClusterOutcome.PROVED, {}, 1, 0, 0.0)
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", always_proved)
     canvas, nets, bounds = _two_strip_stranded_fixture()
@@ -2450,9 +2438,7 @@ def test_a_cluster_with_a_sibling_never_runs_the_relaxed_search(
         environment: last_mile_module.ClusterEnvironment,
     ) -> last_mile_module.ClusterResult:
         calls.append(problem)
-        return last_mile_module.ClusterResult(
-            last_mile_module.ClusterOutcome.PROVED, {}, 1, 0, 0.0
-        )
+        return last_mile_module.ClusterResult(last_mile_module.ClusterOutcome.PROVED, {}, 1, 0, 0.0)
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", always_proved)
     canvas, nets, bounds = _sibling_stranded_fixture()
@@ -2562,80 +2548,78 @@ The relaxed environment is not a copy of the canvas: it is the round with **ever
 **The gate is load-bearing and must be written first.** `_ends` builds part of its starts and goals from `_merge_frontier(canvas, paths, siblings, …)` (`freeform.py:7886`-`7895`, `:7934`-`7939`), and for a net whose lane is walled in by buildings that is *the only way in* — `_merge_frontier`'s docstring (`:6834`-`6843`) and the `src_group` comment (`:7405`-`7411`) both say so. Unstake the sibling and that net's `starts` come back empty, `_astar` reports `DYNAMIC_ACCESS` at zero expansions, CBS prices the net unrouted, the tree closes, and run 2 reports `PROVED` for a net it disconnected itself. So run 2 runs **only** for a cluster in which every net has empty `src_group` and `dst_group`; otherwise it is skipped and counted.
 
 ```python
-    def _cluster_is_sibling_free(problem: last_mile.ClusterProblem) -> bool:
-        """Whether unstaking the pack can take nothing away from this cluster.
+def _cluster_is_sibling_free(problem: last_mile.ClusterProblem) -> bool:
+    """Whether unstaking the pack can take nothing away from this cluster.
 
-        `_ends` offers merge points onto SIBLING paths, and for a walled-in
-        lane that is the only way in.  A net with no siblings had no merge
-        frontier to lose, so for such a cluster -- and only such a cluster --
-        "every other net removed" is a relaxation rather than a mutilation.
-        """
-        return not any(
-            src_group.get(index, ()) or dst_group.get(index, ())
-            for index in problem.nets
+    `_ends` offers merge points onto SIBLING paths, and for a walled-in
+    lane that is the only way in.  A net with no siblings had no merge
+    frontier to lose, so for such a cluster -- and only such a cluster --
+    "every other net removed" is a relaxation rather than a mutilation.
+    """
+    return not any(src_group.get(index, ()) or dst_group.get(index, ()) for index in problem.nets)
+
+
+def _relaxed_cluster_result(
+    problem: last_mile.ClusterProblem,
+) -> last_mile.ClusterResult | None:
+    """Re-run CBS with the whole pack unstaked; see the Phase B spec 5.2.
+
+    Callers MUST have checked `_cluster_is_sibling_free` first.
+
+    The relaxation argument needs every routing-derived constraint gone
+    too: four of the five per-net rejection sets are read inside `_ends`
+    and the fifth, `rejected_path_cells`, is the search's `forbidden`
+    argument (`freeform.py:7534`-`7538`).  All five are saved, emptied for
+    the cluster's nets, and put back afterwards.
+
+    `grid.reserved` needs no separate handling, and not because it is
+    constant -- `_retire_served_roles` filters it and
+    `_restore_unserved_roles` rebuilds it (`:7606`-`7610`, `:7624`-`7632`).
+    The FULL sweep is what makes it right: `_restore_unserved_roles` skips
+    a role only while another member of it is still in `paths` (`:7618`),
+    and once every net is unstaked no member remains.
+    """
+    if budget["left"] <= 0 or _expired(deadline):
+        return None
+    rejections = (
+        rejected_starts,
+        rejected_goals,
+        rejected_path_cells,
+        rejected_source_hints,
+        rejected_sink_hints,
+    )
+    saved = [
+        {index: set(table[index]) for index in problem.nets if index in table}
+        for table in rejections
+    ]
+    every = list(paths)
+    held_all = {
+        index: (
+            source_hint.get(index),
+            sink_hint.get(index),
+            path_tap.get(index),
         )
-
-    def _relaxed_cluster_result(
-        problem: last_mile.ClusterProblem,
-    ) -> last_mile.ClusterResult | None:
-        """Re-run CBS with the whole pack unstaked; see the Phase B spec 5.2.
-
-        Callers MUST have checked `_cluster_is_sibling_free` first.
-
-        The relaxation argument needs every routing-derived constraint gone
-        too: four of the five per-net rejection sets are read inside `_ends`
-        and the fifth, `rejected_path_cells`, is the search's `forbidden`
-        argument (`freeform.py:7534`-`7538`).  All five are saved, emptied for
-        the cluster's nets, and put back afterwards.
-
-        `grid.reserved` needs no separate handling, and not because it is
-        constant -- `_retire_served_roles` filters it and
-        `_restore_unserved_roles` rebuilds it (`:7606`-`7610`, `:7624`-`7632`).
-        The FULL sweep is what makes it right: `_restore_unserved_roles` skips
-        a role only while another member of it is still in `paths` (`:7618`),
-        and once every net is unstaked no member remains.
-        """
-        if budget["left"] <= 0 or _expired(deadline):
-            return None
-        rejections = (
-            rejected_starts,
-            rejected_goals,
-            rejected_path_cells,
-            rejected_source_hints,
-            rejected_sink_hints,
-        )
-        saved = [
-            {index: set(table[index]) for index in problem.nets if index in table}
-            for table in rejections
-        ]
-        every = list(paths)
-        held_all = {
-            index: (
-                source_hint.get(index),
-                sink_hint.get(index),
-                path_tap.get(index),
-            )
-            for index in every
-        }
-        staked = {index: paths[index] for index in every}
-        before_all = _round_state()
-        try:
-            for table in rejections:
-                for index in problem.nets:
-                    table[index].clear()
-            for index in every:
-                _unstake(index)
-            _capture(2, problem)
-            return last_mile.solve_cluster(problem, _cluster_environment())
-        finally:
-            # The SAME verified restore run 1 uses, so run 2 cannot skip the
-            # check that run 1 must pass.  Its return value is read by the
-            # caller through `restore_mismatch`.
-            _restore_staked(every, staked, held_all, before_all)
-            for table, snapshot in zip(rejections, saved, strict=True):
-                for index, cells in snapshot.items():
-                    table[index].clear()
-                    table[index].update(cells)
+        for index in every
+    }
+    staked = {index: paths[index] for index in every}
+    before_all = _round_state()
+    try:
+        for table in rejections:
+            for index in problem.nets:
+                table[index].clear()
+        for index in every:
+            _unstake(index)
+        _capture(2, problem)
+        return last_mile.solve_cluster(problem, _cluster_environment())
+    finally:
+        # The SAME verified restore run 1 uses, so run 2 cannot skip the
+        # check that run 1 must pass.  Its return value is read by the
+        # caller through `restore_mismatch`.
+        _restore_staked(every, staked, held_all, before_all)
+        for table, snapshot in zip(rejections, saved, strict=True):
+            for index, cells in snapshot.items():
+                table[index].clear()
+                table[index].update(cells)
 ```
 
 Then, in `_last_mile`'s `PROVED` branch (after `proved_stranded.update(round_stranded)`):
@@ -2750,7 +2734,7 @@ clear both wherever `direct_relation_no_goods.clear()` runs (`freeform.py:16181`
 and pass them to `_pack` (`freeform.py:16375`-`16376`):
 
 ```python
-                cluster_relation_no_goods=tuple(cluster_relation_no_goods),
+cluster_relation_no_goods = (tuple(cluster_relation_no_goods),)
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -2812,9 +2796,7 @@ def test_a_cluster_relation_matches_a_state_that_repeats_it() -> None:
         evidence=("cluster",),
     )
 
-    assert sequence_solver._projection_feedback_matches(
-        problem, state, pack, no_good, signatures
-    )
+    assert sequence_solver._projection_feedback_matches(problem, state, pack, no_good, signatures)
 
 
 def test_a_cluster_relation_stops_matching_once_a_strip_moves() -> None:
@@ -2890,9 +2872,7 @@ def _recorded_stage_update(
         seen.append(no_good)
         return original(problem, state, no_good, **kwargs)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(
-        sequence_solver, "_projection_feedback_stage_update", recording
-    )
+    monkeypatch.setattr(sequence_solver, "_projection_feedback_stage_update", recording)
     return seen
 
 
@@ -2963,9 +2943,7 @@ Expected: FAIL with `AttributeError: 'ClusterRelationNoGood' object has no attri
 - [ ] **Step 3: Extend the union and the matcher**
 
 ```python
-type _ProjectionPackNoGood = (
-    finalize.ProjectionNoGood | ExactPackNoGood | ClusterRelationNoGood
-)
+type _ProjectionPackNoGood = finalize.ProjectionNoGood | ExactPackNoGood | ClusterRelationNoGood
 ```
 
 At the top of `_projection_feedback_matches`, before the `ProjectionNoGood` branch:
@@ -2994,23 +2972,19 @@ At the top of `_projection_feedback_matches`, before the `ProjectionNoGood` bran
 In `_projection_feedback_stage_update`, replace the pair selection block (`sequence_solver.py:2799`-`2812`) so the cluster case comes first:
 
 ```python
-    if isinstance(no_good, ClusterRelationNoGood):
-        anchor = no_good.strips[0]
-        pairs = iter(tuple((anchor, strip) for strip in no_good.strips[1:]))
-    elif isinstance(no_good, finalize.ProjectionNoGood):
-        pairs = iter(((no_good.left_strip, no_good.right_strip),))
-    elif no_good.projection_pair is not None:
-        pair = no_good.projection_pair
-        pairs = iter(((pair.left_strip, pair.right_strip),))
-    else:
-        pairs = islice(
-            (
-                (left, right)
-                for left in range(problem.size)
-                for right in range(left + 1, problem.size)
-            ),
-            _EXACT_PROJECTION_FALLBACK_PAIR_TRIALS,
-        )
+if isinstance(no_good, ClusterRelationNoGood):
+    anchor = no_good.strips[0]
+    pairs = iter(tuple((anchor, strip) for strip in no_good.strips[1:]))
+elif isinstance(no_good, finalize.ProjectionNoGood):
+    pairs = iter(((no_good.left_strip, no_good.right_strip),))
+elif no_good.projection_pair is not None:
+    pair = no_good.projection_pair
+    pairs = iter(((pair.left_strip, pair.right_strip),))
+else:
+    pairs = islice(
+        ((left, right) for left in range(problem.size) for right in range(left + 1, problem.size)),
+        _EXACT_PROJECTION_FALLBACK_PAIR_TRIALS,
+    )
 ```
 
 - [ ] **Step 5: Feed a routing-proved relation into the stage boundary**
@@ -3020,24 +2994,22 @@ In `transform_stage`, in the `elif detailed.placement is not None:` branch (`seq
 Placing it before would be a silent bug: the loop assigns `projection_relation_feedback` itself (`sequence_solver.py:4730`) and would overwrite the cluster entry the moment any projection failure maps to a strip pair. Placing it after, guarded on `is None`, states the precedence explicitly — **a projection failure wins over a cluster relation**, because a `geom.collide` between two buildings is a static-geometry refusal that recurs whatever the router does, while the cluster relation is about routing:
 
 ```python
-                if projection_relation_feedback is None:
-                    report = detailed.routing.last_mile
-                    if report is not None and report.relation_strips:
-                        cluster_no_good = last_mile.relation_no_good(
-                            strips=report.relation_strips,
-                            origins=tuple(
-                                pack.at[index] for index in range(len(selected))
-                            ),
-                            outline=problem.selected_sizes(state.variant_indices),
-                            height=pack.height,
-                            evidence=report.relation_evidence,
-                        )
-                        if cluster_no_good is not None:
-                            projection_relation_feedback = (
-                                problem,
-                                projection_failures,
-                                cluster_no_good,
-                            )
+if projection_relation_feedback is None:
+    report = detailed.routing.last_mile
+    if report is not None and report.relation_strips:
+        cluster_no_good = last_mile.relation_no_good(
+            strips=report.relation_strips,
+            origins=tuple(pack.at[index] for index in range(len(selected))),
+            outline=problem.selected_sizes(state.variant_indices),
+            height=pack.height,
+            evidence=report.relation_evidence,
+        )
+        if cluster_no_good is not None:
+            projection_relation_feedback = (
+                problem,
+                projection_failures,
+                cluster_no_good,
+            )
 ```
 
 Import `ClusterRelationNoGood` and `LastMileReport` from `flab2bp.layout.route_feedback` and `last_mile` from `flab2bp.layout` at the top of `sequence_solver.py`.
@@ -3084,9 +3056,9 @@ Append to `src/flab2bp/layout/last_mile.py`:
 class ClusterCapture:
     """Everything a replay needs to re-run one live cluster search."""
 
-    run: int                       # 1 environment run, 2 relaxed run
-    canvas: object                 # freeform._Canvas, opaque here
-    grid: object                   # freeform._Grid, opaque here
+    run: int  # 1 environment run, 2 relaxed run
+    canvas: object  # freeform._Canvas, opaque here
+    grid: object  # freeform._Grid, opaque here
     history: Mapping[Cell, float]
     pressure: float
     bounds: tuple[int, int, int, int]
@@ -3111,38 +3083,36 @@ CAPTURE: Callable[[ClusterCapture], None] | None = None
 Task 4 added `_capture(run, problem)` as a `return None` stub at `_route_all` scope, beside `_cluster_environment`. It lives there — not inside `_last_mile` — because **both** runs call it: `_capture(1, problem)` in `_last_mile` and `_capture(2, problem)` inside `_relaxed_cluster_result` (Task 7), and a closure defined inside `_last_mile` would not be in scope for the second. Replace the stub body:
 
 ```python
-    def _capture(run: int, problem: last_mile.ClusterProblem) -> None:
-        """Hand a developer-tool hook everything needed to replay this run.
+def _capture(run: int, problem: last_mile.ClusterProblem) -> None:
+    """Hand a developer-tool hook everything needed to replay this run.
 
-        Called AFTER the unstake that builds each run's environment -- the
-        cluster release for run 1, the whole-pack sweep for run 2 -- so what
-        the bench snapshots is the grid the search will actually see.
-        """
-        hook = last_mile.CAPTURE
-        if hook is None:
-            return
-        ends: dict[int, tuple[list[Cell], set[Cell], frozenset[Cell]]] = {}
-        for index in problem.nets:
-            starts, goals, _offers = _ends(index)
-            ends[index] = (list(starts), set(goals), canvas.routing_ports)
-            canvas.routing_ports = frozenset()
-        hook(
-            last_mile.ClusterCapture(
-                run=run,
-                canvas=canvas,
-                grid=grid,
-                history=history,
-                pressure=pressure,
-                bounds=bounds,
-                problem=problem,
-                ends=ends,
-                budget_left=budget["left"],
-                budget_floor=last_mile_floor,
-                deadline_remaining=(
-                    None if deadline is None else deadline - time.monotonic()
-                ),
-            )
+    Called AFTER the unstake that builds each run's environment -- the
+    cluster release for run 1, the whole-pack sweep for run 2 -- so what
+    the bench snapshots is the grid the search will actually see.
+    """
+    hook = last_mile.CAPTURE
+    if hook is None:
+        return
+    ends: dict[int, tuple[list[Cell], set[Cell], frozenset[Cell]]] = {}
+    for index in problem.nets:
+        starts, goals, _offers = _ends(index)
+        ends[index] = (list(starts), set(goals), canvas.routing_ports)
+        canvas.routing_ports = frozenset()
+    hook(
+        last_mile.ClusterCapture(
+            run=run,
+            canvas=canvas,
+            grid=grid,
+            history=history,
+            pressure=pressure,
+            bounds=bounds,
+            problem=problem,
+            ends=ends,
+            budget_left=budget["left"],
+            budget_floor=last_mile_floor,
+            deadline_remaining=(None if deadline is None else deadline - time.monotonic()),
         )
+    )
 ```
 
 The `ends` mapping is keyed by **net index**, not by cell. `_ends`' only side effect is `canvas.routing_ports`, which is cleared after each call, so the capture is invisible to the search that follows.
@@ -3234,8 +3204,7 @@ def capture_clusters(
         + ", ".join(f"{value}={outcomes.count(value)}" for value in sorted(set(outcomes)))
         + "; bounds "
         + ", ".join(
-            f"{value or 'none'}={bounds_hit.count(value)}"
-            for value in sorted(set(bounds_hit))
+            f"{value or 'none'}={bounds_hit.count(value)}" for value in sorted(set(bounds_hit))
         )
     )
 ```
@@ -3272,12 +3241,8 @@ from scripts import last_mile_bench
 
 
 def test_the_digest_separates_outcomes_and_paths() -> None:
-    solved = last_mile.ClusterResult(
-        last_mile.ClusterOutcome.SOLVED, {0: ((0, 0, 0),)}, 1, 1, 0.0
-    )
-    other = last_mile.ClusterResult(
-        last_mile.ClusterOutcome.SOLVED, {0: ((1, 0, 0),)}, 1, 1, 0.0
-    )
+    solved = last_mile.ClusterResult(last_mile.ClusterOutcome.SOLVED, {0: ((0, 0, 0),)}, 1, 1, 0.0)
+    other = last_mile.ClusterResult(last_mile.ClusterOutcome.SOLVED, {0: ((1, 0, 0),)}, 1, 1, 0.0)
     proved = last_mile.ClusterResult(last_mile.ClusterOutcome.PROVED, {}, 1, 1, 0.0)
 
     assert last_mile_bench.digest([solved]) != last_mile_bench.digest([other])
@@ -3459,8 +3424,10 @@ def bench(path: Path, rounds: int, check: bool) -> int:
     if check:
         want = digest([case["result"] for case in replayable])
         same = digest(got)
-        print(f"captured digest {want}   replay digest {same}   "
-              f"{'MATCH' if want == same else 'DIFFER'}")
+        print(
+            f"captured digest {want}   replay digest {same}   "
+            f"{'MATCH' if want == same else 'DIFFER'}"
+        )
         return 0 if want == same else 1
     return 0
 
@@ -3706,28 +3673,39 @@ In `scripts/route_profile.py`, extend `PHASES`:
 
 ```python
 PHASES = (
-    "plan_strips", "strip_families", "prepare", "place_coaters", "coater_frame_bans",
-    "junction_ban", "power_plan", "static_risks", "relaxed_search", "last_mile",
-    "finalize", "validate",
+    "plan_strips",
+    "strip_families",
+    "prepare",
+    "place_coaters",
+    "coater_frame_bans",
+    "junction_ban",
+    "power_plan",
+    "static_risks",
+    "relaxed_search",
+    "last_mile",
+    "finalize",
+    "validate",
 )
 ```
 
 and in `install`, beside the other shims:
 
 ```python
-    orig_last_mile = last_mile.solve_cluster
+orig_last_mile = last_mile.solve_cluster
 
-    def timed_last_mile(
-        problem: last_mile.ClusterProblem,
-        environment: last_mile.ClusterEnvironment,
-    ) -> last_mile.ClusterResult:
-        t0 = time.perf_counter()
-        try:
-            return orig_last_mile(problem, environment)
-        finally:
-            tally.add("last_mile", time.perf_counter() - t0)
 
-    last_mile.solve_cluster = timed_last_mile
+def timed_last_mile(
+    problem: last_mile.ClusterProblem,
+    environment: last_mile.ClusterEnvironment,
+) -> last_mile.ClusterResult:
+    t0 = time.perf_counter()
+    try:
+        return orig_last_mile(problem, environment)
+    finally:
+        tally.add("last_mile", time.perf_counter() - t0)
+
+
+last_mile.solve_cluster = timed_last_mile
 ```
 
 restoring it in the `restore()` closure the same way every other shim is restored, and add `from flab2bp.layout import last_mile` to the script's imports.
@@ -3760,9 +3738,7 @@ def _last_mile_row(stats: Mapping[str, object]) -> dict[str, float]:
     run never entered the pass, which is a fact worth printing rather than a
     zero worth inventing.
     """
-    return {
-        key: float(str(stats[key])) for key in _LAST_MILE_KEYS if key in stats
-    }
+    return {key: float(str(stats[key])) for key in _LAST_MILE_KEYS if key in stats}
 ```
 
 In `main`, capture the placement and add the field:

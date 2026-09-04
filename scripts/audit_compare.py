@@ -115,9 +115,7 @@ def compare(
         # also catches a mistyped --require-clean name.
         reasons.append(f"MISSING (required): {name}")
     if expect_cells is not None and len(candidate_rows) != expect_cells:
-        reasons.append(
-            f"candidate has {len(candidate_rows)} rows, expected {expect_cells}"
-        )
+        reasons.append(f"candidate has {len(candidate_rows)} rows, expected {expect_cells}")
     ratio = math.exp(sum(log_ratios) / len(log_ratios)) if log_ratios else 1.0
     p95 = _p95(seconds)
     if ratio > 1.0 + noise_area:

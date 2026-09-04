@@ -32,9 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         "--time-budget", type=float, default=None, help="override the per-tier budget"
     )
     parser.add_argument("--baseline", type=Path, default=Path("bench/baseline.json"))
-    parser.add_argument(
-        "--check", action="store_true", help="fail if area or validity regressed"
-    )
+    parser.add_argument("--check", action="store_true", help="fail if area or validity regressed")
     parser.add_argument(
         "--bless", action="store_true", help="record the current run as the baseline"
     )

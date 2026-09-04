@@ -98,18 +98,12 @@ class NetFailure:
     blocking_endpoints: tuple[tuple[Cell | None, Cell | None], ...] = ()
 
     def __post_init__(self) -> None:
-        if self.blocking_endpoints and len(self.blocking_endpoints) != len(
-            self.blocking_nets
-        ):
+        if self.blocking_endpoints and len(self.blocking_endpoints) != len(self.blocking_nets):
             raise ValueError("blocking endpoints must align with blocking net identities")
         cells = (
             self.source,
             self.destination,
-            *(
-                cell
-                for endpoints in self.blocking_endpoints
-                for cell in endpoints
-            ),
+            *(cell for endpoints in self.blocking_endpoints for cell in endpoints),
         )
         if any(cell is not None and not _coordinate_cell(cell) for cell in cells):
             raise ValueError("route failure endpoints must be integer coordinate cells")
@@ -222,9 +216,7 @@ def combine_last_mile_reports(
         proved=sum(report.proved for report in present),
         bounded=sum(report.bounded for report in present),
         commit_rejected=sum(report.commit_rejected for report in present),
-        relation_skipped_siblings=sum(
-            report.relation_skipped_siblings for report in present
-        ),
+        relation_skipped_siblings=sum(report.relation_skipped_siblings for report in present),
         restore_mismatch=sum(report.restore_mismatch for report in present),
         nodes=sum(report.nodes for report in present),
         expansions=sum(report.expansions for report in present),
@@ -234,11 +226,7 @@ def combine_last_mile_reports(
             (),
         ),
         relation_evidence=next(
-            (
-                report.relation_evidence
-                for report in present
-                if report.relation_evidence
-            ),
+            (report.relation_evidence for report in present if report.relation_evidence),
             "",
         ),
         same_source_dropped=sum(report.same_source_dropped for report in present),
@@ -260,10 +248,7 @@ class DetailedRouteResult:
             raise ValueError("route exhaustion marker must be boolean")
         if self.exhaustive and (
             self.status is DetailedRouteStatus.BUDGET
-            or any(
-                failure.kind is RouteFailureKind.BUDGET
-                for failure in self.failures
-            )
+            or any(failure.kind is RouteFailureKind.BUDGET for failure in self.failures)
         ):
             raise ValueError("budget routing cannot be marked exhaustive")
 
@@ -318,10 +303,7 @@ class FeedbackState:
         cell_history = dict(self.cell_history)
         logical_net_weight = dict(self.logical_net_weight)
         endpoint_offsets = dict(self.endpoint_offsets)
-        net_cell_history = {
-            net: dict(history)
-            for net, history in self.net_cell_history.items()
-        }
+        net_cell_history = {net: dict(history) for net, history in self.net_cell_history.items()}
         if any(
             not isinstance(net, NetId)
             or not math.isfinite(value)
@@ -352,16 +334,13 @@ class FeedbackState:
         if any(
             not isinstance(net, NetId)
             or any(
-                not _valid_cell(cell, width, height)
-                or not math.isfinite(value)
-                or value < 0.0
+                not _valid_cell(cell, width, height) or not math.isfinite(value) or value < 0.0
                 for cell, value in history.items()
             )
             for net, history in net_cell_history.items()
         ):
             raise ValueError(
-                "per-net feedback cell history must be finite, non-negative, "
-                "and inside the outline"
+                "per-net feedback cell history must be finite, non-negative, and inside the outline"
             )
         if any(
             not isinstance(net, NetId)
@@ -370,9 +349,7 @@ class FeedbackState:
             or any(not _coordinate_cell(cell) for cell in endpoints)
             for net, endpoints in endpoint_offsets.items()
         ):
-            raise ValueError(
-                "feedback endpoint offsets must map exact nets to two integer cells"
-            )
+            raise ValueError("feedback endpoint offsets must map exact nets to two integer cells")
         object.__setattr__(self, "net_weight", MappingProxyType(net_weight))
         object.__setattr__(self, "cell_history", MappingProxyType(cell_history))
         object.__setattr__(
@@ -389,10 +366,7 @@ class FeedbackState:
             self,
             "net_cell_history",
             MappingProxyType(
-                {
-                    net: MappingProxyType(history)
-                    for net, history in net_cell_history.items()
-                }
+                {net: MappingProxyType(history) for net, history in net_cell_history.items()}
             ),
         )
 
@@ -437,10 +411,7 @@ def update_feedback(
     logical_net_weight = dict(state.logical_net_weight)
     cell_history = dict(state.cell_history)
     endpoint_offsets = dict(state.endpoint_offsets)
-    net_cell_history = {
-        net: dict(history)
-        for net, history in state.net_cell_history.items()
-    }
+    net_cell_history = {net: dict(history) for net, history in state.net_cell_history.items()}
     width, height = state.outline
     for failure in geometric:
         implicated = tuple(dict.fromkeys((failure.net_id, *failure.blocking_nets)))
@@ -478,11 +449,7 @@ def update_feedback(
                 )
                 if offsets is not None:
                     endpoint_offsets[net] = offsets
-        wall = tuple(
-            cell
-            for cell in failure.wall
-            if _valid_cell(cell, width, height)
-        )
+        wall = tuple(cell for cell in failure.wall if _valid_cell(cell, width, height))
         for cell in wall:
             cell_history[cell] = cell_history.get(cell, 0.0) + 1.0
         history = net_cell_history.setdefault(failure.net_id, {})
@@ -529,11 +496,7 @@ def decay_feedback(state: FeedbackState) -> FeedbackState:
         net_weight,
         cell_history,
         logical_net_weight,
-        {
-            net: endpoints
-            for net, endpoints in state.endpoint_offsets.items()
-            if net in net_weight
-        },
+        {net: endpoints for net, endpoints in state.endpoint_offsets.items() if net in net_weight},
         net_cell_history=net_cell_history,
     )
 
@@ -558,11 +521,7 @@ def remap_feedback_nets(
         physical,
         {},
         state.logical_net_weight,
-        {
-            net: endpoints
-            for net, endpoints in state.endpoint_offsets.items()
-            if net in physical
-        },
+        {net: endpoints for net, endpoints in state.endpoint_offsets.items() if net in physical},
         net_cell_history={},
     )
 
@@ -699,9 +658,7 @@ def select_lns_neighbourhood(
     if type(grow_after) is not int or grow_after <= 0:
         raise ValueError("LNS growth interval must be a positive integer")
 
-    failures = tuple(
-        failure for failure in result.failures if failure.kind in _PLACEMENT_FAILURES
-    )
+    failures = tuple(failure for failure in result.failures if failure.kind in _PLACEMENT_FAILURES)
     if not failures:
         return frozenset()
 
@@ -750,11 +707,7 @@ def select_lns_neighbourhood(
 
 
 def _coordinate_cell(cell: object) -> bool:
-    return (
-        isinstance(cell, tuple)
-        and len(cell) == 3
-        and all(type(value) is int for value in cell)
-    )
+    return isinstance(cell, tuple) and len(cell) == 3 and all(type(value) is int for value in cell)
 
 
 def _valid_cell(cell: object, width: int, height: int) -> bool:

@@ -198,10 +198,14 @@ Classical ALNS introduces internal interfaces:
 
 ```python
 class DestroyOperator(StrEnum): ...
+
+
 class RepairOperator(StrEnum): ...
+
 
 @dataclass(frozen=True, slots=True)
 class OperatorContext: ...
+
 
 @dataclass(frozen=True, slots=True)
 class OperatorChoice:
@@ -209,8 +213,10 @@ class OperatorChoice:
     repair: RepairOperator
     scale: int
 
+
 @dataclass(frozen=True, slots=True)
 class OperatorOutcome: ...
+
 
 class AdaptiveOperatorSelector:
     def select(self, context: OperatorContext) -> OperatorChoice: ...

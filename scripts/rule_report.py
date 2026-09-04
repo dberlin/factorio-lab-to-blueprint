@@ -67,8 +67,9 @@ def main() -> int:
     unexplained = provenance.unexplained_literals()
     for violation in unexplained:
         print(f"  {violation}")
-    print(f"  {len(unexplained)} unexplained, "
-          f"{len(registry.LINT_EXCEPTIONS)} declared coincidences")
+    print(
+        f"  {len(unexplained)} unexplained, {len(registry.LINT_EXCEPTIONS)} declared coincidences"
+    )
     stale = provenance.stale_lint_exceptions()
     for exception in stale:
         print(f"  STALE exception: {exception.module}:{exception.where} {exception.value}")

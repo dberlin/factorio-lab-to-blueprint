@@ -164,24 +164,18 @@ def parse_options(raw: JsonValue) -> Options:
     try:
         band: BandSelection = BandPolicy.parse(raw_band).selection
     except ValueError as exc:
-        raise InvalidOptions(
-            "'band' must be one of " + ", ".join(BAND_SELECTIONS)
-        ) from exc
+        raise InvalidOptions("'band' must be one of " + ", ".join(BAND_SELECTIONS)) from exc
 
     raw_candidate_policies = raw.get(
         "candidate_policies",
         [policy.value for policy in DEFAULT_CANDIDATE_POLICIES],
     )
     if not isinstance(raw_candidate_policies, list) or not raw_candidate_policies:
-        raise InvalidOptions(
-            "'candidate_policies' must be a non-empty array of named policies"
-        )
+        raise InvalidOptions("'candidate_policies' must be a non-empty array of named policies")
     selected_policies: set[CandidatePolicy] = set()
     for value in raw_candidate_policies:
         if not isinstance(value, str):
-            raise InvalidOptions(
-                f"'candidate_policies' contains an unknown policy: {value!r}"
-            )
+            raise InvalidOptions(f"'candidate_policies' contains an unknown policy: {value!r}")
         try:
             policy = CandidatePolicy(value)
         except ValueError as exc:
@@ -189,9 +183,7 @@ def parse_options(raw: JsonValue) -> Options:
                 f"'candidate_policies' contains an unknown policy: {value!r}"
             ) from exc
         if policy in selected_policies:
-            raise InvalidOptions(
-                "'candidate_policies' must not contain duplicate policies"
-            )
+            raise InvalidOptions("'candidate_policies' must not contain duplicate policies")
         selected_policies.add(policy)
     candidate_policies = tuple(
         policy for policy in DEFAULT_CANDIDATE_POLICIES if policy in selected_policies
@@ -476,8 +468,7 @@ def _step(step: pipeline.AttemptProgress | None) -> Json | None:
         "ok": step.ok,
         "reason": step.reason,
         "projection_failures": [
-            projection_failure(failure)
-            for failure in step.projection_failures
+            projection_failure(failure) for failure in step.projection_failures
         ],
     }
 

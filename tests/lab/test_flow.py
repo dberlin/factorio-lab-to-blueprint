@@ -119,9 +119,7 @@ class TestParseExactly:
         flow = parse_flow_csv(_csv("coal,=2161/3571,coal-vein"))
         assert flow.by_item["coal"].items == Fraction(2161, 3571)
 
-    def test_a_spreadsheet_round_trip_is_accepted_and_flagged(
-        self, mangled: FlowSelection
-    ) -> None:
+    def test_a_spreadsheet_round_trip_is_accepted_and_flagged(self, mangled: FlowSelection) -> None:
         """Tab-delimited, no `=`, unquoted URL, fractions evaluated to decimals.
 
         Still parsed -- refusing it would reject the file most users have -- but
@@ -204,9 +202,7 @@ class TestParseExactly:
 class TestProvenance:
     """Line 1 carries `window.location.href`; it is why the CSV is the path."""
 
-    def test_a_different_url_refuses_and_says_what_differs(
-        self, pristine: FlowSelection
-    ) -> None:
+    def test_a_different_url_refuses_and_says_what_differs(self, pristine: FlowSelection) -> None:
         other = GRAPHENE_URL.replace("graphene*60", "graphene*120")
         with pytest.raises(FlowProvenanceError, match="different URL") as exc:
             verify_provenance(pristine, other)
@@ -231,8 +227,10 @@ class TestProvenance:
 
     def test_reordered_parameters_are_not_a_difference(self, pristine: FlowSelection) -> None:
         """Angular's router reorders them; the state is identical."""
-        verify_provenance(pristine, GRAPHENE_URL.replace("?o=graphene*60&", "?v=11&o=graphene*60&")
-                          .replace("&v=11", ""))
+        verify_provenance(
+            pristine,
+            GRAPHENE_URL.replace("?o=graphene*60&", "?v=11&o=graphene*60&").replace("&v=11", ""),
+        )
 
     def test_no_url_refuses_rather_than_assumes(self, pristine: FlowSelection) -> None:
         with pytest.raises(FlowProvenanceError, match="cannot be established"):
@@ -368,18 +366,19 @@ class TestCrossCheck:
         self, pristine: FlowSelection, data: Dataset
     ) -> None:
         plan = solve(data, pin_request(parse_url(GRAPHENE_URL), data, pristine))
-        assert cross_check(
-            pristine,
-            data,
-            machines={g.recipe_id: g.machines for g in plan.groups},
-            machine_items={g.recipe_id: g.machine_item_id for g in plan.groups},
-            external_inputs=plan.external_inputs,
-            outputs=dict(plan.outputs),
-        ) == ()
+        assert (
+            cross_check(
+                pristine,
+                data,
+                machines={g.recipe_id: g.machines for g in plan.groups},
+                machine_items={g.recipe_id: g.machine_item_id for g in plan.groups},
+                external_inputs=plan.external_inputs,
+                outputs=dict(plan.outputs),
+            )
+            == ()
+        )
 
-    def test_a_wrong_machine_count_is_named(
-        self, pristine: FlowSelection, data: Dataset
-    ) -> None:
+    def test_a_wrong_machine_count_is_named(self, pristine: FlowSelection, data: Dataset) -> None:
         findings = cross_check(
             pristine,
             data,
@@ -389,9 +388,7 @@ class TestCrossCheck:
         )
         assert any("3 machine(s) here, ceil(1) = 1 in the flow" in f for f in findings)
 
-    def test_a_wrong_rate_is_named_exactly(
-        self, pristine: FlowSelection, data: Dataset
-    ) -> None:
+    def test_a_wrong_rate_is_named_exactly(self, pristine: FlowSelection, data: Dataset) -> None:
         """Both sides exact, so a difference is real -- not a rounding artefact."""
         findings = cross_check(
             pristine,
@@ -468,9 +465,7 @@ class TestBoundaryRule:
         The flow belts in fire ice and nothing else; a build asking for stone
         has changed FactorioLab's chosen inputs, which may never happen.
         """
-        stray = unsupplied_inputs(
-            pristine, data, {"fire-ice": Fraction(1), "stone": Fraction(1)}
-        )
+        stray = unsupplied_inputs(pristine, data, {"fire-ice": Fraction(1), "stone": Fraction(1)})
         assert stray == ("stone",)
 
     def test_a_faithful_build_has_no_stray_inputs(
@@ -485,6 +480,4 @@ class TestBoundaryRule:
         """FactorioLab builds it; we belt it in. Separate, known work."""
         inputs = {"fire-ice": Fraction(1), "proliferator-3": Fraction(1)}
         assert unsupplied_inputs(pristine, data, inputs) == ("proliferator-3",)
-        assert unsupplied_inputs(
-            pristine, data, inputs, exempt=frozenset({"proliferator-3"})
-        ) == ()
+        assert unsupplied_inputs(pristine, data, inputs, exempt=frozenset({"proliferator-3"})) == ()

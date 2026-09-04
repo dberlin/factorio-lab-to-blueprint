@@ -221,9 +221,7 @@ class Verdict:
         return self.condition == "Ok"
 
 
-type _JsonValue = (
-    str | int | float | bool | None | list[_JsonValue] | dict[str, _JsonValue]
-)
+type _JsonValue = str | int | float | bool | None | list[_JsonValue] | dict[str, _JsonValue]
 
 
 class _WireModel(BaseModel):
@@ -498,10 +496,7 @@ def ask(
     payload = json.dumps(
         {
             "slotTables": {
-                k: [
-                    {"pos": list(p.pos), **({"fwd": list(p.fwd)} if p.fwd else {})}
-                    for p in v
-                ]
+                k: [{"pos": list(p.pos), **({"fwd": list(p.fwd)} if p.fwd else {})} for p in v]
                 for k, v in (tables or {}).items()
             },
             "cases": [_payload(c) for c in cases],
@@ -509,14 +504,10 @@ def ask(
     )
     proc = _run([], payload, timeout_s)
     if proc.returncode != 0:
-        raise OracleUnavailable(
-            f"the oracle exited {proc.returncode}: {proc.stderr[-2000:]}"
-        )
+        raise OracleUnavailable(f"the oracle exited {proc.returncode}: {proc.stderr[-2000:]}")
     raw = _VERDICTS_ADAPTER.validate_json(proc.stdout)
     if len(raw) != len(cases):
-        raise OracleUnavailable(
-            f"asked for {len(cases)} verdicts and got {len(raw)}"
-        )
+        raise OracleUnavailable(f"asked for {len(cases)} verdicts and got {len(raw)}")
     return [_verdict(r) for r in raw]
 
 

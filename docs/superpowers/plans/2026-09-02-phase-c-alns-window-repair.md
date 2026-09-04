@@ -312,40 +312,38 @@ Add whichever of `AnnealIncumbent`, `quality_archive_key`, `QualityArchiveKey` a
 Add the method to `SequenceSolver`, directly after `_select_restart`:
 
 ```python
-    def _append_feasibility_restarts(self) -> bool:
-        """Append one deterministic feasibility restart to every height.
+def _append_feasibility_restarts(self) -> bool:
+    """Append one deterministic feasibility restart to every height.
 
-        The seed is a pure function of ``(config.seed, height order, restart
-        ordinal)`` -- the same derivation :func:`_new_height_state` uses -- so a
-        continuation never depends on the order stages happened to complete in.
-        The starting state is the best archived incumbent for that height, which
-        is what makes this a continuation rather than a cold restart; a height
-        with no archive falls back to a fresh anneal seed.
-        """
-        appended = False
-        for height_state in self._heights:
-            ordinal = len(height_state.restarts)
-            seed = derive_stage_seed(
-                derive_stage_seed(self.config.seed, height_state.order),
-                ordinal,
-            )
-            best: AnnealIncumbent | None = None
-            best_key: QualityArchiveKey | None = None
-            for restart in height_state.restarts:
-                for tagged in restart.archive:
-                    key = quality_archive_key(tagged.incumbent)
-                    if best_key is None or key < best_key:
-                        best, best_key = tagged.incumbent, key
-            anneal = (
-                AnnealState.initial(height_state.problem.size, seed)
-                if best is None
-                else replace(best.state, base_seed=seed, stage_index=0)
-            )
-            height_state.restarts.append(
-                _RestartState(restart=ordinal, seed=seed, anneal=anneal)
-            )
-            appended = True
-        return appended
+    The seed is a pure function of ``(config.seed, height order, restart
+    ordinal)`` -- the same derivation :func:`_new_height_state` uses -- so a
+    continuation never depends on the order stages happened to complete in.
+    The starting state is the best archived incumbent for that height, which
+    is what makes this a continuation rather than a cold restart; a height
+    with no archive falls back to a fresh anneal seed.
+    """
+    appended = False
+    for height_state in self._heights:
+        ordinal = len(height_state.restarts)
+        seed = derive_stage_seed(
+            derive_stage_seed(self.config.seed, height_state.order),
+            ordinal,
+        )
+        best: AnnealIncumbent | None = None
+        best_key: QualityArchiveKey | None = None
+        for restart in height_state.restarts:
+            for tagged in restart.archive:
+                key = quality_archive_key(tagged.incumbent)
+                if best_key is None or key < best_key:
+                    best, best_key = tagged.incumbent, key
+        anneal = (
+            AnnealState.initial(height_state.problem.size, seed)
+            if best is None
+            else replace(best.state, base_seed=seed, stage_index=0)
+        )
+        height_state.restarts.append(_RestartState(restart=ordinal, seed=seed, anneal=anneal))
+        appended = True
+    return appended
 ```
 
 - [ ] **Step 4: Rewrite the search loop head**
@@ -374,57 +372,49 @@ The current head is:
 Replace it with:
 
 ```python
-    def search(
-        self,
-        *,
-        max_stages: int | None = None,
-        feasibility_continuation: bool = False,
-    ) -> SequenceSearchResult:
-        """Search until its stage cap, deadline, or searchable budget is exhausted.
+def search(
+    self,
+    *,
+    max_stages: int | None = None,
+    feasibility_continuation: bool = False,
+) -> SequenceSearchResult:
+    """Search until its stage cap, deadline, or searchable budget is exhausted.
 
-        ``feasibility_continuation`` is the production path.  When the derived
-        schedule ends with no exact incumbent and the clock, the admission, and
-        the ledger all still allow work, one deterministic restart is appended
-        per height and the schedule grows.  An explicit ``max_stages`` keeps the
-        default and stays a hard cap, because tests and diagnostic probes need
-        one.
-        """
-        stage_limit = (
-            (1 + (self.config.stages - 1) * self.config.restarts_per_height)
-            * len(self._heights)
-            if max_stages is None
-            else max_stages
-        )
-        if type(stage_limit) is not int or stage_limit < 0:
-            raise ValueError("maximum stages must be a non-negative integer")
-        if type(feasibility_continuation) is not bool:
-            raise ValueError("feasibility continuation mode must be a bool")
+    ``feasibility_continuation`` is the production path.  When the derived
+    schedule ends with no exact incumbent and the clock, the admission, and
+    the ledger all still allow work, one deterministic restart is appended
+    per height and the schedule grows.  An explicit ``max_stages`` keeps the
+    default and stays a hard cap, because tests and diagnostic probes need
+    one.
+    """
+    stage_limit = (
+        (1 + (self.config.stages - 1) * self.config.restarts_per_height) * len(self._heights)
+        if max_stages is None
+        else max_stages
+    )
+    if type(stage_limit) is not int or stage_limit < 0:
+        raise ValueError("maximum stages must be a non-negative integer")
+    if type(feasibility_continuation) is not bool:
+        raise ValueError("feasibility continuation mode must be a bool")
 
-        termination = "stage-limit"
-        feasibility_restart_batches = 0
-        while True:
+    termination = "stage-limit"
+    feasibility_restart_batches = 0
+    while True:
+        if sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats) >= stage_limit:
             if (
-                sum(_counts_as_scheduled_stage(stage) for stage in self._stage_stats)
-                >= stage_limit
+                not feasibility_continuation
+                or self._incumbent is not None
+                or feasibility_restart_batches >= C_FEASIBILITY_RESTART_BATCHES
+                or self.budget.shared_left == 0
+                or self.deadline_reached()
+                or not self._append_feasibility_restarts()
             ):
-                if (
-                    not feasibility_continuation
-                    or self._incumbent is not None
-                    or feasibility_restart_batches >= C_FEASIBILITY_RESTART_BATCHES
-                    or self.budget.shared_left == 0
-                    or self.deadline_reached()
-                    or not self._append_feasibility_restarts()
-                ):
-                    if feasibility_continuation and self._incumbent is None:
-                        termination = (
-                            "deadline"
-                            if self.deadline_reached()
-                            else "feasibility-exhausted"
-                        )
-                    break
-                feasibility_restart_batches += 1
-                stage_limit += len(self._heights)
-                continue
+                if feasibility_continuation and self._incumbent is None:
+                    termination = "deadline" if self.deadline_reached() else "feasibility-exhausted"
+                break
+            feasibility_restart_batches += 1
+            stage_limit += len(self._heights)
+            continue
 ```
 
 The rest of the loop body is unchanged. In the `SequenceSearchResult(...)` construction at the end of `search`, add `feasibility_restart_batches=feasibility_restart_batches`.
@@ -471,7 +461,7 @@ In `SequencePairLayout.lay_out` (`sequence_solver.py:5281`):
 At `sequence_solver.py:5229`, the bare `solver.search().placement` becomes:
 
 ```python
-                    solver.search(feasibility_continuation=True).placement,
+(solver.search(feasibility_continuation=True).placement,)
 ```
 
 Read the ten lines around `:5229` first (`sed -n '5215,5240p' src/flab2bp/layout/sequence_solver.py`): if that call site is inside a test-only or probe-only branch that deliberately wants a hard cap, leave it and say so in the commit message.
@@ -786,9 +776,7 @@ def test_discounting_decays_every_arm_on_every_observation() -> None:
     for _ in range(4):
         session.observe(played, (0.0,) * REWARD_RANKS, applied=True)
     expected = sum(C_DUCB_DISCOUNT**index for index in range(4))
-    assert math.isclose(
-        session.credit[f"count:{played.destroy.value}"], expected, rel_tol=1e-12
-    )
+    assert math.isclose(session.credit[f"count:{played.destroy.value}"], expected, rel_tol=1e-12)
 
 
 def test_local_exact_pack_is_not_offered_without_room_for_a_window() -> None:
@@ -846,9 +834,7 @@ def test_a_clean_placement_outranks_every_other_improvement() -> None:
 
 def test_area_credit_requires_a_clean_placement() -> None:
     assert reward_vector(_outcome(_metrics(), _metrics(area=500)))[4] == 0.0
-    assert reward_vector(
-        _outcome(_metrics(), _metrics(validator_clean=True, area=500))
-    )[4] == 0.5
+    assert reward_vector(_outcome(_metrics(), _metrics(validator_clean=True, area=500)))[4] == 0.5
 
 
 def test_regressions_never_produce_negative_reward() -> None:
@@ -871,12 +857,8 @@ def test_observe_and_select_credits_the_pending_choice_before_choosing() -> None
     first = session.observe_and_select(_metrics(), _context())
     assert session.pending == first
     # The first call has no baseline to compare against, so it credits nothing.
-    assert all(
-        value == 0.0 for key, value in session.credit.items() if key.startswith("count:")
-    )
-    second = session.observe_and_select(
-        _metrics(failed_nets=1), _context(), routing_seconds=1.5
-    )
+    assert all(value == 0.0 for key, value in session.credit.items() if key.startswith("count:"))
+    second = session.observe_and_select(_metrics(failed_nets=1), _context(), routing_seconds=1.5)
     assert session.pending == second
     assert session.credit[f"count:{first.destroy.value}"] == 1.0
     assert session.choices == (first, second)
@@ -887,9 +869,7 @@ def test_observe_and_select_with_no_baseline_only_selects() -> None:
     session = OperatorSession()
     choice = session.observe_and_select(_metrics(), _context())
     assert session.choices == (choice,)
-    assert all(
-        value == 0.0 for key, value in session.credit.items() if key.startswith("count:")
-    )
+    assert all(value == 0.0 for key, value in session.credit.items() if key.startswith("count:"))
 
 
 # --- shared helpers ----------------------------------------------------------
@@ -959,9 +939,7 @@ def test_metrics_read_failed_nets_overflow_congestion_and_realized_area() -> Non
         validator_clean=False,
     )
     assert metrics.failed_nets == 1
-    assert metrics.band_overflow == (
-        max(0, decoded.used_height - problem.outline_height) + 2
-    )
+    assert metrics.band_overflow == (max(0, decoded.used_height - problem.outline_height) + 2)
     assert metrics.congestion == 4.0
     assert metrics.area == decoded.width * decoded.used_height
 
@@ -1447,9 +1425,7 @@ class OperatorSession:
         choice = OperatorChoice(
             destroy=DestroyOperator(self._destroy.best(self._exploration)),
             repair=RepairOperator(
-                self._repair.best(
-                    self._exploration, among=self._affordable_repairs(context)
-                )
+                self._repair.best(self._exploration, among=self._affordable_repairs(context))
             ),
             scale=operator_scale(context),
             ordinal=len(self._choices),
@@ -1887,9 +1863,7 @@ def _alns_substitution(
     ):
         return unchanged, frozenset()
 
-    choice = session.observe_and_select(
-        metrics, context, routing_seconds=routing_seconds
-    )
+    choice = session.observe_and_select(metrics, context, routing_seconds=routing_seconds)
     neighbourhood = destroy_strips(
         choice.destroy,
         # ``cap_scale`` is False until the portfolio opens.  The legacy rule
@@ -2051,27 +2025,25 @@ Expected: FAIL with `AttributeError: 'SequenceSolver' object has no attribute 'a
 In `SequenceSolver.__init__` (`:874`), add three keyword-only parameters after `stage_admission`:
 
 ```python
-        alns_session: OperatorSession | None = None,
-        alns_adapters: _RepairAdapters | None = None,
-        remaining_fraction: Callable[[], int] | None = None,
+alns_session: OperatorSession | None = (None,)
+alns_adapters: _RepairAdapters | None = (None,)
+remaining_fraction: Callable[[], int] | None = (None,)
 ```
 
 and, beside the other attribute assignments:
 
 ```python
-        # Only the legacy pairing is armed here.  Opening the portfolio is its
-        # own commit so any corpus movement is attributable to that commit.
-        self.alns_session = alns_session or OperatorSession(
-            destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
-            repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
-        )
-        self.alns_adapters = alns_adapters or _RepairAdapters()
-        #: Remaining wall as a bucket index.  A solver built without one -- a
-        #: test or a probe -- reports "all the time in the world", which is the
-        #: honest answer when there is no deadline to divide by.
-        self._remaining_fraction = remaining_fraction or (
-            lambda: C_CONTEXT_FRACTION_STEPS
-        )
+# Only the legacy pairing is armed here.  Opening the portfolio is its
+# own commit so any corpus movement is attributable to that commit.
+self.alns_session = alns_session or OperatorSession(
+    destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+    repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
+)
+self.alns_adapters = alns_adapters or _RepairAdapters()
+#: Remaining wall as a bucket index.  A solver built without one -- a
+#: test or a probe -- reports "all the time in the world", which is the
+#: honest answer when there is no deadline to divide by.
+self._remaining_fraction = remaining_fraction or (lambda: C_CONTEXT_FRACTION_STEPS)
 ```
 
 - [ ] **Step 4: Switch the ordinary stage-boundary call site (`:2433`)**
@@ -2169,14 +2141,16 @@ In `_production_run`, increment it where the detailed router adapter is invoked 
 Pass the session, adapters and clock into `SequenceSolver(...)` (`:4804`):
 
 ```python
-        alns_session=OperatorSession(
-            destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
-            repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
-        ),
-        alns_adapters=_RepairAdapters(),
-        remaining_fraction=lambda: remaining_fraction_bucket(
-            max(0.0, (started + ceiling) - time.monotonic()), ceiling
-        ),
+alns_session = (
+    OperatorSession(
+        destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+        repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
+    ),
+)
+alns_adapters = (_RepairAdapters(),)
+remaining_fraction = (
+    lambda: remaining_fraction_bucket(max(0.0, (started + ceiling) - time.monotonic()), ceiling),
+)
 ```
 
 `started` and `ceiling` are the locals `_ProductionRun` is built from at `:5126-5136`; confirm they
@@ -2322,9 +2296,7 @@ def test_band_target_width_returns_the_input_when_it_already_fits() -> None:
 
 def test_band_target_width_rejects_an_implausible_core() -> None:
     with pytest.raises(ValueError):
-        finalize.band_target_width(
-            _any_envelope(), height=40, width=finalize.C_BAND_SCAN_MAX + 1
-        )
+        finalize.band_target_width(_any_envelope(), height=40, width=finalize.C_BAND_SCAN_MAX + 1)
 ```
 
 - [ ] **Step 4: Run to verify they fail, then implement**
@@ -2417,9 +2389,7 @@ def test_band_boundary_selects_the_strips_past_the_target_width() -> None:
     target = max(1, decoded.width - 1)
     selected = _band_destroy(band_target_width=target)
     assert selected
-    assert all(
-        decoded.x[strip] + problem.sizes[strip][0] > target for strip in selected
-    )
+    assert all(decoded.x[strip] + problem.sizes[strip][0] > target for strip in selected)
 
 
 def test_band_boundary_falls_back_to_the_widest_edges_when_nothing_exceeds() -> None:
@@ -2501,10 +2471,7 @@ def _band_boundary(
     would keep the mildest instead.  Ties on the edge fall to index order so the
     result is deterministic.
     """
-    if (
-        band_target_width >= decoded.width
-        and decoded.used_height <= problem.outline_height
-    ):
+    if band_target_width >= decoded.width and decoded.used_height <= problem.outline_height:
         return []
     ranked = sorted(
         range(problem.size),
@@ -2514,9 +2481,7 @@ def _band_boundary(
         ),
     )
     over = [
-        strip
-        for strip in ranked
-        if decoded.x[strip] + problem.sizes[strip][0] > band_target_width
+        strip for strip in ranked if decoded.x[strip] + problem.sizes[strip][0] > band_target_width
     ]
     # Nothing over the width but the outline still overflows: the extent problem
     # is vertical, and the widest strips are still the ones with room to move.
@@ -2616,18 +2581,20 @@ In `SequenceSolver.__init__`, replace the restricted default with the shipped on
 In `_production_run`'s `SequenceSolver(...)` construction, replace
 
 ```python
-        alns_session=OperatorSession(
-            destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
-            repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
-        ),
+alns_session = (
+    OperatorSession(
+        destroy_arms=(DestroyOperator.FAILED_ENDPOINTS,),
+        repair_arms=(RepairOperator.SEQUENCE_REINSERT,),
+    ),
+)
 ```
 
 with
 
 ```python
-        # The full destroy portfolio; the repair portfolio stays at the
-        # heuristic arm until the window adapter is wired.
-        alns_session=OperatorSession(repair_arms=(RepairOperator.SEQUENCE_REINSERT,)),
+# The full destroy portfolio; the repair portfolio stays at the
+# heuristic arm until the window adapter is wired.
+alns_session = (OperatorSession(repair_arms=(RepairOperator.SEQUENCE_REINSERT,)),)
 ```
 
 - [ ] **Step 4: Cap the scale and pass the real band target**
@@ -2638,7 +2605,7 @@ At both `_alns_substitution` call sites, add `cap_scale=True` and replace the pl
 `_production_run`-scoped local and pass it into `SequenceSolver` as one more keyword:
 
 ```python
-        band_target_for: Callable[[int, int], int] | None = None,
+band_target_for: Callable[[int, int], int] | None = (None,)
 ```
 
 stored as
@@ -2650,17 +2617,17 @@ stored as
 and supplied from `_production_run` as
 
 ```python
-        band_target_for=lambda height, width: finalize.band_target_width(
-            projection_envelope, height=height, width=width
-        ),
+band_target_for = (
+    lambda height, width: finalize.band_target_width(
+        projection_envelope, height=height, width=width
+    ),
+)
 ```
 
 Then at both call sites:
 
 ```python
-            band_target = self._band_target_for(
-                problem.outline_height, selected.decoded.width
-            )
+band_target = self._band_target_for(problem.outline_height, selected.decoded.width)
 ```
 
 (and `incumbent.decoded.width` at the compact-seed site), with `cap_scale=True` added to the call.
@@ -2771,12 +2738,8 @@ def test_encode_is_never_wider_or_taller_than_its_input() -> None:
         for index in range(len(sizes)):
             assert encoded.decoded.x[index] <= xs[index], (sizes, xs, ys, index)
             assert encoded.decoded.y[index] <= ys[index], (sizes, xs, ys, index)
-        assert encoded.decoded.width <= max(
-            xs[i] + sizes[i][0] for i in range(len(sizes))
-        )
-        assert encoded.decoded.used_height <= max(
-            ys[i] + sizes[i][1] for i in range(len(sizes))
-        )
+        assert encoded.decoded.width <= max(xs[i] + sizes[i][0] for i in range(len(sizes)))
+        assert encoded.decoded.used_height <= max(ys[i] + sizes[i][1] for i in range(len(sizes)))
 
 
 def test_encode_produces_vertical_relations_on_a_multi_row_placement() -> None:
@@ -2934,9 +2897,9 @@ def encode_placement(
                 else:
                     west[second].add(first)
             elif y[first] + fh <= y[second]:
-                above[second].add(first)   # second sits above first
+                above[second].add(first)  # second sits above first
             else:
-                above[first].add(second)   # first sits above second
+                above[first].add(second)  # first sits above second
 
     positive = _topological_order(
         [west[index] | above[index] for index in range(size)],
@@ -3141,9 +3104,7 @@ def test_pack_model_with_no_pinned_strips_is_the_model_pack_built_before_the_spl
     )
     assert built is not None
     assert built.skipped_no_goods == 0
-    baseline = (
-        Path(__file__).parent / "data" / "plastic_pack_model.pbtxt"
-    ).read_text()
+    baseline = (Path(__file__).parent / "data" / "plastic_pack_model.pbtxt").read_text()
     assert str(built.model.Proto()) == baseline
 
 
@@ -3467,39 +3428,41 @@ def _pack_result(
 `_pack` keeps its signature and docstring and becomes:
 
 ```python
-    built = _pack_model(
-        strips,
-        height=height,
-        width_bound=width_bound,
-        direct_candidates=direct_candidates,
-        projection_no_goods=projection_no_goods,
-        exact_pack_no_goods=exact_pack_no_goods,
-        direct_relation_no_goods=direct_relation_no_goods,
-        feedback=feedback,
-        seed=seed,
+built = _pack_model(
+    strips,
+    height=height,
+    width_bound=width_bound,
+    direct_candidates=direct_candidates,
+    projection_no_goods=projection_no_goods,
+    exact_pack_no_goods=exact_pack_no_goods,
+    direct_relation_no_goods=direct_relation_no_goods,
+    feedback=feedback,
+    seed=seed,
+)
+if built is None or time_budget_s <= 0:
+    return None
+solver = cp_model.CpSolver()
+solver.parameters.max_time_in_seconds = time_budget_s
+solver.parameters.num_search_workers = workers
+if deterministic:
+    solver.parameters.max_deterministic_time = min(
+        time_budget_s,
+        _DETERMINISTIC_PACK_WORK,
     )
-    if built is None or time_budget_s <= 0:
-        return None
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = time_budget_s
-    solver.parameters.num_search_workers = workers
-    if deterministic:
-        solver.parameters.max_deterministic_time = min(
-            time_budget_s,
-            _DETERMINISTIC_PACK_WORK,
-        )
-    solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
+solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
 
-    class SeedAdmission(cp_model.CpSolverSolutionCallback):
-        """End this solve once its exact incumbent admits the routed seed."""
 
-        def on_solution_callback(self) -> None:
-            assert seed is not None
-            if seed.width <= _width_slack_cap(self.Value(built.w_var)):
-                self.StopSearch()
+class SeedAdmission(cp_model.CpSolverSolutionCallback):
+    """End this solve once its exact incumbent admits the routed seed."""
 
-    admission = SeedAdmission() if stop_when_seed_admissible and seed is not None else None
-    return _pack_result(built, solver, strips, direct_candidates, height, admission)
+    def on_solution_callback(self) -> None:
+        assert seed is not None
+        if seed.width <= _width_slack_cap(self.Value(built.w_var)):
+            self.StopSearch()
+
+
+admission = SeedAdmission() if stop_when_seed_admissible and seed is not None else None
+return _pack_result(built, solver, strips, direct_candidates, height, admission)
 ```
 
 - [ ] **Step 9: Run the freeform suite**
@@ -3621,9 +3584,7 @@ def test_pack_window_never_widens_past_its_bound() -> None:
         width_bound=seed.width,
         direct_candidates=candidates,
         window=frozenset(range(free)),
-        fixed_at={
-            index: origin for index, origin in seed.at.items() if index >= free
-        },
+        fixed_at={index: origin for index, origin in seed.at.items() if index >= free},
         seed=seed,
     )
     assert windowed is None or windowed.width <= seed.width
@@ -3910,9 +3871,7 @@ def test_local_exact_pack_is_in_the_production_repair_portfolio() -> None:
     session = run.solver.alns_session
     played: set[RepairOperator] = set()
     for _ in range(len(SHIPPED_REPAIR)):
-        choice = session.select(
-            OperatorContext(strip_count=8, stagnation=0, remaining_fraction=10)
-        )
+        choice = session.select(OperatorContext(strip_count=8, stagnation=0, remaining_fraction=10))
         played.add(choice.repair)
         session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
     assert played == set(SHIPPED_REPAIR)
@@ -3943,94 +3902,91 @@ Beside `commit_stage` in `_production_run` (`:4791`), where `strips`, `band_poli
 `projection_envelope` from `:4100` if it is not — Task 7 already needed it there):
 
 ```python
-    def _count_skipped_no_goods(count: int) -> None:
-        telemetry.alns_skipped_no_goods += count
+def _count_skipped_no_goods(count: int) -> None:
+    telemetry.alns_skipped_no_goods += count
 
-    def window_pack(
-        window: frozenset[int],
-        problem: PlacementProblem,
-        state: AnnealState,
-        decoded: DecodedPlacement,
-    ) -> EncodedPlacement | None:
-        """Repair a decoded placement with a bounded CP-SAT window, then encode it.
 
-        Returns the whole encoding, not just its placement: the round trip is not
-        exact, so re-encoding the compaction upstream could yield a second,
-        different pair.  The compaction itself is provably never wider and never
-        taller, so this cannot lose area or band fit.  It can move a strip and so
-        change a direct-insert offset, which is why the caller scores the
-        returned placement before accepting it: what the search then evaluates is
-        what would be built.
-        """
-        if not window or len(window) >= problem.size:
-            return None
-        remaining = None if deadline is None else deadline - time.monotonic()
-        if remaining is not None and remaining <= C_WINDOW_SECONDS:
-            return None
-        selected = _selected_strips(
-            strips, problem, state.variant_indices, band_policy=band_policy
-        )
-        pack = _decoded_pack(
-            problem.outline_height,
-            decoded,
-            west_channels=tuple(strip.west_channel for strip in selected),
-            direct_candidates=direct_candidates,
-        )
-        telemetry.alns_window_solves += 1
-        started_window = time.monotonic()
-        repaired = _pack_window(
-            list(selected),
+def window_pack(
+    window: frozenset[int],
+    problem: PlacementProblem,
+    state: AnnealState,
+    decoded: DecodedPlacement,
+) -> EncodedPlacement | None:
+    """Repair a decoded placement with a bounded CP-SAT window, then encode it.
+
+    Returns the whole encoding, not just its placement: the round trip is not
+    exact, so re-encoding the compaction upstream could yield a second,
+    different pair.  The compaction itself is provably never wider and never
+    taller, so this cannot lose area or band fit.  It can move a strip and so
+    change a direct-insert offset, which is why the caller scores the
+    returned placement before accepting it: what the search then evaluates is
+    what would be built.
+    """
+    if not window or len(window) >= problem.size:
+        return None
+    remaining = None if deadline is None else deadline - time.monotonic()
+    if remaining is not None and remaining <= C_WINDOW_SECONDS:
+        return None
+    selected = _selected_strips(strips, problem, state.variant_indices, band_policy=band_policy)
+    pack = _decoded_pack(
+        problem.outline_height,
+        decoded,
+        west_channels=tuple(strip.west_channel for strip in selected),
+        direct_candidates=direct_candidates,
+    )
+    telemetry.alns_window_solves += 1
+    started_window = time.monotonic()
+    repaired = _pack_window(
+        list(selected),
+        height=problem.outline_height,
+        width_bound=decoded.width,
+        direct_candidates=direct_candidates,
+        window=window,
+        fixed_at={index: origin for index, origin in pack.at.items() if index not in window},
+        seed=pack,
+        width_target=finalize.band_target_width(
+            projection_envelope,
             height=problem.outline_height,
-            width_bound=decoded.width,
-            direct_candidates=direct_candidates,
-            window=window,
-            fixed_at={
-                index: origin for index, origin in pack.at.items() if index not in window
-            },
-            seed=pack,
-            width_target=finalize.band_target_width(
-                projection_envelope,
-                height=problem.outline_height,
-                width=decoded.width,
+            width=decoded.width,
+        ),
+        time_budget_s=(
+            C_WINDOW_SECONDS
+            if remaining is None
+            else min(C_WINDOW_SECONDS, remaining - C_WINDOW_DEADLINE_SAFETY_SECONDS)
+        ),
+        on_skipped=_count_skipped_no_goods,
+    )
+    telemetry.alns_window_seconds += time.monotonic() - started_window
+    if repaired is None or repaired.at == pack.at:
+        # An unchanged assignment is not a repair.  The caller credits the
+        # choice as unapplied rather than re-evaluating a placement the
+        # router has already refused.
+        return None
+    try:
+        encoded = encode_placement(
+            problem.selected_sizes(state.variant_indices),
+            tuple(
+                repaired.at[index][0] - selected[index].west_channel
+                for index in range(problem.size)
             ),
-            time_budget_s=(
-                C_WINDOW_SECONDS
-                if remaining is None
-                else min(C_WINDOW_SECONDS, remaining - C_WINDOW_DEADLINE_SAFETY_SECONDS)
-            ),
-            on_skipped=_count_skipped_no_goods,
+            tuple(repaired.at[index][1] for index in range(problem.size)),
+            outline_height=problem.outline_height,
         )
-        telemetry.alns_window_seconds += time.monotonic() - started_window
-        if repaired is None or repaired.at == pack.at:
-            # An unchanged assignment is not a repair.  The caller credits the
-            # choice as unapplied rather than re-evaluating a placement the
-            # router has already refused.
-            return None
-        try:
-            encoded = encode_placement(
-                problem.selected_sizes(state.variant_indices),
-                tuple(
-                    repaired.at[index][0] - selected[index].west_channel
-                    for index in range(problem.size)
-                ),
-                tuple(repaired.at[index][1] for index in range(problem.size)),
-                outline_height=problem.outline_height,
-            )
-        except ValueError:
-            # An overlapping result cannot happen for a pack CP-SAT returned; a
-            # cyclic relation graph has never been produced but is not proven
-            # impossible. Either way the choice is dropped, not repaired.
-            telemetry.alns_encode_errors += 1
-            return None
-        if not encoded.exact:
-            telemetry.alns_encode_inexact += 1
-        if encoded.decoded.used_height > problem.outline_height:
-            return None
-        telemetry.alns_window_accepted += 1
-        return replace(
-            encoded,
-            decoded=replace(encoded.decoded, variant_indices=state.variant_indices),
-        )
+    except ValueError:
+        # An overlapping result cannot happen for a pack CP-SAT returned; a
+        # cyclic relation graph has never been produced but is not proven
+        # impossible. Either way the choice is dropped, not repaired.
+        telemetry.alns_encode_errors += 1
+        return None
+    if not encoded.exact:
+        telemetry.alns_encode_inexact += 1
+    if encoded.decoded.used_height > problem.outline_height:
+        return None
+    telemetry.alns_window_accepted += 1
+    return replace(
+        encoded,
+        decoded=replace(encoded.decoded, variant_indices=state.variant_indices),
+    )
 ```
 
 Add the imports this needs: `_pack_window`, `C_WINDOW_SECONDS`, `C_WINDOW_DEADLINE_SAFETY_SECONDS`
@@ -4045,10 +4001,10 @@ now and say so in this commit message.
 In `_production_run`'s `SequenceSolver(...)` construction, replace the Task 7 line with:
 
 ```python
-        # Both portfolios open: the window adapter exists, so LOCAL_EXACT_PACK
-        # has an implementation behind it.
-        alns_session=OperatorSession(),
-        alns_adapters=_RepairAdapters(window_pack=window_pack),
+# Both portfolios open: the window adapter exists, so LOCAL_EXACT_PACK
+# has an implementation behind it.
+alns_session = (OperatorSession(),)
+alns_adapters = (_RepairAdapters(window_pack=window_pack),)
 ```
 
 - [ ] **Step 5: Declare and write the stats**
@@ -4137,12 +4093,14 @@ them.
 
 ```python
 def test_window_candidate_cost_charges_the_window_plus_the_measured_remainder() -> None:
-    assert freeform._window_candidate_seconds(
-        dearest_candidate_s=6.0, dearest_pack_s=2.0
-    ) == freeform.C_WINDOW_SECONDS + 4.0
-    assert freeform._window_candidate_seconds(
-        dearest_candidate_s=1.0, dearest_pack_s=4.0
-    ) == freeform.C_WINDOW_SECONDS
+    assert (
+        freeform._window_candidate_seconds(dearest_candidate_s=6.0, dearest_pack_s=2.0)
+        == freeform.C_WINDOW_SECONDS + 4.0
+    )
+    assert (
+        freeform._window_candidate_seconds(dearest_candidate_s=1.0, dearest_pack_s=4.0)
+        == freeform.C_WINDOW_SECONDS
+    )
 
 
 def test_decoded_from_pack_views_a_pack_as_a_decoded_placement() -> None:
@@ -4164,8 +4122,7 @@ def test_decoded_from_pack_views_a_pack_as_a_decoded_placement() -> None:
         assert decoded.x[index] == pack.at[index][0] - strip.west_channel
         assert decoded.y[index] == pack.at[index][1]
     assert decoded.used_height == max(
-        decoded.y[index] + freeform._box(strip)[1]
-        for index, strip in enumerate(strips)
+        decoded.y[index] + freeform._box(strip)[1] for index, strip in enumerate(strips)
     )
 
 
@@ -4252,18 +4209,14 @@ def _decoded_from_pack(pack: _Pack, strips: Sequence[Strip], height: int) -> Dec
         x=xs,
         y=ys,
         width=pack.width,
-        used_height=max(
-            (ys[index] + sizes[index][1] for index in range(len(strips))), default=0
-        ),
+        used_height=max((ys[index] + sizes[index][1] for index in range(len(strips))), default=0),
         x_windows=tuple((value, value) for value in xs),
         y_windows=tuple((value, value) for value in ys),
         gap_area=0,
     )
 
 
-def _pack_relation_problem(
-    pack: _Pack, strips: Sequence[Strip], height: int
-) -> PlacementProblem:
+def _pack_relation_problem(pack: _Pack, strips: Sequence[Strip], height: int) -> PlacementProblem:
     """A placement problem carrying this pack's sizes and nets, for operator reuse.
 
     ``logical_net_ids`` is left empty on purpose.  No shipped destroy operator
@@ -4530,13 +4483,13 @@ also consume a `candidate_packs` slot.
 At the `_pack` call site (`:16369-16389`), record the pack cost and honour a stored pack:
 
 ```python
-            pending_pack = window_packs.pop((height, arrangement), None)
-            if pending_pack is not None:
-                pack = pending_pack
-            else:
-                pack_started = time.monotonic()
-                pack = _pack(...)          # the existing call, unchanged
-                dearest_pack_s = max(dearest_pack_s, time.monotonic() - pack_started)
+pending_pack = window_packs.pop((height, arrangement), None)
+if pending_pack is not None:
+    pack = pending_pack
+else:
+    pack_started = time.monotonic()
+    pack = _pack(...)  # the existing call, unchanged
+    dearest_pack_s = max(dearest_pack_s, time.monotonic() - pack_started)
 ```
 
 - [ ] **Step 6: Launch a window when the full retry is unaffordable**
@@ -4582,98 +4535,92 @@ Then, in the `if failed:` block, replace the bare `continue` at `:16755` with th
 are all in scope there; confirm each with `grep -n` before writing.
 
 ```python
-                if promote_retry and retry_slot_found and not retry_admitted:
-                    window_cost = _window_candidate_seconds(
-                        dearest_candidate_s=dearest_candidate_s,
-                        dearest_pack_s=dearest_pack_s,
-                    )
-                    if (
-                        (height, arrangement) not in window_packs
-                        and (height, arrangement) not in window_choices
-                        and _room_for_another(deadline, soft, window_cost)
-                    ):
-                        target = finalize.band_target_width(
-                            projection_envelope, height=height, width=pack.width
-                        )
-                        relation_problem = _pack_relation_problem(pack, strips, height)
-                        relation_decoded = _decoded_from_pack(pack, strips, height)
-                        feedback_state_now = feedback_by_height.get(
-                            height, FeedbackState.empty((pack.width, height))
-                        )
-                        before_metrics = metrics_from_evaluation(
-                            attempt.routing,
-                            relation_decoded,
-                            feedback_state_now,
-                            outline_height=height,
-                            band_target_width=target,
-                            validator_clean=False,
-                        )
-                        choice = session.select(
-                            OperatorContext(
-                                strip_count=len(strips),
-                                stagnation=0,
-                                remaining_fraction=remaining_fraction_bucket(
-                                    soft - time.monotonic(), max(time_budget_s, 1e-6)
-                                ),
-                            )
-                        )
-                        try:
-                            window = destroy_strips(
-                                choice.destroy,
-                                scale=choice.scale,
-                                result=attempt.routing,
-                                pair=_pack_relation_pair(pack, strips, height),
-                                gaps=GapProfile.zero(len(strips)),
-                                problem=relation_problem,
-                                decoded=relation_decoded,
-                                band_target_width=target,
-                            )
-                        except ValueError:
-                            # The encoder refused this pack.  Impossible for a
-                            # `no_overlap_2d` result, so it is a bug detector.
-                            window_encode_errors += 1
-                            window = frozenset()
-                        key = (height, arrangement, window)
-                        if not window or len(window) >= len(strips) or key in solved_windows:
-                            session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
-                        else:
-                            solved_windows.add(key)
-                            window_solves += 1
-                            window_started = time.monotonic()
-                            repaired = _pack_window(
-                                strips,
-                                height=height,
-                                width_bound=pack.width,
-                                direct_candidates=net_candidates,
-                                window=window,
-                                fixed_at={
-                                    index: origin
-                                    for index, origin in pack.at.items()
-                                    if index not in window
-                                },
-                                seed=pack,
-                                width_target=target,
-                                arrangement=arrangement,
-                                projection_no_goods=tuple(projection_no_goods),
-                                exact_pack_no_goods=exact_pack_no_goods,
-                                direct_relation_no_goods=tuple(direct_relation_no_goods),
-                                feedback=feedback_by_height.get(height),
-                                on_skipped=_count_window_skips,
-                            )
-                            window_seconds += time.monotonic() - window_started
-                            if repaired is None or repaired.at == pack.at:
-                                session.observe(
-                                    choice, (0.0,) * REWARD_RANKS, applied=False
-                                )
-                            else:
-                                window_accepted += 1
-                                window_packs[height, arrangement] = repaired
-                                window_choices[height, arrangement] = (
-                                    choice,
-                                    before_metrics,
-                                )
-                                window_queue.append((height, arrangement))
-                continue
+if promote_retry and retry_slot_found and not retry_admitted:
+    window_cost = _window_candidate_seconds(
+        dearest_candidate_s=dearest_candidate_s,
+        dearest_pack_s=dearest_pack_s,
+    )
+    if (
+        (height, arrangement) not in window_packs
+        and (height, arrangement) not in window_choices
+        and _room_for_another(deadline, soft, window_cost)
+    ):
+        target = finalize.band_target_width(projection_envelope, height=height, width=pack.width)
+        relation_problem = _pack_relation_problem(pack, strips, height)
+        relation_decoded = _decoded_from_pack(pack, strips, height)
+        feedback_state_now = feedback_by_height.get(
+            height, FeedbackState.empty((pack.width, height))
+        )
+        before_metrics = metrics_from_evaluation(
+            attempt.routing,
+            relation_decoded,
+            feedback_state_now,
+            outline_height=height,
+            band_target_width=target,
+            validator_clean=False,
+        )
+        choice = session.select(
+            OperatorContext(
+                strip_count=len(strips),
+                stagnation=0,
+                remaining_fraction=remaining_fraction_bucket(
+                    soft - time.monotonic(), max(time_budget_s, 1e-6)
+                ),
+            )
+        )
+        try:
+            window = destroy_strips(
+                choice.destroy,
+                scale=choice.scale,
+                result=attempt.routing,
+                pair=_pack_relation_pair(pack, strips, height),
+                gaps=GapProfile.zero(len(strips)),
+                problem=relation_problem,
+                decoded=relation_decoded,
+                band_target_width=target,
+            )
+        except ValueError:
+            # The encoder refused this pack.  Impossible for a
+            # `no_overlap_2d` result, so it is a bug detector.
+            window_encode_errors += 1
+            window = frozenset()
+        key = (height, arrangement, window)
+        if not window or len(window) >= len(strips) or key in solved_windows:
+            session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+        else:
+            solved_windows.add(key)
+            window_solves += 1
+            window_started = time.monotonic()
+            repaired = _pack_window(
+                strips,
+                height=height,
+                width_bound=pack.width,
+                direct_candidates=net_candidates,
+                window=window,
+                fixed_at={
+                    index: origin for index, origin in pack.at.items() if index not in window
+                },
+                seed=pack,
+                width_target=target,
+                arrangement=arrangement,
+                projection_no_goods=tuple(projection_no_goods),
+                exact_pack_no_goods=exact_pack_no_goods,
+                direct_relation_no_goods=tuple(direct_relation_no_goods),
+                feedback=feedback_by_height.get(height),
+                on_skipped=_count_window_skips,
+            )
+            window_seconds += time.monotonic() - window_started
+            if repaired is None or repaired.at == pack.at:
+                session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+            else:
+                window_accepted += 1
+                window_packs[height, arrangement] = repaired
+                window_choices[height, arrangement] = (
+                    choice,
+                    before_metrics,
+                )
+                window_queue.append((height, arrangement))
+continue
 ```
 
 `_count_window_skips` is the accumulator this block passes to `_pack_window`; define it beside the
@@ -4691,36 +4638,32 @@ Every path that finishes evaluating a candidate must settle any choice stored fo
 helper beside the state block:
 
 ```python
-        def settle_window_credit(
-            height: int,
-            arrangement: int,
-            *,
-            after: OperatorMetrics | None,
-            routing_seconds: float,
-        ) -> None:
-            """Credit the choice that produced this candidate, if there was one.
+def settle_window_credit(
+    height: int,
+    arrangement: int,
+    *,
+    after: OperatorMetrics | None,
+    routing_seconds: float,
+) -> None:
+    """Credit the choice that produced this candidate, if there was one.
 
-            ``after=None`` means the candidate was never evaluated -- the
-            deadline arrived first -- which is a cost with no reward, so it is
-            credited unapplied.
-            """
-            stored = window_choices.pop((height, arrangement), None)
-            if stored is None:
-                return
-            choice, before = stored
-            if after is None:
-                session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
-                return
-            session.observe(
-                choice,
-                reward_vector(
-                    OperatorOutcome(
-                        choice=choice, before=before, after=after, applied=True
-                    )
-                ),
-                applied=True,
-                routing_seconds=routing_seconds,
-            )
+    ``after=None`` means the candidate was never evaluated -- the
+    deadline arrived first -- which is a cost with no reward, so it is
+    credited unapplied.
+    """
+    stored = window_choices.pop((height, arrangement), None)
+    if stored is None:
+        return
+    choice, before = stored
+    if after is None:
+        session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
+        return
+    session.observe(
+        choice,
+        reward_vector(OperatorOutcome(choice=choice, before=before, after=after, applied=True)),
+        applied=True,
+        routing_seconds=routing_seconds,
+    )
 ```
 
 Call it in three places:
@@ -4729,23 +4672,21 @@ Call it in three places:
    *current* attempt's metrics — a queued pack that fails again settles its own credit:
 
 ```python
-                settle_window_credit(
-                    height,
-                    arrangement,
-                    after=metrics_from_evaluation(
-                        attempt.routing,
-                        _decoded_from_pack(pack, strips, height),
-                        feedback_by_height.get(
-                            height, FeedbackState.empty((pack.width, height))
-                        ),
-                        outline_height=height,
-                        band_target_width=finalize.band_target_width(
-                            projection_envelope, height=height, width=pack.width
-                        ),
-                        validator_clean=False,
-                    ),
-                    routing_seconds=route_seconds,
-                )
+settle_window_credit(
+    height,
+    arrangement,
+    after=metrics_from_evaluation(
+        attempt.routing,
+        _decoded_from_pack(pack, strips, height),
+        feedback_by_height.get(height, FeedbackState.empty((pack.width, height))),
+        outline_height=height,
+        band_target_width=finalize.band_target_width(
+            projection_envelope, height=height, width=pack.width
+        ),
+        validator_clean=False,
+    ),
+    routing_seconds=route_seconds,
+)
 ```
 
    where `route_seconds` is the measured routing span of this attempt. Find the local the sweep
@@ -4754,30 +4695,28 @@ Call it in three places:
 2. At the acceptance path (`:16948-16961`), after `report = validate.certify(...)`:
 
 ```python
-            settle_window_credit(
-                height,
-                arrangement,
-                after=metrics_from_evaluation(
-                    result.routing,
-                    _decoded_from_pack(pack, strips, height),
-                    feedback_by_height.get(
-                        height, FeedbackState.empty((pack.width, height))
-                    ),
-                    outline_height=height,
-                    band_target_width=finalize.band_target_width(
-                        projection_envelope, height=height, width=pack.width
-                    ),
-                    validator_clean=not report.errors,
-                ),
-                routing_seconds=route_seconds,
-            )
+settle_window_credit(
+    height,
+    arrangement,
+    after=metrics_from_evaluation(
+        result.routing,
+        _decoded_from_pack(pack, strips, height),
+        feedback_by_height.get(height, FeedbackState.empty((pack.width, height))),
+        outline_height=height,
+        band_target_width=finalize.band_target_width(
+            projection_envelope, height=height, width=pack.width
+        ),
+        validator_clean=not report.errors,
+    ),
+    routing_seconds=route_seconds,
+)
 ```
 
 3. After the candidate loop exits, for anything still outstanding:
 
 ```python
-        for (height, arrangement) in list(window_choices):
-            settle_window_credit(height, arrangement, after=None, routing_seconds=0.0)
+for height, arrangement in list(window_choices):
+    settle_window_credit(height, arrangement, after=None, routing_seconds=0.0)
 ```
 
 Count evaluations where the sweep calls `_build(..., route=True, ...)` (`:16501`):

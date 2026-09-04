@@ -196,9 +196,7 @@ def test_a_refusal_comes_back_200_not_500(start: Callable[..., Client]) -> None:
 
 
 def test_a_bad_body_is_400_with_a_reason(start: Callable[..., Client]) -> None:
-    status, body = start().failing_json(
-        "/api/build", {"strategy": "best"}, method="POST"
-    )
+    status, body = start().failing_json("/api/build", {"strategy": "best"}, method="POST")
     assert status == 400
     assert "url" in _string(body, "error")
 
@@ -210,9 +208,7 @@ def test_sequence_pair_is_accepted_with_exact_wire_spelling(
         raise ValueError("layout is not part of this submission-boundary test")
 
     client = start(not_layout)
-    status, body = client.post(
-        "/api/build", {"url": URL, "strategy": "sequence-pair"}
-    )
+    status, body = client.post("/api/build", {"url": URL, "strategy": "sequence-pair"})
     assert status == 202
     assert _object(body, "options")["strategy"] == "sequence-pair"
 
@@ -227,9 +223,7 @@ def test_unknown_strategy_is_rejected_before_submission(start: Callable[..., Cli
 
 def test_a_body_that_is_not_json_is_400(start: Callable[..., Client]) -> None:
     client = start()
-    request = urllib.request.Request(
-        client.base + "/api/build", data=b"{not json", method="POST"
-    )
+    request = urllib.request.Request(client.base + "/api/build", data=b"{not json", method="POST")
     with pytest.raises(urllib.error.HTTPError) as caught:
         urllib.request.urlopen(request, timeout=10)
     assert caught.value.code == 400
@@ -293,9 +287,7 @@ def test_a_large_text_response_is_gzipped_when_the_client_asks(
     (tmp_path / "index.html").write_text("<title>flab2bp</title>")
     (tmp_path / "big.js").write_text("console.log('x');\n" * 5000)
 
-    request = urllib.request.Request(
-        client.base + "/big.js", headers={"Accept-Encoding": "gzip"}
-    )
+    request = urllib.request.Request(client.base + "/big.js", headers={"Accept-Encoding": "gzip"})
     with urllib.request.urlopen(request, timeout=10) as response:
         raw = response.read()
         assert response.headers.get("Content-Encoding") == "gzip"
@@ -354,13 +346,9 @@ class TestTheProxyWillNotRelayIntoThisMachine:
             "http://[::1]:9/x",
         ],
     )
-    def test_a_non_public_target_is_refused(
-        self, start: Callable[..., Client], url: str
-    ) -> None:
+    def test_a_non_public_target_is_refused(self, start: Callable[..., Client], url: str) -> None:
         client = start()
-        status, body = client.failing_text(
-            f"/api/fetch?url={urllib.parse.quote(url, safe='')}"
-        )
+        status, body = client.failing_text(f"/api/fetch?url={urllib.parse.quote(url, safe='')}")
         assert status == 400
         assert "not a public address" in body
 
@@ -374,9 +362,7 @@ class TestTheProxyWillNotRelayIntoThisMachine:
 
         monkeypatch.setattr(httpx, "get", fake_get)
         client = start()
-        status, body = client.get_text(
-            "/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage"
-        )
+        status, body = client.get_text("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
         assert (status, body) == (200, "a blueprint page")
 
     def test_a_redirect_into_loopback_is_refused_at_the_second_hop(
@@ -394,9 +380,7 @@ class TestTheProxyWillNotRelayIntoThisMachine:
 
         monkeypatch.setattr(httpx, "get", fake_get)
         client = start()
-        status, body = client.failing_text(
-            "/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage"
-        )
+        status, body = client.failing_text("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
         assert status == 400
         assert "127.0.0.1" in body and "not a public address" in body
 
@@ -412,9 +396,7 @@ class TestTheProxyWillNotRelayIntoThisMachine:
 
         monkeypatch.setattr(httpx, "get", fake_get)
         client = start()
-        status, body = client.failing_text(
-            "/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage"
-        )
+        status, body = client.failing_text("/api/fetch?url=http%3A%2F%2F93.184.216.34%2Fpage")
         assert status == 502
         assert "Too many redirects" in body
 

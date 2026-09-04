@@ -28,9 +28,10 @@ LIVE = HERE.parent / "src" / "flab2bp" / "layout" / "freeform.py"
 
 def run(cases: Path) -> tuple[float, int, str]:
     out = subprocess.run(
-        [sys.executable, str(HERE / "route_bench.py"), "--cases", str(cases),
-         "--rounds", "1"],
-        capture_output=True, text=True, check=True,
+        [sys.executable, str(HERE / "route_bench.py"), "--cases", str(cases), "--rounds", "1"],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     m = re.search(r"BEST ([\d.]+)s\s+([\d,]+) expansions.*digest (\w+)", out)
     if not m:
@@ -65,9 +66,10 @@ def main() -> int:
         tb, nb, db = best[("B", c)]
         print(f"{Path(c).stem}")
         print(f"  A {ta:.3f}s  {na:,} exp  digest {da}")
-        print(f"  B {tb:.3f}s  {nb:,} exp  digest {db}   "
-              f"{100 * (tb - ta) / ta:+.1f}%"
-              + ("" if da == db else "   *** DIGEST DIFFERS ***"))
+        print(
+            f"  B {tb:.3f}s  {nb:,} exp  digest {db}   "
+            f"{100 * (tb - ta) / ta:+.1f}%" + ("" if da == db else "   *** DIGEST DIFFERS ***")
+        )
     return 0
 
 

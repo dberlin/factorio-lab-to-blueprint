@@ -100,11 +100,7 @@ def _model_eviction_args(name: str, canonical_model: int) -> tuple[_CallArgs, ..
     return tuple((model_index,) for model_index in models[: maxsize + 1])
 
 
-
-
-_EVICTION_CALLS: tuple[
-    tuple[str, _CacheFunction, _CallArgs, tuple[_CallArgs, ...]], ...
-] = (
+_EVICTION_CALLS: tuple[tuple[str, _CacheFunction, _CallArgs, tuple[_CallArgs, ...]], ...] = (
     (
         "catalog.collider_span",
         cast(_CacheFunction, cast(object, catalog.collider_span)),

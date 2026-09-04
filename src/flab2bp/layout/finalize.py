@@ -37,7 +37,6 @@ ProjectionCancelled = planet.ProjectionCancelled
 type ProjectionGeometrySignature = tuple[object, ...]
 
 
-
 @dataclass(frozen=True, slots=True)
 class ProjectionNoGood:
     """One pair-specific packed origin assignment rejected by projection."""
@@ -53,8 +52,6 @@ class ProjectionNoGood:
     left_geometry: ProjectionGeometrySignature
     right_geometry: ProjectionGeometrySignature
     failure: ProjectionFailure
-
-
 
     def __post_init__(self) -> None:
         if (
@@ -72,9 +69,7 @@ class ProjectionRefusal(ValueError):
     def __init__(self, failures: Sequence[ProjectionFailure]) -> None:
         distinct = tuple(dict.fromkeys(failures))
         self.failures: tuple[ProjectionFailure, ...] = distinct
-        self.checks: tuple[str, ...] = tuple(
-            sorted({failure.check for failure in distinct})
-        )
+        self.checks: tuple[str, ...] = tuple(sorted({failure.check for failure in distinct}))
         detail = "; ".join(
             f"band {failure.band} {failure.check} {failure.buildings}: {failure.detail}"
             for failure in distinct
@@ -92,7 +87,6 @@ class FrameCandidate:
     frame: AreaFrame
     south_padding: int
     added_rows: int
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,11 +164,7 @@ def band_policy_search_envelope(
         raise ValueError("search-envelope perimeter must be a non-negative integer")
     explicit = policy.explicit_segments
     band = (
-        next(
-            candidate
-            for candidate in planet.bands()
-            if candidate.area_segments == explicit
-        )
+        next(candidate for candidate in planet.bands() if candidate.area_segments == explicit)
         if explicit is not None
         else None
     )
@@ -224,6 +214,7 @@ def band_target_width(
             high = middle
     return max(1, low)
 
+
 @dataclass(frozen=True, slots=True)
 class _ProjectionInvariants:
     tested: tuple[tuple[int, colliders.Placed], ...]
@@ -270,6 +261,7 @@ type _StaticFailureCache = Callable[
 
 type _FailureCache = Callable[..., ProjectionFailure | None]
 
+
 @dataclass(slots=True)
 class _ProjectionCache:
     counters: _ProjectionCounters
@@ -281,12 +273,8 @@ class _ProjectionCache:
         tuple[tuple[PlacedBuilding, ...], int, bool],
         tuple[tuple[int, int], ...],
     ] = field(default_factory=dict)
-    projections: dict[tuple[int, int, int, int], planet.Projection] = field(
-        default_factory=dict
-    )
-    sorter_conditions: dict[tuple[object, ...], str | None] = field(
-        default_factory=dict
-    )
+    projections: dict[tuple[int, int, int, int], planet.Projection] = field(default_factory=dict)
+    sorter_conditions: dict[tuple[object, ...], str | None] = field(default_factory=dict)
     addon_belt_neighborhoods: dict[
         tuple[int, int, int, int, float, bool],
         tuple[tuple[int, PlacedBuilding], ...],
@@ -400,7 +388,6 @@ class _ProjectionCache:
         self._addon_failure = addon_failure
         self._addon_splitter_failure = addon_splitter_failure
 
-
     def _poll_cancellation(self) -> None:
         if self.cancelled is not None and self.cancelled():
             raise ProjectionCancelled
@@ -492,6 +479,7 @@ class _ProjectionCache:
             self.counters.addon_splitter_result_cache_hits += 1
         return failure
 
+
 def _extent_fits(width: int, height: int) -> tuple[planet.Fit, ...]:
     fits: list[planet.Fit] = []
     for band in sorted(planet.bands(), key=lambda candidate: candidate.area_segments):
@@ -502,8 +490,6 @@ def _extent_fits(width: int, height: int) -> tuple[planet.Fit, ...]:
             if rows <= band.rows and columns <= band.columns:
                 fits.append(planet.Fit(band, rotated, rows, columns))
     return tuple(fits)
-
-
 
 
 def _collision_placed(building: PlacedBuilding) -> colliders.Placed:
@@ -895,8 +881,7 @@ def first_projected_static_failure(
     retained = tuple(
         (index, building)
         for index, building in buildings
-        if not catalog.is_belt(building.item_id)
-        and not catalog.is_sorter(building.item_id)
+        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(building.item_id)
     )
     tested_list: list[tuple[int, colliders.Placed]] = []
     pending_placed: dict[PlacedBuilding, colliders.Placed] = {}
@@ -923,9 +908,7 @@ def first_projected_static_failure(
                 if index == candidate_index
             )
         except StopIteration:
-            raise ValueError(
-                "prospective static candidate is not collision-tested"
-            ) from None
+            raise ValueError("prospective static candidate is not collision-tested") from None
 
     pair_buildings = tuple(building for _index, building in tested)
     pairs_by_context: dict[
@@ -946,10 +929,7 @@ def first_projected_static_failure(
             raise ProjectionCancelled
         if pairs is None:
             broad_phase_buildings = (
-                tuple(
-                    replace(building, x=building.y, y=building.x)
-                    for building in pair_buildings
-                )
+                tuple(replace(building, x=building.y, y=building.x) for building in pair_buildings)
                 if projection.rotated
                 else pair_buildings
             )
@@ -984,18 +964,14 @@ def first_projected_static_failure(
             base_longitude = 0.0
             if wanted:
                 base = tested[wanted[0]][1]
-                base_longitude = (
-                    base.y if projection.rotated else base.x
-                )
+                base_longitude = base.y if projection.rotated else base.x
             placed_context: list[tuple[object, ...]] = []
             for position in wanted:
                 if cancelled is not None and cancelled():
                     raise ProjectionCancelled
                 placed = tested[position][1]
                 longitude, latitude = (
-                    (placed.y, placed.x)
-                    if projection.rotated
-                    else (placed.x, placed.y)
+                    (placed.y, placed.x) if projection.rotated else (placed.x, placed.y)
                 )
                 placed_context.append(
                     (
@@ -1118,20 +1094,13 @@ def _addon_candidate_belts(
     def transformed(x: float, y: float) -> tuple[float, float]:
         return (y, x) if projection.rotated else (x, y)
 
-    position_by_index = {
-        belt_index: position
-        for position, (belt_index, _belt) in enumerate(belts)
-    }
+    position_by_index = {belt_index: position for position, (belt_index, _belt) in enumerate(belts)}
     predecessor_by_position: dict[int, int] = {}
     grid: dict[tuple[int, int], list[int]] = {}
     for position, (_belt_index, belt) in enumerate(belts):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        target = (
-            position_by_index.get(belt.output_obj)
-            if belt.output_obj is not None
-            else None
-        )
+        target = position_by_index.get(belt.output_obj) if belt.output_obj is not None else None
         if target is not None:
             predecessor_by_position[target] = position
         longitude, latitude = transformed(belt.x, belt.y)
@@ -1182,11 +1151,7 @@ def _addon_candidate_belts(
         predecessor = predecessor_by_position.get(position)
         if predecessor is not None:
             with_neighbours.add(predecessor)
-    return tuple(
-        belt
-        for position, belt in enumerate(belts)
-        if position in with_neighbours
-    )
+    return tuple(belt for position, belt in enumerate(belts) if position in with_neighbours)
 
 
 @dataclass(slots=True)
@@ -1201,17 +1166,14 @@ class _AddonProjectionContext:
 
 def _addon_projection_context(
     belts: Sequence[tuple[int, PlacedBuilding]],
-    addons: Sequence[
-        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
-    ],
+    addons: Sequence[tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]],
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> _AddonProjectionContext:
     """Prepare link topology and addon seats once for every latitude anchor."""
     frozen_belts = tuple(belts)
     belt_position_by_index = {
-        belt_index: belt_position
-        for belt_position, (belt_index, _belt) in enumerate(frozen_belts)
+        belt_index: belt_position for belt_position, (belt_index, _belt) in enumerate(frozen_belts)
     }
     predecessor_by_position: dict[int, int] = {}
     for belt_position, (_belt_index, placed_belt) in enumerate(frozen_belts):
@@ -1342,9 +1304,7 @@ def _projected_addon_failure_from_context(
                 else None
             )
             if neighbour_position is None:
-                neighbour_position = context.predecessor_by_position.get(
-                    belt_position
-                )
+                neighbour_position = context.predecessor_by_position.get(belt_position)
             if neighbour_position is None:
                 supplied = True
                 break
@@ -1374,10 +1334,7 @@ def _projected_addon_failure_from_context(
         return ProjectionFailure(
             check="game.addon_supply",
             buildings=(addon_index,),
-            detail=(
-                f"addon area {area} has no belt within "
-                f"{rules.ADDON_AREA_RADIUS} world unit"
-            ),
+            detail=(f"addon area {area} has no belt within {rules.ADDON_AREA_RADIUS} world unit"),
             band=projection.band.area_segments,
         )
     return None
@@ -1385,9 +1342,7 @@ def _projected_addon_failure_from_context(
 
 def _projected_addon_failure(
     belts: Sequence[tuple[int, PlacedBuilding]],
-    addons: Sequence[
-        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
-    ],
+    addons: Sequence[tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]],
     projection: planet.Projection,
     *,
     cancelled: Callable[[], bool] | None = None,
@@ -1491,12 +1446,10 @@ def projected_coater_splitter_failure(
     return ProjectionFailure(
         check="game.addon_splitter_clearance",
         buildings=(coater[0], splitter[0]),
-        detail=(
-            "Splitter connection body enters the Spray Coater projected lateral "
-            "keepout"
-        ),
+        detail=("Splitter connection body enters the Spray Coater projected lateral keepout"),
         band=projection.band.area_segments,
     )
+
 
 type _CoaterSplitterCoordinates = tuple[float, float, float]
 
@@ -1529,11 +1482,7 @@ def _coater_splitter_box_distance2(
     upper: _CoaterSplitterCoordinates,
 ) -> float:
     return sum(
-        (lo - value) ** 2
-        if value < lo
-        else (value - hi) ** 2
-        if value > hi
-        else 0.0
+        (lo - value) ** 2 if value < lo else (value - hi) ** 2 if value > hi else 0.0
         for value, lo, hi in zip(point, lower, upper, strict=True)
     )
 
@@ -1575,30 +1524,18 @@ def _coater_splitter_kd_tree(
         axis_order = ordered[axis]
         middle = len(axis_order) // 2
         point = axis_order[middle]
-        left_positions = {
-            candidate.position for candidate in axis_order[:middle]
-        }
-        right_positions = {
-            candidate.position for candidate in axis_order[middle + 1 :]
-        }
+        left_positions = {candidate.position for candidate in axis_order[:middle]}
+        right_positions = {candidate.position for candidate in axis_order[middle + 1 :]}
         left = build(
             tuple(
-                tuple(
-                    candidate
-                    for candidate in order
-                    if candidate.position in left_positions
-                )
+                tuple(candidate for candidate in order if candidate.position in left_positions)
                 for order in ordered
             ),
             depth + 1,
         )
         right = build(
             tuple(
-                tuple(
-                    candidate
-                    for candidate in order
-                    if candidate.position in right_positions
-                )
+                tuple(candidate for candidate in order if candidate.position in right_positions)
                 for order in ordered
             ),
             depth + 1,
@@ -1641,11 +1578,15 @@ def _coater_splitter_kd_range(
     """Report every indexed point inside one exact broad-phase sphere."""
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
-    if node is None or _coater_splitter_box_distance2(
-        centre,
-        node.lower,
-        node.upper,
-    ) > radius2:
+    if (
+        node is None
+        or _coater_splitter_box_distance2(
+            centre,
+            node.lower,
+            node.upper,
+        )
+        > radius2
+    ):
         return
     if (
         _coater_splitter_point_distance2(
@@ -1731,19 +1672,13 @@ def _projected_coater_splitter_candidates(
     row_lower_bound = projection.radius * latitude_step * 0.9
 
     def transformed(building: colliders.Placed) -> tuple[float, float]:
-        return (
-            (building.y, building.x)
-            if projection.rotated
-            else (building.x, building.y)
-        )
+        return (building.y, building.x) if projection.rotated else (building.x, building.y)
 
     coater_bounds: list[float] = []
     for _index, coater in coaters:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        lateral_step = (
-            (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
-        )
+        lateral_step = (1, 0) if round(coater.yaw) % 180 == 0 else (0, 1)
         lateral_arc = math.dist(
             projection.position(coater.x, coater.y, coater.z),
             projection.position(
@@ -1752,9 +1687,7 @@ def _projected_coater_splitter_candidates(
                 coater.z,
             ),
         )
-        coater_bounds.append(
-            planet.collider_radius(coater.model_index) + lateral_arc
-        )
+        coater_bounds.append(planet.collider_radius(coater.model_index) + lateral_arc)
     splitter_bound = 0.0
     for _index, splitter in splitters:
         if cancelled is not None and cancelled():
@@ -1821,12 +1754,8 @@ def _projected_coater_splitter_candidates(
                     found,
                     cancelled=cancelled,
                 )
-        candidates.append(
-            tuple(splitters[position] for position in sorted(found))
-        )
+        candidates.append(tuple(splitters[position] for position in sorted(found)))
     return tuple(candidates)
-
-
 
 
 def _projected_addon_splitter_failure(
@@ -1883,9 +1812,7 @@ def _projection_invariants(
 ) -> _ProjectionInvariants:
     tested: list[tuple[int, colliders.Placed]] = []
     belts: list[tuple[int, PlacedBuilding]] = []
-    addons: list[
-        tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]
-    ] = []
+    addons: list[tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]] = []
     coaters: list[tuple[int, colliders.Placed]] = []
     splitters: list[tuple[int, colliders.Placed]] = []
     for index, building in enumerate(placement.buildings):
@@ -1938,10 +1865,7 @@ def _failure_at_projection(
         raise ProjectionCancelled
     counters.projections += 1
     failures: list[ProjectionFailure] = []
-    use_cache = (
-        cache is not None
-        and (cancelled is None or cache.cancelled is cancelled)
-    )
+    use_cache = cache is not None and (cancelled is None or cache.cancelled is cancelled)
     if not use_cache:
         power_failure = (
             projected_power_failure(invariants.nodes, projection)
@@ -2056,17 +1980,10 @@ def _certify_frame(
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
     active_cache = (
-        cache
-        if cache is not None
-        and (cancelled is None or cache.cancelled is cancelled)
-        else None
+        cache if cache is not None and (cancelled is None or cache.cancelled is cancelled) else None
     )
     building_key = placement.buildings
-    invariants = (
-        None
-        if active_cache is None
-        else active_cache.invariants.get(building_key)
-    )
+    invariants = None if active_cache is None else active_cache.invariants.get(building_key)
     if invariants is None:
         invariants = (
             _projection_invariants(placement)
@@ -2082,9 +1999,7 @@ def _certify_frame(
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         pair_buildings_list.append(
-            replace(building, x=building.y, y=building.x)
-            if pair_rotated
-            else building
+            replace(building, x=building.y, y=building.x) if pair_rotated else building
         )
     pair_buildings = tuple(pair_buildings_list)
     by_segments = {band.area_segments: band for band in planet.bands()}
@@ -2097,11 +2012,7 @@ def _certify_frame(
         pairs = pairs_by_band.get(segments)
         if pairs is None:
             pair_key = (building_key, segments, pair_rotated)
-            pairs = (
-                None
-                if active_cache is None
-                else active_cache.pairs.get(pair_key)
-            )
+            pairs = None if active_cache is None else active_cache.pairs.get(pair_key)
             if pairs is None:
                 if cancelled is None:
                     pairs = tuple(
@@ -2137,9 +2048,7 @@ def _certify_frame(
                 quadrant,
             )
             projection = (
-                None
-                if active_cache is None
-                else active_cache.projections.get(projection_key)
+                None if active_cache is None else active_cache.projections.get(projection_key)
             )
             if projection is None:
                 projection = planet.Projection(
@@ -2205,11 +2114,7 @@ def materialize_frame_building(
                 else height - 1 - (building.y2 - min_y)
             ),
             y2=None if building.x2 is None else building.x2 - min_x,
-            yaw2=(
-                None
-                if building.yaw2 is None
-                else (building.yaw2 - 90.0) % 360.0
-            ),
+            yaw2=(None if building.yaw2 is None else (building.yaw2 - 90.0) % 360.0),
         )
     else:
         materialized = replace(
@@ -2223,11 +2128,7 @@ def materialize_frame_building(
         materialized = replace(
             materialized,
             y=materialized.y + candidate.south_padding,
-            y2=(
-                None
-                if materialized.y2 is None
-                else materialized.y2 + candidate.south_padding
-            ),
+            y2=(None if materialized.y2 is None else materialized.y2 + candidate.south_padding),
         )
     return materialized
 
@@ -2285,9 +2186,7 @@ def _adjacent_machine_collides_in_band(
         pair_height = height
     placed = (_collision_placed(left), _collision_placed(right))
     band = next(
-        candidate
-        for candidate in planet.bands()
-        if candidate.area_segments == band_segments
+        candidate for candidate in planet.bands() if candidate.area_segments == band_segments
     )
     return any(
         planet.collisions_at(
@@ -2312,11 +2211,7 @@ def _projection_pitch_contexts(
     """Every orientation/band a containing exact candidate may certify."""
     ordered = tuple(sorted(planet.bands(), key=lambda band: band.area_segments))
     primaries = (
-        tuple(
-            band
-            for band in ordered
-            if band.area_segments == policy.explicit_segments
-        )
+        tuple(band for band in ordered if band.area_segments == policy.explicit_segments)
         if policy.explicit_segments is not None
         else ordered
     )
@@ -2328,10 +2223,7 @@ def _projection_pitch_contexts(
         ):
             if columns > primary.columns or rows > primary.rows:
                 continue
-            contexts.update(
-                (rotated, band.area_segments)
-                for band in target_bands(primary, policy)
-            )
+            contexts.update((rotated, band.area_segments) for band in target_bands(primary, policy))
     return tuple(sorted(contexts, key=lambda context: (context[1], context[0])))
 
 
@@ -2363,17 +2255,13 @@ def projection_safe_machine_pitch_x(
     if type(perimeter) is not int or perimeter < 0:
         raise ValueError("projection perimeter must be a non-negative integer")
     item_id = (
-        catalog.item_id(machine_item_id)
-        if isinstance(machine_item_id, str)
-        else machine_item_id
+        catalog.item_id(machine_item_id) if isinstance(machine_item_id, str) else machine_item_id
     )
     pitch_x = catalog.clearance(item_id, yaw)[0]
     if machine_count == 1:
         return pitch_x
     active_policy = BandPolicy("portable") if policy is None else policy
-    maximum_pitch = max(
-        max(band.columns, band.rows) for band in planet.bands()
-    )
+    maximum_pitch = max(max(band.columns, band.rows) for band in planet.bands())
     for candidate_pitch in range(pitch_x, maximum_pitch + 1):
         contexts = _projection_pitch_contexts(
             machine_count * candidate_pitch + 2 * perimeter,
@@ -2403,9 +2291,7 @@ def _primary_band_for_extent(
 ) -> planet.Band | None:
     explicit = policy.explicit_segments
     if explicit is not None:
-        return next(
-            band for band in planet.bands() if band.area_segments == explicit
-        )
+        return next(band for band in planet.bands() if band.area_segments == explicit)
     try:
         return planet.band_for_extent(width, height).band
     except planet.BandRefusal:
@@ -2495,9 +2381,7 @@ def frame_candidates(
         max_x - min_x + 1,
         max_y - min_y + 1,
         policy,
-        prior_rotated=(
-            placement.frame.rotated if placement.frame is not None else False
-        ),
+        prior_rotated=(placement.frame.rotated if placement.frame is not None else False),
     )
 
 
@@ -2542,19 +2426,14 @@ def independent_projection_pair(
         len(pair) != 2
         or pair[0][0] == pair[1][0]
         or any(
-            catalog.is_belt(building.item_id)
-            or catalog.is_sorter(building.item_id)
+            catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id)
             for _index, building in pair
         )
     ):
         return None
     indices = (pair[0][0], pair[1][0])
     bands = (
-        tuple(
-            band
-            for band in planet.bands()
-            if band.area_segments == policy.explicit_segments
-        )
+        tuple(band for band in planet.bands() if band.area_segments == policy.explicit_segments)
         if policy.explicit_segments is not None
         else planet.bands()
     )
@@ -2611,12 +2490,12 @@ def independent_projection_pair(
                 for index, building in oriented
             ),
         )
-        pair_width = max(
-            building.x + building.width for _index, building in oriented
-        ) - min(building.x for _index, building in oriented)
-        pair_height = max(
-            building.y + building.height for _index, building in oriented
-        ) - min(building.y for _index, building in oriented)
+        pair_width = max(building.x + building.width for _index, building in oriented) - min(
+            building.x for _index, building in oriented
+        )
+        pair_height = max(building.y + building.height for _index, building in oriented) - min(
+            building.y for _index, building in oriented
+        )
         # The outer content bounds are not part of the cut.  Using the full
         # authoritative band capacity covers the union of every containing
         # frame size and every row translation that unrelated routed tiles can
@@ -2684,8 +2563,7 @@ def _frame_content_valid(placement: Placement) -> bool:
     if any(segments not in by_segments for segments in frame.certified_bands):
         return False
     if any(
-        frame.width > by_segments[segments].columns
-        or frame.height > by_segments[segments].rows
+        frame.width > by_segments[segments].columns or frame.height > by_segments[segments].rows
         for segments in frame.certified_bands
     ):
         return False
@@ -2728,10 +2606,7 @@ def _frame_satisfies_policy(
     assert frame is not None
     explicit = policy.explicit_segments
     if explicit is not None:
-        return (
-            frame.primary_band == explicit
-            and frame.certified_bands == (explicit,)
-        )
+        return frame.primary_band == explicit and frame.certified_bands == (explicit,)
     min_x, min_y, max_x, max_y = placement.bounds
     try:
         primary = planet.band_for_extent(
@@ -2740,13 +2615,8 @@ def _frame_satisfies_policy(
         ).band
     except planet.BandRefusal:
         return False
-    required = tuple(
-        band.area_segments for band in target_bands(primary, policy)
-    )
-    return (
-        frame.primary_band == primary.area_segments
-        and frame.certified_bands == required
-    )
+    required = tuple(band.area_segments for band in target_bands(primary, policy))
+    return frame.primary_band == primary.area_segments and frame.certified_bands == required
 
 
 def _with_projection_stats(
@@ -2763,18 +2633,10 @@ def _with_projection_stats(
     cache_stats["projection_invariant_cache_hits"] = counters.invariant_cache_hits
     cache_stats["projection_pair_cache_hits"] = counters.pair_cache_hits
     cache_stats["projection_object_cache_hits"] = counters.projection_cache_hits
-    cache_stats["projection_sorter_result_cache_hits"] = (
-        counters.sorter_result_cache_hits
-    )
-    cache_stats["projection_static_result_cache_hits"] = (
-        counters.static_result_cache_hits
-    )
-    cache_stats["projection_power_result_cache_hits"] = (
-        counters.power_result_cache_hits
-    )
-    cache_stats["projection_addon_result_cache_hits"] = (
-        counters.addon_result_cache_hits
-    )
+    cache_stats["projection_sorter_result_cache_hits"] = counters.sorter_result_cache_hits
+    cache_stats["projection_static_result_cache_hits"] = counters.static_result_cache_hits
+    cache_stats["projection_power_result_cache_hits"] = counters.power_result_cache_hits
+    cache_stats["projection_addon_result_cache_hits"] = counters.addon_result_cache_hits
     cache_stats["projection_addon_splitter_result_cache_hits"] = (
         counters.addon_splitter_result_cache_hits
     )
@@ -2790,9 +2652,7 @@ def _extent_failure_for_dimensions(
     explicit = policy.explicit_segments
     if explicit is not None:
         band = next(
-            candidate
-            for candidate in planet.bands()
-            if candidate.area_segments == explicit
+            candidate for candidate in planet.bands() if candidate.area_segments == explicit
         )
         return ProjectionFailure(
             check="game.blueprint_area",
@@ -2825,8 +2685,6 @@ def _extent_failure(
         max_y - min_y + 1,
         policy,
     )
-
-
 
 
 def finalize_placement(
@@ -2997,9 +2855,7 @@ def _prunable_open_belts(
             or building.y + building.height - 1 == top
         )
         protected = (
-            index in protected_roots
-            or index in nonbelt_references
-            or bool(building.parameters)
+            index in protected_roots or index in nonbelt_references or bool(building.parameters)
         )
         if outer and open_end and not protected and neighbours <= 1:
             selected.add(index)
@@ -3168,11 +3024,7 @@ class _CleanupSurvivorGraph:
                         )
                         external.append(source)
                 elif target is not None and 0 <= target < size and self.belts[target]:
-                    protected = (
-                        self.nonbelt_input
-                        if direction == "input"
-                        else self.nonbelt_output
-                    )
+                    protected = self.nonbelt_input if direction == "input" else self.nonbelt_output
                     protected[target] += 1
 
         self.left_records: dict[int, list[int]] = {}
@@ -3304,7 +3156,6 @@ class _CleanupSurvivorGraph:
                 hi = middle
         coordinates.insert(lo, value)
 
-
     def _fork(self) -> _CleanupSurvivorGraph:
         """Copy mutable cleanup state while sharing its aggregate work counter."""
         fork = object.__new__(type(self))
@@ -3331,20 +3182,16 @@ class _CleanupSurvivorGraph:
         fork.external_input_sources = self.external_input_sources.copy()
         fork.external_output_sources = self.external_output_sources.copy()
         fork.left_records = {
-            coordinate: records.copy()
-            for coordinate, records in self.left_records.items()
+            coordinate: records.copy() for coordinate, records in self.left_records.items()
         }
         fork.bottom_records = {
-            coordinate: records.copy()
-            for coordinate, records in self.bottom_records.items()
+            coordinate: records.copy() for coordinate, records in self.bottom_records.items()
         }
         fork.right_records = {
-            coordinate: records.copy()
-            for coordinate, records in self.right_records.items()
+            coordinate: records.copy() for coordinate, records in self.right_records.items()
         }
         fork.top_records = {
-            coordinate: records.copy()
-            for coordinate, records in self.top_records.items()
+            coordinate: records.copy() for coordinate, records in self.top_records.items()
         }
         fork.left_counts = self.left_counts.copy()
         fork.bottom_counts = self.bottom_counts.copy()
@@ -3414,9 +3261,7 @@ class _CleanupSurvivorGraph:
                         external.append(source)
                 elif target is not None and 0 <= target < size and extended.belts[target]:
                     protected = (
-                        extended.nonbelt_input
-                        if direction == "input"
-                        else extended.nonbelt_output
+                        extended.nonbelt_input if direction == "input" else extended.nonbelt_output
                     )
                     protected[target] += 1
 
@@ -3499,7 +3344,6 @@ class _CleanupSurvivorGraph:
         ):
             return extended, bounds
         return extended, extended.snapshot_bounds()
-
 
     def _poll(self) -> None:
         if self.cancelled is not None and self.cancelled():
@@ -3674,11 +3518,7 @@ class _CleanupSurvivorGraph:
             or self.nonbelt_output[index] > 0
             or bool(building.parameters)
         )
-        prunable = (
-            open_end
-            and not protected
-            and predecessor_count + int(successor_is_belt) <= 1
-        )
+        prunable = open_end and not protected and predecessor_count + int(successor_is_belt) <= 1
         return (self.include_boundary_open and boundary_open) or prunable
 
     def _transfer_protection(
@@ -3687,16 +3527,12 @@ class _CleanupSurvivorGraph:
         removed: int,
         pending: set[int],
     ) -> None:
-        counts = (
-            self.nonbelt_input if direction == "input" else self.nonbelt_output
-        )
+        counts = self.nonbelt_input if direction == "input" else self.nonbelt_output
         count = counts[removed]
         if not count:
             return
         target = self._resolve(
-            self.input_jump[removed]
-            if direction == "input"
-            else self.output_jump[removed],
+            self.input_jump[removed] if direction == "input" else self.output_jump[removed],
             direction,
         )
         if (
@@ -3718,11 +3554,7 @@ class _CleanupSurvivorGraph:
         for source in wave:
             self._poll()
             target = self._resolve(self.buildings[source].output_obj, "output")
-            if (
-                target is not None
-                and target != self._EXTERNAL
-                and self.belts[target]
-            ):
+            if target is not None and target != self._EXTERNAL and self.belts[target]:
                 removed_sources[target] = removed_sources.get(target, 0) + 1
 
         for index in wave:
@@ -3748,9 +3580,7 @@ class _CleanupSurvivorGraph:
 
         for removed in wave:
             self._poll()
-            remaining_predecessors = (
-                self.predecessors[removed] - removed_sources.get(removed, 0)
-            )
+            remaining_predecessors = self.predecessors[removed] - removed_sources.get(removed, 0)
             output_target = self._resolve(self.output_jump[removed], "output")
             if (
                 output_target is not None
@@ -3801,11 +3631,7 @@ class _CleanupSurvivorGraph:
         pending: set[int] = set()
         self._enqueue_outer(bounds, pending)
         while pending:
-            wave = {
-                index
-                for index in pending
-                if self._eligible(index, bounds)
-            }
+            wave = {index for index in pending if self._eligible(index, bounds)}
             pending.clear()
             if not wave:
                 break
@@ -3981,9 +3807,7 @@ def compact_open_boundary_belts_certified(
     )
     removed_total = len(removed) if compacted is not placement else 0
     structural_report = (
-        _certify(compacted, spec, expect_power=expect_power)
-        if compacted is not placement
-        else None
+        _certify(compacted, spec, expect_power=expect_power) if compacted is not placement else None
     )
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
@@ -3993,9 +3817,7 @@ def compact_open_boundary_belts_certified(
         sprayed_lanes=len(spec.spray_lanes),
     )
     report = structural_report
-    if compacted is placement or (
-        structural_report is not None and structural_report.errors
-    ):
+    if compacted is placement or (structural_report is not None and structural_report.errors):
         compacted, removed_total, report = _certified_side_fallback(
             placement,
             spec,

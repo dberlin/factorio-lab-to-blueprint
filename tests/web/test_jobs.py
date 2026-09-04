@@ -76,6 +76,7 @@ def test_a_successful_build_reports_done_with_a_result(small_build: pipeline.Bui
     finally:
         builder.shutdown()
 
+
 def test_unframed_success_finishes_as_controlled_error(
     small_build: pipeline.Build,
 ) -> None:
@@ -99,7 +100,6 @@ def test_unframed_success_finishes_as_controlled_error(
         assert current.finished_at is not None
     finally:
         builder.shutdown()
-
 
 
 def test_a_refusal_is_a_result_not_an_error() -> None:
@@ -129,8 +129,7 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
         attempts = refused["attempts"]
         assert isinstance(attempts, list)
         assert [
-            (_object(attempt)["candidate"], _object(attempt)["reason"])
-            for attempt in attempts
+            (_object(attempt)["candidate"], _object(attempt)["reason"]) for attempt in attempts
         ] == [
             ("no-proliferator", "too tall"),
             ("max-proliferation", "unroutable"),
@@ -138,6 +137,7 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
         assert "no valid layout" in str(refused["message"])
     finally:
         builder.shutdown()
+
 
 def test_direct_refusal_without_attempt_strategy_serializes_null_not_an_invalid_name() -> None:
     def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
@@ -268,11 +268,7 @@ def test_a_second_job_queues_behind_the_first(small_build: pipeline.Build) -> No
         # be behind it; without this the assertion could pass vacuously.
         deadline = time.monotonic() + 5.0
         current = builder.get(first.id)
-        while (
-            current is not None
-            and current.state != "running"
-            and time.monotonic() < deadline
-        ):
+        while current is not None and current.state != "running" and time.monotonic() < deadline:
             time.sleep(0.01)
             current = builder.get(first.id)
         assert builder.snapshot(second)["state"] == "queued"
@@ -459,10 +455,9 @@ def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) 
         settled = snap["settled"]
         assert isinstance(settled, list)
         settled_objects = [_object(item) for item in settled]
-        assert [
-            (item["strategy"], item["phase"], item["reason"])
-            for item in settled_objects
-        ] == [("freeform", "refused", "too tall")]
+        assert [(item["strategy"], item["phase"], item["reason"]) for item in settled_objects] == [
+            ("freeform", "refused", "too tall")
+        ]
         assert settled_objects[0]["projection_failures"] == [
             {
                 "band": 7,
@@ -491,10 +486,10 @@ def test_a_job_that_has_not_started_laying_out_claims_no_progress(
 
 def test_band_defaults_to_portable_and_accepts_exact_dimensions() -> None:
     assert parse_options({"url": URL}).band == "portable"
-    assert tuple(
-        parse_options({"url": URL, "band": selection}).band
-        for selection in BAND_SELECTIONS
-    ) == BAND_SELECTIONS
+    assert (
+        tuple(parse_options({"url": URL, "band": selection}).band for selection in BAND_SELECTIONS)
+        == BAND_SELECTIONS
+    )
     assert parse_options({"url": URL, "band": "160"}).band == "50x800"
     assert parse_options({"url": URL, "band": "200"}).band == "160x1000"
 

@@ -122,8 +122,15 @@ def test_a_stack_outside_the_games_range_is_refused() -> None:
 def test_max_stack_is_four_with_the_piler_else_the_largest_place_stack() -> None:
     assert BuildSpec(groups=(), piler_unlocked=True).max_stack == 4
     assert BuildSpec(groups=(), sorter_place_stacks=(1, 1, 1, 4)).max_stack == 4
-    assert BuildSpec(groups=(), sorter_item_ids=("sorter-1",), sorter_pick_stacks=(1,),
-                     sorter_place_stacks=(2,)).max_stack == 2
+    assert (
+        BuildSpec(
+            groups=(),
+            sorter_item_ids=("sorter-1",),
+            sorter_pick_stacks=(1,),
+            sorter_place_stacks=(2,),
+        ).max_stack
+        == 2
+    )
 
 
 def test_the_defaults_are_the_level_zero_row_of_the_pinned_table() -> None:
@@ -227,14 +234,15 @@ def test_an_external_input_is_planned_at_the_bus_stack() -> None:
 def test_a_bus_without_a_pile_sorter_is_refused_not_capped() -> None:
     # Mk.I to Mk.III pick 1 at EVERY level, so any ist > 1 on such a save is a
     # refusal.  This is the whole of the "unpickable bus" class in practice.
-    spec = _stacked(belt_stack=2, pick=(1, 1, 1), place=(1, 1, 1),
-                    ids=("sorter-1", "sorter-2", "sorter-3"))
+    spec = _stacked(
+        belt_stack=2, pick=(1, 1, 1), place=(1, 1, 1), ids=("sorter-1", "sorter-2", "sorter-3")
+    )
     with pytest.raises(NoValidLayout, match=r"stack 2.*pick only 1.*Integrated Logistics System"):
         spec.planning_stack("hydrogen")
 
 
 def test_a_bus_above_the_researched_pick_stack_is_refused() -> None:
-    spec = _stacked(belt_stack=4, pick=(1, 1, 1, 3), place=(1, 1, 1, 2))   # level 2
+    spec = _stacked(belt_stack=4, pick=(1, 1, 1, 3), place=(1, 1, 1, 2))  # level 2
     with pytest.raises(NoValidLayout, match=r"stack 4.*pick only 3.*Pile Sorter Upgrade"):
         spec.planning_stack("hydrogen")
 

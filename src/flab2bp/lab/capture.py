@@ -182,12 +182,12 @@ class _Browser(Protocol):
 
 class _NoDriver(Protocol):
     cdp: _Cdp
+
     async def start(self, *, host: str, port: int) -> _Browser: ...
 
 
 def _is_nodriver(module: object) -> TypeGuard[_NoDriver]:
     return callable(getattr(module, "start", None))
-
 
 
 @dataclass(slots=True)
@@ -289,6 +289,7 @@ async def _navigate_with_request_guard(
         "Chromium admitted the first main-document request but navigation "
         f"remained on about:blank for {deadline_s:g}s"
     )
+
 
 _SOLVE_PROBE_STATE_ADAPTER = TypeAdapter(SolveProbeState)
 
@@ -436,18 +437,14 @@ async def _await_devtools(port: int, process: subprocess.Popen[bytes], deadline_
                     "DevTools port answered; it could not start on this machine"
                 )
             try:
-                response = await client.get(
-                    f"http://127.0.0.1:{port}/json/version", timeout=1.0
-                )
+                response = await client.get(f"http://127.0.0.1:{port}/json/version", timeout=1.0)
             except Exception:  # noqa: BLE001 - not up yet is the normal case here
                 pass
             else:
                 if response.status_code == 200:
                     return
             await asyncio.sleep(_POLL_S)
-    raise CaptureError(
-        f"the browser never answered on its DevTools port within {deadline_s:.0f}s"
-    )
+    raise CaptureError(f"the browser never answered on its DevTools port within {deadline_s:.0f}s")
 
 
 async def _validate_page_location(page: _AsyncPage, validator: UrlValidator) -> None:
@@ -457,9 +454,7 @@ async def _validate_page_location(page: _AsyncPage, validator: UrlValidator) -> 
     try:
         validator(location)
     except ValueError as exc:
-        raise CaptureError(
-            f"browser navigated outside the permitted flow page: {exc}"
-        ) from exc
+        raise CaptureError(f"browser navigated outside the permitted flow page: {exc}") from exc
 
 
 async def _await_navigation(

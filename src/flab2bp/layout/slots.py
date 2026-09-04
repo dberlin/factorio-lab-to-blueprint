@@ -558,9 +558,7 @@ def lane_orientation(item_id: int) -> float:
     return scored[0][2]
 
 
-def attachable_columns(
-    machine: PlacedBuilding, lane_y: int
-) -> dict[int, Attachment]:
+def attachable_columns(machine: PlacedBuilding, lane_y: int) -> dict[int, Attachment]:
     """Every column of ``machine`` a sorter from a lane at ``lane_y`` can use.
 
     Empty is a real answer and a common one.  An Oil Refinery has no insert pose
@@ -845,6 +843,8 @@ def _drag_belt_end(
     ends[other][0] += zero[0] - vfx * along
     ends[other][1] += zero[1] - vfy * along
     ends[other][2] += zero[2]
+
+
 # --- belt ports -------------------------------------------------------------
 #
 # A PORT IS NOT A SLOT, and the two arrays are read by two different tools.
@@ -1112,9 +1112,7 @@ def assign_sorter_slots(
     return assign_belt_slots(_assign_sorter_slots_only(buildings))
 
 
-def _links_splitter(
-    buildings: Sequence[PlacedBuilding], link: int | None
-) -> bool:
+def _links_splitter(buildings: Sequence[PlacedBuilding], link: int | None) -> bool:
     return (
         link is not None
         and 0 <= link < len(buildings)
@@ -1187,9 +1185,7 @@ def assign_belt_slots(
     takes a feeder, so it does not settle the case; it is settled the same way
     the pool is settled everywhere else, by not sharing a cell.
     """
-    supported_models = ", ".join(
-        str(model) for model in sorted(cat.SPLITTER_MODEL_INDICES)
-    )
+    supported_models = ", ".join(str(model) for model in sorted(cat.SPLITTER_MODEL_INDICES))
     for i, building in enumerate(buildings):
         if (
             building.item_id == cat.SPLITTER_ID
@@ -1206,8 +1202,7 @@ def assign_belt_slots(
     taken: dict[int, set[int]] = {}
     for i, b in enumerate(buildings):
         if cat.is_belt(b.item_id) and (
-            _docks_into_a_port(buildings, b.input_obj)
-            or _links_splitter(buildings, b.input_obj)
+            _docks_into_a_port(buildings, b.input_obj) or _links_splitter(buildings, b.input_obj)
         ):
             taken.setdefault(i, set()).add(BELT_PORT_DRAW_TO_SLOT)
     out: list[PlacedBuilding] = []
@@ -1218,13 +1213,9 @@ def assign_belt_slots(
         changes: dict[str, int] = {}
         # The belt's OWN end of a port dock. Constant for machines and
         # Splitters alike: `(out, 0)` when feeding and `(in, 1)` when drawing.
-        if _docks_into_a_port(buildings, b.output_obj) or _links_splitter(
-            buildings, b.output_obj
-        ):
+        if _docks_into_a_port(buildings, b.output_obj) or _links_splitter(buildings, b.output_obj):
             changes["output_from_slot"] = BELT_PORT_FEED_FROM_SLOT
-        if _docks_into_a_port(buildings, b.input_obj) or _links_splitter(
-            buildings, b.input_obj
-        ):
+        if _docks_into_a_port(buildings, b.input_obj) or _links_splitter(buildings, b.input_obj):
             changes["input_to_slot"] = BELT_PORT_DRAW_TO_SLOT
         for field, link in (
             ("output_to_slot", b.output_obj),
@@ -1312,9 +1303,7 @@ def _assign_sorter_slots_only(
     return tuple(out)
 
 
-def _output_filter_id(
-    sorter: PlacedBuilding, buildings: Sequence[PlacedBuilding]
-) -> int:
+def _output_filter_id(sorter: PlacedBuilding, buildings: Sequence[PlacedBuilding]) -> int:
     """Filter a multi-product machine's output sorter to its assigned item."""
     source = sorter.input_obj
     if source is None or not 0 <= source < len(buildings):

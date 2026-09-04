@@ -52,13 +52,13 @@ def test_drive_sets_the_exact_named_candidate_policy_subset(
     )
 
     policy_operations = [
-        operation
-        for operation in operations
-        if operation[0] == "setting candidate policies"
+        operation for operation in operations if operation[0] == "setting candidate policies"
     ]
     assert len(policy_operations) == 1
-    assert policy_operations[0][1].rstrip().endswith(
-        ")(" + json.dumps(["no-proliferator", "output-products"]) + ")"
+    assert (
+        policy_operations[0][1]
+        .rstrip()
+        .endswith(")(" + json.dumps(["no-proliferator", "output-products"]) + ")")
     )
 
 

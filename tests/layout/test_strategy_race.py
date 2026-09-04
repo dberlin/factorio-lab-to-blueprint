@@ -404,9 +404,7 @@ def _race(
 def test_both_arms_return_in_strategy_order() -> None:
     outcomes = _race(
         {
-            "sequence-pair": _StrategyRaceOutcome(
-                "sequence-pair", "refused", refusal_reason="s"
-            ),
+            "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
             "freeform": _StrategyRaceOutcome("freeform", "refused", refusal_reason="f"),
         }
     )
@@ -418,9 +416,7 @@ def test_a_crashed_arm_is_reported_and_the_survivor_decides() -> None:
     outcomes = _race(
         {
             "freeform": ValueError("boom"),
-            "sequence-pair": _StrategyRaceOutcome(
-                "sequence-pair", "refused", refusal_reason="s"
-            ),
+            "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
         }
     )
     crashed = next(o for o in outcomes if o.strategy == "freeform")
@@ -446,9 +442,7 @@ def test_a_surviving_arm_means_a_crash_is_reported_and_not_raised() -> None:
     outcomes = _race(
         {
             "freeform": ValueError("boom"),
-            "sequence-pair": _StrategyRaceOutcome(
-                "sequence-pair", "refused", refusal_reason="s"
-            ),
+            "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
         }
     )
 
@@ -464,9 +458,7 @@ def test_an_arm_that_ignores_the_wall_is_terminated() -> None:
     outcomes = _race(
         {
             "freeform": None,
-            "sequence-pair": _StrategyRaceOutcome(
-                "sequence-pair", "refused", refusal_reason="s"
-            ),
+            "sequence-pair": _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"),
         },
         monotonic=lambda: next(ticks),
     )
@@ -500,9 +492,7 @@ def test_the_race_spends_the_measured_grace_before_it_kills() -> None:
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {slow: "freeform"}
         quick: Future[_StrategyRaceOutcome] = Future()
-        quick.set_result(
-            _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s")
-        )
+        quick.set_result(_StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="s"))
         futures[quick] = "sequence-pair"
         return futures, _NoopExecutor()
 
@@ -544,9 +534,7 @@ def test_the_requests_carry_the_parents_wall_not_a_budget_to_start_later() -> No
         for request in requests:
             seen.append(request.soft_deadline)
             future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(
-                _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x")
-            )
+            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
             futures[future] = request.strategy
         return futures, _NoopExecutor()
 
@@ -574,9 +562,7 @@ def test_share_false_creates_no_channels() -> None:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for request in requests:
             future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(
-                _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x")
-            )
+            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
             futures[future] = request.strategy
         return futures, _NoopExecutor()
 
@@ -658,9 +644,7 @@ def test_the_worker_split_reaches_the_requests() -> None:
         for request in requests:
             seen[request.strategy] = request.workers
             future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(
-                _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x")
-            )
+            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
             futures[future] = request.strategy
         return futures, _NoopExecutor()
 
@@ -1040,9 +1024,7 @@ class _RecordedPool:
         self.ran.append(fn)
         self.submitted.append(request)
         future: Future[_StrategyRaceOutcome] = Future()
-        future.set_result(
-            _StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x")
-        )
+        future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
         return future
 
     def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
@@ -1148,9 +1130,7 @@ def test_two_futures_for_one_arm_is_refused_before_the_wait() -> None:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for _ in range(2):
             future: Future[_StrategyRaceOutcome] = Future()
-            future.set_result(
-                _StrategyRaceOutcome("freeform", "refused", refusal_reason="x")
-            )
+            future.set_result(_StrategyRaceOutcome("freeform", "refused", refusal_reason="x"))
             futures[future] = "freeform"
         return futures, _NoopExecutor()
 
@@ -1296,9 +1276,7 @@ def test_a_leg_publishes_only_a_placement_its_own_validation_accepts(
     def validate_spy(placement: Placement, spec: BuildSpec, **kwargs: object) -> validate.Report:
         seen.append(kwargs)
         return validate.Report(
-            findings=()
-            if ok
-            else (validate.Finding("belt-z", validate.Severity.ERROR, "nope"),)
+            findings=() if ok else (validate.Finding("belt-z", validate.Severity.ERROR, "nope"),)
         )
 
     monkeypatch.setattr(validate, "validate", validate_spy)
@@ -1355,9 +1333,7 @@ def test_a_refused_leg_still_reports_what_it_published_and_consumed(
 ) -> None:
     from flab2bp.layout import validate
 
-    monkeypatch.setattr(
-        validate, "validate", lambda *_a, **_kw: validate.Report(findings=())
-    )
+    monkeypatch.setattr(validate, "validate", lambda *_a, **_kw: validate.Report(findings=()))
     _hook_layout(monkeypatch, publish=(_stub_placement(belt_tiles=7),), refuse=True)
     inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
     outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
@@ -1422,12 +1398,8 @@ def test_a_no_good_from_a_different_shard_or_family_is_dropped() -> None:
     from flab2bp.layout.strategy_race import applicable_no_good
 
     planned = frozenset({_instance("iron-ingot", 0, 8)})
-    differently_sharded = NoGoodMessage(
-        "freeform", (_instance("iron-ingot", 0, 4),), no_good="a"
-    )
-    different_family = NoGoodMessage(
-        "freeform", (_instance("copper-ingot", 0, 8),), no_good="b"
-    )
+    differently_sharded = NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good="a")
+    different_family = NoGoodMessage("freeform", (_instance("copper-ingot", 0, 8),), no_good="b")
 
     assert applicable_no_good(differently_sharded, planned) is False
     assert applicable_no_good(different_family, planned) is False
@@ -1467,9 +1439,7 @@ def test_the_inbox_decides_at_application_time_not_at_arrival() -> None:
     # on a replan (`freeform.py:16179-16182`) -- so the inbox is the only thing
     # holding the proof, and an inbox that emptied on a match would silently lose
     # it the moment a later replan brought the matching strips back.
-    assert inbox.applicable(before_replan) == ("a",), (
-        "matching never consumes a held message"
-    )
+    assert inbox.applicable(before_replan) == ("a",), "matching never consumes a held message"
 
 
 def test_the_inbox_reports_messages_no_strip_set_can_ever_use() -> None:
@@ -1493,9 +1463,7 @@ def test_the_inbox_is_bounded_and_evicts_the_oldest() -> None:
     inbox = _NoGoodInbox()
     planned = frozenset({_instance("iron-ingot", 0, 4)})
     for index in range(NOGOOD_INBOX_MAX + 3):
-        inbox.offer(
-            NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good=index)
-        )
+        inbox.offer(NoGoodMessage("freeform", (_instance("iron-ingot", 0, 4),), no_good=index))
 
     applicable = inbox.applicable(planned)
 
@@ -1538,9 +1506,7 @@ def test_a_no_good_no_strip_set_matches_yet_is_held_and_not_counted(
     _hook_layout(monkeypatch)
     inbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
     outbox: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
-    inbox.put(
-        NoGoodMessage("sequence-pair", (_instance("iron-ingot", 0, 4),), no_good="a")
-    )
+    inbox.put(NoGoodMessage("sequence-pair", (_instance("iron-ingot", 0, 4),), no_good="a"))
     _install_race_channels(inbox, outbox)
     try:
         outcome = _run_race_leg(_request("freeform"))
@@ -1558,9 +1524,7 @@ def test_a_leg_adds_up_the_queue_drops_and_the_inbox_drops(
     """`dropped_messages` is both halves: what the queue refused and what the inbox did."""
     from flab2bp.layout import validate
 
-    monkeypatch.setattr(
-        validate, "validate", lambda *_a, **_kw: validate.Report(findings=())
-    )
+    monkeypatch.setattr(validate, "validate", lambda *_a, **_kw: validate.Report(findings=()))
     _hook_layout(
         monkeypatch,
         publish=(_stub_placement(belt_tiles=1), _stub_placement(belt_tiles=2)),
@@ -1617,9 +1581,7 @@ def test_a_leg_with_sharing_off_is_delivered_no_no_goods(
     assert outcome.consumed_no_goods == 0
 
 
-def _completed(
-    strategy: RaceStrategyName, *, area: int, belt_tiles: int
-) -> _StrategyRaceOutcome:
+def _completed(strategy: RaceStrategyName, *, area: int, belt_tiles: int) -> _StrategyRaceOutcome:
     return _StrategyRaceOutcome(
         strategy, "completed", placement=_placement(area=area, belt_tiles=belt_tiles)
     )
@@ -1732,9 +1694,7 @@ def test_a_completed_arm_with_no_placement_is_not_a_winner() -> None:
         layout._merge(
             (
                 _StrategyRaceOutcome("freeform", "completed", placement=None),
-                _StrategyRaceOutcome(
-                    "sequence-pair", "refused", refusal_reason="no stages"
-                ),
+                _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="no stages"),
             )
         )
 
@@ -1758,9 +1718,7 @@ def test_an_invalid_arm_never_wins_however_small_its_placement_is() -> None:
                 _StrategyRaceOutcome(
                     "freeform", "invalid", placement=_placement(area=100, belt_tiles=10)
                 ),
-                _StrategyRaceOutcome(
-                    "sequence-pair", "refused", refusal_reason="no stages"
-                ),
+                _StrategyRaceOutcome("sequence-pair", "refused", refusal_reason="no stages"),
             )
         )
 

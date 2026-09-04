@@ -81,10 +81,7 @@ FLOW_URL = (
     "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
 )
 FLOW_CSV = (
-    Path(__file__).resolve().parents[1]
-    / "tests"
-    / "fixtures"
-    / "flow_graphene_real_capture.csv"
+    Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "flow_graphene_real_capture.csv"
 )
 
 #: How long to wait for a build to settle in the page.  Both cases below stay
@@ -96,7 +93,6 @@ _POLL_S = 0.5
 
 class SmokeFailure(AssertionError):
     """Something the page promised did not hold."""
-
 
 
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
@@ -202,9 +198,7 @@ class _PermissionType(Protocol):
 class _BrowserDomain(Protocol):
     PermissionType: _PermissionType
 
-    def grant_permissions(
-        self, *, permissions: list[object], origin: str
-    ) -> CdpCommand: ...
+    def grant_permissions(self, *, permissions: list[object], origin: str) -> CdpCommand: ...
 
 
 @runtime_checkable
@@ -226,9 +220,7 @@ class _PageDomain(Protocol):
         capture_beyond_viewport: bool,
     ) -> CdpCommand: ...
 
-    def Viewport(
-        self, *, x: int, y: int, width: int, height: int, scale: float
-    ) -> object: ...
+    def Viewport(self, *, x: int, y: int, width: int, height: int, scale: float) -> object: ...
 
     def enable(self) -> CdpCommand: ...
 
@@ -279,6 +271,7 @@ class _Args(argparse.Namespace):
     server: str | None = None
     browser: str | None = None
     headed: bool = False
+
 
 # ---- what runs in the page -------------------------------------------------
 
@@ -463,9 +456,7 @@ async def _js(page: _Page, script: str) -> object:
     return await page.evaluate(script, return_by_value=True, await_promise=False)
 
 
-def _validated_json[PayloadT](
-    adapter: TypeAdapter[PayloadT], raw: object, what: str
-) -> PayloadT:
+def _validated_json[PayloadT](adapter: TypeAdapter[PayloadT], raw: object, what: str) -> PayloadT:
     if not isinstance(raw, str):
         raise SmokeFailure(f"{what} returned {raw!r}, not JSON")
     try:
@@ -489,6 +480,7 @@ def _json_object(raw: str, what: str) -> dict[str, object]:
         result[raw_key] = value
     return result
 
+
 async def _state_json(page: _Page) -> str:
     raw = await _js(page, _STATE_JS)
     if not isinstance(raw, str):
@@ -497,9 +489,7 @@ async def _state_json(page: _Page) -> str:
 
 
 async def _state(page: _Page) -> PageState:
-    return _validated_json(
-        _PAGE_STATE_ADAPTER, await _state_json(page), "the page's state probe"
-    )
+    return _validated_json(_PAGE_STATE_ADAPTER, await _state_json(page), "the page's state probe")
 
 
 async def _settle(page: _Page, out: Path, tag: str) -> PageState:
@@ -525,9 +515,7 @@ async def _settle(page: _Page, out: Path, tag: str) -> PageState:
             break
         await asyncio.sleep(_POLL_S)
     if settled_raw is not None:
-        settled = _validated_json(
-            _PAGE_STATE_ADAPTER, settled_raw, "the page's settled state"
-        )
+        settled = _validated_json(_PAGE_STATE_ADAPTER, settled_raw, "the page's settled state")
         settled["saw_progress"] = seen_progress
         return settled
     (out / f"{tag}-timeout-state.json").write_text(json.dumps(last, indent=2))
@@ -691,8 +679,7 @@ async def _drive(
     )
     await _expect_ok(
         page,
-        _SET_CANDIDATE_POLICIES_JS
-        % json.dumps([policy.value for policy in candidate_policies]),
+        _SET_CANDIDATE_POLICIES_JS % json.dumps([policy.value for policy in candidate_policies]),
         "setting candidate policies",
     )
     await _expect_ok(
@@ -853,9 +840,7 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> Smoke
                 origin=base,
             )
         )
-        await page.send(
-            cdp_api.emulation.set_device_metrics_override(1600, 1000, 1.0, False)
-        )
+        await page.send(cdp_api.emulation.set_device_metrics_override(1600, 1000, 1.0, False))
         # A headless page is never focused, and `navigator.clipboard.readText`
         # refuses on an unfocused document ("Document is not focused").  The
         # WRITE the button does is unaffected; this is only so the proof can
@@ -865,9 +850,7 @@ async def _run(base: str, out: Path, browser_path: str, headless: bool) -> Smoke
         # `Page.enable` first: without the domain enabled the script is accepted
         # and then never runs, which reads as a page that threw nothing.
         await page.send(cdp_api.page.enable())
-        await page.send(
-            cdp_api.page.add_script_to_evaluate_on_new_document(source=_CONSOLE_HOOK)
-        )
+        await page.send(cdp_api.page.add_script_to_evaluate_on_new_document(source=_CONSOLE_HOOK))
 
         page = await browser.get(base)
 

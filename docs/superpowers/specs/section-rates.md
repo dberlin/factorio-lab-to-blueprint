@@ -29,12 +29,13 @@ Two encodings, distinguished by presence of `z`:
 Zipped payload decoding (verified against `src/state/router/compression.ts`):
 
 ```python
-ZB64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-.'
-STD  = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-_TBL = str.maketrans(ZB64 + '_', STD + '=')
+ZB64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-."
+STD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+_TBL = str.maketrans(ZB64 + "_", STD + "=")
+
 
 def inflate(s: str) -> str:
-    s = s.replace('+', '-').replace('/', '.').replace('=', '_')  # legacy rewrite
+    s = s.replace("+", "-").replace("/", ".").replace("=", "_")  # legacy rewrite
     return zlib.decompress(base64.b64decode(s.translate(_TBL))).decode()
 ```
 
@@ -146,7 +147,7 @@ Detect version from `v`; **absence of `v` with bare params is also V11** (Factor
 ```python
 @dataclass(frozen=True)
 class Objective:
-    target_id: str                 # item id, or recipe id when unit is MACHINES
+    target_id: str  # item id, or recipe id when unit is MACHINES
     value: Fraction
     unit: ObjectiveUnit = ObjectiveUnit.ITEMS
     type: ObjectiveType = ObjectiveType.OUTPUT
@@ -154,17 +155,18 @@ class Objective:
     module_indices: tuple[int, ...] = ()
     fuel_id: str | None = None
 
+
 @dataclass(frozen=True)
 class LabRequest:
     objectives: tuple[Objective, ...]
-    machine_rank: tuple[str, ...] = ()      # mmr
-    module_rank: tuple[str, ...] = ()       # mer
-    belt_id: str | None = None              # ibe
+    machine_rank: tuple[str, ...] = ()  # mmr
+    module_rank: tuple[str, ...] = ()  # mer
+    belt_id: str | None = None  # ibe
     proliferator_spray_id: str | None = None  # mps
-    display_rate: int = 60                  # odr; 60 = per minute (FactorioLab default)
+    display_rate: int = 60  # odr; 60 = per minute (FactorioLab default)
     excluded_recipes: frozenset[str] = frozenset()
     excluded_items: frozenset[str] = frozenset()
-    preset: int | None = None               # mpr
+    preset: int | None = None  # mpr
     raw_params: Mapping[str, list[str]] = field(default_factory=dict)  # for warnings
 ```
 
@@ -485,8 +487,8 @@ matching plus `totalRecipe` plus vein-input detection). `totalRecipe` is a prope
 `water-pump`, and `orbital-collector` entirely.
 
 ```python
-def is_extraction(recipe) -> bool:   # priced as a supply column, never built
-    return 'mining' in recipe.flags
+def is_extraction(recipe) -> bool:  # priced as a supply column, never built
+    return "mining" in recipe.flags
 ```
 
 The flag is NOT a cut line that makes an item external by itself; what makes an item
@@ -542,53 +544,60 @@ complete and valid; they differ only in how far they trade belts for machines.
 
 ```python
 class ProliferatorMode(StrEnum):
-    NONE = "none"; PRODUCTS = "products"; SPEED = "speed"
+    NONE = "none"
+    PRODUCTS = "products"
+    SPEED = "speed"
+
 
 @dataclass(frozen=True)
 class MachineGroup:
     recipe_id: str
-    machine_item_id: str              # e.g. "assembling-machine-2"
-    count: int                        # integer, ≥ 1
+    machine_item_id: str  # e.g. "assembling-machine-2"
+    count: int  # integer, ≥ 1
     proliferator_mode: ProliferatorMode
     proliferator_item_id: str | None  # "proliferator-mk3" item actually consumed
-    inputs:  Mapping[str, Fraction]   # item -> items/s consumed by THIS GROUP (all machines)
-    outputs: Mapping[str, Fraction]   # item -> items/s produced by THIS GROUP
-    utilization: Fraction             # x / (n * craft_rate); ≤ 1
+    inputs: Mapping[str, Fraction]  # item -> items/s consumed by THIS GROUP (all machines)
+    outputs: Mapping[str, Fraction]  # item -> items/s produced by THIS GROUP
+    utilization: Fraction  # x / (n * craft_rate); ≤ 1
+
 
 @dataclass(frozen=True)
 class SprayLane:
     """A lane that must carry sprayed items, and the proliferator it consumes."""
-    item_id: str                      # the item being sprayed on this lane
-    consumers: tuple[str, ...]        # recipe ids relying on this lane being sprayed
+
+    item_id: str  # the item being sprayed on this lane
+    consumers: tuple[str, ...]  # recipe ids relying on this lane being sprayed
     proliferator_item_id: str
-    proliferator_rate: Fraction       # items/s of proliferator this coater consumes
-    is_external_lane: bool            # True if this lane is an external input belt
-                                      # (coater is then ~free: the belt exists anyway)
+    proliferator_rate: Fraction  # items/s of proliferator this coater consumes
+    is_external_lane: bool  # True if this lane is an external input belt
+    # (coater is then ~free: the belt exists anyway)
+
 
 @dataclass(frozen=True)
 class BuildSpec:
     groups: tuple[MachineGroup, ...]
-    external_inputs: Mapping[str, Fraction]   # item -> items/s entering on belts
-    outputs: Mapping[str, Fraction]           # item -> items/s leaving on belts
-    belt_item_id: str                         # from ibe, default conveyor-belt-1
-    belt_speed: Fraction                      # items/s capacity of one belt lane
-    surplus: Mapping[str, Fraction]           # unavoidable byproducts, items/s
+    external_inputs: Mapping[str, Fraction]  # item -> items/s entering on belts
+    outputs: Mapping[str, Fraction]  # item -> items/s leaving on belts
+    belt_item_id: str  # from ibe, default conveyor-belt-1
+    belt_speed: Fraction  # items/s capacity of one belt lane
+    surplus: Mapping[str, Fraction]  # unavoidable byproducts, items/s
     dataset_version: str
-    lower_bound_area: Fraction                # LP relaxation, for bake-off scoring; loose,
-                                              # since extraction columns count 0 area
+    lower_bound_area: Fraction  # LP relaxation, for bake-off scoring; loose,
+    # since extraction columns count 0 area
 
     # --- proliferation / geometry contract (see §4.0) ---
     spray_lanes: tuple[SprayLane, ...]
     belt_required_edges: frozenset[tuple[str, str]]
-        # (producer_recipe_id, consumer_recipe_id) pairs that MUST be belted because the
-        # consumer is proliferated and needs this input sprayed. The layout stage may NOT
-        # direct-insert these. Every other internal edge is free to direct-insert.
-    label: str                 # e.g. "free-proliferation (k=0)"
-    rationale: str             # one line: what this candidate optimises
+    # (producer_recipe_id, consumer_recipe_id) pairs that MUST be belted because the
+    # consumer is proliferated and needs this input sprayed. The layout stage may NOT
+    # direct-insert these. Every other internal edge is free to direct-insert.
+    label: str  # e.g. "free-proliferation (k=0)"
+    rationale: str  # one line: what this candidate optimises
+
 
 @dataclass(frozen=True)
 class BuildSpecSet:
-    candidates: tuple[BuildSpec, ...]   # ordered; see §6.3 for ordering
+    candidates: tuple[BuildSpec, ...]  # ordered; see §6.3 for ordering
     request: LabRequest
 
     def __post_init__(self):

@@ -28,11 +28,7 @@ def test_no_repeat_trace_still_holds_one_complete_case() -> None:
 
 def test_splitter_trace_uses_the_real_one_argument_cache_key() -> None:
     cases = collect_case_traces(Path(__file__).parents[2])
-    keys = [
-        key
-        for case in cases.values()
-        for key in case["colliders.belt_keepout_offsets"]
-    ]
+    keys = [key for case in cases.values() for key in case["colliders.belt_keepout_offsets"]]
     assert keys
     assert all(len(key) == 1 and isinstance(key[0], int) for key in keys)
 
