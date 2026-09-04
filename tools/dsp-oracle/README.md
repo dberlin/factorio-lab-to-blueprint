@@ -26,7 +26,7 @@ changes a condition.
 
 The zip is a Thunderstore package, so **r2modman** installs it directly:
 
-> Settings → Import local mod → pick `flab2bp_oracle-1.1.3.zip`
+> Settings → Import local mod → pick `flab2bp_oracle-1.2.0.zip`
 
 r2modman reads `manifest.json` from the archive root and drops `FlabOracle.dll`
 into the profile's `BepInEx/plugins/`. Nothing else to do; it appears in the mod
@@ -41,7 +41,7 @@ be if any other mod is installed there.
 
 ```sh
 mkdir -p "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
-unzip -oj /path/to/flab2bp_oracle-1.1.3.zip FlabOracle.dll \
+unzip -oj /path/to/flab2bp_oracle-1.2.0.zip FlabOracle.dll \
   -d "$HOME/Dyson Sphere Program/BepInEx/plugins/flab2bp-oracle"
 ```
 
@@ -107,10 +107,19 @@ wrapper from a real zero-collider result. The capture is independent of
 `DumpOnPaste`; disabling the generic two-file paste dump does not disable this
 one-shot diagnostic.
 
+**Stacking facts (hotkey, no blueprint needed).** Press **F10** to write one
+`stacking-facts-YYYYMMDD-HHMMSS-fff.json`: the sorter cargo-stacking research
+table, the sorter and piler prefab fields, and the Automatic Piler's behaviour.
+Load a save first — out of a save the research and live-component halves come
+back `null` and only the type-level facts are written. Unlike the hover dump this
+one needs no armed pass: every fact is already in `LDB`, in `GameMain.history`,
+or on a live component, so it is served on the spot.
+
 Generic files are `BepInEx/flab2bp-oracle/dump-00001.json`,
 `dump-00002.json`, … The counter continues from the highest number already in
 the directory. Target captures use the separate timestamped
-`model40-belt-capture-*.json` pattern.
+`model40-belt-capture-*.json` pattern, and stacking facts the
+`stacking-facts-*.json` one.
 
 ## Configuration
 
@@ -119,6 +128,7 @@ the directory. Target captures use the separate timestamped
 | Section | Key | Default | Meaning |
 | --- | --- | --- | --- |
 | Trigger | `DumpKey` | `F9` | Dumps the current preview set without building. |
+| Trigger | `StackingFactsKey` | `F10` | Dumps the sorter cargo-stacking and Automatic Piler facts. Needs no blueprint on the cursor. |
 | Trigger | `DumpOnPaste` | `true` | Also dump on `CreatePrebuilds` (pre and post). |
 | Capture | `AlwaysCaptureColliderDetail` | `false` | Identify every overlap collider on **every** frame, not just the armed one. Makes the paste dump carry snap-candidate detail too, at the cost of frame time while a blueprint is on the cursor. |
 | Capture | `PatchPhysicsOverlap` | `true` | Hook the exact managed `Physics.OverlapSphereNonAlloc` and `OverlapCapsuleNonAlloc` overloads used by the belt checks. Hooks are process-wide but target capture returns immediately outside the active semantic match. |
@@ -211,6 +221,38 @@ Each call has `before` and `after` snapshots of the same connection fields plus
 prebuild id, and the ladder negates the latter. The plugin records what
 `GetColliderData` reports and does not apply that transform for you.
 
+## What is in a stacking-facts dump
+
+`stacking-facts-*.json`, schema `flab2bp-stacking/1`. Written by
+[`StackingFacts.cs`](StackingFacts.cs).
+
+| Key | What it holds |
+| --- | --- |
+| `gameVersion`, `inGame` | `GameConfig.gameVersion`; whether a save was loaded (if not, `history` and `live` are `null`). |
+| `techs[]` | Every `TechProto` that touches sorter stacking, selected by the unlock-function ids `GameHistoryData.UnlockTechFunction` switches on (14 → `inserterStackCountObsolete`, 39 → `inserterStackOutput`, 40 → `inserterBidirectional`, 41 → `inserterStackInput`) or by a name mentioning stack/pile — so localisation cannot hide one. Carries `ID, Name, translatedName, Level, MaxLevel, UnlockFunctions, UnlockValues, UnlockRecipes, PropertyOverrideItems, PropertyItemCounts, PreTechs, HashNeeded` and the live `techState`. |
+| `history` | `inserterStackCountObsolete`, `inserterStackInput`, `inserterStackOutput`, `inserterBidirectional`, `stationPilerLevel` — the values the research has already produced in this save. |
+| `prefabDescStackFieldNames[]` | Which `PrefabDesc` fields are named for stacking, found by reflection over the type rather than named by us. |
+| `items[]` | Every item whose prefab `isInserter` or `isPiler`, with `inserterGrade/STT/Delay` and the value of every stack-named `PrefabDesc` field. |
+| `belts[]` | Every belt tier's `beltSpeed`, the cargo/s that implies for a piler, and the piler cooldown row that tier selects. |
+| `sorter` | The component's stack-named fields; the grade rules `GameData.OnInserterTechChange` applies (grade 3 uses the obsolete count and forces `stackOutput = 1`; grade 4 uses the newer input/output research); `stackRateFactor`, and `itemsPerCargoDivisor`. |
+| `piler` | The component and prefab-component field lists, `PilerState` values, the private `cacheCdTickArray` read by reflection, `stackParameterIndex` (null — the piler has no stack setting, see below), `maxOutputStack`, `outputStackFromUnstackedInput`, `singlePassToMaxStack`, and the throughput rule. |
+| `live` | Every piler and sorter in the save (capped at 256 each) with its real state and stack fields, plus the largest cargo `stack` byte currently riding any belt — the empirical check on `maxOutputStack`. |
+
+Six of those are read out of a method body rather than off a field, because the
+game keeps them as IL literals. Each is written next to a `…Source` string naming
+the method it was read from and a `…Observed: false` flag, so a transcriber can
+see which numbers the game handed over and which were quoted:
+`piler.maxOutputStack`, `sorter.itemsPerCargoDivisor`, `sorter.stackRateFactor`,
+`sorter.gradeRules[]`, `piler.singlePassToMaxStack`/`piler.outputStackFromUnstackedInput`,
+and `piler.throughputEqualsBeltRate`/`piler.throughputRule`. `live.maxCargoStackObserved`
+is the runtime cross-check on the first of them.
+
+The piler's `stackParameterIndex` is `null` because the setting does not exist,
+not because it was not found: `CargoTraffic.RematchPilerConnection` is the only
+writer of `pilerState` and derives Pile/Split/None from which connected belt is
+the output side, `PilerComponent.Export`/`Import` serialise no stack setting, and
+`BuildingParameters` mentions "piler" only as `StationComponent.pilerCount`.
+
 ## Known limits — read before trusting a field
 
 These are stated because the plugin cannot be end-to-end tested outside the game.
@@ -236,7 +278,7 @@ These are stated because the plugin cannot be end-to-end tested outside the game
 
 ```sh
 cd tools/dsp-oracle
-./build-zip.sh          # -> dist/flab2bp_oracle-1.1.3.zip
+./build-zip.sh          # -> dist/flab2bp_oracle-1.2.0.zip
 ```
 
 Requires the .NET SDK and the game's managed assemblies (referenced by

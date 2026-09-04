@@ -15,16 +15,19 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from fractions import Fraction
 from itertools import combinations, product
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
-from flab2bp.layout.base import Facing, PlacedBuilding, Placement
+from flab2bp.layout.base import Facing, NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.finalize import (
     ProjectionFailure,
     projection_safe_machine_pitch_x,
 )
 from flab2bp.spec import BuildSpec
+
+if TYPE_CHECKING:
+    from flab2bp.layout.freeform import _Group
 
 LaneKind = Literal["input", "output"]
 LaneSide = Literal["north", "south"]
@@ -455,6 +458,11 @@ class StripFamily:
     #: Emitted through east-side gap belts by legacy Freeform. East-face
     #: attachments are not yet representable as cardinal lane variants.
     flank_outputs: bool = False
+    #: Machines per strip so that no lane this family owns exceeds the
+    #: effective lane capacity (multiple-belts design, section 4.1).  0 means
+    #: uncapped, which is what every hand-built family gets; the planner's
+    #: `generate_strip_families` always sets a positive value.
+    machine_cap: int = 0
 
     def __post_init__(self) -> None:
         if self.family_id.group_key != self.group_key:
@@ -1495,12 +1503,48 @@ def _variants(
     return tuple(variants)
 
 
+def _machine_cap(group: _Group, spec: BuildSpec) -> int:
+    """Machines per strip so no single-item lane exceeds its effective capacity.
+
+    A strip's input lane for item X carries ``count * inputs[X]`` and its
+    output lanes for item Y carry at most ``count * outputs[Y]``, so the cap
+    is the floor of capacity over the largest per-machine single-item rate.
+    A machine whose one rate exceeds the capacity cannot be served by any
+    strip length; that is refused here, early and with the numbers, instead
+    of late by ``flow.belt_capacity``. This cap is computed per single item, so
+    a merged lane carrying several items at once can still exceed capacity
+    even when every one of those items is individually under the cap --
+    ``flow.belt_capacity`` at validation is the backstop for that case. A
+    group with neither inputs nor outputs returns 0 (uncapped).
+    """
+    cap: int | None = None
+    for item, rate in (*group.inputs.items(), *group.outputs.items()):
+        capacity = spec.lane_capacity * spec.planning_stack(item)
+        if rate > capacity:
+            raise NoValidLayout(
+                f"recipe {group.recipe_id!r}: one machine moves {rate} items/s of "
+                f"{item!r}, over the {capacity}/s the fastest belt this save can build "
+                f"sustains ({spec.belt_tiers[-1].item_id}); no strip length can carry it",
+                spec_label=spec.label,
+                budget_s=0.0,
+                attempt_reasons=(),
+                attempt_failures=(),
+                projection_failures=(),
+            )
+        fits = int(capacity // rate)
+        cap = fits if cap is None else min(cap, fits)
+    return max(1, cap) if cap is not None else 0
+
+
 def generate_strip_families(
     spec: BuildSpec,
     *,
     prefer_shared_proliferation: bool = False,
 ) -> tuple[StripFamily, ...]:
     """Generate deterministic pose-valid variants for every logical lane shard."""
+    from flab2bp.layout.freeform import _adapt
+
+    groups = _adapt(spec)
     families: list[StripFamily] = []
     for plan in _logical_strip_plans(
         spec,
@@ -1560,6 +1604,7 @@ def generate_strip_families(
                 variants=variants,
                 mode_params=plan.mode_params,
                 flank_outputs=plan.flank_outputs,
+                machine_cap=_machine_cap(groups[plan.group_key], spec),
             )
         )
     return tuple(families)
@@ -1670,6 +1715,8 @@ def partition_strip_variant(
     """Partition a family through one explicit ordinary or padded variant."""
     if max_machine_count <= 0:
         raise ValueError("maximum strip machine count must be positive")
+    if family.machine_cap > 0:
+        max_machine_count = min(max_machine_count, family.machine_cap)
     minimum_pitches = _family_pose_minimum_pitches(family)
     pose_id = strip_pose_id(variant)
     if variant.variant_id.family_id != family.family_id or pose_id not in minimum_pitches:
@@ -1799,6 +1846,8 @@ def merge_strip_instances(
     ):
         return None
     machine_count = left.machine_count + right.machine_count
+    if family.machine_cap > 0 and machine_count > family.machine_cap:
+        return None
     instance_id = StripInstanceId(
         family_id=family.family_id,
         machine_start=left.machine_start,

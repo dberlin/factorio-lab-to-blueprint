@@ -24,7 +24,7 @@ namespace FlabOracle
     {
         public const string PluginGuid = "org.dberlin.flab2bp.oracle";
         public const string PluginName = "flab2bp build-condition oracle";
-        public const string PluginVersion = "1.1.3";
+        public const string PluginVersion = "1.2.0";
 
         private Harmony _harmony;
 
@@ -37,6 +37,12 @@ namespace FlabOracle
                 "DumpKey",
                 new KeyboardShortcut(KeyCode.F9),
                 "Press this while a blueprint preview is following the cursor to dump the current build-condition verdicts without building anything.");
+
+            Oracle.StackingKey = Config.Bind(
+                "Trigger",
+                "StackingFactsKey",
+                new KeyboardShortcut(KeyCode.F10),
+                "Press this at any time (in a save, ideally) to dump the sorter cargo-stacking research table and the Automatic Piler facts. Needs no blueprint on the cursor.");
 
             Oracle.DumpOnPaste = Config.Bind(
                 "Trigger",
@@ -80,6 +86,7 @@ namespace FlabOracle
 
             Logger.LogMessage(
                 "flab2bp oracle ready. Dump key = " + Oracle.DumpKey.Value +
+                ", stacking-facts key = " + Oracle.StackingKey.Value +
                 ", output = " + Oracle.OutputDirectory);
         }
 
@@ -193,6 +200,14 @@ namespace FlabOracle
                     Oracle.ArmHotkey();
                 }
 
+                // Unlike the paste dump this one needs no armed Harmony pass: every
+                // fact it writes is already sitting in LDB, in the history, or on a
+                // live component, so it is served on the spot.
+                if (Oracle.StackingKey.Value.IsDown())
+                {
+                    DumpSink.DumpStackingFacts("hotkey");
+                }
+
                 TargetCaptureRuntime.MonitorUpdate(Time.frameCount);
                 Oracle.TickArmTimeout();
             }
@@ -208,6 +223,7 @@ namespace FlabOracle
     {
         internal static ManualLogSource Log;
         internal static ConfigEntry<KeyboardShortcut> DumpKey;
+        internal static ConfigEntry<KeyboardShortcut> StackingKey;
         internal static ConfigEntry<bool> DumpOnPaste;
         internal static ConfigEntry<bool> AlwaysCaptureColliders;
         internal static ConfigEntry<bool> PatchPhysicsOverlap;
@@ -363,6 +379,12 @@ namespace FlabOracle
         {
             DumpCounter++;
             return Path.Combine(OutputDirectory, "dump-" + DumpCounter.ToString("D5", CultureInfo.InvariantCulture) + ".json");
+        }
+
+        internal static string NextStackingFactsPath()
+        {
+            string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture);
+            return Path.Combine(OutputDirectory, "stacking-facts-" + stamp + ".json");
         }
 
         internal static string NextTargetCapturePath()

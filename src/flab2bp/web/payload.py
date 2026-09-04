@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from fractions import Fraction
+from typing import cast
 
 from flab2bp import pipeline
 from flab2bp.layout import markers, validate
@@ -73,15 +74,25 @@ def _report_block(report: validate.Report) -> Json:
     }
 
 
-def _belt_tiers(spec: BuildSpec, placement: Placement) -> Json:
+def _belt_tiers(spec: BuildSpec, placement: Placement, report: validate.Report) -> Json:
     """The floor FactorioLab chose, the ceiling the save allows, and what was raised."""
     tiers = spec.belt_tiers
     upgraded = placement.stats.get("belt_upgrade_tiers", [])
+    lanes: list[Json] = [
+        {
+            "item": cast(str, finding.detail["item"]),
+            "lanes": cast(int, finding.detail["entry_lanes"]),
+            "lanes_needed": cast(int, finding.detail["lanes_needed"]),
+        }
+        for finding in report.by_check("flow.external_entry_points")
+    ]
+    sorted_lanes: list[Json] = sorted(lanes, key=lambda lane: str(lane["item"]))
     return {
         "floor": tiers[0].item_id,
         "ceiling": tiers[-1].item_id,
         "runs_upgraded": int(placement.stats.get("belt_runs_upgraded", 0)),
         "upgrade_tiers": _array(sorted(upgraded)),
+        "entry_lanes": _array(sorted_lanes),
     }
 
 
@@ -108,7 +119,7 @@ def _attempt_detail(attempt: pipeline.Attempt) -> Json:
         "external_inputs": _rates(dict(spec.external_inputs)),
         "input_markers": int(attempt.placement.stats.get("input_markers", 0)),
         "unmarked_inputs": _array(sorted(unmarked)),
-        "belt_tiers": _belt_tiers(spec, attempt.placement),
+        "belt_tiers": _belt_tiers(spec, attempt.placement, attempt.report),
         "report": _report_block(attempt.report),
     }
 
@@ -199,7 +210,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "flow_pinned": build.flow_pinned,
         "flow_findings": _array(build.flow_findings),
         "belt_rules": belt,
-        "belt_tiers": _belt_tiers(build.spec, build.placement),
+        "belt_tiers": _belt_tiers(build.spec, build.placement, build.report),
         # Refusals travel with a successful build too: "sequence-pair refused
         # this candidate" is invisible in `attempts`, and silence there reads
         # as "it simply was not the best", which is a much more reassuring

@@ -244,6 +244,16 @@ class BuildSpec(_Frozen):
             return self.belt_upgrades[-1].items_per_second
         return self.belt_items_per_second
 
+    def planning_stack(self, item: str) -> int:
+        """The cargo stack the planner may assume for a lane of ``item``.
+
+        Always 1 until stack-aware lanes land (the multiple-belts design,
+        section 5.3): a lane is planned at one item per cargo unit, so the
+        effective lane capacity is ``lane_capacity`` itself.
+        """
+        del item
+        return 1
+
 
 class BuildSpecSet(_Frozen):
     """Several valid ways to build the same objective.
