@@ -514,6 +514,18 @@ class LogisticsTiers:
     #: False when the URL carried no technology set at all, in which case
     #: every technology is taken as researched -- FactorioLab's own default.
     from_url: bool
+    #: Whether the save can build an Automatic Piler.  The technology that
+    #: unlocks it (``integrated-logistics-system``) is the same one that
+    #: unlocks the Pile Sorter, so False here means nothing in the save stacks.
+    piler: bool = False
+    #: Largest stack each tier in ``sorter_item_ids`` can pick off a belt and
+    #: place onto one, at the save's researched Pile Sorter Upgrade level.
+    #: As long as ``sorter_item_ids``, which is SHORTER than four on a save
+    #: without the Pile Sorter -- read them by position, never by a hard-coded
+    #: tier number.  The empty defaults exist only so hand-built instances in
+    #: the tests stay valid; ``logistics_tiers_for_request`` always fills them.
+    sorter_pick_stacks: tuple[int, ...] = ()
+    sorter_place_stacks: tuple[int, ...] = ()
 
 
 def _technology_level(technology_ids: Set[str], prefix: str) -> int:

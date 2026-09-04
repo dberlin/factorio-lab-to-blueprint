@@ -538,3 +538,38 @@ def test_candidates_carry_the_researched_belt_and_sorter_tiers() -> None:
         assert spec.belt_upgrades[0].items_per_second == Fraction(30)
         assert spec.lane_capacity == Fraction(30)
         assert spec.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
+
+
+# --- the URL's cargo stack (multiple-belts design, section 5.2) -------------
+
+
+def test_the_urls_cargo_stack_reaches_the_spec(data: Dataset) -> None:
+    """``ist`` is FactorioLab's items-per-cargo; the spec carries it verbatim,
+    capped at the game's largest pile."""
+    base = parse_url(EXAMPLE_URL)
+    assert base.stack is None
+    # A fractional `ist` is not a stack the game can carry, so it truncates
+    # DOWN: planning a lane at more than the belt really holds would
+    # under-build it, planning at less only wastes belt.
+    for stack, expected in (
+        (None, 1),
+        (Fraction(1), 1),
+        (Fraction(3, 2), 1),
+        (Fraction(2), 2),
+        (Fraction(9), 4),
+    ):
+        specs = build_candidates(data, replace(base, stack=stack)).candidates
+        assert specs
+        assert {spec.belt_stack for spec in specs} == {expected}, stack
+
+
+def test_the_saves_stacking_levels_reach_the_spec(data: Dataset) -> None:
+    """No technology set means everything researched, which is level 6."""
+    specs = build_candidates(data, parse_url(EXAMPLE_URL)).candidates
+    assert specs
+    for spec in specs:
+        assert spec.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
+        assert spec.sorter_pick_stacks == (1, 1, 1, 4)
+        assert spec.sorter_place_stacks == (1, 1, 1, 4)
+        assert spec.piler_unlocked is True
+        assert spec.max_stack == 4

@@ -5166,6 +5166,12 @@ def _tiered_spec(*upgrades: str) -> BuildSpec:
         belt_items_per_second=Fraction(12),
         belt_upgrades=tuple(BeltTier(item_id=u, items_per_second=speeds[u]) for u in upgrades),
         sorter_item_ids=("sorter-1", "sorter-2", "sorter-3"),
+        # A save without the Pile Sorter has three tiers, so it has three
+        # stacks; `BuildSpec._stacks_align` will not guess which tier the
+        # default four-long row belonged to.  None of these stacks anyway --
+        # only the Pile Sorter carries one.
+        sorter_pick_stacks=(1, 1, 1),
+        sorter_place_stacks=(1, 1, 1),
     )
 
 
