@@ -24,7 +24,7 @@ from flab2bp.dsp.catalog import (
 from flab2bp.dsp.catalog import building as catalog_building
 from flab2bp.dsp.catalog import oriented_footprint as catalog_oriented_footprint
 from flab2bp.layout import junction
-from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.validate import (
     CHECKS,
@@ -5325,14 +5325,23 @@ def test_stack_of_reads_the_urls_stack_at_an_entry_run() -> None:
 
 def test_stack_of_a_merge_is_the_minimum_over_its_sources() -> None:
     """A stack-2 entry belt and a sorter-placed stack-1 run merge into one
-    trunk: the trunk is only guaranteed the smaller of the two."""
+    trunk: the trunk is only guaranteed the smaller of the two.
+
+    KEEP THIS PAIRED with `..._keeps_the_stack` below: this half alone passes
+    against a `stack_of` stubbed to 1, and only its partner discriminates.
+    """
     p, spec, trunk_head = _merged_stacks(entry_stack=2, place=1)
     ctx = context_for(p, spec)
     assert ctx.stack_of(ctx.run_of[trunk_head]) == 1
 
 
 def test_stack_of_a_merge_of_two_stacked_sources_keeps_the_stack() -> None:
-    """The minimum is a floor, not a penalty: two stack-2 sources merge at 2."""
+    """The minimum is a floor, not a penalty: two stack-2 sources merge at 2.
+
+    KEEP THIS PAIRED with `..._is_the_minimum_over_its_sources` above: that
+    half passes against a `stack_of` stubbed to 1, and this is the half that
+    tells a real minimum from a constant.
+    """
     p, spec, trunk_head = _merged_stacks(entry_stack=2, place=2)
     ctx = context_for(p, spec)
     assert ctx.stack_of(ctx.run_of[trunk_head]) == 2
@@ -5440,3 +5449,118 @@ def test_flow_sorter_capacity_charges_a_bridge_the_tighter_of_its_two_ends() -> 
     assert ctx.stack_of(stacked_run) == 2, "the labelled entry lane"
     assert ctx.stack_of(unstacked_run) == 2, "fed by a Pile Sorter placing 2"
     assert validate_module._sorter_stack(ctx, 4, p.buildings[4]) == 2
+
+
+def _two_entry_lanes_over_an_unpickable_bus() -> tuple[Placement, BuildSpec]:
+    """Two labelled entry lanes for one item on a save whose sorters cannot
+    pick the bus: `ist=2` with every tier picking 1.
+
+    Two lanes so `flow.external_entry_points` reaches its capacity arithmetic,
+    and an unpickable bus so that arithmetic is asked the question that used to
+    raise out of `validate()`.
+    """
+    p = _placement(
+        belt(0, 0, out=1, item_id=BELT3, carries="copper-ingot"),
+        belt(1, 0, item_id=BELT3, carries="copper-ingot"),
+        machine(3, 0, recipe_id=6),
+        sorter(1, 0, 3, 0, inp=1, out=2, item_id=SORTER3),
+        belt(0, 6, out=5, item_id=BELT3, carries="copper-ingot"),
+        belt(1, 6, item_id=BELT3, carries="copper-ingot"),
+    )
+    return p, _stacked_spec(Fraction(4), belt_stack=2, pick=1)
+
+
+def test_validate_judges_an_unpickable_bus_instead_of_raising() -> None:
+    """A validator reports; it never refuses.
+
+    `spec.planning_stack` REFUSES an unpickable bus -- that is its job at plan
+    time -- so a check that read it raised `NoValidLayout` out of `validate()`
+    on a hand-built spec the planner would never have produced.  Every stack
+    here is derived from what was built, so nothing in the validator can raise,
+    and `flow.stack_pickable` does the reporting.
+    """
+    p, spec = _two_entry_lanes_over_an_unpickable_bus()
+    with pytest.raises(NoValidLayout):
+        spec.planning_stack("copper-ingot", external=True)
+    r = validate(p, spec, ids=TWO_INPUT_IDS)
+    assert fired(r, "flow.stack_pickable")
+
+
+def test_external_entry_points_counts_lanes_at_the_stack_they_were_built_at() -> None:
+    """The capacity in the warning is the DERIVED stack, so it agrees with
+    `flow.belt_capacity` about the same lanes rather than with the plan."""
+    p, spec = _two_entry_lanes_over_an_unpickable_bus()
+    r = validate(p, spec, ids=TWO_INPUT_IDS)
+    (finding,) = r.by_check("flow.external_entry_points")
+    # Two Mk.III entry lanes at 30 cargo/s, carrying the URL's stack of 2.
+    assert finding.detail["capacity"] == "60"
+
+
+def _mis_stacked_output_lane() -> tuple[Placement, BuildSpec]:
+    """Six machines draining onto ONE output belt through Mk.III sorters.
+
+    The spec says the fastest tier places 2, so the lane was planned at 2; the
+    sorters actually standing there place 1.  Each sorter is inside its own
+    tier's rate (6/s of 6/s), so `flow.sorter_capacity` has nothing to say --
+    which is exactly why `flow.belt_capacity` has to be the one that notices.
+    """
+    count, width, rate = 6, 4, Fraction(6)
+    tiles = count * width
+    belts = [
+        belt(
+            x,
+            4,
+            out=(x + 1 if x + 1 < tiles else None),
+            item_id=BELT3,
+            carries="magnetic-coil",
+        )
+        for x in range(tiles)
+    ]
+    machines = [machine(i * width, 0, recipe_id=6) for i in range(count)]
+    sorters = [
+        sorter(
+            i * width, 3, i * width, 4,
+            inp=tiles + i,
+            out=i * width,
+            item_id=SORTER3,
+        )
+        for i in range(count)
+    ]
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=count,
+                inputs_per_machine={},
+                outputs_per_machine={"magnetic-coil": rate},
+            ),
+        ),
+        outputs={"magnetic-coil": rate * count},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=Fraction(30),
+        belt_stack=2,
+        sorter_pick_stacks=(1, 1, 1, 2),
+        sorter_place_stacks=(1, 1, 1, 2),
+    )
+    return _placement(*belts, *machines, *sorters), spec
+
+
+def test_a_lane_built_a_tier_too_small_for_its_stack_is_caught_by_the_belt_check() -> None:
+    """The joint-completeness property: the two capacity checks cannot BOTH be
+    silent on a mis-stacked lane.
+
+    `flow.sorter_capacity` is silent because every sorter is inside its own
+    tier's rate, and it is silent honestly -- the sorter is not overloaded.
+    What is wrong is the lane: it carries 36 items/s of loose cargo on a 30/s
+    belt, because the tier standing there places 1 where the plan assumed 2.
+    Deriving the stack from the placement rather than the spec is what makes
+    `flow.belt_capacity` see it.
+    """
+    p, spec = _mis_stacked_output_lane()
+    ctx = context_for(p, spec)
+    lane = ctx.run_of[0]
+    assert ctx.stack_of(lane) == 1, "Mk.III places 1 at every research level"
+    r = validate(p, spec, ids=TWO_INPUT_IDS)
+    assert not fired(r, "flow.sorter_capacity")
+    assert fired(r, "flow.belt_capacity")
