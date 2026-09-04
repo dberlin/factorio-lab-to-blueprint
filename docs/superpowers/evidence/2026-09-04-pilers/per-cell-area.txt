@@ -1,0 +1,62 @@
+Per-cell area and status comparison
+baseline = Task 10 candidate rounds at 5e9b6c387397e9523047b17e23917e9ffab09a88
+candidate = Task 15 rounds at fa9032df25f46f2c50f86d18e09b30d9eae020bc
+area band = +/-1.3%; area calculations include only cells CLEAN in both paired rows
+
+round 1: transitions={('CLEAN', 'CLEAN'): 66, ('REFUSED', 'CLEAN'): 4, ('REFUSED', 'REFUSED'): 2}
+  jointly_CLEAN=66 aggregate_geomean_ratio=0.996754
+  byte_identical_area=60/66 changed_area=6 outside_band=5
+    OUTSIDE freeform      information-matrix/all-products 5159 -> 4760 ratio=0.922659
+    OUTSIDE freeform      magnetic-coil/output-products 285 -> 272 ratio=0.954386
+    OUTSIDE freeform      processor/no-proliferator 943 -> 884 ratio=0.937434
+    OUTSIDE freeform      super-magnetic-ring/no-proliferator 2124 -> 2183 ratio=1.027778
+    inside  freeform      super-magnetic-ring/output-products 2052 -> 2044 ratio=0.996101
+    OUTSIDE sequence-pair information-matrix/output-products 5394 -> 5150 ratio=0.954765
+    STATUS  freeform      universe-matrix/all-products REFUSED -> CLEAN
+    STATUS  freeform      universe-matrix/output-products REFUSED -> CLEAN
+    STATUS  sequence-pair universe-matrix/all-products REFUSED -> CLEAN
+    STATUS  sequence-pair universe-matrix/output-products REFUSED -> CLEAN
+
+round 2: transitions={('CLEAN', 'CLEAN'): 66, ('REFUSED', 'CLEAN'): 4, ('REFUSED', 'REFUSED'): 2}
+  jointly_CLEAN=66 aggregate_geomean_ratio=0.999661
+  byte_identical_area=63/66 changed_area=3 outside_band=3
+    OUTSIDE freeform      casimir-crystal/output-products 1144 -> 1100 ratio=0.961538
+    OUTSIDE freeform      processor/no-proliferator 884 -> 864 ratio=0.977376
+    OUTSIDE freeform      super-magnetic-ring/no-proliferator 2146 -> 2233 ratio=1.040541
+    STATUS  freeform      universe-matrix/all-products REFUSED -> CLEAN
+    STATUS  freeform      universe-matrix/output-products REFUSED -> CLEAN
+    STATUS  sequence-pair universe-matrix/all-products REFUSED -> CLEAN
+    STATUS  sequence-pair universe-matrix/output-products REFUSED -> CLEAN
+
+round 3: transitions={('CLEAN', 'CLEAN'): 66, ('REFUSED', 'CLEAN'): 4, ('REFUSED', 'REFUSED'): 2}
+  jointly_CLEAN=66 aggregate_geomean_ratio=1.001553
+  byte_identical_area=63/66 changed_area=3 outside_band=2
+    OUTSIDE freeform      information-matrix/all-products 4760 -> 5159 ratio=1.083824
+    OUTSIDE freeform      processor/no-proliferator 864 -> 884 ratio=1.023148
+    inside  freeform      super-magnetic-ring/output-products 2052 -> 2050 ratio=0.999025
+    STATUS  freeform      universe-matrix/all-products REFUSED -> CLEAN
+    STATUS  freeform      universe-matrix/output-products REFUSED -> CLEAN
+    STATUS  sequence-pair universe-matrix/all-products REFUSED -> CLEAN
+    STATUS  sequence-pair universe-matrix/output-products REFUSED -> CLEAN
+
+Repeated outside-band movers and Gate B historical investigation:
+  Gate B recorded repeated movers={('freeform', 'casimir-crystal', 'output-products'): ['down', 'up'], ('freeform', 'processor', 'no-proliferator'): ['down', 'up'], ('freeform', 'super-magnetic-ring', 'all-products'): ['down']}
+  ('freeform', 'information-matrix', 'all-products'): rounds=[1, 3] directions=['down', 'up']
+    Gate B repeated classification=not a repeated Gate B mover
+    Gate B historical CLEAN areas (Task 5 + Task 10)=[5159, 4760, 4760, 5159, 4760, 4760]
+    Gate C candidate CLEAN areas=[4760, 4760, 5159]
+    Gate C values absent from Gate B history=[]
+    finding: repeated mover flips direction, consistent with run-to-run solver noise
+  ('freeform', 'processor', 'no-proliferator'): rounds=[1, 2, 3] directions=['down', 'down', 'up']
+    Gate B repeated classification=['down', 'up']
+    Gate B historical CLEAN areas (Task 5 + Task 10)=[864, 884, 884, 943, 884, 864]
+    Gate C candidate CLEAN areas=[884, 864, 884]
+    Gate C values absent from Gate B history=[]
+    finding: repeated mover flips direction, consistent with run-to-run solver noise
+  ('freeform', 'super-magnetic-ring', 'no-proliferator'): rounds=[1, 2] directions=['up', 'up']; round 3 is unchanged
+    Gate B repeated classification=not a repeated Gate B mover
+    Gate B historical CLEAN areas (Task 5 + Task 10)=[2220, 2156, 2146, 2124, 2146, 2146], range=2124..2220
+    Gate C candidate CLEAN areas=[2183, 2233, 2146], range=2146..2233
+    Gate C values absent from Gate B history=[2183, 2233]
+    the new maximum is 2233, 13 tiles (0.586%) above Gate B's historical maximum 2220
+    finding: this is the only repeated directional mover. Its third pair is identical and Gate B already measured the same cell as high as 2220 and moving the opposite direction (2220 -> 2124) in round 1. Those facts are consistent with the cell's historical solver spread, but the data cannot exclude an implementation contribution at this one cell. The PASS below rests on all three aggregate ratios and byte-identical effective strip counts, not on a claim that every cell stayed inside noise.

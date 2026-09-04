@@ -1,0 +1,10 @@
+command: cmp -s baseline-effective-strips.jsonl candidate-effective-strips.jsonl
+result: EQUAL (exit 0; byte-for-byte identical)
+baseline rows: 72
+candidate rows: 72
+baseline piler total: 0
+candidate piler total: 0
+baseline sha256: e57b457ae3ec23ceb5d3c73e2a2d7dfc734c5803f84a3547319ac028d8b42c76
+candidate sha256: e57b457ae3ec23ceb5d3c73e2a2d7dfc734c5803f84a3547319ac028d8b42c76
+seams: Freeform _machines_without_poses after _coarsen_saturated_strip_plan; SequencePair _variant_search_inputs after strip-length heuristics, _coarsen_saturated_strip_plan, and _sequence_reservation_strips
+raw plan_strips was not called by the helper and no fallback exists.

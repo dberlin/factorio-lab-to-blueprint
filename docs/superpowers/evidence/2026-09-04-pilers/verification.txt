@@ -1,0 +1,14 @@
+Gate C evidence verification: PASS
+required files: 21/21
+candidate rows: 216 (72 each round)
+statuses: {'CLEAN': 210, 'REFUSED': 6}
+commit rows: {'fa9032df25f46f2c50f86d18e09b30d9eae020bc': 216}
+backend rows: {'cython': 216}
+normalized audit piler counts: zero in 216/216 rows
+effective strip records: 72/72 byte-identical, candidate pilers total 0
+regressions-only comparator verdicts: PASS/PASS/PASS
+default comparator verdicts: FAIL/FAIL/FAIL (two REFUSED rows per round)
+load snapshots: 3 uptime + 3 vmstat 1 3 blocks
+compiled-kernel source/build diff: empty
+candidate archive import path: verified
+candidate archive route backend: cython

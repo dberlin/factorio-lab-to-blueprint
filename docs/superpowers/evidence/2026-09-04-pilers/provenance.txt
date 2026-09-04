@@ -1,0 +1,26 @@
+Gate C frozen archive provenance
+baseline=5e9b6c387397e9523047b17e23917e9ffab09a88
+candidate=fa9032df25f46f2c50f86d18e09b30d9eae020bc
+
+$ git diff --name-status 5e9b6c387397e9523047b17e23917e9ffab09a88 fa9032df25f46f2c50f86d18e09b30d9eae020bc -- '*.pyx' '*.pxd' setup.py pyproject.toml
+(empty: compiled-kernel source/build inputs unchanged)
+
+$ git rev-parse HEAD (candidate archive)
+fa9032df25f46f2c50f86d18e09b30d9eae020bc
+$ git rev-parse HEAD (baseline archive)
+5e9b6c387397e9523047b17e23917e9ffab09a88
+
+$ sha256sum copied kernels (candidate then baseline)
+eaf9dd0c440e040d86c094e3fbc828f0a9d5283103f5f61472003725883c4ff9  /tmp/flab2bp-gate-c-20260904/candidate/src/flab2bp/layout/_route_kernel.cpython-314-x86_64-linux-gnu.so
+798371403865fcbe56a0ffcd396a76b12553a002a1041ca7062e74e4e57932aa  /tmp/flab2bp-gate-c-20260904/candidate/src/flab2bp/layout/_sequence_kernel.cpython-314-x86_64-linux-gnu.so
+eaf9dd0c440e040d86c094e3fbc828f0a9d5283103f5f61472003725883c4ff9  /tmp/flab2bp-gate-c-20260904/baseline/src/flab2bp/layout/_route_kernel.cpython-314-x86_64-linux-gnu.so
+798371403865fcbe56a0ffcd396a76b12553a002a1041ca7062e74e4e57932aa  /tmp/flab2bp-gate-c-20260904/baseline/src/flab2bp/layout/_sequence_kernel.cpython-314-x86_64-linux-gnu.so
+
+$ archive import resolution and backend (with the same archive-root/src prefix that scripts/audit.py installs)
+/tmp/flab2bp-gate-c-20260904/candidate/src/flab2bp/__init__.py
+/tmp/flab2bp-gate-c-20260904/candidate/src/flab2bp/layout/freeform.py
+/tmp/flab2bp-gate-c-20260904/candidate/src/flab2bp/layout/sequence_solver.py
+cython
+
+$ candidate smoke: python scripts/audit.py --only iron-ingot --budget 5 --jobs 2
+rows=6 statuses=CLEAN:6 strategies=freeform:3,sequence-pair:3 commit=fa9032df25f46f2c50f86d18e09b30d9eae020bc route_backend=cython:6 pilers=0:6
