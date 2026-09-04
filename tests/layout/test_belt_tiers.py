@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 
+from flab2bp.layout.base import Placement
 from flab2bp.layout.belt_tiers import retier_belts
 from flab2bp.layout.validate import IdMap, validate
 from flab2bp.spec import BeltTier, BuildSpec, MachineGroup
@@ -24,7 +25,12 @@ BELT3 = 2003
 IDS = IdMap(recipes={"magnetic-coil": 6}, items={"assembling-machine-2": ASSEMBLER})
 
 
-def _spec(rate: Fraction, *upgrades: tuple[str, int]) -> BuildSpec:
+def _spec(
+    rate: Fraction,
+    *upgrades: tuple[str, int],
+    belt_stack: int = 1,
+    sorter_pick_stacks: tuple[int, ...] = (1, 1, 1, 2),
+) -> BuildSpec:
     return BuildSpec(
         groups=(
             MachineGroup(
@@ -35,17 +41,21 @@ def _spec(rate: Fraction, *upgrades: tuple[str, int]) -> BuildSpec:
                 outputs_per_machine={"magnetic-coil": Fraction(1)},
             ),
         ),
+        external_inputs={"copper-ingot": rate},
+        outputs={"magnetic-coil": Fraction(1)},
         belt_item_id="conveyor-belt-2",
         belt_items_per_second=Fraction(12),
         belt_upgrades=tuple(
             BeltTier(item_id=item_id, items_per_second=Fraction(speed))
             for item_id, speed in upgrades
         ),
+        belt_stack=belt_stack,
+        sorter_pick_stacks=sorter_pick_stacks,
     )
 
 
-def _fed_machine():
-    # belt(2,0) -> belt(3,0) -> pile sorter -> assembler at (4,0)
+def _fed_machine() -> Placement:
+    """belt(2,0) -> belt(3,0) -> pile sorter -> assembler at (4,0)."""
     return place(
         belt(2, 0, out=1),
         belt(3, 0),
@@ -126,3 +136,30 @@ def test_a_trunk_feeding_two_branches_is_tiered_on_the_sum() -> None:
     assert by_index[0] == BELT3 and by_index[1] == BELT3
     assert by_index[3] == BELT2 and by_index[4] == BELT2
     assert by_index[5] == BELT2 and by_index[6] == BELT2
+
+
+def test_a_stacked_run_is_measured_in_cargo_not_items() -> None:
+    """20 items/s is 10 cargo/s when each cargo holds two, and a Mk.II belt
+    carries 12 cargo/s -- so the same lane that needs a Mk.III loose fits the
+    floor stacked, and the pass must not pay for the upgrade."""
+    stacked = _spec(Fraction(20), ("conveyor-belt-3", 30), belt_stack=2)
+    out = retier_belts(_fed_machine(), stacked)
+    assert _tiers(out) == [BELT2, BELT2]
+    assert out.stats["belt_runs_upgraded"] == 0.0
+
+
+def test_the_same_run_unstacked_still_takes_the_upgrade() -> None:
+    """The other half of the pair: without the URL's stack, 20 items/s is 20
+    cargo/s and the floor cannot carry it."""
+    out = retier_belts(_fed_machine(), _spec(Fraction(20), ("conveyor-belt-3", 30)))
+    assert _tiers(out) == [BELT3, BELT3]
+    assert out.stats["belt_runs_upgraded"] == 1.0
+
+
+def test_a_stacked_run_over_the_ceiling_is_still_set_to_the_ceiling() -> None:
+    """The fall-through has to survive the division: 80 items/s at stack 2 is
+    40 cargo/s, over the 30/s ceiling, so the run ends on the ceiling and
+    `flow.belt_capacity` refuses it rather than this pass inventing a tier."""
+    stacked = _spec(Fraction(80), ("conveyor-belt-3", 30), belt_stack=2)
+    out = retier_belts(_fed_machine(), stacked)
+    assert _tiers(out) == [BELT3, BELT3]

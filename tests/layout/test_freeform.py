@@ -74,6 +74,7 @@ from flab2bp.layout.freeform import (
     _pack,
     _pair_lanes,
     _PathSearchResult,
+    _place_shared_external_input_trunks,
     _Port,
     _power_plan,
     _prepare_routing_problem,
@@ -87,6 +88,7 @@ from flab2bp.layout.freeform import (
     _shard_sinks,
     _sink_for,
     _source_for,
+    _tap_source,
     _Unpowerable,
     fallback_placement,
     plan_strips,
@@ -17789,6 +17791,50 @@ def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> No
         )
 
 
+def test_a_shared_lane_is_judged_against_the_stack_its_cargo_carries() -> None:
+    """20/s each is 40/s on one lane: over a 30/s belt of loose items, inside
+    it once every cargo carries two.  The stack is the lane's, so the check
+    takes it rather than re-deriving one from the spec."""
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": F(20), "iron-ingot": F(20)},
+                outputs_per_machine={"magnetic-coil": F(1)},
+            ),
+        ),
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+    )
+    group = next(iter(freeform._adapt(spec).values()))
+    lane = (("copper-ingot", "iron-ingot"),)
+    with pytest.raises(ValueError, match="cannot share a belt"):
+        freeform._check_shared_lane_capacity(group, lane, 1, spec, stack=1)
+    freeform._check_shared_lane_capacity(group, lane, 1, spec, stack=2)
+
+
+def test_a_shared_lane_defaults_to_stack_one() -> None:
+    """An omitted stack must never be read as "unbounded"."""
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": F(20), "iron-ingot": F(20)},
+                outputs_per_machine={"magnetic-coil": F(1)},
+            ),
+        ),
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+    )
+    group = next(iter(freeform._adapt(spec).values()))
+    with pytest.raises(ValueError, match="cannot share a belt"):
+        freeform._check_shared_lane_capacity(group, (("copper-ingot", "iron-ingot"),), 1, spec)
+
+
 def _rated_spec(rate: Fraction, *, count: int = 8, capacity: Fraction = Fraction(30)) -> BuildSpec:
     """One collider-like group drawing ``rate`` of hydrogen per machine."""
     return BuildSpec(
@@ -17813,6 +17859,107 @@ def test_plan_strips_shortens_strips_to_the_capacity_cap() -> None:
     strips = plan_strips(spec, strip_len=8)
     assert max(strip.machines for strip in strips) <= 7
     assert sum(strip.machines for strip in strips) == 8
+
+
+def test_pick_sorter_keeps_the_stack_the_lane_was_planned_at() -> None:
+    """A 1 item/s lane needs no tier above Mk.I on rate alone, but a lane
+    planned at stack 4 needs a sorter that can PLACE 4, or the lane it feeds
+    would be built at 1 and the validator would judge it at 1.
+    """
+    stacks = freeform._SorterStacks(
+        place_by_tier={2011: 1, 2012: 1, 2013: 1, 2014: 4},
+        pick_by_tier={2011: 1, 2012: 1, 2013: 1, 2014: 4},
+    )
+    tiers = (2011, 2012, 2013, 2014)
+    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks, min_place_stack=4)
+    assert tier == 2014
+    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks, min_pick_stack=4)
+    assert tier == 2014
+    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks)
+    assert tier == 2011, "an unstacked lane must still take the cheapest tier"
+
+
+def test_pick_sorter_returns_the_fastest_tier_when_no_tier_keeps_the_promise() -> None:
+    """Same contract as the rate case: never emit a tier the save cannot
+    build; leave the refusal to the validator's `flow.sorter_capacity`."""
+    stacks = freeform._SorterStacks(
+        place_by_tier={2011: 1, 2012: 1, 2013: 1},
+        pick_by_tier={2011: 1, 2012: 1, 2013: 1},
+    )
+    tier, _ = freeform._pick_sorter(
+        F(1), 1, 1, (2011, 2012, 2013), stacks=stacks, min_place_stack=2
+    )
+    assert tier == 2013
+
+
+def _both_fed_stacked_spec() -> BuildSpec:
+    """Hydrogen belted in at stack 2 AND made inside, on a save that places 3.
+
+    Level 4 of the real table: the Pile Sorter picks 4 and places 3, and the
+    URL's `ist` is 2.  This is the one shape where an item's two lanes are
+    planned at DIFFERENT stacks.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=1,
+                inputs_per_machine={"hydrogen": F(4)},
+                outputs_per_machine={"deuterium": F(1, 2)},
+            ),
+            MachineGroup(
+                recipe_id="hydrogen-cracking",
+                machine_item_id="oil-refinery",
+                count=1,
+                inputs_per_machine={"refined-oil": F(1)},
+                outputs_per_machine={"hydrogen": F(3)},
+            ),
+        ),
+        external_inputs={"hydrogen": F(1), "refined-oil": F(1)},
+        outputs={"deuterium": F(1, 2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        belt_stack=2,
+        sorter_pick_stacks=(1, 1, 1, 4),
+        sorter_place_stacks=(1, 1, 1, 3),
+    )
+
+
+def test_a_both_fed_item_keeps_a_stack_for_each_side_of_the_strip() -> None:
+    """An item's entry lane and its output lane are not the same lane.
+
+    The bus arrives at 2 and the producer's sorter places 3, so the merged
+    ENTRY lane carries min(2, 3) = 2 while the OUTPUT lane carries 3.  One
+    number per item cannot say both, and the producer's sorter has to be asked
+    for the lane it actually feeds.
+    """
+    spec = _both_fed_stacked_spec()
+    assert spec.planning_stack("hydrogen") == 2
+    assert spec.planning_stack("hydrogen", external=False) == 3
+
+    stacks = freeform._lane_stacks_for(spec)
+    assert stacks.into("hydrogen") == 2, "the lane a consumer picks from"
+    assert stacks.out_of("hydrogen") == 3, "the lane the producer places onto"
+    # An item with only one lane answers the same on both sides.
+    assert stacks.into("deuterium") == stacks.out_of("deuterium") == 3
+
+
+def test_the_producer_sorter_is_asked_for_the_stack_its_output_lane_promises() -> None:
+    """The consequence of the two-sided map, at the picker.
+
+    Asked for the entry lane's 2, a tier that places 2 would be accepted for a
+    lane that promises 3, and the lane would be built a tier too small.
+    """
+    spec = _both_fed_stacked_spec()
+    lanes = freeform._lane_stacks_for(spec)
+    sorter_stacks = freeform._sorter_stacks_for(spec)
+    tiers = freeform._sorter_tiers_for(spec)
+    tier, _ = freeform._pick_sorter(
+        F(1), 1, 1, tiers, stacks=sorter_stacks, min_place_stack=lanes.out_of("hydrogen")
+    )
+    assert sorter_stacks.place(tier) >= 3
+    assert tier == 2014, "only the Pile Sorter places 3 on this save"
 
 
 def test_pick_sorter_never_leaves_the_allowed_tiers() -> None:
@@ -21181,3 +21328,79 @@ def test_a_freeform_refusal_carries_the_sweep_s_telemetry_end_to_end(
 
     assert caught.value.stats["evaluations"] == 3.0
     assert caught.value.stats["distinct_assignments"] == 2.0
+def test_three_destination_shared_external_bucket_commits_one_physical_root() -> None:
+    """Prepared taps respect the exact model-38 splitter collider at commit."""
+    canvas = _Canvas()
+    belt_id = catalog.get_item_id("conveyor-belt-3") or 2003
+    belt_model = catalog.building(belt_id).model_index
+    destinations = tuple(
+        _Port(
+            10_000 + offset,
+            20 + offset,
+            20,
+            20 + offset,
+            20 + offset,
+            (10_000 + offset,),
+            cargo_domain=CargoDomain.UNSPRAYED,
+        )
+        for offset in range(3)
+    )
+
+    nets, roots = _place_shared_external_input_trunks(
+        canvas,
+        (("ore", CargoDomain.UNSPRAYED, destinations),),
+        belt_id=belt_id,
+        belt_model=belt_model,
+        bounds=(0, 0, 8, 8),
+    )
+
+    assert len(roots) == 1
+    assert roots[0][0] == "ore"
+    assert len(nets) == 3
+    root = roots[0][1]
+    canvas.add(
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=belt_model,
+            x=root.x - 1,
+            y=root.y,
+            width=1,
+            height=1,
+            output_obj=root.belt,
+            carries_item="ore",
+        ),
+        level=0,
+    )
+    trunk_run = {
+        (building.x, building.y, int(building.z))
+        for building in canvas.buildings
+        if catalog.is_belt(building.item_id) and building.z.denominator == 1
+    }
+
+    for offset, net in enumerate(nets):
+        source = net.source
+        branch = canvas.add(
+            PlacedBuilding(
+                item_id=belt_id,
+                model_index=belt_model,
+                x=source.x,
+                y=source.y + 1,
+                width=1,
+                height=1,
+                carries_item="ore",
+            ),
+            level=0,
+        )
+        rejected: list[str] = []
+        assert _tap_source(
+            canvas,
+            source.belt,
+            branch,
+            belt_id,
+            belt_model,
+            trunk_run | {(source.x, source.y + 1, 0)},
+            rejected_reason=rejected,
+        ), rejected
+        if offset == 0:
+            assert not canvas.junction_is_clear(source.x + 1, source.y, 0)
+            assert canvas.junction_is_clear(source.x + 2, source.y, 0)

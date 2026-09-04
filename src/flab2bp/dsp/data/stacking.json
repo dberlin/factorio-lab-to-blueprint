@@ -1,0 +1,89 @@
+{
+  "schema": "flab2bp-stacking/1",
+  "source": {
+    "game_version": "0.10.34",
+    "assembly": "Assembly-CSharp.dll",
+    "assembly_sha256": "ae0ba95f75bd879a62aa4ce253b2ab78eaa4fb3c7c595f5e1fee75ebe0e0ef85",
+    "resources_assets_sha256": "7232732470c9ad45f8f255dcaf5f5a0b9e8741ec736d851a2dfc5feae3429300",
+    "game_dir": "~/Dyson Sphere Program/DSPGAME_Data",
+    "how": "ilspycmd 11.0.0.9375 whole-assembly decompile for the behavioural facts; scripts/extract_dsp_tables.py (UnityPy typetrees) -> data/stacking_techs.json for the per-level unlock values. No live game dump: every number below is read out of the files on disk.",
+    "game_version_source": "Assembly-CSharp.dll GameConfig.cs:12 -- private static Version _gameVersion = new Version(0, 10, 34)",
+    "line_numbers": "Line numbers name the ilspycmd 11.0.0.9375 decompilation of Assembly-CSharp.dll, one file per type (PilerComponent.cs, GameData.cs, ...). Re-derive with: ilspycmd -p -o <dir> Assembly-CSharp.dll"
+  },
+  "sorter_cargo_stacking": {
+    "levels": 6,
+    "levels_source": {
+      "value": "resources.assets TechProtoSet 3311..3316 -- Pile Sorter Upgrade, Level 1..6, MaxLevel 6",
+      "why": "6 is the only research ladder in 0.10.34 that still moves any sorter's stacking. The five-level Sorter Cargo Stacking ladder (3301-3305) carries IsObsolete=1, and IsObsolete is what hides a tech from the tree (UITechNode.cs:914, :1289, :1483, :1487) and from the unlock-everything achievement (ACH_UnlockAllTech.cs:37), so its levels are not reachable in a game started on this build. It is recorded under obsolete_ladder rather than dropped, because a save imported from an older build still carries the value (GameHistoryData.cs:2728)."
+    },
+    "pick_stack_by_level": {"0": 1, "1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1},
+    "place_stack_by_level": {"0": 1, "1": 1, "2": 1, "3": 1, "4": 1, "5": 1, "6": 1},
+    "pick_place_source": {
+      "value": "GameHistoryData.cs:554-557 (SetForNewGame, :509) -- inserterStackCountObsolete = 1, inserterStackInput = 2, inserterStackOutput = 1, inserterBidirectional = false; no reachable tech moves inserterStackCountObsolete on this build",
+      "why": "This table is the answer for every sorter EXCEPT the Pile Sorter, which has its own entry below. Grades 1 and 2 are pinned at 1/1 by the grade rule; grade 3 reads inserterStackCountObsolete, whose only writers are the obsolete techs 3301-3305 and the new-game baseline of 1."
+    },
+    "applies_to": {
+      "grade_rule_source": "GameData.OnInserterTechChange (GameData.cs:1094-1134): grade == 3 -> stackInput = history.inserterStackCountObsolete, stackOutput = 1, bidirectional = false; grade == 4 -> stackInput = history.inserterStackInput, stackOutput = history.inserterStackOutput, bidirectional = history.inserterBidirectional; every other grade -> stackInput = stackOutput = 1, bidirectional = false. FactorySystem.NewInserterComponent (FactorySystem.cs:534-556) and the upgrade path in PlanetFactory.cs:1822-1845 spell the same rule with range comparisons (grade >= 3 / grade > 3), which agree on every grade that exists. The tooltip math states it a third time: ItemProto.cs:1703 (grade != 3 ? 1 : inserterStackCountObsolete) and ItemProto.cs:2211 (grade != 4 ? 1 : inserterStackInput).",
+      "grade_source": "resources.assets ItemProtoSet ItemProto.Grade; PlanetFactory.cs:1822 reads newProto.Grade for the upgrade path, and PlanetFactory.cs:1175/:1183 pass prefabDesc.inserterGrade (the prefab's InserterDesc.grade, PrefabDesc.cs:1356) at build time. Both agree on 2011..2014 = grade 1..4.",
+      "items": [
+        {"item_id": 2011, "name": "Sorter Mk.I", "factoriolab_id": "sorter-1", "grade": 1, "pick_from": "1", "place_from": "1", "table": "sorter_cargo_stacking"},
+        {"item_id": 2012, "name": "Sorter Mk.II", "factoriolab_id": "sorter-2", "grade": 2, "pick_from": "1", "place_from": "1", "table": "sorter_cargo_stacking"},
+        {"item_id": 2013, "name": "Sorter Mk.III", "factoriolab_id": "sorter-3", "grade": 3, "pick_from": "history.inserterStackCountObsolete", "place_from": "1", "table": "sorter_cargo_stacking"},
+        {"item_id": 2014, "name": "Pile Sorter", "factoriolab_id": "sorter-4", "grade": 4, "pick_from": "history.inserterStackInput", "place_from": "history.inserterStackOutput", "table": "pile_sorter"}
+      ]
+    },
+    "meaning": {
+      "pick_stack": "history.inserterStackInput / inserterStackCountObsolete, i.e. how many belt cargos the sorter accumulates before it swings. InserterComponent.InternalUpdate picks while stackCount < stackInput (InserterComponent.cs:358, :608) and leaves the Picking stage at stackCount == stackInput (:392). Each pick adds the picked cargo's own stack byte to itemCount (:313, :334, :351, :369, :383), so the items carried per trip are pick_stack cargos times the stack riding on them, not pick_stack items.",
+      "place_stack": "history.inserterStackOutput, the largest stack the sorter may form on the OUTPUT belt: InserterComponent.cs:443-448 passes stackOutput straight to CargoTraffic.TryInsertItemToBeltWithStackIncreasement. Inserting into a building instead splits the load evenly (itemCount / stackCount, :471-474) and never consults stackOutput."
+    },
+    "obsolete_ladder": {
+      "techs": [3301, 3302, 3303, 3304, 3305],
+      "name": "Sorter Cargo Stacking",
+      "field": "history.inserterStackCountObsolete",
+      "applies_to_grade": 3,
+      "pick_stack_by_level": {"0": 1, "1": 4, "2": 5, "3": 6, "4": 7, "5": 8},
+      "place_stack_by_level": {"0": 1, "1": 1, "2": 1, "3": 1, "4": 1, "5": 1},
+      "reachable": false,
+      "source": "resources.assets TechProtoSet 3301-3305, UnlockFunctions [14], UnlockValues [4,5,6,7,8]; GameHistoryData.cs:1848-1850 case 14 assigns (not increments) inserterStackCountObsolete. IsObsolete = 1 on all five, so they are unreachable on this build; place stays 1 because the grade-3 branch of OnInserterTechChange forces stackOutput = 1."
+    },
+    "pile_sorter": {
+      "item_id": 2014,
+      "name": "Pile Sorter",
+      "grade": 4,
+      "levels": 6,
+      "techs": [3311, 3312, 3313, 3314, 3315, 3316],
+      "pick_stack_by_level": {"0": 2, "1": 2, "2": 3, "3": 3, "4": 4, "5": 4, "6": 4},
+      "place_stack_by_level": {"0": 1, "1": 2, "2": 2, "3": 3, "4": 3, "5": 4, "6": 4},
+      "bidirectional_by_level": {"0": false, "1": false, "2": false, "3": false, "4": false, "5": false, "6": true},
+      "needs_research": true,
+      "unlock_tech": 1607,
+      "unlock_source": "resources.assets TechProtoSet 1607 (Integrated Logistics System) unlocks recipe 160 (Pile Sorter) and recipe 120 (Automatic Piler). Nothing else unlocks either recipe, so both buildings need research before they can be placed at all.",
+      "level_source": "resources.assets TechProtoSet 3311-3316 applied in order to the GameHistoryData.cs:554-557 baseline (inserterStackInput = 2, inserterStackOutput = 1, inserterBidirectional = false), through the assignments at GameHistoryData.cs:1943 (case 39 -> inserterStackOutput = num), :1947 (case 40 -> inserterBidirectional = true) and :1951 (case 41 -> inserterStackInput = num): 3311 [39]=2 -> place 2; 3312 [41]=3 -> pick 3; 3313 [39]=3 -> place 3; 3314 [41]=4 -> pick 4; 3315 [39]=4 -> place 4; 3316 [40] -> bidirectional. Level 0 is the unresearched Pile Sorter, which already picks 2 because the baseline does, not because a tech granted it.",
+      "level_0_caveat": "The obsolete tech 3306 (Sorter Cargo Integration, UnlockFunctions [39,40], UnlockValues [1,1]) writes the same inserterStackOutput = 1 the baseline already holds and sets inserterBidirectional; it carries IsObsolete = 1 and is not reachable on this build."
+    }
+  },
+  "sorter_stack_rate_factor": {
+    "value": true,
+    "source": "InserterComponent.InternalUpdate: every pick does itemCount += stack (InserterComponent.cs:313, :334, :351, :369, :383, and again in InternalUpdate_Bidirectional at :548, :575, :595, :626, :644), where stack is the picked cargo's own stack byte. The Inserting stage then delivers itemCount items in one trip -- TryInsertItemToBeltWithStackIncreasement(beltId, offset, itemId, stackOutput, ref itemCount, ...) onto a belt (:448) or InsertInto(..., itemCount / stackCount, ...) into a building (:471-474). A carried stack of n therefore counts as n items on that trip; sorter throughput scales with the stack it carries."
+  },
+  "piler": {
+    "item_id": 2040,
+    "name": "Automatic Piler",
+    "max_stack": 4,
+    "max_stack_source": "PilerComponent.InternalUpdate, Pile branch: when the two cached cargos hold the same item and cacheCargoStack1 + cacheCargoStack2 > 4 it emits AddCargo(cacheItemId1, 4, ...) and keeps the remainder (PilerComponent.cs:195-207); otherwise it emits one cargo of stack1 + stack2 (:210). The 4 is an IL literal, not a field.",
+    "single_pass": false,
+    "single_pass_source": "PilerComponent.InternalUpdate holds at most TWO cached cargos -- cacheItemId1 (newest) and cacheItemId2 (shifted, PilerComponent.cs:161-169) -- and emits ONE cargo of stack1 + stack2 capped at 4 (:195-210). Fed a belt of stack-1 cargos, 1 + 1 = 2, so one piler leaves the belt at stack 2 and reaching stack 4 from an unstacked belt takes two pilers in series (1 -> 2 -> 4). It reaches 4 in a single pass only when its input is already stacked 2 or more.",
+    "output_stack_from_unstacked_input": 2,
+    "throughput_cargo_per_second": {
+      "rule": "At least the belt's own cargo rate. The piler has no rate of its own: the timed branch alone equals 6 x beltSpeed cargo per second, which is exactly the belt's cargo rate, and the untimed branch adds picks on top of that.",
+      "per_belt_speed": 6,
+      "charge_per_tick_per_belt_speed": 1000,
+      "ticks_per_cargo": 10000,
+      "ticks_per_second": 60,
+      "source": "PilerComponent.InternalUpdate: timeSpend += (pilerState == Pile ? inputBelt.speed : outputBelt.speed) * (int)(1000f * powerRatio) per tick while timeSpend < 10000 (PilerComponent.cs:146-149); a timed pick costs timeSpend -= 10000 (:171, :260). At 60 ticks per second and full power that is 60 * beltSpeed * 1000 / 10000 = 6 * beltSpeed cargo per second. The UNTIMED branches pick a cargo without spending timeSpend at all (Pile: PilerComponent.cs:176-187; Split: :265-272), so the intake is a lower bound, not a cap. slowlyBeltSpeed = min(input, output) clamped to 3 (:144-145) selects only the animation state and the cacheCdTickArray cooldown row {10, 5, 2} (:35, :170, :259).",
+      "cross_check": "6 x beltSpeed reproduces catalog.BELT_RATE exactly for the three belt tiers (beltSpeed 1, 2, 5 -> 6, 12, 30 cargo/s), which is the arithmetic statement of 'the piler never throttles the belt it sits on'."
+    },
+    "parameter_index": null,
+    "parameter_index_source": "There is no per-building piler setting to serialise. PilerDesc declares no fields at all (PilerDesc.cs: an empty MonoBehaviour, which PrefabDesc.ReadPrefab only tests for presence -- PrefabDesc.cs:1334-1337 sets isPiler = true). PilerComponent.Export writes id, entityId, pcId, pilerState, belt ids, the two cached cargos and timeSpend, and no stack setting (PilerComponent.cs:58-75). pilerState itself is derived from wiring by CargoTraffic.RematchPilerConnection (CargoTraffic.cs:938, writing Pile/Split/None at :962, :968, :973); the only other writers reset it (CargoTraffic.DisconnectToPiler at :984, :989; PilerComponent.SetEmpty at :44; PilerComponent.Import at :83 restores a serialised value). BuildingParameters mentions 'piler' only as StationComponent.pilerCount, a logistics-station field (BuildingParameters.cs:1334, :1952, :1969, :3204, :3228), never for a PilerComponent. So the index is null because the setting does not exist, not because the search failed."
+  }
+}

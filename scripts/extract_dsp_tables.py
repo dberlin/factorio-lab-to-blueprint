@@ -2,11 +2,11 @@
 # requires-python = ">=3.14"
 # dependencies = ["UnityPy==1.25.3", "TypeTreeGeneratorAPI"]
 # ///
-"""Extract the current DSP recipe and item tables from a game install.
+"""Extract the current DSP recipe, item and cargo-stacking tables from a game install.
 
     uv run scripts/extract_dsp_tables.py [GAME_DIR]
 
-Writes ``src/flab2bp/dsp/data/{recipes,items}.json``, which
+Writes ``src/flab2bp/dsp/data/{recipes,items,stacking_techs}.json``, which
 ``flab2bp.dsp.catalog`` maps FactorioLab ids onto.
 
 This was written to chase a suspected staleness bug and DISPROVED it, which is
@@ -33,6 +33,13 @@ netstandard / UnityEngine.CoreModule.  Display names live in ``Locale/1033``,
 which is a real folder in the game root rather than inside the asset bundles;
 without it every name stays in the source language and nothing maps.
 
+``stacking_techs.json`` is the provenance for ``data/stacking.json``: the
+research rows that move a sorter's cargo stacking, selected by the unlock
+function ids ``GameHistoryData.UnlockTechFunction`` itself switches on rather
+than by an English name, so the selection survives a localisation change.  The
+name hints are a CHECK on that id filter, never the filter itself -- see
+``stacking_techs``.
+
 Schema matches what was there before.  ``color`` is the one field this cannot
 regenerate -- the viewer derives it by rasterising every icon, which needs Pillow
 and a scan of every Texture2D -- so existing colours are PRESERVED rather than
@@ -57,6 +64,47 @@ DEFAULT_COLOR = 0xDDDDDD
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(_ROOT, "src", "flab2bp", "dsp", "data")
+
+#: ``UnlockFunctions`` values that ``GameHistoryData.UnlockTechFunction``
+#: (Assembly-CSharp, GameHistoryData.cs:1795) routes to a sorter cargo-stacking
+#: field::
+#:
+#:     case 14: inserterStackCountObsolete = num;   (:1848)
+#:     case 39: inserterStackOutput        = num;   (:1943)
+#:     case 40: inserterBidirectional      = true;  (:1947)
+#:     case 41: inserterStackInput         = num;   (:1951)
+#:
+#: These four ids ARE the definition of "a tech that changes sorter stacking".
+STACK_UNLOCK_FUNCTIONS = frozenset({14, 39, 40, 41})
+
+#: A cross-check on the id filter, not a second filter.  If a display name
+#: mentions one of these and the id filter did not already select the tech, the
+#: id list above has gone stale and the run fails rather than writing a table
+#: that quietly lost a research ladder.  The reverse -- an id-selected tech
+#: whose name mentions neither -- is expected and only noted: DSP names the
+#: Pile Sorter unlock "Sorter Cargo Integration".
+STACK_TECH_NAME_HINTS = ("Cargo Stacking", "Pile Sorter")
+
+#: Exactly the ``TechProto`` fields the stacking facts are derived from.
+#:
+#: ``IsObsolete`` is load-bearing, not decoration: it is what hides a tech from
+#: the tree (``UITechNode.cs:914``, ``:1289``, ``:1483``, ``:1487``) and from
+#: the unlock-everything achievement (``ACH_UnlockAllTech.cs:37``).  On 0.10.34
+#: it is the whole reason the five-level Sorter Cargo Stacking ladder counts
+#: for nothing while the six-level Pile Sorter Upgrade ladder is the live one.
+#: Leave it out and a patch that un-obsoleted the old ladder would land here as
+#: a zero-diff re-extraction.
+STACK_TECH_FIELDS = (
+    "ID",
+    "Name",
+    "Level",
+    "MaxLevel",
+    "IsObsolete",
+    "UnlockFunctions",
+    "UnlockValues",
+    "UnlockRecipes",
+    "PropertyOverrideItems",
+)
 
 
 def fail(msg: str) -> None:
@@ -135,6 +183,46 @@ def read_proto_sets(data_dir: str, wanted: set[str]) -> dict[str, dict]:
     return protos
 
 
+def stacking_techs(techs: list[dict], tr: dict[str, str]) -> list[dict]:
+    """Every research row that moves a sorter's cargo stacking.
+
+    Selected by ``UnlockFunctions``, cross-checked by display name.  A tech the
+    NAME finds and the id filter did not is fatal: it means ``UnlockTechFunction``
+    grew a case and ``STACK_UNLOCK_FUNCTIONS`` is stale, and a silently short
+    table here would flatten a whole research ladder into "no such level".
+    """
+
+    def en(name: str) -> str:
+        return tr.get(name, name)
+
+    def named(tech: dict) -> bool:
+        labels = (tech.get("Name") or "", en(tech.get("Name") or ""))
+        return any(hint in label for hint in STACK_TECH_NAME_HINTS for label in labels)
+
+    by_id = {t["ID"] for t in techs if set(t.get("UnlockFunctions") or []) & STACK_UNLOCK_FUNCTIONS}
+    by_name = {t["ID"] for t in techs if named(t)}
+    if by_name - by_id:
+        fail(
+            f"techs {sorted(by_name - by_id)} are named for cargo stacking but carry none "
+            f"of UnlockFunctions {sorted(STACK_UNLOCK_FUNCTIONS)}; the id filter is stale"
+        )
+    if by_id - by_name:
+        print(f"note: id-selected techs the name hints do not reach: {sorted(by_id - by_name)}")
+
+    rows = [
+        {**{f: t[f] for f in STACK_TECH_FIELDS}, "englishName": en(t.get("Name") or "")}
+        for t in techs
+        if t["ID"] in by_id
+    ]
+    rows.sort(key=lambda r: r["ID"])
+    # 0.10.34 ships twelve: Sorter Cargo Stacking 1-5, Sorter Cargo Integration,
+    # and Pile Sorter Upgrade 1-6.  The floor sits under that so a real update
+    # raises it and a truncated read trips the guard.
+    if len(rows) < 6:
+        fail(f"only {len(rows)} cargo-stacking techs; the proto set looks truncated")
+    return rows
+
+
 def main() -> int:
     game = sys.argv[1] if len(sys.argv) > 1 else "/Users/dannyb/Downloads/Dyson Sphere Program"
     data_dir = os.path.join(game, "DSPGAME_Data")
@@ -142,7 +230,7 @@ def main() -> int:
         data_dir = game
 
     tr = load_english(game, data_dir)
-    protos = read_proto_sets(data_dir, {"ItemProtoSet", "RecipeProtoSet"})
+    protos = read_proto_sets(data_dir, {"ItemProtoSet", "RecipeProtoSet", "TechProtoSet"})
 
     def en(name: str) -> str:
         return tr.get(name, name)
@@ -186,8 +274,14 @@ def main() -> int:
     if len(recipes) < 155:
         fail(f"only {len(recipes)} recipes; the proto set looks truncated")
 
+    techs = stacking_techs(protos["TechProtoSet"]["dataArray"], tr)
+
     os.makedirs(OUT, exist_ok=True)
-    for name, payload in (("items.json", items), ("recipes.json", recipes)):
+    for name, payload in (
+        ("items.json", items),
+        ("recipes.json", recipes),
+        ("stacking_techs.json", techs),
+    ):
         path = os.path.join(OUT, name)
         with open(path, "w", encoding="utf-8") as fh:
             # Compact, matching what is on disk: a re-extraction against an

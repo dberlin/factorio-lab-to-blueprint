@@ -7,6 +7,8 @@ one solve rather than one per test.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from flab2bp import cli, pipeline
@@ -48,3 +50,34 @@ def test_cli_reports_how_many_entry_lanes_an_item_needs(
     cli._report(deuteron_build, verbose=False)
     report = capsys.readouterr().err
     assert "  entry lanes: hydrogen 2 (needs 2 at 30/s)" in report
+
+
+def test_cli_always_reports_stack_one_without_a_url_suffix(
+    deuteron_build: pipeline.Build,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unstacked bus is still an explicit reporting contract, but ``ist=1``
+    needs no URL provenance suffix."""
+    cli._report(deuteron_build, verbose=False)
+    line = next(
+        line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")
+    )
+    assert line.endswith("; stack 1")
+    assert "URL ist=" not in line
+
+
+def test_cli_names_the_stack_when_the_url_carries_one(
+    deuteron_build: pipeline.Build,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`ist` is the player's own setting, so the report says it back with the
+    URL field named -- a reader who did not expect stacked belts has to be able
+    to find where the number came from."""
+    stacked = dataclasses.replace(deuteron_build, spec=deuteron_build.spec.model_copy(
+        update={"belt_stack": 2}
+    ))
+    cli._report(stacked, verbose=False)
+    line = next(
+        line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")
+    )
+    assert "stack 2 (URL ist=2)" in line

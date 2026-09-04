@@ -278,7 +278,14 @@ def test_belt_tiers_travel_on_the_build_and_each_attempt(small_build: pipeline.B
     body = describe(small_build)
     tiers = body["belt_tiers"]
     assert isinstance(tiers, dict)
-    assert set(tiers) == {"floor", "ceiling", "runs_upgraded", "upgrade_tiers", "entry_lanes"}
+    assert set(tiers) == {
+        "floor",
+        "ceiling",
+        "runs_upgraded",
+        "upgrade_tiers",
+        "entry_lanes",
+        "stack",
+    }
     assert tiers["floor"] == small_build.spec.belt_item_id
     assert tiers["ceiling"] == small_build.spec.belt_tiers[-1].item_id
     attempts = body["attempts"]
@@ -293,7 +300,11 @@ def test_belt_tiers_travel_on_the_build_and_each_attempt(small_build: pipeline.B
         "runs_upgraded",
         "upgrade_tiers",
         "entry_lanes",
+        "stack",
     }
+    # Every corpus URL is `ist=1`; the field is present regardless so a reader
+    # never has to tell "unstacked" from "this build predates the field".
+    assert tiers["stack"] == 1
 
 
 def test_belt_tiers_entry_lanes_carries_the_finding_shape(

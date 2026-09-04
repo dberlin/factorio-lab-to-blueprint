@@ -1,0 +1,17 @@
+
+Every corpus URL's FactorioLab `ist` (belt stack), read from the URL itself:
+
+  iron-ingot                 ist=None
+  magnetic-coil              ist=None
+  graphene                   ist=None
+  electromagnetic-matrix     ist=None
+  plastic                    ist=None
+  processor                  ist=None
+  energy-matrix              ist=None
+  super-magnetic-ring        ist=None
+  casimir-crystal            ist=None
+  information-matrix         ist=None
+  quantum-chip               ist=None
+  universe-matrix            ist=None
+
+12 URLs; 0 carry ist>1: none
