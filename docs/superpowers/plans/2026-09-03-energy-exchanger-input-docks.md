@@ -1739,8 +1739,18 @@ Evidence file size is not a concern; do not trim it.
 
 ## Status
 
-Filled in by Task 6 step 7 with the three `audit_compare` verdicts, the baseline
-self-check, and the `universe-matrix` watched-clause result.
+> **Merged and gated.** Tasks 1-5 landed on `energy-exchanger` (final code commit `229c9a3`);
+> Task 6's corpus gate ran three candidate rounds against two fresh baselines archived
+> from the merge-base `3a10f21`, all `--tier stress --budget 30 --jobs 16`. `audit_compare`
+> PASSED on all three candidate rounds (area ratios 0.9969/0.9984/0.9964) and the baseline
+> self-check (0.9961, the noise floor every candidate round sits inside; the worst per-cell
+> area delta, 0.1107, is the same cell in the baseline-vs-baseline comparison). The
+> `universe-matrix` watched clause PASSED (zero cells moved status or area across 18
+> comparisons) but is corpus-inert at this budget: all six cells refuse for reasons
+> unrelated to this branch, and their refusal text is byte-identical before and after.
+> The positive evidence for the fix is Task 5's end-to-end pin (`tests/bench/test_broke6_url.py`),
+> whose seven tests fail on the merge-base and pass on the branch. Full evidence:
+> `docs/superpowers/evidence/2026-09-03-energy-exchanger/broke6-gate/gate.md`.
 
 ---
 
