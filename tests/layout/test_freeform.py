@@ -9397,6 +9397,103 @@ def _assert_energy_exchanger_port_routing(
     assert validate.certify(placement, spec, expect_power=True).ok
 
 
+def test_an_energy_exchanger_placement_pastes_without_collisions() -> None:
+    """Two belts per exchanger used to be convicted and hidden by the exemption.
+
+    Asked directly, with no LOW_CONFIDENCE filtering, the answer has to be none.
+    """
+    spec = mode_driven_spec()
+    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+    ctx = validate._context(placement, spec, None, 0, Fraction(4), True)
+    assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
+
+
+def _ray_receiver_spec() -> BuildSpec:
+    """A Ray Receiver making critical photons, shaped like ``mode_driven_spec``.
+
+    Pure SOURCE: fed nothing, its output routed straight to the spec boundary
+    -- the same shape ``mode_driven_spec`` uses for the Energy Exchanger, just
+    swapped to the other belt-port host with no INPUT lane and no east dock at
+    yaw 0, so ``_dock_input_lane`` never touches it and ``_port_approach`` is
+    never consulted for it either.
+    """
+    return BuildSpec(
+        groups=(
+            group(
+                "critical-photon",
+                "ray-receiver",
+                2,
+                {},
+                {"critical-photon": F(1)},
+            ),
+        ),
+        external_inputs={},
+        outputs={"critical-photon": F(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="ray-receiver",
+    )
+
+
+#: Captured on 688cbed (this branch's base, before any edit in this task) by
+#: running ``_ray_receiver_spec()`` through ``FreeformLayout`` three times --
+#: twice at ``time_budget_s=4.0`` and once at ``8.0`` -- and comparing the
+#: three shapes.  *Deterministic:* all three gave the same 31 buildings.
+#: *And the identity holds:* the same spec laid out with Tasks 1-3 of this
+#: plan applied gives 31 buildings that compare equal to this on
+#: ``(item_id, x, y, z, yaw, output_obj, input_obj)`` -- exactly what
+#: :func:`test_a_ray_receiver_strip_is_byte_identical_after_the_approach_change`
+#: asserts.  Both Ray Receivers place at yaw 0.0 with no ``output_obj`` /
+#: ``input_obj`` of their own, confirming ``_dock_input_lane`` never runs for
+#: this spec: the shape this fix must never move.
+RAY_RECEIVER_SHAPE = [
+    (2002, 5, 8, F(0), 90.0, 1, None),
+    (2002, 6, 8, F(0), 90.0, 2, None),
+    (2002, 7, 8, F(0), 90.0, 3, None),
+    (2002, 8, 8, F(0), 90.0, 4, None),
+    (2002, 9, 8, F(0), 90.0, 5, None),
+    (2002, 10, 8, F(0), 90.0, 6, None),
+    (2002, 11, 8, F(0), 90.0, 7, None),
+    (2002, 12, 8, F(0), 90.0, 8, None),
+    (2002, 13, 8, F(0), 90.0, 9, None),
+    (2002, 14, 8, F(0), 90.0, 10, None),
+    (2002, 15, 8, F(0), 90.0, 11, None),
+    (2002, 16, 8, F(0), 90.0, 12, None),
+    (2002, 17, 8, F(0), 90.0, 13, None),
+    (2002, 18, 8, F(0), 90.0, 14, None),
+    (2002, 19, 8, F(0), 90.0, 25, None),
+    (2208, 2, 0, F(0), 0.0, None, None),
+    (2208, 11, 0, F(0), 0.0, None, None),
+    (2002, 5, 4, F(0), 0.0, 18, 15),
+    (2002, 5, 5, F(0), 0.0, 19, None),
+    (2002, 5, 6, F(0), 0.0, 20, None),
+    (2002, 5, 7, F(0), 0.0, 0, None),
+    (2002, 14, 4, F(0), 0.0, 22, 16),
+    (2002, 14, 5, F(0), 0.0, 23, None),
+    (2002, 14, 6, F(0), 0.0, 24, None),
+    (2002, 14, 7, F(0), 0.0, 9, None),
+    (2002, 20, 8, F(0), 0.0, 26, None),
+    (2002, 21, 8, F(0), 0.0, 27, None),
+    (2002, 22, 8, F(0), 0.0, None, None),
+    (2201, 10, 6, F(0), 0.0, None, None),
+    (2201, 19, 0, F(0), 0.0, None, None),
+    (2201, 0, 0, F(0), 0.0, None, None),
+]
+
+
+def test_a_ray_receiver_strip_is_byte_identical_after_the_approach_change() -> None:
+    """A Ray Receiver has no east dock at yaw 0 and no input lanes, so
+    _dock_input_lane never runs for it and _port_approach is never consulted.
+    Pin the emitted geometry so a future widening of the rule cannot drift it.
+    """
+    spec = _ray_receiver_spec()
+    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+    shape = [
+        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
+    ]
+    assert shape == RAY_RECEIVER_SHAPE
+
+
 class TestModeDrivenMachines:
     """Some machines are configured by a MODE, not a recipe id.
 

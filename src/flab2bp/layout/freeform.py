@@ -66,7 +66,16 @@ import time
 from array import array
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence, Set
+from collections.abc import (
+    Callable,
+    Collection,
+    Container,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+    Set,
+)
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -1160,7 +1169,16 @@ class Strip:
             )
             if lane_index >= len(docks):
                 return self.width
-            last_tap = (self.machines - 1) * self.pw + docks[lane_index].cell[0] + 1
+            # The lane must reach the column the approach will TAP, which is no
+            # longer always dock+1: a host whose port sits inside its own
+            # collider taps further east (see _port_approach).  Trimming to
+            # dock+1 left the LAST machine in a strip with no legal tap, which
+            # turns the collision this fix removes into a refusal instead.
+            probe = slots.probe_building(self.item_id, self.yaw)
+            offset = _port_approach_offset(probe, docks[lane_index], self.pw)
+            if offset is None:
+                return self.width
+            last_tap = (self.machines - 1) * self.pw + docks[lane_index].cell[0] + offset
             return min(self.width, last_tap + 1)
         plan = self._input_attachment_plan(lane[0])
         if plan.lane.items != lane:
@@ -5471,6 +5489,63 @@ def _flank_lane(
     return placed
 
 
+def _port_approach(
+    machine: PlacedBuilding,
+    dock: slots.PortDock,
+    lane_y: int,
+    lane_columns: Container[int],
+    max_offset: int,
+) -> tuple[list[tuple[int, int]], int] | None:
+    """The branch cells from the input lane to ``dock``, and the column it taps.
+
+    An L: down or up the tap column, then west along the dock's row into the
+    port.  The tap column used to be fixed at ``dock.cell[0] + 1``, which is
+    right for every host whose port pose clears its own build collider and
+    WRONG for one whose does not.  An Energy Exchanger's east port sits two
+    tiles from its centre inside a collider that reaches three, so the fixed
+    column stood inside the collider for its whole length -- five tiles, of
+    which the paste rescues three and convicts the rest.  That is the red belt
+    in every Energy Exchanger paste.
+
+    So the column is CHOSEN, with the paste's own predicate.  Two conditions,
+    and the second is not redundant: the hits must be the run's SUFFIX, because
+    ``CheckBuildConditions`` 147443 rescues by HOP DISTANCE from the host, so
+    three hits scattered along a run are three convictions.
+    """
+    for offset in range(1, max_offset + 1):
+        tap_x = dock.cell[0] + offset
+        if tap_x not in lane_columns:
+            continue
+        cells: list[tuple[int, int]] = []
+        if dock.cell[1] != lane_y:
+            step = 1 if dock.cell[1] > lane_y else -1
+            cells += [(tap_x, y) for y in range(lane_y + step, dock.cell[1] + step, step)]
+        cells += [(x, dock.cell[1]) for x in range(tap_x - 1, dock.cell[0] - 1, -1)]
+        if not cells or cells[-1] != dock.cell:
+            continue
+        hits = [i for i, (x, y) in enumerate(cells) if slots.belt_tile_hits_collider(machine, x, y)]
+        if hits and hits != list(range(len(cells) - len(hits), len(cells))):
+            continue
+        if len(hits) <= slots.MAX_RESCUED_COLLIDER_TILES:
+            return cells, tap_x
+    return None
+
+
+def _port_approach_offset(probe: PlacedBuilding, dock: slots.PortDock, pitch_w: int) -> int | None:
+    """How far east of ``dock`` a lane must reach, in the PROBE frame.
+
+    ``Strip.input_lane_tiles`` and ``_feedable_by_port`` both need the answer
+    before any machine is placed, so they ask it of ``probe_building``'s
+    origin-anchored copy.  ``probe.height + 1`` is the first row below the
+    machine band -- a real lane row, not a width.  That distinction matters:
+    the vertical leg's LENGTH changes the in-collider count, so passing a width
+    here would answer a different question from the one the emitter asks and
+    could pass a strip the emitter then refuses.
+    """
+    got = _port_approach(probe, dock, probe.height + 1, range(-pitch_w, 2 * pitch_w), pitch_w)
+    return None if got is None else got[1] - dock.cell[0]
+
+
 def _dock_input_lane(
     canvas: _Canvas,
     machines: list[int],
@@ -5500,7 +5575,8 @@ def _dock_input_lane(
                 for _port, candidate in sorted(slots.port_docks(machine).items())
                 if candidate.port not in taken
                 and candidate.facing is Facing.EAST
-                and candidate.cell[0] + 1 in lane_by_x
+                and _port_approach(machine, candidate, lane_y, lane_by_x, machine.width + 2)
+                is not None
             ),
             None,
         )
@@ -5508,17 +5584,13 @@ def _dock_input_lane(
             name = catalog.building(machine.item_id).name
             raise NoValidLayout(
                 f"{name} cannot feed {item!r} from its east-running input lane "
-                "through a distinct exact belt port"
+                "through a distinct exact belt port whose approach stays inside "
+                f"the paste's {slots.MAX_RESCUED_COLLIDER_TILES}-tile collider rescue"
             )
 
-        tap_x = dock.cell[0] + 1
-        step_y = 1 if dock.cell[1] > lane_y else -1
-        branch_cells = (
-            [(dock.cell[0], dock.cell[1])]
-            if dock.cell[1] == lane_y
-            else [(tap_x, y) for y in range(lane_y + step_y, dock.cell[1] + step_y, step_y)]
-            + [(dock.cell[0], dock.cell[1])]
-        )
+        approach = _port_approach(machine, dock, lane_y, lane_by_x, machine.width + 2)
+        assert approach is not None  # the dock filter above already asked
+        branch_cells, tap_x = approach
         branch: list[int] = []
         for cell_index, (x, y) in enumerate(branch_cells):
             if cell_index + 1 < len(branch_cells):
@@ -16469,7 +16541,10 @@ def _feedable_by_port(strip: Strip) -> bool:
     """Can each input lane branch through a distinct east-facing prefab port?"""
     probe = slots.probe_building(strip.item_id, strip.yaw)
     docks = slots.port_docks(probe).values()
-    capacity = sum(dock.facing is Facing.EAST and dock.cell[0] + 1 < strip.pw for dock in docks)
+    capacity = sum(
+        dock.facing is Facing.EAST and _port_approach_offset(probe, dock, strip.pw) is not None
+        for dock in docks
+    )
     lanes = strip.in_above + strip.in_below
     return (
         bool(lanes)
