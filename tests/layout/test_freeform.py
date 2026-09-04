@@ -3980,6 +3980,80 @@ def _sweep_after_first_routing(
     )
     return result, seen, attempts
 
+def test_a_repeated_draw_becomes_a_diversification_cut_at_the_next_arrangement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2 §6b: without this, every arrangement past 0 is a byte-identical pack.
+
+    Eighty candidate slots produced FIVE routing evaluations, because CP-SAT
+    returns the identical assignment for every arrangement seed on a 42-strip
+    model it proves optimal in under 0.1 s, and the duplicate-assignment guard
+    then drops it. The cut is what makes arrangement N a different draw.
+
+    Reachable only because Task 10 replaced the arrangement gate: on master the
+    sweep breaks before `(20, 1)` is ever packed.
+    """
+    seen_cuts: dict[tuple[int, int], tuple[freeform.ExactPackNoGood, ...]] = {}
+
+    def record(
+        candidate: tuple[int, int],
+        pack: freeform._Pack,
+        exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
+    ) -> freeform._Pack:
+        seen_cuts[candidate] = exact_no_goods
+        return pack
+
+    _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(RouteFailureKind.SEALED_POCKET),
+        subsequent_routing=_routing_failures(RouteFailureKind.SEALED_POCKET),
+        arrangements=2,
+        heights=(20, 30),
+        distinct_arrangements=False,
+        time_budget_s=1e6,
+        pack_transform=record,
+    )
+
+    assert seen_cuts[20, 0] == ()
+    assert seen_cuts[30, 0] == ()
+    cuts_20 = seen_cuts[20, 1]
+    assert len(cuts_20) == 1
+    assert cuts_20[0].height == 20
+    assert cuts_20[0].evidence[0].check == "pack.diversification"
+    # Scoped to (height, arrangement + 1): the height 30 draw at arrangement 1
+    # carries only ITS OWN height's cut, never height 20's.
+    cuts_30 = seen_cuts[30, 1]
+    assert len(cuts_30) == 1
+    assert cuts_30[0].height == 30
+
+
+def test_a_diversification_cut_is_never_taken_once_a_pack_has_wired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cell that wires is untouched, so no clean cell's area can move here."""
+    seen_cuts: dict[tuple[int, int], tuple[freeform.ExactPackNoGood, ...]] = {}
+
+    def record(
+        candidate: tuple[int, int],
+        pack: freeform._Pack,
+        exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
+    ) -> freeform._Pack:
+        seen_cuts[candidate] = exact_no_goods
+        return pack
+
+    result, _seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routed(),
+        arrangements=2,
+        heights=(20,),
+        subsequent_routing=_routed(),
+        time_budget_s=1e6,
+        pack_transform=record,
+    )
+
+    assert result is not None
+    assert all(cuts == () for cuts in seen_cuts.values())
+
 
 def _lay_out_with_injected_packs(
     monkeypatch: pytest.MonkeyPatch,
@@ -4521,6 +4595,7 @@ def test_feedback_retry_does_not_reroute_the_same_assignment(
             and no_good.width == 20
             and no_good.outline == prior_outline
             and no_good.origins == prior_origins
+            and no_good.evidence[0].check == "route.feedback_retry"
         )
         if not excluded:
             return pack
@@ -5038,8 +5113,14 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
     assert isinstance(feedback, FeedbackState)
     assert feedback.net_weight[failed.failures[0].net_id] == 1.0
     exact_no_goods = calls[1]["exact_pack_no_goods"]
-    assert isinstance(exact_no_goods, tuple) and len(exact_no_goods) == 1
-    rejected = exact_no_goods[0]
+    assert isinstance(exact_no_goods, tuple)
+    route_no_goods = tuple(
+        no_good
+        for no_good in exact_no_goods
+        if no_good.evidence[0].check != "pack.diversification"
+    )
+    assert len(route_no_goods) == 1
+    rejected = route_no_goods[0]
     assert isinstance(rejected, freeform.ExactPackNoGood)
     assert rejected.origins == tuple(compact.at[index] for index in range(len(compact.at)))
     assert attempts[0].origins != attempts[1].origins
