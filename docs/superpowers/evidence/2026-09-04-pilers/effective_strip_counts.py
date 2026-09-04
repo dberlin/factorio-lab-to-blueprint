@@ -12,6 +12,7 @@ import inspect
 import json
 import sys
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -85,10 +86,8 @@ def _capture_freeform(
 
     freeform._machines_without_poses = intercept
     try:
-        try:
+        with suppress(_SeamCaptured):
             strategy.lay_out(spec, time_budget_s=30.0)
-        except _SeamCaptured:
-            pass
     finally:
         freeform._machines_without_poses = original
     if captured is None:
@@ -122,10 +121,8 @@ def _capture_sequence_pair(
 
     sequence_solver._variant_search_inputs = intercept
     try:
-        try:
+        with suppress(_SeamCaptured):
             strategy.lay_out(spec, time_budget_s=30.0)
-        except _SeamCaptured:
-            pass
     finally:
         sequence_solver._variant_search_inputs = original
     if captured is None:
@@ -144,6 +141,7 @@ def main() -> int:
     sys.path.insert(0, str(archive / "scripts"))
 
     import audit  # type: ignore[import-not-found]  # noqa: PLC0415
+
     from flab2bp.layout import freeform, sequence_solver  # noqa: PLC0415
 
     _require_seams(freeform, sequence_solver)
