@@ -1,0 +1,36 @@
+
+Per-cell area: baseline = Task 5's candidate rounds (Deliverable A, 2f7d366),
+candidate = Task 10 (5e9b6c3).  Jointly-CLEAN cells only.
+Noise band +/-1.3% (`--noise-area 0.013`, the same-arm median from docs/BACKLOG.md).
+
+round 1: 66 jointly-CLEAN cells, 62 with byte-identical area, 4 outside the noise band
+    freeform       casimir-crystal/output-products         1144 ->      1100   ratio 0.9615
+    freeform       processor/no-proliferator          864 ->       943   ratio 1.0914
+    freeform       super-magnetic-ring/no-proliferator         2220 ->      2124   ratio 0.9568
+    sequence-pair  information-matrix/output-products         5150 ->      5394   ratio 1.0474
+
+round 2: 66 jointly-CLEAN cells, 63 with byte-identical area, 1 outside the noise band
+    freeform       super-magnetic-ring/all-products            1960 ->      1880   ratio 0.9592
+
+round 3: 66 jointly-CLEAN cells, 62 with byte-identical area, 4 outside the noise band
+    freeform       casimir-crystal/output-products         1100 ->      1144   ratio 1.0400
+    freeform       processor/no-proliferator          884 ->       864   ratio 0.9774
+    freeform       super-magnetic-ring/all-products            1960 ->      1880   ratio 0.9592
+    sequence-pair  information-matrix/all-products            3960 ->      4453   ratio 1.1245
+
+Cells outside the band in more than one round (a systematic move would show here):
+    ('freeform', 'casimir-crystal', 'output-products'): [(1, 0.9615), (3, 1.04)]  direction(s): ['down', 'up']
+    ('freeform', 'processor', 'no-proliferator'): [(1, 1.0914), (3, 0.9774)]  direction(s): ['down', 'up']
+    ('freeform', 'super-magnetic-ring', 'all-products'): [(2, 0.9592), (3, 0.9592)]  direction(s): ['down']
+
+
+Every mover's area across all three rounds of BOTH arms, so a move can be
+told from the spread each arm has on its own:
+
+cell                                                       baseline r1/r2/r3          candidate r1/r2/r3
+freeform casimir-crystal/output-products                   1144/1144/1100             1100/1144/1144
+freeform processor/no-proliferator                         864/884/884                943/884/864
+freeform super-magnetic-ring/no-proliferator               2220/2156/2146             2124/2146/2146
+freeform super-magnetic-ring/all-products                  1880/1960/1960             1880/1880/1880
+sequence-pair information-matrix/output-products           5150/5394/5394             5394/5394/5394
+sequence-pair information-matrix/all-products              3960/3960/3960             3960/3960/4453
