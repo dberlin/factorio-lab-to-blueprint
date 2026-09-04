@@ -6108,9 +6108,38 @@ class SequencePairLayout:
                     budget_s=run.ceiling,
                     attempt_reasons=exc.attempt_reasons,
                     projection_failures=exc.projection_failures,
+                    stats=_refusal_stats(run),
                 ) from exc
             placement = _with_observational_stats(result, run, True, self.config)
         return placement
+
+
+def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
+    """Telemetry for a run that produced no placement.
+
+    A subset of `_with_observational_stats`' keys, and deliberately only the ones
+    that exist without an incumbent: there is no placement to measure area, belt
+    tiles or a validation verdict on.  `stages` is the count a gate needs to
+    bound the product probe's cost (R3 §4.4 measured a 45% stage loss when the
+    window arm fires freely), and it is already a published `PlacementStats` key
+    on CLEAN sequence-pair rows, so a gate joins the two arms on one name.
+    """
+    telemetry = run.telemetry
+    session = run.solver.alns_session
+    return {
+        "stages": float(len(run.solver._stage_stats)),
+        "heights": float(len(run.heights)),
+        "alns_choices": float(len(session.choices)),
+        "alns_applied": float(session.applied),
+        "alns_evaluations": float(telemetry.alns_evaluations),
+        "alns_operators": operator_tally(session),
+        "alns_window_solves": float(telemetry.alns_window_solves),
+        "alns_window_accepted": float(telemetry.alns_window_accepted),
+        "alns_window_seconds": telemetry.alns_window_seconds,
+        "alns_skipped_no_goods": float(telemetry.alns_skipped_no_goods),
+        "global_routes": float(telemetry.global_routes),
+        "detailed_routes": float(telemetry.detailed_routes),
+    }
 
 
 def _with_observational_stats(

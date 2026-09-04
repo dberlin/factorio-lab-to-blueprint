@@ -30,6 +30,7 @@ is where it picks up and ``output_obj`` is where it puts down.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from fractions import Fraction
@@ -461,6 +462,7 @@ class NoValidLayout(Exception):
         attempt_reasons: tuple[str, ...] = (),
         attempt_failures: tuple[LayoutAttemptFailure, ...] = (),
         projection_failures: tuple[ProjectionFailureRecord, ...] = (),
+        stats: Mapping[str, float | str] | None = None,
     ) -> None:
         super().__init__(
             f"no valid layout for {spec_label or 'this spec'} after "
@@ -473,6 +475,13 @@ class NoValidLayout(Exception):
         self.attempt_reasons = attempt_reasons
         self.attempt_failures = tuple(attempt_failures)
         self.projection_failures = tuple(dict.fromkeys(projection_failures))
+        #: Solver telemetry from the run that refused, or empty.  A refusal with
+        #: no numbers is a refusal no gate can attribute a lever to: R3 §5.3
+        #: measured every `alns_*` stat as written only on the SUCCESS path, so a
+        #: REFUSED audit row carried nothing about the search that produced it.
+        #: Keys absent on a row read as zero, or as the empty string for
+        #: `alns_operators`, which is a tally string rather than a number.
+        self.stats: dict[str, float | str] = dict(stats or {})
 
 
 class LayoutStrategy(Protocol):

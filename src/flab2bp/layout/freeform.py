@@ -17071,6 +17071,7 @@ class FreeformLayout:
         #: Candidate heights whose greedy seed extent fits no band.  NOT a
         #: rejection: no pack existed to reject.
         skipped_heights: list[int] = []
+        sweep_telemetry: dict[str, float | str] = {}
         #: Complete immutable evidence from every pack the sweep routed. Empty
         #: means no pack got that far. Refusal reporting reads counts from the
         #: detailed results without destroying identities Task 10 consumes.
@@ -17103,6 +17104,7 @@ class FreeformLayout:
                     attempts,
                     skipped_heights=skipped_heights,
                     session=alns_session,
+                    telemetry=sweep_telemetry,
                 )
             except _PreparationDeadline as exc:
                 raise NoValidLayout(
@@ -17140,6 +17142,11 @@ class FreeformLayout:
             if skipped_heights
             else ""
         )
+        refusal_stats: dict[str, float | str] = {
+            **sweep_telemetry,
+            "attempts": float(len(attempts)),
+            "skipped_heights": float(len(skipped_heights)),
+        }
         # A build that WIRED and then failed our own validator is a different
         # defect from one that could not be wired, and saying so is the whole
         # value of checking: "the packer produced packs its own router cannot
@@ -17155,6 +17162,7 @@ class FreeformLayout:
                 spec_label=spec.label,
                 budget_s=budgets[-1],
                 projection_failures=projection_failures,
+                stats=refusal_stats,
             )
         if deadline_expired:
             # AND IT HAS TO SAY HOW CLOSE THE PACKS CAME, because the clock
@@ -17250,6 +17258,7 @@ class FreeformLayout:
                 spec_label=spec.label,
                 budget_s=ceiling,
                 projection_failures=projection_failures,
+                stats=refusal_stats,
             )
         # "every pack the sweep produced left nets unrouted" is false when no
         # pack was ever produced. `attempts` is empty whenever `_sweep` never
@@ -17282,6 +17291,7 @@ class FreeformLayout:
             (_port_seating_refusal(attempts) or base) + over_band,
             spec_label=spec.label,
             budget_s=budgets[-1],
+            stats=refusal_stats,
         )
 
     def _sweep(
@@ -17296,6 +17306,7 @@ class FreeformLayout:
         skipped_heights: list[int] | None = None,
         *,
         session: OperatorSession,
+        telemetry: dict[str, float | str] | None = None,
     ) -> Placement | None:
         """Try every candidate height, returning the best FULLY ROUTED placement.
 
@@ -17319,6 +17330,11 @@ class FreeformLayout:
         ``rejected`` made `lay_out` report "every packing that wired was rejected
         by our own validator" for a cell where nothing wired (R1 §0).  The
         POST-pack gate still retains a real pack's rejection.
+
+        ``telemetry`` receives this sweep's counters whatever the outcome, so a
+        refusal can carry them.  `best.stats` is stamped only when a placement
+        exists, and a refusing cell is precisely the one whose numbers a gate
+        needs.
 
         ``time_budget_s`` bounds the WHOLE sweep, not just CP-SAT.  It used to
         bound only the packing: routing is limited by an expansion count, not a
@@ -17569,6 +17585,10 @@ class FreeformLayout:
         window_skipped_no_goods = 0
         window_encode_errors = 0
         evaluations = 0
+        #: Consecutive draws that added no new entry to `routed_assignments`.
+        #: Task 11 makes it move; it is published from here so the refused-row
+        #: schema does not change again a task later.
+        stale_draws = 0
         started_at: float | None = None
         candidate_index = 0
 
@@ -18857,6 +18877,24 @@ class FreeformLayout:
                     after=None,
                     routing_seconds=0.0,
                 )
+        if telemetry is not None:
+            telemetry["alns_choices"] = float(len(session.choices))
+            telemetry["alns_applied"] = float(session.applied)
+            telemetry["alns_evaluations"] = float(evaluations)
+            telemetry["alns_routing_seconds"] = session.routing_seconds
+            telemetry["alns_operators"] = operator_tally(session)
+            telemetry["alns_window_solves"] = float(window_solves)
+            telemetry["alns_window_accepted"] = float(window_accepted)
+            telemetry["alns_window_seconds"] = window_seconds
+            telemetry["alns_encode_errors"] = float(window_encode_errors)
+            telemetry["alns_skipped_no_goods"] = float(window_skipped_no_goods)
+            # The names spec 5.3.2 asks for on a REFUSED freeform row, beside the
+            # `alns_*` names the CLEAN rows already use.
+            telemetry["evaluations"] = float(evaluations)
+            telemetry["distinct_assignments"] = float(len(routed_assignments))
+            telemetry["stale_draws"] = float(stale_draws)
+            telemetry["window_solves"] = float(window_solves)
+            telemetry["window_accepted"] = float(window_accepted)
         # `stats["route_backend"]` is stamped in `lay_out`, where none of these
         # locals exist, so the operator telemetry is stamped here instead --
         # guarded, because a sweep that refuses has no placement to carry it.

@@ -7,7 +7,7 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy
-from flab2bp.layout.base import AreaFrame, Facing, PlacedBuilding, Placement
+from flab2bp.layout.base import AreaFrame, Facing, NoValidLayout, PlacedBuilding, Placement
 
 
 def test_area_and_bounds_cover_full_footprints() -> None:
@@ -92,3 +92,23 @@ def test_facing_delta_and_opposite_are_consistent() -> None:
         dx, dy = f.delta
         ox, oy = f.opposite().delta
         assert (dx + ox, dy + oy) == (0, 0)
+
+
+def test_no_valid_layout_carries_optional_solver_stats() -> None:
+    """A REFUSED row with no stats is a refusal nobody can attribute.
+
+    R3 §5.3 measured it: every `alns_*` stat is written in
+    `_with_observational_stats`, which only runs on a SUCCESSFUL placement, so a
+    refused cell reported nothing about the search that refused it.
+    """
+    bare = NoValidLayout("nothing wired", spec_label="x", budget_s=30.0)
+    carried = NoValidLayout(
+        "nothing wired",
+        spec_label="x",
+        budget_s=30.0,
+        stats={"stages": 11.0, "alns_operators": "destroy:failed-endpoints:9"},
+    )
+
+    assert bare.stats == {}
+    assert carried.stats["stages"] == 11.0
+    assert carried.stats["alns_operators"] == "destroy:failed-endpoints:9"
