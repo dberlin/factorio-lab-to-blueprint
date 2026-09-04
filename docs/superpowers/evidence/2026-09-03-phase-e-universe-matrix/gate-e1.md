@@ -71,7 +71,7 @@ No `NO STATS` line and no `AREA OUTLIER` line were printed in any round.
 
 ## Load
 
-See `e1-load.txt` for `uptime` and `vmstat 1 3` recorded immediately before each of the six round/arm runs. Load ranged up to `load average: 37.63` (round 2, candidate arm) — consistent with this box's standing behaviour (128 cores, load is I/O wait, never idle); no round waited for it to drop.
+See `e1-load.txt` for `uptime` and `vmstat 1 3` recorded immediately before each of the six round/arm runs. Load ranged up to `load average: 37.63` (round 2, candidate arm). The recorded samples show the load was mostly this audit's own 16 jobs on a 128-core box (the round-1 candidate sample reads `us 88, wa 0, r 131` while the previous arm drained), not I/O wait; no round waited for it to drop.
 
 ## Clause verdicts
 
