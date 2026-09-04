@@ -696,6 +696,10 @@ GEOMETRY_SAFE_FIXTURES = (
 #: may be measurement error rather than a wrong table -- but it is unresolved.
 LOW_CONFIDENCE_FOOTPRINTS = frozenset({2101, 2104, 2203, 2205, 2209, 2210, 2212})
 
+# Read UNPLACED_LOW_CONFIDENCE_FOOTPRINTS, not this, when the question is "may
+# a check skip this building?".  This set is the raw distrust; that one is the
+# distrust minus what we place, which is what the claim above means.
+
 
 # --- recipes ---------------------------------------------------------------
 
@@ -816,6 +820,28 @@ MODE_DRIVEN_MACHINE = {
     "critical-photon": ModeDriven(RAY_RECEIVER_ID, "ray-receiver", "photon"),
     "critical-photon-graviton": ModeDriven(RAY_RECEIVER_ID, "ray-receiver", "photon"),
 }
+
+#: DSP item ids of the mode-driven buildings, read off the table above.
+#:
+#: Listed nowhere: the hardcoded "buildings the generator places" set this
+#: replaces was written before `MODE_DRIVEN_MACHINE` existed, so it did not
+#: know we place an Energy Exchanger, and the guard that depended on it passed
+#: vacuously while `validate` suppressed real belt collisions on one.
+MODE_DRIVEN_MACHINE_ITEM_IDS: frozenset[int] = frozenset(
+    driven.machine_item_id for driven in MODE_DRIVEN_MACHINE.values()
+)
+
+#: The belt/collider exemption, narrowed to what it always claimed to be.
+#:
+#: `LOW_CONFIDENCE_FOOTPRINTS` says "none of them placed by the generator".
+#: That sentence is the whole justification for suppressing a conviction, and
+#: the mode-driven feature falsified it for **2209** without touching the
+#: sentence.  2208 was never in the distrusted set, and every other machine we
+#: place was, and stays, absent from it -- so this subtraction newly checks
+#: exactly one building.
+UNPLACED_LOW_CONFIDENCE_FOOTPRINTS: frozenset[int] = (
+    LOW_CONFIDENCE_FOOTPRINTS - MODE_DRIVEN_MACHINE_ITEM_IDS
+)
 
 
 def _kebab(name: str) -> str:
