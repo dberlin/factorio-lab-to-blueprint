@@ -317,6 +317,9 @@ class PlacementStats(TypedDict, total=False):
     quality_exits: float
     quality_stages: float
     race_terminated: float
+    relation_no_goods_produced: float
+    relation_no_goods_repeated: float
+    relation_no_goods_unique: float
     repair_iterations: float
     restarts: float
     riser_columns: float
