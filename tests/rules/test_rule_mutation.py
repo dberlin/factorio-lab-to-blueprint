@@ -59,6 +59,7 @@ VERDICTS: dict[str, tuple[str, str]] = {
     "catalog.SORTER_MAX_REACH": ("both", "sorter span, checked and searched"),
     "catalog.SORTER_RATE_AT_1": ("both", "rate rule, checked and searched"),
     "catalog.BELT_RATE": ("validator", "belt-capacity witnesses cross the tier boundary"),
+    "catalog.PILER_MAX_STACK": ("both", "piler output stack cap, checked and searched"),
     "catalog.BELT_Z_PER_WORLD_UNIT": ("both", "world-to-blueprint z conversion"),
     "catalog.clearance": (
         "strategy",

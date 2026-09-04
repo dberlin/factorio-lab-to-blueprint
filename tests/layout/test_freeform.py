@@ -614,7 +614,7 @@ def test_belt_port_input_lane_fans_out_through_exact_machine_ports() -> None:
     canvas = _Canvas()
     belt_id = catalog.item_id(spec.belt_item_id)
 
-    inputs, _outputs, _connections = _emit_strip(
+    inputs, _outputs, _connections, _piler_nets = _emit_strip(
         canvas,
         strip,
         0,
@@ -763,7 +763,7 @@ def test_strip_emission_reproduces_every_precomputed_attachment() -> None:
     belt_id = catalog.item_id(spec.belt_item_id)
     ox, oy = 11, 7
 
-    _inputs, _outputs, sorter_count = _emit_strip(
+    _inputs, _outputs, sorter_count, _piler_nets = _emit_strip(
         canvas,
         strip,
         ox,
@@ -837,7 +837,7 @@ def test_multi_lane_assembler_emission_uses_one_slot_per_sorter() -> None:
     canvas = _Canvas()
     belt_id = catalog.item_id(spec.belt_item_id)
 
-    _inputs, _outputs, sorter_count = _emit_strip(
+    _inputs, _outputs, sorter_count, _piler_nets = _emit_strip(
         canvas,
         strip,
         0,
@@ -1112,7 +1112,7 @@ def test_input_lane_emission_uses_precomputed_attachment_span() -> None:
     canvas = _Canvas()
     belt_id = catalog.item_id(spec.belt_item_id)
 
-    _inputs, _outputs, sorter_count = _emit_strip(
+    _inputs, _outputs, sorter_count, _piler_nets = _emit_strip(
         canvas,
         strip,
         0,

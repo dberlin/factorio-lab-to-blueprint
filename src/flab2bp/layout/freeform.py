@@ -16005,6 +16005,9 @@ def _build_prepared(
         for net in workspace.nets
         if net.net_id is not None and net.net_id.role is NetRole.EXTERNAL
     ]
+    external_entry_counts: dict[str, int] = defaultdict(int)
+    for net in external_nets:
+        external_entry_counts[net.item] += 1
     route_nets = [
         net
         for net in workspace.nets
@@ -16192,7 +16195,26 @@ def _build_prepared(
         description=f"flab2bp freeform layout ({spec.label or 'default'})",
         short_desc=spec.label or "flab2bp",
         stats={
+            # Match `flow.external_entry_points`: only items with at least two
+            # physical entry roots count, using the fastest researched belt's
+            # cargo rate times the incoming stack and exact ceiling division.
+            # `planning_stack(..., external=True)` is the spec-side counterpart
+            # of the validator's derived `Context.stack_of` for an entry run.
+            "entry_lanes_needed": float(
+                sum(
+                    max(
+                        1,
+                        lanes_for(
+                            demand,
+                            spec.lane_capacity * spec.planning_stack(item, external=True),
+                        ),
+                    )
+                    for item, demand in spec.external_inputs.items()
+                    if external_entry_counts[item] >= 2
+                )
+            ),
             "machines": float(spec.machine_count),
+            "pilers": float(sum(b.item_id == catalog.PILER_ID for b in wired)),
             "strips": float(len(strips)),
             "sorters": float(prepared.sorters),
             "towers": float(len(towers)),

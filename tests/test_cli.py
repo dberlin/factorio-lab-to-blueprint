@@ -62,7 +62,7 @@ def test_cli_always_reports_stack_one_without_a_url_suffix(
     line = next(
         line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")
     )
-    assert line.endswith("; stack 1")
+    assert line.endswith("; stack 1; 0 piler(s)")
     assert "URL ist=" not in line
 
 
