@@ -1,0 +1,48 @@
+Gate C candidate JSONL summary
+command shape: python scripts/audit.py --budget 30 --jobs 16 --json candidate-budget30-round<N>.jsonl
+expected matrix: default explicit strategies (freeform + sequence-pair), 12 URLs x 3 candidates x 2 = 72 rows
+
+round 1:
+  rows=72 unique_cells=72
+  statuses={'CLEAN': 70, 'REFUSED': 2}
+  strategies={'freeform': 36, 'sequence-pair': 36}
+  commits={'fa9032df25f46f2c50f86d18e09b30d9eae020bc': 72}
+  route_backends={'cython': 72}
+  explicit stats.pilers fields=70/72 values={0.0: 70, '<missing>': 2}
+  REFUSED freeform universe-matrix/no-proliferator: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  REFUSED sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+round 2:
+  rows=72 unique_cells=72
+  statuses={'CLEAN': 70, 'REFUSED': 2}
+  strategies={'freeform': 36, 'sequence-pair': 36}
+  commits={'fa9032df25f46f2c50f86d18e09b30d9eae020bc': 72}
+  route_backends={'cython': 72}
+  explicit stats.pilers fields=70/72 values={0.0: 70, '<missing>': 2}
+  REFUSED freeform universe-matrix/no-proliferator: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  REFUSED sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+round 3:
+  rows=72 unique_cells=72
+  statuses={'CLEAN': 70, 'REFUSED': 2}
+  strategies={'freeform': 36, 'sequence-pair': 36}
+  commits={'fa9032df25f46f2c50f86d18e09b30d9eae020bc': 72}
+  route_backends={'cython': 72}
+  explicit stats.pilers fields=70/72 values={0.0: 70, '<missing>': 2}
+  REFUSED freeform universe-matrix/no-proliferator: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  REFUSED sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+
+all rounds rows=216
+all rounds statuses={'CLEAN': 210, 'REFUSED': 6}
+all rounds commits={'fa9032df25f46f2c50f86d18e09b30d9eae020bc': 216}
+all rounds route_backends={'cython': 216}
+all rounds explicit stats.pilers fields=210/216
+all rounds stats.pilers values={0.0: 210, '<missing>': 6}
+all rounds normalized piler count (`row.get("stats", {}).get("pilers", 0)`)={0.0: 216}
+caveat: 210 CLEAN rows explicitly carry `stats.pilers=0.0`; the 6 placement-free REFUSED rows omit solver stats rather than explicitly serializing zero.
+independent seam proof: candidate-effective-strips.jsonl reports `pilers=0` for all 72 strategy/cell pairs, including both refused cells; each of the 216 audit rows joins to one of those 72 zero-piler records.
+
+round-for-round status comparison with Task 10:
+  each round: CLEAN->CLEAN=66, REFUSED->CLEAN=4, REFUSED->REFUSED=2, no CLEAN regression
+  REFUSED->CLEAN in every round: freeform and sequence-pair universe-matrix/{all-products,output-products}
+  REFUSED->REFUSED in every round: freeform and sequence-pair universe-matrix/no-proliferator
+  sequence-pair/no-proliferator detail is byte-identical (`deadline exhausted before finding an exact layout`)
+  freeform/no-proliferator detail changed: Task 10 refused on `game.blueprint_area`; Task 15 refused because no packing of 43 strips could be wired. `audit_compare.py --regressions-only` calls this CARRIED because its classification is status-based, not detail-based.
