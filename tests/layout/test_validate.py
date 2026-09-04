@@ -4095,6 +4095,21 @@ def test_flow_external_entry_points_silent_on_a_single_entry() -> None:
     assert not fired(r, "flow.external_entry_points")
 
 
+def test_flow_external_entry_points_counts_one_trunk_before_a_splitter() -> None:
+    """Branches fed inside the blueprint are not extra player connections."""
+    p = place(
+        belt(0, 1, out=1, carries="copper-ore"),  # 0  physical entry
+        belt(0, 0, out=2, carries="copper-ore"),  # 1
+        splitter(0, 0),  # 2
+        belt(0, 0, inp=2, out=4, carries="copper-ore"),  # 3  east branch
+        belt(1, 0, carries="copper-ore"),  # 4
+        belt(0, 0, inp=2, out=6, carries="copper-ore"),  # 5  north branch
+        belt(0, -1, carries="copper-ore"),  # 6
+    )
+    r = validate(p, ore_spec(), ids=SPLIT_IDS)
+    assert not fired(r, "flow.external_entry_points")
+
+
 # --- item attribution crosses a junction -----------------------------------
 
 

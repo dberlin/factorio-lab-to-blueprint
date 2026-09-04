@@ -81,6 +81,7 @@ const BeltTiers = z.object({
   ceiling: z.string(),
   runs_upgraded: z.number(),
   upgrade_tiers: z.array(z.string()),
+  stack: z.number(),
 });
 
 /**

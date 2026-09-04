@@ -52,17 +52,18 @@ def test_cli_reports_how_many_entry_lanes_an_item_needs(
     assert "  entry lanes: hydrogen 2 (needs 2 at 30/s)" in report
 
 
-def test_cli_says_nothing_about_a_stack_when_the_url_does_not_stack(
+def test_cli_always_reports_stack_one_without_a_url_suffix(
     deuteron_build: pipeline.Build,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Every corpus URL is `ist=1`, so the belts line must read exactly as it
-    always did -- a `stack 1` nobody asked about is noise on every build."""
+    """An unstacked bus is still an explicit reporting contract, but ``ist=1``
+    needs no URL provenance suffix."""
     cli._report(deuteron_build, verbose=False)
     line = next(
         line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")
     )
-    assert "stack" not in line
+    assert line.endswith("; stack 1")
+    assert "URL ist=" not in line
 
 
 def test_cli_names_the_stack_when_the_url_carries_one(
