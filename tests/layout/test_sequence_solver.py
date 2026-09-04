@@ -1470,6 +1470,36 @@ def test_local_exact_pack_credits_an_unusable_window_as_unapplied() -> None:
     assert session.applied == 0
 
 
+def test_a_whole_problem_destroy_set_never_reaches_the_window() -> None:
+    """Pins the guard R3 §1.4 measured, and the counter that now names it.
+
+    `_window_arms()` arms exactly one destroy and one repair, so every draw is
+    `(FAILED_ENDPOINTS, LOCAL_EXACT_PACK)` and the probe cannot change which
+    guard fires.  `_substitution_fixture()`'s routing evidence reaches every one
+    of its four strips, so `destroy_strips` returns the whole problem and
+    `_alns_substitution` credits the choice unapplied without calling the
+    adapter.
+    """
+    calls: list[frozenset[int]] = []
+    dropped: list[str] = []
+
+    def _record_window_pack(window: frozenset[int], *_args: object) -> None:
+        calls.append(window)
+        return None
+
+    adapters = sequence_solver_module._RepairAdapters(
+        window_pack=_record_window_pack,
+        window_dropped=dropped.append,
+    )
+    session = _window_arms()
+
+    _call_alns(session=session, adapters=adapters)
+
+    assert calls == []
+    assert dropped == ["whole"]
+    assert session.applied == 0
+
+
 def test_local_exact_pack_without_an_adapter_is_skipped_and_charged_a_zero_reward(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8579,7 +8609,7 @@ def test_the_default_session_plays_every_shipped_arm() -> None:
     """
     solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
     played: set[DestroyOperator] = set()
-    for _ in range(len(SHIPPED_DESTROY)):
+    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
         choice = solver.alns_session.select(
             OperatorContext(strip_count=20, stagnation=0, remaining_fraction=10)
         )
@@ -8600,7 +8630,7 @@ def test_the_production_session_arms_the_shipped_destroy_and_repair_portfolio() 
     session = run.solver.alns_session
     played_destroy: set[DestroyOperator] = set()
     played_repair: set[RepairOperator] = set()
-    for _ in range(max(len(SHIPPED_DESTROY), len(SHIPPED_REPAIR))):
+    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
         choice = session.select(
             OperatorContext(
                 strip_count=8,

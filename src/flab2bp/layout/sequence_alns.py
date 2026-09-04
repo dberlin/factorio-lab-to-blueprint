@@ -14,6 +14,11 @@ consults no RNG, so for a fixed seed and a fixed deterministic budget the
 sequence of choices replays exactly.  ``routing_seconds`` is carried on the
 outcome and summed for telemetry, and is read nowhere else.
 
+The two ledgers are otherwise phi-isomorphic -- `observe` credits both from one
+reward vector and one `applied` flag -- so `select` walks the destroy x repair
+product on its first `|D| x |R|` draws.  Without that walk, half the shipped
+pairings are unreachable under every reward sequence (R3 section 1.2).
+
 The shipped portfolio is deliberately four operators.  The other enum members
 exist so adding one later is a new dispatch branch rather than a redesign; the
 rule for adding one is that a refusing corpus cell names its mechanism.
@@ -488,14 +493,61 @@ class OperatorSession:
         return affordable or self._repair.order
 
     def select(self, context: OperatorContext) -> OperatorChoice:
-        """Choose the next destroy/repair pairing.  Consults no RNG, no clock."""
+        """Choose the next destroy/repair pairing.  Consults no RNG, no clock.
+
+        THE FIRST ``|D| x |R|`` DRAWS WALK THE PRODUCT, and the rest is the
+        discounted UCB exactly as before.  Two independent ledgers whose untried
+        probes both return `untried[0]` are index-ISOMORPHIC forever: `observe`
+        credits both from the same reward vector and the same ``applied`` flag,
+        so `best` returns the same INDEX in each at every draw and half the
+        advertised portfolio is unreachable under every reward sequence.  R3 §1.2
+        proves it by induction and §1.3 confirms it over 60,000 randomized draws
+        and 166 real corpus selections: zero cross pairings.
+
+        A constant probe OFFSET does not fix it -- a shifted bijection is still a
+        bijection, and it only rotates WHICH two pairings are reachable (R3 §5,
+        measured).  Walking the product does, and after the walk the two ledgers
+        carry genuinely different count and reward patterns, so all four pairings
+        stay reachable under the D-UCB.
+
+        THE WALK IS DESTROY-MAJOR IN DECLARATION ORDER, so draw 0 is master's own
+        ``(FAILED_ENDPOINTS, SEQUENCE_REINSERT)`` and draw 1 is
+        ``(FAILED_ENDPOINTS, LOCAL_EXACT_PACK)`` -- the window posed against the
+        routing-failure set, the evidence it was designed for.  Keeping draw 0
+        identical is deliberate: it is what the production solver's first repair
+        already was, and reversing the repair axis to reach the window one draw
+        sooner was measured to move six solver-behaviour tests for no gain.
+
+        TWO LEDGERS ARE KEPT.  The product is PROBED, not LEARNED, so this
+        class's reason for not learning the product still holds.
+
+        The probe is a pure function of ``len(self._choices)`` and the two arm
+        tuples: no RNG, no clock, no reward.  Replay is preserved; the VALUES of
+        the replayed sequence change once, deliberately and gated.
+
+        ``_affordable_repairs`` still governs.  A probe that would name
+        LOCAL_EXACT_PACK below ``C_WINDOW_FRACTION_FLOOR`` falls through to the
+        D-UCB for both arms rather than smuggling a window past the floor; the
+        ordinal still advances, so that pairing loses its probe turn.
+        """
+        affordable = self._affordable_repairs(context)
+        destroy_order = self._destroy.order
+        repair_order = self._repair.order
+        probe = len(self._choices)
+        pairing: tuple[str, str] | None = None
+        if probe < len(destroy_order) * len(repair_order):
+            probed_destroy = destroy_order[probe // len(repair_order)]
+            probed_repair = repair_order[probe % len(repair_order)]
+            if probed_repair in affordable:
+                pairing = (probed_destroy, probed_repair)
+        if pairing is None:
+            pairing = (
+                self._destroy.best(self._exploration),
+                self._repair.best(self._exploration, among=affordable),
+            )
         choice = OperatorChoice(
-            destroy=DestroyOperator(self._destroy.best(self._exploration)),
-            repair=RepairOperator(
-                self._repair.best(
-                    self._exploration, among=self._affordable_repairs(context)
-                )
-            ),
+            destroy=DestroyOperator(pairing[0]),
+            repair=RepairOperator(pairing[1]),
             scale=operator_scale(context),
             ordinal=len(self._choices),
         )
