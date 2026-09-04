@@ -4748,6 +4748,46 @@ def test_belt_crossing_control_is_not_vacuous() -> None:
     assert total >= 20, total
 
 
+def test_belt_collide_convicts_an_energy_exchanger_approach() -> None:
+    """A five-tile approach inside a 2209's collider is not excused.
+
+    Three tiles are: the docking belt (147492) and the two behind it (147443).
+    A run that turns beside the exchanger and climbs its collider column is
+    four and five hops out and the game flags both, which is what
+    /home/dannyb/full8.png shows on all three exchangers.  On master the
+    exemption suppresses all of them and this set is empty.
+    """
+    info = catalog_building(ENERGY_EXCHANGER_ID)
+    belt = catalog_building(2002)
+    buildings = [
+        PlacedBuilding(
+            item_id=info.item_id,
+            model_index=info.model_index,
+            x=0,
+            y=0,
+            width=info.width,
+            height=info.height,
+        )
+    ]
+    buildings += [
+        PlacedBuilding(
+            item_id=belt.item_id, model_index=belt.model_index, x=7, y=y, width=1, height=1
+        )
+        for y in range(0, 5)
+    ]
+    buildings.append(
+        PlacedBuilding(
+            item_id=belt.item_id, model_index=belt.model_index, x=6, y=4, width=1, height=1
+        )
+    )
+    for i in range(1, 6):
+        buildings[i] = dataclasses.replace(buildings[i], output_obj=i + 1)
+    buildings[6] = dataclasses.replace(buildings[6], output_obj=0)
+    report = validate(Placement(buildings=tuple(buildings)), only={"game.belt_collide"})
+    convicted = {f.buildings[0] for f in report.by_check("game.belt_collide")}
+    assert convicted == {2, 3}, report.by_check("game.belt_collide")
+
+
 # --- prolif.sprayed_cargo_reaches_machines ----------------------------------
 
 SPRAYED_REACHES = "prolif.sprayed_cargo_reaches_machines"
