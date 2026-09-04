@@ -14,7 +14,7 @@ import pytest
 import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog
 from flab2bp.layout import slots
-from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.strip_variants import (
@@ -88,6 +88,51 @@ def _family(spec: BuildSpec) -> StripFamily:
     families = generate_strip_families(spec)
     assert len(families) == 1
     return families[0]
+
+
+def _rated_spec(rate: Fraction, *, count: int = 8, capacity: Fraction = Fraction(30)) -> BuildSpec:
+    """One collider-like group drawing ``rate`` of hydrogen per machine."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=count,
+                inputs_per_machine={"hydrogen": rate},
+                outputs_per_machine={"deuterium": Fraction(1, 2)},
+            ),
+        ),
+        external_inputs={"hydrogen": rate * count},
+        outputs={"deuterium": Fraction(count, 2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=capacity,
+    )
+
+
+def test_machine_cap_is_the_floor_of_capacity_over_the_largest_single_item_rate() -> None:
+    (family,) = generate_strip_families(_rated_spec(Fraction(4)))
+    assert family.machine_cap == 7  # floor(30 / 4)
+
+
+def test_machine_cap_uses_the_fastest_allowed_belt() -> None:
+    (family,) = generate_strip_families(_rated_spec(Fraction(4), capacity=Fraction(12)))
+    assert family.machine_cap == 3  # floor(12 / 4)
+
+
+def test_machine_cap_is_at_least_one_and_a_literal_family_defaults_to_uncapped() -> None:
+    (family,) = generate_strip_families(_rated_spec(Fraction(29)))
+    assert family.machine_cap == 1
+    # `_family(...)` goes through `generate_strip_families`, so it is always
+    # capped (the module's default spec gives 6 at 6/s and 1 per machine);
+    # only a literal `StripFamily(...)` keeps the 0 default.
+    generated = _family(_single_machine_spec("assembling-machine-1", count=3))
+    assert generated.machine_cap == 6
+    assert replace(generated, machine_cap=0).machine_cap == 0
+
+
+def test_a_single_machine_over_the_ceiling_is_refused_early_with_the_rate() -> None:
+    with pytest.raises(NoValidLayout, match=r"31.*hydrogen.*30"):
+        generate_strip_families(_rated_spec(Fraction(31)))
 
 
 def test_sequence_families_keep_same_group_feedback_destination(
@@ -586,7 +631,12 @@ class _OriginArithmeticCounter(int):
 def _adversarial_projection_fixture(
     machine_count: int,
 ) -> tuple[StripInstance, tuple[tuple[_OriginArithmeticCounter, int], ...]]:
-    family = _family(_single_machine_spec("chemical-plant", count=machine_count))
+    # This is about projection-pitch arithmetic growth, not capacity: lift
+    # the family's machine cap so one big adversarial strip still forms.
+    family = replace(
+        _family(_single_machine_spec("chemical-plant", count=machine_count)),
+        machine_cap=0,
+    )
     (instance,) = partition_strip_family(family, max_machine_count=machine_count)
     variant = instance.variant
     adversarial_origins = (
@@ -1375,6 +1425,9 @@ def test_repeated_stage_boundary_splits_conserve_every_machine_and_lane(
         for instance in instances
     )
 
+    # This test is about conservation, not capacity: lift the family's cap
+    # before merging instances back up past it.
+    family = replace(family, machine_cap=0)
     while len(instances) > 1:
         merged = merge_strip_instances(family, instances[0], instances[1])
         assert merged is not None
@@ -1588,3 +1641,33 @@ def test_a_both_fed_ingredient_seated_below_takes_the_LAST_below_row() -> None:
 
     assert above == ()
     assert below == (("graphene",), ("titanium-crystal",), ("hydrogen",))
+
+
+def test_partition_never_exceeds_the_family_machine_cap() -> None:
+    family = replace(_family(_single_machine_spec("assembling-machine-1", count=7)), machine_cap=2)
+    instances = partition_strip_family(family, max_machine_count=6)
+    assert [instance.machine_count for instance in instances] == [2, 2, 2, 1]
+    validate_instance_partition(family, instances)
+
+
+def test_a_zero_cap_leaves_the_requested_length_alone() -> None:
+    family = replace(_family(_single_machine_spec("assembling-machine-1", count=7)), machine_cap=0)
+    instances = partition_strip_family(family, max_machine_count=6)
+    assert [instance.machine_count for instance in instances] == [4, 3]
+
+
+def test_a_stage_boundary_merge_refuses_to_exceed_the_cap() -> None:
+    family = replace(_family(_single_machine_spec("assembling-machine-1", count=6)), machine_cap=4)
+    left, right = partition_strip_family(family, max_machine_count=3)
+    assert merge_strip_instances(family, left, right) is None  # 3 + 3 > 4
+    uncapped = replace(family, machine_cap=0)
+    left, right = partition_strip_family(uncapped, max_machine_count=3)
+    assert merge_strip_instances(uncapped, left, right) is not None
+
+
+@pytest.mark.parametrize("requested", [1, 3, 12, 40])
+def test_every_strip_length_heuristic_survives_the_cap(requested: int) -> None:
+    family = replace(_family(_single_machine_spec("assembling-machine-1", count=9)), machine_cap=3)
+    instances = partition_strip_family(family, max_machine_count=requested)
+    assert max(instance.machine_count for instance in instances) <= 3
+    assert sum(instance.machine_count for instance in instances) == 9

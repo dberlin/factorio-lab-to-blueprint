@@ -114,6 +114,15 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
             file=out,
         )
 
+    for lane_finding in build.report.by_check("flow.external_entry_points"):
+        print(
+            f"  entry lanes: {lane_finding.detail['item']} "
+            f"{lane_finding.detail['entry_lanes']} "
+            f"(needs {lane_finding.detail['lanes_needed']} at "
+            f"{lane_finding.detail['capacity']}/s)",
+            file=out,
+        )
+
     if build.refused:
         # A strategy that produced NO layout is invisible in `attempts`, so say
         # so. Silence here would read as "that combination was simply not the

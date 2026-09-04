@@ -4252,18 +4252,37 @@ def _external_entry_points(ctx: Context) -> Iterable[Finding]:
     """
     assert ctx.spec is not None
     bs = ctx.placement.buildings
+    spec = ctx.spec
     for item, runs in sorted(_entry_runs(ctx).items()):
         if len(runs) < 2:
             continue
+        capacity = spec.lane_capacity * spec.planning_stack(item)
+        demand = spec.external_inputs.get(item, Fraction(0))
+        lanes_needed = max(1, -(-demand // capacity)) if demand > 0 else 1
         heads = [bs[ctx.runs[r].head] for r in runs]
         where = ", ".join(f"({b.x},{b.y})" for b in heads[:6])
+        if len(runs) == lanes_needed:
+            message = (
+                f"{item!r} is belted in at {len(runs)} separate lanes ({where}); "
+                f"{demand} items/s needs {lanes_needed} lanes of {capacity}/s"
+            )
+        else:
+            message = (
+                f"{item!r} is belted in at {len(runs)} separate lanes ({where}); the "
+                f"player must connect a supply to every one of them"
+            )
         yield Finding(
             "flow.external_entry_points",
             Severity.WARNING,
-            f"{item!r} is belted in at {len(runs)} separate lanes ({where}); the "
-            f"player must connect a supply to every one of them",
+            message,
             tuple(ctx.runs[r].head for r in runs),
-            {"item": item, "entry_lanes": len(runs), "runs": sorted(runs)},
+            {
+                "item": item,
+                "entry_lanes": len(runs),
+                "lanes_needed": lanes_needed,
+                "capacity": str(capacity),
+                "runs": sorted(runs),
+            },
         )
 
 

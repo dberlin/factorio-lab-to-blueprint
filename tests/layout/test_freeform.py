@@ -14,6 +14,7 @@ import random
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import replace
+from fractions import Fraction
 from fractions import Fraction as F
 from pathlib import Path
 
@@ -5315,7 +5316,10 @@ def test_pitch_replan_does_not_contaminate_later_ordinary_strip_plans() -> None:
 
 def test_coarsening_preserves_pose_specific_minimum_pitch() -> None:
     spec = projected_chemical_plant_spec(machine_count=41)
-    ordinary = plan_strips(spec, strip_len=1)
+    # This is about minimum-pitch survival through coarsening, not capacity:
+    # lift the family's machine cap so coarsening still collapses to one strip.
+    families = tuple(replace(family, machine_cap=0) for family in generate_strip_families(spec))
+    ordinary = plan_strips(spec, strip_len=1, families=families)
     assert len(ordinary) == 41
     assert ordinary[0].physical_variant is not None
     pose_id = strip_pose_id(ordinary[0].physical_variant)
@@ -5324,6 +5328,7 @@ def test_coarsening_preserves_pose_specific_minimum_pitch() -> None:
         spec,
         strip_len=1,
         minimum_pitch_x=minimum_pitch_x,
+        families=families,
     )
 
     coarse, effective_strip_len = freeform._coarsen_saturated_strip_plan(
@@ -5331,6 +5336,7 @@ def test_coarsening_preserves_pose_specific_minimum_pitch() -> None:
         padded,
         strip_len=1,
         minimum_pitch_x=minimum_pitch_x,
+        families=families,
     )
 
     assert effective_strip_len == spec.machine_count
@@ -17374,6 +17380,32 @@ def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> No
         freeform._check_shared_lane_capacity(
             group, (("copper-ingot", "iron-ingot"),), 1, floor_only
         )
+
+
+def _rated_spec(rate: Fraction, *, count: int = 8, capacity: Fraction = Fraction(30)) -> BuildSpec:
+    """One collider-like group drawing ``rate`` of hydrogen per machine."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=count,
+                inputs_per_machine={"hydrogen": rate},
+                outputs_per_machine={"deuterium": Fraction(1, 2)},
+            ),
+        ),
+        external_inputs={"hydrogen": rate * count},
+        outputs={"deuterium": Fraction(count, 2)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=capacity,
+    )
+
+
+def test_plan_strips_shortens_strips_to_the_capacity_cap() -> None:
+    spec = _rated_spec(Fraction(4), count=8)
+    strips = plan_strips(spec, strip_len=8)
+    assert max(strip.machines for strip in strips) <= 7
+    assert sum(strip.machines for strip in strips) == 8
 
 
 def test_pick_sorter_never_leaves_the_allowed_tiers() -> None:

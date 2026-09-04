@@ -278,7 +278,7 @@ def test_belt_tiers_travel_on_the_build_and_each_attempt(small_build: pipeline.B
     body = describe(small_build)
     tiers = body["belt_tiers"]
     assert isinstance(tiers, dict)
-    assert set(tiers) == {"floor", "ceiling", "runs_upgraded", "upgrade_tiers"}
+    assert set(tiers) == {"floor", "ceiling", "runs_upgraded", "upgrade_tiers", "entry_lanes"}
     assert tiers["floor"] == small_build.spec.belt_item_id
     assert tiers["ceiling"] == small_build.spec.belt_tiers[-1].item_id
     attempts = body["attempts"]
@@ -287,4 +287,53 @@ def test_belt_tiers_travel_on_the_build_and_each_attempt(small_build: pipeline.B
     assert isinstance(attempt, dict)
     detail = attempt["detail"]
     assert isinstance(detail, dict)
-    assert set(detail["belt_tiers"]) == {"floor", "ceiling", "runs_upgraded", "upgrade_tiers"}
+    assert set(detail["belt_tiers"]) == {
+        "floor",
+        "ceiling",
+        "runs_upgraded",
+        "upgrade_tiers",
+        "entry_lanes",
+    }
+
+
+def test_belt_tiers_entry_lanes_carries_the_finding_shape(
+    small_build: pipeline.Build,
+) -> None:
+    """``entry_lanes`` was checked only for its keys, never its contents -- a
+    populated list pins the actual item/lanes/lanes_needed shape.
+
+    ``small_build`` already carries one ``flow.external_entry_points`` finding
+    (``iron-ore``, 2 lanes built, 1 needed); a second, distinct finding is
+    added here so the assertion pins a genuinely multi-entry list, sorted by
+    item as ``_belt_tiers`` promises.
+    """
+    with_finding = dataclasses.replace(
+        small_build,
+        report=dataclasses.replace(
+            small_build.report,
+            findings=(
+                *small_build.report.findings,
+                Finding(
+                    check="flow.external_entry_points",
+                    severity=Severity.WARNING,
+                    message="'copper-ingot' is belted in at 2 separate lanes; "
+                    "2 items/s needs 2 lanes of 1/s",
+                    detail={
+                        "item": "copper-ingot",
+                        "entry_lanes": 2,
+                        "lanes_needed": 2,
+                        "capacity": "1",
+                        "runs": [1, 2],
+                    },
+                ),
+            ),
+        ),
+    )
+
+    body = describe(with_finding)
+    tiers = body["belt_tiers"]
+    assert isinstance(tiers, dict)
+    assert tiers["entry_lanes"] == [
+        {"item": "copper-ingot", "lanes": 2, "lanes_needed": 2},
+        {"item": "iron-ore", "lanes": 2, "lanes_needed": 1},
+    ]
