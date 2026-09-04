@@ -98,11 +98,13 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
     stack_note = f"; stack {build.spec.belt_stack}"
     if build.spec.belt_stack > 1:
         stack_note += f" (URL ist={build.spec.belt_stack})"
+    piler_count = int(build.placement.stats.get("pilers", 0))
+    piler_note = f"; {piler_count} piler(s)"
     if len(tiers) == 1:
         print(
             f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s); it is "
             f"the fastest belt this save can build, so a lane over that rate is "
-            f"refused{stack_note}",
+            f"refused{stack_note}{piler_note}",
             file=out,
         )
     else:
@@ -116,7 +118,7 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
         print(
             f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s) floor, "
             f"{ceiling.item_id} ({float(ceiling.items_per_second)}/s) ceiling; "
-            f"{upgrade_note}{stack_note}",
+            f"{upgrade_note}{stack_note}{piler_note}",
             file=out,
         )
 

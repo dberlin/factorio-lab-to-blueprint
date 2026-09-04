@@ -43,6 +43,7 @@ from flab2bp.layout.freeform import (
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult
+from flab2bp.layout.piling import PilerPlan
 from flab2bp.layout.route_feedback import (
     ClusterRelationNoGood,
     DetailedRouteResult,
@@ -123,6 +124,8 @@ from flab2bp.layout.strip_variants import (
 )
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
 from tests.layout.test_freeform import (
+    _piler_two_stage_spec,
+    _prepare_piler_strips,
     band_120_control_spec,
     plastic_spec,
     projected_chemical_plant_spec,
@@ -5029,6 +5032,189 @@ def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
         split.problem.instance_ids[target + 1].machine_start,
     ]
     assert all(strip.family_id is not None for strip in selected)
+
+
+def test_sequence_reservation_and_child_rebuild_preserve_piler_tail_fields() -> None:
+    spec = proliferated_spec()
+    policy = BandPolicy("120")
+    strips = plan_strips(spec, strip_len=6, band_policy=policy)
+    target = next(
+        index
+        for index, strip in enumerate(strips)
+        if strip.cargo_domain is freeform_module.CargoDomain.REQUIRES_SPRAY
+        and strip.machines > 1
+        and strip.out_lanes
+    )
+    family = next(
+        family
+        for family in generate_strip_families(spec)
+        if family.family_id == strips[target].family_id
+    )
+    output_lane_id = next(
+        plan.lane.lane_id for plan in strips[target].attachment_plan if plan.lane.kind == "output"
+    )
+    piler = PilerPlan(output_lane_id, count=2, stack=4)
+    ordinary_width = _box(strips[target])[0]
+    strips[target] = replace(
+        strips[target],
+        tail_extension=7,
+        pilers=(piler,),
+    )
+
+    assert _box(strips[target])[0] == ordinary_width + 7
+
+    reserved = sequence_solver_module._sequence_reservation_strips(strips)
+    assert reserved[target].west_channel == strips[target].west_channel + 1
+    assert reserved[target].tail_extension == 7
+    assert reserved[target].pilers == (piler,)
+
+    instance_ids, variant_tables = _variant_search_inputs(
+        spec,
+        reserved,
+        strip_len=6,
+    )
+    problem = PlacementProblem(
+        sizes=tuple(_box(strip) for strip in reserved),
+        nets=tuple(_nets_between(reserved)),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=instance_ids,
+        variant_tables=variant_tables,
+    )
+    state = AnnealState.initial(problem.size, seed=17)
+    split = split_stage_boundary(problem, state, family, target)
+    selected = _selected_strips(
+        reserved,
+        split.problem,
+        split.state.variant_indices,
+        band_policy=policy,
+    )
+    children = selected[target : target + 2]
+
+    assert len(children) == 2
+    assert all(child.tail_extension == 7 and child.pilers == (piler,) for child in children)
+    assert all(
+        _box(child)[0] == _box(replace(child, tail_extension=0, pilers=()))[0] + 7
+        for child in children
+    )
+
+
+def test_preparing_shifted_piler_producers_keeps_contiguous_merge_groups() -> None:
+    base = _piler_two_stage_spec(
+        Fraction(20),
+        producer_count=4,
+        consumer_count=2,
+        pick_stack=2,
+        place_stack=1,
+    )
+    unrelated = MachineGroup(
+        recipe_id="copper-ingot",
+        machine_item_id="arc-smelter",
+        count=2,
+        inputs_per_machine={"copper-ore": Fraction(1)},
+        outputs_per_machine={"copper-ingot": Fraction(1)},
+    )
+    spec = base.model_copy(
+        update={
+            "groups": (unrelated, *base.groups),
+            "external_inputs": {**base.external_inputs, "copper-ore": Fraction(2)},
+            "outputs": {**base.outputs, "copper-ingot": Fraction(2)},
+        }
+    )
+    policy = BandPolicy("portable")
+    strips = plan_strips(spec, strip_len=6, band_policy=policy)
+    unrelated_index = next(
+        index for index, strip in enumerate(strips) if strip.recipe_id == "copper-ingot"
+    )
+    producer_index, original_producer = next(
+        (index, strip) for index, strip in enumerate(strips) if strip.recipe_id == "iron-ingot"
+    )
+    assert unrelated_index < producer_index
+    (original_piler,) = original_producer.pilers
+    assert original_piler.lane_id.startswith(f"{producer_index}:")
+
+    families = {family.recipe_id: family for family in generate_strip_families(spec)}
+    instance_ids, variant_tables = _variant_search_inputs(
+        spec,
+        strips,
+        strip_len=6,
+    )
+    problem = PlacementProblem(
+        sizes=tuple(_box(strip) for strip in strips),
+        nets=tuple(_nets_between(strips)),
+        outline_height=40,
+        area_lower_bound=1,
+        instance_ids=instance_ids,
+        variant_tables=variant_tables,
+    )
+    state = AnnealState.initial(problem.size, seed=17)
+
+    for recipe_id in ("iron-ingot", "gear"):
+        family = families[recipe_id]
+        while True:
+            target = next(
+                (
+                    index
+                    for index, instance in enumerate(problem.instance_ids)
+                    if instance.family_id == family.family_id and instance.machine_count > 1
+                ),
+                None,
+            )
+            if target is None:
+                break
+            split = split_stage_boundary(problem, state, family, target)
+            problem, state = split.problem, split.state
+
+    unrelated_family = families["copper-ingot"]
+    shifted = split_stage_boundary(
+        problem,
+        state,
+        unrelated_family,
+        next(
+            index
+            for index, instance in enumerate(problem.instance_ids)
+            if instance.family_id == unrelated_family.family_id and instance.machine_count > 1
+        ),
+    )
+    selected = _selected_strips(
+        strips,
+        shifted.problem,
+        shifted.state.variant_indices,
+        band_policy=policy,
+    )
+    producer_indices = [
+        index for index, strip in enumerate(selected) if strip.recipe_id == "iron-ingot"
+    ]
+    consumer_indices = [index for index, strip in enumerate(selected) if strip.recipe_id == "gear"]
+
+    assert len(producer_indices) == 4
+    assert len(consumer_indices) == 2
+    assert min(producer_indices) == producer_index + 1
+    assert all(
+        len(selected[index].pilers) == 1
+        and (selected[index].pilers[0].count, selected[index].pilers[0].stack) == (1, 2)
+        for index in producer_indices
+    )
+    assert any(
+        not selected[index].pilers[0].lane_id.startswith(f"{index}:") for index in producer_indices
+    )
+
+    prepared = _prepare_piler_strips(spec, selected)
+    producer_to_consumer = [
+        (net.net_id.source_strip, net.net_id.destination_strip)
+        for net in prepared.nets
+        if net.item == "iron-ingot"
+        and net.net_id.source_strip in producer_indices
+        and net.net_id.destination_strip in consumer_indices
+    ]
+    first, second, third, fourth = producer_indices
+    left, right = consumer_indices
+    assert producer_to_consumer[:4] == [
+        (first, left),
+        (second, left),
+        (third, left),
+        (fourth, right),
+    ]
 
 
 @pytest.mark.parametrize(

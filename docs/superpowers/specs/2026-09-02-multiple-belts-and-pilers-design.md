@@ -1,7 +1,8 @@
 # Multiple belts and Automatic Pilers above the fastest belt
 
-Date: 2026-09-02, revision 2 on 2026-09-03, revision 3 on 2026-09-03. Status:
-design, awaiting review. Follows `2026-09-02-belt-and-sorter-tiers-design.md`,
+Date: 2026-09-02, revision 2 on 2026-09-03, revision 3 on 2026-09-03,
+revision 4 on 2026-09-04. Status: design, awaiting review. Follows
+`2026-09-02-belt-and-sorter-tiers-design.md`,
 whose section 11 hands this work off. Revision 2 replaced revision 1 entirely:
 revision 1 modelled a piler as a device at "the head of a lane planned at
 ceiling x stack", which only works when that lane is already fed by a stacked
@@ -18,6 +19,17 @@ lane needs two in series; a piler has NO per-building stack parameter, its mode
 coming from its wiring; and a piler's intake is at least the belt's own cargo
 rate, which deletes the throughput branch. Sections 1, 2, 8, 9 and 10 carry the
 consequential corrections; nothing else changed.
+
+Revision 4 removes the live-fixture prerequisite from C. The Automatic Piler
+record is derivable from shipped 0.10.34 code: its catalog row has
+`multiLevel = 1`, so the blueprint generator assigns `inputToSlot = 14`,
+`outputFromSlot = 15`, `inputFromSlot = 15`, and `outputToSlot = 14`; null
+object references serialize as `-1`, adjacent belts carry port references 1
+and 0, and the empty generic parameter path emits `int[0]`. The shipped catalog
+fixes model, footprint,
+centre, yaw rotation, and ordered port poses. Sections 6.3, 8, 9, and 10 and
+plan Task 11 now cite that conformance evidence rather than claiming that an
+uncaptured player blueprint blocks C.
 
 ## 1. Problem
 
@@ -568,18 +580,29 @@ after it names it as `input_obj`, and the piler itself names nobody, the
 convention `junction.make_splitter` uses.
 
 A new `junction.make_piler(x, y, z, *, yaw)` builds the record from the catalog
-(item 2040, model 257). **It takes no stack argument and writes no parameter
-block:** 5.1 pins `PILER_STACK_PARAMETER = None`, so a piler's Pile-versus-Split
-behaviour is decided entirely by which belts are attached to it, and the stack
-it emits is decided by the stack arriving on its input belt. `dsp/codec.py`
-serialises it like any building (the per-building record is generic; only belts
-and splitters get forced sentinel slots), and `dsp/params.py` gains nothing.
-The byte-identical re-encode guarantee needs one player-built blueprint that
-contains a piler between two belts in `tests/fixtures/`; none of the ten
-factory fixtures contains item 2040 today. **Prerequisite:** obtain that
-fixture from the game before C starts; it pins the record convention (which
-neighbour names the piler, the four slot values, the yaw, whether `x/y` is the
-middle tile) and the wiring that puts the component into Pile mode.
+(item 2040, model 257). The unrotated footprint is 1x3; yaw 90 rotates it to
+3x1, and the encoder stores the centre of that oriented footprint. The shipped
+`piler` `portPoses` order is port 0 at `(dx=0, dy=+0.25)` facing north and port
+1 at `(dx=0, dy=-0.25)` facing south before yaw is applied.
+
+It takes no stack argument and writes no parameter block:
+`PILER_STACK_PARAMETER = None`. `BlueprintUtils.GenerateBlueprintData`
+0.10.34 lines 1181-1182 and 1222-1306 leave the piler's object references
+null; its shipped catalog row has `multiLevel = 1`, so the multilevel branch
+assigns `inputToSlot = 14`, `outputFromSlot = 15`, `inputFromSlot = 15`, and
+`outputToSlot = 14`. `BlueprintBuilding.Export` lines 294-295 serializes the
+null references as `-1`; and `BuildingParameters.ToParamsArray` lines 83-363
+falls through with a zero parameter count, normalized to `int[0]` at
+`BlueprintUtils.decompiled.cs:1297-1306`.
+
+The connections live on the neighbouring belts.
+`BlueprintUtils.decompiled.cs:1248-1272` makes the feeding belt name the piler
+through `outputObj/outputToSlot = (piler, 1)` and the drawing belt name it
+through `inputObj/inputFromSlot = (piler, 0)`.
+`CargoTraffic.decompiled.cs:938-974` reads piler slots 0 and 1 and selects
+`PilerState.Pile` when slot 0 is output and slot 1 input. Tests originate this
+three-record shape, encode and decode it, and assert each field; they do not
+fabricate or require a game-authored fixture.
 
 The strip reserves each piler's three tiles, and the belt tile between
 consecutive pilers, as a **tail extension**: `Strip` gains
@@ -668,9 +691,11 @@ the stack that would have carried the rate.
   ordering is deterministic across input permutations.
 - Validator (C): each new check has a fires case and a clean case on
   hand-built placements; a piler fed above belt speed refuses.
-- Codec (C): the piler fixture re-encodes byte-identically and its port
-  anchors land on the neighbouring belts (the geometry oracle in
-  `tests/dsp/test_local_offset.py`).
+- Codec (C): an originated piler-between-belts placement encodes and decodes
+  with null piler links represented as `-1`, multilevel slot sentinels
+  `(inputFrom, inputTo, outputFrom, outputTo) = (15, 14, 15, 14)`, an empty
+  parameter tuple, and adjacent belt references to ordered ports 1 and 0.
+  Separate yaw-0/yaw-90 assertions pin the catalog footprint and emitted centre.
 - Corpus gate before and after each deliverable, evidence committed under
   `docs/superpowers/evidence/<date>-multiple-belts/`, `<date>-stacked-lanes/`
   and `<date>-pilers/`. A must not cost a clean cell; B and C must not cost a
@@ -681,8 +706,9 @@ the stack that would have carried the rate.
 A first; it needs no game data beyond what the repo has and fixes the reported
 class of failure for every URL whose per-machine rates fit one belt. B second;
 it needs the numbers in 5.1 (pinned on 2026-09-03) and no new building, and it
-is what makes a stacked bus usable. C last; it needs the piler fixture, and it
-is its own plan. Each deliverable ends with its own gate.
+is what makes a stacked bus usable. C last; Task 11 derives its piler record
+from the shipped 0.10.34 code and catalog, so no live fixture gate remains.
+Each deliverable ends with its own gate.
 
 Out of scope for all three: pilers on elevated lanes, unstacking devices (a
 machine's sorter unstacks by picking), stacking lanes that already fit one
@@ -716,11 +742,13 @@ belts.
   so a lane raised from unstacked to 4 costs two pilers and seven tiles of tail
   (`4 x 2 - 1`, the separator belt included), not one and three. Any estimate of area or building count made before this
   fact was pinned is low by a factor of two on those lanes.
-- **Game facts (B, C).** SETTLED for the stacking ladders, the sorter tables,
-  the rate factor and the piler's behaviour, all pinned from the shipped game
-  files in 5.1. What remains a prerequisite is the piler's record convention
-  and port anchors, which need the fixture in 6.3; there is no stack parameter
-  to discover, because there is none.
+- **Game facts (B, C).** SETTLED for the stacking ladders, sorter tables, rate
+  factor, piler behaviour, and piler blueprint record. Section 5.1 pins the
+  behaviour from shipped files. Section 6.3 pins record defaults and belt wiring
+  from `BlueprintUtils`, `BlueprintBuilding.Export`,
+  `BuildingParameters.ToParamsArray`, and `CargoTraffic.RematchPilerConnection`,
+  and pins model 257's footprint and port ordering from the shipped catalog.
+  No live game fixture or stack parameter remains to discover.
 - **Mixed stacks (B).** The minimum rule is conservative; a build the game
   would run at a favourable average may be refused. Accepted: an optimistic
   capacity would emit builds that starve, which is worse than a refusal.

@@ -94,6 +94,7 @@ from flab2bp.layout.freeform import (
     plan_strips,
     tie_break_cap,
 )
+from flab2bp.layout.piling import PilerPlan
 from flab2bp.layout.route_feedback import (
     Cell,
     ClusterRelationNoGood,
@@ -613,7 +614,7 @@ def test_belt_port_input_lane_fans_out_through_exact_machine_ports() -> None:
     canvas = _Canvas()
     belt_id = catalog.item_id(spec.belt_item_id)
 
-    inputs, _outputs, _connections = _emit_strip(
+    inputs, _outputs, _connections, _piler_nets = _emit_strip(
         canvas,
         strip,
         0,
@@ -762,7 +763,7 @@ def test_strip_emission_reproduces_every_precomputed_attachment() -> None:
     belt_id = catalog.item_id(spec.belt_item_id)
     ox, oy = 11, 7
 
-    _inputs, _outputs, sorter_count = _emit_strip(
+    _inputs, _outputs, sorter_count, _piler_nets = _emit_strip(
         canvas,
         strip,
         ox,
@@ -836,7 +837,7 @@ def test_multi_lane_assembler_emission_uses_one_slot_per_sorter() -> None:
     canvas = _Canvas()
     belt_id = catalog.item_id(spec.belt_item_id)
 
-    _inputs, _outputs, sorter_count = _emit_strip(
+    _inputs, _outputs, sorter_count, _piler_nets = _emit_strip(
         canvas,
         strip,
         0,
@@ -1111,7 +1112,7 @@ def test_input_lane_emission_uses_precomputed_attachment_span() -> None:
     canvas = _Canvas()
     belt_id = catalog.item_id(spec.belt_item_id)
 
-    _inputs, _outputs, sorter_count = _emit_strip(
+    _inputs, _outputs, sorter_count, _piler_nets = _emit_strip(
         canvas,
         strip,
         0,
@@ -18292,6 +18293,258 @@ def test_sorter_tiers_for_spec_maps_ids_and_keeps_catalog_order() -> None:
     spec = single_recipe_spec().model_copy(update={"sorter_item_ids": ("sorter-2", "sorter-1")})
     assert freeform._sorter_tiers_for(spec) == (2011, 2012)
     assert freeform._sorter_tiers_for(single_recipe_spec()) == catalog.SORTER_TIERS
+
+
+def _piler_two_stage_spec(
+    output_rate: Fraction,
+    *,
+    producer_count: int = 1,
+    consumer_count: int = 1,
+    pick_stack: int,
+    place_stack: int,
+    piler_unlocked: bool = True,
+) -> BuildSpec:
+    """The small two-stage fixture with tunable producer and consumer shards."""
+    base = two_stage_spec()
+    producer, consumer = base.groups
+    total = output_rate * producer_count
+    return base.model_copy(
+        update={
+            "groups": (
+                producer.model_copy(
+                    update={
+                        "count": producer_count,
+                        "outputs_per_machine": {"iron-ingot": output_rate},
+                    }
+                ),
+                consumer.model_copy(
+                    update={
+                        "count": consumer_count,
+                        "inputs_per_machine": {"iron-ingot": total / consumer_count},
+                        "outputs_per_machine": {"gear": Fraction(1, consumer_count)},
+                    }
+                ),
+            ),
+            "external_inputs": {"iron-ore": Fraction(producer_count)},
+            "outputs": {"gear": Fraction(1)},
+            "belt_item_id": "conveyor-belt-3",
+            "belt_items_per_second": Fraction(30),
+            "belt_stack": 2,
+            "sorter_pick_stacks": (1, 1, 1, pick_stack),
+            "sorter_place_stacks": (1, 1, 1, place_stack),
+            "piler_unlocked": piler_unlocked,
+        }
+    )
+
+
+def _prepare_piler_strips(
+    spec: BuildSpec,
+    strips: list[Strip],
+) -> freeform._PreparedRoutingProblem:
+    return _prepare_routing_problem(
+        spec,
+        strips,
+        _greedy_pack(strips, sum(_box(strip)[1] for strip in strips)),
+        policy=BandPolicy("portable"),
+        power=False,
+        _reserve_ports=False,
+    )
+
+
+def test_one_planned_piler_extends_its_producer_strip_and_box_by_three() -> None:
+    spec = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
+    strips = plan_strips(spec, strip_len=1)
+    producer = next(strip for strip in strips if strip.recipe_id == "iron-ingot")
+    unextended = replace(producer, tail_extension=0, pilers=())
+    (piler,) = producer.pilers
+
+    assert isinstance(piler, PilerPlan)
+    assert (piler.count, piler.stack) == (1, 2)
+    assert piler.lane_id
+    assert producer.tail_extension == 3
+    assert _box(producer)[0] == _box(unextended)[0] + 3
+    assert all(not strip.pilers for strip in strips if strip is not producer)
+
+
+def test_belt_port_output_starts_unstacked_and_emits_one_piler() -> None:
+    base = ray_receiver_spec()
+    producer_group, sink_group = base.groups
+    spec = base.model_copy(
+        update={
+            "groups": (
+                producer_group.model_copy(
+                    update={
+                        "count": 1,
+                        "outputs_per_machine": {"critical-photon": F(40)},
+                    }
+                ),
+                sink_group.model_copy(
+                    update={
+                        "count": 1,
+                        "inputs_per_machine": {"critical-photon": F(40)},
+                        "outputs_per_machine": {"graphene": F(1)},
+                    }
+                ),
+            ),
+            "outputs": {"graphene": F(1)},
+            "belt_item_id": "conveyor-belt-3",
+            "belt_items_per_second": F(30),
+            "belt_stack": 2,
+            "sorter_pick_stacks": (1, 1, 1, 2),
+            "sorter_place_stacks": (1, 1, 1, 2),
+            "piler_unlocked": True,
+        }
+    )
+    strips = plan_strips(spec, strip_len=1)
+    producer_index, producer = next(
+        (index, strip) for index, strip in enumerate(strips) if strip.recipe_id == "critical-photon"
+    )
+
+    assert producer.takes_belt_ports
+    (plan,) = producer.pilers
+    assert (plan.count, plan.stack) == (1, 2)
+    assert sum(len(strip.pilers) for strip in strips) == 1
+
+    prepared = _prepare_piler_strips(spec, strips)
+    emitted = [building for building in prepared.building_templates if building.item_id == 2040]
+    assert len(emitted) == 1
+    assert emitted[0].owner_strip == producer_index
+
+
+def test_two_serial_pilers_extend_link_and_split_one_output_lane() -> None:
+    spec = _piler_two_stage_spec(Fraction(80), pick_stack=4, place_stack=1)
+    strips = plan_strips(spec, strip_len=1)
+    producer_index, producer = next(
+        (index, strip) for index, strip in enumerate(strips) if strip.recipe_id == "iron-ingot"
+    )
+    unextended = replace(producer, tail_extension=0, pilers=())
+    (plan,) = producer.pilers
+
+    assert isinstance(plan, PilerPlan)
+    assert (plan.count, plan.stack) == (2, 4)
+    assert producer.tail_extension == 7
+    assert _box(producer)[0] == _box(unextended)[0] + 7
+
+    prepared = _prepare_piler_strips(spec, strips)
+    indexed_pilers = sorted(
+        (
+            (index, building)
+            for index, building in enumerate(prepared.building_templates)
+            if building.item_id == 2040
+        ),
+        key=lambda pair: pair[1].x,
+    )
+    assert len(indexed_pilers) == 2
+    (upstream_index, upstream), (downstream_index, downstream) = indexed_pilers
+    assert upstream.owner_strip == downstream.owner_strip == producer_index
+    assert upstream.yaw == downstream.yaw == Facing.EAST.value
+
+    belts = [
+        building for building in prepared.building_templates if catalog.is_belt(building.item_id)
+    ]
+    (before,) = [
+        belt for belt in belts if belt.output_obj == upstream_index and belt.output_to_slot == 1
+    ]
+    (separator,) = [
+        belt
+        for belt in belts
+        if belt.input_obj == upstream_index
+        and belt.input_from_slot == 0
+        and belt.output_obj == downstream_index
+        and belt.output_to_slot == 1
+    ]
+    (after,) = [
+        belt for belt in belts if belt.input_obj == downstream_index and belt.input_from_slot == 0
+    ]
+    assert (before.y, upstream.y, separator.y, downstream.y, after.y) == (upstream.y,) * 5
+    assert before.x + 1 == upstream.x
+    assert separator.x == upstream.x + upstream.width
+    assert downstream.x == separator.x + 1
+    assert after.x == downstream.x + downstream.width
+
+    unpiled_strips = [
+        replace(strip, tail_extension=0, pilers=()) if index == producer_index else strip
+        for index, strip in enumerate(strips)
+    ]
+    unpiled = _prepare_piler_strips(spec, unpiled_strips)
+    piled_net_count = len(prepared.nets) + len(prepared.external_output_nets)
+    unpiled_net_count = len(unpiled.nets) + len(unpiled.external_output_nets)
+    assert piled_net_count == unpiled_net_count + 2
+
+
+def test_no_piler_plan_keeps_zero_extension_and_the_disabled_strip_plan() -> None:
+    enabled = _piler_two_stage_spec(Fraction(10), pick_stack=2, place_stack=2)
+    disabled = enabled.model_copy(update={"piler_unlocked": False})
+
+    enabled_strips = plan_strips(enabled, strip_len=1)
+    disabled_strips = plan_strips(disabled, strip_len=1)
+
+    assert enabled_strips == disabled_strips
+    assert all(strip.tail_extension == 0 and strip.pilers == () for strip in enabled_strips)
+
+
+def test_two_twenty_per_second_lanes_emit_one_piler_per_producer() -> None:
+    spec = _piler_two_stage_spec(
+        Fraction(20),
+        producer_count=2,
+        pick_stack=2,
+        place_stack=1,
+    )
+    strips = plan_strips(spec, strip_len=1)
+    producer_indices = [
+        index for index, strip in enumerate(strips) if strip.recipe_id == "iron-ingot"
+    ]
+    producers = [strips[index] for index in producer_indices]
+
+    assert len(producers) == 2
+    plans = tuple(strip.pilers for strip in producers)
+    assert tuple(
+        tuple((plan.count, plan.stack) for plan in strip_plans) for strip_plans in plans
+    ) == (
+        ((1, 2),),
+        ((1, 2),),
+    )
+    assert len({strip_plans[0].lane_id for strip_plans in plans}) == 2
+
+    prepared = _prepare_piler_strips(spec, strips)
+    pilers = [building for building in prepared.building_templates if building.item_id == 2040]
+    assert len(pilers) == 2
+    assert {piler.owner_strip for piler in pilers} == set(producer_indices)
+
+
+def test_merge_plan_groups_drive_contiguous_producer_to_sink_topology() -> None:
+    spec = _piler_two_stage_spec(
+        Fraction(20),
+        producer_count=4,
+        consumer_count=2,
+        pick_stack=2,
+        place_stack=1,
+    )
+    strips = plan_strips(spec, strip_len=1)
+    producer_indices = [
+        index for index, strip in enumerate(strips) if strip.recipe_id == "iron-ingot"
+    ]
+    consumer_indices = [index for index, strip in enumerate(strips) if strip.recipe_id == "gear"]
+    assert len(producer_indices) == 4
+    assert len(consumer_indices) == 2
+
+    prepared = _prepare_piler_strips(spec, strips)
+    producer_to_consumer = [
+        (net.net_id.source_strip, net.net_id.destination_strip)
+        for net in prepared.nets
+        if net.item == "iron-ingot"
+        and net.net_id.source_strip in producer_indices
+        and net.net_id.destination_strip in consumer_indices
+    ]
+
+    first, second, third, fourth = producer_indices
+    left, right = consumer_indices
+    assert producer_to_consumer[:4] == [
+        (first, left),
+        (second, left),
+        (third, left),
+        (fourth, right),
+    ]
 
 
 def test_prepared_problem_hands_the_spec_sorter_tiers_to_the_workspace() -> None:

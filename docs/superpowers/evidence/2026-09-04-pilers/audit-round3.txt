@@ -1,0 +1,13 @@
+command: python scripts/audit.py --budget 30 --jobs 16 --json candidate-budget30-round3.jsonl
+exit: 1
+72 cells, 16 at a time, 8 CP-SAT workers each, cap 900s
+=== freeform: 35/36 clean -- NOT CLEAN   (refused 1, invalid 0, crashed 0, not run 0)
+    by check: {'<refused>': 1}
+    slowest: 30s freeform universe-matrix/all-products power=1 budget=30s, 28s freeform super-magnetic-ring/no-proliferator power=1 budget=30s, 28s freeform super-magnetic-ring/output-products power=1 budget=30s, 27s freeform universe-matrix/output-products power=1 budget=30s, 27s freeform quantum-chip/all-products power=1 budget=30s
+=== sequence-pair: 35/36 clean -- NOT CLEAN   (refused 1, invalid 0, crashed 0, not run 0)
+    by check: {'<refused>': 1}
+    slowest: 29s sequence-pair energy-matrix/all-products power=1 budget=30s, 28s sequence-pair magnetic-coil/all-products power=1 budget=30s, 28s sequence-pair graphene/all-products power=1 budget=30s, 28s sequence-pair universe-matrix/no-proliferator power=1 budget=30s, 28s sequence-pair super-magnetic-ring/all-products power=1 budget=30s
+76s wall, 72/72 cells
+NOT CLEAN. An INVALID cell is worse than a REFUSED one: refusing emits nothing, while an invalid blueprint pastes and then does not run. Fix the invalid ones first.
+rows: 72 statuses: {'CLEAN': 70, 'REFUSED': 2}
+pilers: {0.0: 72}

@@ -80,7 +80,7 @@ from flab2bp.layout.freeform import (
     _width_slack_cap,
 )
 from flab2bp.layout.freeform import plan_strips as plan_strips
-from flab2bp.layout.global_router import GlobalRouteResult, route_global
+from flab2bp.layout.global_router import GlobalNetResult, GlobalRouteResult, route_global
 from flab2bp.layout.route_feedback import (
     ClusterRelationNoGood,
     DetailedRouteResult,
@@ -3520,7 +3520,12 @@ def _sequence_reservation_strips(strips: Sequence[Strip]) -> list[Strip]:
     """Reserve W4 so a later exact pose swap cannot outgrow its proxy box."""
     return [
         (
-            replace(strip, west_channel=_COATER_WEST_CHANNEL + 1)
+            replace(
+                strip,
+                west_channel=_COATER_WEST_CHANNEL + 1,
+                tail_extension=strip.tail_extension,
+                pilers=strip.pilers,
+            )
             if strip.physical_variant is not None
             and strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
             else strip
@@ -3580,6 +3585,8 @@ def _selected_strips(
                 if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
                 else WEST_CHANNEL
             ),
+            tail_extension=strip.tail_extension,
+            pilers=strip.pilers,
         )
         if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY:
             selected_strip = replace(
@@ -3593,6 +3600,8 @@ def _selected_strips(
                     ),
                     default=_COATER_WEST_CHANNEL,
                 ),
+                tail_extension=selected_strip.tail_extension,
+                pilers=selected_strip.pilers,
             )
         selected.append(selected_strip)
     return selected
@@ -5084,10 +5093,30 @@ def _production_run(
                 exhausted=False,
                 cancelled=is_deadline,
             )
+        prelinked_nets = tuple(net for net in candidate.prepared.nets if net.prelinked)
+        prelinked_results = tuple(
+            GlobalNetResult(
+                net_id=net.net_id,
+                length=0,
+                level_changes=0,
+                overflow=0,
+                expansions=0,
+            )
+            for net in prelinked_nets
+        )
+        prelinked_paths = {
+            net.net_id: (
+                (net.src.x, net.src.y, net.src.z),
+                (net.dst.x, net.dst.y, net.dst.z),
+            )
+            for net in prelinked_nets
+            if net.src is not None
+        }
         if deadline_reached():
             result = _empty_global_result(exhausted=False, cancelled=True)
         else:
-            current_nets = tuple(net.net_id for net in candidate.prepared.nets)
+            routing_problem = candidate.prepared.routing_problem()
+            current_nets = tuple(net.net_id for net in routing_problem.nets)
             expected_weights = {
                 net: weight
                 for net in current_nets
@@ -5105,11 +5134,20 @@ def _production_run(
                 else remap_feedback_nets(feedback, current_nets)
             )
             result = route_global(
-                candidate.prepared,
+                routing_problem,
                 routed_feedback,
                 allowance,
                 max_rounds=config.global_rounds,
                 cancelled=deadline_reached,
+            )
+        if prelinked_results:
+            # These endpoint pairs are fixed links through emitted pilers, not
+            # cells for the congestion ledger to claim. Presence in ``paths``
+            # is the global router's explicit success record.
+            result = replace(
+                result,
+                net_results=(*result.net_results, *prelinked_results),
+                paths={**result.paths, **prelinked_paths},
             )
         telemetry.global_expansions += result.expansions
         telemetry.best_overflow = (

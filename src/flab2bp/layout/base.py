@@ -254,6 +254,7 @@ class PlacementStats(TypedDict, total=False):
     direct_inserts: float
     direct_sorters: float
     elevated_coater_routes: float
+    entry_lanes_needed: float
     expansion_allowance: float
     expansions: float
     fallback_reason: float
@@ -302,6 +303,7 @@ class PlacementStats(TypedDict, total=False):
     nets: float
     objective_mode: str
     pack_width: float
+    pilers: float
     placement_time_s: float
     planning_time_s: float
     pose_count: float
