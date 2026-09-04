@@ -293,9 +293,14 @@ def test_an_item_fed_from_the_bus_and_from_inside_is_planned_at_the_smaller_stac
 
 
 def test_the_external_override_beats_the_specs_own_classification() -> None:
-    """A boundary OUTPUT lane is 'produced' even for an item the spec belts in,
-    and an entry lane is 'external' even for one it also makes.  Both
-    directions have to move, or the keyword is decoration."""
+    """The override replaces the spec's classification and nothing else.
+
+    Forcing "produced" on a belted-in item gives what its sorter places;
+    forcing "external" on a produced one gives the bus stack, still through
+    the both-fed rule, because that item IS also produced.  The planner only
+    ever makes the first call (a boundary output lane for an item the spec
+    also belts in); the second is here to pin that the both-fed rule is not
+    skipped just because the caller named the side."""
     spec = _stacked(belt_stack=2, place=(1, 1, 1, 3), pick=(1, 1, 1, 4))
     # hydrogen is external by classification: the bus stack, 2.
     assert spec.planning_stack("hydrogen") == 2
