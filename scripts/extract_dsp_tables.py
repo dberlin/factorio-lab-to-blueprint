@@ -86,11 +86,20 @@ STACK_UNLOCK_FUNCTIONS = frozenset({14, 39, 40, 41})
 STACK_TECH_NAME_HINTS = ("Cargo Stacking", "Pile Sorter")
 
 #: Exactly the ``TechProto`` fields the stacking facts are derived from.
+#:
+#: ``IsObsolete`` is load-bearing, not decoration: it is what hides a tech from
+#: the tree (``UITechNode.cs:914``, ``:1289``, ``:1483``, ``:1487``) and from
+#: the unlock-everything achievement (``ACH_UnlockAllTech.cs:37``).  On 0.10.34
+#: it is the whole reason the five-level Sorter Cargo Stacking ladder counts
+#: for nothing while the six-level Pile Sorter Upgrade ladder is the live one.
+#: Leave it out and a patch that un-obsoleted the old ladder would land here as
+#: a zero-diff re-extraction.
 STACK_TECH_FIELDS = (
     "ID",
     "Name",
     "Level",
     "MaxLevel",
+    "IsObsolete",
     "UnlockFunctions",
     "UnlockValues",
     "UnlockRecipes",

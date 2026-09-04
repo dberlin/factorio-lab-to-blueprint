@@ -795,6 +795,7 @@ def _piler_throughput() -> Fraction:
 #: takes cargo without charging ``timeSpend`` at all.
 PILER_THROUGHPUT: Fraction = _piler_throughput()
 
+
 @cache
 def _piler_stack_parameter() -> int | None:
     """``null`` is a FINDING here, so the key must be present to say it."""
