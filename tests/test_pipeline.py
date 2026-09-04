@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import dataclasses
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-from flab2bp import pipeline
+from flab2bp import cli, pipeline
 from flab2bp.dsp import catalog, codec
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
@@ -39,7 +39,8 @@ from flab2bp.rates.candidates import (
     CandidatePolicy,
     _build_candidates_canonical,
 )
-from flab2bp.spec import BuildSpec, BuildSpecSet
+from flab2bp.spec import BeltTier, BuildSpec, BuildSpecSet, MachineGroup
+from flab2bp.web.payload import describe
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
 #: costs a second of CP-SAT rather than a minute -- the sequence is the subject,
@@ -1099,6 +1100,282 @@ def test_at_mk3_hydrogen_above_the_ceiling_arrives_on_two_lanes() -> None:
     findings = build.report.by_check("flow.external_entry_points")
     (finding,) = [f for f in findings if f.detail["item"] == "hydrogen"]
     assert finding.detail["entry_lanes"] == finding.detail["lanes_needed"] == 2
+
+
+# --- Task 15: Automatic Piler end-to-end and reporting ----------------------
+
+
+def _synthetic_piler_spec(
+    producer_rate: Fraction,
+    producer_count: int,
+    *,
+    pick_stack: int,
+    include_single_entry: bool = False,
+) -> BuildSpec:
+    """A deterministic producer merge whose only capacity escape is piling."""
+    total = producer_rate * producer_count
+    consumer_inputs = {"iron-ingot": total}
+    external_inputs = {"iron-ore": Fraction(producer_count)}
+    if include_single_entry:
+        consumer_inputs["copper-ingot"] = Fraction(1)
+        external_inputs["copper-ingot"] = Fraction(1)
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="iron-ingot",
+                machine_item_id="arc-smelter",
+                count=producer_count,
+                inputs_per_machine={"iron-ore": Fraction(1)},
+                outputs_per_machine={"iron-ingot": producer_rate},
+            ),
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine=consumer_inputs,
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+        ),
+        external_inputs=external_inputs,
+        outputs={"gear": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+        belt_upgrades=(BeltTier(item_id="conveyor-belt-3", items_per_second=Fraction(30)),),
+        belt_stack=2,
+        sorter_pick_stacks=(1, 1, 1, pick_stack),
+        sorter_place_stacks=(1, 1, 1, 1),
+        piler_unlocked=True,
+        label=f"synthetic-{producer_count}-lane-piler",
+    )
+
+
+def _lay_out_synthetic_piler_spec(
+    strategy: pipeline.ExplicitStrategyName,
+    spec: BuildSpec,
+) -> Placement:
+    layout = (
+        FreeformLayout(band_policy=BandPolicy("portable"), strip_len=1, workers=1)
+        if strategy == "freeform"
+        else SequencePairLayout(band_policy=BandPolicy("portable"), strip_len=1)
+    )
+    return layout.lay_out(spec, time_budget_s=15.0)
+
+
+def _piler_stack_transitions(placement: Placement, spec: BuildSpec) -> list[tuple[int, int]]:
+    """Stacks on the physical belt runs immediately before and after each piler."""
+    runs, _demands, stacks = validate.belt_run_demands(placement, spec)
+    run_of = {
+        building_index: run_index
+        for run_index, run in enumerate(runs)
+        for building_index in run.indices
+    }
+    piler_indices = {
+        index for index, building in enumerate(placement.buildings) if building.item_id == 2040
+    }
+    transitions: list[tuple[int, int]] = []
+    for piler_index in sorted(piler_indices):
+        incoming = [
+            index
+            for index, building in enumerate(placement.buildings)
+            if catalog.is_belt(building.item_id) and building.output_obj == piler_index
+        ]
+        outgoing = [
+            index
+            for index, building in enumerate(placement.buildings)
+            if catalog.is_belt(building.item_id) and building.input_obj == piler_index
+        ]
+        assert len(incoming) == len(outgoing) == 1
+        transitions.append((stacks[run_of[incoming[0]]], stacks[run_of[outgoing[0]]]))
+    return sorted(transitions)
+
+
+def _assert_merged_run_is_retiered_from_derived_stack(
+    placement: Placement,
+    spec: BuildSpec,
+    *,
+    total: Fraction,
+    expected_stack: int,
+) -> None:
+    """The merged item rate is carried by the tier chosen from its derived stack."""
+    runs, demands, stacks = validate.belt_run_demands(placement, spec)
+    merged = [
+        run
+        for run_index, run in enumerate(runs)
+        if demands.get(run_index, {}).get("iron-ingot") == total
+        and stacks[run_index] == expected_stack
+    ]
+    assert merged, "the downstream run must carry the whole merged producer rate"
+    mk3 = catalog.item_id("conveyor-belt-3")
+    assert all(
+        all(placement.buildings[index].item_id == mk3 for index in run.indices) for run in merged
+    )
+    assert placement.stats["belt_upgrade_tiers"] == ["conveyor-belt-3"]
+    assert placement.stats["belt_runs_upgraded"] >= 1.0
+
+
+def _entry_lanes_needed(findings: Sequence[validate.Finding]) -> int:
+    total = 0
+    for finding in findings:
+        lanes = finding.detail["lanes_needed"]
+        assert isinstance(lanes, int)
+        total += lanes
+    return total
+
+
+def _assert_piler_reporting(
+    spec: BuildSpec,
+    placement: Placement,
+    report: validate.Report,
+    strategy: pipeline.ExplicitStrategyName,
+    count: int,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    build = pipeline.Build(
+        spec=spec,
+        placement=placement,
+        report=report,
+        strategy=strategy,
+        blueprint=codec.encode(placement),
+    )
+
+    cli._report(build, verbose=False)
+    belts_line = next(
+        line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")
+    )
+    assert belts_line.endswith(f"; {count} piler(s)")
+
+    body = describe(build)
+    assert type(body["pilers"]) is int
+    assert body["pilers"] == count
+    # Existing, unrelated summary fields keep reporting their original sources.
+    assert body["machines"] == spec.machine_count
+    assert body["buildings"] == len(placement.buildings)
+    assert body["area"] == placement.area
+    belt_tiers = body["belt_tiers"]
+    assert isinstance(belt_tiers, dict)
+    assert belt_tiers["stack"] == spec.belt_stack
+    assert belt_tiers["runs_upgraded"] == int(placement.stats["belt_runs_upgraded"])
+
+
+@pytest.mark.parametrize("strategy", pipeline.PRODUCTION_STRATEGIES)
+def test_one_piler_per_producer_lane_lays_out_cleanly_and_reports(
+    strategy: pipeline.ExplicitStrategyName,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spec = _synthetic_piler_spec(Fraction(20), 2, pick_stack=2)
+    total = Fraction(2 * 20)
+    ceiling = spec.belt_tiers[-1].items_per_second
+    assert total == 40
+    assert total > ceiling
+    assert total / 2 == 20 <= ceiling
+
+    placement = _lay_out_synthetic_piler_spec(strategy, spec)
+    report = validate.certify(placement, spec, expect_power=True)
+    pilers = [building for building in placement.buildings if building.item_id == 2040]
+
+    assert report.ok, [finding.message for finding in report.errors]
+    assert not report.by_check("flow.belt_capacity")
+    assert {"piler.ports", "piler.input_rate", "piler.tier_allowed"} <= set(report.checks_run)
+    entry_findings = report.by_check("flow.external_entry_points")
+    (entry_lanes,) = entry_findings
+    assert (
+        entry_lanes.detail["item"],
+        entry_lanes.detail["entry_lanes"],
+        entry_lanes.detail["lanes_needed"],
+        entry_lanes.detail["capacity"],
+    ) == ("iron-ore", 2, 1, "60")
+    assert len(pilers) == 2
+    assert None not in {piler.owner_strip for piler in pilers}
+    assert len({piler.owner_strip for piler in pilers}) == 2
+    assert _piler_stack_transitions(placement, spec) == [(1, 2), (1, 2)]
+    assert placement.stats["pilers"] == 2.0
+    assert placement.stats["entry_lanes_needed"] == float(_entry_lanes_needed(entry_findings))
+    _assert_merged_run_is_retiered_from_derived_stack(
+        placement,
+        spec,
+        total=total,
+        expected_stack=2,
+    )
+    _assert_piler_reporting(spec, placement, report, strategy, 2, capsys)
+
+
+def test_entry_lane_stats_sum_only_external_entry_findings() -> None:
+    spec = _synthetic_piler_spec(
+        Fraction(20),
+        2,
+        pick_stack=2,
+        include_single_entry=True,
+    )
+    placement = _lay_out_synthetic_piler_spec("freeform", spec)
+    report = validate.certify(placement, spec, expect_power=True)
+    entry_findings = report.by_check("flow.external_entry_points")
+
+    assert report.ok, [finding.message for finding in report.errors]
+    assert set(spec.external_inputs) == {"iron-ore", "copper-ingot"}
+    assert {finding.detail["item"] for finding in entry_findings} == {"iron-ore"}
+    assert placement.stats["entry_lanes_needed"] == float(_entry_lanes_needed(entry_findings))
+
+
+@pytest.mark.parametrize("strategy", pipeline.PRODUCTION_STRATEGIES)
+def test_two_serial_pilers_per_producer_lane_reach_stack_four_and_validate(
+    strategy: pipeline.ExplicitStrategyName,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spec = _synthetic_piler_spec(Fraction(20), 4, pick_stack=4)
+    total = Fraction(4 * 20)
+    ceiling = spec.belt_tiers[-1].items_per_second
+    assert spec.sorter_pick_stacks[-1] == 4
+    assert total == 80
+    assert total / 2 == 40 > ceiling
+    assert total / 4 == 20 <= ceiling
+
+    placement = _lay_out_synthetic_piler_spec(strategy, spec)
+    report = validate.certify(placement, spec, expect_power=True)
+    piler_indices = {
+        index for index, building in enumerate(placement.buildings) if building.item_id == 2040
+    }
+    owners = [placement.buildings[index].owner_strip for index in piler_indices]
+    serial_links = [
+        building
+        for building in placement.buildings
+        if catalog.is_belt(building.item_id)
+        and building.input_obj in piler_indices
+        and building.output_obj in piler_indices
+    ]
+
+    assert report.ok, [finding.message for finding in report.errors]
+    assert not report.by_check("flow.belt_capacity")
+    assert {"piler.ports", "piler.input_rate", "piler.tier_allowed"} <= set(report.checks_run)
+    (entry_lanes,) = report.by_check("flow.external_entry_points")
+    assert (
+        entry_lanes.detail["item"],
+        entry_lanes.detail["entry_lanes"],
+        entry_lanes.detail["lanes_needed"],
+        entry_lanes.detail["capacity"],
+    ) == ("iron-ore", 4, 1, "60")
+    assert len(piler_indices) == 8
+    assert None not in owners
+    assert sorted(owners.count(owner) for owner in set(owners)) == [2, 2, 2, 2]
+    assert len(serial_links) == 4
+    assert _piler_stack_transitions(placement, spec) == [
+        (1, 2),
+        (1, 2),
+        (1, 2),
+        (1, 2),
+        (2, 4),
+        (2, 4),
+        (2, 4),
+        (2, 4),
+    ]
+    assert placement.stats["pilers"] == 8.0
+    assert placement.stats["entry_lanes_needed"] == 1.0
+    _assert_merged_run_is_retiered_from_derived_stack(
+        placement,
+        spec,
+        total=total,
+        expected_stack=4,
+    )
+    _assert_piler_reporting(spec, placement, report, strategy, 8, capsys)
 
 
 # --- Task 14: `workers`, opt-in racing, and the relaxed islands guard ---------

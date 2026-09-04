@@ -132,6 +132,7 @@ const BuildResult = z.object({
   strategy: ExplicitStrategy,
   candidate: z.string(),
   machines: z.number(),
+  pilers: z.number(),
   area: z.number(),
   buildings: z.number(),
   title: z.string(),

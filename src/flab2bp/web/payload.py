@@ -196,6 +196,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "strategy": build.strategy,
         "candidate": build.spec.label,
         "machines": build.spec.machine_count,
+        "pilers": int(build.placement.stats.get("pilers", 0)),
         "area": build.placement.area,
         "primary_band": frame.primary_band,
         "certified_bands": _array(frame.certified_bands),
