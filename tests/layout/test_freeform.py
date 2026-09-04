@@ -3309,7 +3309,7 @@ def _proof_attempt(
         ),
     )
 
-def _feedback_for(routing: DetailedRouteResult) -> freeform.FeedbackState:
+def _feedback_for(routing: DetailedRouteResult) -> FeedbackState:
     """A `FeedbackState` that knows every one of `routing`'s failing nets.
 
     `FeedbackState` is `@dataclass(frozen=True, slots=True)` and stores every
@@ -3317,7 +3317,7 @@ def _feedback_for(routing: DetailedRouteResult) -> freeform.FeedbackState:
     mutated. `endpoint_offsets` values are validated as two integer CELLS.
     """
     nets = [failure.net_id for failure in routing.failures]
-    return freeform.FeedbackState(
+    return FeedbackState(
         outline=(10, 10),
         net_weight=dict.fromkeys(nets, 1.0),
         cell_history={},
@@ -3346,7 +3346,7 @@ def test_a_routing_failure_with_no_feedback_is_still_not_retry_eligible() -> Non
     attempt = _proof_attempt(routing, plan_strips(two_stage_spec()))
 
     assert not freeform._feedback_retry_eligible(
-        attempt, freeform.FeedbackState.empty((10, 10))
+        attempt, FeedbackState.empty((10, 10))
     )
 
 
@@ -3366,11 +3366,10 @@ def test_the_window_launches_on_a_best_failing_pack_with_three_failures(
         lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
     )
     launched: list[object] = []
-    monkeypatch.setattr(
-        freeform,
-        "_pack_window",
-        lambda *args, **kwargs: launched.append(kwargs) or None,
-    )
+    def record_window(*_args: object, **kwargs: object) -> None:
+        launched.append(kwargs)
+
+    monkeypatch.setattr(freeform, "_pack_window", record_window)
     feedback_retry_cuts: list[freeform.ExactPackNoGood] = []
 
     def record_feedback_retry(
@@ -3417,11 +3416,10 @@ def test_the_window_is_withheld_on_a_pack_that_only_ties_the_best_failing_one(
         lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
     )
     launched: list[object] = []
-    monkeypatch.setattr(
-        freeform,
-        "_pack_window",
-        lambda *args, **kwargs: launched.append(kwargs) or None,
-    )
+    def record_window(*_args: object, **kwargs: object) -> None:
+        launched.append(kwargs)
+
+    monkeypatch.setattr(freeform, "_pack_window", record_window)
 
     _sweep_after_first_routing(
         monkeypatch,
@@ -3450,11 +3448,10 @@ def test_the_window_is_withheld_on_a_pack_worse_than_the_best_failing_one(
         lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
     )
     launched: list[object] = []
-    monkeypatch.setattr(
-        freeform,
-        "_pack_window",
-        lambda *args, **kwargs: launched.append(kwargs) or None,
-    )
+    def record_window(*_args: object, **kwargs: object) -> None:
+        launched.append(kwargs)
+
+    monkeypatch.setattr(freeform, "_pack_window", record_window)
 
     _sweep_after_first_routing(
         monkeypatch,
@@ -4286,7 +4283,7 @@ def test_packs_that_keep_producing_new_assignments_run_to_the_deadline(
         clock += 0.2
         return clock
 
-    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     _result, seen, _attempts = _sweep_after_first_routing(
         monkeypatch,
         _routing_failures(RouteFailureKind.SEALED_POCKET),
@@ -4313,7 +4310,7 @@ def test_external_incumbent_does_not_stop_finding_before_a_local_best(
         return clock
 
     failure = _routing_failures(RouteFailureKind.SEALED_POCKET)
-    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     result, seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         failure,
@@ -4729,11 +4726,10 @@ def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     launched: list[object] = []
-    monkeypatch.setattr(
-        freeform,
-        "_pack_window",
-        lambda *args, **kwargs: launched.append(kwargs) or None,
-    )
+    def record_window(*_args: object, **kwargs: object) -> None:
+        launched.append(kwargs)
+
+    monkeypatch.setattr(freeform, "_pack_window", record_window)
     result, seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         _feedback_bearing_routing(),
