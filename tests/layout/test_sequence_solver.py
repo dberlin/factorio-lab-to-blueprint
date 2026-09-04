@@ -4506,22 +4506,53 @@ def test_production_seed_has_its_own_wall_and_deterministic_caps(
     assert run.solver._borrow_first_discovery is False
 
 
+def _cancelled_compact_seed(
+    _problem: PlacementProblem,
+    *,
+    base_seed: int,
+    attempt: int,
+    config: CompactSeedConfig | None = None,
+    direct_eligibility: tuple[VariantDirectInsertTarget, ...] = (),
+    absolute_deadline: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> CompactSeedResult:
+    """A `solve_compact_seed` double that returns instantly -- keeps these
+    large-sparse `_production_run` tests fast and deterministic without caring
+    what the search itself would have found."""
+    del base_seed, attempt, config, direct_eligibility, absolute_deadline, cancelled
+    return CompactSeedResult(
+        CompactSeedStatus.CANCELLED,
+        None,
+        CompactSeedDiagnostics(
+            solver_seed=0,
+            status_name="CANCELLED",
+            width_weight=1,
+            secondary_upper_bound=0,
+        ),
+    )
+
+
 def test_large_sparse_compact_seed_survives_a_bounded_narrowest_height(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The large-sparse role must read the SCHEDULED narrowest height, not the
-    pre-bound one.  `two_stage_spec()`'s narrowest greedy height is 14, and
-    `BandPolicy("80")` gives a boundary of 9 -- low enough that the ceiling
-    bound (and `reserve_boundary_height` ahead of it) replaces the schedule's
-    narrowest slot before `_large_sparse_compact_seed_height`'s
-    ``narrowest_height in scheduled_heights`` guard ever runs.  Capturing
-    `narrowest_greedy_height` off the pre-bound, `seeds`-sorted tuple leaves a
-    stale 14 that is never in the bounded schedule, so the guard silently
-    fails and the seed falls back to `_balanced_compact_seed_height` --
-    monkeypatched here to a value (999) no real bounded height can produce, so
-    a fallback is unambiguous.  Reading it off the bounded `coarse_heights`
-    (this task's fix) keeps the guard honest and the large-sparse role reaches
-    the height the schedule actually offers.
+    """The large-sparse role must survive the CEILING relocating index 0, by
+    following the same index through the ceiling's own (position-preserving)
+    replacement -- not by reading whatever ends up scheduled at index 0 and
+    trivially finding it there (that was round 1's bug: it made the
+    `narrowest_height in scheduled_heights` guard tautological and silently
+    dropped the pre-existing `reserve_boundary_height` fallback; see
+    `test_a_reserve_boundary_swap_still_falls_back_to_the_balanced_height`
+    for that half).
+
+    `two_stage_spec()`'s narrowest greedy height is 14; `BandPolicy("80")`
+    gives a boundary of 9.  `reserve_boundary_height` is neutralised here (to
+    an identity) so ONLY the ceiling bound can touch index 0, isolating this
+    task's own mapping from the pre-existing reserve fallback.  The ceiling
+    then relocates 14 to 9 (MEASURED: traced `_ceiling_bounded_schedule`'s own
+    left-to-right scan over `(14, 17, 22, 8, 11, 16, 19, 24, 10, 13)` at
+    boundary 9), so the fixed `narrowest_role_height` reads 9 -- not the
+    balanced-height fallback, monkeypatched here to 999 (a value no real
+    bounded height can produce) so a fallback would be unambiguous.
     """
     monkeypatch.setattr(sequence_solver_module, "_LARGE_SPARSE_COMPACT_MIN_MACHINES", 1)
     monkeypatch.setattr(sequence_solver_module, "_LARGE_SPARSE_COMPACT_MIN_STRIPS", 1)
@@ -4530,30 +4561,12 @@ def test_large_sparse_compact_seed_survives_a_bounded_narrowest_height(
         "_balanced_compact_seed_height",
         lambda _template_problem: 999,
     )
-
-    def cancelled_seed(
-        _problem: PlacementProblem,
-        *,
-        base_seed: int,
-        attempt: int,
-        config: CompactSeedConfig | None = None,
-        direct_eligibility: tuple[VariantDirectInsertTarget, ...] = (),
-        absolute_deadline: float | None = None,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> CompactSeedResult:
-        del base_seed, attempt, config, direct_eligibility, absolute_deadline, cancelled
-        return CompactSeedResult(
-            CompactSeedStatus.CANCELLED,
-            None,
-            CompactSeedDiagnostics(
-                solver_seed=0,
-                status_name="CANCELLED",
-                width_weight=1,
-                secondary_upper_bound=0,
-            ),
-        )
-
-    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", cancelled_seed)
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", _cancelled_compact_seed)
+    monkeypatch.setattr(
+        finalize.BandPolicySearchEnvelope,
+        "reserve_boundary_height",
+        lambda self, ordered, *, minimum_width_for_height: ordered,
+    )
 
     run = _production_run(
         two_stage_spec(),
@@ -4565,12 +4578,52 @@ def test_large_sparse_compact_seed_survives_a_bounded_narrowest_height(
         compact_seed_attempt=0,
     )
 
-    # MEASURED: `two_stage_spec()`'s coarse heights are (14, 17, 22, 8, 11) by
-    # width; boundary 9 replaces the over-ceiling ones, and 9 -- the boundary
-    # itself, already scheduled by `reserve_boundary_height` -- lands at index
-    # 0, so it is what the fixed `narrowest_greedy_height` reads back.
     assert run.telemetry.compact_seed_height == 9
     assert run.telemetry.compact_seed_height != 999
+    assert run.telemetry.compact_seed_height == run.heights[0]
+
+
+def test_a_reserve_boundary_swap_still_falls_back_to_the_balanced_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ORIGINAL, pre-Task-6 fallback: when `reserve_boundary_height` (not
+    the ceiling bound) is what replaces index 0, the narrowest-greedy-pack
+    role is gone, and `_large_sparse_compact_seed_height`'s
+    ``narrowest_height in scheduled_heights`` guard must still fail -- the
+    ceiling bound must not resurrect a role the reserve already dropped.
+
+    `reserve_boundary_height` runs for real here (unlike the sibling test
+    above): `two_stage_spec()`'s narrowest greedy height, 14, is infeasible
+    against `BandPolicy("80")`'s boundary of 9, and is the FIRST height
+    `reserve_boundary_height` checks, so it swaps index 0 for the boundary (9)
+    before the ceiling bound ever runs.  14 is then nowhere in the final
+    schedule, so the seed falls back to `_balanced_compact_seed_height` --
+    monkeypatched here to 999 (a value no real bounded height can produce) so
+    the fallback is unambiguous.  This is the case round 1's fix (reading
+    index 0 after ALL bounding, blind to which mechanism moved it) silently
+    dropped: it read 9 back off the schedule and treated that as the narrowest
+    role surviving, when 9 is the boundary's stand-in, not the greedy pack.
+    """
+    monkeypatch.setattr(sequence_solver_module, "_LARGE_SPARSE_COMPACT_MIN_MACHINES", 1)
+    monkeypatch.setattr(sequence_solver_module, "_LARGE_SPARSE_COMPACT_MIN_STRIPS", 1)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_balanced_compact_seed_height",
+        lambda _template_problem: 999,
+    )
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", _cancelled_compact_seed)
+
+    run = _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("80"),
+        time_budget_s=2.0,
+        power=True,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        compact_seed_attempt=0,
+    )
+
+    assert run.telemetry.compact_seed_height == 999
     assert run.telemetry.compact_seed_height == run.heights[0]
 
 
