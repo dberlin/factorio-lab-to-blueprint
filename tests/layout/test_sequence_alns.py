@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -30,6 +31,7 @@ from flab2bp.layout.sequence_alns import (
     OperatorOutcome,
     OperatorSession,
     RepairOperator,
+    _band_boundary,
     destroy_strips,
     metrics_from_evaluation,
     operator_scale,
@@ -124,7 +126,8 @@ def test_band_boundary_is_a_shipped_arm_the_selector_can_dispatch() -> None:
     is not the operator's evidence, so the answer there is the empty set.
     """
     session = OperatorSession()
-    session.observe(session.select(_context()), (0.0,) * REWARD_RANKS, applied=True)
+    for _ in range(len(SHIPPED_REPAIR)):
+        session.observe(session.select(_context()), (0.0,) * REWARD_RANKS, applied=True)
     assert session.select(_context()).destroy is DestroyOperator.BAND_BOUNDARY
 
     problem = _problem()
@@ -165,20 +168,6 @@ def test_a_follow_up_destroy_operator_has_no_dispatch_branch() -> None:
 # --- selector ----------------------------------------------------------------
 
 
-def test_every_arm_is_played_once_before_any_arm_is_played_twice() -> None:
-    session = OperatorSession()
-    seen_destroy: list[DestroyOperator] = []
-    seen_repair: list[RepairOperator] = []
-    for _ in range(max(len(SHIPPED_DESTROY), len(SHIPPED_REPAIR))):
-        choice = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
-        seen_destroy.append(choice.destroy)
-        seen_repair.append(choice.repair)
-        session.observe(choice, (1.0, 0.0, 0.0, 0.0, 0.0), applied=True)
-    assert seen_destroy[: len(SHIPPED_DESTROY)] == list(SHIPPED_DESTROY)
-    assert seen_repair[: len(SHIPPED_REPAIR)] == list(SHIPPED_REPAIR)
-    assert len(set(seen_destroy[: len(SHIPPED_DESTROY)])) == len(SHIPPED_DESTROY)
-
-
 def test_a_tie_on_rank_zero_is_broken_by_rank_one() -> None:
     session = OperatorSession()
     rewards = {
@@ -197,7 +186,7 @@ def test_rank_zero_outranks_every_later_rank() -> None:
         DestroyOperator.FAILED_ENDPOINTS: (1.0, 0.0, 0.0, 0.0, 0.0),
         DestroyOperator.BAND_BOUNDARY: (0.0, 9.0, 9.0, 9.0, 9.0),
     }
-    for _ in range(len(SHIPPED_DESTROY)):
+    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
         choice = session.select(_context())
         session.observe(choice, rewards[choice.destroy], applied=True)
     assert session.select(_context()).destroy is DestroyOperator.FAILED_ENDPOINTS
@@ -205,7 +194,7 @@ def test_rank_zero_outranks_every_later_rank() -> None:
 
 def test_the_less_played_arm_wins_when_every_mean_is_tied_at_zero() -> None:
     session = OperatorSession()
-    for _ in range(len(SHIPPED_DESTROY)):
+    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
         choice = session.select(_context())
         session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
     # Both arms have identical (zero) means, so the less-played arm wins on the bonus.
@@ -226,26 +215,28 @@ def test_a_tie_on_every_nonzero_mean_is_broken_by_the_exploration_bonus() -> Non
     for _ in range(3):
         choice = session.select(_context())
         session.observe(choice, (0.0, 1.0, 0.0, 0.0, 0.0), applied=True)
-    # Every arm has been credited the same reward, so every mean is exactly 1.0,
-    # but BAND_BOUNDARY has been played once against FAILED_ENDPOINTS' twice.
-    assert math.isclose(session.credit["reward:failed-endpoints:1"], 1.81, rel_tol=1e-12)
-    assert math.isclose(session.credit["reward:band-boundary:1"], 0.9, rel_tol=1e-12)
+    # FAILED_ENDPOINTS was credited on draws 0 and 1, so its first credit carries
+    # two discounts (0.9*0.9 + 0.9 = 1.71); BAND_BOUNDARY was credited last and
+    # carries none.
+    assert math.isclose(session.credit["reward:failed-endpoints:1"], 1.71, rel_tol=1e-12)
+    assert math.isclose(session.credit["reward:band-boundary:1"], 1.0, rel_tol=1e-12)
     assert session.select(_context()).destroy is DestroyOperator.BAND_BOUNDARY
 
 
 def test_the_exploration_bonus_never_outvotes_even_the_last_mean() -> None:
     """A difference on rank 4 beats a bonus, which is the whole lexicographic point."""
     session = OperatorSession()
-    first = session.select(_context())
-    session.observe(first, (0.0,) * REWARD_RANKS, applied=True)
-    second = session.select(_context())
-    session.observe(second, (0.0, 0.0, 0.0, 0.0, 1.0), applied=True)
-    # `first` is now the less-played arm and so carries the larger bonus, but
-    # `second` leads on the lowest-priority mean; the mean still wins.
-    assert session.credit[f"count:{first.destroy.value}"] < session.credit[
-        f"count:{second.destroy.value}"
+    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
+        session.observe(session.select(_context()), (0.0,) * REWARD_RANKS, applied=True)
+    leader = session.select(_context())
+    session.observe(leader, (0.0, 0.0, 0.0, 0.0, 1.0), applied=True)
+    # `leader` is now the MORE-played arm and so carries the SMALLER bonus, and
+    # the other arm's every mean is zero; the rank-4 mean still wins.
+    other = next(arm for arm in SHIPPED_DESTROY if arm is not leader.destroy)
+    assert session.credit[f"count:{other.value}"] < session.credit[
+        f"count:{leader.destroy.value}"
     ]
-    assert session.select(_context()).destroy is second.destroy
+    assert session.select(_context()).destroy is leader.destroy
 
 
 def test_the_selector_constants_are_pinned_at_their_reviewed_values() -> None:
@@ -263,7 +254,7 @@ def test_the_selector_constants_are_pinned_at_their_reviewed_values() -> None:
 def test_a_zero_exploration_coefficient_collapses_to_declaration_order() -> None:
     """What the bonus buys, stated as behaviour: without it, ties never rotate."""
     session = OperatorSession(exploration=0.0)
-    for _ in range(len(SHIPPED_DESTROY)):
+    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
         choice = session.select(_context())
         session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
     assert session.select(_context()).destroy is DestroyOperator.FAILED_ENDPOINTS
@@ -304,13 +295,14 @@ def test_discounting_decays_the_reward_sums_and_not_only_the_counts() -> None:
     session.observe(first, (0.0, 1.0, 0.0, 0.0, 0.0), applied=True)
     second = session.select(_context())
     session.observe(second, (0.0, 4.0, 0.0, 0.0, 0.0), applied=True)
-    # One observation has passed since the first arm was credited, so both its
-    # count and its rank-1 sum carry exactly one discount.
-    assert math.isclose(session.credit["count:failed-endpoints"], 0.9, rel_tol=1e-12)
-    assert math.isclose(session.credit["reward:failed-endpoints:1"], 0.9, rel_tol=1e-12)
-    # The arm credited last carries none.
-    assert math.isclose(session.credit["count:band-boundary"], 1.0, rel_tol=1e-12)
-    assert math.isclose(session.credit["reward:band-boundary:1"], 4.0, rel_tol=1e-12)
+    # The product probe plays SEQUENCE_REINSERT then LOCAL_EXACT_PACK, so the
+    # repair ledger is where two different arms are credited one draw apart.
+    assert first.repair is RepairOperator.SEQUENCE_REINSERT
+    assert second.repair is RepairOperator.LOCAL_EXACT_PACK
+    assert math.isclose(session.credit["count:sequence-reinsert"], 0.9, rel_tol=1e-12)
+    assert math.isclose(session.credit["reward:sequence-reinsert:1"], 0.9, rel_tol=1e-12)
+    assert math.isclose(session.credit["count:local-exact-pack"], 1.0, rel_tol=1e-12)
+    assert math.isclose(session.credit["reward:local-exact-pack:1"], 4.0, rel_tol=1e-12)
 
 
 def test_local_exact_pack_is_not_offered_without_room_for_a_window() -> None:
@@ -657,3 +649,193 @@ def test_band_boundary_refuses_a_scale_below_one() -> None:
     """The scale guard runs before dispatch, so the new branch inherits it."""
     with pytest.raises(ValueError, match="positive integer"):
         _band_destroy(band_target_width=1, scale=0)
+
+
+def test_the_window_arm_is_paired_with_the_failure_set_on_its_first_window_draw() -> None:
+    """The pairing master can never make.
+
+    R3 §1.2 proves the two ledgers are index-isomorphic under every reward
+    sequence -- `observe` credits both from the same vector and the same
+    `applied` flag -- so `(FAILED_ENDPOINTS, LOCAL_EXACT_PACK)` and
+    `(BAND_BOUNDARY, SEQUENCE_REINSERT)` are structurally unreachable.  Verified
+    over 60,000 randomized draws and 166 real corpus selections: zero cross
+    pairings.
+
+    The probe walks the product destroy-major in declaration order, so draw 0
+    stays master's `(FAILED_ENDPOINTS, SEQUENCE_REINSERT)` and the FIRST draw
+    that names the window is draw 1 -- paired with the routing-failure set, which
+    is the evidence the window was designed for.
+    """
+    session = OperatorSession()
+
+    first = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
+    session.observe(first, (0.0,) * REWARD_RANKS, applied=True)
+    second = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
+
+    assert (first.destroy, first.repair) == (
+        DestroyOperator.FAILED_ENDPOINTS,
+        RepairOperator.SEQUENCE_REINSERT,
+    )
+    assert (second.destroy, second.repair) == (
+        DestroyOperator.FAILED_ENDPOINTS,
+        RepairOperator.LOCAL_EXACT_PACK,
+    )
+
+
+def test_every_shipped_pairing_is_reachable_inside_the_probe() -> None:
+    """The honest statement of the defect, as a table master cannot pass.
+
+    Asserted WITHIN the first `|D| x |R|` draws, because that is the property
+    being bought: every pairing is played once before any is played twice.
+    """
+    session = OperatorSession()
+    rewards = [
+        (1.0, 0.0, 0.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0, 1.0, 0.0),
+    ]
+    seen: set[tuple[DestroyOperator, RepairOperator]] = set()
+    for reward in rewards[: len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)]:
+        choice = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
+        seen.add((choice.destroy, choice.repair))
+        session.observe(choice, reward, applied=True)
+
+    assert seen == {
+        (destroy, repair) for destroy in SHIPPED_DESTROY for repair in SHIPPED_REPAIR
+    }
+
+
+def test_the_probe_walks_the_product_destroy_major() -> None:
+    """The walk's SHAPE, which is what makes the two ledgers desynchronise.
+
+    Master's two independent untried probes alternate in lockstep and produce
+    `[FE, BB, FE, BB]` on the destroy ledger; the product walk produces
+    `[FE, FE, BB, BB]`, because the destroy axis advances once per `|R|` draws.
+    That difference is the whole mechanism: after the walk the two ledgers carry
+    different count and reward patterns, which is what keeps all four pairings
+    reachable under the D-UCB.
+
+    Both sequences give each arm the same PLAY COUNT, so the counts alone cannot
+    tell the two apart -- they are asserted here as the invariant the probe must
+    not break, and the ORDER is what makes this test red on master.  The repair
+    sequence is `[SR, LEP, SR, LEP]` under both and is therefore not asserted.
+    """
+    session = OperatorSession()
+    destroys: list[DestroyOperator] = []
+    repairs: list[RepairOperator] = []
+    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
+        choice = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
+        destroys.append(choice.destroy)
+        repairs.append(choice.repair)
+        session.observe(choice, (1.0, 0.0, 0.0, 0.0, 0.0), applied=True)
+
+    assert destroys == [
+        DestroyOperator.FAILED_ENDPOINTS,
+        DestroyOperator.FAILED_ENDPOINTS,
+        DestroyOperator.BAND_BOUNDARY,
+        DestroyOperator.BAND_BOUNDARY,
+    ]
+    # The probe is not permission to skip an arm: both ledgers stay balanced.
+    assert all(destroys.count(arm) == len(SHIPPED_REPAIR) for arm in SHIPPED_DESTROY)
+    assert all(repairs.count(arm) == len(SHIPPED_DESTROY) for arm in SHIPPED_REPAIR)
+
+
+def test_the_probe_is_a_pure_function_of_the_draw_ordinal() -> None:
+    """Replayability (program invariant): no RNG, no clock, no reward.
+
+    Six draws, not four: with only the probe's own draws the assertion would be
+    true even if the probe ignored the ordinal entirely.  Draws 4 and 5 come from
+    the D-UCB and MUST differ between the two reward streams, which is what
+    proves the equality on draws 0 to 3 is the probe's doing.
+    """
+    def run(rewards: list[tuple[float, ...]]) -> list[tuple[str, str]]:
+        session = OperatorSession()
+        pairs: list[tuple[str, str]] = []
+        for index in range(6):
+            choice = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
+            pairs.append((choice.destroy.value, choice.repair.value))
+            session.observe(choice, rewards[index % len(rewards)], applied=True)
+        return pairs
+
+    hot = run([(5.0, 0.0, 0.0, 0.0, 0.0), (0.0,) * REWARD_RANKS])
+    cold = run([(0.0,) * REWARD_RANKS, (5.0, 0.0, 0.0, 0.0, 0.0)])
+
+    assert hot[:4] == cold[:4]
+    # Measured: hot tails on (failed-endpoints, sequence-reinsert) twice, cold on
+    # (failed-endpoints, local-exact-pack) then (band-boundary, local-exact-pack).
+    assert hot[4:] != cold[4:]
+
+
+def test_a_probe_naming_the_window_without_room_falls_through_to_the_ducb() -> None:
+    """`_affordable_repairs` still governs: the probe cannot smuggle a window in.
+
+    Below `C_WINDOW_FRACTION_FLOOR` the probe's LOCAL_EXACT_PACK draws fall
+    through to the D-UCB for BOTH arms; the ordinal still advances, so those
+    pairings lose their probe turn rather than being deferred.
+    """
+    session = OperatorSession()
+    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
+        choice = session.select(_context(remaining_fraction=0))
+        assert choice.repair is not RepairOperator.LOCAL_EXACT_PACK
+        session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
+
+
+def test_a_dropped_window_proposal_is_charged_a_count_and_no_reward() -> None:
+    """Unchanged accounting, pinned so the probe did not start paying for a drop.
+
+    Draw 1 is the first that names the window under Ruling E1's order.  Both
+    draws are observed UNAPPLIED so `session.applied` isolates the property.
+    """
+    session = OperatorSession()
+    first = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
+    session.observe(first, (0.0,) * REWARD_RANKS, applied=False)
+    window = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
+    session.observe(window, (0.0,) * REWARD_RANKS, applied=False)
+
+    assert window.repair is RepairOperator.LOCAL_EXACT_PACK
+    assert math.isclose(session.credit["count:local-exact-pack"], 1.0, rel_tol=1e-12)
+    assert all(
+        session.credit[f"reward:local-exact-pack:{rank}"] == 0.0
+        for rank in range(REWARD_RANKS)
+    )
+    assert session.applied == 0
+
+
+def test_band_boundary_on_a_vertical_only_overflow_is_the_whole_problem() -> None:
+    """R3 §1.4's two drop paths, pinned as behaviour.
+
+    `band_target_for` returns the input width unchanged when a frame already
+    exists, so on a band-legal placement the strict inequality inside
+    `_band_boundary` can never hold and `over` is empty.  Measured: 9 empties and
+    4 whole-problem lists across 13 BAND_BOUNDARY draws, zero strict subsets.
+    """
+    problem = _problem()
+    state = AnnealState.initial(problem.size, 7)
+    decoded = decode_state(problem, state)
+    short = replace(problem, outline_height=decoded.used_height - 1)
+
+    assert _band_boundary(problem, decoded, band_target_width=decoded.width) == []
+    assert len(_band_boundary(short, decoded, band_target_width=decoded.width)) == problem.size
+
+
+def test_a_single_repair_arm_session_is_unchanged_by_the_probe() -> None:
+    """Freeform arms ONE repair, so its draws must not move.
+
+    `FreeformLayout.lay_out` constructs
+    `OperatorSession(repair_arms=(RepairOperator.LOCAL_EXACT_PACK,))`, so
+    `|D| x |R| == 2` and the probe yields exactly what master's single-arm repair
+    ledger and alternating destroy ledger already produced.  Measured: the first
+    four draws are FE/BB/FE/BB, all with LOCAL_EXACT_PACK.
+    """
+    session = OperatorSession(repair_arms=(RepairOperator.LOCAL_EXACT_PACK,))
+    pairs = []
+    for _ in range(4):
+        choice = session.select(_context(remaining_fraction=C_CONTEXT_FRACTION_STEPS))
+        pairs.append((choice.destroy, choice.repair))
+        session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
+
+    assert pairs[:2] == [
+        (DestroyOperator.FAILED_ENDPOINTS, RepairOperator.LOCAL_EXACT_PACK),
+        (DestroyOperator.BAND_BOUNDARY, RepairOperator.LOCAL_EXACT_PACK),
+    ]

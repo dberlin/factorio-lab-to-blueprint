@@ -3076,6 +3076,11 @@ class _RepairAdapters:
     #: here rather than where the encoding is produced.  The run's own closure
     #: recognises its window's state and ignores every other one.
     window_installed: Callable[[AnnealState], None] | None = None
+    #: Report why a LOCAL_EXACT_PACK proposal was dropped before it reached
+    #: CP-SAT: ``"empty"`` or ``"whole"``.  A callback rather than a telemetry
+    #: reference because `_alns_substitution` is also driven by bare-constructed
+    #: and test solvers that own no telemetry.
+    window_dropped: Callable[[str], None] | None = None
 
 
 def _alns_substitution(
@@ -3167,6 +3172,14 @@ def _alns_substitution(
     if not neighbourhood or (problem.size > 1 and len(neighbourhood) == problem.size):
         # Credit it now, as unapplied.  Leaving it pending would charge the next
         # evaluation's outcome to a choice that never ran.
+        if (
+            choice.repair is RepairOperator.LOCAL_EXACT_PACK
+            and adapters.window_dropped is not None
+        ):
+            # Counted only for the window arm: these counters exist to say why
+            # `alns_window_solves` is zero, and a SEQUENCE_REINSERT proposal that
+            # finds nothing to destroy is a different fact.
+            adapters.window_dropped("empty" if not neighbourhood else "whole")
         session.observe(choice, (0.0,) * REWARD_RANKS, applied=False)
         return unchanged, frozenset()
 
@@ -4410,6 +4423,14 @@ class _ProductionTelemetry:
     alns_encode_inexact: int = 0
     alns_encode_errors: int = 0
     alns_skipped_no_goods: int = 0
+    #: Window proposals dropped because the destroy set was EMPTY.  Phase C open
+    #: item 3; R3 §1.4 measured 9 of 13 BAND_BOUNDARY draws at 30 s here.
+    alns_window_dropped_empty: int = 0
+    #: ... and because it was the WHOLE problem.  4 of 13 at 30 s.
+    alns_window_dropped_whole: int = 0
+    #: Windows that reached CP-SAT and returned the incumbent's own assignment.
+    #: 8 of 55 in R3 §4.2's `window-always` run at 120 s.
+    alns_window_unchanged: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -5441,6 +5462,12 @@ def _production_run(
     def _count_skipped_no_goods(count: int) -> None:
         telemetry.alns_skipped_no_goods += count
 
+    def _count_window_drop(reason: str) -> None:
+        if reason == "empty":
+            telemetry.alns_window_dropped_empty += 1
+        else:
+            telemetry.alns_window_dropped_whole += 1
+
     #: The encoding the window last produced, until a call site installs it.  A
     #: one-slot list, not a counter: the install sites report the state they are
     #: about to install, and only the state carrying this encoding's pair is the
@@ -5499,11 +5526,14 @@ def _production_run(
             on_skipped=_count_skipped_no_goods,
         )
         telemetry.alns_window_seconds += time.monotonic() - started_window
-        if repaired is None or repaired.at == pack.at:
-            # INFEASIBLE, UNKNOWN, unaffordable, or an unchanged assignment --
-            # none of which is a repair.  The caller credits the choice as
-            # unapplied rather than re-evaluating a placement the router has
-            # already refused.
+        if repaired is None:
+            # INFEASIBLE, UNKNOWN or unaffordable -- CP-SAT ran and gave nothing
+            # to install.  The caller credits the choice as unapplied.
+            return None
+        if repaired.at == pack.at:
+            # It solved and returned the incumbent.  Not a repair, and a distinct
+            # fact from an infeasible window: R3 §4.2 measured 8 of 55.
+            telemetry.alns_window_unchanged += 1
             return None
         try:
             encoded = encode_placement(
@@ -5612,6 +5642,7 @@ def _production_run(
         alns_adapters=_RepairAdapters(
             window_pack=window_pack,
             window_installed=window_installed,
+            window_dropped=_count_window_drop,
         ),
         remaining_fraction=lambda: remaining_fraction_bucket(
             max(0.0, (started + ceiling) - time.monotonic()), ceiling
@@ -6137,6 +6168,9 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
         "alns_window_accepted": float(telemetry.alns_window_accepted),
         "alns_window_seconds": telemetry.alns_window_seconds,
         "alns_skipped_no_goods": float(telemetry.alns_skipped_no_goods),
+        "alns_window_dropped_empty": float(telemetry.alns_window_dropped_empty),
+        "alns_window_dropped_whole": float(telemetry.alns_window_dropped_whole),
+        "alns_window_unchanged": float(telemetry.alns_window_unchanged),
         "global_routes": float(telemetry.global_routes),
         "detailed_routes": float(telemetry.detailed_routes),
     }
@@ -6301,6 +6335,9 @@ def _with_observational_stats(
             "alns_encode_inexact": float(telemetry.alns_encode_inexact),
             "alns_encode_errors": float(telemetry.alns_encode_errors),
             "alns_skipped_no_goods": float(telemetry.alns_skipped_no_goods),
+            "alns_window_dropped_empty": float(telemetry.alns_window_dropped_empty),
+            "alns_window_dropped_whole": float(telemetry.alns_window_dropped_whole),
+            "alns_window_unchanged": float(telemetry.alns_window_unchanged),
             "termination_cause": result.termination,
             "validation_clean": 1.0,
             "validation_status": "clean",
