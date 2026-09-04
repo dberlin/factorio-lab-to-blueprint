@@ -2575,8 +2575,13 @@ def _belt_crossing(ctx: Context) -> Iterable[Finding]:
     * Sorters and belt addons are left out entirely because the game excuses
       them (145871 and ``AddonPass`` at 145885/147454); belt on belt is
       ``geom.belt_single_occupancy``'s question, not this one.
-    * ``catalog.LOW_CONFIDENCE_FOOTPRINTS`` is left out, for the reason already
-      recorded there.
+    * ``catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS`` is left out -- the distrusted
+      footprints we never place.  One we DO place is convicted here like any other
+      building: the exemption's own justification is "none of them placed by the
+      generator", and the mode-driven Energy Exchanger falsified it.
+      ``game.belt_collide`` consults the SAME narrowed set, so the sentence above
+      about it being "the same rule without this narrowing" still holds -- the two
+      differ only in the probe-inside restriction, never in the exemption.
     * ``multiLevel`` buildings are left out HERE, because a belt one level above
       a Splitter or Storage Tank is on its raised port rather than crossing it
       and this check cannot tell the two apart.  ``game.belt_collide`` can: the
@@ -2769,7 +2774,7 @@ def _belt_collide_findings(ctx: Context, cid: str, *, crossings_only: bool) -> I
     for collision in collisions:
         ia = collision.belt
         ic = collision.collider
-        if bs[ic].item_id in cat.LOW_CONFIDENCE_FOOTPRINTS:
+        if bs[ic].item_id in cat.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS:
             continue
         over = _probe_inside(previews[ia], previews[ic]) and bs[ia].z > bs[ic].z
         if crossings_only and (not over or _stacks(bs[ic].item_id)):

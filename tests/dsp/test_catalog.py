@@ -416,13 +416,55 @@ def test_overlap_check_can_fail() -> None:
     assert set(a) & set(b)
 
 
-def test_low_confidence_footprints_are_not_production_buildings() -> None:
-    """Nothing the generator places may sit in the unresolved set."""
-    generator_places = {
-        2302, 2303, 2304, 2305, 2308, 2309,
-        2310, 2314, 2315, 2318, 2319, 2901, 2902,
-    }
-    assert not (generator_places & catalog.LOW_CONFIDENCE_FOOTPRINTS)
+def test_the_exemption_never_covers_a_building_we_place() -> None:
+    """A footprint we distrust is only exempt while we never place it.
+
+    The set this replaces hardcoded thirteen assembler-ish item ids and was
+    written before MODE_DRIVEN_MACHINE existed, so it passed vacuously while
+    validate suppressed real belt collisions on an Energy Exchanger.  Derive
+    the answer from the two places a MachineGroup's machine comes from: a
+    recipe's producers, and the mode-driven table.
+
+    NOT from Dataset's machine ids: the lab dataset lists Wind Turbines, Solar
+    Panels, Artificial Stars, Satellite Substations and Interstellar Logistics
+    Stations as machines, and the generator never places one as a producer, so
+    that form fails on five buildings that are legitimately still exempt.
+    """
+    from flab2bp.lab.data import load_vendored
+
+    data = load_vendored()
+    placed = {driven.machine_item_id for driven in catalog.MODE_DRIVEN_MACHINE.values()}
+    for recipe in data.recipes:
+        for producer in recipe.producers:
+            try:
+                placed.add(catalog.item_id(producer))
+            except KeyError:
+                continue  # a lab producer with no DSP building is not one we place
+    assert not (placed & catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS), sorted(
+        placed & catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS
+    )
+    assert catalog.ENERGY_EXCHANGER_ID in placed
+    assert catalog.ENERGY_EXCHANGER_ID in catalog.LOW_CONFIDENCE_FOOTPRINTS
+    assert catalog.ENERGY_EXCHANGER_ID not in catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS
+
+
+def test_only_the_energy_exchanger_becomes_newly_checked() -> None:
+    """2208 was never exempt, so the Ray Receiver's behaviour does not move."""
+    assert catalog.RAY_RECEIVER_ID not in catalog.LOW_CONFIDENCE_FOOTPRINTS
+    newly_checked = catalog.LOW_CONFIDENCE_FOOTPRINTS - catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS
+    assert newly_checked == {catalog.ENERGY_EXCHANGER_ID}
+    assert {2101, 2104, 2203, 2205, 2210, 2212} == catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS
+
+
+def test_the_mode_driven_ids_are_read_off_the_table() -> None:
+    assert (
+        frozenset(driven.machine_item_id for driven in catalog.MODE_DRIVEN_MACHINE.values())
+        == catalog.MODE_DRIVEN_MACHINE_ITEM_IDS
+    )
+    assert {
+        catalog.ENERGY_EXCHANGER_ID,
+        catalog.RAY_RECEIVER_ID,
+    } == catalog.MODE_DRIVEN_MACHINE_ITEM_IDS
 
 
 # --- recipe and item id mapping --------------------------------------------
