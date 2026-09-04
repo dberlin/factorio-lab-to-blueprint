@@ -365,6 +365,22 @@ _CATALOG: tuple[Entry, ...] = (
     _e("catalog.NO_DSP_ITEM_PREFIXES", Kind.DATA),
     _e("catalog.NO_DSP_RECIPE", Kind.DATA),
     _e("catalog.MODE_DRIVEN_MACHINE", Kind.DATA),
+    _e(
+        "catalog.MODE_DRIVEN_MACHINE_ITEM_IDS",
+        Kind.DERIVED,
+        projection_of="catalog.MODE_DRIVEN_MACHINE",
+        note="The machines a MachineGroup can name that are not ordinary "
+        "producers.  Derived so a new mode-driven building cannot silently "
+        "keep a footprint exemption it should lose.",
+    ),
+    _e(
+        "catalog.UNPLACED_LOW_CONFIDENCE_FOOTPRINTS",
+        Kind.DERIVED,
+        projection_of="catalog.LOW_CONFIDENCE_FOOTPRINTS",
+        depends_on=("catalog.MODE_DRIVEN_MACHINE_ITEM_IDS",),
+        note="The belt-collider exemption actually consulted by validate.  The "
+        "unnarrowed set suppressed convictions on an Energy Exchanger we place.",
+    ),
     # Callable rules.  A rule does not stop being a rule for being a function.
     _e(
         "catalog.belt_max_z",

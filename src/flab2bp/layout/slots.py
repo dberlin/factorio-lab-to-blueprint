@@ -69,7 +69,7 @@ from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import colliders, splitter_ports
+from flab2bp.dsp import codec, colliders, splitter_ports
 from flab2bp.dsp.rules import (
     ADDON_FROM_SLOT,
     ADDON_TO_SLOT,
@@ -98,6 +98,7 @@ __all__ = [
     "Attachment",
     "PortDock",
     "SlotUndetermined",
+    "MAX_RESCUED_COLLIDER_TILES",
     "addon_supply_cell",
     "addon_supply_position",
     "assign_belt_slots",
@@ -105,6 +106,8 @@ __all__ = [
     "attachable_columns",
     "attachable_rows",
     "attachment",
+    "belt_tile_hits_collider",
+    "drain_dock_count",
     "lane_facing",
     "lane_orientation",
     "machine_slot",
@@ -967,6 +970,67 @@ def port_docks(machine: PlacedBuilding) -> dict[int, PortDock]:
         if got is not None:
             out[k] = got
     return out
+
+
+def drain_dock_count(item_id: int, yaw: float) -> int:
+    """How many of ``item_id``'s ports face the lane band (draw from the north) at ``yaw``.
+
+    The exact question ``strip_variants._logical_strip_plans``'s output-lane cap
+    and ``freeform._drainable_by_port`` both ask, of the same type-level probe --
+    ``dock.facing.delta[1] > 0`` over :func:`port_docks`.  Before this they
+    computed that expression at two separate call sites; sharing one removes the
+    chance of the two silently drifting, even though today neither divergence
+    would be *visible* -- both paths end in a refusal at a 0-dock yaw, so the
+    duplication was inert rather than wrong.
+
+    Returns the raw count, including zero.  A caller that wants "at least one
+    lane, even with none to give" applies that floor itself at its own call
+    site -- :func:`strip_variants._logical_strip_plans` does; a bare capacity
+    check like ``_drainable_by_port`` must not, since ``0 <= 0`` would then read
+    as drainable.
+    """
+    probe = probe_building(item_id, yaw)
+    return sum(dock.facing.delta[1] > 0 for dock in port_docks(probe).values())
+
+
+#: How many belt tiles inside a host's build collider the game lets off.
+#:
+#: ``colliders.belt_run_ends_in_a_building`` (CheckBuildConditions 147492)
+#: excuses the belt that ends in the port, and ``colliders.belt_chain_excuses``
+#: (147443) the TWO behind it -- its three-hop walk reaches the host from a belt
+#: two tiles back and no further, because the host itself is one of the hops.
+#:
+#: THE RESCUE IS BY HOP DISTANCE, NOT BY COUNT.  Three in-collider tiles that
+#: are not the last three hops into the port are still convicted, and a
+#: splitter inside the run moves the budget (147443's two-hop clause).  A
+#: caller counting with this number must ALSO check that the hits are the run's
+#: suffix; :func:`flab2bp.layout.freeform._port_approach` is the one that does.
+MAX_RESCUED_COLLIDER_TILES = 3
+
+
+def belt_tile_hits_collider(
+    host: PlacedBuilding, x: int, y: int, z: Fraction = Fraction(0)
+) -> bool:
+    """Would a belt standing on ``(x, y, z)`` probe into ``host``'s collider?
+
+    The paste's own question, asked with the paste's own primitives, so the
+    emitter cannot disagree with ``validate``'s ``game.belt_collide`` about
+    which tiles need excusing.  The geometry comes from the asset table through
+    ``colliders.target_boxes``; no footprint number is consulted, because a
+    footprint is a derived tile count and the collider is what the game probes.
+
+    Raw overlap only.  Whether a hit is then rescued is a property of the
+    belt's RUN, not of the tile -- see :data:`MAX_RESCUED_COLLIDER_TILES`.
+    """
+    pose_args = codec.tile_to_local_offset(host.x, host.y, host.z, host.width, host.height)
+    preview = colliders.Preview(host.model_index, *pose_args, host.yaw)
+    boxes = colliders.target_boxes(
+        preview, *colliders.flat_pose(preview.x, preview.y, preview.z, preview.yaw)
+    )
+    probe = colliders.belt_probe(*codec.tile_to_local_offset(x, y, z, 1, 1))
+    return any(
+        colliders.sphere_box_overlap(probe, colliders.BELT_PROBE_RADIUS, box) for box in boxes
+    )
 
 
 def _cardinal(fx: float, fy: float) -> Facing | None:

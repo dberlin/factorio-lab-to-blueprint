@@ -13,7 +13,7 @@ import pytest
 
 import flab2bp.layout.strip_variants as strip_variants_module
 from flab2bp.dsp import catalog
-from flab2bp.layout import slots
+from flab2bp.layout import freeform, slots
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.finalize import ProjectionFailure
 from flab2bp.layout.freeform import plan_strips
@@ -1671,3 +1671,181 @@ def test_every_strip_length_heuristic_survives_the_cap(requested: int) -> None:
     instances = partition_strip_family(family, max_machine_count=requested)
     assert max(instance.machine_count for instance in instances) <= 3
     assert sum(instance.machine_count for instance in instances) == 9
+
+
+# --- a belt-port host is planned one output lane per drain port -------------
+
+
+def _plans_for(spec: BuildSpec) -> tuple[strip_variants_module._LogicalStripPlan, ...]:
+    return strip_variants_module._logical_strip_plans(spec)
+
+
+def _two_sink_exchanger_spec(count: int = 3) -> BuildSpec:
+    """Charge exchangers whose product has an internal consumer AND an output.
+
+    ``count`` selects the shape the planner produces: 1 folds both sinks onto
+    ONE lane with DEST_SEP (no second shard to give), 2 or more shards them
+    across two strips of one lane each.  Only ``count >= 2`` routes -- one
+    charge machine cannot feed a discharge machine AND the external output --
+    so ``count=1`` is a planner fixture and never reaches `lay_out`.
+    """
+    return BuildSpec(
+        groups=(
+            _group(
+                "accumulator-full",
+                "energy-exchanger",
+                count,
+                {"accumulator": Fraction(1)},
+                {"accumulator-full": Fraction(1)},
+            ),
+            _group(
+                "accumulator-discharge",
+                "energy-exchanger",
+                1,
+                {"accumulator-full": Fraction(1)},
+                {"accumulator": Fraction(1)},
+            ),
+        ),
+        external_inputs={"accumulator": Fraction(2)},
+        outputs={"accumulator-full": Fraction(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+        label=f"two-sink-{count}",
+    )
+
+
+def _two_sink_assembler_spec() -> BuildSpec:
+    """An ordinary sorter-seated producer with two distinct output destinations.
+
+    Not a belt-port host (``assembling-machine-2`` has slot poses, no port
+    poses), so this task's cap must never fire for it: ``out_capacity`` still
+    comes from the sorter reach and the south face, exactly as before.
+    """
+    return BuildSpec(
+        groups=(
+            _group(
+                "gear",
+                "assembling-machine-2",
+                1,
+                {"iron-ingot": Fraction(2)},
+                {"gear": Fraction(1)},
+            ),
+            _group(
+                "gear-to-motor",
+                "assembling-machine-2",
+                1,
+                {"gear": Fraction(1)},
+                {"motor": Fraction(1)},
+            ),
+            _group(
+                "gear-to-frame",
+                "assembling-machine-2",
+                1,
+                {"gear": Fraction(1)},
+                {"frame": Fraction(1)},
+            ),
+        ),
+        external_inputs={"iron-ingot": Fraction(2)},
+        outputs={"motor": Fraction(1), "frame": Fraction(1)},
+    )
+
+
+def test_a_single_machine_belt_port_host_folds_its_sinks_onto_one_lane() -> None:
+    """2209 has ONE north-facing dock, so it may be planned one output lane.
+
+    Two accumulator-full sinks -- an internal discharge machine and the
+    external output -- used to become two lane rows, which one port cannot
+    drain, and the strip refused before any search.  With ONE machine there is
+    no second shard to give, so the other axis moves: they become one lane
+    whose destination field names both groups, which is what DEST_SEP is for.
+    """
+    plans = _plans_for(_two_sink_exchanger_spec(count=1))
+    charge = [p for p in plans if p.recipe_id == "accumulator-full"]
+    assert len(charge) == 1, charge
+    assert len(charge[0].out_lanes) == 1, charge[0].out_lanes
+    item, dest, _domain = charge[0].out_lanes[0]
+    assert item == "accumulator-full"
+    assert dest == "|accumulator-discharge#1"
+    assert freeform._dests(dest) == ("", "accumulator-discharge#1")
+
+
+def test_several_machines_shard_instead_of_folding_and_still_take_one_lane() -> None:
+    """The cap is 'one lane per PLAN', which sharding satisfies too.
+
+    With machines to spare the planner splits the destinations across STRIPS
+    rather than folding them onto one lane -- `_shard_sinks` runs before
+    `_merge_lanes`.  Either shape honours the cap; what must never come back is
+    a single plan carrying two lanes for a host with one drain port.
+    """
+    plans = _plans_for(_two_sink_exchanger_spec(count=3))
+    charge = [p for p in plans if p.recipe_id == "accumulator-full"]
+    assert len(charge) == 2, charge
+    assert {p.shard_index for p in charge} == {0, 1}
+    assert all(len(p.out_lanes) == 1 for p in charge), charge
+    assert {dest for p in charge for _i, dest, _c in p.out_lanes} == {
+        "accumulator-discharge#1",
+        "",
+    }
+
+
+def test_an_ordinary_producer_keeps_its_sorter_derived_lane_capacity() -> None:
+    """The cap is asked only of a host that drains through PORTS.
+
+    An assembler has no port poses at all, so its out_capacity must still come
+    from the south face and the sorter reach -- otherwise every strip in the
+    corpus loses lanes.
+    """
+    plans = _plans_for(_two_sink_assembler_spec())
+    producer = next(p for p in plans if p.recipe_id == "gear")
+    assert len(producer.out_lanes) == 2
+
+
+def test_a_multi_dock_belt_port_host_keeps_its_full_drain_capacity() -> None:
+    """2316 has THREE north-facing docks at its lane-orientation yaw -- not one.
+
+    The cap's guard (`takes_belt_ports and not slot_poses`) covers every
+    belt-port host, not only the Energy Exchanger -- measured: all twelve such
+    buildings have falsy `slot_poses`.  A cap that assumed 'one dock' (the
+    Energy Exchanger's own shape) would flatten a two-destination producer onto
+    one DEST_SEP-joined lane the way a one-dock host is folded.  2316
+    (Advanced Mining Machine) has `slots.drain_dock_count(2316, 0.0) == 3`
+    (measured), so two destinations must stay two separate lanes -- capacity
+    to spare, no fold needed.
+    """
+    assert slots.drain_dock_count(2316, 0.0) == 3
+    plans = _plans_for(
+        BuildSpec(
+            groups=(
+                _group(
+                    "ore",
+                    "advanced-mining-machine",
+                    1,
+                    {},
+                    {"ore": Fraction(1)},
+                ),
+                _group(
+                    "ore-to-a",
+                    "assembling-machine-1",
+                    1,
+                    {"ore": Fraction(1)},
+                    {"a": Fraction(1)},
+                ),
+                _group(
+                    "ore-to-b",
+                    "assembling-machine-1",
+                    1,
+                    {"ore": Fraction(1)},
+                    {"b": Fraction(1)},
+                ),
+            ),
+            external_inputs={},
+            outputs={"a": Fraction(1), "b": Fraction(1)},
+        )
+    )
+    miner = [p for p in plans if p.recipe_id == "ore"]
+    assert len(miner) == 1, miner
+    assert len(miner[0].out_lanes) == 2, miner[0].out_lanes
+    assert {dest for _item, dest, _domain in miner[0].out_lanes} == {
+        "ore-to-a#1",
+        "ore-to-b#2",
+    }

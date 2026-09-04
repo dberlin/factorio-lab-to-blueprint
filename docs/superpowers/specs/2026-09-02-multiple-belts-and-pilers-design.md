@@ -1,11 +1,23 @@
 # Multiple belts and Automatic Pilers above the fastest belt
 
-Date: 2026-09-02, revision 2 on 2026-09-03. Status: design, awaiting review.
-Follows `2026-09-02-belt-and-sorter-tiers-design.md`, whose section 11 hands
-this work off. Revision 2 replaces revision 1 entirely: revision 1 modelled a
-piler as a device at "the head of a lane planned at ceiling x stack", which
-only works when that lane is already fed by a stacked source, and it never
-stated the constraint that governs where a piler may sit. Section 2 states it.
+Date: 2026-09-02, revision 2 on 2026-09-03, revision 3 on 2026-09-03. Status:
+design, awaiting review. Follows `2026-09-02-belt-and-sorter-tiers-design.md`,
+whose section 11 hands this work off. Revision 2 replaced revision 1 entirely:
+revision 1 modelled a piler as a device at "the head of a lane planned at
+ceiling x stack", which only works when that lane is already fed by a stacked
+source, and it never stated the constraint that governs where a piler may sit.
+Section 2 states it.
+
+Revision 3 (Ruling P12) amends sections 5 and 6 to the game facts pinned by
+plan Task 6 on 2026-09-03 (`multibelt` commit `8c6f4b1`,
+`src/flab2bp/dsp/data/stacking.json`). Four of them moved the design: only the
+Pile Sorter carries a stack and only on the live `Pile Sorter Upgrade` ladder
+(the `Sorter Cargo Stacking` ladder is obsolete and unreachable); a piler
+DOUBLES rather than jumping to a setting, so reaching stack 4 from an unstacked
+lane needs two in series; a piler has NO per-building stack parameter, its mode
+coming from its wiring; and a piler's intake is at least the belt's own cargo
+rate, which deletes the throughput branch. Sections 1, 2, 8, 9 and 10 carry the
+consequential corrections; nothing else changed.
 
 ## 1. Problem
 
@@ -18,11 +30,11 @@ implements neither:
 - **Several belts in parallel.** Split the flow across lanes so that each lane
   carries at most one belt's worth. Costs belts, entry points and strip length;
   needs no research beyond the belt itself.
-- **Piling.** An Automatic Piler (item 2040) combines consecutive items into
-  one cargo unit of up to four; a stack travels as one unit, so a belt whose
-  cargo carries stack 2 moves twice the items at the same belt speed. Sorters
-  with the cargo-stacking research pick and place stacks. Piling can be
-  repeated (1 to 2, then 2 to 4).
+- **Piling.** An Automatic Piler (item 2040) merges two consecutive cargos into
+  one of up to four; a stack travels as one unit, so a belt whose cargo carries
+  stack 2 moves twice the items at the same belt speed. Pile Sorters with the
+  Pile Sorter Upgrade research pick and place stacks. Piling is repeated to go
+  further: one piler takes 1 to 2, a second takes 2 to 4 (5.1).
 
 Three gaps in the current code, all measured:
 
@@ -63,15 +75,17 @@ on what was built.
    it (section 5.5 says why the minimum is the honest number).
 2. **Piler rule.** A piler takes at most one belt's worth of cargo per second
    in, because its input is a belt, and emits the same items per second at
-   the stack it is set to, up to 4, in one pass (an unstacked belt at 30
-   items/s leaves a stack-4 piler as 7.5 cargo/s). It never increases the
-   items per second that one input belt delivers. What it buys is headroom on
-   the belt *after* it, so further belts can merge in. Because one piler
-   reaches any stack up to 4, this design never piles a merged trunk: every
-   piler sits on a tributary before its junction, and a tributary is a
-   producer strip's own output lane. The two facts this rule rests on (a
-   piler's own throughput is at least belt speed, and one piler stacks
-   straight to its setting) are pinned from the game in section 5.1.
+   **twice** the stack that arrived, capped at 4. It never increases the items
+   per second that one input belt delivers. What it buys is headroom on the
+   belt *after* it, so further belts can merge in. Because a piler doubles
+   rather than jumps to a setting, a lane reaches stack 4 from an unstacked
+   source through TWO pilers in series (30 items/s at stack 1 is 30 cargo/s;
+   after one piler 15 cargo/s at stack 2; after a second 7.5 cargo/s at stack
+   4). Pilers are still never placed on a merged trunk: every piler sits on a
+   tributary before its junction, and a tributary is a producer strip's own
+   output lane. The two facts this rule rests on -- a piler's own throughput is
+   at least belt speed, and one piler doubles -- are pinned from the game in
+   section 5.1.
 3. **Merge rule.** A junction may merge belts only if the cargo rates of the
    merged belts sum to at most the outgoing belt's speed. Therefore: pile the
    tributaries first, merge after, and pile again if another merge follows.
@@ -81,10 +95,11 @@ Two sources of stack need no piler at all:
 - **External feeds.** FactorioLab computes its belt counts at speed x stack
   when the URL's `ist` is greater than 1, so the player's bus is stacked at
   `ist`. An entry lane arrives stacked; the tool cannot and need not pile it.
-- **Machine outputs.** With the cargo-stacking research, an output sorter
-  takes several items from the machine's buffer and places them as one stack,
-  so a producer lane is stacked up to the sorter's stack level without a
-  piler. The Pile Sorter always stacks to 4.
+- **Machine outputs.** A Pile Sorter takes several items from the machine's
+  buffer and places them as one stack, so a producer lane is stacked up to that
+  sorter's place level without a piler. Only the Pile Sorter does this, and
+  only to its researched place stack (1 unresearched, rising to 4 at level 5);
+  Sorter Mk.I to Mk.III place 1 at every level (5.1).
 
 A piler is therefore needed only where a lane's *actual* stack is below what
 the next merge needs. Consumer sorters must be able to pick the stack their
@@ -93,19 +108,21 @@ lane carries; that is a research level, read from the game data (section 5.1).
 Worked examples, at Mk.III (30 cargo/s):
 
 - Four producer lanes at 30 items/s unstacked into one 120 items/s trunk:
-  four pilers to stack 4 (7.5 cargo/s each), then merges to one belt at 30
-  cargo/s. Merging before piling would put 60 cargo/s on the first merged
-  belt.
+  EIGHT pilers, two in series per lane (1 -> 2 -> 4, 7.5 cargo/s each), then
+  merges to one belt at 30 cargo/s. Merging before piling would put 60 cargo/s
+  on the first merged belt.
 - A consumer strip drawing 40 items/s of one item, fed by two 20 items/s
-  producer lanes: pile each to stack 2 (10 cargo/s each), then merge (20
+  producer lanes: one piler each to stack 2 (10 cargo/s each), then merge (20
   cargo/s at stack 2 = 40 items/s). Merging first would put 40 cargo/s on one
-  belt. Stack 2 is chosen, not 4, because it is the smallest stack that fits.
+  belt. Stack 2 is chosen, not 4, because it is the smallest stack that fits --
+  and it also halves the piler count, since 4 would need a second piler per
+  lane.
 - The same strip when the player's bus is stacked at 2 (`ist=2`): one entry
   lane at 20 cargo/s, no piler, consumer sorters picking stack 2.
 - Five producer lanes at 30 items/s each: at stack 4 they are 37.5 cargo/s,
   over one belt, so the lanes are grouped by strip ordinal up to 30 cargo/s
-  per belt: four on one trunk and one alone. Parallel belts are the remainder
-  the stack cannot absorb.
+  per belt: four on one trunk and one alone (ten pilers, two per lane).
+  Parallel belts are the remainder the stack cannot absorb.
 
 Parallel belts are what remains when stacking is unavailable (the URL says
 `ist=1`, the piler or the sorter stacking level is not researched) or when
@@ -255,37 +272,78 @@ case with an early, explained one.
 
 ### 5.1 Game facts, pinned before the code
 
-Three numbers come from the game's technology table. They are NOT in the
-repo today: the vendored FactorioLab data lists `sorter-cargo-stacking-1`
-through `-5` and `pile-sorter-1` through `-6` as upgrades with prerequisites
-only (no values), has no `canStack` field, and `sorter-4`'s `"stack": 200` is
-an inventory stack size, not a cargo stack; `oracle/` and `tools/dsp-oracle/`
-export nothing about stacking. They are read from the game through the
-BepInEx oracle plugin (`tools/dsp-oracle/`), extended to dump the upgrade
-table, and pinned as data, never assumed:
+**Pinned on 2026-09-03** (`multibelt` commit `8c6f4b1`, plan Task 6). Every
+number below is read out of the game's own files for version 0.10.34 -- an
+ilspycmd decompile of `Assembly-CSharp.dll` for the behaviour and a UnityPy
+typetree dump of `resources.assets` for the per-level unlock values -- not from
+a live dump and not assumed. They live in `src/flab2bp/dsp/data/stacking.json`
+with the source field named for each one, `catalog` loads them, and
+`tests/dsp/test_catalog.py` pins every table entry as a literal.
 
-- `piler_unlocked`: whether `automatic-piler` is in the researched unlock set
-  (`integrated-logistics-system` in the vendored data). This one IS in the
-  repo.
-- `sorter_pick_stack(sorter_item_id)`: the largest stack a sorter of that tier
-  can pick from a belt, given the researched `sorter-cargo-stacking` level;
-  the Pile Sorter picks 4 regardless.
-- `sorter_place_stack(sorter_item_id)`: the largest stack a sorter of that tier
-  places when taking from a machine's output buffer, given the same research.
-- `sorter_stack_rate_factor`: whether a sorter carrying a stack of `n` moves
-  `n` times the items per trip, so that `flow.sorter_capacity` scales with
-  the stack (section 10 assumes it does; the dump decides).
-- `piler_max_stack` and `piler_single_pass`: the largest stack setting of the
-  Automatic Piler, and that one piler takes an unstacked belt straight to
-  that setting; plus `piler_throughput`, the cargo per second one piler
-  processes, which must be at least `BELT_RATE[ceiling]` for the piler rule
-  in section 2 to hold as stated (if it is lower, the rule's bound becomes
-  the piler's throughput and the merge tree uses that number).
+- `piler_unlocked`: whether `automatic-piler` is in the researched unlock set.
+  In the vendored FactorioLab data `integrated-logistics-system` (tech 1607) is
+  the sole `recipeUnlock` for both `automatic-piler` and `sorter-4`, so the
+  Pile Sorter and the Automatic Piler unlock together.
+- **Two stacking ladders, and the obvious one is dead.** `Sorter Cargo
+  Stacking` (techs 3301-3305; FactorioLab `sorter-cargo-stacking-1` through
+  `-5`) carries `IsObsolete = 1`, which is what hides a tech from the tree, so
+  none of its five levels is reachable in a game started on this build. It is
+  kept in the JSON under `obsolete_ladder` only because an imported save still
+  carries the value. **No code may read it.** The live ladder is `Pile Sorter
+  Upgrade` (techs 3311-3316; FactorioLab `pile-sorter-1` through `-6`), six
+  levels.
+- **A stack is a property of the sorter TIER and the research level, never of
+  the item.** The game's grade rule (`GameData.OnInserterTechChange`) pins
+  Sorter Mk.I (2011), Mk.II (2012) and Mk.III (2013) at pick 1 and place 1 at
+  every level -- Mk.III reads the obsolete ladder's field, whose only reachable
+  value is the new-game baseline 1 -- and gives the Pile Sorter (2014):
 
-The plan's first task pins these with evidence (file, field, value per level)
-and writes them into `catalog` as data, with a test that fails if the
-vendored data changes. If the mapping cannot be read from the repo, the task
-records what the oracle must export and the design stops at A until it does.
+  | research level | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+  | -------------- | - | - | - | - | - | - | - |
+  | pick stack     | 2 | 2 | 3 | 3 | 4 | 4 | 4 |
+  | place stack    | 1 | 2 | 2 | 3 | 3 | 4 | 4 |
+
+  Level 0 is an unresearched Pile Sorter, which already picks 2 because the
+  new-game baseline does. The accessors are
+  `catalog.SORTER_STACKING_LEVELS` (`== 6`),
+  `catalog.sorter_pick_stack(item_id, level)` and
+  `catalog.sorter_place_stack(item_id, level)`; asking them about a
+  non-sorter, or about a level outside `0..6`, raises.
+
+  The consequence that governs the rest of this design: **only the Pile Sorter
+  stacks.** A save with Mk.III as its fastest sorter can neither place a stack
+  nor pick one, so for that save every stack in this design is 1 and a stacked
+  bus is a refusal (5.3), not a slower build.
+- `catalog.SORTER_STACK_RATE_FACTOR is True`: each pick adds the picked cargo's
+  own stack byte to the load the sorter carries, and the whole load is
+  delivered in one trip, so a sorter carrying a stack of `n` moves `n` items
+  per trip and `flow.sorter_capacity` scales with the stack. Risk "Sorter
+  throughput (B)" in section 10 is settled: the stacks enter that check's
+  arithmetic.
+- `catalog.PILER_MAX_STACK == 4`, `catalog.PILER_SINGLE_PASS is False`. The
+  Automatic Piler caches at most TWO cargos and emits their sum capped at 4, so
+  **it doubles**: fed an unstacked belt it emits stack 2, and reaching stack 4
+  from an unstacked belt takes two pilers in series (1 -> 2 -> 4). It reaches 4
+  in one pass only when its input is already at stack 2 or more.
+  `catalog.piler_output_stack(s)` is `min(2 * s, 4)`.
+- `catalog.PILER_STACK_PARAMETER is None`: **the piler has no per-building
+  stack setting.** `PilerDesc` declares no fields at all,
+  `PilerComponent.Export` serialises no stack, and the component's Pile / Split
+  state is derived from the wiring by `CargoTraffic.RematchPilerConnection`.
+  What a piler does is decided by which belts are attached to it, and to what
+  stack it raises a lane is decided by how many pilers the lane passes through
+  -- never by a parameter block. There is nothing for `dsp/params.py` to encode
+  and nothing for the validator to decode.
+- `catalog.PILER_THROUGHPUT == Fraction(6)` cargo per second **per unit of
+  `PrefabDesc.beltSpeed`**, and its timed branch is a lower bound (the untimed
+  branch adds picks on top). `PILER_THROUGHPUT * beltSpeed` reproduces
+  `catalog.BELT_RATE` exactly at all three tiers (6, 12, 30 cargo/s), which is
+  the arithmetic statement of "a piler never throttles the belt it sits on".
+  The "piler throughput below lane capacity" branch this design once carried is
+  therefore unreachable and is deleted rather than left as dead prose (6.2).
+
+Task 6 pinned these on the no-game path (Ruling P11): the files on disk were
+enough, so B and C proceed with no live capture outstanding.
 
 ### 5.2 The spec boundary
 
@@ -297,9 +355,11 @@ class BuildSpec(_Frozen):
     #: raised above 4. This is what the player's bus carries.
     belt_stack: int = 1
     #: Largest stack the save's sorters can pick from a belt and place onto
-    #: one, per sorter tier, slowest first, aligned with `sorter_item_ids`.
-    sorter_pick_stacks: tuple[int, ...] = (1, 1, 1, 4)
-    sorter_place_stacks: tuple[int, ...] = (1, 1, 1, 4)
+    #: one, per sorter TIER, slowest first, aligned with `sorter_item_ids`.
+    #: The defaults are the level-0 row of 5.1's table: Mk.I-III at 1, an
+    #: unresearched Pile Sorter picking 2 and placing 1.
+    sorter_pick_stacks: tuple[int, ...] = (1, 1, 1, 2)
+    sorter_place_stacks: tuple[int, ...] = (1, 1, 1, 1)
     piler_unlocked: bool = False
 
     @property
@@ -307,11 +367,21 @@ class BuildSpec(_Frozen):
         """4 when the piler is unlocked, else the largest place stack."""
 ```
 
+There is no per-item stack anywhere in the model: a lane's stack is decided by
+the tier of sorter that touches it and by the save's `pile-sorter` level, both
+of which are properties of the save, so both tuples are indexed by tier and
+nothing is keyed by item id.
+
 `_to_build_spec` fills them from `logistics_tiers_for_request`, which gains
 `piler: bool` and the two stack tuples, and from `request.stack` (`ist`),
-which is parsed today and read by nothing. Defaults keep every hand-built
-spec in the tests at stack 1 with today's behaviour. `lane_capacity` stays
-the un-stacked ceiling in cargo per second.
+which is parsed today and read by nothing. `logistics_tiers_for_request`
+derives the research level from the `pile-sorter-{n}` ids alone -- the highest
+`n` in `1..6` present in the researched set, 0 when none is, 6 when the request
+carries no technology set at all -- and maps each entry of `sorter_item_ids`
+through `catalog.sorter_pick_stack` / `sorter_place_stack` at that level. It
+never reads `sorter-cargo-stacking-{n}`, which 5.1 shows is unreachable.
+Defaults keep every hand-built spec in the tests at stack 1 with today's
+behaviour. `lane_capacity` stays the un-stacked ceiling in cargo per second.
 
 One more reader of the stack: `rates/solve.py` computes an
 `ObjectiveUnit.Belts` objective as `value x belt_speed(belt_id)` with no stack
@@ -330,14 +400,33 @@ that item, and it is what 4.1's cap reads:
   can build cannot pick `belt_stack`, the build is refused at plan time with
   the stack, the sorter tier and the research that would pick it (rule 3).
   Nothing is capped silently, because a capped plan would still be fed a
-  stacked bus and starve.
+  stacked bus and starve. With 5.1's tables this refusal has one concrete
+  shape: **a save without the Pile Sorter can pick nothing above 1**, so any
+  URL with `ist > 1` on a Mk.I/II/III save is refused, and the message names
+  `integrated-logistics-system`. With a Pile Sorter, the pickable ceiling is
+  the level's pick stack: 2 at levels 0-1, 3 at levels 2-3, 4 from level 4 up,
+  so `ist=4` on a level-2 save is also a refusal.
+- For an item **fed from the bus and from an internal producer** at once:
+  `min(belt_stack, place_stack)`, because the lane carries both and a merge is
+  judged at its minimum (5.5).
 - For a **produced item**: the place stack of the fastest sorter tier the
-  save can build (that is what the producer's output sorters put on the
-  belt), raised to `max_stack` when the piler is unlocked (C places the piler
-  that makes the difference, and only where a merge needs it). If the
-  consumer's sorters cannot pick that stack, the build is refused the same
-  way; the stack is never lowered to fit, since a sorter cannot be told to
-  place less.
+  save can build -- that is what the producer's output sorters put on the belt,
+  and it is unavoidable, so if the consumer cannot pick it the build is refused
+  the same way and never lowered, since a sorter cannot be told to place less.
+  Note that the place stack lags the pick stack by one level in 5.1's table, so
+  a level-0 Pile Sorter places 1: without a piler such a save produces
+  unstacked lanes even though its sorters could pick 2.
+
+  When the piler is unlocked the lane may then be **raised** to the largest
+  value of the doubling ladder `1, 2, 4` (6.2) that is at most
+  `min(max_stack, pick_stack)`. C places the pilers that make the difference,
+  and only where a merge needs them; with `PILER_SINGLE_PASS` false that may be
+  two in series. Raising stops at the pickable stack because **piling is
+  elective**: choosing not to pile further is not the silent lowering rule 3
+  forbids, which is about a stack that arrives whether the tool wants it or
+  not. Raising snaps to the ladder because a doubler cannot land on 3, so
+  planning at 3 would promise a stack C could not build. Concretely, a level-0
+  save with the piler plans produced lanes at 2, not at 4.
 - For an **external output**: as a produced item, with no consumer to pick.
 
 Sorter tiers are chosen per lane by `_pick_sorter` from the rate, as today,
@@ -357,8 +446,9 @@ stack (the ceiling of what any tier can promise), and the validator's
 `planning_stack` for input lanes and output lanes, and internal lanes inherit
 the producing lane's stack. `input_lane_fits`, `_check_shared_lane_capacity`
 and `_merge_lanes` compare `demand / stack` against `lane_capacity`. A lane
-whose consumer sorter cannot pick its stack is not planned; the family is
-planned at the pickable stack instead, which is the cap in 5.3.
+whose consumer sorter cannot pick its stack is not planned at a lower stack:
+`planning_stack` has already refused the build (5.3), because the belt would
+arrive stacked either way.
 
 ### 5.5 Validator
 
@@ -370,8 +460,10 @@ was built and judges the arithmetic:
   exactly, including one seeded by a Pile Sorter), else the minimum stack
   over the run's sources, walking upstream through junctions and splitters. A
   source is an entry belt (stack `spec.belt_stack`), a sorter placing from a
-  machine (that sorter tier's `sorter_place_stacks` entry), or a piler (its
-  configured stack, C). A run with no traceable source has stack 1.
+  machine (that sorter tier's `sorter_place_stacks` entry), or a piler, whose
+  output stack is `min(2 x stack_of(the run into it), 4)` -- derived, because
+  5.1 pins that a piler carries no stack setting to read (C). A run with no
+  traceable source has stack 1.
 - `flow.belt_capacity` compares `demand` against
   `BELT_RATE[tier] x stack_of(run)`.
 - `flow.stack_pickable` (ERROR): a sorter drawing from a run must have
@@ -399,8 +491,10 @@ stacked Mk.II run carrying 20 items/s at stack 2 keeps Mk.II.
 ### 6.1 Gate
 
 Pilers are placed only when `spec.belt_stack > 1` and `spec.piler_unlocked`.
-A lane gets a piler only where its actual stack is below what the next merge
-needs; a lane that already fits stays as it is.
+A lane gets pilers only where its actual stack is below what the next merge
+needs; a lane that already fits stays as it is. Since 5.1 pins that the piler
+and the Pile Sorter unlock from the same technology, `piler_unlocked` also
+means the save's fastest sorter is a Pile Sorter.
 
 ### 6.2 The merge tree
 
@@ -410,66 +504,92 @@ strip's input lane, or the boundary), the planner decides, before routing:
 1. The lanes are the producer strips' output lanes for the item, each with
    its demand (`machine_count x outputs_per_machine[item]`) and its planned
    stack (5.3).
-2. The **uniform stack** `s` is the smallest value in `1..min(max_stack,
-   sink_pick_stack)` such that `sum(demand_i) / s <= lane_capacity`. If one
-   exists, every lane whose planned stack is below `s` gets a piler set to
-   `s` at its downstream end, and all lanes merge onto one belt. Stack 2
-   before 4: the smallest stack that fits keeps the most headroom for the
-   sink's sorters and needs the fewest pilings.
-3. If none exists, `s = min(max_stack, sink_pick_stack)`, every lane below
-   `s` gets a piler to `s`, and the lanes are **grouped** by strip ordinal
-   into belts of at most `lane_capacity` cargo per second each. Each group
-   merges onto one belt; a group of one is a parallel belt. A's lane count
-   already provides the geometry for that.
-4. A lane whose planned stack already exceeds `s` keeps its stack (a Pile
-   Sorter output at 4 into a stack-2 trunk is fine: the validator's minimum
-   rule judges the trunk at 2). The fit test in step 2 charges every lane at
-   `s` even when its own stack is higher, so it is pessimistic against the
-   grouping arithmetic in step 3 (`demand / max(stack, s)`); that can choose
-   a larger `s` than the cargo strictly needs, never a smaller one, and it
-   stays that way on purpose: an optimistic fit test would be the one place
-   a belt could be overfilled.
-5. If the pinned piler throughput (5.1) is below the belt speed, that
-   throughput replaces `lane_capacity` as the bound a piled lane's cargo rate
-   must respect.
+2. **A piler is a doubler, so the reachable stacks are 1, 2 and 4.** 5.1 pins
+   `PILER_SINGLE_PASS = False`: one piler emits `min(2 x input_stack, 4)`.
+   Raising a lane from stack `s0` to a target `t` therefore costs
+   `ceil(log2(t / s0))` pilers **in series** on that lane, and lands exactly on
+   `t` for every `(s0, t)` this design produces: `1 -> 2` (one), `1 -> 4`
+   (two), `2 -> 4` (one), `3 -> 4` (one, capped by `PILER_MAX_STACK`). The
+   candidate uniform stacks are consequently the doubling ladder `1, 2, 4`, not
+   every integer: a target of 3 is unreachable from an unstacked lane and
+   asking for it would silently overshoot to 4, past a sink that can pick only
+   3.
+3. The **uniform stack** `s` is the smallest value in `(1, 2, 4)` that is at
+   most `limit = min(max_stack, sink_pick_stack)` and satisfies
+   `sum(demand_i) / s <= lane_capacity`. Stack 2 before 4: the smallest stack
+   that fits keeps the most headroom for the sink's sorters and needs the
+   fewest pilers. If one exists, every lane whose planned stack is below `s`
+   gets `ceil(log2(s / lane.stack))` pilers in series at its downstream end,
+   and all lanes merge onto one belt.
+4. If none fits, `s` is the largest candidate at most `limit`, every lane below
+   `s` is piled to `s` the same way, and the lanes are **grouped** by strip
+   ordinal into belts of at most `lane_capacity` cargo per second each. Each
+   group merges onto one belt; a group of one is a parallel belt. A's lane
+   count already provides the geometry for that.
+5. A lane whose planned stack already exceeds `s` keeps its stack and gets no
+   piler (a Pile Sorter output at 4 into a stack-2 trunk is fine: the
+   validator's minimum rule judges the trunk at 2). The fit test in step 3
+   charges every lane at `s` even when its own stack is higher, so it is
+   pessimistic against the grouping arithmetic in step 4 (`demand /
+   max(stack, s)`); that can choose a larger `s` than the cargo strictly
+   needs, never a smaller one, and it stays that way on purpose: an optimistic
+   fit test would be the one place a belt could be overfilled.
 
 The decision is deterministic: lanes are ordered by strip ordinal and the
-first stack that fits is taken. Its output is a set of `PilerPlan(lane,
-stack)` records and a grouping of lanes into belts. There is never a piler on
-a merged trunk (section 2's piler rule), so every piler is on a strip's own
-output lane and the strip's geometry can reserve it. Today's router merges
-tributaries with junctions in whatever order its nets arrive; the grouping
-fixes which lanes may share a belt, and a lane carrying a piler is split into
-two nets at the piler (the piler's ports are a source and a sink like a
-splitter's), so the router never needs to know about stacks: it routes belts
-between ports, and the pilers sit where the strip put them.
+first stack that fits is taken. Its output is a set of `PilerPlan(lane_id,
+count, stack)` records -- `count` pilers in series on that lane, the last of
+which emits `stack` -- and a grouping of lanes into belts. There is never a
+piler on a merged trunk (section 2's piler rule), so every piler is on a
+strip's own output lane and the strip's geometry can reserve it; a lane piled
+twice reserves twice the tiles (6.3). Today's router merges tributaries with
+junctions in whatever order its nets arrive; the grouping fixes which lanes may
+share a belt, and a lane carrying `count` pilers is split into `count + 1` nets
+(each piler's ports are a source and a sink like a splitter's), so the router
+never needs to know about stacks: it routes belts between ports, and the pilers
+sit where the strip put them.
+
+There is no piler-throughput bound in this arithmetic. 5.1 pins the piler's
+intake at 6 cargo/s per unit `beltSpeed`, which is exactly `BELT_RATE`, so
+"the piler is slower than the belt" cannot happen and the branch that once
+handled it is gone.
 
 ### 6.3 Geometry and emission
 
-A piler is a tile-occupying inline device: 1x3 footprint along the lane, port
-poses straight through, ground level only in this design. It is emitted on
-the three tiles at the downstream end of the lane it stacks, before that
-lane's junction into the next belt (an output lane) or after the entry and
-before any sorter (an input lane fed unstacked, which under rule 1 only
-happens for internal merges, never for the player's bus). The belt before it
-names it as `output_obj`, the belt after it names it as `input_obj`, and the
-piler itself names nobody, the convention `junction.make_splitter` uses. A
-new `junction.make_piler(x, y, z, yaw, stack)` builds the record from the
-catalog (item 2040, model 257) with its stack parameter, and `dsp/codec.py`
-serialises it like any building (the per-building record is generic; only
-belts and splitters get forced sentinel slots). The byte-identical re-encode
-guarantee needs one player-built blueprint that contains a piler between two
-belts in `tests/fixtures/`; none of the ten factory fixtures contains item
-2040 today, and `dsp/params.py` has no piler entry. **Prerequisite:** obtain
-that fixture from the game before C starts; it pins the record convention
-(which neighbour names the piler, the four slot values, the yaw, whether
-`x/y` is the middle tile) and the stack parameter's index and values.
+A piler is a tile-occupying inline device: 1x3 footprint along the lane
+(`catalog.building(2040)` is `width=1, height=3`), port poses straight through,
+ground level only in this design. Its pilers are emitted on the tiles at the
+downstream end of the lane they stack, before that lane's junction into the
+next belt (an output lane) or after the entry and before any sorter (an input
+lane fed unstacked, which under rule 1 only happens for internal merges, never
+for the player's bus). Where a lane carries two pilers in series they sit
+consecutively along the lane with a belt tile between them, the second reading
+the first's output. The belt before a piler names it as `output_obj`, the belt
+after it names it as `input_obj`, and the piler itself names nobody, the
+convention `junction.make_splitter` uses.
 
-The strip reserves the piler's three tiles as a **tail extension**: `Strip`
-gains `tail_extension: int` (0, or 3 for a strip with at least one piled
-output lane) and `pilers: tuple[PilerPlan, ...]`, `_box` includes the
+A new `junction.make_piler(x, y, z, *, yaw)` builds the record from the catalog
+(item 2040, model 257). **It takes no stack argument and writes no parameter
+block:** 5.1 pins `PILER_STACK_PARAMETER = None`, so a piler's Pile-versus-Split
+behaviour is decided entirely by which belts are attached to it, and the stack
+it emits is decided by the stack arriving on its input belt. `dsp/codec.py`
+serialises it like any building (the per-building record is generic; only belts
+and splitters get forced sentinel slots), and `dsp/params.py` gains nothing.
+The byte-identical re-encode guarantee needs one player-built blueprint that
+contains a piler between two belts in `tests/fixtures/`; none of the ten
+factory fixtures contains item 2040 today. **Prerequisite:** obtain that
+fixture from the game before C starts; it pins the record convention (which
+neighbour names the piler, the four slot values, the yaw, whether `x/y` is the
+middle tile) and the wiring that puts the component into Pile mode.
+
+The strip reserves each piler's three tiles, and the belt tile between
+consecutive pilers, as a **tail extension**: `Strip` gains
+`tail_extension: int` (0, or `4 x count - 1` for the largest `PilerPlan.count`
+over its output lanes — `3 x count` tiles of piler plus the `count - 1`
+separators, since a `PilerComponent` reads an input belt and an output belt and
+two pilers cannot abut: 3 tiles for one piler, 7 for two in series) and
+`pilers: tuple[PilerPlan, ...]`, `_box` includes the
 extension on the side where output lanes exit, and the piled lane's belt row
-runs through it with the piler on those three tiles after the last sorter.
+runs through it with its pilers on those tiles after the last sorter.
 Packing and routing therefore see the piler as part of the strip's footprint.
 This is a pure width claim: only `_box` needs it, unlike `west_channel`, which
 is an origin offset read wherever a strip's machines are placed. It is a new
@@ -495,8 +615,10 @@ pins that.
   already breaks a run at any non-belt tile, so a piler needs no change
   there. `junction.colocated`'s premise (every attachment shares the
   junction's tile) does not hold for a piler, whose belts are one tile before
-  and one tile after; the piler checks below replace it. `stack_of` reads
-  the piler's stack parameter for the run after it.
+  and one tile after; the piler checks below replace it. `stack_of` for the run
+  after a piler is `min(2 x stack_of(the run into it), 4)`: there is no stack
+  parameter to read (5.1), so the doubling rule is the only source of the
+  number, and two pilers in series are judged by applying it twice.
 - `piler.input_rate` (ERROR): the run into a piler carries at most
   `BELT_RATE[tier]` cargo per second, i.e. the piler rule.
 - `piler.ports` checks the two belts named around a piler dock on its port
@@ -529,17 +651,21 @@ the stack that would have carried the rate.
 - Unit (B): `stack_of` on hand-built placements: an entry belt at the URL
   stack; a sorter-placed run at the place stack; a merge of stack 2 and
   stack 1 reads 1; `flow.belt_capacity` passes 40 items/s on a Mk.III run at
-  stack 2 and refuses it at stack 1; `flow.stack_pickable` fires for a Mk.I
-  sorter on a stack-2 run and stays quiet for a Pile Sorter.
+  stack 2 and refuses it at stack 1; `flow.stack_pickable` fires for ANY
+  sorter below the Pile Sorter on a stack-2 run (Mk.III is the sharpest case,
+  since even the fastest non-Pile tier picks 1) and stays quiet for a Pile
+  Sorter.
 - Layout (B): the deuteron URL with `ist=2` and every technology researched
   builds with ONE hydrogen entry lane at 40 items/s and validates clean; the
   same URL with a technology set lacking the stacking research builds with
   two lanes (A's path) and says so in the report.
 - Unit (C): the merge decision on hand-built lane sets: the 4 x 30 example
-  yields four pilers to stack 4 and one shared trunk; two 20s yield two pilers
-  to stack 2; five 30s yield a group of four and a group of one; a sink whose
-  sorters pick only 1 forces parallel belts; ordering is deterministic across
-  input permutations.
+  yields four lanes at two pilers each (eight in all) to stack 4 and one
+  shared trunk; two 20s yield one piler each to stack 2; five 30s yield a
+  group of four and a group of one; a lane already at stack 2 needs one piler
+  where an unstacked one needs two; a sink whose sorters pick only 1 forces
+  parallel belts; a sink picking 3 is planned at stack 2, never at 3;
+  ordering is deterministic across input permutations.
 - Validator (C): each new check has a fires case and a clean case on
   hand-built placements; a piler fed above belt speed refuses.
 - Codec (C): the piler fixture re-encodes byte-identically and its port
@@ -554,9 +680,9 @@ the stack that would have carried the rate.
 
 A first; it needs no game data beyond what the repo has and fixes the reported
 class of failure for every URL whose per-machine rates fit one belt. B second;
-it needs the three numbers in 5.1 and no new building, and it is what makes a
-stacked bus usable. C last; it needs the piler fixture, and it is its own
-plan. Each deliverable ends with its own gate.
+it needs the numbers in 5.1 (pinned on 2026-09-03) and no new building, and it
+is what makes a stacked bus usable. C last; it needs the piler fixture, and it
+is its own plan. Each deliverable ends with its own gate.
 
 Out of scope for all three: pilers on elevated lanes, unstacking devices (a
 machine's sorter unstacks by picking), stacking lanes that already fit one
@@ -574,20 +700,27 @@ belts.
   12 may get 3. The plan adds a test that each heuristic's chosen length
   survives `min` with the cap without a crash, and the corpus gate catches the
   rest.
-- **Sorter throughput (B).** High-rate machines are often sorter-bound before
-  they are belt-bound, and stacked cargo is what lifts a sorter's items per
-  second too. `sorter_stack_rate_factor` in 5.1 decides whether the place and
-  pick stacks enter `flow.sorter_capacity`'s arithmetic; the plan extends the
-  check when the dump says they do, or records why it is unaffected.
+- **Sorter throughput (B).** SETTLED by 5.1: `SORTER_STACK_RATE_FACTOR` is
+  true, so the place and pick stacks do enter `flow.sorter_capacity`'s
+  arithmetic and the plan extends the check. What remains is that only the
+  Pile Sorter carries a stack at all, so a save without it gains nothing here.
 - **Coarsening (A).** `_coarsen_saturated_strip_plan` cannot collapse strips
   the cap keeps short, so a build over the coarse threshold whose lanes are
   above the ceiling keeps its many strips. A's gate counts those cells.
 - **Unpickable bus (B).** A URL with `ist` above what the save's sorters can
   pick is refused rather than built at a lower stack; that is a new refusal
-  class and the message names the research that removes it.
-- **Game facts (B, C).** The stacking research mapping, the piler's stack
-  parameter and its port anchors are the largest unknowns and are made
-  prerequisites rather than assumptions.
+  class and the message names the research that removes it. 5.1 makes this
+  broader than it looked: any `ist > 1` without the Pile Sorter is refused,
+  because Mk.I to Mk.III pick 1 at every level.
+- **Piler count (C).** A piler doubles rather than jumping to a setting (5.1),
+  so a lane raised from unstacked to 4 costs two pilers and seven tiles of tail
+  (`4 x 2 - 1`, the separator belt included), not one and three. Any estimate of area or building count made before this
+  fact was pinned is low by a factor of two on those lanes.
+- **Game facts (B, C).** SETTLED for the stacking ladders, the sorter tables,
+  the rate factor and the piler's behaviour, all pinned from the shipped game
+  files in 5.1. What remains a prerequisite is the piler's record convention
+  and port anchors, which need the fixture in 6.3; there is no stack parameter
+  to discover, because there is none.
 - **Mixed stacks (B).** The minimum rule is conservative; a build the game
   would run at a favourable average may be refused. Accepted: an optimistic
   capacity would emit builds that starve, which is worse than a refusal.
