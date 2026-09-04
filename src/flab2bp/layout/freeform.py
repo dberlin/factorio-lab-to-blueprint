@@ -16634,7 +16634,14 @@ def _machines_without_poses(strips: list[Strip]) -> list[str]:
             if key in seen:
                 continue
             seen.add(key)
-            if s.takes_belt_ports and s.in_lanes:
+            if s.takes_belt_ports and s.in_lanes and s.out_lanes and not _drainable_by_port(s):
+                out.append(
+                    f"{building.name} ({s.recipe_id}): its "
+                    f"{len({(i, d) for i, _dest, d in s.out_lanes})} distinct output "
+                    f"cargo(es) cannot claim distinct docks facing the lane band "
+                    f"from its {len(building.port_poses)} belt port(s)"
+                )
+            elif s.takes_belt_ports and s.in_lanes:
                 out.append(
                     f"{building.name} ({s.recipe_id}): its ingredient lanes cannot "
                     f"claim distinct east-facing input docks from its "

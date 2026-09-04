@@ -1046,6 +1046,26 @@ def _logical_strip_plans(
                 south_columns - sum(len(lane) for lane in in_below),
             )
 
+        building = catalog.building(group.item_id)
+        if building.takes_belt_ports and not building.slot_poses:
+            # A host with no insert pose drains through PORTS, not sorters, so
+            # the sorter reach and the south face's attachable columns are the
+            # wrong question: what bounds its lanes is how many ports face the
+            # lane band, and an Energy Exchanger has exactly ONE at every yaw.
+            #
+            # Capping here is what removes the whole defect class rather than
+            # coping with it downstream: `_merge_lanes` then folds this cargo's
+            # destinations onto that one lane, joining their group keys with
+            # DEST_SEP, and `_dock_lane` drains it exactly as it always has.
+            # Fanning one port out across two lane rows instead was built and
+            # measured four ways -- every one either failed to attach, emitted
+            # splitters our own validator convicts, or turned the collision
+            # into a refusal.
+            out_capacity = min(
+                out_capacity,
+                sum(dock.facing.delta[1] > 0 for dock in slots.port_docks(probe).values()) or 1,
+            )
+
         cargo_count = len(_cargo_keys(sinks))
         input_domain = (
             CargoDomain.REQUIRES_SPRAY

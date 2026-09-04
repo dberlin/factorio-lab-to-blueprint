@@ -9494,6 +9494,76 @@ def test_a_ray_receiver_strip_is_byte_identical_after_the_approach_change() -> N
     assert shape == RAY_RECEIVER_SHAPE
 
 
+def _two_sink_exchanger_spec(count: int = 3) -> BuildSpec:
+    """Charge exchangers whose product has an internal consumer AND an output.
+
+    ``count`` selects the shape the planner produces: 1 folds both sinks onto
+    ONE lane with DEST_SEP (no second shard to give), 2 or more shards them
+    across two strips of one lane each.  Only ``count >= 2`` routes -- one
+    charge machine cannot feed a discharge machine AND the external output --
+    so ``count=1`` is a planner fixture and never reaches `lay_out`.
+    """
+    return BuildSpec(
+        groups=(
+            group(
+                "accumulator-full",
+                "energy-exchanger",
+                count,
+                {"accumulator": F(1)},
+                {"accumulator-full": F(1)},
+            ),
+            group(
+                "accumulator-discharge",
+                "energy-exchanger",
+                1,
+                {"accumulator-full": F(1)},
+                {"accumulator": F(1)},
+            ),
+        ),
+        external_inputs={"accumulator": F(2)},
+        outputs={"accumulator-full": F(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label=f"two-sink-{count}",
+    )
+
+
+def test_a_two_sink_exchanger_lays_out_with_one_wired_lane() -> None:
+    """The end of the class of bug, not a fan-out.
+
+    Every accumulator-full sink is served by ONE drawn belt per machine, so a
+    lane joined to nothing is not representable.  Measured: 4 exchangers, one
+    drawing belt each, certify ok, zero collisions.
+    """
+    spec = _two_sink_exchanger_spec(count=3)  # count=1 does not route; see the fixture
+    placement = FreeformLayout(band_policy=BandPolicy.parse("portable")).lay_out(
+        spec, time_budget_s=4.0
+    )
+    bs = placement.buildings
+    exchangers = [i for i, b in enumerate(bs) if b.item_id == catalog.ENERGY_EXCHANGER_ID]
+    assert exchangers
+    for i in exchangers:
+        drawing = [j for j, b in enumerate(bs) if b.input_obj == i]
+        assert len(drawing) == 1, (i, drawing)
+    report = validate.certify(placement, spec, expect_power=True)
+    assert report.ok, report.errors
+    ctx = validate._context(placement, spec, None, 0, F(4), True)
+    assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
+
+
+def test_a_ray_receiver_drain_is_byte_identical_after_the_lane_cap() -> None:
+    """2208 is capped too: one drain port, one product, so nothing may move."""
+    spec = _ray_receiver_spec()  # from Task 2 step 10
+    placement = FreeformLayout(band_policy=BandPolicy.parse("portable")).lay_out(
+        spec, time_budget_s=4.0
+    )
+    shape = [
+        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj)
+        for b in placement.buildings
+    ]
+    assert shape == RAY_RECEIVER_SHAPE
+
+
 class TestModeDrivenMachines:
     """Some machines are configured by a MODE, not a recipe id.
 
