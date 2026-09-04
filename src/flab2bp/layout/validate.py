@@ -4400,9 +4400,14 @@ def _external_entry_points(ctx: Context) -> Iterable[Finding]:
     for item, runs in sorted(_entry_runs(ctx).items()):
         if len(runs) < 2:
             continue
-        # An entry run by construction, so the item is EXTERNAL whatever the
-        # spec's own dict would classify it as.
-        capacity = spec.lane_capacity * spec.planning_stack(item, external=True)
+        # DERIVED, not planned (design 5.5).  `spec.planning_stack` REFUSES an
+        # unpickable bus -- correct at plan time, wrong here: a validator
+        # reports, it never raises, and reading it made `validate()` refuse a
+        # hand-built spec instead of judging it.  `stack_of` is raise-free and
+        # agrees with the planner wherever the plan was followed; the minimum
+        # over these lanes is what all of them are guaranteed to carry, which
+        # is the same rule `flow.belt_capacity` judges each of them by.
+        capacity = spec.lane_capacity * min(ctx.stack_of(r) for r in runs)
         demand = spec.external_inputs.get(item, Fraction(0))
         lanes_needed = max(1, -(-demand // capacity)) if demand > 0 else 1
         heads = [bs[ctx.runs[r].head] for r in runs]
