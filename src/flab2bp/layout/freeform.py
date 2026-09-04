@@ -15451,16 +15451,29 @@ def _feedback_retry_eligible(
     attempt: PackAttempt,
     feedback: FeedbackState,
 ) -> bool:
-    """Whether this exact attempt earned one bounded evidence-driven retry."""
+    """Whether this exact attempt earned one bounded evidence-driven retry.
+
+    THE "EXACTLY ONE FAILURE" CONJUNCT IS GONE.  It was written for a near miss
+    and it excluded every cell this program still refuses: R2 §4 measured
+    `universe-matrix/all-products` at 3 failures and `output-products` at 6, so
+    the retry -- and with it the Phase C window, whose launch is downstream of
+    this -- never fired on the specs it was built for.  What the predicate is
+    really asking is whether the sweep LEARNED something aimable: a failure the
+    feedback state can weight and whose endpoints it knows.  One such failure is
+    as aimable as one of six.
+    """
     routing = attempt.routing
     if (
         routing.exhaustive
         or routing.status is not DetailedRouteStatus.STRANDED
-        or len(routing.failures) != 1
+        or not routing.failures
     ):
         return False
-    failure = routing.failures[0]
-    return failure.net_id in feedback.net_weight and failure.net_id in feedback.endpoint_offsets
+    return any(
+        failure.net_id in feedback.net_weight
+        and failure.net_id in feedback.endpoint_offsets
+        for failure in routing.failures
+    )
 
 
 @dataclass(slots=True)
@@ -18117,6 +18130,10 @@ class FreeformLayout:
         window_skipped_no_goods = 0
         window_encode_errors = 0
         evaluations = 0
+        #: Fewest unrouted nets any evaluated pack has left.  A window is posed
+        #: only against a pack that BEATS it, so one hard CP-SAT second (R3 §4.2)
+        #: is never spent on evidence the sweep has already matched.
+        best_failed_count = math.inf
         #: Consecutive draws that added no new entry to `routed_assignments`.
         #: Task 11 makes it move; it is published from here so the refused-row
         #: schema does not change again a task later.
@@ -18932,6 +18949,9 @@ class FreeformLayout:
 
                 try:
                     failed = result.routing.failed_count
+                    best_failing = bool(failed) and failed < best_failed_count
+                    if failed:
+                        best_failed_count = min(best_failed_count, failed)
                     attempt = PackAttempt(
                         origins=tuple(pack.at[index] for index in range(len(pack.at))),
                         compact_width=pack.width,
@@ -19000,24 +19020,38 @@ class FreeformLayout:
                         feedback_retry = feedback_state is not None and _feedback_retry_eligible(
                             attempt, feedback_state
                         )
-                        promote_retry = arrangement == 0 and (learned or feedback_retry)
-                        #: A window launches where a retry was WANTED and refused, so
-                        #: the two facts the block below already decides are recorded
-                        #: rather than re-derived.
+                        # RULING E12: "aimable" is wider than "take a full exact
+                        # retry".  The one-failure near miss keeps its existing
+                        # unmetered retry; multiple failures leave the slot for
+                        # the bounded window.  A learned proof may still buy its
+                        # existing affordable full re-solve below.
+                        single_failure_feedback_retry = (
+                            feedback_retry and len(attempt.routing.failures) == 1
+                        )
+                        promote_retry = arrangement == 0 and (
+                            learned or single_failure_feedback_retry
+                        )
+                        #: A window launches where a retry SLOT exists and was not
+                        #: taken.  The slot lookup used to sit under
+                        #: `promote_retry`, which is exactly the conjunct that
+                        #: never held on a refusing cell (R2 §4).  Resolving it
+                        #: independently lets an aimable multi-failure pack spend
+                        #: the bounded window instead of the old single-failure
+                        #: exact retry.  The affordability check below is
+                        #: untouched and still bounds the cost.
                         retry_slot_found = False
                         retry_admitted = False
-                        if promote_retry:
-                            retry_candidate = (height, arrangement + 1)
-                            next_candidate = (*retry_candidate, False)
-                            try:
-                                next_index = candidate_packs.index(
-                                    next_candidate,
-                                    candidate_index,
-                                )
-                            except ValueError:
-                                pass
-                            else:
-                                retry_slot_found = True
+                        retry_candidate = (height, arrangement + 1)
+                        try:
+                            next_index = candidate_packs.index(
+                                (*retry_candidate, False),
+                                candidate_index,
+                            )
+                        except ValueError:
+                            pass
+                        else:
+                            retry_slot_found = True
+                            if promote_retry:
                                 current_candidate_s = (
                                     0.0 if started_at is None else time.monotonic() - started_at
                                 )
@@ -19025,12 +19059,15 @@ class FreeformLayout:
                                     dearest_candidate_s,
                                     current_candidate_s,
                                 )
-                                if feedback_retry or _room_for_another(
-                                    deadline,
-                                    soft,
-                                    retry_cost,
+                                if single_failure_feedback_retry or (
+                                    learned
+                                    and _room_for_another(
+                                        deadline,
+                                        soft,
+                                        retry_cost,
+                                    )
                                 ):
-                                    if feedback_retry:
+                                    if single_failure_feedback_retry:
                                         # This exact failed assignment is not proved
                                         # infeasible, so its cut belongs only to the
                                         # promoted feedback draw. Never remember it in
@@ -19076,12 +19113,12 @@ class FreeformLayout:
                                 after=window_metrics(validator_clean=False),
                                 routing_seconds=route_seconds,
                             )
-                        # A WINDOW REPLACES A RETRY THAT WAS WANTED AND COULD NOT BE
-                        # AFFORDED, and nothing else.  Alongside an admitted retry it
-                        # would be redundant -- the retry re-solves the whole pack --
-                        # and with no retry to promote there is no learned evidence to
-                        # aim a window at either.
-                        if promote_retry and retry_slot_found and not retry_admitted:
+                        # A WINDOW USES AN UNUSED NEXT-ARRANGEMENT SLOT.  The old
+                        # one-failure feedback retry and an affordable learned
+                        # retry consume that slot above; a multi-failure draw does
+                        # not.  Only a strict best-failing improvement can spend
+                        # the bounded window, so a tie never buys a second solve.
+                        if retry_slot_found and not retry_admitted and best_failing:
                             window_cost = _window_candidate_seconds(
                                 dearest_remainder_s=dearest_remainder_s,
                             )

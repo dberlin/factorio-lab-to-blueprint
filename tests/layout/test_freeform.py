@@ -3174,10 +3174,14 @@ def test_pack_attempt_retains_complete_failed_attempt_identity(
     assert len(attempts) == 1
     attempt = attempts[0]
     assert isinstance(attempt, freeform.PackAttempt)
-    assert attempt.origins == ((0, 0), (10, 0))
+    expected_strips = plan_strips(two_stage_spec())
+    assert attempt.origins == tuple(
+        (index * 10 + strip.west_channel, 0)
+        for index, strip in enumerate(expected_strips)
+    )
     assert attempt.compact_width == 20
     assert attempt.height == 20
-    assert attempt.outline == tuple(_box(strip) for strip in plan_strips(two_stage_spec()))
+    assert attempt.outline == tuple(_box(strip) for strip in expected_strips)
     assert attempt.routing is routing
     assert attempt.static_access == routing.failures
     assert attempt.promised_direct == frozenset()
@@ -3304,6 +3308,164 @@ def _proof_attempt(
             enabled=True,
         ),
     )
+
+def _feedback_for(routing: DetailedRouteResult) -> freeform.FeedbackState:
+    """A `FeedbackState` that knows every one of `routing`'s failing nets.
+
+    `FeedbackState` is `@dataclass(frozen=True, slots=True)` and stores every
+    mapping as a `MappingProxyType`, so it is constructed complete rather than
+    mutated. `endpoint_offsets` values are validated as two integer CELLS.
+    """
+    nets = [failure.net_id for failure in routing.failures]
+    return freeform.FeedbackState(
+        outline=(10, 10),
+        net_weight=dict.fromkeys(nets, 1.0),
+        cell_history={},
+        endpoint_offsets={net: ((0, 0, 0), (0, 0, 0)) for net in nets},
+    )
+
+
+
+def test_a_multi_failure_attempt_is_now_retry_eligible() -> None:
+    """R2 §4: `promote_retry` was false on every `universe-matrix` candidate.
+
+    `learned` was false because a preparation failure forces
+    `routing.exhaustive` false and `_proof_scoped_no_goods` returns nothing, and
+    `_feedback_retry_eligible` demanded EXACTLY ONE failure against the 3 and 6
+    those cells carry. Affordability was never the blocker: `room=True` on every
+    turn, window cost 1.00 to 2.37 s against 25+ s remaining.
+    """
+    routing = _feedback_bearing_routing(count=3)
+    attempt = _proof_attempt(routing, plan_strips(two_stage_spec()))
+
+    assert freeform._feedback_retry_eligible(attempt, _feedback_for(routing))
+
+
+def test_a_routing_failure_with_no_feedback_is_still_not_retry_eligible() -> None:
+    routing = _feedback_bearing_routing(count=3)
+    attempt = _proof_attempt(routing, plan_strips(two_stage_spec()))
+
+    assert not freeform._feedback_retry_eligible(
+        attempt, freeform.FeedbackState.empty((10, 10))
+    )
+
+
+def test_the_window_launches_on_a_best_failing_pack_with_three_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slot and a clock, and no `learned` evidence: that is the trigger now."""
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: True)
+    monkeypatch.setattr(
+        freeform,
+        "destroy_strips",
+        lambda *_args, **_kwargs: frozenset({0}),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_pack_relation_pair",
+        lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
+    )
+    launched: list[object] = []
+    monkeypatch.setattr(
+        freeform,
+        "_pack_window",
+        lambda *args, **kwargs: launched.append(kwargs) or None,
+    )
+    feedback_retry_cuts: list[freeform.ExactPackNoGood] = []
+
+    def record_feedback_retry(
+        _candidate: tuple[int, int],
+        pack: freeform._Pack,
+        exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
+    ) -> freeform._Pack:
+        feedback_retry_cuts.extend(
+            no_good
+            for no_good in exact_no_goods
+            if no_good.evidence[0].check == "route.feedback_retry"
+        )
+        return pack
+
+    _sweep_after_first_routing(
+        monkeypatch,
+        _feedback_bearing_routing(count=3),
+        arrangements=2,
+        heights=(20,),
+        time_budget_s=1e6,
+        pack_transform=record_feedback_retry,
+    )
+
+    assert len(launched) == 1
+    assert feedback_retry_cuts == []
+
+
+def test_the_window_is_withheld_on_a_pack_that_only_ties_the_best_failing_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One window solve costs a hard second (R3 §4.2) and halves the stage count;
+    a pack that ties the incumbent offers no better evidence than the solve
+    already spent, so it does not buy a second one.
+    """
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: True)
+    monkeypatch.setattr(
+        freeform,
+        "destroy_strips",
+        lambda *_args, **_kwargs: frozenset({0}),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_pack_relation_pair",
+        lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
+    )
+    launched: list[object] = []
+    monkeypatch.setattr(
+        freeform,
+        "_pack_window",
+        lambda *args, **kwargs: launched.append(kwargs) or None,
+    )
+
+    _sweep_after_first_routing(
+        monkeypatch,
+        _feedback_bearing_routing(count=3),
+        arrangements=2,
+        heights=(20, 30),
+        subsequent_routing=_feedback_bearing_routing(count=3),
+        time_budget_s=1e6,
+    )
+
+    assert len(launched) == 1
+
+
+def test_the_window_is_withheld_on_a_pack_worse_than_the_best_failing_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: True)
+    monkeypatch.setattr(
+        freeform,
+        "destroy_strips",
+        lambda *_args, **_kwargs: frozenset({0}),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_pack_relation_pair",
+        lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
+    )
+    launched: list[object] = []
+    monkeypatch.setattr(
+        freeform,
+        "_pack_window",
+        lambda *args, **kwargs: launched.append(kwargs) or None,
+    )
+
+    _sweep_after_first_routing(
+        monkeypatch,
+        _feedback_bearing_routing(count=3),
+        arrangements=2,
+        heights=(20, 30),
+        subsequent_routing=_feedback_bearing_routing(count=9),
+        time_budget_s=1e6,
+    )
+
+    assert len(launched) == 1
 
 
 def test_static_access_without_an_independent_relation_proof_is_evidence_only() -> None:
@@ -3826,7 +3988,9 @@ def _install_injected_packs(
         (height, arrangement): freeform._Pack(
             at={
                 index: (
-                    index * 10 + (arrangement if distinct_arrangements else 0),
+                    index * 10
+                    + strips[index].west_channel
+                    + (arrangement if distinct_arrangements else 0),
                     0,
                 )
                 for index in range(len(strips))
@@ -4564,6 +4728,12 @@ def test_sweep_reserves_measured_certify_and_finalize_cost_before_admission(
 def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    launched: list[object] = []
+    monkeypatch.setattr(
+        freeform,
+        "_pack_window",
+        lambda *args, **kwargs: launched.append(kwargs) or None,
+    )
     result, seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         _feedback_bearing_routing(),
@@ -4572,14 +4742,19 @@ def test_exact_one_net_feedback_admits_the_next_configured_arrangement(
     assert result is not None
     assert seen == [(20, 0), (20, 1)]
     assert [attempt.routing.failed_count for attempt in attempts] == [1, 0]
+    assert launched == []
 
 
 def test_feedback_retry_does_not_reroute_the_same_assignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     excluded: list[freeform.ExactPackNoGood] = []
-    prior_origins = ((0, 0), (10, 0))
-    prior_outline = tuple(_box(strip) for strip in plan_strips(two_stage_spec()))
+    prior_strips = plan_strips(two_stage_spec())
+    prior_origins = tuple(
+        (index * 10 + strip.west_channel, 0)
+        for index, strip in enumerate(prior_strips)
+    )
+    prior_outline = tuple(_box(strip) for strip in prior_strips)
 
     def enforce_retry_exclusion(
         candidate: tuple[int, int],
@@ -19856,11 +20031,11 @@ def test_the_sweep_repairs_a_window_when_a_full_resolve_is_unaffordable(
 def test_the_sweep_never_solves_the_same_window_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The same question is never put to CP-SAT twice inside one sweep.
+    """A tied failure never poses the same CP-SAT question twice.
 
-    A repair that fails again settles its own credit and is free to ask for
-    another window; when the selector names a set already asked, the LEDGER
-    answers -- an unapplied credit -- instead of the solver.
+    A repair that fails again settles its own credit, but its failure count only
+    TIES the best-failing pack. The strict best-failing guard therefore declines
+    another choice before `solved_windows` has to reject the repeated set.
     """
     session = OperatorSession()
     keys: list[tuple[int, int, frozenset[int]]] = []
@@ -19890,8 +20065,8 @@ def test_the_sweep_never_solves_the_same_window_twice(
     assert result is None
     assert len(keys) == len(set(keys))
     assert (20, 0, frozenset({0})) in keys
-    # More choices than solves: the repeats were declined without a solve.
-    assert len(session.choices) > len(keys)
+    # The tied repair is declined before another operator choice is made.
+    assert len(session.choices) == len(keys)
     # A DRAINED REPAIR CONSUMES NO `candidate_packs` SLOT.  Both arrangement-0
     # candidates are packed once each, and the two repairs that follow them are
     # evaluated from the stored pack; hoisting the `candidate_index += 1` out of
@@ -20217,12 +20392,11 @@ def test_a_repair_that_routes_into_the_budget_wall_is_paid_on_real_metrics(
 def test_a_repair_that_fails_again_settles_before_it_asks_for_another_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The failure block settles its own credit BEFORE the next window launch.
+    """A failed repair settles before the strict best-failing guard stops it.
 
-    The launch guard refuses a candidate that still has an unsettled choice
-    against it, so the ORDER decides whether a second window can be asked for
-    at all.  Settling only on the way out of the loop body would leave the
-    guard looking at a choice the sweep had already finished with.
+    The repair's routing pass is still real work and receives its applied
+    observation. Its tied failure count cannot buy a second window, so no
+    unapplied choice is created afterward.
     """
     log: list[str] = []
     session = _RecordingSession(log)
@@ -20247,9 +20421,8 @@ def test_a_repair_that_fails_again_settles_before_it_asks_for_another_window(
     )
 
     assert result is None
-    # The settle sits BETWEEN the two launches: the second is declined by
-    # `solved_windows` -- the same question -- and not by an unsettled choice.
-    assert log == ["solve", "observe:True", "observe:False"]
+    # The tied failure is settled, then declined before a second choice.
+    assert log == ["solve", "observe:True"]
 
 
 def test_a_sweep_that_dies_mid_flight_still_settles_its_outstanding_choices(
@@ -20413,15 +20586,11 @@ def test_a_queued_repair_is_charged_the_dearest_post_pack_remainder(
 def test_the_second_window_is_not_paid_for_the_repair_that_launched_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Credit lands on the choice whose repair was evaluated, held by IDENTITY.
+    """A tied repair cannot launch a second window that might be miscredited.
 
-    A repair that fails again settles its own credit and then launches another
-    window under the SAME `(height, arrangement)` key.  The loop body's exit
-    then runs the settle at its foot, and a membership test -- "is there a
-    choice for this key?" -- answers yes, for a choice whose repair has not been
-    evaluated at all: it would be paid on THIS turn's metrics, and the repair it
-    belongs to would then be evaluated for nothing.  Only identity can tell the
-    choice this candidate ARRIVED with from the one it just created.
+    The first repair is evaluated and settled on its own failed routing pass.
+    Its failure count ties the best-failing incumbent, so the strict guard stops
+    before a second choice can be stored under the same candidate key.
     """
     log: list[str] = []
     session = _RecordingSession(log)
@@ -20444,16 +20613,12 @@ def test_the_second_window_is_not_paid_for_the_repair_that_launched_it(
         heights=(20,),
     )
 
-    assert result is not None
-    assert builds == ["test", "window", "window"]
-    # A different question each time, so the second window is a real solve and
-    # a second choice is really stored under the key the first one just left.
-    assert windows == [frozenset({0}), frozenset({1})]
-    assert log == ["observe:True", "observe:True"]
-    assert [choice.ordinal for choice, _applied, _reward in session.observations] == [0, 1]
-    # The first component of the reward vector is earned only by a placement
-    # the validator certified, and the SECOND repair is the one that certified.
-    assert [reward[0] for _choice, _applied, reward in session.observations] == [0.0, 1.0]
+    assert result is None
+    assert builds == ["test", "window"]
+    assert windows == [frozenset({0})]
+    assert log == ["observe:True"]
+    assert [choice.ordinal for choice, _applied, _reward in session.observations] == [0]
+    assert [reward[0] for _choice, _applied, reward in session.observations] == [0.0]
 
 
 def test_a_repair_that_dies_after_routing_is_paid_on_the_pass_it_ran(
