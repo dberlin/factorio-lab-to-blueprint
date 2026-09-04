@@ -20732,3 +20732,46 @@ def test_a_freeform_refusal_carries_the_sweep_s_own_counters(
         "window_accepted",
         "alns_operators",
     }
+
+
+def test_a_freeform_refusal_carries_the_sweep_s_telemetry_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins `sweep_telemetry -> refusal_stats -> NoValidLayout.stats`.
+
+    Every other `_sweep` stub in this file absorbs `telemetry` via
+    `**_kwargs` without touching it, so nothing else proves the dict `_sweep`
+    WRITES INTO actually survives the trip through `lay_out`'s
+    `refusal_stats` into the raised exception -- as opposed to, say,
+    `refusal_stats` silently building its own numbers and `sweep_telemetry`
+    never being read.
+
+    Probes `evaluations`/`distinct_assignments` rather than `attempts` or
+    `skipped_heights`: `lay_out` itself overwrites those two names in
+    `refusal_stats` with the REAL attempt/skip counts (both 0 here, since
+    this stub never touches either list), regardless of what a same-named
+    telemetry entry claims.
+    """
+
+    def stub_sweep(
+        _self: FreeformLayout,
+        _spec: BuildSpec,
+        _strips: list[Strip],
+        *_args: object,
+        telemetry: dict[str, float | str] | None = None,
+        **_kwargs: object,
+    ) -> Placement | None:
+        if telemetry is not None:
+            telemetry["evaluations"] = 3.0
+            telemetry["distinct_assignments"] = 2.0
+        return None
+
+    monkeypatch.setattr(FreeformLayout, "_sweep", stub_sweep)
+
+    with pytest.raises(NoValidLayout) as caught:
+        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+            two_stage_spec(), time_budget_s=1.0
+        )
+
+    assert caught.value.stats["evaluations"] == 3.0
+    assert caught.value.stats["distinct_assignments"] == 2.0

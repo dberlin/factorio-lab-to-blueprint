@@ -922,3 +922,27 @@ def test_a_row_without_stats_omits_the_key() -> None:
     audit.record({"freeform": audit.Tally()}, audit.Result(job, "CRASH", "?", "", (), 1.0))
 
     assert "stats" not in audit._JSONL[0]
+
+
+def test_scalar_stats_drops_list_values_and_keeps_the_scalars() -> None:
+    """`PlacementStats.archive_categories` is a `list[str]`; `Result.stats`
+
+    only holds `float | str`.  This is the one conversion site that draws
+    that boundary, so it is the one place a `list` value must be provably
+    dropped rather than silently reaching a REFUSED/CLEAN/INVALID JSONL row
+    Gate E2 (Task 8) is about to read.
+    """
+    scalars = audit._scalar_stats(
+        {
+            "archive_categories": ["gear", "circuit-board"],
+            "stages": 11,
+            "alns_operators": "destroy:failed-endpoints:9",
+            "area": 240.5,
+        }
+    )
+
+    assert scalars == {
+        "stages": 11.0,
+        "alns_operators": "destroy:failed-endpoints:9",
+        "area": 240.5,
+    }

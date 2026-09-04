@@ -68,7 +68,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import asdict, dataclass, field, replace
 from fractions import Fraction
@@ -241,6 +241,30 @@ class Result:
         )
 
 
+def _scalar_stats(mapping: Mapping[str, object]) -> dict[str, float | str]:
+    """Narrow a stats mapping to what `Result.stats` can actually hold.
+
+    `PlacementStats` also carries non-scalar keys -- `archive_categories` and
+    `belt_upgrade_tiers` are `list[str]` -- that a `dict(...)` copy would pass
+    straight through into a `dict[str, float | str]`-typed field with nothing
+    to catch it at runtime.  This is the one place that boundary is drawn:
+    every ``int``/``float`` becomes a ``float``, every ``str`` is kept as is,
+    and everything else (lists included) is dropped.  ``bool`` is excluded
+    deliberately even though it is an ``int`` subclass; `PlacementStats`
+    declares none today, and a stray one silently becoming ``0.0``/``1.0``
+    would be a worse surprise than dropping it.
+    """
+    scalars: dict[str, float | str] = {}
+    for key, value in mapping.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            scalars[key] = float(value)
+        elif isinstance(value, str):
+            scalars[key] = value
+    return scalars
+
+
 # Per-process spec cache. Rebuilding candidates for every cell would re-run the
 # rate solver six times per URL; a worker handles several cells of the same URL,
 # so caching here pays for itself and cannot skew the layout timings.
@@ -337,7 +361,7 @@ def run_cell(job: Job) -> Result:
             time.monotonic() - t0,
             attempt_failures=exc.attempt_failures,
             projection_failures=exc.projection_failures,
-            stats=dict(exc.stats),
+            stats=_scalar_stats(exc.stats),
         )
     except Exception as exc:  # noqa: BLE001
         return Result(
@@ -384,10 +408,7 @@ def run_cell(job: Job) -> Result:
                 projection_failures=projection_failures,
                 attempt_wall_s=attempt_wall_s,
                 wall_overshoot_s=wall_overshoot_s,
-                # `PlacementStats` is broader than `Result.stats`'s `float | str`
-                # (it also carries `list[str]` and `int` keys); the deviation is
-                # declared in Task 7's brief and this narrowing is intentional.
-                stats=dict(placement.stats),  # type: ignore[arg-type]
+                stats=_scalar_stats(placement.stats),
             )
         placement = replace(
             placement,
@@ -431,10 +452,7 @@ def run_cell(job: Job) -> Result:
             projection_sorters,
             attempt_wall_s=attempt_wall_s,
             wall_overshoot_s=wall_overshoot_s,
-            # `PlacementStats` is broader than `Result.stats`'s `float | str`
-            # (it also carries `list[str]` and `int` keys); the deviation is
-            # declared in Task 7's brief and this narrowing is intentional.
-            stats=dict(placement.stats),  # type: ignore[arg-type]
+            stats=_scalar_stats(placement.stats),
         )
     checks = tuple(sorted({f.check for f in report.errors})) + tuple(
         f"unchecked:{check}" for check in skipped_power
@@ -454,10 +472,7 @@ def run_cell(job: Job) -> Result:
         projection_sorters,
         attempt_wall_s=attempt_wall_s,
         wall_overshoot_s=wall_overshoot_s,
-        # `PlacementStats` is broader than `Result.stats`'s `float | str` (it
-        # also carries `list[str]` and `int` keys); the deviation is declared
-        # in Task 7's brief and this narrowing is intentional.
-        stats=dict(placement.stats),  # type: ignore[arg-type]
+        stats=_scalar_stats(placement.stats),
     )
 
 
