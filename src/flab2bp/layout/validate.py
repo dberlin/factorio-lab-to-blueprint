@@ -264,6 +264,9 @@ class _Cache:
     run_components: dict[int, int] | None = None
     run_demand: dict[int, dict[str | None, Fraction]] | None = None
     entry_runs: dict[str, list[int]] | None = None
+    stack_of: dict[int, int] | None = None
+    sorter_tier_index: dict[int, int] | None = None
+    run_sorter_sources: dict[int, tuple[int, ...]] | None = None
     entry_items: dict[int, set[str]] | None = None
     sorter_peers: _SorterPeers | None = None
     coater_rides: dict[int, int] | None = None
@@ -398,6 +401,86 @@ class Context:
             )
             self.cache.of_kind[kind] = got
         return iter(got)
+
+    def stack_of(self, run: int) -> int:
+        """The cargo stack every unit on ``run`` is guaranteed to have (design 5.5).
+
+        Walks upstream over ``pred`` from the run, through junctions and other
+        runs, to every source and takes the MINIMUM: an entry belt carries the
+        URL's stack, a sorter placing onto the run carries its tier's place
+        stack, and a run with no traceable source carries 1.  The minimum is
+        the only stack a mixed merge is guaranteed to carry, so capacity judged
+        at it is never optimistic.
+
+        DERIVED FROM WHAT WAS BUILT, never from what was planned.  The spec
+        supplies the two numbers the game decides -- the URL's own stack, and
+        what each sorter TIER can place -- but which tier is standing there is
+        read off the placement.  A canvas that fell back to a tier too small
+        for its lane is caught here rather than believed.
+
+        Returns 1 for every run when the URL does not stack (design rule 1), so
+        an ``ist=1`` save is judged exactly as it was before any of this
+        existed, Pile Sorters included.
+        """
+        if self.spec is None or self.spec.belt_stack == 1:
+            return 1
+        cached = self.cache.stack_of
+        if cached is None:
+            cached = {}
+            self.cache.stack_of = cached
+        got = cached.get(run)
+        if got is not None:
+            return got
+
+        # `_entry_items` rather than `_entry_runs`: the two answer the same
+        # question from opposite ends, and this one is the COMPLETE direction.
+        # `_entry_runs` settles for the first `carries_item` label it finds,
+        # and a run whose tiles carry no label at all -- every hand-built
+        # fixture, and any lane a strategy leaves unlabelled -- would then read
+        # as no entry run, be judged at stack 1, and refuse a legitimately
+        # stacked build.  `_entry_items` unions in what the sorters on the run
+        # resolve to, which cannot invent an entry run: it has already excluded
+        # every run the blueprint fills itself.
+        entry = set(_entry_items(self))
+        sources = _run_sorter_sources(self)
+        bs = self.placement.buildings
+
+        stack: int | None = None
+        seen: set[Node] = set()
+        pending: list[Node] = [(RUN, run)]
+        while pending:
+            node = pending.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            kind, index = node
+            if kind == JUNCTION:
+                pending.extend(self.pred.get(node, ()))
+                continue
+            # A run can have BOTH a sorter placing onto it and an upstream
+            # predecessor, so every source is collected rather than the first.
+            sourced = False
+            for sorter_index in sources.get(index, ()):
+                placed = _sorter_place_stack(self, bs[sorter_index].item_id)
+                stack = placed if stack is None else min(stack, placed)
+                sourced = True
+            if index in entry:
+                bus = self.spec.belt_stack
+                stack = bus if stack is None else min(stack, bus)
+                sourced = True
+            # Task 12 adds the piler here: a piler DOUBLES the stack of the run
+            # into it, capped at `catalog.PILER_MAX_STACK`, and there is no
+            # stack setting on the building to read (design 5.1).
+            upstream = self.pred.get(node, ())
+            if upstream:
+                pending.extend(upstream)
+            elif not sourced:
+                # Nothing traceable feeds this run, so nothing guarantees more
+                # than loose items on it.
+                stack = 1
+        answer = 1 if stack is None else stack
+        cached[run] = answer
+        return answer
 
     def recipe_name(self, rid: int) -> str | None:
         """``IdMap.recipe_name``, over a reverse index built once.
@@ -4081,6 +4164,67 @@ def _lane_sourced(ctx: Context) -> Iterable[Finding]:
             )
 
 
+def _sorter_tier_index(ctx: Context) -> dict[int, int]:
+    """Catalog sorter id -> its position in ``spec.sorter_item_ids``.
+
+    The spec's stack rows are one entry per TIER, positional, and the catalog
+    id is what a placed sorter carries; this is the bridge, built once.  Same
+    id resolution ``sorter.tier_allowed`` uses, so a tier this cannot place is
+    a tier that check has already reported.
+    """
+    assert ctx.spec is not None
+    cached = ctx.cache.sorter_tier_index
+    if cached is not None:
+        return cached
+    ctx.cache.sorter_tier_index = {
+        numeric: index
+        for index, item_id in enumerate(ctx.spec.sorter_item_ids)
+        if (numeric := cat.get_item_id(item_id)) is not None
+    }
+    return ctx.cache.sorter_tier_index
+
+
+def _sorter_place_stack(ctx: Context, tier: int) -> int:
+    """Largest stack a sorter of this tier may FORM on a belt."""
+    assert ctx.spec is not None
+    index = _sorter_tier_index(ctx).get(tier)
+    if index is None or index >= len(ctx.spec.sorter_place_stacks):
+        return 1  # a tier this save cannot build; `sorter.tier_allowed` reports it
+    return ctx.spec.sorter_place_stacks[index]
+
+
+def _sorter_pick_stack(ctx: Context, tier: int) -> int:
+    """Belt cargos a sorter of this tier may accumulate per swing."""
+    assert ctx.spec is not None
+    index = _sorter_tier_index(ctx).get(tier)
+    if index is None or index >= len(ctx.spec.sorter_pick_stacks):
+        return 1
+    return ctx.spec.sorter_pick_stacks[index]
+
+
+def _run_sorter_sources(ctx: Context) -> dict[int, tuple[int, ...]]:
+    """Run -> the sorters that PLACE onto it, by building index.
+
+    Any tile, not only the head: a sorter dropping onto the middle of a run
+    puts its own stack onto every tile downstream of it, so a run's guaranteed
+    stack has to account for it.  Reading only the head would miss such a
+    source and answer with the larger stack, which is the optimistic direction.
+    """
+    cached = ctx.cache.run_sorter_sources
+    if cached is not None:
+        return cached
+    out: dict[int, list[int]] = defaultdict(list)
+    for i, s in ctx.of_kind(Kind.SORTER):
+        target = s.output_obj
+        if target is None:
+            continue
+        run = ctx.run_of.get(target)
+        if run is not None:
+            out[run].append(i)
+    ctx.cache.run_sorter_sources = {run: tuple(v) for run, v in out.items()}
+    return ctx.cache.run_sorter_sources
+
+
 def _entry_runs(ctx: Context) -> dict[str, list[int]]:
     """Runs the PLAYER has to fill, grouped by the item they want.
 
@@ -4256,7 +4400,9 @@ def _external_entry_points(ctx: Context) -> Iterable[Finding]:
     for item, runs in sorted(_entry_runs(ctx).items()):
         if len(runs) < 2:
             continue
-        capacity = spec.lane_capacity * spec.planning_stack(item)
+        # An entry run by construction, so the item is EXTERNAL whatever the
+        # spec's own dict would classify it as.
+        capacity = spec.lane_capacity * spec.planning_stack(item, external=True)
         demand = spec.external_inputs.get(item, Fraction(0))
         lanes_needed = max(1, -(-demand // capacity)) if demand > 0 else 1
         heads = [bs[ctx.runs[r].head] for r in runs]
@@ -5110,7 +5256,11 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
         ]
         if not rates:
             continue
-        capacity = min(rates)
+        # A belt's tier rate is CARGO per second; the stack says how many items
+        # ride in one cargo (design 5.5).  At stack 1 -- every unstacked save --
+        # this is the arithmetic it always was.
+        stack = ctx.stack_of(ridx)
+        capacity = min(rates) * stack
         required = sum(per_item.values(), Fraction(0))
         if required <= capacity:
             continue
@@ -5119,18 +5269,80 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
             for k, v in sorted(per_item.items(), key=lambda kv: (kv[0] is None, kv[0] or ""))
         }
         shared = " across " + ", ".join(breakdown) if len(per_item) > 1 else ""
+        # Name the stack when there is one, or a stacked refusal reads as a
+        # plain tier refusal and sends the reader to the wrong fix.
+        stacked = f" at stack {stack}" if stack > 1 else ""
         yield Finding(
             "flow.belt_capacity",
             Severity.ERROR,
             f"belt run {ridx} must carry {required} items/s{shared} but its tier "
-            f"sustains only {capacity}",
+            f"sustains only {capacity}{stacked}",
             run.indices,
             {
                 "run": ridx,
                 "required": str(required),
                 "capacity": str(capacity),
+                "stack": stack,
                 "per_item": breakdown,
             },
+        )
+
+
+def _sorter_stack(ctx: Context, index: int, s: PlacedBuilding) -> int:
+    """The cargo stack one sorter handles, from the run at its belt end.
+
+    It either draws a run's cargo into a machine, in which case it PICKS that
+    run's stack, or takes a machine's output onto a run, in which case it FORMS
+    that run's stack.  A BRIDGE has a belt at both ends and does both, so it is
+    charged the smaller: it cannot move more per trip than the tighter end
+    allows.  With a belt at neither end there is no stack to count and the
+    answer is 1.
+
+    The tier's own row is the CEILING, not the answer: a Pile Sorter on a
+    stack-1 lane moves loose items however much it could carry.
+    """
+    ends: list[int] = []
+    drawn = ctx.run_of.get(s.input_obj) if s.input_obj is not None else None
+    if drawn is not None:
+        ends.append(min(ctx.stack_of(drawn), _sorter_pick_stack(ctx, s.item_id)))
+    fed = ctx.run_of.get(s.output_obj) if s.output_obj is not None else None
+    if fed is not None:
+        ends.append(min(ctx.stack_of(fed), _sorter_place_stack(ctx, s.item_id)))
+    return min(ends) if ends else 1
+
+
+@check("flow.stack_pickable", needs_spec=True)
+def _stack_pickable(ctx: Context) -> Iterable[Finding]:
+    """A sorter drawing from a stacked run must be able to pick that stack.
+
+    A stacked bus over Mk.I sorters would not starve loudly in the game; it
+    would feed slowly, and the blueprint would look correct while the factory
+    ran under rate.  This turns it into a refusal with the stack named.
+
+    Sorter Mk.I to Mk.III pick 1 at EVERY research level (design 5.1), so on a
+    save whose URL stacks, every one of them drawing from a stacked lane is
+    reported.  ``ctx.stack_of`` is 1 everywhere when the URL does not stack, so
+    no existing build can trip this.
+    """
+    assert ctx.spec is not None
+    for i, s in ctx.of_kind(Kind.SORTER):
+        if s.input_obj is None:
+            continue
+        run = ctx.run_of.get(s.input_obj)
+        if run is None:
+            continue  # not drawing from a belt at all
+        stack = ctx.stack_of(run)
+        pick = _sorter_pick_stack(ctx, s.item_id)
+        if stack <= pick:
+            continue
+        yield Finding(
+            "flow.stack_pickable",
+            Severity.ERROR,
+            f"sorter {i} draws from belt run {run} at stack {stack} but tier "
+            f"{s.item_id} picks only {pick}; only the Pile Sorter carries a "
+            "stack, and only up to the researched Pile Sorter Upgrade level",
+            (i, s.input_obj),
+            {"sorter": i, "run": run, "stack": stack, "pick": pick, "tier": s.item_id},
         )
 
 
@@ -5153,7 +5365,13 @@ def _sorter_capacity(ctx: Context) -> Iterable[Finding]:
             continue  # sorter.reach already reported this
         if s.item_id not in cat.SORTER_RATE_AT_1:
             continue
-        capacity = cat.sorter_rate(s.item_id, span)
+        # `catalog.SORTER_STACK_RATE_FACTOR` is True: a sorter carrying a stack
+        # of n moves n items on that trip, so its items/s scales with the stack
+        # it handles.  Which stack that is depends on which end of it is the
+        # belt -- it PICKS a run's cargo on the way in and FORMS one on the way
+        # out -- and it is the run's own stack, derived from what was built.
+        stack = _sorter_stack(ctx, i, s)
+        capacity = cat.sorter_rate(s.item_id, span) * stack
         required = _sorter_demand(ctx, i, items)
         if required is None or required <= capacity:
             continue
@@ -5170,6 +5388,7 @@ def _sorter_capacity(ctx: Context) -> Iterable[Finding]:
                 "item": items.get(i),
                 "required": str(required),
                 "capacity": str(capacity),
+                "stack": stack,
             },
         )
 
