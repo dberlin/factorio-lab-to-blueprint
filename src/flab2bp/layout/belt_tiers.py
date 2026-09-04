@@ -52,12 +52,17 @@ def retier_belts(placement: Placement, spec: BuildSpec) -> Placement:
     if floor_numeric is None:
         return placement
 
-    runs, demands = belt_run_demands(placement, spec)
+    runs, demands, stacks = belt_run_demands(placement, spec)
     buildings = list(placement.buildings)
     upgraded = 0
     used: set[str] = set()
     for index, run in enumerate(runs):
-        demand = sum(demands.get(index, {}).values(), Fraction(0))
+        # A tier's rate is CARGO per second, so the demand a tier is chosen
+        # against has to be in cargo too (multiple-belts design, section 5.5).
+        # `stack_of` is 1 for every run on a save that does not stack, so this
+        # is the arithmetic it always was there.  Same source as the judge's,
+        # so the two cannot disagree about the same lane.
+        demand = sum(demands.get(index, {}).values(), Fraction(0)) / stacks.get(index, 1)
         chosen_numeric, chosen_id = floor_numeric, tiers[0][1]
         for numeric, item_id, speed in tiers:
             if numeric is None:

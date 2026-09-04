@@ -7,6 +7,8 @@ one solve rather than one per test.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from flab2bp import cli, pipeline
@@ -48,3 +50,33 @@ def test_cli_reports_how_many_entry_lanes_an_item_needs(
     cli._report(deuteron_build, verbose=False)
     report = capsys.readouterr().err
     assert "  entry lanes: hydrogen 2 (needs 2 at 30/s)" in report
+
+
+def test_cli_says_nothing_about_a_stack_when_the_url_does_not_stack(
+    deuteron_build: pipeline.Build,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Every corpus URL is `ist=1`, so the belts line must read exactly as it
+    always did -- a `stack 1` nobody asked about is noise on every build."""
+    cli._report(deuteron_build, verbose=False)
+    line = next(
+        line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")
+    )
+    assert "stack" not in line
+
+
+def test_cli_names_the_stack_when_the_url_carries_one(
+    deuteron_build: pipeline.Build,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`ist` is the player's own setting, so the report says it back with the
+    URL field named -- a reader who did not expect stacked belts has to be able
+    to find where the number came from."""
+    stacked = dataclasses.replace(deuteron_build, spec=deuteron_build.spec.model_copy(
+        update={"belt_stack": 2}
+    ))
+    cli._report(stacked, verbose=False)
+    line = next(
+        line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")
+    )
+    assert "stack 2 (URL ist=2)" in line

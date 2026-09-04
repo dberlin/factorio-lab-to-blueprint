@@ -5950,22 +5950,29 @@ def id_map(spec: BuildSpec) -> IdMap:
 
 def belt_run_demands(
     placement: Placement, spec: BuildSpec
-) -> tuple[tuple[BeltRun, ...], dict[int, dict[str | None, Fraction]]]:
-    """Each belt run and the items/second it must carry, by item.
+) -> tuple[tuple[BeltRun, ...], dict[int, dict[str | None, Fraction]], dict[int, int]]:
+    """Each belt run, the items/second it must carry by item, and its stack.
 
-    The same runs ``_build_runs`` chains and the same demand ``_run_demand``
-    computes for ``flow.belt_capacity`` -- exposed so the belt-tier pass in
-    ``layout/belt_tiers.py`` and the judge can never disagree about what a run
-    carries.  Runs no checks.  When a machine cannot be resolved to a spec
-    group the demand is empty: the flow is unknowable, and
-    ``machine.group_resolved`` reports the placement anyway.
+    The same runs ``_build_runs`` chains, the same demand ``_run_demand``
+    computes for ``flow.belt_capacity``, and the same stack ``Context.stack_of``
+    derives -- exposed so the belt-tier pass in ``layout/belt_tiers.py`` and the
+    judge can never disagree about what a run carries.  All three together, and
+    not the demand alone: a tier chosen against items where the judge counts
+    cargo would pay for an upgrade the lane does not need, or skip one it does.
+    Runs no checks.
+
+    When a machine cannot be resolved to a spec group the demand is empty: the
+    flow is unknowable, and ``machine.group_resolved`` reports the placement
+    anyway.  The stacks are still returned in that case -- they do not depend on
+    the group resolution -- so a caller need not special-case the shape.
     """
     ctx = _context(
         placement, spec, id_map(spec), 256, cat.DEFAULT_MAX_BELT_Z, True
     )
+    stacks = {index: ctx.stack_of(index) for index in range(len(ctx.runs))}
     if ctx.unresolved_machines():
-        return ctx.runs, {}
-    return ctx.runs, _run_demand(ctx)
+        return ctx.runs, {}, stacks
+    return ctx.runs, _run_demand(ctx), stacks
 
 
 def certify(placement: Placement, spec: BuildSpec, *, expect_power: bool) -> Report:
