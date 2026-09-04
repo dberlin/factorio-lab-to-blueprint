@@ -226,6 +226,12 @@ class Result:
     #: the maximum.
     attempt_wall_s: float | None = None
     wall_overshoot_s: float | None = None
+    #: Solver telemetry for THIS cell.  Present on CLEAN rows from
+    #: `PlacementStats` and on REFUSED rows from `NoValidLayout.stats` or the
+    #: rejected placement's own stats; absent from the JSONL when empty, and read
+    #: as empty by every consumer.  Values are numbers except `alns_operators`,
+    #: which is a tally string.
+    stats: dict[str, float | str] = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -331,6 +337,7 @@ def run_cell(job: Job) -> Result:
             time.monotonic() - t0,
             attempt_failures=exc.attempt_failures,
             projection_failures=exc.projection_failures,
+            stats=dict(exc.stats),
         )
     except Exception as exc:  # noqa: BLE001
         return Result(
@@ -377,6 +384,10 @@ def run_cell(job: Job) -> Result:
                 projection_failures=projection_failures,
                 attempt_wall_s=attempt_wall_s,
                 wall_overshoot_s=wall_overshoot_s,
+                # `PlacementStats` is broader than `Result.stats`'s `float | str`
+                # (it also carries `list[str]` and `int` keys); the deviation is
+                # declared in Task 7's brief and this narrowing is intentional.
+                stats=dict(placement.stats),  # type: ignore[arg-type]
             )
         placement = replace(
             placement,
@@ -420,6 +431,10 @@ def run_cell(job: Job) -> Result:
             projection_sorters,
             attempt_wall_s=attempt_wall_s,
             wall_overshoot_s=wall_overshoot_s,
+            # `PlacementStats` is broader than `Result.stats`'s `float | str`
+            # (it also carries `list[str]` and `int` keys); the deviation is
+            # declared in Task 7's brief and this narrowing is intentional.
+            stats=dict(placement.stats),  # type: ignore[arg-type]
         )
     checks = tuple(sorted({f.check for f in report.errors})) + tuple(
         f"unchecked:{check}" for check in skipped_power
@@ -439,6 +454,10 @@ def run_cell(job: Job) -> Result:
         projection_sorters,
         attempt_wall_s=attempt_wall_s,
         wall_overshoot_s=wall_overshoot_s,
+        # `PlacementStats` is broader than `Result.stats`'s `float | str` (it
+        # also carries `list[str]` and `int` keys); the deviation is declared
+        # in Task 7's brief and this narrowing is intentional.
+        stats=dict(placement.stats),  # type: ignore[arg-type]
     )
 
 
@@ -614,6 +633,10 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
         row["attempt_wall_s"] = r.attempt_wall_s
     if r.wall_overshoot_s is not None:
         row["wall_overshoot_s"] = r.wall_overshoot_s
+    # Present exactly where the strategy produced numbers.  A CRASH or SPEC row
+    # never reached a solver, so it carries none and the key is absent.
+    if r.stats:
+        row["stats"] = dict(r.stats)
     _JSONL.append(row)
     t = tallies[r.job.strategy]
     t.slowest.append((r.seconds, f"{r.job.strategy} {r.label}"))

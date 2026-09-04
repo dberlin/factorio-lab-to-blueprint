@@ -875,3 +875,50 @@ def test_the_strategy_flag_accepts_all_five_choices() -> None:
     for choice in ("both", "all", "freeform", "sequence-pair", "best"):
         args = parser.parse_args(["--strategy", choice])
         assert args.strategy == choice
+
+
+def test_a_refused_row_carries_the_solver_stats_from_the_exception() -> None:
+    audit._JSONL.clear()
+    job = audit.Job(
+        strategy="sequence-pair",
+        url_id=URL_CORPUS[0].url_id,
+        url=URL_CORPUS[0].url,
+        tier=URL_CORPUS[0].tier.value,
+        spec_index=0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        budget=1.0,
+        workers=1,
+    )
+
+    audit.record(
+        {"sequence-pair": audit.Tally()},
+        audit.Result(
+            job,
+            "REFUSED",
+            "no-proliferator",
+            "deadline exhausted",
+            ("<refused>",),
+            1.0,
+            stats={"stages": 11.0, "alns_window_solves": 0.0},
+        ),
+    )
+
+    assert audit._JSONL[0]["stats"] == {"stages": 11.0, "alns_window_solves": 0.0}
+
+
+def test_a_row_without_stats_omits_the_key() -> None:
+    audit._JSONL.clear()
+    job = audit.Job(
+        strategy="freeform",
+        url_id=URL_CORPUS[0].url_id,
+        url=URL_CORPUS[0].url,
+        tier=URL_CORPUS[0].tier.value,
+        spec_index=0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        budget=1.0,
+        workers=1,
+    )
+
+    audit.record({"freeform": audit.Tally()}, audit.Result(job, "CRASH", "?", "", (), 1.0))
+
+    assert "stats" not in audit._JSONL[0]

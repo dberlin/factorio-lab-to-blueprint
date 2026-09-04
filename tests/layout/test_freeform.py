@@ -20705,3 +20705,30 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
 
     assert 161 not in heights
     assert 154 in heights
+
+
+def test_a_freeform_refusal_carries_the_sweep_s_own_counters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The keys Gate E2 reads off a REFUSED freeform row."""
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [20])
+    telemetry: dict[str, float | str] = {}
+
+    FreeformLayout(band_policy=BandPolicy("portable"), arrangements=1)._sweep(
+        spec,
+        strips,
+        1.0,
+        session=OperatorSession(),
+        telemetry=telemetry,
+    )
+
+    assert set(telemetry) >= {
+        "evaluations",
+        "distinct_assignments",
+        "stale_draws",
+        "window_solves",
+        "window_accepted",
+        "alns_operators",
+    }
