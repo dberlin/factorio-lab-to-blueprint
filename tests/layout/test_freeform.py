@@ -17353,6 +17353,50 @@ def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> No
         )
 
 
+def test_a_shared_lane_is_judged_against_the_stack_its_cargo_carries() -> None:
+    """20/s each is 40/s on one lane: over a 30/s belt of loose items, inside
+    it once every cargo carries two.  The stack is the lane's, so the check
+    takes it rather than re-deriving one from the spec."""
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": F(20), "iron-ingot": F(20)},
+                outputs_per_machine={"magnetic-coil": F(1)},
+            ),
+        ),
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+    )
+    group = next(iter(freeform._adapt(spec).values()))
+    lane = (("copper-ingot", "iron-ingot"),)
+    with pytest.raises(ValueError, match="cannot share a belt"):
+        freeform._check_shared_lane_capacity(group, lane, 1, spec, stack=1)
+    freeform._check_shared_lane_capacity(group, lane, 1, spec, stack=2)
+
+
+def test_a_shared_lane_defaults_to_stack_one() -> None:
+    """An omitted stack must never be read as "unbounded"."""
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": F(20), "iron-ingot": F(20)},
+                outputs_per_machine={"magnetic-coil": F(1)},
+            ),
+        ),
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+    )
+    group = next(iter(freeform._adapt(spec).values()))
+    with pytest.raises(ValueError, match="cannot share a belt"):
+        freeform._check_shared_lane_capacity(group, (("copper-ingot", "iron-ingot"),), 1, spec)
+
+
 def _rated_spec(rate: Fraction, *, count: int = 8, capacity: Fraction = Fraction(30)) -> BuildSpec:
     """One collider-like group drawing ``rate`` of hydrogen per machine."""
     return BuildSpec(
@@ -17377,6 +17421,37 @@ def test_plan_strips_shortens_strips_to_the_capacity_cap() -> None:
     strips = plan_strips(spec, strip_len=8)
     assert max(strip.machines for strip in strips) <= 7
     assert sum(strip.machines for strip in strips) == 8
+
+
+def test_pick_sorter_keeps_the_stack_the_lane_was_planned_at() -> None:
+    """A 1 item/s lane needs no tier above Mk.I on rate alone, but a lane
+    planned at stack 4 needs a sorter that can PLACE 4, or the lane it feeds
+    would be built at 1 and the validator would judge it at 1.
+    """
+    stacks = freeform._SorterStacks(
+        place_by_tier={2011: 1, 2012: 1, 2013: 1, 2014: 4},
+        pick_by_tier={2011: 1, 2012: 1, 2013: 1, 2014: 4},
+    )
+    tiers = (2011, 2012, 2013, 2014)
+    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks, min_place_stack=4)
+    assert tier == 2014
+    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks, min_pick_stack=4)
+    assert tier == 2014
+    tier, _ = freeform._pick_sorter(F(1), 1, 1, tiers, stacks=stacks)
+    assert tier == 2011, "an unstacked lane must still take the cheapest tier"
+
+
+def test_pick_sorter_returns_the_fastest_tier_when_no_tier_keeps_the_promise() -> None:
+    """Same contract as the rate case: never emit a tier the save cannot
+    build; leave the refusal to the validator's `flow.sorter_capacity`."""
+    stacks = freeform._SorterStacks(
+        place_by_tier={2011: 1, 2012: 1, 2013: 1},
+        pick_by_tier={2011: 1, 2012: 1, 2013: 1},
+    )
+    tier, _ = freeform._pick_sorter(
+        F(1), 1, 1, (2011, 2012, 2013), stacks=stacks, min_place_stack=2
+    )
+    assert tier == 2013
 
 
 def test_pick_sorter_never_leaves_the_allowed_tiers() -> None:
