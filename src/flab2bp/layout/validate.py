@@ -125,6 +125,7 @@ class Kind(Enum):
     BELT = "belt"
     SORTER = "sorter"
     SPLITTER = "splitter"
+    PILER = "piler"
     POWER = "power"
     ADDON = "addon"
     OTHER = "other"
@@ -145,6 +146,8 @@ def _kind(b: PlacedBuilding) -> Kind:
         return Kind.SORTER
     if b.item_id == cat.SPLITTER_ID:
         return Kind.SPLITTER
+    if b.item_id == cat.PILER_ID:
+        return Kind.PILER
     try:
         info = cat.building(b.item_id)
     except KeyError:
@@ -184,7 +187,7 @@ def _supplies_power(b: PlacedBuilding) -> bool:
 
 #: Kinds that draw power.  Belts are unpowered in DSP; power nodes supply rather
 #: than consume.
-_POWERED = {Kind.MACHINE, Kind.SORTER, Kind.SPLITTER, Kind.ADDON}
+_POWERED = {Kind.MACHINE, Kind.SORTER, Kind.SPLITTER, Kind.PILER, Kind.ADDON}
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,12 +206,12 @@ class BeltRun:
         return self.indices[-1]
 
 
-#: Tags for the two node types in the flow graph.  A junction is a node in its
-#: own right rather than an edge between runs because its ARITY is what the rate
-#: arithmetic needs: a splitter with two inputs feeding one output charges each
-#: input half the load, and collapsing it into a plain run-to-run edge would
-#: charge both of them all of it -- inventing a violation on a lane that is
-#: correctly split.
+#: Tags for the two node types in the flow graph.  A boundary building is a node
+#: in its own right rather than an edge between runs because its ARITY is what
+#: the rate arithmetic needs: a splitter with two inputs feeding one output
+#: charges each input half the load, while a piler's one input and one output
+#: preserve the whole rate.  Collapsing the splitter into a run-to-run edge
+#: would charge both inputs all of the load and invent a violation.
 RUN = 0
 JUNCTION = 1
 
@@ -317,38 +320,37 @@ class Context:
     kinds: tuple[Kind, ...]
     #: cell -> building indices standing on it.  Sorters are absent by design:
     #: their anchors sit *on* the buildings they serve, and the tiles they span
-    #: are not exclusively theirs in this model.  Belts and splitters ARE here,
-    #: so sorter anchors and belt links can be resolved against them.
+    #: are not exclusively theirs in this model.  Belts, splitters and pilers
+    #: ARE here, so sorter anchors and belt links can be resolved against them.
     occupancy: Mapping[tuple[int, int, Fraction], tuple[int, ...]]
     #: cell -> building indices that exclusively *reserve* it.  Belt-integrated
-    #: buildings (belts, sorters, splitters) are absent; this is what
+    #: buildings (belts, sorters, splitters and pilers) are absent; this is what
     #: ``geom.overlap`` judges.
     blocking: Mapping[tuple[int, int, Fraction], tuple[int, ...]]
     runs: tuple[BeltRun, ...]
     run_of: Mapping[int, int]
-    #: splitter index -> belts that FEED it (they name it as ``output_obj``).
+    #: flow-boundary index -> belts that FEED it (they name it as ``output_obj``).
     #:
-    #: A splitter is a run boundary -- ``_build_runs`` chains belt to belt only
-    #: -- so without these two maps every run leaving a junction reads as
-    #: unsourced and every run entering one reads as unterminated.  That would
-    #: report the splitter, the whole point of which is to source several runs
-    #: from one, as the very defect it fixes.
+    #: Splitters and pilers are run boundaries -- ``_build_runs`` chains belt to
+    #: belt only -- so without these two maps every run leaving one reads as
+    #: unsourced and every run entering one reads as unterminated.  Junction
+    #: checks still select ``Kind.SPLITTER`` explicitly; piler checks select
+    #: ``Kind.PILER``.
     junction_in: Mapping[int, tuple[int, ...]]
-    #: splitter index -> belts that DRAW from it (they name it as ``input_obj``).
+    #: flow-boundary index -> belts that DRAW from it (they name it as ``input_obj``).
     junction_out: Mapping[int, tuple[int, ...]]
-    #: Flow graph over runs and junctions.  Every check that reasons about what
-    #: a lane must carry, what it may be fed by, or where it ends needs to cross
-    #: a junction to answer the question; before this existed each of them
-    #: stopped dead at one and read the far side as unconnected.
+    #: Flow graph over runs and junction-shaped boundaries.  Every check that
+    #: reasons about what a lane must carry, what it may be fed by, or where it
+    #: ends needs to cross them to answer the question.
     succ: Mapping[Node, tuple[Node, ...]]
     pred: Mapping[Node, tuple[Node, ...]]
     #: Scratch space for indexes several checks want; see :class:`_Cache`.
     cache: _Cache = field(default_factory=lambda: _Cache(), compare=False, repr=False)
 
     def junctions_feeding(self, run: int) -> tuple[int, ...]:
-        """Splitters that put items onto ``run``.
+        """Splitter or piler boundaries that put items onto ``run``.
 
-        A run is fed by a junction when its HEAD draws from one.  Only the head
+        A run is fed by a boundary when its HEAD draws from one.  Only the head
         can: every other belt in a run has exactly one belt predecessor, which
         is what made it part of the run rather than the start of a new one.
         """
@@ -356,7 +358,7 @@ class Context:
         b = self.placement.buildings[head]
         if b.input_obj is None:
             return ()
-        if self.kinds[b.input_obj] is not Kind.SPLITTER:
+        if self.kinds[b.input_obj] not in (Kind.SPLITTER, Kind.PILER):
             return ()
         return (b.input_obj,)
 
@@ -408,21 +410,22 @@ class Context:
         Walks upstream over ``pred`` from the run, through junctions and other
         runs, to every source and takes the MINIMUM: an entry belt carries the
         URL's stack, a sorter placing onto the run carries its tier's place
-        stack, and a run with no traceable source carries 1.  The minimum is
-        the only stack a mixed merge is guaranteed to carry, so capacity judged
-        at it is never optimistic.
+        stack, a piler doubles the stack reaching its input, and a run with no
+        traceable source carries 1.  The minimum is the only stack a mixed merge
+        is guaranteed to carry, so capacity judged at it is never optimistic.
 
         DERIVED FROM WHAT WAS BUILT, never from what was planned.  The spec
-        supplies the two numbers the game decides -- the URL's own stack, and
-        what each sorter TIER can place -- but which tier is standing there is
-        read off the placement.  A canvas that fell back to a tier too small
-        for its lane is caught here rather than believed.
+        supplies the URL's own stack and what each sorter TIER can place, while
+        the placement supplies the actual sorter and piler chain.  A piler has
+        no stack parameter: its output is always
+        :func:`catalog.piler_output_stack` of the run feeding it.
 
         Returns 1 for every run when the URL does not stack (design rule 1), so
         an ``ist=1`` save is judged exactly as it was before any of this
-        existed, Pile Sorters included.
+        existed, Pile Sorters and invalid pilers included.
         """
-        if self.spec is None or self.spec.belt_stack == 1:
+        spec = self.spec
+        if spec is None or spec.belt_stack == 1:
             return 1
         cached = self.cache.stack_of
         if cached is None:
@@ -435,50 +438,58 @@ class Context:
         # `_entry_items` rather than `_entry_runs`: the two answer the same
         # question from opposite ends, and this one is the COMPLETE direction.
         # `_entry_runs` settles for the first `carries_item` label it finds,
-        # and a run whose tiles carry no label at all -- every hand-built
-        # fixture, and any lane a strategy leaves unlabelled -- would then read
-        # as no entry run, be judged at stack 1, and refuse a legitimately
-        # stacked build.  `_entry_items` unions in what the sorters on the run
-        # resolve to, which cannot invent an entry run: it has already excluded
-        # every run the blueprint fills itself.
+        # while `_entry_items` also resolves otherwise unlabelled entry lanes.
         entry = set(_entry_items(self))
         sources = _run_sorter_sources(self)
         bs = self.placement.buildings
+        visiting: set[Node] = set()
 
-        stack: int | None = None
-        seen: set[Node] = set()
-        pending: list[Node] = [(RUN, run)]
-        while pending:
-            node = pending.pop()
-            if node in seen:
-                continue
-            seen.add(node)
+        def walk(node: Node) -> int | None:
             kind, index = node
-            if kind == JUNCTION:
-                pending.extend(self.pred.get(node, ()))
-                continue
-            # A run can have BOTH a sorter placing onto it and an upstream
-            # predecessor, so every source is collected rather than the first.
-            sourced = False
-            for sorter_index in sources.get(index, ()):
-                placed = _sorter_place_stack(self, bs[sorter_index].item_id)
-                stack = placed if stack is None else min(stack, placed)
-                sourced = True
-            if index in entry:
-                bus = self.spec.belt_stack
-                stack = bus if stack is None else min(stack, bus)
-                sourced = True
-            # Task 12 adds the piler here: a piler DOUBLES the stack of the run
-            # into it, capped at `catalog.PILER_MAX_STACK`, and there is no
-            # stack setting on the building to read (design 5.1).
-            upstream = self.pred.get(node, ())
-            if upstream:
-                pending.extend(upstream)
-            elif not sourced:
-                # Nothing traceable feeds this run, so nothing guarantees more
-                # than loose items on it.
-                stack = 1
-        answer = 1 if stack is None else stack
+            if kind == RUN:
+                known = cached.get(index)
+                if known is not None:
+                    return known
+            if node in visiting:
+                return None
+            visiting.add(node)
+            try:
+                upstream = self.pred.get(node, ())
+                if kind == JUNCTION:
+                    upstream_stacks = [
+                        value for prior in upstream if (value := walk(prior)) is not None
+                    ]
+                    if not upstream_stacks:
+                        return None
+                    answer = min(upstream_stacks)
+                    if self.kinds[index] is Kind.PILER:
+                        answer = cat.piler_output_stack(answer)
+                    return answer
+
+                stacks: list[int] = []
+                for sorter_index in sources.get(index, ()):
+                    stacks.append(_sorter_place_stack(self, bs[sorter_index].item_id))
+                if index in entry and not upstream:
+                    stacks.append(spec.belt_stack)
+                stacks.extend(value for prior in upstream if (value := walk(prior)) is not None)
+                if stacks:
+                    answer = min(stacks)
+                elif upstream:
+                    # Every predecessor is already on this path: this is a
+                    # cycle, whose flow checks own the finding.  Propagate no
+                    # invented source so another real source may still decide
+                    # the answer.
+                    return None
+                else:
+                    answer = 1
+                cached[index] = answer
+                return answer
+            finally:
+                visiting.discard(node)
+
+        answer = walk((RUN, run))
+        if answer is None:
+            answer = 1
         cached[run] = answer
         return answer
 
@@ -669,16 +680,21 @@ def _build_graph(
     j_in: Mapping[int, Sequence[int]],
     j_out: Mapping[int, Sequence[int]],
 ) -> tuple[dict[Node, tuple[Node, ...]], dict[Node, tuple[Node, ...]]]:
-    """Edges between runs, through junctions and through native belt merges.
+    """Edges between runs, through flow boundaries and through native belt merges.
 
-    THREE kinds of run boundary exist and all of them need crossing.  The
+    FOUR kinds of run boundary exist and all of them need crossing.  The
     obvious one is the splitter.  The second is a plain DSP merge:
     ``_build_runs`` ends a chain at any belt with more than one predecessor, so
     two lanes pointing at one tile leave three runs where the items see one
     continuous path.  A check that followed only junctions would still read a
     merged lane's downstream half as fed by nothing.
 
-    The third is a **sorter with a belt on both ends** -- a lane-to-lane
+    The third is an Automatic Piler.  It is represented by a junction-shaped
+    node because, like a splitter, the adjacent belts own its cargo links and
+    it separates two runs.  Its one input and one output mean the graph's
+    fair-share arithmetic never divides its flow.
+
+    The fourth is a **sorter with a belt on both ends** -- a lane-to-lane
     transfer, which is how both strategies tap a trunk onto a branch without
     spending a splitter.  It is an EDGE and not a flow source: what it moves is
     whatever the far lane needs, so modelling it as a graph edge lets
@@ -753,20 +769,36 @@ def _context(
             occ[cell].append(i)
             if blocks:
                 blocking[cell].append(i)
+    # Splitters and pilers name nobody; the belts around them name the boundary
+    # as their ``output_obj`` to feed it and as their ``input_obj`` to draw from
+    # it.  Both directions are collected once for graph construction and the
+    # kind-specific checks below.
     runs, run_of = _build_runs(placement.buildings, kinds)
-    # The corpus convention: a splitter names nobody, and the belts around it
-    # name it -- as their `output_obj` to feed it, as their `input_obj` to draw
-    # from it. Both directions are collected here once so no check has to
-    # rediscover it.
     j_in: dict[int, list[int]] = defaultdict(list)
     j_out: dict[int, list[int]] = defaultdict(list)
     for i, b in enumerate(placement.buildings):
         if kinds[i] is not Kind.BELT:
             continue
         o, n = b.output_obj, b.input_obj
-        if o is not None and 0 <= o < len(kinds) and kinds[o] is Kind.SPLITTER:
+        if (
+            o is not None
+            and 0 <= o < len(kinds)
+            and kinds[o]
+            in (
+                Kind.SPLITTER,
+                Kind.PILER,
+            )
+        ):
             j_in[o].append(i)
-        if n is not None and 0 <= n < len(kinds) and kinds[n] is Kind.SPLITTER:
+        if (
+            n is not None
+            and 0 <= n < len(kinds)
+            and kinds[n]
+            in (
+                Kind.SPLITTER,
+                Kind.PILER,
+            )
+        ):
             j_out[n].append(i)
     succ, pred = _build_graph(placement.buildings, kinds, runs, run_of, j_in, j_out)
     return Context(
@@ -3165,6 +3197,86 @@ def _junction_records_no_links(ctx: Context) -> Iterable[Finding]:
         )
 
 
+# --- pilers ----------------------------------------------------------------
+
+
+@check("piler.ports")
+def _piler_ports(ctx: Context) -> Iterable[Finding]:
+    """Every piler has one belt on each authoritative physical port pose."""
+    bs = ctx.placement.buildings
+    expected_model = cat.building(cat.PILER_ID).model_index
+    for piler_index, piler in ctx.of_kind(Kind.PILER):
+        inputs = sorted(ctx.junction_in.get(piler_index, ()))
+        outputs = sorted(ctx.junction_out.get(piler_index, ()))
+        if len(inputs) != 1 or len(outputs) != 1:
+            yield Finding(
+                "piler.ports",
+                Severity.ERROR,
+                f"piler {piler_index} has {len(inputs)} input belt(s) {inputs} and "
+                f"{len(outputs)} output belt(s) {outputs}; an Automatic Piler "
+                "requires exactly one input belt and one output belt",
+                (piler_index, *inputs, *outputs),
+                {
+                    "piler": piler_index,
+                    "inputs": inputs,
+                    "outputs": outputs,
+                    "input_count": len(inputs),
+                    "output_count": len(outputs),
+                },
+            )
+            continue
+        if piler.model_index != expected_model:
+            yield Finding(
+                "piler.ports",
+                Severity.ERROR,
+                f"piler {piler_index} uses model {piler.model_index}, but item "
+                f"{cat.PILER_ID} requires model {expected_model}; a foreign "
+                "prefab's port poses cannot validate an Automatic Piler connection",
+                (piler_index,),
+                {
+                    "piler": piler_index,
+                    "expected_model": expected_model,
+                    "actual_model": piler.model_index,
+                },
+            )
+            continue
+        for direction, attached, expected_port in (
+            ("input", inputs, 1),
+            ("output", outputs, 0),
+        ):
+            fx, fy, _fz = slots.port_forward(piler.item_id, piler.yaw, expected_port)
+            pz = slots.port_offset(piler.item_id, piler.yaw, expected_port)[2]
+            centre_x = piler.x + (piler.width - 1) / 2
+            centre_y = piler.y + (piler.height - 1) / 2
+            expected = (
+                round(centre_x + round(fx) * (piler.width + 1) / 2),
+                round(centre_y + round(fy) * (piler.height + 1) / 2),
+                piler.z + Fraction(pz).limit_denominator(),
+            )
+            for belt_index in attached:
+                belt = bs[belt_index]
+                port = belt.output_to_slot if direction == "input" else belt.input_from_slot
+                actual = (belt.x, belt.y, belt.z)
+                if port == expected_port and actual == expected:
+                    continue
+                yield Finding(
+                    "piler.ports",
+                    Severity.ERROR,
+                    f"belt {belt_index} is the {direction} belt of piler "
+                    f"{piler_index} through port {port}, but that connection must "
+                    f"use port {expected_port} at {expected}, not {actual}",
+                    (belt_index, piler_index),
+                    {
+                        "piler": piler_index,
+                        "belt": belt_index,
+                        "direction": direction,
+                        "port": port,
+                        "expected": expected,
+                        "actual": actual,
+                    },
+                )
+
+
 @check("belt.link_adjacent")
 def _link_adjacent(ctx: Context) -> Iterable[Finding]:
     bs = ctx.placement.buildings
@@ -3207,10 +3319,9 @@ def _port_docks(ctx: Context) -> tuple[_Dock, ...]:
     ``BuildTool_Path`` one with no ``portPoses`` -- so a Ray Receiver takes a
     belt and no sorter, and an Assembling Machine the reverse.
 
-    Splitters are excluded: a belt attached to one carries the constants
-    :data:`~flab2bp.dsp.rules.SPLITTER_INPUT_TO_SLOT` /
-    ``SPLITTER_OUTPUT_FROM_SLOT`` rather than a pose index, and
-    ``junction.colocated`` is the check that judges them.
+    Splitters and pilers are excluded.  Their adjacent belts are collected in
+    ``Context.junction_in`` / ``junction_out`` for their kind-specific checks;
+    ``junction.*`` and ``piler.ports`` own those two distinct record shapes.
 
     Every candidate is returned, INCLUDING the ones that name a building with no
     port at all.  ``belt.port_dock`` is what convicts those, and a helper that
@@ -3231,7 +3342,13 @@ def _port_docks(ctx: Context) -> tuple[_Dock, ...]:
         ):
             if link is None or not 0 <= link < len(bs):
                 continue
-            if ctx.kinds[link] in (Kind.BELT, Kind.SPLITTER, Kind.SORTER, Kind.ADDON):
+            if ctx.kinds[link] in (
+                Kind.BELT,
+                Kind.SPLITTER,
+                Kind.PILER,
+                Kind.SORTER,
+                Kind.ADDON,
+            ):
                 continue
             out.append(_Dock(i, link, slot, draws))
     ctx.cache.port_docks = tuple(out)
@@ -3371,28 +3488,28 @@ def _port_dock(ctx: Context) -> Iterable[Finding]:
 
 
 def _belt_successors(ctx: Context, i: int) -> tuple[int, ...]:
-    """Where items on building ``i`` go next, junctions included.
+    """Where items on building ``i`` go next, flow boundaries included.
 
-    A splitter has no ``output_obj`` of its own, so following links alone stops
-    dead at one.  Its successors are the belts that named it as their
-    ``input_obj`` -- which is how a loop that closes THROUGH a junction, the
-    shape a fan-out router most easily produces, stays invisible to a
+    A splitter or piler has no ``output_obj`` of its own, so following links
+    alone stops dead at one.  Its successors are the belts that named it as
+    their ``input_obj`` -- which is how a loop that closes THROUGH a boundary,
+    the shape a fan-out router most easily produces, stays invisible to a
     link-following walk.
     """
     bs = ctx.placement.buildings
-    if ctx.kinds[i] is Kind.SPLITTER:
+    if ctx.kinds[i] in (Kind.SPLITTER, Kind.PILER):
         return ctx.junction_out.get(i, ())
     o = bs[i].output_obj
     if o is None or not (0 <= o < len(bs)):
         return ()
-    if ctx.kinds[o] in (Kind.BELT, Kind.SPLITTER):
+    if ctx.kinds[o] in (Kind.BELT, Kind.SPLITTER, Kind.PILER):
         return (o,)
     return ()
 
 
 @check("belt.acyclic")
 def _acyclic(ctx: Context) -> Iterable[Finding]:
-    """No belt path returns to itself, following splitters as well as links.
+    """No belt path returns to itself, following flow boundaries as well as links.
 
     Iterative rather than recursive: a corridor lane in a real build runs to 51
     tiles and a chain of them would put a recursive walk within reach of the
@@ -3409,6 +3526,7 @@ def _acyclic(ctx: Context) -> Iterable[Finding]:
 
     starts = [i for i, _ in ctx.of_kind(Kind.BELT)]
     starts += [j for j, _ in ctx.of_kind(Kind.SPLITTER)]
+    starts += [p for p, _ in ctx.of_kind(Kind.PILER)]
     for start in starts:
         if colour.get(start):
             continue
@@ -5240,6 +5358,16 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
             )
 
 
+def _belt_run_rate(ctx: Context, run: BeltRun) -> Fraction | None:
+    """Cargo/second sustained by a run's slowest catalogued belt tile."""
+    rates = [
+        rate
+        for index in run.indices
+        if (rate := cat.BELT_RATE.get(ctx.placement.buildings[index].item_id)) is not None
+    ]
+    return min(rates) if rates else None
+
+
 @check("flow.belt_capacity", needs_spec=True, needs_groups=True)
 def _belt_capacity(ctx: Context) -> Iterable[Finding]:
     """No belt run may be asked to carry more than its tier sustains.
@@ -5254,18 +5382,14 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
         # A run can be mixed after the finalizer's compaction merges two runs
         # whose tiles were retiered differently, so the run's capacity is the
         # SLOWEST tile in it -- that tile is what actually throttles the lane.
-        rates = [
-            r
-            for i in run.indices
-            if (r := cat.BELT_RATE.get(ctx.placement.buildings[i].item_id)) is not None
-        ]
-        if not rates:
+        rate = _belt_run_rate(ctx, run)
+        if rate is None:
             continue
         # A belt's tier rate is CARGO per second; the stack says how many items
         # ride in one cargo (design 5.5).  At stack 1 -- every unstacked save --
         # this is the arithmetic it always was.
         stack = ctx.stack_of(ridx)
-        capacity = min(rates) * stack
+        capacity = rate * stack
         required = sum(per_item.values(), Fraction(0))
         if required <= capacity:
             continue
@@ -5291,6 +5415,41 @@ def _belt_capacity(ctx: Context) -> Iterable[Finding]:
                 "per_item": breakdown,
             },
         )
+
+
+@check("piler.input_rate", needs_spec=True, needs_groups=True)
+def _piler_input_rate(ctx: Context) -> Iterable[Finding]:
+    """A piler's incoming cargo rate may not exceed its slowest belt tile."""
+    demand: dict[int, dict[str | None, Fraction]] | None = None
+    for piler_index, _piler in ctx.of_kind(Kind.PILER):
+        if demand is None:
+            demand = _run_demand(ctx)
+        for run_index in ctx.runs_feeding_junction(piler_index):
+            run = ctx.runs[run_index]
+            capacity = _belt_run_rate(ctx, run)
+            if capacity is None:
+                continue
+            required = sum(demand.get(run_index, {}).values(), Fraction(0))
+            stack = ctx.stack_of(run_index)
+            cargo_rate = required / stack
+            if cargo_rate <= capacity:
+                continue
+            yield Finding(
+                "piler.input_rate",
+                Severity.ERROR,
+                f"piler {piler_index} receives {required} items/s from belt run "
+                f"{run_index} at stack {stack}, or {cargo_rate} cargo/s, but that "
+                f"run's slowest belt sustains only {capacity} cargo/s",
+                (piler_index, *run.indices),
+                {
+                    "piler": piler_index,
+                    "run": run_index,
+                    "required": str(required),
+                    "stack": stack,
+                    "cargo_rate": str(cargo_rate),
+                    "capacity": str(capacity),
+                },
+            )
 
 
 def _sorter_stack(ctx: Context, index: int, s: PlacedBuilding) -> int:
@@ -5451,6 +5610,27 @@ def _sorter_tier_allowed(ctx: Context) -> Iterable[Finding]:
             f"allowed: {', '.join(ctx.spec.sorter_item_ids)}",
             (i,),
             {"sorter": i, "tier": s.item_id, "allowed": list(ctx.spec.sorter_item_ids)},
+        )
+
+
+@check("piler.tier_allowed", needs_spec=True)
+def _piler_tier_allowed(ctx: Context) -> Iterable[Finding]:
+    """Every piler requires its unlock and a save whose belts carry stacks."""
+    assert ctx.spec is not None
+    if ctx.spec.piler_unlocked and ctx.spec.belt_stack > 1:
+        return
+    for piler_index, _piler in ctx.of_kind(Kind.PILER):
+        yield Finding(
+            "piler.tier_allowed",
+            Severity.ERROR,
+            f"piler {piler_index} cannot be built by this save: "
+            f"piler_unlocked={ctx.spec.piler_unlocked}, belt_stack={ctx.spec.belt_stack}",
+            (piler_index,),
+            {
+                "piler": piler_index,
+                "piler_unlocked": ctx.spec.piler_unlocked,
+                "belt_stack": ctx.spec.belt_stack,
+            },
         )
 
 

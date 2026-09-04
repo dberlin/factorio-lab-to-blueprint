@@ -24,7 +24,7 @@ from dataclasses import replace
 from fractions import Fraction
 
 from flab2bp.dsp import catalog, rules
-from flab2bp.layout import freeform, geometry, junction, slots
+from flab2bp.layout import freeform, geometry, junction, piling, slots
 from flab2bp.layout.base import PlacedBuilding
 
 #: Item ids with real colliders, slot poses and footprints, picked once so the
@@ -256,6 +256,15 @@ def _belt_rates() -> list[tuple[int, str, str]]:
     ]
 
 
+
+def _piler_plan() -> piling.MergePlan:
+    return piling.plan_merges(
+        (piling.LaneLoad("lane", 0, Fraction(20), catalog.PILER_MAX_STACK),),
+        lane_capacity=Fraction(30),
+        max_stack=catalog.PILER_MAX_STACK,
+        sink_pick_stack=catalog.PILER_MAX_STACK,
+    )
+
 def _belt_ceiling() -> list[str]:
     return [str(catalog.belt_max_z(level)) for level in (3, 9, 13, 15)]
 
@@ -282,6 +291,7 @@ PROBES: dict[str, Callable[[], object]] = {
     "freeform._altitude_profile": _altitude_profiles,
     "catalog.footprint/clearance": _footprints_and_clearance,
     "catalog.belt_rate/sorter_rate": _belt_rates,
+    "piling.plan_merges": _piler_plan,
     "catalog.belt_max_z": _belt_ceiling,
 }
 

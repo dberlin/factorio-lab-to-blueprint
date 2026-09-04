@@ -64,7 +64,6 @@ EXPECTED_UNCONSULTED = {
     "catalog.sorter_pick_stack",
     "catalog.sorter_place_stack",
     "catalog.SORTER_STACK_RATE_FACTOR",
-    "catalog.PILER_MAX_STACK",
     "catalog.PILER_SINGLE_PASS",
     "catalog.PILER_THROUGHPUT",
     "catalog.PILER_STACK_PARAMETER",

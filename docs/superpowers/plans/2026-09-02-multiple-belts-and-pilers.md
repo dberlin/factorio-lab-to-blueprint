@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.14, pydantic models in `spec.py`, frozen dataclasses in `layout/`, the validator's `Context`/`check` registry in `layout/validate.py`, exact `Fraction` rates everywhere, pytest (serial), Ruff, strict MyPy, `uv run`; the BepInEx oracle plugin under `tools/dsp-oracle/` (C#) for game facts.
 
-**Spec:** `docs/superpowers/specs/2026-09-02-multiple-belts-and-pilers-design.md` (revision 3). Section numbers below refer to it.
+**Spec:** `docs/superpowers/specs/2026-09-02-multiple-belts-and-pilers-design.md` (revision 4). Section numbers below refer to it.
 
 ## Status (2026-09-03)
 
@@ -24,7 +24,7 @@
 
 - **Base: master `60ab5f8`** (2026-09-03; Phases B, C and D of the reliability program, the belt-and-sorter-tier work and the rates commit `98dfa5d` are all merged). Phase C and D edited `freeform.py` extensively (`FreeformLayout.lay_out`, `_sweep`, `_pack`) and `sequence_solver.py`; this plan's hunks in those files are small and elsewhere (`plan_strips`, `_box`, `Strip`). Every gate baseline is generated fresh at this base. Phase E (`docs/superpowers/specs/2026-09-03-phase-e-universe-matrix-closure-design.md`) runs concurrently in another worktree and edits `strip_variants._logical_strip_plans` (the `input_items` order and `_seat_inputs`), `NoValidLayout` (an additive `stats` keyword) and `audit.Result` (an additive `stats` field); Task 8's hunks in `_logical_strip_plans` are the one likely merge conflict and are merged by hand, never blind.
 - **The cap has two seams** (§4.1): `partition_strip_variant` and `sequence_pair.merge_strip_instances` (the stage-boundary merge that sums two instances' machine counts after partitioning). Task 2 covers both.
-- **Deliverables are gates, not milestones.** A ships alone if B's game facts cannot be pinned (Task 6 says how to stop). C does not start until Task 11's fixture exists. Each deliverable's last task runs the three-round corpus audit against the previous deliverable's rounds.
+- **Deliverables are gates, not milestones.** A ships alone if B's game facts cannot be pinned (Task 6 says how to stop). C starts after Task 11 derives and tests the Automatic Piler record from the shipped 0.10.34 code and catalog; no player fixture is required. Each deliverable's last task runs the three-round corpus audit against the previous deliverable's rounds.
 - **The partition cap lives in `partition_strip_variant`** (§4.1). The sequence solver reaches it through `partition_strip_family` (`sequence_solver.py::_variant_search_inputs`), freeform through `plan_strips`; a cap in either caller misses the other.
 - **mypy covers `tests/` too** (`pyproject.toml` `files = ["src", "tests"]`): every test function and helper in this plan is annotated (`-> None`, typed parameters, no bare lambdas assigned to names).
 - **No behaviour change for a URL with `ist=1`** beyond A's cap, and A's cap binds only where a lane would already have been refused (§4.3). The gate's `--regressions-only` compare is the proof; a `CLEAN -> REFUSED` flip is a defect, not noise.
@@ -1215,80 +1215,57 @@ git commit -m "feat(layout): retier and report belt runs at their cargo stack"
 
 ## Deliverable C: Automatic Pilers
 
-### Task 11: The piler fixture and its record
+### Task 11: Derive the Automatic Piler record from shipped game code
 
 **Files:**
-- Create: `tests/fixtures/<name>-piler.txt` (a player-built blueprint with one Automatic Piler between two belts, obtained from the game)
-- Modify: `src/flab2bp/layout/junction.py` — `make_piler` after `make_splitter` (`:157`)
-- Modify: `src/flab2bp/dsp/catalog.py` — `PILER_ID = 2040`, `BELT_INTEGRATED_IDS` (`:258`) gains it
-- Test: `tests/dsp/test_roundtrip.py` (parametrised over fixtures, picks the new one up automatically); Create: `tests/layout/test_junction.py` (there is none today; the splitter helpers are tested from `test_freeform.py` and `test_validate.py`)
+- Modify: `src/flab2bp/layout/junction.py` — add `make_piler` after `make_splitter`
+- Modify: `src/flab2bp/dsp/catalog.py` — add `PILER_ID = 2040`; add it to `BELT_INTEGRATED_IDS`
+- Create: `tests/layout/test_junction.py`
+- Modify: this plan and `docs/superpowers/specs/2026-09-02-multiple-belts-and-pilers-design.md`
 
-**Fact this task follows (Ruling P12): the piler has no parameter block.** `catalog.PILER_STACK_PARAMETER is None` — `PilerDesc` declares no fields, `PilerComponent.Export` serialises no stack, and Pile versus Split comes from `CargoTraffic.RematchPilerConnection` reading the wiring. So `src/flab2bp/dsp/params.py` is NOT touched by this task: there is no `params.piler`, no `params.piler_stack`, and no `parameter_index` to pin. What the fixture must pin instead is the WIRING: which neighbour names the piler, in which direction, and the four slot fields.
+**Conformance evidence (DSP 0.10.34 shipped code, not a player fixture):**
+- `BlueprintUtils.decompiled.cs:1181-1182,1222-1306` initializes both object references to null. The Automatic Piler's shipped catalog row has `multiLevel = 1`, so it takes the multilevel branch and receives `inputToSlot = 14`, `outputFromSlot = 15`, `inputFromSlot = 15`, and `outputToSlot = 14`.
+- `BlueprintBuilding.decompiled.cs:294-295` serializes null object references as `-1`. The layer-specific invariants are therefore `PlacedBuilding.input_obj/output_obj is None`, decoded `BlueprintBuilding.input_obj_idx/output_obj_idx == -1`, and the four sentinel slot integers above.
+- `BlueprintUtils.decompiled.cs:1248-1272` puts the connections on the adjacent belts: a feeding belt's `outputObj/outputToSlot` names piler port 1; a drawing belt's `inputObj/inputFromSlot` names piler port 0.
+- `CargoTraffic.decompiled.cs:938-974` reads piler slots 0 and 1 and selects `PilerState.Pile` when slot 0 is output and slot 1 is input. Wiring, not a building parameter, selects the mode.
+- `BuildingParameters.cs:83-363` has no piler case; `ToParamsArray` falls through with `_paramCount = 0`, and `BlueprintUtils.decompiled.cs:1297-1306` normalizes null parameters to `new int[0]`.
+- The shipped catalog rows `dsp/data/buildings.json` (`itemId` 2040) and `dsp/data/slot_poses.json` (`piler`) pin item 2040, model 257, unrotated footprint 1x3, and ordered ports: port 0 at `(dx=0, dy=+0.25)` facing north, port 1 at `(dx=0, dy=-0.25)` facing south. `catalog.oriented_footprint` rotates the footprint to 3x1 at yaw 90, and `codec.tile_to_local_offset` emits the footprint centre.
 
-**This task is a human-in-the-loop prerequisite for C.** Without the fixture the record convention is unverified; stop here and record it if it cannot be obtained.
+`catalog.PILER_STACK_PARAMETER is None` remains the separate behavioural fact from Task 6. There is no `params.piler`, `params.piler_stack`, stack argument, or piler parameter block.
 
-- [ ] **Step 1: Obtain and decode the fixture**
+- [ ] **Step 1: Write game-code conformance tests**
 
-Decode with `codec.decode` and print the piler's record: `item_id, model_index, x, y, z, yaw, input_obj_idx, output_obj_idx, input_from_slot, input_to_slot, output_from_slot, output_to_slot, parameters`, and the two neighbouring belts' records. Write those values into the test below as literals. Record the observed `parameters` in the report even though nothing reads it — if it is not empty, that is a finding against the pinned fact and C stops until it is explained.
+Create `tests/layout/test_junction.py` with:
 
-- [ ] **Step 2: Tests**
+1. catalog assertions for `PILER_ID`, model 257, footprint 1x3 at yaw 0 and 3x1 at yaw 90, empty sorter slots, and the two ordered port poses above;
+2. `make_piler` field assertions for item/model, oriented footprint, yaw, null `PlacedBuilding` references, sentinel own-slot fields `inputToSlot = 14`, `outputFromSlot = 15`, `inputFromSlot = 15`, `outputToSlot = 14`, and empty parameters;
+3. an originated encode/decode check proving the piler decodes with object indices `(-1, -1)`, `(input_from_slot, input_to_slot, output_from_slot, output_to_slot) == (15, 14, 15, 14)`, and `parameters == ()`, while its feeding belt names `(piler index, port 1)` and its drawing belt names `(piler index, port 0)`;
+4. yaw-0 and yaw-90 centre checks derived from the footprint, not copied from a fabricated game-authored blueprint.
 
-```python
-def test_the_piler_fixture_records_its_neighbours_the_way_a_splitter_does() -> None:
-    bp = codec.decode(fixture_text("<name>-piler"))
-    piler = next(b for b in bp.buildings if b.item_id == 2040)
-    before = next(b for b in bp.buildings if b.output_obj_idx == piler.index)
-    after = next(b for b in bp.buildings if b.input_obj_idx == piler.index)
-    # The piler names nobody; the belts around it name IT.  (-1, -1) expected
-    # like a splitter, but the fixture decides.
-    assert (piler.input_obj_idx, piler.output_obj_idx) == (<literal>, <literal>)
-    assert (piler.input_from_slot, piler.input_to_slot) == (<literal>, <literal>)
-    assert (piler.output_from_slot, piler.output_to_slot) == (<literal>, <literal>)
-    assert (before.x, before.y) == (<literal>, <literal>)
-    assert (after.x, after.y) == (<literal>, <literal>)
+The test comments cite the exact decompiled paths and lines above. It deliberately adds no fixture and does not claim byte identity with a capture that does not exist.
 
-
-def test_the_piler_carries_no_parameter_block() -> None:
-    """catalog.PILER_STACK_PARAMETER is None: the stack is not a building setting.
-
-    A piler's Pile-or-Split mode comes from its wiring and the stack it emits
-    comes from the stack arriving on its input belt (spec §5.1, §6.3).
-    """
-    bp = codec.decode(fixture_text("<name>-piler"))
-    piler = next(b for b in bp.buildings if b.item_id == 2040)
-    assert catalog.PILER_STACK_PARAMETER is None
-    assert piler.parameters == ()   # replace with the fixture's literal; report if non-empty
-```
-
-plus `make_piler(x, y, z, yaw=...)` producing a `PlacedBuilding` whose serialised record equals the fixture's piler record field for field (except position). There is no `params.piler(...)` pin, because there is no such function.
-
-- [ ] **Step 3: Implement `make_piler` and the catalog entries**
+- [ ] **Step 2: Implement `make_piler` and catalog integration**
 
 ```python
-def make_piler(x: int, y: int, z: Fraction = Fraction(0), *, yaw: float = 0.0) -> PlacedBuilding:
-    """An Automatic Piler at ``(x, y)`` facing ``yaw``.
-
-    Like a splitter it names nobody: the belt before it names it as
-    ``output_obj`` and the belt after as ``input_obj``, and that wiring is
-    also what puts the component into Pile mode
-    (``CargoTraffic.RematchPilerConnection``).
-
-    There is NO stack argument.  ``catalog.PILER_STACK_PARAMETER is None``:
-    the game stores no stack on the building.  A piler doubles whatever
-    arrives, capped at ``catalog.PILER_MAX_STACK``, so the stack a lane ends
-    up at is decided by how many pilers it passes through, which is
-    ``layout/piling.py``'s job, not this function's.
-    """
+def make_piler(
+    x: int,
+    y: int,
+    z: Fraction = Fraction(0),
+    *,
+    yaw: float = 0.0,
+) -> PlacedBuilding:
+    """An Automatic Piler at ``(x, y, z)`` facing ``yaw``."""
 ```
 
-using `catalog.building(PILER_ID)` for the model index (257) and footprint (`width=1, height=3`). `BELT_INTEGRATED_IDS` gains `PILER_ID` so `_context` stops treating it as a blocking building.
+Read model 257 from `catalog.building(PILER_ID)` and read the yaw-oriented dimensions from `catalog.oriented_footprint(PILER_ID, yaw)`. Leave `input_obj`, `output_obj`, and `parameters` at `PlacedBuilding`'s generic defaults; set `input_to_slot = 14`, `output_from_slot = 15`, `input_from_slot = 15`, and `output_to_slot = 14` from the multilevel branch contract. `BELT_INTEGRATED_IDS` gains `PILER_ID` so occupancy logic recognizes this inline belt device.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
+
+Do not run tests, lint, format, or builds for this revised execution; the integration owner performs validation after concurrent work lands.
 
 ```bash
-uv run pytest tests/dsp tests/layout/test_junction.py -q
-git add tests/fixtures/<name>-piler.txt src/flab2bp/dsp/catalog.py src/flab2bp/layout/junction.py tests/dsp tests/layout/test_junction.py
-git commit -m "feat(dsp): decode, build, and re-encode an Automatic Piler byte for byte"
+git add src/flab2bp/dsp/catalog.py src/flab2bp/layout/junction.py tests/layout/test_junction.py docs/superpowers/plans/2026-09-02-multiple-belts-and-pilers.md docs/superpowers/specs/2026-09-02-multiple-belts-and-pilers-design.md
+git commit -m "feat(dsp): derive Automatic Piler records from game code"
 ```
 
 ### Task 12: The merge tree
@@ -1535,7 +1512,7 @@ git commit -m "feat(validate): judge pilers as run boundaries with their own che
 Two synthetic specs (not corpus URLs; none stacks), both with `ist=2` and the piler unlocked:
 
 1. **One piler per lane.** Two producer strips at 20 items/s each feeding one consumer strip: `lay_out` under both strategies emits two pilers (one per lane, stack 1 -> 2), validates clean, and `flow.belt_capacity` passes at the merge.
-2. **Two pilers in series (Ruling P12).** THREE unstacked producer strips at 30 items/s each into one consumer strip whose sorters pick 4 (`sorter_pick_stacks[-1] == 4`, i.e. `pile-sorter-4` researched). Three is the smallest set that forces stack 4, and the arithmetic is worth stating because a smaller one silently emits nothing: one lane fits unpiled (`30 / 1 = 30 <= 30`, so `s = 1`), two lanes reach only stack 2 (`60 / 2 = 30 <= 30`, one piler each), and three lanes give `90 / 1 = 90` and `90 / 2 = 45`, both over the belt, so `s = 4` and `_pilers_in_series(1, 4) == 2` on every lane. Deliverable A's `machine_cap` bounds a strip's lane to `lane_capacity * planning_stack`, so a SINGLE unstacked lane can never need stack 4 — a one-lane version of this test would assert two pilers against a plan that emits none. Assertions: `lay_out` under both strategies emits SIX pilers, two in series per lane with a belt between them; each producer strip's `tail_extension == 7`; `Context.stack_of` on the run after each lane's second piler is 4; and the build validates clean. This is the case a single-pass piler model would have got wrong by half, so it is the regression pin for the doubling fact.
+2. **Two pilers in series (Ruling P12).** FOUR unstacked producer strips at 20 items/s each feed one consumer strip whose sorter picks 4 (`sorter_pick_stacks[-1] == 4`, i.e. `pile-sorter-4` researched). This is the smallest validator-clean case that forces stack 4 with the selected machines and real Pile Sorter throughput: every producer sorter can place 20 items/s at stack 1, while the merged `80 / 2 = 40` exceeds the 30 cargo/s belt and `80 / 4 = 20` fits it; the consumer sorter can pick the resulting 80 items/s at stack 4. `_pilers_in_series(1, 4) == 2` on every lane. Assertions: `lay_out` under both strategies emits EIGHT pilers, two in series per lane with a belt between them; each producer strip's `tail_extension == 7`; `Context.stack_of` on the run after each lane's second piler is 4; and the build validates clean. The earlier three-at-30 case was rejected during execution because a stack-1 Pile Sorter carries 20 items/s, not 30, and the single consumer sorter carries at most 80 items/s at stack 4.
 
 Mark slow only if either needs a real budget.
 
@@ -1555,11 +1532,12 @@ git commit -m "feat(layout): report pilers and gate the piled build"
 
 ## Self-review notes (kept for the reviewer)
 
-- **Spec coverage (revision 3).** §2 rules -> Tasks 9, 12, 14. §4.1-4.5 -> Tasks 1-4. §4.4 (lane multiplicity) is deliberately not a task: the spec defers it to the gate. §5.1 -> Task 6 (EXECUTED; its four amended facts are carried into Tasks 7, 8, 11, 12, 13, 14, 15 and each of those names the one it follows). §5.2 -> Task 7 (including the `rates/solve.py` Belts objective, the `pile-sorter-{n}` level derivation and the level-0 defaults). §5.3-5.4 -> Task 8 (including `PILER_LADDER` and the elective-raise rule). §5.5 -> Task 9. §5.6 -> Task 10. §6.1-6.2 -> Tasks 12 and 13. §6.3 -> Tasks 11, 13 (the `4 x count - 1` tail). §6.4 -> Task 14 (derived `stack_of` after a piler). §6.5 and §7 -> Tasks 10, 15. §8 tests are distributed as listed, including §8's amended C bullet (eight pilers for 4 x 30; a sink picking 3 planned at 2) in Task 12 and the two-in-series end-to-end case in Task 15. §9 sequencing -> the three gates.
+- **Spec coverage (revision 4).** §2 rules -> Tasks 9, 12, 14. §4.1-4.5 -> Tasks 1-4. §4.4 (lane multiplicity) is deliberately not a task: the spec defers it to the gate. §5.1 -> Task 6 (EXECUTED; its four amended facts are carried into Tasks 7, 8, 11, 12, 13, 14, 15 and each of those names the one it follows). §5.2 -> Task 7 (including the `rates/solve.py` Belts objective, the `pile-sorter-{n}` level derivation and the level-0 defaults). §5.3-5.4 -> Task 8 (including `PILER_LADDER` and the elective-raise rule). §5.5 -> Task 9. §5.6 -> Task 10. §6.1-6.2 -> Tasks 12 and 13. §6.3 -> Tasks 11, 13 (the game-code-derived record and the `4 x count - 1` tail). §6.4 -> Task 14 (derived `stack_of` after a piler). §6.5 and §7 -> Tasks 10, 15. §8 tests are distributed as listed, including §8's amended C bullet (eight pilers for 4 x 30; a sink picking 3 planned at 2) in Task 12 and the two-in-series end-to-end case in Task 15. §9 sequencing -> the three gates.
 - **Type consistency (re-checked across Tasks 7-15 after the amendment).** `planning_stack(item, *, external=None)` is introduced in Task 1 with one positional parameter and gains the keyword in Task 8; Task 3's call uses the positional form and Task 9's the keyword form, both valid after Task 8. `spec.PILER_LADDER: tuple[int, int, int]` is introduced in Task 8 and imported (never redefined) by `layout/piling.py` in Task 12. `belt_run_demands`' three-tuple is introduced in Task 10 and consumed there only. `PilerPlan(lane_id: str, count: int, stack: int)` and `MergePlan(stack, groups, pilers)` are defined in Task 12 and consumed in Task 13 by name; `count` is what Task 13 turns into `tail_extension` (`4 x count - 1`, the separator belts included) and into the number of `make_piler` calls, and Task 15 sums it for `stats["pilers"]`; the three tile numbers agree — Task 13 Step 1 asserts 3 and 7, Task 13 Step 2 computes `PILER_TILES * count + (count - 1)`, Task 15 asserts 7, and spec §6.3 and §10 say the same. `junction.make_piler(x, y, z, *, yaw)` is defined in Task 11 and called in Task 13 with exactly that signature — no `stack` argument exists anywhere. `catalog.piler_output_stack(int) -> int` (Task 6, shipped) is called by Task 12's `_pilers_in_series` and by Task 14's `stack_of`, so the doubling rule has one implementation. `catalog.PILER_THROUGHPUT` is cited in Tasks 6 and 12 as a reason and read by no production code. `params.piler` / `params.piler_stack` were REMOVED by the amendment: no task defines them and no task calls them. `LogicalLane` is `order=True`; `stack` is appended as a trailing field so ordering of existing lanes is unchanged. Stack tuples are indexed only with `[-1]`, since a save without the Pile Sorter has three entries, not four; Task 7's alignment validator requires `len(sorter_pick_stacks) == len(sorter_place_stacks) == len(sorter_item_ids)`, so Task 8's `_stacked(..., ids=)` and Task 9's `_stacked_spec` must vary the ids and the tuples together — a three-entry tuple against the four default ids raises at construction.
-- **Placeholders (re-scanned 2026-09-03).** Task 6's JSON sample and Task 11's `<literal>` fixture values are deliberately marked as shapes to be replaced by the shipped JSON and the fixture's decoded values; Task 11's `<name>-piler` is the fixture filename the implementer chooses. Nothing else is a placeholder: no code step says "add appropriate handling", every new test names its assertion, and every amended number is a table row from §5.1 rather than an illustrative one.
+- **Placeholders (re-scanned 2026-09-04).** Task 6's historical JSON sample is superseded by the shipped `stacking.json`. Revised Task 11 contains no fixture filename or placeholder literals: every record, wiring, geometry, and parameter expectation is derived from cited 0.10.34 code or catalog data. No implementation step says "add appropriate handling", and every amended number is a game-code or table literal rather than an illustrative one.
 - **Amendment (Ruling P12, 2026-09-03)** applied to Tasks 7-15 after Task 6 pinned the game facts: the tech ids moved from the obsolete `sorter-cargo-stacking-{n}` to the live `pile-sorter-{n}` (Task 7); `BuildSpec`'s stack defaults moved to the real level-0 row `(1,1,1,2)`/`(1,1,1,1)` and every test tuple became a real table row (Tasks 7, 8, 9); `planning_stack` gained the doubling ladder and the elective-raise rule, and its refusal message names the right research (Task 8); `params.piler`/`params.piler_stack` and `make_piler`'s `stack` argument were deleted because the building has no parameter block (Tasks 11, 13, 14); `PilerPlan` gained `count` and `plan_merges` lost `piler_throughput` (Task 12); `tail_extension` became `4 x count - 1` (Task 13); `stack_of` after a piler became derived (Task 14); Task 15 gained the two-pilers-in-series end-to-end case. Tasks 1-6 and the Task 10 and 15 gates are unchanged.
 - **Fix round 1 (2026-09-03, after review; 3 blocker / 3 medium / 4 minor, all applied).** B1: `tail_extension` was short by the separator belt tiles — two pilers cannot abut, because a `PilerComponent` reads an input belt and an output belt, so `count` pilers occupy `3 x count + (count - 1) = 4 x count - 1` tiles (3 for one, 7 for two); corrected in spec §6.3 and §10 and in Task 13's Produces, Step 1 (two assertions) and Step 2, and in Task 15. B2: Task 15's two-in-series case named ONE 30 items/s lane, which yields `s = 1` and no piler at all — and Deliverable A's `machine_cap` means a single unstacked lane can never need stack 4; rewritten to THREE lanes at 30 items/s (`90 / 2 = 45` over the belt, `90 / 4 = 22.5` under it), asserting six pilers, and the arithmetic for why one and two lanes do not work is stated in the task so nobody shrinks it again. B3: Task 8's `_stacked` helper could not express a save without a Pile Sorter — three-entry stack tuples against the four default `sorter_item_ids` would have failed Task 7's alignment validator at construction, before `pytest.raises`; the helper gained an `ids` parameter and the test passes three ids. M1: the refusal message now branches, naming Integrated Logistics System when `sorter-4` is absent (a save without the Pile Sorter cannot research the upgrade ladder, whose only prerequisite is that unlock) and Pile Sorter Upgrade otherwise, and both refusal tests' regexes pin the research name so the spec and the message cannot drift apart again. M2: the both-fed test moved to level 4 (`place 3`, `pick 4`, answer 3) — its `place` value is load-bearing and had been an unreal row. M3: three tests' rows made real (`place` passed explicitly in the two external-input assertions; Task 9's stale "a Pile Sorter places 4 by default" comment replaced). m1: Task 14 tests `piler.tier_allowed`'s second condition (`belt_stack == 1` with the piler unlocked). m2: GC-33 records A's line drift. m3: Task 6's preserved Produces carries a trailing "shipped values" note. m4: spec §8's Unit (B) bullet synced with Task 9's Mk.III case.
+- **Execution correction (2026-09-04).** Runtime validation supersedes Fix round 1 B2's three-at-30 fixture: each stack-1 producer sorter was overloaded at 30 items/s and the stack-4 consumer sorter was overloaded at 90 items/s. Task 15 now uses four lanes at 20 items/s, producing 80 items/s through eight pilers; both producer and consumer sorters operate at their real 20-cargo/s ceiling.
 - **Re-validation at `60ab5f8` (2026-09-03, before execution)** found and this revision fixed: `particle-collider` is not a catalog id (`miniature-particle-collider`); `tests/test_cli.py` does not exist (Task 3 creates it); the deuteron build emits two `flow.external_entry_points` findings (hydrogen and super-magnetic-ring), so Tasks 4 and 10 filter on the item; the Mk.III test already passes today (the cap is inert at Mk.III) and is now the fast pin of `lanes_needed`; today's Mk.II refusal also names `flow.sorter_capacity`, which the belt cap cannot clear (Task 4's stop condition says what to report); gate baselines are generated fresh at the base from a git archive; a both-fed external item is planned at `min(belt_stack, place_stack)` (Task 8); `params.piler_stack` is the decoder Task 14 reads (Task 11) — **superseded by Ruling P12: the piler has no parameter block and there is no decoder**. The design premise (hydrogen belted in at 40 items/s; Mk.II refused with `flow.belt_capacity`) was re-measured and holds; both route digests MATCH at the base.
 - **Review round 2 (2026-09-03)** found and this revision fixed: `merge_strip_instances` lives in `strip_variants.py`; the conservation test at `test_strip_variants.py:1343` needs its family uncapped; the three piler/sorter facts are now in Task 6's dump, schema and Produces and `plan_merges` takes `piler_throughput` (**superseded by Ruling P12: the pinned throughput equals `BELT_RATE`, so the parameter is gone**); `_pick_sorter` floors its tier by the planned stack (Task 8 Step 3b); `LogicalLane`, not `LanePlan`, carries the stack; §8's example count; §3 rule 3's edge; the pessimistic fit test is stated; `MachineGroup` import; typed `monkeypatch`.
 - **Review round 1 (2026-09-03)** found and this revision fixed: the leaf-only merge tree could not express the spec's own example (resolved by single-pass piling to the uniform stack, no trunk pilers); `merge_strip_instances` as a second cap seam; `stack_of` and `planning_stack` gated on `belt_stack > 1`; an unpickable bus is refused, not capped; `cat.item_name` does not exist; `tests/layout/test_junction.py` is created, not modified; the Phase C collision reason; typed test signatures; the refusal regex order; `_family` always caps.

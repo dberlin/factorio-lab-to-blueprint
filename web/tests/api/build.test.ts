@@ -163,6 +163,17 @@ test('sequence-pair is accepted as an explicit response strategy', async () => {
   expect(job.result?.strategy).toBe('sequence-pair');
 });
 
+test('submit and poll retain the parsed piler count', async () => {
+  const body = { ...aJob(), result: { ...aResult(), pilers: 4 } };
+  serving({ status: 202, body }, { status: 200, body });
+
+  const submitted = await submitBuild(DEFAULT_OPTIONS);
+  const polled = await pollBuild(submitted.id);
+
+  expect(submitted.result?.pilers).toBe(4);
+  expect(polled.result?.pilers).toBe(4);
+});
+
 test('parsed responses retain a stacked belt tier on the result and attempt', async () => {
   const result = aResult();
   const body = {

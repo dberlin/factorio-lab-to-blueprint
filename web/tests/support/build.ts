@@ -68,6 +68,7 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
     strategy: 'freeform',
     candidate: 'no-proliferator',
     machines: 9,
+    pilers: 0,
     area: 575,
     primary_band: 160,
     certified_bands: [160, 200],

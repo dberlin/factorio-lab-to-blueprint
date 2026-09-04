@@ -28,7 +28,9 @@ from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.validate import (
     CHECKS,
+    JUNCTION,
     NEEDS_GROUPS,
+    RUN,
     Context,
     Finding,
     IdMap,
@@ -118,6 +120,11 @@ def splitter(
     x: int, y: int, z: Fraction | int = 0, *, carries: str | None = None
 ) -> PlacedBuilding:
     return junction.make_splitter(x, y, Fraction(z), carries_item=carries)
+
+
+def piler(x: int, y: int, yaw: float = 0.0) -> PlacedBuilding:
+    """An Automatic Piler with no per-building stack parameter."""
+    return junction.make_piler(x, y, yaw=yaw)
 
 
 def sorter(
@@ -5623,3 +5630,391 @@ def test_a_lane_built_a_tier_too_small_for_its_stack_is_caught_by_the_belt_check
     r = validate(p, spec, ids=TWO_INPUT_IDS)
     assert not fired(r, "flow.sorter_capacity")
     assert fired(r, "flow.belt_capacity")
+
+
+# --- Automatic Pilers ------------------------------------------------------
+
+
+def _piler_spec(
+    rate: Fraction,
+    *,
+    belt_stack: int = 4,
+    piler_unlocked: bool = True,
+) -> BuildSpec:
+    """A fragment whose unlabelled source run carries loose cargo."""
+    return _stacked_spec(rate, belt_stack=belt_stack, pick=4).model_copy(
+        update={
+            "external_inputs": {},
+            "outputs": {},
+            "piler_unlocked": piler_unlocked,
+        }
+    )
+
+
+def _piler_to_machine(*, carries: str | None = None) -> Placement:
+    """One loose source run, one piler, and one run drained by a machine."""
+    return place(
+        dataclasses.replace(
+            belt(0, 1, out=1, item_id=BELT3, carries=carries),
+            output_to_slot=1,
+        ),
+        piler(0, 2, 0.0),
+        dataclasses.replace(
+            belt(0, 5, inp=1, item_id=BELT3),
+            input_from_slot=0,
+        ),
+        machine(1, 5, recipe_id=6),
+        sorter(0, 5, 1, 5, inp=2, out=3, item_id=PILE),
+    )
+
+
+def test_kind_classifies_an_automatic_piler() -> None:
+    assert _kind(piler(0, 0, 90.0)) is Kind.PILER
+
+
+def test_piler_is_a_one_in_one_out_run_boundary() -> None:
+    placement = place(
+        dataclasses.replace(belt(0, 1, out=1, item_id=BELT3), output_to_slot=1),
+        piler(0, 2, 0.0),
+        dataclasses.replace(belt(0, 5, inp=1, item_id=BELT3), input_from_slot=0),
+    )
+    ctx = context_for(placement, _piler_spec(Fraction(1)))
+    incoming = ctx.run_of[0]
+    outgoing = ctx.run_of[2]
+
+    assert [run.indices for run in ctx.runs] == [(0,), (2,)]
+    assert ctx.succ[(RUN, incoming)] == ((JUNCTION, 1),)
+    assert ctx.pred[(JUNCTION, 1)] == ((RUN, incoming),)
+    assert ctx.succ[(JUNCTION, 1)] == ((RUN, outgoing),)
+    assert ctx.pred[(RUN, outgoing)] == ((JUNCTION, 1),)
+
+
+def test_sprayed_cargo_traversal_crosses_a_valid_piler() -> None:
+    """An uncoated source remains uncoated after crossing a piler boundary."""
+    report = validate(
+        _piler_to_machine(carries="copper-ore"),
+        _sprayed_spec(),
+        ids=_SPRAYED_IDS,
+        only={SPRAYED_REACHES},
+    )
+
+    (finding,) = report.by_check(SPRAYED_REACHES)
+    assert finding.severity is Severity.ERROR
+    assert finding.buildings == (4, 3, 2)
+    assert finding.detail == {
+        "item": "copper-ore",
+        "machine": 3,
+        "belt": 2,
+    }
+
+
+def test_belt_acyclic_follows_a_loop_through_a_piler() -> None:
+    """The piler is the only boundary joining the loop's incoming and outgoing runs."""
+    placement = place(
+        dataclasses.replace(belt(0, 1, out=1), output_to_slot=1),
+        piler(0, 2, 0.0),
+        dataclasses.replace(belt(0, 5, inp=1, out=0), input_from_slot=0),
+    )
+    report = validate(placement, only={"belt.acyclic"})
+
+    (finding,) = report.by_check("belt.acyclic")
+    assert finding.severity is Severity.ERROR
+    assert finding.buildings == (0, 1, 2)
+    assert finding.detail == {"cycle": "[0, 1, 2]"}
+
+
+def test_stack_of_doubles_after_one_piler() -> None:
+    placement = place(
+        dataclasses.replace(belt(0, 1, out=1, item_id=BELT3), output_to_slot=1),
+        piler(0, 2, 0.0),
+        dataclasses.replace(belt(0, 5, inp=1, item_id=BELT3), input_from_slot=0),
+    )
+    ctx = context_for(placement, _piler_spec(Fraction(1)))
+
+    assert ctx.stack_of(ctx.run_of[0]) == 1
+    assert ctx.stack_of(ctx.run_of[2]) == 2
+
+
+def test_stack_of_doubles_twice_across_serial_pilers() -> None:
+    placement = place(
+        dataclasses.replace(belt(0, 1, out=1, item_id=BELT3), output_to_slot=1),
+        piler(0, 2, 0.0),
+        dataclasses.replace(
+            belt(0, 5, inp=1, out=3, item_id=BELT3),
+            input_from_slot=0,
+            output_to_slot=1,
+        ),
+        piler(0, 6, 0.0),
+        dataclasses.replace(belt(0, 9, inp=3, item_id=BELT3), input_from_slot=0),
+    )
+    ctx = context_for(placement, _piler_spec(Fraction(1)))
+
+    assert ctx.stack_of(ctx.run_of[0]) == 1
+    assert ctx.stack_of(ctx.run_of[2]) == 2
+    assert ctx.stack_of(ctx.run_of[4]) == 4
+
+
+def test_stack_of_caps_a_stack_four_input_at_four() -> None:
+    placement = place(
+        dataclasses.replace(
+            belt(0, 1, out=1, item_id=BELT3, carries="copper-ingot"),
+            output_to_slot=1,
+        ),
+        piler(0, 2, 0.0),
+        dataclasses.replace(belt(0, 5, inp=1, item_id=BELT3), input_from_slot=0),
+    )
+    spec = _stacked_spec(Fraction(1), belt_stack=4, pick=4).model_copy(
+        update={"piler_unlocked": True}
+    )
+    ctx = context_for(placement, spec)
+
+    assert ctx.stack_of(ctx.run_of[0]) == 4
+    assert ctx.stack_of(ctx.run_of[2]) == 4
+
+
+def test_flow_belt_capacity_accepts_sixty_items_on_the_run_after_one_piler() -> None:
+    placement = _piler_to_machine()
+    spec = _piler_spec(Fraction(60))
+    ctx = context_for(placement, spec)
+    incoming = ctx.run_of[0]
+    downstream = ctx.run_of[2]
+    assert ctx.stack_of(incoming) == 1
+    assert ctx.stack_of(downstream) == 2
+    report = validate(
+        placement,
+        spec,
+        ids=TWO_INPUT_IDS,
+        only={"flow.belt_capacity"},
+    )
+
+    # The loose input is separately invalid; this assertion isolates the
+    # downstream Mk.III run, whose stack 2 makes its capacity exactly 60/s.
+    assert [finding.detail["run"] for finding in report.by_check("flow.belt_capacity")] == [
+        incoming
+    ]
+    assert downstream != incoming
+
+
+def test_piler_input_rate_fires_at_forty_cargo_per_second() -> None:
+    report = validate(
+        _piler_to_machine(),
+        _piler_spec(Fraction(40)),
+        ids=TWO_INPUT_IDS,
+        only={"piler.input_rate"},
+    )
+
+    (finding,) = report.by_check("piler.input_rate")
+    assert finding.detail == {
+        "piler": 1,
+        "run": 0,
+        "required": "40",
+        "stack": 1,
+        "cargo_rate": "40",
+        "capacity": "30",
+    }
+
+
+def test_piler_input_rate_divides_demand_by_the_upstream_stack() -> None:
+    placement = _piler_to_machine(carries="copper-ingot")
+    spec = _stacked_spec(Fraction(40), belt_stack=2, pick=2).model_copy(
+        update={"piler_unlocked": True}
+    )
+
+    report = validate(
+        placement,
+        spec,
+        ids=TWO_INPUT_IDS,
+        only={"piler.input_rate"},
+    )
+
+    assert report.by_check("piler.input_rate") == ()
+
+
+def test_piler_input_rate_uses_the_slowest_upstream_belt() -> None:
+    placement = place(
+        belt(0, 0, out=1, item_id=BELT3),
+        dataclasses.replace(belt(0, 1, out=2, item_id=BELT2), output_to_slot=1),
+        piler(0, 2, 0.0),
+        dataclasses.replace(belt(0, 5, inp=2, item_id=BELT3), input_from_slot=0),
+        machine(1, 5, recipe_id=6),
+        sorter(0, 5, 1, 5, inp=3, out=4, item_id=PILE),
+    )
+    report = validate(
+        placement,
+        _piler_spec(Fraction(20)),
+        ids=TWO_INPUT_IDS,
+        only={"piler.input_rate"},
+    )
+
+    (finding,) = report.by_check("piler.input_rate")
+    assert finding.detail == {
+        "piler": 2,
+        "run": 0,
+        "required": "20",
+        "stack": 1,
+        "cargo_rate": "20",
+        "capacity": "12",
+    }
+
+
+def test_piler_ports_accepts_belts_at_both_port_poses() -> None:
+    report = validate(_piler_to_machine(), only={"piler.ports"})
+
+    assert report.by_check("piler.ports") == ()
+
+
+def test_piler_ports_fires_when_a_named_belt_misses_its_port_pose() -> None:
+    placement = place(
+        dataclasses.replace(belt(0, 1, out=1, item_id=BELT3), output_to_slot=1),
+        piler(0, 2, 0.0),
+        dataclasses.replace(belt(1, 5, inp=1, item_id=BELT3), input_from_slot=0),
+    )
+    report = validate(placement, only={"piler.ports"})
+
+    (finding,) = report.by_check("piler.ports")
+    assert finding.detail == {
+        "piler": 1,
+        "belt": 2,
+        "direction": "output",
+        "port": 0,
+        "expected": (0, 5, 0),
+        "actual": (1, 5, 0),
+    }
+
+
+@pytest.mark.parametrize(
+    ("input_count", "output_count", "inputs", "outputs"),
+    (
+        pytest.param(0, 1, [], [1], id="no-input"),
+        pytest.param(1, 0, [1], [], id="no-output"),
+        pytest.param(2, 1, [1, 2], [3], id="multiple-inputs"),
+        pytest.param(1, 2, [1], [2, 3], id="multiple-outputs"),
+        pytest.param(0, 0, [], [], id="isolated"),
+    ),
+)
+def test_piler_ports_requires_exactly_one_attachment_on_each_side(
+    input_count: int,
+    output_count: int,
+    inputs: list[int],
+    outputs: list[int],
+) -> None:
+    input_belts = [
+        dataclasses.replace(belt(0, 1, out=0, item_id=BELT3), output_to_slot=1)
+        for _ in range(input_count)
+    ]
+    output_belts = [
+        dataclasses.replace(belt(0, 5, inp=0, item_id=BELT3), input_from_slot=0)
+        for _ in range(output_count)
+    ]
+    report = validate(
+        place(piler(0, 2, 0.0), *input_belts, *output_belts),
+        only={"piler.ports", "belt.termination"},
+    )
+
+    (finding,) = report.by_check("piler.ports")
+    assert finding.severity is Severity.ERROR
+    assert finding.buildings == (0, *inputs, *outputs)
+    assert finding.detail == {
+        "piler": 0,
+        "inputs": inputs,
+        "outputs": outputs,
+        "input_count": input_count,
+        "output_count": output_count,
+    }
+    assert "piler.ports" in errors(report), (
+        "belt.termination must not be the only error for malformed piler attachments"
+    )
+
+
+def test_piler_ports_rejects_a_foreign_model_before_accepting_item_level_poses() -> None:
+    expected_model = catalog_building(2040).model_index
+    foreign_model = catalog_building(BELT2).model_index
+    assert foreign_model != expected_model
+    placement = place(
+        dataclasses.replace(belt(0, 1, out=1, item_id=BELT3), output_to_slot=1),
+        dataclasses.replace(piler(0, 2, 0.0), model_index=foreign_model),
+        dataclasses.replace(belt(0, 5, inp=1, item_id=BELT3), input_from_slot=0),
+    )
+    report = validate(placement, only={"piler.ports"})
+
+    (finding,) = report.by_check("piler.ports")
+    assert finding.severity is Severity.ERROR
+    assert finding.buildings == (1,)
+    assert finding.detail == {
+        "piler": 1,
+        "expected_model": expected_model,
+        "actual_model": foreign_model,
+    }
+
+
+def test_piler_tier_allowed_accepts_an_unlocked_stacked_save() -> None:
+    report = validate(
+        _piler_to_machine(),
+        _piler_spec(Fraction(1), belt_stack=2, piler_unlocked=True),
+        ids=TWO_INPUT_IDS,
+        only={"piler.tier_allowed"},
+    )
+
+    assert report.by_check("piler.tier_allowed") == ()
+
+
+def test_piler_tier_allowed_fires_when_the_piler_is_locked() -> None:
+    report = validate(
+        _piler_to_machine(),
+        _piler_spec(Fraction(1), belt_stack=2, piler_unlocked=False),
+        ids=TWO_INPUT_IDS,
+        only={"piler.tier_allowed"},
+    )
+
+    (finding,) = report.by_check("piler.tier_allowed")
+    assert finding.detail == {
+        "piler": 1,
+        "piler_unlocked": False,
+        "belt_stack": 2,
+    }
+
+
+def test_piler_tier_allowed_fires_on_an_unstacked_save_even_when_unlocked() -> None:
+    report = validate(
+        _piler_to_machine(),
+        _piler_spec(Fraction(1), belt_stack=1, piler_unlocked=True),
+        ids=TWO_INPUT_IDS,
+        only={"piler.tier_allowed"},
+    )
+
+    (finding,) = report.by_check("piler.tier_allowed")
+    assert finding.detail == {
+        "piler": 1,
+        "piler_unlocked": True,
+        "belt_stack": 1,
+    }
+
+
+def test_junction_checks_ignore_pilers() -> None:
+    checks = {cid for cid in CHECKS if cid.startswith("junction.")}
+    spec = BuildSpec(groups=(), belt_stack=2, piler_unlocked=True)
+    report = validate(
+        place(piler(0, 0, 0.0)),
+        spec,
+        ids=id_map(spec),
+        only=checks,
+    )
+
+    assert not report.findings
+    assert set(report.checks_run) == checks
+    assert not report.skipped
+
+
+def test_machine_checks_ignore_pilers() -> None:
+    checks = {cid for cid in CHECKS if cid.startswith("machine.")}
+    spec = BuildSpec(groups=(), belt_stack=2, piler_unlocked=True)
+    report = validate(
+        place(piler(0, 0, 0.0)),
+        spec,
+        ids=id_map(spec),
+        only=checks,
+    )
+
+    assert not report.findings
+    assert set(report.checks_run) == checks
+    assert not report.skipped

@@ -205,6 +205,7 @@ _CATALOG: tuple[Entry, ...] = (
     _e("catalog.BELT_IDS", Kind.DATA, note="Item ids for the three belt tiers."),
     _e("catalog.SORTER_IDS", Kind.DATA),
     _e("catalog.SPLITTER_ID", Kind.DATA),
+    _e("catalog.PILER_ID", Kind.DATA),
     _e(
         "catalog.SPLITTER_MODEL_INDICES",
         Kind.DATA,
@@ -312,8 +313,6 @@ _CATALOG: tuple[Entry, ...] = (
         "catalog.PILER_MAX_STACK",
         Kind.RULE,
         lint=False,
-        unconsulted_because=_STACKING_UNCONSULTED,
-        mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
         note=(
             "PilerComponent.cs:195-207: cacheCargoStack1 + cacheCargoStack2 > 4 "
             "emits AddCargo(item, 4, ...) and keeps the remainder.  An IL "

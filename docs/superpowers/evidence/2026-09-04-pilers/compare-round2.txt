@@ -1,0 +1,4 @@
+clean 70  refused 2  invalid 0  crashed 0  paired 66  area ratio 0.9997  p95 28.5s
+  note CARRIED: freeform universe-matrix/no-proliferator: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+PASS

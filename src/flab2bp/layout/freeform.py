@@ -104,6 +104,7 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.belt_tiers import retier_belts
 from flab2bp.layout.finalize import ProjectionNoGood
+from flab2bp.layout.piling import LaneLoad, MergePlan, PilerPlan, plan_merges
 from flab2bp.layout.route_feedback import (
     Cell,
     ClusterRelationNoGood,
@@ -921,6 +922,10 @@ class Strip:
     family_id: StripFamilyId | None = None
     machine_start: int = 0
     west_channel: int = WEST_CHANNEL
+    #: Output-side tiles reserved for inline Automatic Pilers.
+    tail_extension: int = 0
+    #: Per-output-lane Automatic Piler plans owned by this strip.
+    pilers: tuple[PilerPlan, ...] = ()
 
     @property
     def staged_static_variant_id(self) -> StagedStaticVariantId | None:
@@ -1609,7 +1614,7 @@ def _box(s: Strip) -> tuple[int, int]:
     whose width is not measured the same way as the solver's is not an upper
     bound on anything.
     """
-    return s.width + s.west_channel + MARGIN, s.height + MARGIN
+    return s.width + s.west_channel + s.tail_extension + MARGIN, s.height + MARGIN
 
 
 def _sink_demand(
@@ -2136,6 +2141,180 @@ def _seat_inputs(
     )
 
 
+def _strip_output_lane_id(strip: Strip, lane_index: int) -> str:
+    """Return the selected logical id for one output lane."""
+    planned = next(
+        (
+            plan.lane
+            for plan in strip.attachment_plan
+            if plan.lane.kind == "output" and plan.lane.side_index == lane_index
+        ),
+        None,
+    )
+    if planned is None:
+        planned = next(
+            (
+                plan.lane
+                for plan in strip.port_dock_plan
+                if plan.lane.kind == "output" and plan.lane.side_index == lane_index
+            ),
+            None,
+        )
+    return planned.lane_id if planned is not None else f"output:{lane_index}"
+
+
+def _producer_output_stack(
+    strip: Strip,
+    lane_index: int,
+    item: str,
+    rate: Fraction,
+    sorter_tiers: tuple[int, ...],
+    sorter_stacks: _SorterStacks,
+    lane_stacks: _LaneStacks,
+) -> int:
+    """Return the stack the selected producer mechanism puts on one lane."""
+    if strip.takes_belt_ports:
+        return 1
+
+    if strip.flank_outputs:
+        probe = slots.probe_building(strip.item_id, strip.yaw)
+        attachments = slots.attachable_rows(probe, strip.pw - 1)
+        claimed = {
+            attachment.slot
+            for lane in strip.in_above
+            for attachment in strip._input_attachment_plan(lane[0]).attachments
+        }
+        selected: slots.Attachment | None = None
+        for _ in range(lane_index + 1):
+            selected = next(
+                (
+                    attachments[row]
+                    for row in sorted(attachments, reverse=True)
+                    if attachments[row].slot not in claimed
+                ),
+                None,
+            )
+            if selected is None:
+                return 1
+            claimed.add(selected.slot)
+        assert selected is not None
+        span = selected.span
+    else:
+        span = strip._output_attachment_plan(lane_index).attachments[0].span
+
+    tier, _count = _pick_sorter(
+        rate,
+        span,
+        1,
+        sorter_tiers,
+        stacks=sorter_stacks,
+        min_place_stack=lane_stacks.out_of(item),
+    )
+    return sorter_stacks.place(tier)
+
+
+def _strip_merge_plans(
+    spec: BuildSpec,
+    groups: Mapping[str, _Group],
+    strips: Sequence[Strip],
+) -> tuple[
+    dict[str, tuple[int, int]],
+    dict[tuple[str, str, CargoDomain], MergePlan],
+]:
+    """Rebuild deterministic per-sink merge plans from physical strip order."""
+    if not spec.piler_unlocked or spec.belt_stack <= 1:
+        return {}, {}
+
+    lane_owners: dict[str, tuple[int, int]] = {}
+    loads_by_sink: dict[tuple[str, str, CargoDomain], list[LaneLoad]] = defaultdict(list)
+    sorter_tiers = _sorter_tiers_for(spec)
+    sorter_stacks = _sorter_stacks_for(spec)
+    lane_stacks = _lane_stacks_for(spec)
+    for strip_ordinal, strip in enumerate(strips):
+        made = groups[strip.group_key].outputs
+        for lane_index, (item, destinations, cargo_domain) in enumerate(strip.out_lanes):
+            demand = strip.machines * made.get(item, Fraction(0))
+            if demand <= 0:
+                continue
+            pre_piler_stack = _producer_output_stack(
+                strip,
+                lane_index,
+                item,
+                made[item],
+                sorter_tiers,
+                sorter_stacks,
+                lane_stacks,
+            )
+            lane_id = f"{strip_ordinal}:{_strip_output_lane_id(strip, lane_index)}"
+            lane_owners[lane_id] = (strip_ordinal, lane_index)
+            for sink in _dests(destinations) or ("",):
+                loads_by_sink[item, sink, cargo_domain].append(
+                    LaneLoad(
+                        lane_id=lane_id,
+                        strip_ordinal=strip_ordinal,
+                        demand=demand,
+                        stack=pre_piler_stack,
+                    )
+                )
+
+    plans = {
+        key: plan_merges(
+            loads,
+            lane_capacity=spec.lane_capacity,
+            max_stack=spec.max_stack,
+            sink_pick_stack=spec.max_stack if not key[1] else spec.sorter_pick_stacks[-1],
+        )
+        for key, loads in sorted(
+            loads_by_sink.items(),
+            key=lambda entry: (entry[0][0], entry[0][1], entry[0][2].value),
+        )
+    }
+    return lane_owners, plans
+
+
+def _plan_strip_pilers(
+    spec: BuildSpec,
+    groups: Mapping[str, _Group],
+    strips: list[Strip],
+) -> list[Strip]:
+    """Stamp tail-end pilers from the stack producer sorters actually place."""
+    lane_owners, merge_plans = _strip_merge_plans(spec, groups, strips)
+    if not merge_plans:
+        return strips
+
+    planned_by_lane: dict[tuple[int, int], PilerPlan] = {}
+    for merge in merge_plans.values():
+        for plan in merge.pilers:
+            owner = lane_owners[plan.lane_id]
+            previous = planned_by_lane.get(owner)
+            if previous is None or (plan.count, plan.stack) > (previous.count, previous.stack):
+                planned_by_lane[owner] = plan
+
+    if not planned_by_lane:
+        return strips
+    piler_tiles = catalog.building(catalog.PILER_ID).height
+    planned = list(strips)
+    for strip_ordinal in sorted({owner[0] for owner in planned_by_lane}):
+        pilers = tuple(
+            plan
+            for (_owner, plan) in sorted(
+                (
+                    (owner, plan)
+                    for owner, plan in planned_by_lane.items()
+                    if owner[0] == strip_ordinal
+                ),
+                key=lambda entry: entry[0][1],
+            )
+        )
+        count = max(plan.count for plan in pilers)
+        planned[strip_ordinal] = replace(
+            planned[strip_ordinal],
+            tail_extension=piler_tiles * count + count - 1,
+            pilers=pilers,
+        )
+    return planned
+
+
 def plan_strips(
     spec: BuildSpec,
     *,
@@ -2349,7 +2528,7 @@ def plan_strips(
             for ordinal, relation in enumerate(unresolved)
             if exact_risks[2 * ordinal] and not exact_risks[2 * ordinal + 1]
         )
-    return [
+    planned = [
         replace(
             strip,
             west_channel=max(
@@ -2366,6 +2545,7 @@ def plan_strips(
         )
         for strip, relations in zip(strips, clearance_keys, strict=True)
     ]
+    return _plan_strip_pilers(spec, groups, planned)
 
 
 _COARSE_STRIP_THRESHOLD = 40
@@ -2929,6 +3109,8 @@ def _strip_geometry_signature(
         strip.family_id,
         strip.machine_start,
         strip.west_channel,
+        strip.tail_extension,
+        strip.pilers,
     )
 
 
@@ -5238,6 +5420,130 @@ def _lane_filter(item: str) -> int:
     return got
 
 
+def _piler_plan_for_output(strip: Strip, lane_index: int) -> PilerPlan | None:
+    """Return the piler plan belonging to one selected output lane."""
+    lane_id = _strip_output_lane_id(strip, lane_index)
+    return next(
+        (
+            plan
+            for plan in strip.pilers
+            if plan.lane_id == lane_id or plan.lane_id.endswith(f":{lane_id}")
+        ),
+        None,
+    )
+
+
+def _emit_piler_tail(
+    canvas: _Canvas,
+    strip: Strip,
+    lane_index: int,
+    lane: list[int],
+    *,
+    x: int,
+    y: int,
+    item: str,
+    cargo_domain: CargoDomain,
+    belt_id: int,
+    belt_model: int,
+    owner_strip: int | None,
+) -> tuple[_Port, tuple[_Net, ...]]:
+    """Extend one output lane through its serial inline pilers."""
+    plan = _piler_plan_for_output(strip, lane_index)
+    if plan is None:
+        tail = canvas.buildings[lane[-1]]
+        return (
+            _Port(
+                lane[-1],
+                tail.x,
+                y,
+                tail.x - len(lane) + 1,
+                tail.x,
+                tuple(lane),
+                strip.machines,
+                cargo_domain=cargo_domain,
+            ),
+            (),
+        )
+
+    previous = lane[-1]
+    cursor = x
+    transitions: list[_Net] = []
+    for _ in range(plan.count):
+        piler_index = canvas.add(
+            replace(
+                junction.make_piler(cursor, y, yaw=Facing.EAST.value),
+                owner_strip=owner_strip,
+            )
+        )
+        canvas.buildings[previous] = replace(
+            canvas.buildings[previous],
+            output_obj=piler_index,
+            output_to_slot=1,
+        )
+        piler = canvas.buildings[piler_index]
+        after_index = canvas.add(
+            PlacedBuilding(
+                item_id=belt_id,
+                model_index=belt_model,
+                x=cursor + piler.width,
+                y=y,
+                width=1,
+                height=1,
+                yaw=Facing.EAST.value,
+                input_obj=piler_index,
+                input_from_slot=0,
+                carries_item=item,
+                owner_strip=owner_strip,
+            )
+        )
+        before = canvas.buildings[previous]
+        after = canvas.buildings[after_index]
+        transitions.append(
+            _Net(
+                src=_Port(
+                    previous,
+                    before.x,
+                    before.y,
+                    before.x,
+                    before.x,
+                    (previous,),
+                    strip.machines,
+                    cargo_domain=cargo_domain,
+                ),
+                dst=_Port(
+                    after_index,
+                    after.x,
+                    after.y,
+                    after.x,
+                    after.x,
+                    (after_index,),
+                    strip.machines,
+                    cargo_domain=cargo_domain,
+                ),
+                item=item,
+                cargo_domain=cargo_domain,
+                prelinked=True,
+            )
+        )
+        previous = after_index
+        cursor = after.x + 1
+
+    tail = canvas.buildings[previous]
+    return (
+        _Port(
+            previous,
+            tail.x,
+            tail.y,
+            tail.x,
+            tail.x,
+            (previous,),
+            strip.machines,
+            cargo_domain=cargo_domain,
+        ),
+        tuple(transitions),
+    )
+
+
 def _emit_strip(
     canvas: _Canvas,
     s: Strip,
@@ -5249,11 +5555,11 @@ def _emit_strip(
     in_rates: Mapping[str, Fraction] | None = None,
     out_rates: Mapping[str, Fraction] | None = None,
     owner_strip: int | None = None,
-) -> tuple[dict[str, _Port], dict[_CargoSink, _Port], int]:
+) -> tuple[dict[str, _Port], dict[_CargoSink, _Port], int, tuple[_Net, ...]]:
     """Place one strip's lanes, machines and sorters.
 
-    Returns the west end of each input lane and the east end of each output lane
-    -- the points routing connects -- plus the sorter count.
+    Returns the west end of each input lane, the east end of each output lane,
+    the sorter count, and the already-linked piler transitions.
 
     Inputs may sit on either side of the machine band; ``Strip.row_of_input``
     owns that arithmetic so it is stated once rather than re-derived here.
@@ -5277,6 +5583,7 @@ def _emit_strip(
     out_rates = out_rates or {}
     in_ports: dict[str, _Port] = {}
     out_ports: dict[_CargoSink, _Port] = {}
+    piler_nets: list[_Net] = []
     width = s.width
     machine_row = s.machine_row
 
@@ -5471,16 +5778,21 @@ def _emit_strip(
 
     for j, (item, dest, cargo_domain) in enumerate(s.out_lanes):
         row = s.row_of_output(j)
-        out_ports[item, dest, cargo_domain] = _Port(
-            lane_idx[row][-1],
-            ox + width - 1,
-            oy + row,
-            ox,
-            ox + width - 1,
-            tuple(lane_idx[row]),
-            s.machines,
+        output_port, transitions = _emit_piler_tail(
+            canvas,
+            s,
+            j,
+            lane_idx[row],
+            x=ox + width,
+            y=oy + row,
+            item=item,
             cargo_domain=cargo_domain,
+            belt_id=belt_id,
+            belt_model=belt_model,
+            owner_strip=owner_strip,
         )
+        out_ports[item, dest, cargo_domain] = output_port
+        piler_nets.extend(transitions)
         if s.takes_belt_ports:
             _dock_lane(
                 canvas,
@@ -5530,7 +5842,7 @@ def _emit_strip(
     for lane in s.in_below:
         sorters += feed(lane)
 
-    return in_ports, out_ports, sorters
+    return in_ports, out_ports, sorters, tuple(piler_nets)
 
 
 def _flank_lane(
@@ -7352,6 +7664,9 @@ class _Net:
     cargo_domain: CargoDomain = CargoDomain.UNSPRAYED
     net_id: NetId | None = None
     boundary_goals: tuple[tuple[int, int, int], ...] = ()
+    #: This segment is already linked through an inline piler and is recorded
+    #: for routing topology only; path search must not build a bypass around it.
+    prelinked: bool = False
 
     def __post_init__(self) -> None:
         ports = (self.dst,) if self.src is None else (self.src, self.dst)
@@ -7375,6 +7690,7 @@ class _PreparedNet:
     boundary_goals: tuple[tuple[int, int, int], ...] = ()
     src_group: tuple[NetId, ...] = ()
     dst_group: tuple[NetId, ...] = ()
+    prelinked: bool = False
 
     def __post_init__(self) -> None:
         ports = (self.dst,) if self.src is None else (self.src, self.dst)
@@ -7522,6 +7838,11 @@ class _PreparedRoutingProblem:
             external_output_nets=external_output_nets,
         )
 
+    def routing_problem(self) -> _PreparedRoutingProblem:
+        """Return the path-search view without already-linked piler transitions."""
+        routed = tuple(net for net in self.nets if not net.prelinked)
+        return self if len(routed) == len(self.nets) else replace(self, nets=routed)
+
 
 def _bind_prepared_net(net: _PreparedNet, buildings: list[PlacedBuilding]) -> _Net:
     return _Net(
@@ -7531,6 +7852,7 @@ def _bind_prepared_net(net: _PreparedNet, buildings: list[PlacedBuilding]) -> _N
         cargo_domain=net.cargo_domain,
         net_id=net.net_id,
         boundary_goals=net.boundary_goals,
+        prelinked=net.prelinked,
     )
 
 
@@ -14429,6 +14751,17 @@ def _prepare_routing_problem(
         raise _PreparationDeadline
 
     groups = _adapt(spec)
+    lane_owners, merge_plans = _strip_merge_plans(spec, groups, strips)
+    piled_lane_ids = {
+        lane_id
+        for lane_id, (strip_ordinal, lane_index) in lane_owners.items()
+        if _piler_plan_for_output(strips[strip_ordinal], lane_index) is not None
+    }
+    merge_plans = {
+        key: plan
+        for key, plan in merge_plans.items()
+        if any(lane_id in piled_lane_ids for group in plan.groups for lane_id in group)
+    }
     rates: dict[str, Fraction] = {}
     for g in groups.values():
         for item, r in list(g.inputs.items()) + list(g.outputs.items()):
@@ -14481,12 +14814,14 @@ def _prepare_routing_problem(
     lane_demand: dict[CargoKey, dict[int, Fraction]] = defaultdict(dict)
     sibling_lanes: dict[CargoKey, list[tuple[int, int]]] = defaultdict(list)
     strip_of_belt: dict[int, int] = {}
+    output_lane_id_by_belt: dict[int, str] = {}
+    piler_nets: list[_Net] = []
     sorters = 0
     for i, s in enumerate(strips):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         ox, oy = pack.at[i]
-        ins, outs, placed = _emit_strip(
+        ins, outs, placed, strip_piler_nets = _emit_strip(
             canvas,
             s,
             ox,
@@ -14497,13 +14832,20 @@ def _prepare_routing_problem(
             *per_item.get(s.group_key, ({}, {})),
             owner_strip=i,
         )
+        piler_nets.extend(strip_piler_nets)
         sorters += placed
         strip_in_ports.append(ins)
         for port in (*ins.values(), *outs.values()):
             for belt in port.tiles:
                 strip_of_belt[belt] = i
+        for net in strip_piler_nets:
+            strip_of_belt[net.source.belt] = i
+            strip_of_belt[net.dst.belt] = i
         for item, port in ins.items():
             in_ports[s.group_key, item, port.cargo_domain].append(port)
+        for lane_index, (item, destination, cargo_domain) in enumerate(s.out_lanes):
+            port = outs[item, destination, cargo_domain]
+            output_lane_id_by_belt[port.belt] = f"{i}:{_strip_output_lane_id(s, lane_index)}"
         made = per_item.get(s.group_key, ({}, {}))[1]
         by_cargo: dict[CargoKey, list[int]] = defaultdict(list)
         cargo_weight: dict[CargoKey, Fraction] = defaultdict(Fraction)
@@ -14552,6 +14894,49 @@ def _prepare_routing_problem(
     # and rebuilding this inside it is quadratic in the sorter count, which on a
     # stress spec is thousands.
     standing = slots.sorter_seat_boxes(canvas.buildings)
+
+    def connect_lanes(
+        port: _Port,
+        sink: _Port,
+        item: str,
+        cargo_domain: CargoDomain,
+        in_rate: Fraction,
+    ) -> None:
+        """Record one physical producer-to-consumer connection."""
+        cargo = (item, cargo_domain)
+        joined[cargo].append((port.belt, sink.belt))
+        lane_of[sink.belt] = sink
+        lane_demand[cargo][sink.belt] = sink.machines * in_rate
+        direct_id = DirectInsertId(
+            source_strip=strip_of_belt[port.belt],
+            destination_strip=strip_of_belt[sink.belt],
+            item=item,
+            cargo_domain=cargo_domain,
+        )
+        if direct_id in promised_direct:
+            realized = _bridge(
+                canvas,
+                port,
+                sink,
+                rates,
+                item,
+                standing,
+                direct_id,
+            )
+            if realized is not None:
+                realized_direct.add(realized)
+            # A failed rewarded bridge is a failed attempt, not a licence
+            # to restore the net the objective was paid to delete.
+            return
+        nets.append(
+            _Net(
+                src=port,
+                dst=sink,
+                item=item,
+                cargo_domain=cargo_domain,
+            )
+        )
+
     for (src_key, item, dest_group, cargo_domain), srcs in out_ports.items():
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -14559,46 +14944,77 @@ def _prepare_routing_problem(
         # `_merge_lanes` -- and each of them is its own set of consumer strips to
         # pair against. Domain is part of the key, so a clean and a sprayed lane
         # can never become siblings merely because they carry the same item.
-        cargo = (item, cargo_domain)
         out_rate = per_item.get(src_key, ({}, {}))[1].get(item, Fraction(0))
         for dest in _dests(dest_group):
+            if (item, dest, cargo_domain) in merge_plans:
+                continue
             sinks = in_ports.get((dest, item, cargo_domain), [])
             if not srcs or not sinks:
                 continue
             in_rate = per_item.get(dest, ({}, {}))[0].get(item, Fraction(0))
             for port, sink in _pair_lanes(srcs, sinks, out_rate=out_rate, in_rate=in_rate):
-                joined[cargo].append((port.belt, sink.belt))
-                lane_of[sink.belt] = sink
-                lane_demand[cargo][sink.belt] = sink.machines * in_rate
-                direct_id = DirectInsertId(
-                    source_strip=strip_of_belt[port.belt],
-                    destination_strip=strip_of_belt[sink.belt],
-                    item=item,
-                    cargo_domain=cargo_domain,
-                )
-                if direct_id in promised_direct:
-                    realized = _bridge(
-                        canvas,
-                        port,
-                        sink,
-                        rates,
-                        item,
-                        standing,
-                        direct_id,
+                connect_lanes(port, sink, item, cargo_domain, in_rate)
+
+    # Piler planning is global to one (item, sink, domain), while ``out_ports``
+    # is partitioned by producer group. Rebuild the same plan from these exact
+    # physical strips and consume its contiguous groups before choosing sink
+    # lanes; pairing each producer independently would turn {0,1,2}/{3} into
+    # the old cyclic {0,2}/{1,3}.
+    boundary_output_belts: set[int] = set()
+    for (item, dest, cargo_domain), merge_plan in merge_plans.items():
+        sources_by_lane: dict[str, _Port] = {}
+        for (
+            _src_key,
+            output_item,
+            destinations,
+            output_domain,
+        ), sources in out_ports.items():
+            if output_item != item or output_domain is not cargo_domain:
+                continue
+            if dest not in (_dests(destinations) or ("",)):
+                continue
+            for source in sources:
+                sources_by_lane[output_lane_id_by_belt[source.belt]] = source
+
+        source_groups = tuple(
+            tuple(sources_by_lane[lane_id] for lane_id in lane_ids)
+            for lane_ids in merge_plan.groups
+        )
+        if not dest:
+            cargo = (item, cargo_domain)
+            for source_group in source_groups:
+                root = source_group[0]
+                boundary_output_belts.add(root.belt)
+                for tributary in source_group[1:]:
+                    joined[cargo].append((tributary.belt, root.belt))
+                    nets.append(
+                        _Net(
+                            src=tributary,
+                            dst=root,
+                            item=item,
+                            cargo_domain=cargo_domain,
+                        )
                     )
-                    if realized is not None:
-                        realized_direct.add(realized)
-                    # A failed rewarded bridge is a failed attempt, not a licence
-                    # to restore the net the objective was paid to delete.
-                    continue
-                nets.append(
-                    _Net(
-                        src=port,
-                        dst=sink,
-                        item=item,
-                        cargo_domain=cargo_domain,
-                    )
-                )
+            continue
+
+        sinks = in_ports.get((dest, item, cargo_domain), [])
+        if not sinks:
+            continue
+        in_rate = per_item.get(dest, ({}, {}))[0].get(item, Fraction(0))
+        pairs = [
+            (source, sinks[group_index % len(sinks)])
+            for group_index, source_group in enumerate(source_groups)
+            for source in source_group
+        ]
+        # A consumer may be sharded more finely than the capacity-safe producer
+        # groups. Keep every group intact, then reuse one representative only
+        # for otherwise-unfed sink lanes.
+        for sink_index in range(len(source_groups), len(sinks)):
+            source_group = source_groups[sink_index % len(source_groups)]
+            source = source_group[(sink_index // len(source_groups)) % len(source_group)]
+            pairs.append((source, sinks[sink_index]))
+        for port, sink in pairs:
+            connect_lanes(port, sink, item, cargo_domain, in_rate)
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -14861,6 +15277,8 @@ def _prepare_routing_problem(
         hold_ports()
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
+    nets.extend(piler_nets)
+    net_roles.extend([NetRole.INTERNAL] * len(piler_nets))
 
     # The stack-aware sharing plan has reduced ``wanted`` to unshared roots;
     # shared groups already have one zero-predecessor perimeter trunk each.
@@ -14871,12 +15289,15 @@ def _prepare_routing_problem(
         _group_key,
         output_item,
         destination,
-        _cargo_domain,
+        cargo_domain,
     ), output_ports in out_ports.items():
-        destinations = _dests(destination)
-        if output_item not in requested_outputs or (destination and "" not in destinations):
+        output_destinations = _dests(destination)
+        if output_item not in requested_outputs or (destination and "" not in output_destinations):
             continue
+        boundary_plan = merge_plans.get((output_item, "", cargo_domain))
         for output_port in output_ports:
+            if boundary_plan is not None and output_port.belt not in boundary_output_belts:
+                continue
             wanted_outputs.setdefault(
                 output_port.belt,
                 (output_item, output_port),
@@ -14971,6 +15392,7 @@ def _prepare_routing_problem(
             boundary_goals=(
                 boundary if role in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT) else ()
             ),
+            prelinked=net.prelinked,
         )
         if role is NetRole.EXTERNAL_OUTPUT:
             prepared_output_nets.append(prepared)
@@ -14985,7 +15407,9 @@ def _prepare_routing_problem(
         source = None if prepared.src is None else (prepared.src.x, prepared.src.y, prepared.src.z)
         return source, (prepared.dst.x, prepared.dst.y, prepared.dst.z)
 
-    all_prepared_nets = (*prepared_nets, *prepared_output_nets)
+    all_prepared_nets = tuple(
+        prepared for prepared in (*prepared_nets, *prepared_output_nets) if not prepared.prelinked
+    )
     net_by_id = {prepared.net_id: prepared for prepared in all_prepared_nets}
 
     def static_access_failure(
@@ -15093,6 +15517,7 @@ def _prepare_routing_problem(
             {
                 (source.x, source.y)
                 for net in nets
+                if not net.prelinked
                 if net.src is not None
                 for source in (net.source,)
                 if not (
@@ -15122,7 +15547,12 @@ def _prepare_routing_problem(
         )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-    grouped_nets = _with_sibling_groups(prepared_nets)
+    routed_prepared_nets = tuple(net for net in prepared_nets if not net.prelinked)
+    grouped_routed_nets = _with_sibling_groups(routed_prepared_nets)
+    grouped_nets = (
+        *grouped_routed_nets,
+        *(net for net in prepared_nets if net.prelinked),
+    )
     # Projected coater legality is expensive and only matters when the detailed
     # router can introduce a Splitter. Reserved Tesla towers are different:
     # their elevated static geometry must be frozen with the prepared problem,
@@ -15132,10 +15562,11 @@ def _prepare_routing_problem(
         net.src.belt_index for net in prepared_output_nets if net.src is not None
     }
     shared_boundary_output = any(
-        net.src is not None and net.src.belt_index in output_source_belts for net in grouped_nets
+        net.src is not None and net.src.belt_index in output_source_belts
+        for net in grouped_routed_nets
     )
     junction_possible = not preparation_failures and (
-        _junction_geometry_required(grouped_nets, canvas.buildings) or shared_boundary_output
+        _junction_geometry_required(grouped_routed_nets, canvas.buildings) or shared_boundary_output
     )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
@@ -15564,7 +15995,8 @@ def _build_prepared(
     prioritize_source_families: bool = False,
 ) -> _BuildResult:
     """Emit, route, and power one already-prepared immutable problem."""
-    workspace = prepared.new_workspace()
+    prelinked_routed = tuple(net.net_id for net in prepared.nets if net.prelinked) if route else ()
+    workspace = prepared.routing_problem().new_workspace()
     canvas = workspace.canvas
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
@@ -15573,6 +16005,9 @@ def _build_prepared(
         for net in workspace.nets
         if net.net_id is not None and net.net_id.role is NetRole.EXTERNAL
     ]
+    external_entry_counts: dict[str, int] = defaultdict(int)
+    for net in external_nets:
+        external_entry_counts[net.item] += 1
     route_nets = [
         net
         for net in workspace.nets
@@ -15687,7 +16122,8 @@ def _build_prepared(
     routing = DetailedRouteResult(
         status=routing_status,
         routed=(
-            external_routing.routed
+            prelinked_routed
+            + external_routing.routed
             + early_output_routing.routed
             + internal_routing.routed
             + late_output_routing.routed
@@ -15759,7 +16195,26 @@ def _build_prepared(
         description=f"flab2bp freeform layout ({spec.label or 'default'})",
         short_desc=spec.label or "flab2bp",
         stats={
+            # Match `flow.external_entry_points`: only items with at least two
+            # physical entry roots count, using the fastest researched belt's
+            # cargo rate times the incoming stack and exact ceiling division.
+            # `planning_stack(..., external=True)` is the spec-side counterpart
+            # of the validator's derived `Context.stack_of` for an entry run.
+            "entry_lanes_needed": float(
+                sum(
+                    max(
+                        1,
+                        lanes_for(
+                            demand,
+                            spec.lane_capacity * spec.planning_stack(item, external=True),
+                        ),
+                    )
+                    for item, demand in spec.external_inputs.items()
+                    if external_entry_counts[item] >= 2
+                )
+            ),
             "machines": float(spec.machine_count),
+            "pilers": float(sum(b.item_id == catalog.PILER_ID for b in wired)),
             "strips": float(len(strips)),
             "sorters": float(prepared.sorters),
             "towers": float(len(towers)),
