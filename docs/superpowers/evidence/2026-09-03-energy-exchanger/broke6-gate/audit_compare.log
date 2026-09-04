@@ -1,0 +1,44 @@
+=== round 1 ===
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+clean 66  refused 6  invalid 0  crashed 0  paired 66  area ratio 0.9969  p95 28.3s
+  note CARRIED: freeform universe-matrix/no-proliferator: every packing that wired was rejected by our own validator (game.blueprint_area; findings: band 0 game.blueprint_area (): a 264x162 extent fits no band on a segment-200 planet: it needs 162 latitude rows in its better orientation and the tallest band (200 segments) holds 160. The game refuses this paste with EBuildCondition.BlueprintAreaCrossTropic.); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+  note CARRIED: freeform universe-matrix/output-products: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: freeform universe-matrix/all-products: no packing of 42 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: sequence-pair universe-matrix/all-products: deadline exhausted before finding an exact layout
+  note CARRIED: sequence-pair universe-matrix/output-products: deadline exhausted before finding an exact layout
+  note CARRIED: sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+PASS
+exit=0
+=== round 2 ===
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+clean 66  refused 6  invalid 0  crashed 0  paired 66  area ratio 0.9984  p95 28.6s
+  note CARRIED: freeform universe-matrix/no-proliferator: every packing that wired was rejected by our own validator (game.blueprint_area; findings: band 0 game.blueprint_area (): a 264x162 extent fits no band on a segment-200 planet: it needs 162 latitude rows in its better orientation and the tallest band (200 segments) holds 160. The game refuses this paste with EBuildCondition.BlueprintAreaCrossTropic.); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+  note CARRIED: freeform universe-matrix/output-products: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: freeform universe-matrix/all-products: no packing of 42 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: sequence-pair universe-matrix/all-products: deadline exhausted before finding an exact layout
+  note CARRIED: sequence-pair universe-matrix/output-products: deadline exhausted before finding an exact layout
+  note CARRIED: sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+PASS
+exit=0
+=== round 3 ===
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+clean 66  refused 6  invalid 0  crashed 0  paired 66  area ratio 0.9964  p95 28.3s
+  note CARRIED: freeform universe-matrix/no-proliferator: every packing that wired was rejected by our own validator (game.blueprint_area; findings: band 0 game.blueprint_area (): a 264x162 extent fits no band on a segment-200 planet: it needs 162 latitude rows in its better orientation and the tallest band (200 segments) holds 160. The game refuses this paste with EBuildCondition.BlueprintAreaCrossTropic.); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+  note CARRIED: freeform universe-matrix/output-products: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: freeform universe-matrix/all-products: no packing of 42 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: sequence-pair universe-matrix/all-products: deadline exhausted before finding an exact layout
+  note CARRIED: sequence-pair universe-matrix/output-products: deadline exhausted before finding an exact layout
+  note CARRIED: sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+PASS
+exit=0
+=== baseline self-check (2 vs 1): the noise floor ===
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+clean 66  refused 6  invalid 0  crashed 0  paired 66  area ratio 0.9961  p95 29.0s
+  note CARRIED: freeform universe-matrix/no-proliferator: every packing that wired was rejected by our own validator (game.blueprint_area; findings: band 0 game.blueprint_area (): a 264x162 extent fits no band on a segment-200 planet: it needs 162 latitude rows in its better orientation and the tallest band (200 segments) holds 160. The game refuses this paste with EBuildCondition.BlueprintAreaCrossTropic.); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+  note CARRIED: freeform universe-matrix/output-products: no packing of 43 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: freeform universe-matrix/all-products: no packing of 42 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+  note CARRIED: sequence-pair universe-matrix/all-products: deadline exhausted before finding an exact layout
+  note CARRIED: sequence-pair universe-matrix/output-products: deadline exhausted before finding an exact layout
+  note CARRIED: sequence-pair universe-matrix/no-proliferator: deadline exhausted before finding an exact layout
+PASS
+exit=0
