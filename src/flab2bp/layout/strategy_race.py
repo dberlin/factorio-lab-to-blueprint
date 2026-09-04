@@ -40,7 +40,7 @@ from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Placement, ProjectionFailureRecord
 from flab2bp.layout.compact_seed import CompactSeedConfig
-from flab2bp.layout.sequence_solver import _MAX_SEQUENCE_ISLANDS, SequenceSolverConfig
+from flab2bp.layout.sequence_solver import SequenceSolverConfig, _validate_sequence_islands
 from flab2bp.layout.strip_variants import StripInstanceId
 from flab2bp.spec import BuildSpec
 
@@ -665,8 +665,7 @@ def run_strategy_race(
     # an unvalidated count would submit both arms and come back as two
     # crashed outcomes instead of raising -- refuse before anything is
     # submitted, exactly like the serial path.
-    if type(sequence_islands) is not int or not 1 <= sequence_islands <= _MAX_SEQUENCE_ISLANDS:
-        raise ValueError(f"islands must be an integer from 1 to {_MAX_SEQUENCE_ISLANDS}")
+    _validate_sequence_islands(sequence_islands)
     # One queue per direction is a complete graph only for TWO arms, and
     # `_install_race_channels` keys exactly two.  A third strategy must fail
     # loudly here rather than silently receive nothing.

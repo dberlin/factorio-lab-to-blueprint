@@ -33,9 +33,15 @@ The web request contract is `best`, `freeform`, or the exact wire spelling
 `sequence-pair`. `best` runs both Freeform and SequencePair and returns the
 smallest validator-clean result.
 
-The solver ceiling is `candidates × active production strategies × budget` for `best`, using
-the pipeline's canonical active-strategy tuple. The promoted portfolio has two strategies.
-An explicit Freeform or SequencePair request always runs one layout per candidate.
+The solver-work ceiling is `candidates × active production strategies × budget` for `best`,
+using the pipeline's canonical active-strategy tuple. The promoted portfolio has two strategies.
+One build defaults to an aggregate budget of at most 16 CPUs from its process affinity set.
+For an unpinned request, the widest candidate batch runs whose shares can fund Freeform plus
+every requested SequencePair island; the aggregate budget is divided exactly across that
+batch. If even one two-strategy race cannot fit, the strategies run serially instead.
+Uploaded or fetched flows remain a single pinned candidate. An explicit Freeform or
+SequencePair request remains serial across candidates and gives the current layout the whole
+worker budget.
 
 ## Latitude bands
 
@@ -117,15 +123,16 @@ Then the parts that read as silence if nobody prints them:
 ## Progress is real, and where it is not
 
 `pipeline.build` takes an `on_progress` sink and calls it as each (candidate, strategy) pair
-starts and as it settles, so the bar counts **pairs finished over pairs to do** and the line
-above it names the pair currently in CP-SAT. `GET /api/build/<id>` carries that as `progress`
-and `settled`.
+starts and as it settles, so the bar counts **pairs finished over pairs to do**. Unpinned
+`best` web requests may have several candidate portfolios active at once; the line above the
+bar therefore names the most recently reported pair, while `settled` retains every completed
+pair. `GET /api/build/<id>` carries both fields.
 
-Before the layout loop there is nothing to count: parsing the URL and solving the rates happen
-first, take an unknown time, and are not divided into pairs. The panel says exactly that and
-falls back to elapsed time against `solver_ceiling_s` — `candidates x strategies x budget`,
-which bounds CP-SAT only. Validation and encoding are on top of it and a strategy that refuses
-spends its retry budget as well, so it is a scale for the wait, never a finish time.
+Before layout there is nothing to count: parsing the URL and solving the rates take an unknown
+time and are not divided into pairs. The panel says exactly that and falls back to elapsed time
+against `solver_ceiling_s` — `candidates × strategies × budget`. This is an aggregate
+solver-work/admission bound, not a wall-clock prediction: bounded candidate concurrency can
+spend several budgets simultaneously, and validation and encoding are on top.
 
 ## Flow provenance
 
@@ -158,11 +165,15 @@ which is the honest half. The fix is not in this package at all — it needs a `
 or a solve interrupter threaded through the layout backends that build and run a `CpSolver`.
 It is the one item on this list that is unfinished rather than decided.
 
-**Concurrency is a queue, not parallelism, and that is deliberate.** One CP-SAT solve already
-runs at ~700% CPU (see the note in `pyproject.toml` about why the test suite is not `-n auto`).
-`--workers` exists but raising it above 1 on one machine makes every concurrent build slower,
-since `time_budget_s` is wall-clock. Two people on one server contend; there is no admission
-control beyond the queue and the 300s ceiling per job.
+**Jobs queue; one job's candidate portfolio may run in bounded parallel.** The default
+one-job queue prevents two users from each claiming a solver budget. Inside that job, the
+pipeline uses at most 16 available CPUs by default and divides them across concurrent
+candidate races. Each race divides its share between Freeform and SequencePair, and requested
+SequencePair islands must fit the latter share. Otherwise candidate concurrency narrows or
+the two strategies run serially. `--workers` above 1 still permits concurrent jobs and can
+make every build slower because
+`time_budget_s` is wall-clock. There is no admission control beyond the queue and the 300s
+ceiling per job.
 
 **A refusal leaves the previous blueprint on screen, and now says so.** The viewer keeps
 rendering whatever was loaded last, because clearing it would throw away the thing you were

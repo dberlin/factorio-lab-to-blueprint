@@ -9,6 +9,7 @@ because by the time there is a return value the answer is "none of them".
 from __future__ import annotations
 
 import dataclasses
+import threading
 import time
 from collections.abc import Callable, Sequence
 from fractions import Fraction
@@ -1443,6 +1444,382 @@ def _one_win_one_refusal() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
     )
 
 
+def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rendezvous = threading.Barrier(2)
+    second_finished = threading.Event()
+    calls: list[str] = []
+    steps: list[pipeline.AttemptProgress] = []
+
+    def record(
+        spec: BuildSpec, **_kwargs: object
+    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+        calls.append(spec.label)
+        rendezvous.wait(timeout=1.0)
+        if spec.label == CandidatePolicy.NO_PROLIFERATOR.value:
+            assert second_finished.wait(timeout=1.0)
+        else:
+            second_finished.set()
+        return (
+            strategy_race._StrategyRaceOutcome(
+                "freeform",
+                "completed",
+                placement=_finished(4, 5),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair",
+                "completed",
+                placement=_finished(3, 5),
+            ),
+        )
+
+    monkeypatch.setattr(strategy_race, "run_strategy_race", record)
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(
+            CandidatePolicy.NO_PROLIFERATOR,
+            CandidatePolicy.ALL_PRODUCTS,
+        ),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+        candidate_parallelism=2,
+        on_progress=steps.append,
+    )
+
+    assert set(calls) == {
+        CandidatePolicy.NO_PROLIFERATOR.value,
+        CandidatePolicy.ALL_PRODUCTS.value,
+    }
+    assert [(attempt.candidate, attempt.strategy) for attempt in built.attempts] == [
+        ("no-proliferator", "freeform"),
+        ("no-proliferator", "sequence-pair"),
+        ("all-products", "freeform"),
+        ("all-products", "sequence-pair"),
+    ]
+    assert [step.candidate for step in steps] == [
+        "no-proliferator",
+        "no-proliferator",
+        "all-products",
+        "all-products",
+        "no-proliferator",
+        "no-proliferator",
+        "all-products",
+        "all-products",
+    ]
+    assert [step.index for step in steps] == [1, 2, 3, 4, 1, 2, 3, 4]
+
+
+def test_candidate_batch_settles_before_the_next_batch_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs = tuple(
+        _title_spec({"electromagnetic-matrix": Fraction(1)}, label=label)
+        for label in (
+            CandidatePolicy.NO_PROLIFERATOR.value,
+            CandidatePolicy.ALL_PRODUCTS.value,
+            CandidatePolicy.OUTPUT_PRODUCTS.value,
+        )
+    )
+    steps: list[pipeline.AttemptProgress] = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "_build_candidates_canonical",
+        lambda *_args, **_kwargs: BuildSpecSet(candidates=specs),
+    )
+    monkeypatch.setattr(
+        strategy_race,
+        "run_strategy_race",
+        lambda *_args, **_kwargs: (
+            strategy_race._StrategyRaceOutcome(
+                "freeform",
+                "completed",
+                placement=_finished(2, 3),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair",
+                "completed",
+                placement=_finished(3, 3),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+        candidate_parallelism=2,
+        on_progress=steps.append,
+    )
+
+    assert [(step.candidate, step.phase) for step in steps] == [
+        ("no-proliferator", "started"),
+        ("no-proliferator", "started"),
+        ("all-products", "started"),
+        ("all-products", "started"),
+        ("no-proliferator", "laid-out"),
+        ("no-proliferator", "laid-out"),
+        ("all-products", "laid-out"),
+        ("all-products", "laid-out"),
+        ("output-products", "started"),
+        ("output-products", "started"),
+        ("output-products", "laid-out"),
+        ("output-products", "laid-out"),
+    ]
+
+
+def test_candidate_attempt_wall_excludes_waiting_for_a_slower_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs = tuple(
+        _title_spec({"electromagnetic-matrix": Fraction(1)}, label=label)
+        for label in (
+            CandidatePolicy.NO_PROLIFERATOR.value,
+            CandidatePolicy.ALL_PRODUCTS.value,
+        )
+    )
+    fast_returned = threading.Event()
+
+    def race(
+        spec: BuildSpec, **_kwargs: object
+    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+        if spec.label == CandidatePolicy.NO_PROLIFERATOR.value:
+            fast_returned.set()
+        else:
+            assert fast_returned.wait(timeout=1.0)
+            time.sleep(0.5)
+        return (
+            strategy_race._StrategyRaceOutcome(
+                "freeform",
+                "completed",
+                placement=_finished(2, 3),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair",
+                "completed",
+                placement=_finished(3, 3),
+            ),
+        )
+
+    monkeypatch.setattr(
+        pipeline,
+        "_build_candidates_canonical",
+        lambda *_args, **_kwargs: BuildSpecSet(candidates=specs),
+    )
+    monkeypatch.setattr(strategy_race, "run_strategy_race", race)
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+        candidate_parallelism=2,
+    )
+
+    fast_wall = float(built.attempts[0].placement.stats["attempt_wall_s"])
+    slow_wall = float(built.attempts[2].placement.stats["attempt_wall_s"])
+    assert fast_wall + 0.25 < slow_wall
+
+
+def test_candidate_concurrency_uses_one_shared_rate_frontier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_calls: list[tuple[CandidatePolicy, ...]] = []
+    race_calls: list[str] = []
+    surviving = _title_spec({"electromagnetic-matrix": Fraction(1)}, label="no-proliferator")
+
+    def candidates(
+        _data: object,
+        _request: object,
+        **kwargs: object,
+    ) -> BuildSpecSet:
+        policies = kwargs["candidate_policies"]
+        assert isinstance(policies, tuple)
+        candidate_calls.append(policies)
+        return BuildSpecSet(candidates=(surviving,))
+
+    def record(
+        spec: BuildSpec, **_kwargs: object
+    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+        race_calls.append(spec.label)
+        return (
+            strategy_race._StrategyRaceOutcome(
+                "freeform",
+                "completed",
+                placement=_finished(2, 3),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair",
+                "completed",
+                placement=_finished(3, 3),
+            ),
+        )
+
+    monkeypatch.setattr(pipeline, "_build_candidates_canonical", candidates)
+    monkeypatch.setattr(strategy_race, "run_strategy_race", record)
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(
+            CandidatePolicy.NO_PROLIFERATOR,
+            CandidatePolicy.ALL_PRODUCTS,
+        ),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+        candidate_parallelism=2,
+    )
+
+    assert candidate_calls == [
+        (
+            CandidatePolicy.NO_PROLIFERATOR,
+            CandidatePolicy.ALL_PRODUCTS,
+        )
+    ]
+    assert race_calls == ["no-proliferator"]
+    assert built.spec is surviving
+
+
+@pytest.mark.parametrize(
+    ("available_cpus", "sequence_islands", "expected_workers"),
+    [
+        (4, 1, {"no-proliferator": 2, "all-products": 2, "output-products": 4}),
+        (8, 1, {"no-proliferator": 3, "all-products": 3, "output-products": 2}),
+        (16, 1, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
+        (64, 1, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
+        (16, 3, {"no-proliferator": 16, "all-products": 16, "output-products": 16}),
+    ],
+)
+def test_raced_build_defaults_to_a_shared_sixteen_cpu_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    available_cpus: int,
+    sequence_islands: int,
+    expected_workers: dict[str, int],
+) -> None:
+    specs = tuple(
+        _title_spec({"electromagnetic-matrix": Fraction(1)}, label=label)
+        for label in (
+            CandidatePolicy.NO_PROLIFERATOR.value,
+            CandidatePolicy.ALL_PRODUCTS.value,
+            CandidatePolicy.OUTPUT_PRODUCTS.value,
+        )
+    )
+    seen_workers: dict[str, object] = {}
+
+    def record(
+        spec: BuildSpec, **kwargs: object
+    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+        seen_workers[spec.label] = kwargs["workers"]
+        return (
+            strategy_race._StrategyRaceOutcome(
+                "freeform",
+                "completed",
+                placement=_finished(2, 3),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair",
+                "completed",
+                placement=_finished(3, 3),
+            ),
+        )
+
+    monkeypatch.setattr(
+        pipeline,
+        "_build_candidates_canonical",
+        lambda *_args, **_kwargs: BuildSpecSet(candidates=specs),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_available_cpu_count",
+        lambda: available_cpus,
+        raising=False,
+    )
+    monkeypatch.setattr(strategy_race, "run_strategy_race", record)
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        time_budget_s=STUB_RACE_BUDGET_S,
+        sequence_islands=sequence_islands,
+        race=True,
+    )
+
+    assert seen_workers == expected_workers
+
+
+@pytest.mark.parametrize(
+    ("workers", "sequence_islands"),
+    [(1, 1), (16, 5)],
+)
+def test_unfunded_strategy_race_falls_back_to_serial_strategies(
+    monkeypatch: pytest.MonkeyPatch,
+    completed_layout: Placement,
+    workers: int,
+    sequence_islands: int,
+) -> None:
+    del completed_layout
+
+    def unexpected_race(*_args: object, **_kwargs: object) -> tuple[object, ...]:
+        raise AssertionError("an unfunded two-strategy race must not start")
+
+    monkeypatch.setattr(strategy_race, "run_strategy_race", unexpected_race)
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        workers=workers,
+        sequence_islands=sequence_islands,
+        race=True,
+    )
+
+    assert [attempt.strategy for attempt in built.attempts] == [
+        "freeform",
+        "sequence-pair",
+    ]
+
+
+@pytest.mark.parametrize("parallelism", [True, 1.0, 1.5])
+def test_candidate_parallelism_rejects_nonintegers_before_url_work(
+    parallelism: object,
+) -> None:
+    with pytest.raises(ValueError, match="candidate parallelism must be a positive integer"):
+        pipeline.build(
+            "not-a-url",
+            candidate_parallelism=parallelism,  # type: ignore[arg-type]
+        )
+
+
 def test_islands_are_legal_with_best_and_still_illegal_with_freeform() -> None:
     # Islands now live INSIDE the sequence-pair racer, so `best` may ask for
     # them.  The guard fires before any URL work, so a bogus URL proves which
@@ -1519,6 +1896,44 @@ def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
         "freeform",
         "sequence-pair",
     ]
+
+
+def test_raced_build_breaks_equal_area_ties_by_belt_tiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pipeline preserves the solvers' lexicographic exact objective."""
+    more_belts = _finished(2, 3)
+    more_belts.stats["belt_tiles"] = 8
+    fewer_belts = _finished(3, 2)
+    fewer_belts.stats["belt_tiles"] = 3
+    outcomes = (
+        strategy_race._StrategyRaceOutcome(
+            "freeform",
+            "completed",
+            placement=more_belts,
+        ),
+        strategy_race._StrategyRaceOutcome(
+            "sequence-pair",
+            "completed",
+            placement=fewer_belts,
+        ),
+    )
+    calls: list[dict[str, object]] = []
+    _install_stub_race(monkeypatch, outcomes, calls)
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        race=True,
+    )
+
+    assert len(calls) == 1
+    assert built.strategy == "sequence-pair"
+    assert built.placement.stats["belt_tiles"] == 3
+
+
 
 
 def test_both_arms_are_announced_before_the_race_rather_than_after_it(
@@ -1638,22 +2053,15 @@ def test_an_explicit_strategy_never_races_even_when_asked_to(
     assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
 
 
-def test_racing_rejects_sequence_islands_outside_the_serial_range_before_submitting(
+def test_racing_rejects_sequence_islands_outside_the_serial_range_before_work(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A raced build must refuse an out-of-range island count before any child
+    """An invalid island count is rejected before either strategy starts."""
 
-    is submitted, exactly as the serial path already does at construction.
-    ``run_strategy_race`` (real, not stubbed here) is what must raise: this
-    test stubs only ``_pool_submit``, the actual submission call, to prove the
-    ``ValueError`` fires before it -- a race that submitted first would report
-    two crashed arms instead of raising.
-    """
+    def _never_constructed(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("no layout may start for an out-of-range island count")
 
-    def _never_submitted(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("no race may be submitted for an out-of-range island count")
-
-    monkeypatch.setattr(strategy_race, "_pool_submit", _never_submitted)
+    monkeypatch.setattr(pipeline, "_new_layout", _never_constructed)
 
     with pytest.raises(ValueError, match="islands must be an integer from 1 to"):
         pipeline.build(
@@ -1663,6 +2071,17 @@ def test_racing_rejects_sequence_islands_outside_the_serial_range_before_submitt
             time_budget_s=STUB_RACE_BUDGET_S,
             race=True,
             sequence_islands=99,
+        )
+
+
+def test_sequence_islands_cannot_exceed_the_aggregate_worker_budget() -> None:
+    with pytest.raises(ValueError, match="sequence islands cannot exceed worker budget"):
+        pipeline.build(
+            "not-a-url",
+            strategy="best",
+            workers=4,
+            sequence_islands=5,
+            race=True,
         )
 
 

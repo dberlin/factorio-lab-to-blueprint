@@ -303,8 +303,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--workers",
         type=int,
         default=None,
-        help="CP-SAT search workers (default: every core; split between the two "
-        "racers under --strategy best --race)",
+        help="aggregate solver workers (default: up to 16 available CPUs; "
+        "divided across candidate and strategy races)",
     )
     ap.add_argument(
         "--race",
