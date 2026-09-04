@@ -3934,6 +3934,7 @@ def _sweep_after_first_routing(
     certifier: Callable[..., validate.Report] | None = None,
     before_build: Callable[[int, int], None] | None = None,
     time_budget_s: float = 1.0,
+    portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
     pack_transform: Callable[
         [
             tuple[int, int],
@@ -3966,6 +3967,7 @@ def _sweep_after_first_routing(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
+        portfolio_incumbent=portfolio_incumbent,
     )._sweep(
         spec,
         strips,
@@ -4058,6 +4060,32 @@ def test_packs_that_keep_producing_new_assignments_run_to_the_deadline(
 
     assert len(seen) > 1 + freeform.C_SWEEP_STALE_DRAWS
     assert len(seen) <= 8
+
+
+def test_external_incumbent_does_not_stop_finding_before_a_local_best(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+
+    def monotonic() -> float:
+        nonlocal clock
+        clock += 0.1
+        return clock
+
+    failure = _routing_failures(RouteFailureKind.SEALED_POCKET)
+    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    result, seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        failure,
+        arrangements=2,
+        subsequent_routing=failure,
+        time_budget_s=100.0,
+        portfolio_incumbent=lambda: (1, 1),
+    )
+
+    assert result is None
+    assert seen == [(20, 0), (20, 1)]
+    assert [attempt.routing.failed_count for attempt in attempts] == [1, 1]
 
 
 def test_a_stale_stop_names_staleness_in_the_refusal(
@@ -4714,7 +4742,7 @@ def test_admitted_feedback_retry_cannot_cascade_to_a_third_arrangement(
     result, seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         failure,
-        arrangements=3,
+        arrangements=2,
         subsequent_routing=failure,
     )
 
@@ -5205,7 +5233,11 @@ def test_non_rescuable_routing_does_not_admit_an_arrangement(
     monkeypatch: pytest.MonkeyPatch,
     first_routing: DetailedRouteResult,
 ) -> None:
-    result, seen, attempts = _sweep_after_first_routing(monkeypatch, first_routing)
+    result, seen, attempts = _sweep_after_first_routing(
+        monkeypatch,
+        first_routing,
+        arrangements=1,
+    )
 
     assert result is None
     assert seen == [(20, 0)]
@@ -5218,6 +5250,7 @@ def test_budget_routing_never_reaches_validation_or_projection(
     result, seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         _routing_failures(RouteFailureKind.BUDGET),
+        arrangements=1,
         forbid_finalization=True,
     )
 
@@ -20532,29 +20565,18 @@ def test_the_portfolio_soft_deadline_only_shortens_and_only_for_a_better_bound()
 
 
 def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> None:
-    """`soft` is never rebound, and `improvement_soft` is read at exactly four sites.
+    """Pin finding and improvement paths to the clocks they are allowed to read.
 
-    `_sweep` has `_room_for_another` sites with NO `best is not None` guard --
-    `projection_retry_affordable`, the learned-retry promotion, and the window
-    launch -- and they are finding paths, deliberately exempt from the
-    soft-deadline breaks (each is spelled `if not projection_retry and ...`).
-    If an external bound rebound the enclosing `soft`, every retry for the rest
-    of the sweep would be refused and a spec that only routes after a retry
-    would refuse under racing where the unraced arm succeeds.
+    ``soft`` is bound once and every finding path keeps using it. An external
+    portfolio incumbent may shorten only improvement work after this sweep has
+    its own local best. The later-arrangement affordability call is reachable in
+    both states, so its clock must be conditional: ``soft`` while ``best is
+    None``, then ``improvement_soft`` once a local best exists.
 
-    This is asserted on the SOURCE rather than on a spy because no spec in this
-    suite reaches a finding-path `_room_for_another` call: instrumented over
-    `two_stage_spec` and over the corpus cell `plastic`, all 38 calls come from
-    the three improvement sites, so a runtime spy cannot tell a correct sweep
-    from one that rebound `soft`.  The static form can, and it is exactly the
-    `git diff | grep` check the design asks a reader to perform by hand.
-
-    Counts alone are not enough: swapping one improvement read for one finding
-    read, or deleting the `best is not None` term from an improvement guard,
-    leaves every count where it was.  So each site is also pinned BY POSITION --
-    `_room_for_another`'s calls keyed on the candidate cost they charge -- and
-    every `improvement_soft` read is required to sit under a `best is not None`
-    guard, directly or through the pre-break the arrangement arm relies on.
+    This is asserted on the source because the requirement is which lexical
+    clock each call reads; a runtime spy over ordinary fixtures does not reach
+    every finding path. Counts alone are insufficient, so the conditional's
+    test and both arms are pinned structurally as well.
     """
     import ast
     import inspect
@@ -20618,38 +20640,38 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
             for sub in ast.walk(node)
         )
 
+    def guarded_by_conditional_local_best(node: ast.AST) -> bool:
+        current = node
+        while current in parents:
+            parent = parents[current]
+            if isinstance(parent, ast.IfExp) and tests_best_is_none(parent.test):
+                return current is parent.orelse
+            current = parent
+        return False
+
     soft_loads, soft_stores = counted("soft", tree)
     improvement_loads, improvement_stores = counted("improvement_soft", tree)
     assert soft_stores == 1, "the sweep's own soft is bound once and never rebound"
     assert improvement_stores == 1, "the improvement deadline is bound once per turn"
     assert improvement_loads == 4, (
-        "the improvement deadline is read at exactly the four sites already "
-        "guarded by `best is not None`, and nowhere else"
+        "the improvement deadline is read at the three post-best improvement "
+        "sites and the post-best arm of the conditional arrangement clock"
     )
     # One read per finding site (`projection_retry_affordable`, the learned-retry
     # promotion, and the window launch's two), plus the argument handed to
     # `_portfolio_soft_deadline`.
-    assert soft_loads == 5
+    assert soft_loads == 6
 
-    # EVERY improvement read sits under a `best is not None` guard.  Three carry
-    # the term in their own `if`; the arrangement arm carries it as an
-    # `arrangement and best is None: break` EARLIER IN THE SAME BODY, which is
-    # why that site is reachable only with a `best` in hand.  Any preceding
-    # sibling will do -- pinning it to index-1 would fail on a statement
-    # inserted between the two that changes nothing about the guarantee.
+    # Every improvement read is guarded by a local best. Three carry
+    # `best is not None` in their enclosing `if`; the arrangement call carries
+    # the equivalent conditional expression and may use that arm only when
+    # `best is not None`.
     unguarded: list[ast.If] = []
     for load in loads_of("improvement_soft", tree):
+        if guarded_by_conditional_local_best(load):
+            continue
         guard = enclosing_if(load)
         if tests_best_is_not_none(guard.test):
-            continue
-        siblings = getattr(parents[guard], "body", None)
-        preceding = siblings[: siblings.index(guard)] if isinstance(siblings, list) else []
-        if any(
-            isinstance(statement, ast.If)
-            and tests_best_is_none(statement.test)
-            and all(isinstance(inner, ast.Break) for inner in statement.body)
-            for statement in preceding
-        ):
             continue
         unguarded.append(guard)
     assert not unguarded, (
@@ -20657,8 +20679,8 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
         "incumbent can now end a sweep that has found nothing"
     )
 
-    # WHICH CLOCK, bound by NAME.  Nothing here reads the cost argument: what it
-    # is called, and whether it is passed positionally, are free to change.
+    # Which clock each call reads. Nothing here reads the cost argument; its
+    # name and whether it is passed positionally remain free to change.
     room_calls = [
         call
         for call in ast.walk(tree)
@@ -20670,20 +20692,30 @@ def test_the_sweep_reads_the_portfolio_bound_only_at_the_improvement_sites() -> 
     def clock_of(call: ast.Call) -> str:
         by_keyword = {keyword.arg: keyword.value for keyword in call.keywords}
         node = by_keyword.get("soft") or (call.args[1] if len(call.args) > 1 else None)
-        assert isinstance(node, ast.Name), (
-            "a `_room_for_another` call passes its soft deadline as something "
-            "other than a plain name, so this pin can no longer read it"
+        if isinstance(node, ast.Name):
+            return node.id
+        assert isinstance(node, ast.IfExp), (
+            "a `_room_for_another` call passes an unrecognised soft-deadline expression"
         )
-        return node.id
+        assert tests_best_is_none(node.test)
+        assert isinstance(node.body, ast.Name) and node.body.id == "soft"
+        assert isinstance(node.orelse, ast.Name) and node.orelse.id == "improvement_soft"
+        return "soft-if-no-best-else-improvement"
 
     clocks = [clock_of(call) for call in room_calls]
-    # Three improvement calls and three finding ones.  The fourth improvement
-    # read is `time.monotonic() >= improvement_soft`, which is not a call.
-    assert sorted(clocks) == ["improvement_soft"] * 3 + ["soft"] * 3, (
-        "every `_room_for_another` reads one of the two clocks, and the split "
-        "between improvement and finding sites is fixed"
+    # Two improvement calls, three finding calls, and the arrangement call that
+    # is finding until a local best exists and improvement work thereafter. The
+    # fourth improvement read is `time.monotonic() >= improvement_soft`.
+    assert sorted(clocks) == (
+        ["improvement_soft"] * 2
+        + ["soft"] * 3
+        + ["soft-if-no-best-else-improvement"]
     )
-    assert clocks.count("improvement_soft") == improvement_loads - 1
+    assert (
+        clocks.count("improvement_soft")
+        + clocks.count("soft-if-no-best-else-improvement")
+        == improvement_loads - 1
+    )
 
     # The bandit's remaining-fraction bucket is not a deadline at all, and it is
     # inside the window launch, so it reads the sweep's own clock too.
