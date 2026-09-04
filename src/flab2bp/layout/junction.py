@@ -200,8 +200,8 @@ def make_piler(
     The piler names neither neighbouring belt.  The belt before it names piler
     port 1 as its output, and the belt after it names piler port 0 as its input;
     that wiring makes ``CargoTraffic.RematchPilerConnection`` select Pile mode.
-    Its own four slot fields remain zero, exactly as the generic building branch
-    of ``BlueprintUtils.GenerateBlueprintData`` leaves them.
+    Its catalog row has ``multiLevel = 1``, so the game generator assigns the
+    same ``14, 15, 15, 14`` multilevel sentinels used by a Splitter.
 
     There is no stack argument or parameter block.  A piler doubles the stack
     arriving on its input belt, capped at :data:`catalog.PILER_MAX_STACK`; lane
@@ -218,6 +218,10 @@ def make_piler(
         width=width,
         height=height,
         yaw=yaw,
+        output_to_slot=SPLITTER_OUTPUT_TO_SLOT,
+        input_from_slot=SPLITTER_INPUT_FROM_SLOT,
+        input_to_slot=SPLITTER_INPUT_TO_SLOT,
+        output_from_slot=SPLITTER_OUTPUT_FROM_SLOT,
     )
 
 
