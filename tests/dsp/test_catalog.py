@@ -12,7 +12,7 @@ import json
 import math
 import pathlib
 from fractions import Fraction
-from typing import ClassVar
+from typing import ClassVar, TypedDict
 
 import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -997,19 +997,57 @@ def test_stacking_json_sources_every_number() -> None:
     assert "BuildingParameters" in payload["piler"]["parameter_index_source"]
 
 
-def test_stacking_techs_table_is_the_provenance_for_the_level_tables() -> None:
-    """``stacking_techs.json`` is what the extractor read; the level tables must
-    be derivable from it, so a re-extraction that changes the game's unlock
-    values fails here instead of silently disagreeing with ``stacking.json``.
-    """
+class _TechRow(TypedDict):
+    """One row of ``data/stacking_techs.json``, as the extractor writes it."""
+
+    ID: int
+    Name: str
+    Level: int
+    MaxLevel: int
+    IsObsolete: int
+    UnlockFunctions: list[int]
+    UnlockValues: list[float]
+    UnlockRecipes: list[int]
+    PropertyOverrideItems: list[int]
+    englishName: str
+
+
+def _stacking_techs() -> dict[int, _TechRow]:
+    """``data/stacking_techs.json`` keyed by tech id."""
     rows = json.loads(
         (
             pathlib.Path(catalog.__file__).parent / "data" / "stacking_techs.json"
         ).read_text()
     )
-    by_id = {row["ID"]: row for row in rows}
+    by_id: dict[int, _TechRow] = {row["ID"]: row for row in rows}
     assert sorted(by_id) == [3301, 3302, 3303, 3304, 3305, 3306,
                              3311, 3312, 3313, 3314, 3315, 3316]
+    return by_id
+
+
+def test_only_the_pile_sorter_ladder_is_a_reachable_research_ladder() -> None:
+    """The fact ``SORTER_STACKING_LEVELS == 6`` rests on.
+
+    ``IsObsolete`` is what hides a tech from the tree (``UITechNode.cs:914``)
+    and from the unlock-everything achievement (``ACH_UnlockAllTech.cs:37``).
+    3301-3306 carry it, so ``inserterStackCountObsolete`` never leaves its
+    new-game 1 and Sorter Mk.III stacks nothing; 3311-3316 do not, and they are
+    the six levels the catalog exposes.  If a game patch ever un-obsoletes the
+    old ladder this fails, which is the whole reason the field is extracted.
+    """
+    by_id = _stacking_techs()
+    obsolete = {tech_id for tech_id, row in by_id.items() if row["IsObsolete"]}
+    assert obsolete == {3301, 3302, 3303, 3304, 3305, 3306}
+    assert sorted(set(by_id) - obsolete) == [3311, 3312, 3313, 3314, 3315, 3316]
+    assert len(by_id) - len(obsolete) == catalog.SORTER_STACKING_LEVELS
+
+
+def test_stacking_techs_table_is_the_provenance_for_the_level_tables() -> None:
+    """``stacking_techs.json`` is what the extractor read; the level tables must
+    be derivable from it, so a re-extraction that changes the game's unlock
+    values fails here instead of silently disagreeing with ``stacking.json``.
+    """
+    by_id = _stacking_techs()
 
     # GameHistoryData.SetForNewGame (:554-557).
     pick, place = 2, 1

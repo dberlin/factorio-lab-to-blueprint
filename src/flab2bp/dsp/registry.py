@@ -311,12 +311,15 @@ _CATALOG: tuple[Entry, ...] = (
     _e(
         "catalog.PILER_MAX_STACK",
         Kind.RULE,
+        lint=False,
         unconsulted_because=_STACKING_UNCONSULTED,
         mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
         note=(
             "PilerComponent.cs:195-207: cacheCargoStack1 + cacheCargoStack2 > 4 "
             "emits AddCargo(item, 4, ...) and keeps the remainder.  An IL "
-            "literal, not a field."
+            "literal, not a field.  lint=False: a bare 4 under layout/ is a "
+            "loop bound, a tuple width, a quadrant count -- hunting it would "
+            "be all noise and no finding."
         ),
     ),
     _e(
@@ -333,6 +336,7 @@ _CATALOG: tuple[Entry, ...] = (
     _e(
         "catalog.PILER_THROUGHPUT",
         Kind.RULE,
+        lint=False,
         unconsulted_because=_STACKING_UNCONSULTED,
         mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
         note=(
@@ -341,7 +345,10 @@ _CATALOG: tuple[Entry, ...] = (
             "into one tier's number.  timeSpend += beltSpeed * 1000 per tick, "
             "10000 per cargo, 60 ticks/s (PilerComponent.cs:146-149, :171) = "
             "6 * beltSpeed, which reproduces BELT_RATE exactly.  A lower bound: "
-            "the untimed pick branch (:176-187, :265-272) charges nothing."
+            "the untimed pick branch (:176-187, :265-272) charges nothing.  "
+            "lint=False: Fraction(6) and a bare 6 are a hex count, a slot "
+            "range, a loop bound everywhere in layout/; and where the number "
+            "does mean a rate it means BELT_RATE[2001], which owns its own row."
         ),
     ),
     _e(
