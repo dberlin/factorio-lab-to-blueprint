@@ -143,7 +143,7 @@ git commit -m "feat: measure reusable sequence relation proofs"
 - [ ] **Step 1: Build the existing native extensions and record backend provenance**
 
 ```bash
-uv sync
+uv sync --group build
 uv run python setup.py build_ext --inplace
 uv run python - <<'PY'
 from flab2bp.layout import route_kernel, sequence_kernel
