@@ -9397,6 +9397,195 @@ def _assert_energy_exchanger_port_routing(
     assert validate.certify(placement, spec, expect_power=True).ok
 
 
+def test_an_energy_exchanger_placement_pastes_without_collisions() -> None:
+    """Two belts per exchanger used to be convicted and hidden by the exemption.
+
+    Asked directly, with no LOW_CONFIDENCE filtering, the answer has to be none.
+    """
+    spec = mode_driven_spec()
+    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+    ctx = validate._context(placement, spec, None, 0, Fraction(4), True)
+    assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
+
+
+def _ray_receiver_spec() -> BuildSpec:
+    """A Ray Receiver making critical photons, shaped like ``mode_driven_spec``.
+
+    Pure SOURCE: fed nothing, its output routed straight to the spec boundary
+    -- the same shape ``mode_driven_spec`` uses for the Energy Exchanger, just
+    swapped to the other belt-port host with no INPUT lane and no east dock at
+    yaw 0, so ``_dock_input_lane`` never touches it and ``_port_approach`` is
+    never consulted for it either.
+    """
+    return BuildSpec(
+        groups=(
+            group(
+                "critical-photon",
+                "ray-receiver",
+                2,
+                {},
+                {"critical-photon": F(1)},
+            ),
+        ),
+        external_inputs={},
+        outputs={"critical-photon": F(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label="ray-receiver",
+    )
+
+
+#: Captured on 688cbed (this branch's base, before any edit in this task) by
+#: running ``_ray_receiver_spec()`` through ``FreeformLayout`` three times --
+#: twice at ``time_budget_s=4.0`` and once at ``8.0`` -- and comparing the
+#: three shapes.  *Deterministic:* all three gave the same 31 buildings.
+#: *And the identity holds:* the same spec laid out with Tasks 1-3 of this
+#: plan applied gives 31 buildings that compare equal to this on
+#: ``(item_id, x, y, z, yaw, output_obj, input_obj)`` -- exactly what
+#: :func:`test_a_ray_receiver_strip_is_byte_identical_after_the_approach_change`
+#: asserts.  Both Ray Receivers place at yaw 0.0 with no ``output_obj`` /
+#: ``input_obj`` of their own, confirming ``_dock_input_lane`` never runs for
+#: this spec: the shape this fix must never move.
+RAY_RECEIVER_SHAPE = [
+    (2002, 5, 8, F(0), 90.0, 1, None),
+    (2002, 6, 8, F(0), 90.0, 2, None),
+    (2002, 7, 8, F(0), 90.0, 3, None),
+    (2002, 8, 8, F(0), 90.0, 4, None),
+    (2002, 9, 8, F(0), 90.0, 5, None),
+    (2002, 10, 8, F(0), 90.0, 6, None),
+    (2002, 11, 8, F(0), 90.0, 7, None),
+    (2002, 12, 8, F(0), 90.0, 8, None),
+    (2002, 13, 8, F(0), 90.0, 9, None),
+    (2002, 14, 8, F(0), 90.0, 10, None),
+    (2002, 15, 8, F(0), 90.0, 11, None),
+    (2002, 16, 8, F(0), 90.0, 12, None),
+    (2002, 17, 8, F(0), 90.0, 13, None),
+    (2002, 18, 8, F(0), 90.0, 14, None),
+    (2002, 19, 8, F(0), 90.0, 25, None),
+    (2208, 2, 0, F(0), 0.0, None, None),
+    (2208, 11, 0, F(0), 0.0, None, None),
+    (2002, 5, 4, F(0), 0.0, 18, 15),
+    (2002, 5, 5, F(0), 0.0, 19, None),
+    (2002, 5, 6, F(0), 0.0, 20, None),
+    (2002, 5, 7, F(0), 0.0, 0, None),
+    (2002, 14, 4, F(0), 0.0, 22, 16),
+    (2002, 14, 5, F(0), 0.0, 23, None),
+    (2002, 14, 6, F(0), 0.0, 24, None),
+    (2002, 14, 7, F(0), 0.0, 9, None),
+    (2002, 20, 8, F(0), 0.0, 26, None),
+    (2002, 21, 8, F(0), 0.0, 27, None),
+    (2002, 22, 8, F(0), 0.0, None, None),
+    (2201, 10, 6, F(0), 0.0, None, None),
+    (2201, 19, 0, F(0), 0.0, None, None),
+    (2201, 0, 0, F(0), 0.0, None, None),
+]
+
+
+def test_a_ray_receiver_strip_is_byte_identical_after_the_approach_change() -> None:
+    """A Ray Receiver has no east dock at yaw 0 and no input lanes, so
+    _dock_input_lane never runs for it and _port_approach is never consulted.
+    Pin the emitted geometry so a future widening of the rule cannot drift it.
+    """
+    spec = _ray_receiver_spec()
+    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+    shape = [
+        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
+    ]
+    assert shape == RAY_RECEIVER_SHAPE
+
+
+def _two_sink_exchanger_spec(count: int = 3) -> BuildSpec:
+    """Charge exchangers whose product has an internal consumer AND an output.
+
+    ``count`` selects the shape the planner produces: 1 folds both sinks onto
+    ONE lane with DEST_SEP (no second shard to give), 2 or more shards them
+    across two strips of one lane each.  Only ``count >= 2`` routes -- one
+    charge machine cannot feed a discharge machine AND the external output --
+    so ``count=1`` is a planner fixture and never reaches `lay_out`.
+    """
+    return BuildSpec(
+        groups=(
+            group(
+                "accumulator-full",
+                "energy-exchanger",
+                count,
+                {"accumulator": F(1)},
+                {"accumulator-full": F(1)},
+            ),
+            group(
+                "accumulator-discharge",
+                "energy-exchanger",
+                1,
+                {"accumulator-full": F(1)},
+                {"accumulator": F(1)},
+            ),
+        ),
+        external_inputs={"accumulator": F(2)},
+        outputs={"accumulator-full": F(2)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=F(12),
+        label=f"two-sink-{count}",
+    )
+
+
+def test_a_two_sink_exchanger_lays_out_with_one_wired_lane() -> None:
+    """The end of the class of bug, not a fan-out.
+
+    Every accumulator-full sink is served by ONE drawn belt per machine, so a
+    lane joined to nothing is not representable.  Measured: 4 exchangers, one
+    drawing belt each, certify ok, zero collisions.
+    """
+    spec = _two_sink_exchanger_spec(count=3)  # count=1 does not route; see the fixture
+    placement = FreeformLayout(band_policy=BandPolicy.parse("portable")).lay_out(
+        spec, time_budget_s=4.0
+    )
+    bs = placement.buildings
+    exchangers = [i for i, b in enumerate(bs) if b.item_id == catalog.ENERGY_EXCHANGER_ID]
+    assert exchangers
+    for i in exchangers:
+        drawing = [j for j, b in enumerate(bs) if b.input_obj == i]
+        assert len(drawing) == 1, (i, drawing)
+    report = validate.certify(placement, spec, expect_power=True)
+    assert report.ok, report.errors
+    ctx = validate._context(placement, spec, None, 0, F(4), True)
+    assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
+
+
+def test_a_ray_receiver_drain_is_byte_identical_after_the_lane_cap() -> None:
+    """2208 is capped too: one drain port, one product, so nothing may move."""
+    spec = _ray_receiver_spec()  # from Task 2 step 10
+    placement = FreeformLayout(band_policy=BandPolicy.parse("portable")).lay_out(
+        spec, time_budget_s=4.0
+    )
+    shape = [
+        (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj)
+        for b in placement.buildings
+    ]
+    assert shape == RAY_RECEIVER_SHAPE
+
+
+def test_a_belt_port_host_at_a_zero_dock_yaw_is_capped_and_refused_honestly() -> None:
+    """2208 has ZERO north-facing docks at yaw 90 -- the floor, and the refusal.
+
+    `slots.lane_orientation` always picks 2208's yaw 0 (a 1-dock yaw) for a real
+    spec, so there is no spec that reaches ``_logical_strip_plans`` at yaw 90 to
+    exercise the planner's ``or 1`` floor end-to-end.  Force it directly on a
+    real planned strip instead: `_drainable_by_port` and the refusal message
+    only read `item_id`, `yaw` and `out_lanes`, so overriding just those (and
+    clearing `port_dock_plan`, planned for the ORIGINAL yaw and otherwise
+    short-circuiting the refusal check before it is asked) is faithful to what
+    they actually consult.
+    """
+    (strip,) = plan_strips(_ray_receiver_spec())
+    strip = replace(strip, yaw=90.0, lane_plan=None, attachment_plan=(), port_dock_plan=())
+    assert slots.drain_dock_count(strip.item_id, strip.yaw) == 0
+    assert not freeform_module._drainable_by_port(strip)
+    assert _machines_without_poses([strip]) == [
+        "Ray Receiver (critical-photon): none of its 2 belt port(s) faces the "
+        "output lane below the machine band"
+    ]
+
+
 class TestModeDrivenMachines:
     """Some machines are configured by a MODE, not a recipe id.
 
