@@ -175,6 +175,14 @@ type RefinementHint = tuple[int, tuple[int, int], DecodedPlacement]
 
 _QUALITY_REVISIT_AFTER = 2
 _MAX_SEQUENCE_ISLANDS = 16
+
+
+def _validate_sequence_islands(islands: int) -> None:
+    """Reject island counts no SequencePair execution path can honor."""
+    if type(islands) is not int or not 1 <= islands <= _MAX_SEQUENCE_ISLANDS:
+        raise ValueError(f"islands must be an integer from 1 to {_MAX_SEQUENCE_ISLANDS}")
+
+
 _COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND = 32.0 / 375.0
 _COMPACT_SEED_WALL_SHARE = Fraction(1, 3)
 _COMPACT_SEED_DIRECT_MIN_BUDGET_S = 30.0
@@ -6009,8 +6017,7 @@ class SequencePairLayout:
     ) -> None:
         if type(strip_len) is not int or strip_len <= 0:
             raise ValueError("strip length must be a positive integer")
-        if type(islands) is not int or not 1 <= islands <= _MAX_SEQUENCE_ISLANDS:
-            raise ValueError(f"islands must be an integer from 1 to {_MAX_SEQUENCE_ISLANDS}")
+        _validate_sequence_islands(islands)
         if solver_factory is not None and islands != 1:
             raise ValueError("solver factory requires exactly one island")
         if compact_seed_config is not None and type(compact_seed_config) is not CompactSeedConfig:

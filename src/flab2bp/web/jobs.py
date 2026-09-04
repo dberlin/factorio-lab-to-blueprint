@@ -1,17 +1,19 @@
 """Submit-and-poll, because a build is seconds to minutes.
 
 ``--budget`` is per layout and ``best`` lays out every candidate with every
-active production strategy, so the wall clock is a multiple of it.  A request
-that waits for that is a request that looks like a hang: browsers and proxies
-give up long before a large spec does, and the connection dying takes the
-result with it.
+active production strategy. Unpinned web requests run those independent
+candidate races concurrently under one bounded CPU allowance; their aggregate
+solver work is still ``candidates × strategies × budget``. A synchronous
+request would still look like a hang to browsers and proxies, and a connection
+dying would take the result with it.
 So a build is a job -- submitted, then polled.
 
-One worker by default, deliberately.  ``pyproject.toml`` already records what
-happens when CP-SAT solves are run in parallel on this box: a single solve runs
-at ~700% CPU, so N of them do not go N times faster, they each get a fraction of
-the wall-clock budget they were promised and the whole set comes back worse.
-A queue is the honest answer -- a job that waits says so, with its position.
+One submitted job runs at a time by default, deliberately. Inside that job the
+pipeline caps its default aggregate solver budget at 16 CPUs from the process
+affinity set, divides that budget across a bounded candidate pool, and each
+candidate divides its share between the two strategy racers. Running separate
+jobs concurrently would oversubscribe that allowance, so the outer queue
+remains the honest answer: a job that waits says so, with its position.
 """
 
 from __future__ import annotations
@@ -293,8 +295,12 @@ class Job:
         return self.state in ("done", "refused", "error")
 
 
+
+
+
+
 def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.Build:
-    """The one call into the solver.
+    """Run one build through the pipeline's shared CPU-allocation policy.
 
     ``--flow`` arrives as CSV text and goes through ``flow_from_text``'s
     provenance check exactly as a file named on the command line does.
@@ -314,6 +320,7 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
         fetch_flow=options.fetch_flow,
         fetch_url_validator=_validate_web_fetch_url if options.fetch_flow else None,
         on_progress=on_progress,
+        race=options.strategy == "best",
     )
 
 

@@ -15,9 +15,9 @@ worker thread, which is the entire concurrency requirement.
 Bound to 127.0.0.1 by default.  ``/api/fetch`` is a relay to any http(s) URL
 whose host resolves to a public address -- every redirect hop is checked, but
 the address is resolved and connected to separately, so a name that changes
-between the two still gets through -- and ``/api/build`` will spend every core
-on a CP-SAT solve for anyone who asks.  Neither belongs on a public interface
-without work this does not do.
+between the two still gets through -- and ``/api/build`` will spend up to 16
+available CPUs on a solver portfolio for anyone who asks. Neither belongs on a
+public interface without work this does not do.
 """
 
 from __future__ import annotations
@@ -374,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
         "--workers",
         type=int,
         default=1,
-        help="concurrent builds (default 1; one CP-SAT solve already uses every core)",
+        help="concurrent builds (default 1; one solver portfolio uses up to 16 CPUs)",
     )
     args = ap.parse_args(argv)
 

@@ -9,8 +9,10 @@ touch it.
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
@@ -44,7 +46,7 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
 )
 from flab2bp.layout.freeform import FreeformLayout
-from flab2bp.layout.sequence_solver import SequencePairLayout
+from flab2bp.layout.sequence_solver import SequencePairLayout, _validate_sequence_islands
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.candidates import (
     DEFAULT_CANDIDATE_POLICIES,
@@ -67,6 +69,49 @@ PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = (
     "sequence-pair",
 )
 PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
+
+#: Default aggregate solver-worker budget for one build. More logical CPUs do
+#: not improve these time-limited searches enough to justify making every
+#: workstation run them unbounded.
+DEFAULT_WORKER_BUDGET_CAP = 16
+
+
+def _available_cpu_count() -> int:
+    """Return the CPU set this process may actually schedule on."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.process_cpu_count() or 1)
+
+
+def _worker_allocations(
+    total_workers: int,
+    concurrent_candidates: int,
+) -> tuple[int, ...]:
+    """Divide one worker budget exactly across a concurrent candidate batch."""
+    per_candidate, remainder = divmod(total_workers, concurrent_candidates)
+    return tuple(
+        per_candidate + int(index < remainder) for index in range(concurrent_candidates)
+    )
+
+
+def _candidate_race_parallelism(
+    total_workers: int,
+    candidate_count: int,
+    requested_parallelism: int,
+    sequence_islands: int,
+) -> int:
+    """Return the widest candidate batch whose nested races fit the budget."""
+    widest = min(candidate_count, requested_parallelism)
+    for parallelism in range(widest, 0, -1):
+        allocations = _worker_allocations(total_workers, parallelism)
+        if all(
+            candidate_workers >= PRODUCTION_STRATEGY_COUNT
+            and strategy_race.race_worker_split(candidate_workers)[1] >= sequence_islands
+            for candidate_workers in allocations
+        ):
+            return parallelism
+    return 0
 
 
 def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
@@ -103,18 +148,18 @@ def _new_layout(
     )
 
 
-#: One settled pair: its strategy, its 1-based index over ``total_pairs``, the
-#: monotonic instant its solve began, the completion grace it is JUDGED by, and
-#: what that solve produced.  A racing pair and a serial one reduce to exactly
-#: this, which is why the attempt loop below has one shape rather than two.
-#:
-#: The grace travels with the pair because the two modes do not share one.  A
-#: serial solve is bounded by ``ATOMIC_COMPLETION_GRACE_S``; a raced one is
-#: bounded by the race's own contract, ``RACE_COMPLETION_GRACE_S``, which is
-#: longer -- ``run_strategy_race`` waits that long before terminating an arm.
-#: Judging a raced pair by the atomic grace reports overshoot the race never
-#: spent and starts its finalization already past a deadline it never blew.
-_Resolved = tuple[ExplicitStrategyName, int, float, float, Placement | NoValidLayout]
+#: One settled pair: its strategy, 1-based index, solve start, optional race
+#: finish, completion grace, and result. The race finish excludes time spent
+#: waiting for peer candidates or earlier settlement from this pair's wall.
+_Resolved = tuple[
+    ExplicitStrategyName,
+    int,
+    float,
+    float | None,
+    float,
+    Placement | NoValidLayout,
+]
+_CandidateRace = tuple[float, float, tuple[strategy_race._StrategyRaceOutcome, ...]]
 
 
 def _raced_result(
@@ -402,11 +447,10 @@ def build(
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
     #: Legal with ``best`` as well as ``sequence-pair``, because islands live
-    #: inside the raced sequence-pair arm.  Under ``race=True`` they cost a
-    #: SECOND spawn -- once for the arm, once per island -- and the islands
-    #: start a fresh ``time_budget_s`` those spawn seconds late, because
-    #: ``run_sequence_islands`` derives its own deadlines and takes no absolute
-    #: one.  A direct ``build(...)`` call is the only way to reach that today.
+    #: inside the raced sequence-pair arm. Under ``race=True`` the aggregate
+    #: worker allocator reserves enough of each candidate's share for every
+    #: island. If even a single two-strategy race cannot fund them, strategies
+    #: run serially instead.
     sequence_islands: int = 1,
     dataset: Dataset | None = None,
     name: str = "",
@@ -424,11 +468,15 @@ def build(
     fetch_url_validator: UrlValidator | None = None,
     no_proliferator: bool = False,
     on_progress: ProgressSink | None = None,
-    #: CP-SAT search workers.  ``None`` is every core for an explicit strategy
-    #: and ``strategy_race.race_worker_split(every core)`` when racing.  It is
-    #: surfaced here because racing puts TWO CP-SAT users on one box and the
-    #: split has to be decided by whoever knows both arms exist.
+    #: Aggregate solver-worker budget for one build. ``None`` uses at most 16
+    #: CPUs from the process affinity set. A serial build gives the whole budget
+    #: to its current strategy; concurrent candidate races divide it exactly
+    #: and reserve the SequencePair arm's island processes.
     workers: int | None = None,
+    #: Candidate races to run at once. ``None`` admits the widest batch whose
+    #: candidate shares fund Freeform plus every requested SequencePair island.
+    #: An unfunded two-strategy race falls back to serial strategies.
+    candidate_parallelism: int | None = None,
     #: Race the two strategies for ONE budget instead of running them serially
     #: for one budget EACH.  OFF by default until the flip commit: a change this
     #: large in wall time and process count opts in before it opts everyone in.
@@ -451,11 +499,31 @@ def build(
     are standing in front of it in game.
     """
     policy = BandPolicy.parse(band)
+    _validate_sequence_islands(sequence_islands)
     # Islands now live INSIDE the sequence-pair racer, so `best` may ask for
     # them: the raced sequence-pair child constructs its own SequencePairLayout
-    # with this island count.  `freeform` still may not -- it has no islands.
+    # with this island count. `freeform` still may not -- it has no islands.
     if sequence_islands != 1 and strategy not in ("sequence-pair", "best"):
         raise ValueError("sequence islands require --strategy sequence-pair or best")
+    if workers is not None and (type(workers) is not int or workers < 1):
+        raise ValueError("workers must be a positive integer")
+    worker_budget = (
+        workers
+        if workers is not None
+        else min(_available_cpu_count(), DEFAULT_WORKER_BUDGET_CAP)
+    )
+    if strategy in ("sequence-pair", "best") and sequence_islands > worker_budget:
+        raise ValueError("sequence islands cannot exceed worker budget")
+    if candidate_parallelism is not None and (
+        type(candidate_parallelism) is not int or candidate_parallelism < 1
+    ):
+        raise ValueError("candidate parallelism must be a positive integer")
+    if (
+        candidate_parallelism is not None
+        and candidate_parallelism > 1
+        and (strategy != "best" or not race)
+    ):
+        raise ValueError("candidate parallelism requires a raced best-strategy build")
     data = canonicalize_dataset(dataset if dataset is not None else load_vendored())
     request = canonicalize_request(parse_url(url))
     # How high a belt may go, and whether it may climb with no run at all, are
@@ -575,6 +643,16 @@ def build(
         spec_set = BuildSpecSet(candidates=unsprayed)
 
     wanted = _strategy_names(strategy)
+    strategy_race_parallelism = 0
+    if strategy == "best" and race:
+        requested_parallelism = candidate_parallelism or len(spec_set.candidates)
+        strategy_race_parallelism = _candidate_race_parallelism(
+            worker_budget,
+            len(spec_set.candidates),
+            requested_parallelism,
+            sequence_islands,
+        )
+    resolved_candidate_parallelism = max(1, strategy_race_parallelism)
 
     # Counted here, after the flow filter, so a progress report never promises a
     # pair that was already dropped.
@@ -607,7 +685,7 @@ def build(
             belt_vertical_construction=belt_rules.vertical_construction,
             sequence_islands=sequence_islands,
             band_policy=policy,
-            workers=workers,
+            workers=worker_budget,
         )
         try:
             return layout.lay_out(candidate, time_budget_s=time_budget_s)
@@ -625,37 +703,83 @@ def build(
         """
         for offset, sname in enumerate(wanted):
             _announce(first_index + offset, candidate.label, sname)
+            attempt_started = time.monotonic()
+            result = _solve_one(candidate, sname)
             yield (
                 sname,
                 first_index + offset,
-                time.monotonic(),
+                attempt_started,
+                None,
                 ATOMIC_COMPLETION_GRACE_S,
-                _solve_one(candidate, sname),
+                result,
             )
 
-    for candidate_ordinal, spec in enumerate(spec_set.candidates):
+    def _run_race(candidate: BuildSpec, candidate_workers: int) -> _CandidateRace:
+        """Run one candidate's strategy race and retain its actual wall."""
+        race_started = time.monotonic()
+        outcomes = strategy_race.run_strategy_race(
+            candidate,
+            time_budget_s=time_budget_s,
+            band_policy=policy,
+            belt_vertical_construction=belt_rules.vertical_construction,
+            max_belt_z=belt_rules.max_z,
+            workers=candidate_workers,
+            sequence_islands=sequence_islands,
+            share=share,
+        )
+        return race_started, time.monotonic(), outcomes
+
+    def _solve_candidate_batches() -> Iterator[tuple[int, BuildSpec, _CandidateRace]]:
+        """Yield one completed batch before admitting the next."""
+        parallelism = resolved_candidate_parallelism
+        with ThreadPoolExecutor(
+            max_workers=parallelism,
+            thread_name_prefix="flab2bp-candidate",
+        ) as executor:
+            for batch_start in range(0, len(spec_set.candidates), parallelism):
+                batch = spec_set.candidates[batch_start : batch_start + parallelism]
+                for offset_in_batch, spec in enumerate(batch):
+                    candidate_ordinal = batch_start + offset_in_batch
+                    first_index = candidate_ordinal * len(wanted) + 1
+                    for offset, sname in enumerate(wanted):
+                        _announce(first_index + offset, spec.label, sname)
+                allocations = _worker_allocations(worker_budget, len(batch))
+                futures = tuple(
+                    executor.submit(_run_race, spec, candidate_workers)
+                    for spec, candidate_workers in zip(batch, allocations, strict=True)
+                )
+                results = tuple(future.result() for future in futures)
+                for offset_in_batch, (spec, result) in enumerate(
+                    zip(batch, results, strict=True)
+                ):
+                    yield batch_start + offset_in_batch, spec, result
+
+    parallel_candidates = resolved_candidate_parallelism > 1
+    candidate_runs: Iterable[tuple[int, BuildSpec, _CandidateRace | None]]
+    if parallel_candidates:
+        candidate_runs = _solve_candidate_batches()
+    else:
+        candidate_runs = (
+            (candidate_ordinal, spec, None)
+            for candidate_ordinal, spec in enumerate(spec_set.candidates)
+        )
+
+    for candidate_ordinal, spec, candidate_race in candidate_runs:
         #: 1-based over ``total_pairs``, candidates outer and strategies inner.
         #: Derived rather than counted so the raced branch, which settles a
         #: candidate's pairs together, cannot renumber them.
         first_index = candidate_ordinal * len(wanted) + 1
         solved: Iterable[_Resolved]
-        if strategy == "best" and race:
-            # Both arms genuinely start together, so both are announced BEFORE
-            # the race (spec 5.4).  Told afterwards, a caller's progress bar
-            # would sit silent for a whole budget and then jump by two.
-            for offset, sname in enumerate(wanted):
-                _announce(first_index + offset, spec.label, sname)
-            race_started = time.monotonic()
-            outcomes = strategy_race.run_strategy_race(
-                spec,
-                time_budget_s=time_budget_s,
-                band_policy=policy,
-                belt_vertical_construction=belt_rules.vertical_construction,
-                max_belt_z=belt_rules.max_z,
-                workers=workers,
-                sequence_islands=sequence_islands,
-                share=share,
-            )
+        if strategy_race_parallelism:
+            if candidate_race is None:
+                # Both arms genuinely start together, so both are announced
+                # BEFORE the race. Told afterwards, a caller's progress bar
+                # would sit silent for a whole budget and then jump by two.
+                for offset, sname in enumerate(wanted):
+                    _announce(first_index + offset, spec.label, sname)
+                race_started, race_finished, outcomes = _run_race(spec, worker_budget)
+            else:
+                race_started, race_finished, outcomes = candidate_race
             by_strategy = {outcome.strategy: outcome for outcome in outcomes}
             if set(by_strategy) != set(wanted):
                 # A lost arm must never read as a complete build: `total_pairs`
@@ -671,6 +795,7 @@ def build(
                     sname,
                     first_index + offset,
                     race_started,
+                    race_finished,
                     strategy_race.RACE_COMPLETION_GRACE_S,
                     _raced_result(by_strategy[sname], spec.label, time_budget_s),
                 )
@@ -679,7 +804,14 @@ def build(
         else:
             solved = _solve_serially(spec, first_index)
 
-        for sname, pair_index, attempt_started, completion_grace_s, result in solved:
+        for (
+            sname,
+            pair_index,
+            attempt_started,
+            result_finished,
+            completion_grace_s,
+            result,
+        ) in solved:
             if isinstance(result, NoValidLayout):
                 # One strategy failing a candidate is not a failed build -- the
                 # others may well succeed. Record it so the reason survives to
@@ -705,18 +837,25 @@ def build(
                     )
                 continue
             placement = result
+            # Candidate peers may finish later, and the previous arm's
+            # settlement runs serially. Neither delay belongs to this attempt.
+            settlement_started = time.monotonic()
+            settlement_wait_s = (
+                0.0
+                if result_finished is None
+                else max(0.0, settlement_started - result_finished)
+            )
             # A HARD wall per attempt, in the one place that can see the whole
-            # cost.  A strategy's own budget covers its search; compaction,
-            # projection, validation and encoding all run AFTER it and are
-            # charged to nobody.  `validate.validate` takes no cancellation
-            # parameter at all, so this cancels where a hook exists and REPORTS
-            # everywhere else -- a number the gate can fail on beats a number
-            # nobody produced.
-            #
-            # `completion_grace_s` and not the atomic constant: a raced pair is
-            # judged by the race's own, longer contract, or it arrives here
-            # already past a deadline the race was entitled to reach.
-            attempt_deadline = attempt_started + time_budget_s + completion_grace_s
+            # cost. A strategy's own budget covers its search; compaction,
+            # projection, validation and encoding consume its remaining grace.
+            # Shift only by time spent waiting to be settled, never by solve
+            # time, so a real solver overshoot still expires immediately.
+            attempt_deadline = (
+                attempt_started
+                + time_budget_s
+                + completion_grace_s
+                + settlement_wait_s
+            )
 
             def attempt_expired(_deadline: float = attempt_deadline) -> bool:
                 return time.monotonic() >= _deadline
@@ -775,7 +914,7 @@ def build(
                         raise
                     reason = (
                         f"attempt deadline exhausted during finalization "
-                        f"after {time.monotonic() - attempt_started:.1f}s "
+                        f"after {time.monotonic() - attempt_started - settlement_wait_s:.1f}s "
                         f"(budget {time_budget_s:g}s + grace "
                         f"{completion_grace_s:g}s)"
                     )
@@ -844,11 +983,12 @@ def build(
                         )
                     )
                 continue
-            # Serially this is the pair's own solve plus its own completion.
-            # Under racing it is the RACE's wall plus this attempt's own
-            # post-processing -- the same base for both arms, because the arms'
-            # individual walls stay in the children and no outcome carries them.
-            attempt_wall_s = time.monotonic() - attempt_started
+            # Each raced arm is charged its shared race plus only its own
+            # post-processing. Waiting for peer candidates or earlier arms to
+            # settle is deliberately excluded.
+            attempt_wall_s = (
+                time.monotonic() - attempt_started - settlement_wait_s
+            )
             labelled.stats["attempt_wall_s"] = attempt_wall_s
             labelled.stats["wall_overshoot_s"] = max(
                 0.0,
@@ -898,7 +1038,13 @@ def build(
     # one because it measured smaller -- which it will, since a missing net is a
     # missing belt run.
     pool = valid or attempts
-    best = min(pool, key=lambda a: a.area)
+    best = min(
+        pool,
+        key=lambda attempt: (
+            attempt.area,
+            float(attempt.placement.stats.get("belt_tiles", float("inf"))),
+        ),
+    )
     chosen_spec = next(s for s in spec_set.candidates if s.label == best.candidate)
 
     # Cross-check rather than trust. With the selection pinned this must be

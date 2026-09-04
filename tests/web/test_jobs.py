@@ -530,11 +530,50 @@ def test_run_build_passes_the_exact_candidate_policy_subset(
     )
     with pytest.raises(ValueError, match="stop after observing"):
         run_build(
-            Options(url=URL, candidate_policies=selected),
+            Options(
+                url=URL,
+                strategy="freeform",
+                candidate_policies=selected,
+            ),
             lambda _step: None,
         )
 
     assert seen["candidate_policies"] == selected
+
+
+def test_run_build_delegates_default_cpu_allocation_to_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    small_build: pipeline.Build,
+) -> None:
+    """Web and direct builds use the pipeline's one allocation policy."""
+    calls: list[dict[str, object]] = []
+
+    def solve_once(*_args: object, **kwargs: object) -> pipeline.Build:
+        calls.append(dict(kwargs))
+        return small_build
+
+    monkeypatch.setattr(pipeline, "build", solve_once)
+    selected = (
+        CandidatePolicy.NO_PROLIFERATOR,
+        CandidatePolicy.ALL_PRODUCTS,
+    )
+
+    built = run_build(
+        Options(
+            url=URL,
+            candidate_policies=selected,
+        ),
+        lambda _step: None,
+    )
+
+    assert built is small_build
+    assert len(calls) == 1
+    assert calls[0]["candidate_policies"] == selected
+    assert calls[0]["race"] is True
+    assert "workers" not in calls[0]
+    assert "candidate_parallelism" not in calls[0]
+
+
 
 
 def test_pinned_flow_snapshot_advertises_one_effective_candidate(
