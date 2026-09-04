@@ -374,7 +374,7 @@ def test_preparation_groups_internal_siblings_but_never_external_nets() -> None:
     assert grouped[3].src_group == grouped[3].dst_group == ()
 
 
-def test_preparation_never_groups_different_items_at_the_same_endpoint() -> None:
+def test_preparation_groups_mixed_destinations_but_not_mixed_sources() -> None:
     iron_id = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
     copper_id = NetId(0, 2, "copper", NetRole.INTERNAL, 0)
     source = _PreparedPort(0, 1, 1, 0, 3, (0,), 1)
@@ -384,8 +384,10 @@ def test_preparation_never_groups_different_items_at_the_same_endpoint() -> None
 
     grouped = _with_sibling_groups((iron, copper))
 
-    assert grouped[0].src_group == grouped[0].dst_group == ()
-    assert grouped[1].src_group == grouped[1].dst_group == ()
+    assert grouped[0].src_group == ()
+    assert grouped[1].src_group == ()
+    assert grouped[0].dst_group == (copper_id,)
+    assert grouped[1].dst_group == (iron_id,)
 
 
 def test_external_net_routes_inward_from_prepared_boundary_goals() -> None:

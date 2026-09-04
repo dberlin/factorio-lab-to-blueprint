@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import flab2bp.layout.validate as validate_module
+from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.dsp import params, rules
 from flab2bp.dsp.catalog import (
     DEFAULT_MAX_BELT_Z,
@@ -24,6 +25,7 @@ from flab2bp.dsp.catalog import (
 from flab2bp.dsp.catalog import building as catalog_building
 from flab2bp.dsp.catalog import oriented_footprint as catalog_oriented_footprint
 from flab2bp.layout import junction
+from flab2bp.layout import slots as slots_module
 from flab2bp.layout.base import NoValidLayout, PlacedBuilding, Placement
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.layout.validate import (
@@ -952,8 +954,10 @@ def test_game_slot_occupancy_fires_on_a_splitter_draw_own_slot_collision() -> No
     assert finding.detail["object"] == 1
     assert finding.detail["slot"] == 1
     assert finding.detail["claim_count"] == 2
-    assert "input own" in finding.detail["claims"]
-    assert "output peer" in finding.detail["claims"]
+    claims = finding.detail["claims"]
+    assert isinstance(claims, str)
+    assert "input own" in claims
+    assert "output peer" in claims
 
 
 def test_game_slot_occupancy_counts_one_record_once_when_both_ends_share_a_cell() -> None:
@@ -1362,15 +1366,24 @@ def test_game_belt_crossing_excuses_a_belt_beside_a_coater_on_the_ground() -> No
 def test_game_belt_crossing_exact_probe_ignores_distant_belts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exact = validate_module.dsp_colliders.belt_crossings
+    exact = dsp_colliders.belt_crossings
     probes = 0
 
-    def counted(*args: object, **kwargs: object) -> list[tuple[int, int]]:
+    def counted(
+        belts: list[dsp_colliders.Placed],
+        buildings: list[dsp_colliders.Placed],
+        *,
+        directly_over_only: bool = False,
+    ) -> list[tuple[int, int]]:
         nonlocal probes
-        probes += len(args[0])  # type: ignore[arg-type]
-        return exact(*args, **kwargs)  # type: ignore[arg-type]
+        probes += len(belts)
+        return exact(
+            belts,
+            buildings,
+            directly_over_only=directly_over_only,
+        )
 
-    monkeypatch.setattr(validate_module.dsp_colliders, "belt_crossings", counted)
+    monkeypatch.setattr(dsp_colliders, "belt_crossings", counted)
     placement = _coater_with_a_belt_at(1)
     placement = Placement(
         buildings=(
@@ -1582,7 +1595,7 @@ COATER_SPEC = BuildSpec(
 def test_addon_belt_lookup_reuses_exact_result_across_checks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exact = validate_module.slots.world_gap
+    exact = slots_module.world_gap
     probes = 0
 
     def counted(dx: float, dy: float, dz: float) -> float:
@@ -1590,7 +1603,7 @@ def test_addon_belt_lookup_reuses_exact_result_across_checks(
         probes += 1
         return exact(dx, dy, dz)
 
-    monkeypatch.setattr(validate_module.slots, "world_gap", counted)
+    monkeypatch.setattr(slots_module, "world_gap", counted)
     placement = place(
         belt(0, 0, carries="ore"),
         belt(-1, 0, 1, carries="proliferator-3"),
@@ -3294,8 +3307,8 @@ def test_junction_stack_uses_two_level_pitch_and_names_its_support() -> None:
     )
 
     assert [(building.z, building.input_obj, building.carries_item) for building in stack] == [
-        (0, None, None),
-        (2, 7, "iron-ore"),
+        (Fraction(0), None, None),
+        (Fraction(2), 7, "iron-ore"),
     ]
 
 

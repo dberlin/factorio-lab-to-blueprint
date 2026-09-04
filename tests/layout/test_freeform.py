@@ -17,6 +17,7 @@ from dataclasses import replace
 from fractions import Fraction
 from fractions import Fraction as F
 from pathlib import Path
+from typing import Protocol, cast, overload
 
 import pytest
 from ortools.sat.python import cp_model
@@ -107,6 +108,7 @@ from flab2bp.layout.route_feedback import (
     NetRole,
     RouteFailureKind,
     combine_last_mile_reports,
+    update_feedback,
 )
 from flab2bp.layout.sequence_alns import (
     OperatorChoice,
@@ -329,7 +331,11 @@ def test_prepare_routing_problem_does_not_deepcopy_buildings(
 
     import flab2bp.layout.freeform as freeform_module
 
-    assert PlacedBuilding.__dataclass_params__.frozen
+    class DataclassParams(Protocol):
+        frozen: bool
+
+    params = cast(DataclassParams, PlacedBuilding.__dict__["__dataclass_params__"])
+    assert params.frozen
     spec = two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     pack = _greedy_pack(strips, _height_seed(strips))
@@ -1278,28 +1284,22 @@ def test_detailed_route_terminates_at_elevated_port() -> None:
     assert any(building.z > 0 for building in canvas.buildings[2:])
 
 
-def test_detailed_router_never_groups_different_items_at_one_endpoint(
+def test_detailed_router_groups_mixed_destination_but_not_mixed_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A mixed lane shares its destination topology, never its producers."""
     canvas = _Canvas(limit=(0, -2, 6, 2))
-    first_source = canvas.add(
-        PlacedBuilding(2001, 35, 0, -1, carries_item="iron"),
-        level=0,
-    )
-    second_source = canvas.add(
-        PlacedBuilding(2001, 35, 0, 1, carries_item="copper"),
-        level=0,
-    )
+    shared_source = canvas.add(PlacedBuilding(2001, 35, 0, 0), level=0)
     destination = canvas.add(PlacedBuilding(2001, 35, 6, 0), level=0)
     nets = [
         _Net(
-            src=_Port(first_source, 0, -1, 0, 0),
+            src=_Port(shared_source, 0, 0, 0, 0),
             dst=_Port(destination, 6, 0, 6, 6),
             item="iron",
             net_id=NetId(0, 2, "iron", NetRole.INTERNAL, 0),
         ),
         _Net(
-            src=_Port(second_source, 0, 1, 0, 0),
+            src=_Port(shared_source, 0, 0, 0, 0),
             dst=_Port(destination, 6, 0, 6, 6),
             item="copper",
             net_id=NetId(1, 2, "copper", NetRole.INTERNAL, 0),
@@ -1336,7 +1336,7 @@ def test_detailed_router_never_groups_different_items_at_one_endpoint(
     assert observed
     for src_group, dst_group in observed:
         assert src_group == {0: (), 1: ()}
-        assert dst_group == {0: (), 1: ()}
+        assert dst_group == {0: (1,), 1: (0,)}
 
 
 def test_commit_link_rejection_reroutes_the_same_net_before_emission(
@@ -2614,6 +2614,24 @@ class TestASideCarriesAsManyLanesAsItsPosesAllow:
         assert all(len(s.out_lanes) + len(s.in_below) <= 2 for s in gears)
 
 
+def test_greedy_seed_adds_only_requested_routing_clearance() -> None:
+    """Only large unsprayed searches request the deterministic safety gap."""
+    strips = plan_strips(two_stage_spec(), strip_len=6)
+    height = sum(_box(strip)[1] + 1 for strip in strips)
+
+    compact = _greedy_pack(strips, height)
+    safe = _greedy_pack(strips, height, route_clearance=1)
+
+    for index, previous in enumerate(strips[:-1]):
+        assert compact.at[index + 1][1] - compact.at[index][1] == _box(previous)[1]
+        assert safe.at[index + 1][1] - safe.at[index][1] == _box(previous)[1] + 1
+
+    large = [strips[0]] * freeform._DETERMINISTIC_PACK_STRIPS
+    assert freeform._routing_seed_clearance(large, sprayed_lanes=0) == 1
+    assert freeform._routing_seed_clearance(large[:-1], sprayed_lanes=0) == 0
+    assert freeform._routing_seed_clearance(large, sprayed_lanes=1) == 0
+
+
 # --- fallback --------------------------------------------------------------
 
 
@@ -2806,17 +2824,23 @@ def test_direct_column_delta_work_is_linear_in_packed_bytes(
 
         def __sub__(self, other: object) -> int:
             type(self).subtractions += 1
-            return int(self) - int(other)
+            if not isinstance(other, int):
+                return NotImplemented
+            return int(self) - other
 
     class CountedBytearray(bytearray):
         allocations = 0
         writes = 0
 
         def __init__(self, source: object = 0) -> None:
+            if not isinstance(source, (int, bytes, bytearray)):
+                raise TypeError("the counted test double accepts bytearray runtime inputs")
             super().__init__(source)
             type(self).allocations += len(self)
 
         def __setitem__(self, key: object, value: object) -> None:
+            if not isinstance(key, int) or not isinstance(value, int):
+                raise TypeError("the counted test double accepts indexed integer writes")
             type(self).writes += 1
             super().__setitem__(key, value)
 
@@ -2828,8 +2852,23 @@ def test_direct_column_delta_work_is_linear_in_packed_bytes(
         coefficient_bytes: int,
         digit_count: int,
     ) -> bytearray:
-        class CountedPackedBytes:
-            def __iter__(self):
+        class CountedPackedBytes(Sequence[int]):
+            def __len__(self) -> int:
+                return len(packed)
+
+            @overload
+            def __getitem__(self, index: int) -> int: ...
+
+            @overload
+            def __getitem__(self, index: slice) -> Sequence[int]: ...
+
+            def __getitem__(self, index: int | slice) -> int | Sequence[int]:
+                nonlocal extraction_reads
+                if isinstance(index, int):
+                    extraction_reads += 1
+                return packed[index]
+
+            def __iter__(self) -> Iterator[int]:
                 nonlocal extraction_reads
                 for value in packed:
                     extraction_reads += 1
@@ -4470,7 +4509,7 @@ def test_fully_routed_attempt_finishes_certification_inside_atomic_grace(
         clock += 0.2
         return validate.Report(findings=())
 
-    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     result, _seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         _routing_failures(),
@@ -4505,7 +4544,7 @@ def test_fully_routed_attempt_crossing_atomic_completion_grace_is_not_returned(
         clock += 5.2
         return validate.Report(findings=())
 
-    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     result, _seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         _routing_failures(),
@@ -4563,7 +4602,7 @@ def test_terminal_refusal_names_completion_stage_after_every_net_wired(
         clock = 2.0
         return None
 
-    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     monkeypatch.setattr(FreeformLayout, "_sweep", expire_after_routing)
 
     with pytest.raises(NoValidLayout) as caught:
@@ -4701,7 +4740,7 @@ def test_sweep_reserves_compaction_finalization_and_validation_as_exact_sum(
             )
         )
 
-    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
     result, seen, attempts = _sweep_after_first_routing(
         monkeypatch,
@@ -4781,7 +4820,7 @@ def test_sweep_reserves_measured_certify_and_finalize_cost_before_admission(
         clock += 0.2
         return placement
 
-    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     result, seen, _attempts = _sweep_after_first_routing(
         monkeypatch,
         DetailedRouteResult(
@@ -4906,7 +4945,7 @@ def test_feedback_rescue_uses_positive_hard_time_without_prior_candidate_afforda
         if (height, arrangement) == (20, 0):
             clock += first_attempt_s
 
-    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     room_for_another = freeform._room_for_another
 
     result, seen, attempts = _sweep_after_first_routing(
@@ -4986,7 +5025,7 @@ def test_ordinary_retry_admission_uses_measured_nonzero_candidate_cost(
     ticks = itertools.count()
     measured: list[float] = []
 
-    monkeypatch.setattr(freeform.time, "monotonic", lambda: float(next(ticks)))
+    monkeypatch.setattr(time, "monotonic", lambda: float(next(ticks)))
 
     def refuse_retry(
         _deadline: float | None,
@@ -5041,7 +5080,7 @@ def test_failed_assignments_enumerate_direct_candidates_once_per_strip_plan(
     def counted_candidates(
         strips: list[Strip],
         spec: BuildSpec,
-    ) -> dict[tuple[int, int], object]:
+    ) -> dict[tuple[int, int], _DirectCandidate]:
         nonlocal enumerations
         enumerations += 1
         return enumerate_candidates(strips, spec)
@@ -5104,9 +5143,9 @@ def test_fifteen_strip_pack_uses_reproducible_solver_budget(
     monkeypatch.setattr(
         freeform,
         "_band_policy_candidate_heights",
-        lambda _strips, _policy: (20,),
+        lambda _strips, _policy, **_kwargs: (20,),
     )
-    monkeypatch.setattr(freeform, "_greedy_pack", lambda *_args: seed)
+    monkeypatch.setattr(freeform, "_greedy_pack", lambda *_args, **_kwargs: seed)
     monkeypatch.setattr(freeform, "_pack", pack)
 
     result = FreeformLayout(
@@ -5436,7 +5475,7 @@ def test_route_feedback_objective_keeps_exact_net_terms_and_hot_walls() -> None:
 def test_ground_net_retains_elevated_wall_as_an_exact_cp_term() -> None:
     net = NetId(0, 1, "ore", NetRole.INTERNAL, 0)
     wall = (12, 5, 2)
-    feedback = freeform.update_feedback(
+    feedback = update_feedback(
         FeedbackState.empty((60, 20)),
         DetailedRouteResult(
             DetailedRouteStatus.STRANDED,
@@ -5482,7 +5521,7 @@ def test_route_feedback_disjoint_walls_create_only_linear_exact_terms() -> None:
         )
         for index, (net, wall) in enumerate(zip(nets, walls, strict=True))
     )
-    feedback = freeform.update_feedback(
+    feedback = update_feedback(
         FeedbackState.empty((40, 20)),
         DetailedRouteResult(
             DetailedRouteStatus.STRANDED,
@@ -6308,10 +6347,8 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
         return _BuildResult(
             placement=Placement(
                 buildings=(),
-                stats={
-                    "belt_tiles": 0.0,
-                    "test_height": float(pack.height),
-                },
+                description=str(pack.height),
+                stats={"belt_tiles": 0.0},
             ),
             routing=routed,
             budget_stage=None,
@@ -6353,7 +6390,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
         cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         del cancelled
-        if placement.stats["test_height"] == 20.0:
+        if placement.description == "20":
             raise finalize.ProjectionRefusal((failure,))
         return placement
 
@@ -6387,7 +6424,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
     )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     assert result is not None
-    assert result.stats["test_height"] == 21.0
+    assert result.description == "21"
     assert seen_candidates == [(20, 0, 8), (21, 0, 9)]
 
 
@@ -6915,7 +6952,8 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
 
     assert result is not None
     assert len(seen_no_goods) == len(seen_exact_no_goods) == 2
-    assert seen_no_goods[0] == seen_exact_no_goods[0] == ()
+    assert seen_no_goods[0] == ()
+    assert seen_exact_no_goods[0] == ()
     if independent:
         learned = seen_no_goods[1]
         assert seen_exact_no_goods[1] == ()
@@ -8313,7 +8351,7 @@ def test_prospective_static_cache_reuses_only_the_immutable_base(
         width=chemical.width,
         height=chemical.height,
     )
-    candidates = (
+    candidates = tuple(
         PlacedBuilding(
             catalog.TESLA_TOWER_ID,
             tower.model_index,
@@ -8324,7 +8362,6 @@ def test_prospective_static_cache_reuses_only_the_immutable_base(
         )
         for x in (20, 25)
     )
-    candidates = tuple(candidates)
     frames = freeform._junction_projection_frames(
         (0, 0, 30, 5),
         (0, 0, 30, 5),
@@ -8850,10 +8887,8 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
         return _BuildResult(
             placement=Placement(
                 buildings=(),
-                stats={
-                    "belt_tiles": 0.0,
-                    "test_height": float(pack.height),
-                },
+                description=str(pack.height),
+                stats={"belt_tiles": 0.0},
             ),
             routing=routed,
             budget_stage=None,
@@ -8886,7 +8921,7 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch.undo()
     freeform._staged_static_preclearance_proved.cache_clear()
     assert result is not None
-    assert result.stats["test_height"] == 21.0
+    assert result.description == "21"
     assert seen_candidates == [
         (20, 0, freeform._COATER_WEST_CHANNEL),
         (21, 0, freeform._COATER_WEST_CHANNEL + 1),
@@ -9051,10 +9086,8 @@ def _sweep_with_repeated_exact_feedback(
                 PlacedBuilding(1, 1, 0, 0, owner_strip=0),
                 PlacedBuilding(1, 1, 1, 0, owner_strip=1),
             ),
-            stats={
-                "belt_tiles": 0.0,
-                "test_height": float(pack.height),
-            },
+            description=str(pack.height),
+            stats={"belt_tiles": 0.0},
         )
         if pack.height != 20 or source == "finalizer":
             return _BuildResult(
@@ -9084,7 +9117,7 @@ def _sweep_with_repeated_exact_feedback(
         cancelled: Callable[[], bool] | None = None,
     ) -> Placement:
         del cancelled
-        if source == "finalizer" and placement.stats["test_height"] == 20.0:
+        if source == "finalizer" and placement.description == "20":
             raise finalize.ProjectionRefusal((failure,))
         return placement
 
@@ -9136,7 +9169,7 @@ def test_exact_feedback_admits_at_most_one_distinct_assignment_retry_per_candida
     )
 
     assert result is not None
-    assert result.stats["test_height"] == 21.0
+    assert result.description == "21"
     assert seen_candidates == [(20, 0), (20, 0), (21, 0)]
     assert applicable_counts == [0, 1, 0]
 
@@ -9153,7 +9186,7 @@ def test_unaffordable_exact_feedback_preserves_later_base_height(
     )
 
     assert result is not None
-    assert result.stats["test_height"] == 21.0
+    assert result.description == "21"
     assert seen_candidates == [(20, 0), (21, 0)]
     assert applicable_counts == [0, 0]
 
@@ -9190,10 +9223,8 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
         return _BuildResult(
             placement=Placement(
                 buildings=(),
-                stats={
-                    "belt_tiles": 0.0,
-                    "test_height": float(pack.height),
-                },
+                description=str(pack.height),
+                stats={"belt_tiles": 0.0},
             ),
             routing=routed,
             budget_stage=None,
@@ -9229,7 +9260,7 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
     )._sweep(spec, strips, 1.0, session=OperatorSession())
 
     assert result is not None
-    assert result.stats["test_height"] == 20.0
+    assert result.description == "20"
     assert seen_heights == [20]
 
 
@@ -11461,10 +11492,23 @@ class TestPowerClaimsItsGroundBeforeRouting:
         frame_queries = 0
         original_frames = freeform._cached_junction_projection_frames
 
-        def counted_frames(*args: object, **kwargs: object) -> object:
+        def counted_frames(
+            cache: freeform._StagedStaticCache,
+            occupied: tuple[int, int, int, int],
+            limit: tuple[int, int, int, int],
+            policy: BandPolicy,
+            *,
+            cancelled: Callable[[], bool] | None = None,
+        ) -> tuple[freeform._JunctionProjectionFrame, ...]:
             nonlocal frame_queries
             frame_queries += 1
-            return original_frames(*args, **kwargs)  # type: ignore[no-any-return]
+            return original_frames(
+                cache,
+                occupied,
+                limit,
+                policy,
+                cancelled=cancelled,
+            )
 
         monkeypatch.setattr(
             freeform,
@@ -12991,11 +13035,9 @@ class TestABranchLeavesFromItsOwnSource:
             if building.output_obj == branch
         ]
         assert len(predecessors) == 1
-        assert canvas.buildings[predecessors[0]].input_obj is not None
-        assert (
-            canvas.buildings[canvas.buildings[predecessors[0]].input_obj].item_id
-            == catalog.SPLITTER_ID
-        )
+        predecessor_input = canvas.buildings[predecessors[0]].input_obj
+        assert predecessor_input is not None
+        assert canvas.buildings[predecessor_input].item_id == catalog.SPLITTER_ID
 
     @pytest.mark.parametrize("blocked_owner", ("absent", "other"))
     def test_self_hint_recovery_uses_head_coordinate_not_blocked_owner(
@@ -13720,14 +13762,25 @@ class TestDetailedRoutingDiagnostics:
         original_merge = freeform._merge_frontier
 
         def capture_frontier(
-            *args: object,
+            canvas: _Canvas,
+            paths: Mapping[int, Sequence[Cell]],
+            siblings: tuple[int, ...],
+            junctionable: Callable[[int, int, int], bool] | None = None,
+            *,
             provenance: dict[Cell, Cell] | None = None,
-            **kwargs: object,
+            belt_prefab: tuple[int, int] | None = None,
+            tentative_ok: bool = False,
+            owned_guard: Mapping[Cell, Cell] | None = None,
         ) -> set[Cell]:
             frontier = original_merge(
-                *args,
+                canvas,
+                paths,
+                siblings,
+                junctionable,
                 provenance=provenance,
-                **kwargs,
+                belt_prefab=belt_prefab,
+                tentative_ok=tentative_ok,
+                owned_guard=owned_guard,
             )
             if provenance is not None and branch_head in provenance:
                 latest_provenance[:] = [provenance]
@@ -15129,6 +15182,7 @@ class TestAJunctionIsNotBuiltBesideAForeignBelt:
     def test_a_merge_on_the_splitter_feed_is_stable_in_every_order(self) -> None:
         """Every reconstructed feeder still reaches the Splitter downstream."""
         canvas, nets, paths = self._scene(stranger=False)
+        assert nets[0].src is not None
         lane = nets[0].src.belt
         upstream = next(
             index for index, belt in enumerate(canvas.buildings) if belt.output_obj == lane
@@ -15697,8 +15751,8 @@ class TestSourceTapMaterializesSupportedSplitterStacks:
             (building.z, building.input_obj, building.carries_item)
             for _index, building in splitters
         ] == [
-            (0, None, None),
-            (2, splitters[0][0], "gear"),
+            (Fraction(0), None, None),
+            (Fraction(2), splitters[0][0], "gear"),
         ]
         assert canvas.buildings[source].output_obj == splitters[1][0]
         for level in (0, 2):
@@ -16359,7 +16413,16 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             def __len__(self) -> int:
                 return len(self.buildings)
 
-            def __getitem__(self, index: int) -> PlacedBuilding:
+            @overload
+            def __getitem__(self, index: int) -> PlacedBuilding: ...
+
+            @overload
+            def __getitem__(self, index: slice) -> Sequence[PlacedBuilding]: ...
+
+            def __getitem__(
+                self,
+                index: int | slice,
+            ) -> PlacedBuilding | Sequence[PlacedBuilding]:
                 return self.buildings[index]
 
             def __iter__(self) -> Iterator[PlacedBuilding]:
@@ -17078,10 +17141,22 @@ def test_staged_static_projection_risk_uses_one_exact_pair_per_relation(
         buildings: Sequence[colliders.Placed],
         projection: planet.Projection,
         pairs: Sequence[tuple[int, int]] | None = None,
-        **kwargs: object,
+        *,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[tuple[int, int]]:
         pair_counts.append(0 if pairs is None else len(pairs))
-        return original(buildings, projection, pairs, **kwargs)
+        return original(
+            buildings,
+            projection,
+            pairs,
+            _box_cache=_box_cache,
+            cancelled=cancelled,
+        )
 
     monkeypatch.setattr(planet, "collisions_at", counted)
 
@@ -17122,10 +17197,22 @@ def test_staged_static_preclearance_batches_both_exact_relations(
         buildings: Sequence[colliders.Placed],
         projection: planet.Projection,
         pairs: Sequence[tuple[int, int]] | None = None,
-        **kwargs: object,
+        *,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[tuple[int, int]]:
         pair_counts.append(0 if pairs is None else len(pairs))
-        return original(buildings, projection, pairs, **kwargs)
+        return original(
+            buildings,
+            projection,
+            pairs,
+            _box_cache=_box_cache,
+            cancelled=cancelled,
+        )
 
     monkeypatch.setattr(planet, "collisions_at", counted)
 
@@ -17290,10 +17377,22 @@ def test_plan_strips_batches_all_exact_preclearance_relations(
         buildings: Sequence[colliders.Placed],
         projection: planet.Projection,
         pairs: Sequence[tuple[int, int]] | None = None,
-        **kwargs: object,
+        *,
+        _box_cache: dict[
+            tuple[colliders.Placed, planet.Projection],
+            tuple[colliders.Box, ...],
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[tuple[int, int]]:
         pair_counts.append(0 if pairs is None else len(pairs))
-        return original(buildings, projection, pairs, **kwargs)
+        return original(
+            buildings,
+            projection,
+            pairs,
+            _box_cache=_box_cache,
+            cancelled=cancelled,
+        )
 
     monkeypatch.setattr(planet, "collisions_at", counted)
 
@@ -21115,6 +21214,20 @@ def test_a_replan_drops_a_pending_window_repair_and_settles_it_once(
     log: list[str] = []
     session = _RecordingSession(log)
     replanned = plan_strips(two_stage_spec(), strip_len=1)
+    seed_policies: list[tuple[int, int]] = []
+    routing_seed_clearance = freeform._routing_seed_clearance
+
+    def record_seed_policy(
+        current: Sequence[Strip],
+        *,
+        sprayed_lanes: int,
+    ) -> int:
+        clearance = routing_seed_clearance(current, sprayed_lanes=sprayed_lanes)
+        seed_policies.append((len(current), clearance))
+        return clearance
+
+    monkeypatch.setattr(freeform, "_DETERMINISTIC_PACK_STRIPS", 5)
+    monkeypatch.setattr(freeform, "_routing_seed_clearance", record_seed_policy)
 
     def refuse_the_frame(
         _placement: Placement,
@@ -21172,6 +21285,9 @@ def test_a_replan_drops_a_pending_window_repair_and_settles_it_once(
 
     # The strip count really did change under the pending repair.
     assert len(replanned) > 2
+    # The seed policy and its fixed height schedule belong to the immutable
+    # input plan, not to a geometry-driven strip split halfway through a sweep.
+    assert seed_policies == [(2, 0)]
     assert packed == [(20, 0)]
     assert builds == ["test", "window"]
     assert result is None
@@ -21807,13 +21923,13 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
     anywhere in the corpus, matching the reversion rule's "buys no coverage by
     itself" (R4 §6 E2).
 
-    This restores R1's own measured number (258, the width its greedy seed for
-    this cell's tallest height actually packed) at the one height whose seed
-    narrowed under Task 2, holding every other height's real, unmodified seed.
-    That is the minimal patch that makes the historical defect observable
-    again: with only `_minimum_pack_width` (64) as witness, height 161
-    survives; with `max(_minimum_pack_width, seed.width)` (258) it dies at
-    `frame_candidates` and boundary height 154 takes its slot -- R1's §2/§3
+    This restores R1's own measured number (258, the realised outline width its
+    greedy seed for this cell's tallest height actually packed) at the one
+    height whose seed narrowed under Task 2, holding every other height's real,
+    unmodified seed.  That is the minimal patch that makes the historical defect
+    observable again: with only `_minimum_pack_width` (64) as witness, height
+    161 survives; with `max(_minimum_pack_width, realised_width)` (258) it dies
+    at `frame_candidates` and boundary height 154 takes its slot -- R1's §2/§3
     mechanism, on real strips, with one real historical number substituted for
     a value the corpus no longer produces.
     """
@@ -21834,7 +21950,22 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
 
     def widened_seed_at_161(strips_: list[Strip], height: int) -> freeform._Pack:
         pack = real_greedy_pack(strips_, height)
-        return replace(pack, width=258) if height == 161 else pack
+        if height != 161:
+            return pack
+        box_rights = {
+            index: pack.at[index][0] - strip.west_channel + _box(strip)[0]
+            for index, strip in enumerate(strips_)
+        }
+        rightmost = max(box_rights, key=box_rights.__getitem__)
+        realized_width, _realized_height = freeform._realized_pack_outline(
+            strips_,
+            pack,
+        )
+        at = dict(pack.at)
+        x, y = at[rightmost]
+        added_width = 258 - realized_width
+        at[rightmost] = (x + added_width, y)
+        return replace(pack, at=at, width=pack.width + added_width)
 
     monkeypatch.setattr(freeform, "_greedy_pack", widened_seed_at_161)
 
@@ -21849,6 +21980,7 @@ def test_a_freeform_refusal_carries_the_sweep_s_own_counters(
 ) -> None:
     """The keys Gate E2 reads off a REFUSED freeform row."""
     spec = two_stage_spec()
+
     strips = plan_strips(spec)
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [20])
     telemetry: dict[str, float | str] = {}
@@ -21869,6 +22001,63 @@ def test_a_freeform_refusal_carries_the_sweep_s_own_counters(
         "window_accepted",
         "alns_operators",
     }
+
+
+def test_band_scheduler_uses_the_requested_seed_clearance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strips = plan_strips(two_stage_spec())
+    strips = [
+        replace(strips[0], west_channel=1),
+        replace(strips[1], west_channel=3),
+    ]
+    clearances: list[int] = []
+    reserved_widths: dict[int, int] = {}
+
+    def greedy(
+        current: list[Strip],
+        height: int,
+        *,
+        route_clearance: int = 0,
+    ) -> freeform._Pack:
+        clearances.append(route_clearance)
+        return freeform._Pack(
+            at={index: (index * 100, 0) for index in range(len(current))},
+            width=10_000,
+            height=height,
+            status="seed",
+        )
+
+    def reserve_boundary(
+        _envelope: finalize.BandPolicySearchEnvelope,
+        ordered: tuple[int, ...],
+        *,
+        minimum_width_for_height: Mapping[int, int],
+    ) -> tuple[int, ...]:
+        reserved_widths.update(minimum_width_for_height)
+        return ordered
+
+    monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [20])
+    monkeypatch.setattr(freeform, "_greedy_pack", greedy)
+    monkeypatch.setattr(
+        finalize.BandPolicySearchEnvelope,
+        "reserve_boundary_height",
+        reserve_boundary,
+    )
+
+    freeform._band_policy_candidate_heights(
+        strips,
+        BandPolicy("portable"),
+        route_clearance=1,
+    )
+
+    box_lefts = [index * 100 - strip.west_channel for index, strip in enumerate(strips)]
+    box_rights = [
+        box_left + _box(strip)[0] for box_left, strip in zip(box_lefts, strips, strict=True)
+    ]
+    realized_width = max(box_rights) - min(box_lefts)
+    assert clearances == [1]
+    assert reserved_widths == {20: max(freeform._minimum_pack_width(strips, 20), realized_width)}
 
 
 def test_a_freeform_refusal_carries_the_sweep_s_telemetry_end_to_end(

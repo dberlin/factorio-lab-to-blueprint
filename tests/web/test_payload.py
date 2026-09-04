@@ -295,7 +295,9 @@ def test_belt_tiers_travel_on_the_build_and_each_attempt(small_build: pipeline.B
     assert isinstance(attempt, dict)
     detail = attempt["detail"]
     assert isinstance(detail, dict)
-    assert set(detail["belt_tiers"]) == {
+    belt_tiers = detail["belt_tiers"]
+    assert isinstance(belt_tiers, dict)
+    assert set(belt_tiers) == {
         "floor",
         "ceiling",
         "runs_upgraded",

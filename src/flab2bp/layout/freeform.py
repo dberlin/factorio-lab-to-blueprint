@@ -167,6 +167,10 @@ _DEFAULT_BAND_POLICY = BandPolicy("portable")
 #: Free tiles reserved on a strip's east and south faces.  One is enough for a
 #: belt to pass; the router uses upper levels when one is not.
 MARGIN = 1
+#: Additional free row and column in the deterministic routing seed.  The exact
+#: packer may remove it; retaining it in the seed gives every port-access
+#: corridor one cell in which to turn before another strip can occupy the route.
+_GREEDY_ROUTE_CLEARANCE = 1
 
 #: Free tiles reserved on a strip's WEST face -- a routing channel the model
 #: pays for, rather than a corridor the router hopes to find.
@@ -3274,19 +3278,26 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
     return sorted(nets)
 
 
-def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
-    """Shelf packing -- always succeeds, and seeds the solver's upper bound.
+def _greedy_pack(
+    strips: list[Strip],
+    height: int,
+    *,
+    route_clearance: int = 0,
+) -> _Pack:
+    """Shelf packing with optional expendable routing cells between strip boxes.
 
-    A deterministic seed, not a loose fallback.  It bounds `_pack`'s width from
-    above and hints its variables.  `_sweep` may route it in place of the first
-    exact incumbent only after that incumbent proves the seed fits the existing
-    width-slack cap; a failed solve can never return it.
+    It is the deterministic safety candidate and the exact packer's upper bound.
+    The solver remains free to compact requested clearance, but a short search
+    can retain this seed instead of making an honest refusal from a tighter pack
+    whose port corridors have no turning cell.
     """
     at: dict[int, tuple[int, int]] = {}
     shelf_x, shelf_y, shelf_h = 0, 0, 0
     width = 0
     for i, s in enumerate(strips):
-        w, h = _box(s)
+        packed_width, packed_height = _box(s)
+        w = packed_width + route_clearance
+        h = packed_height + route_clearance
         if shelf_y + h > height and shelf_h:
             shelf_x, shelf_y, shelf_h = width, 0, 0
         # `at` is the CONTENT origin, so the west channel is stepped over here
@@ -3296,6 +3307,39 @@ def _greedy_pack(strips: list[Strip], height: int) -> _Pack:
         shelf_h = max(shelf_h, w)
         width = max(width, shelf_x + w)
     return _Pack(at=at, width=width, height=height, status="greedy")
+
+
+def _realized_pack_outline(
+    strips: Sequence[Strip],
+    pack: _Pack,
+) -> tuple[int, int]:
+    """Return occupied strip-box extent, excluding expendable seed clearance."""
+    boxes = tuple(
+        (
+            pack.at[index][0] - strip.west_channel,
+            pack.at[index][1],
+            *_box(strip),
+        )
+        for index, strip in enumerate(strips)
+    )
+    left = min(x for x, _y, _width, _height in boxes)
+    bottom = min(y for _x, y, _width, _height in boxes)
+    right = max(x + width for x, _y, width, _height in boxes)
+    top = max(y + height for _x, y, _width, height in boxes)
+    return right - left, top - bottom
+
+
+def _routing_seed_clearance(
+    strips: Sequence[Strip],
+    *,
+    sprayed_lanes: int,
+) -> int:
+    """Return the shared freeform/sequence safety gap for this strip plan."""
+    return (
+        _GREEDY_ROUTE_CLEARANCE
+        if sprayed_lanes == 0 and len(strips) >= _DETERMINISTIC_PACK_STRIPS
+        else 0
+    )
 
 
 def _add_exact_pack_no_good(
@@ -5352,8 +5396,12 @@ def _projected_coater_supply_context_key(
                     latitude,
                     building.z,
                     building.yaw,
-                    role_by_index.get(source.input_obj),
-                    role_by_index.get(source.output_obj),
+                    (role_by_index.get(source.input_obj) if source.input_obj is not None else None),
+                    (
+                        role_by_index.get(source.output_obj)
+                        if source.output_obj is not None
+                        else None
+                    ),
                 )
             )
         geometries.append((rotated, *buildings))
@@ -7703,14 +7751,14 @@ def _with_sibling_groups(
 ) -> tuple[_PreparedNet, ...]:
     """Freeze the detailed router's exact branch/merge groups onto each net."""
     same_src: dict[tuple[str, CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
-    same_dst: dict[tuple[str, CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
+    same_dst: dict[tuple[CargoDomain, int, int, int], list[NetId]] = defaultdict(list)
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
             continue
         if net.src is None:
             raise ValueError("non-external prepared nets require source ports")
         same_src[net.item, net.cargo_domain, net.src.y, net.src.x0, net.src.z].append(net.net_id)
-        same_dst[net.item, net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
+        same_dst[net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(net.net_id)
     grouped: list[_PreparedNet] = []
     for net in nets:
         if net.net_id.role is NetRole.EXTERNAL:
@@ -7735,7 +7783,6 @@ def _with_sibling_groups(
                 dst_group=tuple(
                     sibling
                     for sibling in same_dst[
-                        net.item,
                         net.cargo_domain,
                         net.dst.x,
                         net.dst.y,
@@ -8470,18 +8517,16 @@ def _route_all(
     # one grid.  Everybody else routes a handful of nets and gets Manhattan.
     grid.build_landmarks(_ALT_LANDMARKS)
 
-    # Nets carrying the same item and cargo domain that end at the same lane.
-    # Ordered, so "the ones before me" is well defined however the router
-    # chooses to sequence a round.
-    same_dst: dict[tuple[str, CargoDomain, int, int, int], list[int]] = defaultdict(list)
+    # Nets that end at the same physical lane share destination topology even
+    # when they carry different items.  Entry lanes are deliberately mixed:
+    # the sorters select each recipe input from that one belt.  Including
+    # ``item`` here prevented the third material from merging after two routes
+    # had occupied the only direct approaches to a shared lane head.
+    same_dst: dict[tuple[CargoDomain, int, int, int], list[int]] = defaultdict(list)
     for i, net in enumerate(nets):
-        same_dst[net.item, net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(i)
+        same_dst[net.cargo_domain, net.dst.x, net.dst.y, net.dst.z].append(i)
     dst_group = {
-        i: tuple(
-            g
-            for g in same_dst[net.item, net.cargo_domain, net.dst.x, net.dst.y, net.dst.z]
-            if g != i
-        )
+        i: tuple(g for g in same_dst[net.cargo_domain, net.dst.x, net.dst.y, net.dst.z] if g != i)
         for i, net in enumerate(nets)
     }
     # The same story on the producer side, and it needs the same answer. An
@@ -16947,54 +16992,54 @@ def _place_coaters(
         policy,
         cancelled=cancelled,
     )
-    addon_failure: finalize.ProjectionFailure | None = None
+    final_addon_failure: finalize.ProjectionFailure | None = None
     failed_candidate: _StagedCoater | None = None
     viable_addon_frames: list[_JunctionProjectionFrame] = []
     for frame in final_frames:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        frame_failure: finalize.ProjectionFailure | None = None
+        final_frame_failure: finalize.ProjectionFailure | None = None
         frame_failed_candidate: _StagedCoater | None = None
         for candidate in staged:
-            host = prospective[candidate.port.host_belt]
+            candidate_host = prospective[candidate.port.host_belt]
             context_key = _projected_coater_supply_context_key(
                 candidate,
-                host,
+                candidate_host,
                 frame,
             )
             if context_key in staged_static_cache.coater_supply_failures:
-                frame_failure = staged_static_cache.coater_supply_failures[context_key]
+                final_frame_failure = staged_static_cache.coater_supply_failures[context_key]
             else:
-                frame_failure = _projected_coater_supply_frame_failure(
+                final_frame_failure = _projected_coater_supply_frame_failure(
                     candidate,
-                    host,
+                    candidate_host,
                     frame,
                     cancelled=cancelled,
                 )
-                staged_static_cache.coater_supply_failures[context_key] = frame_failure
-            if frame_failure is not None:
+                staged_static_cache.coater_supply_failures[context_key] = final_frame_failure
+            if final_frame_failure is not None:
                 frame_failed_candidate = candidate
                 break
-        if frame_failure is None:
+        if final_frame_failure is None:
             viable_addon_frames.append(frame)
-            addon_failure = None
+            final_addon_failure = None
             failed_candidate = None
             if projected_capacity is None:
                 break
-        elif addon_failure is None:
-            addon_failure = frame_failure
+        elif final_addon_failure is None:
+            final_addon_failure = final_frame_failure
             failed_candidate = frame_failed_candidate
-    if not viable_addon_frames and addon_failure is not None:
+    if not viable_addon_frames and final_addon_failure is not None:
         candidate = failed_candidate or staged[0]
         raise _Unseatable(
             f"the {candidate.port.item} coater at "
             f"({candidate.port.host_x}, {candidate.port.host_y}, "
             f"z={candidate.port.host_z}) loses a projected supply belt after "
             "the complete coater set fixes the final frame",
-            failure=addon_failure,
+            failure=final_addon_failure,
             exact_retry_evidence=_exact_retry_evidence(
                 "seating",
-                addon_failure,
+                final_addon_failure,
                 dict(enumerate(prospective)),
             ),
         )
@@ -17044,7 +17089,7 @@ def _place_coaters(
                 )
             except finalize.ProjectionCancelled:
                 raise _PreparationDeadline from None
-            frame_failure: finalize.ProjectionFailure | None = None
+            splitter_frame_failure: finalize.ProjectionFailure | None = None
             for candidate_position, candidate in enumerate(staged):
                 if cancelled is not None and cancelled():
                     raise _PreparationDeadline
@@ -17058,22 +17103,22 @@ def _place_coaters(
                     for splitter in candidates[candidate_position]:
                         if cancelled is not None and cancelled():
                             raise _PreparationDeadline
-                        frame_failure = finalize.projected_coater_splitter_failure(
+                        splitter_frame_failure = finalize.projected_coater_splitter_failure(
                             framed_staged_pairs[candidate_position],
                             splitter,
                             projection,
                             cancelled=cancelled,
                         )
-                        if frame_failure is not None:
+                        if splitter_frame_failure is not None:
                             break
-                    if frame_failure is not None:
+                    if splitter_frame_failure is not None:
                         break
-                if frame_failure is not None:
+                if splitter_frame_failure is not None:
                     if splitter_failure is None:
-                        splitter_failure = frame_failure
+                        splitter_failure = splitter_frame_failure
                         failed_splitter_candidate = candidate
                     break
-            if frame_failure is None:
+            if splitter_frame_failure is None:
                 viable_splitter_frame = True
                 break
         if not viable_splitter_frame and splitter_failure is not None:
@@ -18357,7 +18402,24 @@ class FreeformLayout:
         """
         cancelled = None if deadline is None else lambda: _expired(deadline)
         candidates = _direct_insert_candidates(spec)
-        greedy = _greedy_pack(strips, _height_seed(strips))
+        # Select the deterministic fallback from the immutable input plan. A
+        # geometry replan can split strips, but changing seed policy halfway
+        # through this sweep would mix two policies in one fixed height schedule.
+        routing_seed_clearance = _routing_seed_clearance(
+            strips,
+            sprayed_lanes=len(spec.spray_lanes),
+        )
+
+        def greedy_seed(height: int) -> _Pack:
+            if routing_seed_clearance:
+                return _greedy_pack(
+                    strips,
+                    height,
+                    route_clearance=routing_seed_clearance,
+                )
+            return _greedy_pack(strips, height)
+
+        greedy = greedy_seed(_height_seed(strips))
         bound = max(greedy.width, max((w for w, _h in map(_box, strips)), default=1))
         direct_candidate_snapshot = _direct_candidate_snapshot(
             strips,
@@ -18437,8 +18499,16 @@ class FreeformLayout:
         #
         # The greedy pack is already built per height as `_pack`'s seed, so the
         # order adds no model, solve, candidate, or work.
-        heights = list(_band_policy_candidate_heights(strips, self.band_policy))
-        seeds = {height: _greedy_pack(strips, height) for height in heights}
+        heights = list(
+            _band_policy_candidate_heights(
+                strips,
+                self.band_policy,
+                route_clearance=routing_seed_clearance,
+            )
+            if routing_seed_clearance
+            else _band_policy_candidate_heights(strips, self.band_policy)
+        )
+        seeds = {height: greedy_seed(height) for height in heights}
         original_height_ordinal = {height: ordinal for ordinal, height in enumerate(heights)}
         envelope = finalize.band_policy_search_envelope(
             self.band_policy,
@@ -18680,11 +18750,7 @@ class FreeformLayout:
         )
 
         def strip_outline(pack: _Pack) -> tuple[int, int]:
-            left = min(origin[0] for origin in pack.at.values())
-            bottom = min(origin[1] for origin in pack.at.values())
-            right = max(pack.at[index][0] + _box(strip)[0] for index, strip in enumerate(strips))
-            top = max(pack.at[index][1] + _box(strip)[1] for index, strip in enumerate(strips))
-            return right - left, top - bottom
+            return _realized_pack_outline(strips, pack)
 
         compaction_reserve_s = 0.0
         finalize_reserve_s = 0.0
@@ -18732,7 +18798,7 @@ class FreeformLayout:
                 minimum_staged_static_clearance=(minimum_staged_static_clearance),
                 cancelled=cancelled,
             )
-            greedy = _greedy_pack(strips, _height_seed(strips))
+            greedy = greedy_seed(_height_seed(strips))
             bound = max(
                 greedy.width,
                 max((w for w, _h in map(_box, strips)), default=1),
@@ -18744,8 +18810,7 @@ class FreeformLayout:
             )
             net_candidates = direct_candidate_snapshot.candidates
             seeds = {
-                candidate_height: _greedy_pack(strips, candidate_height)
-                for candidate_height in heights
+                candidate_height: greedy_seed(candidate_height) for candidate_height in heights
             }
             # These proofs carry offsets, widths, or relation rows from the old
             # strip geometry. Exact and projection cuts self-filter by outline or
@@ -20114,28 +20179,42 @@ def _minimum_pack_width(strips: list[Strip], height: int) -> int:
 def _band_policy_candidate_heights(
     strips: list[Strip],
     policy: BandPolicy,
+    *,
+    route_clearance: int = 0,
 ) -> tuple[int, ...]:
     """Keep the measured order while reserving one proved fixed-band boundary.
 
-    THE WITNESS IS THE GREEDY SEED'S WIDTH, not `_minimum_pack_width`'s.  The
-    latter is a valid area-based LOWER bound and it is far below anything the
-    packer builds: 92 against 258 on `universe-matrix/no-proliferator`, where a
-    98x166 extent fits the 200-segment band rotated and a 264x162 extent fits
-    nothing.  Height 160 therefore survived the filter, its greedy seed was
-    rejected at the pre-pack gate, and one of five candidate slots was spent
-    proving that (R1 §2).  With the seed's width the boundary height 154 replaces
-    it, and its 258x154 pack packs and routes (R1 §3, E1).
+    THE WITNESS IS THE GREEDY SEED'S REALISED STRIP OUTLINE, not
+    `_minimum_pack_width`'s.  The latter is a valid area-based LOWER bound and it
+    is far below anything the packer builds: 92 against 258 on
+    `universe-matrix/no-proliferator`, where a 98x166 extent fits the 200-segment
+    band rotated and a 264x162 extent fits nothing.  Height 160 therefore
+    survived the filter, its greedy seed was rejected at the pre-pack gate, and
+    one of five candidate slots was spent proving that (R1 §2).  With the seed's
+    realised width the boundary height 154 replaces it, and its 258x154 pack
+    packs and routes (R1 §3, E1).
 
-    `max(...)` rather than the seed alone: `_minimum_pack_width` is still a proof
-    and can exceed the seed for a height the shelf pack seats badly, and taking
-    the larger of the two keeps the filter no weaker than it was.
+    `max(...)` rather than the outline alone: `_minimum_pack_width` is still a
+    proof and can exceed the seed for a height the shelf pack seats badly, and
+    taking the larger of the two keeps the filter no weaker than it was.
 
-    This is a WIDTH witness at the SCHEDULED height; the sweep's own seed gate
-    filters on `strip_outline(seed)`, whose height is the shelf's realised one.
-    The two are different questions and this function answers only the first.
+    Expendable routing clearance after the final shelf is deliberately excluded,
+    exactly as it is at `_sweep`'s seed gate.  This is a WIDTH witness at the
+    SCHEDULED height; the gate separately checks the realised outline height.
     """
-    seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
-    ordered = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
+
+    def greedy_seed(height: int) -> _Pack:
+        if route_clearance:
+            return _greedy_pack(
+                strips,
+                height,
+                route_clearance=route_clearance,
+            )
+        return _greedy_pack(strips, height)
+
+    seeds = {height: greedy_seed(height) for height in _candidate_heights(strips)}
+    outlines = {height: _realized_pack_outline(strips, seed) for height, seed in seeds.items()}
+    ordered = tuple(sorted(seeds, key=lambda height: (outlines[height][0], height)))
     envelope = finalize.band_policy_search_envelope(
         policy,
         perimeter=_ENTRY_RING,
@@ -20143,7 +20222,7 @@ def _band_policy_candidate_heights(
     return envelope.reserve_boundary_height(
         ordered,
         minimum_width_for_height={
-            height: max(_minimum_pack_width(strips, height), seeds[height].width)
+            height: max(_minimum_pack_width(strips, height), outlines[height][0])
             for height in ordered
         },
     )

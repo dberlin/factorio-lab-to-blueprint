@@ -12,7 +12,7 @@ from typing import cast
 import pytest
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
-from flab2bp.layout import finalize, freeform
+from flab2bp.layout import finalize, freeform, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from tests.layout.test_freeform import two_stage_spec
@@ -219,11 +219,15 @@ def test_cleanup_coordinate_index_uses_linear_cancellable_radix_passes() -> None
 
         def __lt__(self, other: object) -> bool:
             type(self).comparisons += 1
-            return super().__lt__(other)
+            if not isinstance(other, int):
+                return NotImplemented
+            return int(self) < other
 
         def __gt__(self, other: object) -> bool:
             type(self).comparisons += 1
-            return super().__gt__(other)
+            if not isinstance(other, int):
+                return NotImplemented
+            return int(self) > other
 
     belt_count = 2_048
 
@@ -334,7 +338,7 @@ def test_cleanup_prefix_snapshots_match_oracle_with_linear_aggregate_work() -> N
 
 
 def test_cleanup_prefix_snapshot_rechecks_linked_and_boundary_additions() -> None:
-    buildings = (
+    buildings: tuple[PlacedBuilding, ...] = (
         _linked_belt(0, 0, input_obj=None, output_obj=1),
         _linked_belt(1, 0, input_obj=0, output_obj=None),
         _building(2302, 1, 1),
@@ -516,7 +520,7 @@ def test_certified_compaction_returns_the_exact_clean_report(
             _belt(1, 0, output=1),
         )
     )
-    report = _Report()
+    report = validate.Report(findings=())
     monkeypatch.setattr(finalize, "_certify", lambda *_args, **_kwargs: report)
 
     result = finalize.compact_open_boundary_belts_certified(
@@ -1494,7 +1498,7 @@ def test_projected_coater_splitter_broad_phase_bounds_same_longitude_scan(
     )
     sqrt_calls = 0
     exact_pairs: list[tuple[int, int]] = []
-    original_sqrt = finalize.math.sqrt
+    original_sqrt = math.sqrt
 
     def counted_sqrt(value: float) -> float:
         nonlocal sqrt_calls
@@ -1509,7 +1513,7 @@ def test_projected_coater_splitter_broad_phase_bounds_same_longitude_scan(
         exact_pairs.append((coater[0], splitter[0]))
         return None
 
-    monkeypatch.setattr(finalize.math, "sqrt", counted_sqrt)
+    monkeypatch.setattr(math, "sqrt", counted_sqrt)
     monkeypatch.setattr(
         finalize,
         "projected_coater_splitter_failure",

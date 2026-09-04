@@ -14,6 +14,7 @@ import pytest
 from flab2bp.bench.corpus import URL_CORPUS, Tier
 from flab2bp.dsp import catalog
 from flab2bp.layout import finalize, route_kernel, validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
     AreaFrame,
@@ -311,7 +312,7 @@ def test_run_cell_does_not_repeat_completed_placement_work(
 
     def finalize_spy(
         placement: Placement,
-        policy: audit.BandPolicy,
+        policy: BandPolicy,
     ) -> Placement:
         completion_calls["finalize"] += 1
         return placement
@@ -320,9 +321,9 @@ def test_run_cell_does_not_repeat_completed_placement_work(
         placement: Placement,
         spec: object,
         **kwargs: object,
-    ) -> audit.validate.Report:
+    ) -> validate.Report:
         certified.append(placement)
-        return audit.validate.Report(findings=())
+        return validate.Report(findings=())
 
     monkeypatch.setattr(
         audit,
@@ -339,10 +340,10 @@ def test_run_cell_does_not_repeat_completed_placement_work(
         "completed",
         lambda workers, vertical, _max_belt_z: CompletedStrategy(),
     )
-    monkeypatch.setattr(audit.finalize, "compact_open_boundary_belts", compact_spy)
-    monkeypatch.setattr(audit.finalize, "finalize_placement", finalize_spy)
-    monkeypatch.setattr(audit.validate, "id_map", lambda spec: object())
-    monkeypatch.setattr(audit.validate, "validate", validate_spy)
+    monkeypatch.setattr(finalize, "compact_open_boundary_belts", compact_spy)
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
+    monkeypatch.setattr(validate, "id_map", lambda spec: object())
+    monkeypatch.setattr(validate, "validate", validate_spy)
     monkeypatch.setattr(audit, "_JSONL", [])
     job = audit.Job(
         strategy="completed",
@@ -407,22 +408,22 @@ def test_run_cell_completes_unmarked_placement_once_and_preserves_invalid_findin
 
     def finalize_spy(
         placement: Placement,
-        policy: audit.BandPolicy,
+        policy: BandPolicy,
     ) -> Placement:
         stages.append("finalize")
         assert placement is compacted
         return finalized
 
     findings = (
-        audit.validate.Finding(
+        validate.Finding(
             check="geom.collide",
-            severity=audit.validate.Severity.ERROR,
+            severity=validate.Severity.ERROR,
             message="overlap",
             buildings=(2, 7),
         ),
-        audit.validate.Finding(
+        validate.Finding(
             check="power.coverage",
-            severity=audit.validate.Severity.ERROR,
+            severity=validate.Severity.ERROR,
             message="unpowered",
             buildings=(11,),
         ),
@@ -432,10 +433,10 @@ def test_run_cell_completes_unmarked_placement_once_and_preserves_invalid_findin
         placement: Placement,
         spec: object,
         **kwargs: object,
-    ) -> audit.validate.Report:
+    ) -> validate.Report:
         stages.append("validate")
         certified.append(placement)
-        return audit.validate.Report(findings=findings)
+        return validate.Report(findings=findings)
 
     monkeypatch.setattr(
         audit,
@@ -452,10 +453,10 @@ def test_run_cell_completes_unmarked_placement_once_and_preserves_invalid_findin
         "ordinary",
         lambda workers, vertical, _max_belt_z: UncompletedStrategy(),
     )
-    monkeypatch.setattr(audit.finalize, "compact_open_boundary_belts", compact_spy)
-    monkeypatch.setattr(audit.finalize, "finalize_placement", finalize_spy)
-    monkeypatch.setattr(audit.validate, "id_map", lambda spec: object())
-    monkeypatch.setattr(audit.validate, "validate", validate_spy)
+    monkeypatch.setattr(finalize, "compact_open_boundary_belts", compact_spy)
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
+    monkeypatch.setattr(validate, "id_map", lambda spec: object())
+    monkeypatch.setattr(validate, "validate", validate_spy)
     job = audit.Job(
         strategy="ordinary",
         url_id="ordinary",

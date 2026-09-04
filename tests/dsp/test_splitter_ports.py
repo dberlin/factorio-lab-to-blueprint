@@ -8,6 +8,7 @@ from collections import Counter
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
+from typing import Literal, cast
 
 import pytest
 
@@ -308,7 +309,11 @@ def test_every_observed_game_port_form_is_accepted_as_a_layout_control() -> None
         (39, "feed", 3),
     }
     for model_index, direction, port in observed:
-        buildings = _observed_placement(model_index, direction, port)
+        buildings = _observed_placement(
+            model_index,
+            cast(Literal["feed", "draw"], direction),
+            port,
+        )
         assert splitter_ports.placement_issues(buildings) == (), (
             model_index,
             direction,
@@ -444,12 +449,12 @@ def test_indexed_attachment_lookup_preserves_order_and_ignores_non_belts() -> No
             belt_model,
             0,
             0,
-            z=1,
+            z=Fraction(1),
             input_obj=4,
             output_obj=6,
             input_from_slot=99,
         ),
-        PlacedBuilding(2002, belt_model, 0, 1, z=1),
+        PlacedBuilding(2002, belt_model, 0, 1, z=Fraction(1)),
         PlacedBuilding(2303, assembler_model, 0, 0, input_obj=4),
     )
 
