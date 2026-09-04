@@ -18078,7 +18078,11 @@ class FreeformLayout:
                 if (
                     not projection_retry
                     and arrangement
-                    and not _room_for_another(deadline, improvement_soft, turn_cost)
+                    and not _room_for_another(
+                        deadline,
+                        soft if best is None else improvement_soft,
+                        turn_cost,
+                    )
                 ):
                     break
                 # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
