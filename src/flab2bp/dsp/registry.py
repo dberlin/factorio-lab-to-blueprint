@@ -174,6 +174,30 @@ _POWER_TIER = (
     "building: PrefabDesc.geothermal",
 )
 
+#: What a sorter's cargo stacking varies over.  Both halves are real: the grade
+#: rule picks WHICH history field a tier reads, and the research ladder sets
+#: that field's value.  Recording only one of them would be a flattened rule.
+_STACK_TIER_AND_LEVEL = (
+    "sorter tier (item id)",
+    "technology: pile-sorter-upgrade (cargo stacking research level)",
+)
+
+#: Shared by the Task 6 stacking rows.  They are pinned from the game files and
+#: nothing reads them yet: the multi-belt planner that will is Deliverable B/C.
+_STACKING_UNCONSULTED = (
+    "Pinned from the game files by Task 6 of the multiple-belts-and-pilers "
+    "plan; the belt-splitting and piler planner that consumes them is "
+    "Deliverable B/C and is not written yet."
+)
+
+#: Shared by the same rows.  Stacking changes what a build MOVES, not whether
+#: the game accepts the paste, so R4 has no emitted-paste seam to perturb.
+_STACKING_MUTATION_EXEMPT = (
+    "Cargo stacking and piler throughput change a layout's RATES, not whether "
+    "the paste is accepted; there is no emitted-paste seam for R4 to perturb "
+    "until a planner consumes them."
+)
+
 
 # --- catalog ---------------------------------------------------------------
 
@@ -235,6 +259,112 @@ _CATALOG: tuple[Entry, ...] = (
         Kind.RULE,
         depends_on=("belt tier (item id)",),
         note="A mapping, so the tier dependency is modelled rather than flattened.",
+    ),
+    _e(
+        "catalog.SORTER_STACKING_LEVELS",
+        Kind.RULE,
+        unconsulted_because=_STACKING_UNCONSULTED,
+        mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
+        note=(
+            "resources.assets TechProtoSet 3311-3316 (Pile Sorter Upgrade, "
+            "MaxLevel 6).  The five-level Sorter Cargo Stacking ladder is "
+            "IsObsolete on 0.10.34 and unreachable, so 6 is the whole live axis."
+        ),
+    ),
+    _e(
+        "catalog.sorter_pick_stack",
+        Kind.RULE,
+        depends_on=_STACK_TIER_AND_LEVEL,
+        unconsulted_because=_STACKING_UNCONSULTED,
+        mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
+        note=(
+            "A callable over (item id, level), so both dependencies are modelled "
+            "rather than flattened.  history.inserterStackInput for the Pile "
+            "Sorter, inserterStackCountObsolete for Mk.III, 1 otherwise -- "
+            "GameData.OnInserterTechChange (GameData.cs:1094-1134)."
+        ),
+    ),
+    _e(
+        "catalog.sorter_place_stack",
+        Kind.RULE,
+        depends_on=_STACK_TIER_AND_LEVEL,
+        unconsulted_because=_STACKING_UNCONSULTED,
+        mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
+        note=(
+            "history.inserterStackOutput, the largest stack the sorter may form "
+            "on the OUTPUT BELT (InserterComponent.cs:443-448).  Inserting into "
+            "a building splits evenly and never reads it."
+        ),
+    ),
+    _e(
+        "catalog.SORTER_STACK_RATE_FACTOR",
+        Kind.RULE,
+        unconsulted_because=_STACKING_UNCONSULTED,
+        mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
+        note=(
+            "InserterComponent.InternalUpdate does itemCount += stack on every "
+            "pick and delivers itemCount in one trip, so a carried stack of n "
+            "counts as n items.  True, and it is what makes stacking worth "
+            "planning for at all."
+        ),
+    ),
+    _e(
+        "catalog.PILER_MAX_STACK",
+        Kind.RULE,
+        lint=False,
+        unconsulted_because=_STACKING_UNCONSULTED,
+        mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
+        note=(
+            "PilerComponent.cs:195-207: cacheCargoStack1 + cacheCargoStack2 > 4 "
+            "emits AddCargo(item, 4, ...) and keeps the remainder.  An IL "
+            "literal, not a field.  lint=False: a bare 4 under layout/ is a "
+            "loop bound, a tuple width, a quadrant count -- hunting it would "
+            "be all noise and no finding."
+        ),
+    ),
+    _e(
+        "catalog.PILER_SINGLE_PASS",
+        Kind.RULE,
+        unconsulted_because=_STACKING_UNCONSULTED,
+        mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
+        note=(
+            "False.  The Pile branch caches at most two cargos and emits their "
+            "sum (PilerComponent.cs:161-169, :195-210), so a piler DOUBLES: an "
+            "unstacked belt needs two in series to reach stack 4."
+        ),
+    ),
+    _e(
+        "catalog.PILER_THROUGHPUT",
+        Kind.RULE,
+        lint=False,
+        unconsulted_because=_STACKING_UNCONSULTED,
+        mutation_exempt_because=_STACKING_MUTATION_EXEMPT,
+        note=(
+            "Cargo/s per unit of PrefabDesc.beltSpeed, so the belt-tier "
+            "dependency is carried by the multiplication rather than flattened "
+            "into one tier's number.  timeSpend += beltSpeed * 1000 per tick, "
+            "10000 per cargo, 60 ticks/s (PilerComponent.cs:146-149, :171) = "
+            "6 * beltSpeed, which reproduces BELT_RATE exactly.  A lower bound: "
+            "the untimed pick branch (:176-187, :265-272) charges nothing.  "
+            "lint=False: Fraction(6) and a bare 6 are a hex count, a slot "
+            "range, a loop bound everywhere in layout/; and where the number "
+            "does mean a rate it means BELT_RATE[2001], which owns its own row."
+        ),
+    ),
+    _e(
+        "catalog.PILER_STACK_PARAMETER",
+        Kind.RULE,
+        unconsulted_because=_STACKING_UNCONSULTED,
+        mutation_exempt_because=(
+            "A dead protocol bound: there is no parameter to perturb.  PilerDesc "
+            "declares no fields and BuildingParameters has no PilerComponent case."
+        ),
+        note=(
+            "None, and None is the finding.  Pile-vs-Split comes from wiring "
+            "(CargoTraffic.RematchPilerConnection, CargoTraffic.cs:938, :962-973) "
+            "and PilerComponent.Export serialises no stack setting, so a "
+            "blueprint cannot ask a piler for a stack."
+        ),
     ),
     _e("catalog.BELT_Z_PER_WORLD_UNIT", Kind.RULE, lint=True),
     _e(

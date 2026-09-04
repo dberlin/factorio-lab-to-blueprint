@@ -1011,13 +1011,23 @@ def _with_belt(
     belt_id: str,
     *,
     researched: set[str] | None = None,
+    stack: Fraction | None = None,
 ) -> None:
+    """Rewrite the URL's belt, and optionally its technology set and its `ist`.
+
+    Patching the request rather than the URL string keeps the corpus URLs
+    verbatim -- no corpus URL carries `ist>1`, and inventing one by hand-editing
+    an encoded payload would be a fixture nobody could check against
+    FactorioLab.
+    """
     original = pipeline.parse_url  # type: ignore[attr-defined]
 
     def patched(url: str, **kwargs: object):  # type: ignore[no-untyped-def]
         replacements: dict[str, object] = {"belt_id": belt_id}
         if researched is not None:
             replacements["researched_technology_ids"] = set(researched)
+        if stack is not None:
+            replacements["stack"] = stack
         return dataclasses.replace(original(url, **kwargs), **replacements)  # type: ignore[arg-type]
 
     monkeypatch.setattr(pipeline, "parse_url", patched)
@@ -1701,3 +1711,30 @@ def test_racing_best_produces_the_same_attempt_shape_as_the_serial_one() -> None
 
     assert shape(raced) == shape(serial)
     assert len(raced.attempts) + len(raced.refused) == 2
+
+
+@pytest.mark.slow
+def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``ist=2`` with every technology researched: 40 items/s is 20 cargo/s,
+    so one Mk.III entry lane carries it and no strip is shortened.
+
+    This is the only end-to-end evidence of the stacked path: no corpus URL
+    carries ``ist>1``, so the corpus gate cannot exercise the request-to-plan-
+    to-emission contract.  The unstacked guard above proves the same 40 items/s
+    still enters on two physical lanes when the bus carries one item per cargo.
+    """
+    _with_belt(monkeypatch, "conveyor-belt-3", stack=Fraction(2))
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        time_budget_s=45.0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
+    assert build.report.ok
+    assert build.spec.belt_stack == 2
+    hydrogen = [
+        finding
+        for finding in build.report.by_check("flow.external_entry_points")
+        if finding.detail["item"] == "hydrogen"
+    ]
+    assert not hydrogen

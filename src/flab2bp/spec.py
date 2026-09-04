@@ -22,6 +22,13 @@ from fractions import Fraction
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# `layout.base` imports only the standard library at runtime -- `BuildSpec`
+# itself is under TYPE_CHECKING there -- so this is not a cycle.  The refusal
+# `planning_stack` raises is a LAYOUT refusal (design 5.3) and must be the same
+# exception every other layout refusal is, or the pipeline would report it
+# differently for no reason a user could see.
+from flab2bp.layout.base import NoValidLayout
+
 
 class ProliferatorMode(StrEnum):
     """How a recipe's inputs are sprayed, if at all.
@@ -39,6 +46,23 @@ class ProliferatorMode(StrEnum):
     PRODUCTS = "products"
     #: Production speedup.  Always legal.  Cuts machines at this step only.
     SPEED = "speed"
+
+
+#: The largest cargo stack DSP will ever put on a belt, and so the ceiling on
+#: every stack this module carries.  It is ``dsp.catalog.PILER_MAX_STACK``,
+#: pinned from ``Assembly-CSharp`` (``PilerComponent.cs:195-207``).  Spelt out
+#: here rather than imported because this module is the rates/geometry boundary
+#: and deliberately imports nothing from ``flab2bp``; ``tests/test_spec.py``
+#: asserts the two are equal, so drift is a failing test, not a silent lie.
+MAX_CARGO_STACK = 4
+
+#: The stacks one or more Automatic Pilers in series can reach from an
+#: unstacked lane.  A piler DOUBLES its input, capped at ``MAX_CARGO_STACK``
+#: (``catalog.PILER_SINGLE_PASS`` is False: the Pile branch merges at most the
+#: two cargos it has cached), so 3 is NOT reachable and must never be planned
+#: as a piler target.  ``layout/piling.py`` imports this rather than
+#: redefining it, so the merge tree and the plan cannot disagree.
+PILER_LADDER = (1, 2, 4)
 
 
 class _Frozen(BaseModel):
@@ -131,6 +155,24 @@ class BuildSpec(_Frozen):
     #: Sorter tiers the save can build, slowest first.  Every tier by default
     #: so a spec built without a request keeps today's behaviour.
     sorter_item_ids: tuple[str, ...] = ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
+    #: FactorioLab's belt stack (``ist``): the cargo stack the player's bus
+    #: carries.  1 when the URL says nothing.  Never above 4, the game's
+    #: largest pile (``catalog.PILER_MAX_STACK``).
+    belt_stack: int = Field(default=1, ge=1, le=MAX_CARGO_STACK)
+    #: Largest stack each sorter TIER can PICK off a belt and PLACE onto one,
+    #: aligned with ``sorter_item_ids``.  Never per item: DSP decides a stack
+    #: from the sorter's grade and the researched Pile Sorter Upgrade level.
+    #: The defaults are that table's level-0 row -- Sorter Mk.I to Mk.III at 1
+    #: forever, an unresearched Pile Sorter picking 2 and placing 1.  They only
+    #: matter when ``belt_stack > 1``: every stack the planner and validator
+    #: derive is 1 when the URL does not stack (design rule 1), so a hand-built
+    #: spec behaves as today.
+    sorter_pick_stacks: tuple[int, ...] = (1, 1, 1, 2)
+    sorter_place_stacks: tuple[int, ...] = (1, 1, 1, 1)
+    #: Whether the save can build an Automatic Piler.  The same technology
+    #: (``integrated-logistics-system``) unlocks the piler and the Pile Sorter,
+    #: so this is False exactly when nothing in the save stacks at all.
+    piler_unlocked: bool = False
     #: What this candidate optimises, for the bake-off report.
     label: str = ""
 
@@ -173,6 +215,36 @@ class BuildSpec(_Frozen):
                 f"{self.label or 'spec'}: no sorter tier is allowed; a build with no "
                 "sorter at all cannot feed a machine"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _stacks_align(self) -> BuildSpec:
+        """A stack tuple is a value PER TIER, so it is as long as the tiers.
+
+        A save without the Pile Sorter has three tiers, not four, so nothing
+        downstream may index these by a hard-coded tier number -- only by
+        position within ``sorter_item_ids`` or by ``[-1]`` for the fastest.
+        A mismatch here would silently mis-attribute one tier's stack to
+        another, which produces a plan that pastes and under-produces.
+        """
+        tiers = len(self.sorter_item_ids)
+        for name, stacks in (
+            ("sorter_pick_stacks", self.sorter_pick_stacks),
+            ("sorter_place_stacks", self.sorter_place_stacks),
+        ):
+            if len(stacks) != tiers:
+                raise ValueError(
+                    f"{self.label or 'spec'}: {name} has {len(stacks)} entries but "
+                    f"there are {tiers} sorter tiers {list(self.sorter_item_ids)}; "
+                    "a stack is a value per tier and is read by position"
+                )
+            for stack in stacks:
+                if not 1 <= stack <= MAX_CARGO_STACK:
+                    raise ValueError(
+                        f"{self.label or 'spec'}: {name} entry {stack} is outside "
+                        f"1..{MAX_CARGO_STACK}; a cargo holds at least one item and "
+                        "never more than the game's largest pile"
+                    )
         return self
 
     @model_validator(mode="after")
@@ -244,15 +316,82 @@ class BuildSpec(_Frozen):
             return self.belt_upgrades[-1].items_per_second
         return self.belt_items_per_second
 
-    def planning_stack(self, item: str) -> int:
-        """The cargo stack the planner may assume for a lane of ``item``.
+    @property
+    def max_stack(self) -> int:
+        """The largest stack any lane may be planned at.
 
-        Always 1 until stack-aware lanes land (the multiple-belts design,
-        section 5.3): a lane is planned at one item per cargo unit, so the
-        effective lane capacity is ``lane_capacity`` itself.
+        4 with a piler, else what the save's sorters can PLACE.  A piler
+        reaches 4 from any belt, but not in one pass -- ``PILER_SINGLE_PASS``
+        is False, so a lane coming off an unstacked belt needs two in series.
+        That is Deliverable C's cost, not a lower ceiling: this is the ceiling.
         """
-        del item
-        return 1
+        if self.piler_unlocked:
+            return MAX_CARGO_STACK
+        return max(self.sorter_place_stacks)
+
+    def planning_stack(self, item: str, *, external: bool | None = None) -> int:
+        """The cargo stack the planner may assume for a lane of ``item`` (design 5.3).
+
+        1 when the URL does not stack, so an ``ist=1`` save -- which is every
+        corpus URL -- is planned exactly as it was before any of this existed.
+
+        An external input arrives at the bus stack whatever the consumer can do
+        about it; a produced item leaves at what the fastest allowed sorter
+        PLACES.  Either is REFUSED, never lowered, when that same sorter cannot
+        pick it: a lowered plan would still be fed the stacked belt and would
+        starve on a lane it thought was smaller.  A produced lane may then be
+        RAISED by pilers, but only along :data:`PILER_LADDER` and only as far
+        as the sink can pick, because piling is elective and a piler doubles.
+
+        ``external`` overrides the spec's own classification when the caller
+        knows better -- a boundary OUTPUT lane is "produced" even for an item
+        the spec also belts in.
+        """
+        if self.belt_stack == 1:
+            return 1
+        is_external = item in self.external_inputs if external is None else external
+        # The fastest allowed tier's row is the ceiling of what ANY tier can
+        # promise; with the game's table that tier is the Pile Sorter whenever
+        # anything stacks at all, and every slower tier is 1 at every level.
+        pick = self.sorter_pick_stacks[-1]
+        place = self.sorter_place_stacks[-1]
+        if is_external:
+            stack = self.belt_stack
+            if any(item in group.outputs_per_machine for group in self.groups):
+                # Fed from the bus AND from an internal producer
+                # (universe-matrix's hydrogen is the corpus case): the lane also
+                # carries what the producer's sorter places, and a merge is
+                # judged at its minimum (design 5.5), so plan the smaller.
+                stack = min(stack, place)
+        else:
+            stack = place
+        if stack > pick:
+            # Name research the player can actually reach.  `pile-sorter-1`'s
+            # only prerequisite IS `integrated-logistics-system`, so telling a
+            # save with no Pile Sorter to research the upgrade ladder is dead
+            # advice; it needs the unlock first.
+            missing = (
+                "research Integrated Logistics System to unlock the Pile Sorter"
+                if "sorter-4" not in self.sorter_item_ids
+                else "research Pile Sorter Upgrade (the Sorter Cargo Stacking ladder is "
+                "obsolete and grants nothing)"
+            )
+            raise NoValidLayout(
+                f"{self.label or 'spec'}: {item!r} travels at stack {stack} but the fastest "
+                f"sorter this save can build ({self.sorter_item_ids[-1]}) can pick only "
+                f"{pick}; {missing}, or lower the URL's belt stack",
+                spec_label=self.label,
+                budget_s=0.0,
+                attempt_reasons=(),
+                attempt_failures=(),
+                projection_failures=(),
+            )
+        if not is_external and self.piler_unlocked:
+            # Elective, so it only ever RAISES: a lane already above every rung
+            # the sink can pick keeps what its sorter placed.
+            reachable = max(rung for rung in PILER_LADDER if rung <= min(self.max_stack, pick))
+            stack = max(stack, reachable)
+        return stack
 
 
 class BuildSpecSet(_Frozen):

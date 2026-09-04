@@ -163,6 +163,30 @@ test('sequence-pair is accepted as an explicit response strategy', async () => {
   expect(job.result?.strategy).toBe('sequence-pair');
 });
 
+test('parsed responses retain a stacked belt tier on the result and attempt', async () => {
+  const result = aResult();
+  const body = {
+    ...aJob(),
+    result: {
+      ...result,
+      belt_tiers: { ...result.belt_tiers, stack: 2 },
+      attempts: result.attempts.map((attempt) => ({
+        ...attempt,
+        detail: {
+          ...attempt.detail,
+          belt_tiers: { ...attempt.detail.belt_tiers, stack: 2 },
+        },
+      })),
+    },
+  };
+  serving({ status: 200, body });
+
+  const parsed = await pollBuild('x');
+
+  expect(parsed.result?.belt_tiers.stack).toBe(2);
+  expect(parsed.result?.attempts[0]?.detail.belt_tiers.stack).toBe(2);
+});
+
 test('an attempt without its own detail is rejected rather than half-described', async () => {
   // The report follows the SELECTED attempt; an attempt missing its detail
   // would silently fall back to describing the winner, which is the bug this

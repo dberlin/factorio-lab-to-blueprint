@@ -174,3 +174,97 @@ def test_an_empty_technology_set_falls_back_to_sorter_one() -> None:
     tiers = techs.logistics_tiers_for_request(request, data)
     assert tiers.belt_item_ids == ("conveyor-belt-2",)
     assert tiers.sorter_item_ids == ("sorter-1",)
+
+
+# --- cargo stacking (multiple-belts design, section 5.2) --------------------
+
+#: The four technologies that unlock the four sorter tiers, one each:
+#: `basic-` -> sorter-1, `improved-` -> sorter-2, `high-efficiency-` ->
+#: sorter-3, `integrated-` -> sorter-4 AND the Automatic Piler.  Listing all
+#: four keeps the stack tuples four long, so a level's row can be read off
+#: whole instead of against a truncated tier list.
+_SORTER_TECHS = (
+    "basic-logistics-system",
+    "improved-logistics-system",
+    "high-efficiency-logistics-system",
+    "integrated-logistics-system",
+)
+
+
+def test_no_technology_set_means_everything_is_researched() -> None:
+    data = load_vendored()
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe=conveyor-belt-2&v=11"
+    )
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.piler is True
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 4)   # level 6
+    assert tiers.sorter_place_stacks == (1, 1, 1, 4)
+
+
+def test_without_the_integrated_logistics_system_nothing_stacks() -> None:
+    # The same tech unlocks the Pile Sorter and the Automatic Piler, so this
+    # save has neither: every tier it can build picks and places 1.
+    data = load_vendored()
+    request = parse_url(
+        _url_with_techs([t for t in _SORTER_TECHS if t != "integrated-logistics-system"])
+    )
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.piler is False
+    assert "sorter-4" not in tiers.sorter_item_ids
+    assert set(tiers.sorter_pick_stacks) == {1}
+    assert set(tiers.sorter_place_stacks) == {1}
+
+
+def test_the_stack_tuples_are_as_long_as_the_tier_list() -> None:
+    """Shorter than four on a save without the Pile Sorter, so nothing
+    downstream may index them by a hard-coded tier number."""
+    data = load_vendored()
+    request = parse_url(_url_with_techs(["basic-logistics-system"]))
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.sorter_item_ids == ("sorter-1",)
+    assert tiers.sorter_pick_stacks == (1,)
+    assert tiers.sorter_place_stacks == (1,)
+
+
+def test_the_level_is_the_highest_researched_pile_sorter_tech() -> None:
+    researched = [*_SORTER_TECHS, "pile-sorter-1", "pile-sorter-2"]
+    tiers = techs.logistics_tiers_for_request(
+        parse_url(_url_with_techs(researched)), load_vendored()
+    )
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 3)   # level 2
+    assert tiers.sorter_place_stacks == (1, 1, 1, 2)
+
+
+def test_a_gap_in_the_ladder_still_reads_the_highest_researched_level() -> None:
+    """DSP's prerequisites make a gap impossible in a real save, but the URL
+    is the player's to hand-edit; the highest researched level is the answer,
+    not the longest unbroken prefix."""
+    researched = [*_SORTER_TECHS, "pile-sorter-1", "pile-sorter-4"]
+    tiers = techs.logistics_tiers_for_request(
+        parse_url(_url_with_techs(researched)), load_vendored()
+    )
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 4)   # level 4
+    assert tiers.sorter_place_stacks == (1, 1, 1, 3)
+
+
+def test_the_obsolete_cargo_stacking_ladder_is_ignored() -> None:
+    """3301-3305 carry IsObsolete=1; researching them must move nothing."""
+    researched = [*_SORTER_TECHS, *(f"sorter-cargo-stacking-{n}" for n in range(1, 6))]
+    tiers = techs.logistics_tiers_for_request(
+        parse_url(_url_with_techs(researched)), load_vendored()
+    )
+    assert tiers.sorter_pick_stacks == (1, 1, 1, 2)   # level 0, unmoved
+    assert tiers.sorter_place_stacks == (1, 1, 1, 1)
+
+
+def test_an_empty_technology_set_still_answers_with_a_stack_per_tier() -> None:
+    """The `("sorter-1",)` fallback must not leave the tuples empty, or every
+    downstream `max(...)` over them raises on an empty sequence."""
+    data = load_vendored()
+    request = replace(parse_url(_url_with_techs([])), researched_technology_ids=set())
+    tiers = techs.logistics_tiers_for_request(request, data)
+    assert tiers.sorter_item_ids == ("sorter-1",)
+    assert tiers.sorter_pick_stacks == (1,)
+    assert tiers.sorter_place_stacks == (1,)
+    assert tiers.piler is False

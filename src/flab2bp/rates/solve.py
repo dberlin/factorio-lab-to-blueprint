@@ -49,7 +49,7 @@ from flab2bp.rates.adjust import (
     available_modes,
     select_machine,
 )
-from flab2bp.spec import ProliferatorMode
+from flab2bp.spec import MAX_CARGO_STACK, ProliferatorMode
 
 _SECONDS_PER_PERIOD = {
     DisplayRate.PerSecond: Fraction(1),
@@ -242,6 +242,26 @@ def _default_objective(
         items=(),
     )
 
+
+def cargo_stack(request: LabRequest) -> int:
+    """Items per cargo on the URL's belts: FactorioLab's ``ist``, clamped.
+
+    Design rule 1: a URL that says nothing about stacking, or says 1, is judged
+    exactly as it is today -- one item per cargo unit -- so nothing about an
+    unstacked build can move because this exists.  Above 1 the value is the
+    player's bus, capped at ``spec.MAX_CARGO_STACK``, because the game cannot
+    put more than that on a belt however large a number the URL holds.
+
+    One function, so the two ``Belts`` branches below and ``_to_build_spec``
+    cannot drift: an objective counted in belts and the spec's own
+    ``belt_stack`` have to mean the same belt.
+    """
+    stack = request.stack
+    if stack is None or stack <= 1:
+        return 1
+    return min(MAX_CARGO_STACK, int(stack))
+
+
 def target_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
     """Normalise objectives to items/second, keyed by item id."""
     period = _SECONDS_PER_PERIOD[request.display_rate]
@@ -259,7 +279,10 @@ def target_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
             item_id = objective.target_id
         elif objective.unit is ObjectiveUnit.Belts:
             belt_id = request.belt_id or "conveyor-belt-1"
-            rate = objective.value * data.belt_speed(belt_id)
+            # A belt's speed is CARGO per second; each cargo carries `ist`
+            # items.  At `ist=1` (design rule 1) this is the old arithmetic
+            # unchanged.
+            rate = objective.value * data.belt_speed(belt_id) * cargo_stack(request)
             item_id = objective.target_id
         elif objective.unit is ObjectiveUnit.Machines:
             recipe = data.recipe(objective.target_id)
@@ -299,7 +322,14 @@ def supplied_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
         if objective.unit is ObjectiveUnit.Items:
             rate = objective.value / period
         elif objective.unit is ObjectiveUnit.Belts:
-            rate = objective.value * data.belt_speed(request.belt_id or "conveyor-belt-1")
+            # The declared supply arrives on the same belts, so it stacks the
+            # same way; leaving this branch unstacked would under-declare the
+            # player's bus while the Output branch above counted it in full.
+            rate = (
+                objective.value
+                * data.belt_speed(request.belt_id or "conveyor-belt-1")
+                * cargo_stack(request)
+            )
         else:
             raise UnsupportedObjectiveError(
                 f"an Input objective in {objective.unit.name!r} units is not "

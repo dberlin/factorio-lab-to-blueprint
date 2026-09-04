@@ -1740,8 +1740,14 @@ def _merge_lanes(
     reach: int,
     demand: Mapping[_CargoSink, Fraction],
     capacity: Fraction,
+    stacks: Mapping[str, int] | None = None,
 ) -> list[_CargoSink]:
     """Fold a shard's destinations onto at most ``reach`` output lanes.
+
+    ``capacity`` is the belt's rate in CARGO per second; ``stacks`` says how
+    many items each item's lane puts in one cargo (multiple-belts design,
+    section 5.3).  An absent entry is 1, so an unstacked plan is judged exactly
+    as it was.
 
     Sharding splits a producer's destinations across STRIPS and needs one
     machine per shard.  A producer with one machine and four destinations has no
@@ -1811,14 +1817,15 @@ def _merge_lanes(
             b = min(range(k), key=lambda i: (loads[i], i))
             bins[b].append(dest)
             loads[b] += demand.get((item, dest, cargo_domain), Fraction(0))
+        lane_capacity = capacity * ((stacks or {}).get(item, 1))
         for b, group in enumerate(bins):
             if not group:
                 continue
-            if loads[b] > capacity:
+            if loads[b] > lane_capacity:
                 raise ValueError(
                     f"{item}: destinations {sorted(group)} have to share one "
                     f"output lane carrying {loads[b]} items/s, over the "
-                    f"{capacity}/s the belt sustains"
+                    f"{lane_capacity}/s the belt sustains"
                 )
             out.append((item, DEST_SEP.join(sorted(group)), cargo_domain))
     return out
@@ -1915,7 +1922,12 @@ def _adapt(spec: BuildSpec) -> dict[str, _Group]:
 
 
 def _check_shared_lane_capacity(
-    g: _Group, lanes: tuple[tuple[str, ...], ...], machines: int, spec: BuildSpec
+    g: _Group,
+    lanes: tuple[tuple[str, ...], ...],
+    machines: int,
+    spec: BuildSpec,
+    *,
+    stack: int = 1,
 ) -> None:
     """A shared lane must carry the SUM of its items within the belt tier.
 
@@ -1923,10 +1935,16 @@ def _check_shared_lane_capacity(
     was, so this cannot reject a spec that already worked -- mixing is the new
     thing, so mixing is what gets the new constraint.
 
+    ``stack`` is the LANE's, taken from the ``LogicalLane`` the family already
+    planned rather than re-derived here: one belt has one cargo size, and the
+    planner has already reduced a mixed lane to the smallest stack its items
+    share.  It defaults to 1, so an omitted stack is "loose items", never
+    "unbounded".
+
     Exact ``Fraction`` throughout: a float here would let a lane that lands
     precisely on the tier's limit read as over capacity, or worse, the reverse.
     """
-    cap = spec.lane_capacity
+    cap = spec.lane_capacity * stack
     for lane in lanes:
         if len(lane) < 2:
             continue
@@ -2164,15 +2182,15 @@ def plan_strips(
 
     strips: list[Strip] = []
     for family in selected_families:
+        by_side_index = sorted(family.input_lanes, key=lambda lane: lane.side_index)
+        input_lanes_in_order = tuple(
+            lane for lane in by_side_index if lane.side == "south"
+        ) + tuple(lane for lane in by_side_index if lane.side == "north")
         inputs_above = tuple(
-            lane.items
-            for lane in sorted(family.input_lanes, key=lambda lane: lane.side_index)
-            if lane.side == "south"
+            lane.items for lane in by_side_index if lane.side == "south"
         )
         inputs_below = tuple(
-            lane.items
-            for lane in sorted(family.input_lanes, key=lambda lane: lane.side_index)
-            if lane.side == "north"
+            lane.items for lane in by_side_index if lane.side == "north"
         )
         outputs = tuple(
             (
@@ -2222,12 +2240,19 @@ def plan_strips(
                 machine_start += machine_count
             realized = tuple(realized_list)
         for machine_start, machine_count, physical_variant in realized:
-            _check_shared_lane_capacity(
-                group,
-                inputs_above + inputs_below,
-                machine_count,
-                spec,
-            )
+            # Per lane, because the stack is the LANE's: two input lanes of the
+            # same strip can be planned at different stacks, so one call over
+            # all of them would have to pick one and be wrong about the other.
+            # Same order as `inputs_above + inputs_below`, so which lane a
+            # multi-lane failure names does not change.
+            for lane in input_lanes_in_order:
+                _check_shared_lane_capacity(
+                    group,
+                    (lane.items,),
+                    machine_count,
+                    spec,
+                    stack=lane.stack,
+                )
             lane_plan: LanePlan | None
             attachment_plan: tuple[LaneAttachmentPlan, ...]
             port_dock_plan: tuple[LanePortDockPlan, ...]
@@ -4518,6 +4543,63 @@ def _prepared_junction_ban(
     return frozenset(banned)
 
 
+@dataclass(frozen=True, slots=True)
+class _SorterStacks:
+    """What each sorter tier promises about cargo stacks, by catalog item id.
+
+    Built from the spec's per-tier rows, so it survives whatever order the
+    spec listed its tiers in; an absent tier promises 1, which is what every
+    tier promises on a save that does not stack.
+    """
+
+    pick_by_tier: Mapping[int, int] = field(default_factory=dict)
+    place_by_tier: Mapping[int, int] = field(default_factory=dict)
+
+    def pick(self, tier: int) -> int:
+        return self.pick_by_tier.get(tier, 1)
+
+    def place(self, tier: int) -> int:
+        return self.place_by_tier.get(tier, 1)
+
+
+#: Every tier at stack 1: the answer for an unstacked save, and the default.
+_NO_SORTER_STACKS = _SorterStacks()
+
+
+@dataclass(frozen=True, slots=True)
+class _LaneStacks:
+    """The stack each item's lanes are planned at, one map per SIDE of a strip.
+
+    Two maps rather than one, because one number per item cannot describe both
+    lanes of an item that is BOTH belted in and produced (universe-matrix's
+    hydrogen is the corpus shape).  Its entry lane carries ``min(bus, place)``
+    -- a merge is judged at its minimum -- while its output lane carries
+    ``place``, because a lane leaving a machine on a sorter is produced
+    whatever the bus also does.  Ask the producer's sorter for the entry
+    lane's number and a tier that places 2 is accepted for a lane that
+    promises 3, which is a lane built a tier too small for what it carries.
+
+    An absent item is unstacked, which is every item on a save without `ist`.
+    """
+
+    #: Item -> the stack of the lane a CONSUMER picks from.
+    consumed: Mapping[str, int] = field(default_factory=dict)
+    #: Item -> the stack of the lane a PRODUCER places onto.
+    produced: Mapping[str, int] = field(default_factory=dict)
+
+    def into(self, item: str) -> int:
+        """The lane a sorter picks off, feeding a machine or a junction."""
+        return self.consumed.get(item, 1)
+
+    def out_of(self, item: str) -> int:
+        """The lane a sorter places onto, leaving a machine."""
+        return self.produced.get(item, 1)
+
+
+#: Every lane unstacked: the answer for a save without `ist`, and the default.
+_NO_LANE_STACKS = _LaneStacks()
+
+
 @dataclass
 class _Canvas:
     """Buildings under construction, plus what occupies each cell."""
@@ -4533,6 +4615,11 @@ class _Canvas:
     #: Sorter tiers this save can build, slowest first.  Every sorter the
     #: emitter picks comes from this tuple; see :func:`_pick_sorter`.
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
+    #: What each of those tiers may promise about cargo stacks.
+    sorter_stacks: _SorterStacks = _NO_SORTER_STACKS
+    #: The stack each item's lanes are planned at, so an emitter can ask for a
+    #: sorter that keeps the promise the plan made (design 5.3).
+    lane_stacks: _LaneStacks = _NO_LANE_STACKS
 
     buildings: list[PlacedBuilding] = field(default_factory=list)
     #: ``(x, y, level)`` -> building index, for cells that block routing.
@@ -4793,11 +4880,52 @@ def _sorter_tiers_for(spec: BuildSpec) -> tuple[int, ...]:
     return tuple(tier for tier in catalog.SORTER_TIERS if tier in allowed) or catalog.SORTER_TIERS
 
 
+def _sorter_stacks_for(spec: BuildSpec) -> _SorterStacks:
+    """The spec's per-tier stack rows, re-keyed by catalog item id.
+
+    Positional rows are aligned with ``spec.sorter_item_ids``, which is not
+    the order ``_sorter_tiers_for`` hands the picker; keying by id removes the
+    chance of reading one tier's promise off another's row.
+    """
+    pick: dict[int, int] = {}
+    place: dict[int, int] = {}
+    for item_id, pick_stack, place_stack in zip(
+        spec.sorter_item_ids, spec.sorter_pick_stacks, spec.sorter_place_stacks, strict=True
+    ):
+        tier = catalog.get_item_id(item_id)
+        if tier is None:
+            continue  # a dataset mismatch, already tolerated by _sorter_tiers_for
+        pick[tier] = pick_stack
+        place[tier] = place_stack
+    return _SorterStacks(pick_by_tier=pick, place_by_tier=place)
+
+
+def _lane_stacks_for(spec: BuildSpec) -> _LaneStacks:
+    """The stack each item's lanes are planned at, per side (design 5.3)."""
+    items = (
+        {item for group in spec.groups for item in group.inputs_per_machine}
+        | {item for group in spec.groups for item in group.outputs_per_machine}
+        | set(spec.external_inputs)
+        | set(spec.outputs)
+        | set(spec.surplus_outputs)
+    )
+    return _LaneStacks(
+        consumed={item: spec.planning_stack(item) for item in sorted(items)},
+        produced={
+            item: spec.planning_stack(item, external=False) for item in sorted(items)
+        },
+    )
+
+
 def _pick_sorter(
     rate: Fraction,
     span: int,
     machines: int,
     tiers: tuple[int, ...] = catalog.SORTER_TIERS,
+    *,
+    stacks: _SorterStacks | None = None,
+    min_place_stack: int = 1,
+    min_pick_stack: int = 1,
 ) -> tuple[int, int]:
     """Cheapest allowed sorter tier and count carrying ``rate`` across ``span``.
 
@@ -4806,9 +4934,21 @@ def _pick_sorter(
     ``tiers`` is what the save can build, slowest first; when none carries the
     rate the fastest allowed one is returned and ``flow.sorter_capacity``
     refuses the placement, rather than emitting a tier the save cannot build.
+
+    A lane planned at a stack adds a second requirement (design 5.3): a
+    low-rate producer lane planned at stack 4 must not be built with a
+    ``sorter-1`` that places 1, or the lane would carry a quarter of what the
+    plan promised and the validator would judge it at 1.  ``min_place_stack``
+    and ``min_pick_stack`` are the lane's stack on the producer and consumer
+    side; a tier that cannot keep them is skipped exactly as a tier too slow
+    for the rate is, and the same fastest-allowed fallback applies.  Both
+    default to 1, so on an unstacked save nothing here changes.
     """
     per_machine = rate / machines if machines else rate
+    promises = stacks or _NO_SORTER_STACKS
     for tier in tiers:
+        if promises.place(tier) < min_place_stack or promises.pick(tier) < min_pick_stack:
+            continue
         if catalog.sorter_rate(tier, span) >= per_machine:
             return tier, machines
     return tiers[-1], machines
@@ -5479,7 +5619,17 @@ def _flank_lane(
         for a, b in zip(column, column[1:], strict=False):
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
         canvas.buildings[column[-1]] = _relink(canvas.buildings[column[-1]], output_obj=tail)
-        tier, _count = _pick_sorter(rate, got.span, 1, canvas.sorter_tiers)
+        # Producer side: this sorter PLACES onto an OUTPUT lane, so it is the
+        # produced-side stack it has to keep -- not the entry lane's, which for
+        # an item that is also belted in is the smaller of the two.
+        tier, _count = _pick_sorter(
+            rate,
+            got.span,
+            1,
+            canvas.sorter_tiers,
+            stacks=canvas.sorter_stacks,
+            min_place_stack=canvas.lane_stacks.out_of(item),
+        )
         canvas.buildings.append(
             PlacedBuilding(
                 item_id=tier,
@@ -5822,7 +5972,17 @@ def _link_lane(
         belt_index = lane_by_x.get(column)
         if belt_index is None:
             raise NoValidLayout(f"lane for {planned.item!r} omits precomputed column {column}")
-        tier, _count = _pick_sorter(rate, planned.span, 1, canvas.sorter_tiers)
+        # `into_machine` says which end of the lane this sorter is on: it
+        # PICKS the lane's cargo on the way in and PLACES it on the way out.
+        tier, _count = _pick_sorter(
+            rate,
+            planned.span,
+            1,
+            canvas.sorter_tiers,
+            stacks=canvas.sorter_stacks,
+            min_pick_stack=canvas.lane_stacks.into(planned.item) if into_machine else 1,
+            min_place_stack=1 if into_machine else canvas.lane_stacks.out_of(planned.item),
+        )
         model_index = catalog.building(tier).model_index
         facing = Facing.SOUTH.value if lane_y < expected_cell[1] else Facing.NORTH.value
         if into_machine:
@@ -7312,12 +7472,16 @@ class _PreparedRoutingProblem:
     stranded_ports: tuple[StrandedPort, ...] = ()
     external_output_nets: tuple[_PreparedNet, ...] = ()
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
+    sorter_stacks: _SorterStacks = _NO_SORTER_STACKS
+    lane_stacks: _LaneStacks = _NO_LANE_STACKS
 
     def new_workspace(self) -> _RoutingWorkspace:
         buildings = list(self.building_templates)
         canvas = _Canvas(
             ramped=self.ramped,
             sorter_tiers=self.sorter_tiers,
+            sorter_stacks=self.sorter_stacks,
+            lane_stacks=self.lane_stacks,
             buildings=buildings,
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
@@ -14061,6 +14225,212 @@ def _join_shard_islands(
     return extra
 
 
+def _plan_shared_external_inputs(
+    spec: BuildSpec,
+    strips: Sequence[Strip],
+    strip_in_ports: Sequence[Mapping[str, _Port]],
+    per_item: Mapping[str, tuple[Mapping[str, Fraction], Mapping[str, Fraction]]],
+) -> tuple[
+    dict[int, tuple[_Port, int]],
+    dict[int, str],
+    tuple[tuple[str, CargoDomain, tuple[_Port, ...]], ...],
+]:
+    """Plan capacity-bounded boundary roots for otherwise identical bus lanes.
+
+    Every consumer strip still owns its physical input lane.  When the URL's
+    bus is stacked, identical external lanes may share one perimeter trunk while
+    their combined item demand fits that feed.  Stack one deliberately keeps
+    the historical one-boundary-feed-per-lane path byte-for-byte in shape.
+    """
+    lane_ports: dict[int, tuple[_Port, int]] = {}
+    lane_items: dict[int, list[str]] = defaultdict(list)
+    for strip_index, ports in enumerate(strip_in_ports):
+        for item, port in sorted(ports.items()):
+            if item not in spec.external_inputs:
+                continue
+            lane_ports.setdefault(port.belt, (port, strip_index))
+            lane_items[port.belt].append(item)
+
+    carried_by_belt = {belt: min(items) for belt, items in lane_items.items()}
+    if spec.belt_stack == 1:
+        return lane_ports, carried_by_belt, ()
+
+    produced_items = {item for group in spec.groups for item in group.outputs_per_machine}
+    by_signature: dict[
+        tuple[tuple[str, ...], CargoDomain],
+        list[tuple[_Port, int]],
+    ] = defaultdict(list)
+    for belt, (port, strip_index) in lane_ports.items():
+        items = tuple(sorted(set(lane_items[belt])))
+        by_signature[items, port.cargo_domain].append((port, strip_index))
+
+    roots: dict[int, tuple[_Port, int]] = {}
+    carried: dict[int, str] = {}
+    sharing: list[tuple[str, CargoDomain, tuple[_Port, ...]]] = []
+
+    def commit_group(
+        lanes: Sequence[tuple[_Port, int]],
+        items: tuple[str, ...],
+        cargo_domain: CargoDomain,
+    ) -> None:
+        if len(lanes) == 1:
+            root, root_strip = lanes[0]
+            roots[root.belt] = (root, root_strip)
+            carried[root.belt] = items[0]
+            return
+        sharing.append(
+            (
+                items[0],
+                cargo_domain,
+                tuple(port for port, _strip_index in lanes),
+            )
+        )
+
+    def commit_capacity_group(
+        lanes: Sequence[tuple[_Port, int]],
+        load: Fraction,
+        items: tuple[str, ...],
+        cargo_domain: CargoDomain,
+    ) -> None:
+        # Deliverable B changes only lanes whose multiplicity came from the
+        # unstacked belt ceiling.  A pair that already fit at stack one was
+        # seated separately for geometry, so stacking must not merge it as a
+        # side effect (super-magnetic-ring in the deuteron build is the guard).
+        if load <= spec.lane_capacity:
+            for lane in lanes:
+                commit_group((lane,), items, cargo_domain)
+            return
+        commit_group(lanes, items, cargo_domain)
+
+    for (items, cargo_domain), lanes in sorted(
+        by_signature.items(),
+        key=lambda entry: (entry[0][0], entry[0][1].value),
+    ):
+        ordered = sorted(lanes, key=lambda lane: lane[0].belt)
+        # A bus-plus-producer lane has two independent sources.  Its sharing
+        # topology is governed by the internal producer allocation, not solely
+        # by external capacity, so retain the established per-lane roots.
+        if any(item in produced_items for item in items):
+            for lane in ordered:
+                commit_group((lane,), items, cargo_domain)
+            continue
+
+        capacity = spec.lane_capacity * min(
+            spec.planning_stack(item, external=True) for item in items
+        )
+        group: list[tuple[_Port, int]] = []
+        load = Fraction(0)
+        for lane in ordered:
+            port, strip_index = lane
+            strip = strips[strip_index]
+            input_rates = per_item.get(strip.group_key, ({}, {}))[0]
+            demand = strip.machines * sum(
+                (input_rates.get(item, Fraction(0)) for item in items),
+                Fraction(0),
+            )
+            if group and load + demand > capacity:
+                commit_capacity_group(group, load, items, cargo_domain)
+                group = []
+                load = Fraction(0)
+            group.append((port, strip_index))
+            load += demand
+        if group:
+            commit_capacity_group(group, load, items, cargo_domain)
+
+    return roots, carried, tuple(sharing)
+
+
+# Ground-level taps use model 38 at yaw 0.  Its exact collider overlaps another
+# model 38 one plan tile away and clears it at two; the three-destination commit
+# regression checks both predicates through ``junction_is_clear``.
+_SHARED_EXTERNAL_TAP_SPACING = 2
+
+
+def _place_shared_external_input_trunks(
+    canvas: _Canvas,
+    groups: Sequence[tuple[str, CargoDomain, tuple[_Port, ...]]],
+    *,
+    belt_id: int,
+    belt_model: int,
+    bounds: tuple[int, int, int, int],
+) -> tuple[tuple[_Net, ...], tuple[tuple[str, _Port], ...]]:
+    """Place one perimeter distribution run for each shared bus group."""
+    min_x, min_y, max_x, max_y = bounds
+    sides = (
+        tuple((x, min_y, 0) for x in range(min_x, max_x + 1)),
+        tuple((max_x, y, 0) for y in range(min_y + 1, max_y + 1)),
+        tuple((x, max_y, 0) for x in range(max_x - 1, min_x - 1, -1)),
+        tuple((min_x, y, 0) for y in range(max_y - 1, min_y, -1)),
+    )
+    nets: list[_Net] = []
+    roots: list[tuple[str, _Port]] = []
+    for item, cargo_domain, destinations in groups:
+        tap_span = 1 + (len(destinations) - 1) * _SHARED_EXTERNAL_TAP_SPACING
+        segment = next(
+            (
+                side[start : start + tap_span]
+                for side in sides
+                for start in range(len(side) - tap_span + 1)
+                if all(canvas.free(cell) for cell in side[start : start + tap_span])
+            ),
+            None,
+        )
+        if segment is None:
+            raise _Unseatable(
+                f"no {tap_span}-tile perimeter trunk fits the shared external input {item!r}"
+            )
+
+        indices = [
+            canvas.add(
+                PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=x,
+                    y=y,
+                    width=1,
+                    height=1,
+                    carries_item=item,
+                ),
+                level=level,
+            )
+            for x, y, level in segment
+        ]
+        for source_index, destination_index in zip(
+            indices, indices[1:], strict=False
+        ):
+            canvas.buildings[source_index] = _relink(
+                canvas.buildings[source_index],
+                output_obj=destination_index,
+            )
+        ports = tuple(
+            _Port(
+                index,
+                x,
+                y,
+                x,
+                x,
+                (index,),
+                cargo_domain=cargo_domain,
+            )
+            for index, (x, y, _level) in zip(
+                indices[::_SHARED_EXTERNAL_TAP_SPACING],
+                segment[::_SHARED_EXTERNAL_TAP_SPACING],
+                strict=True,
+            )
+        )
+        roots.append((item, ports[0]))
+        for source, destination in zip(ports, destinations, strict=True):
+            nets.append(
+                _Net(
+                    src=source,
+                    dst=destination,
+                    item=item,
+                    cargo_domain=cargo_domain,
+                )
+            )
+    return tuple(nets), tuple(roots)
+
+
 def _prepare_routing_problem(
     spec: BuildSpec,
     strips: list[Strip],
@@ -14076,7 +14446,12 @@ def _prepare_routing_problem(
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
-    canvas = _Canvas(ramped=ramped, sorter_tiers=_sorter_tiers_for(spec))
+    canvas = _Canvas(
+        ramped=ramped,
+        sorter_tiers=_sorter_tiers_for(spec),
+        sorter_stacks=_sorter_stacks_for(spec),
+        lane_stacks=_lane_stacks_for(spec),
+    )
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
     if cancelled is not None and cancelled():
@@ -14292,6 +14667,12 @@ def _prepare_routing_problem(
                     cargo_domain=cargo_domain,
                 )
             )
+    wanted, carried, shared_external_groups = _plan_shared_external_inputs(
+        spec,
+        strips,
+        strip_in_ports,
+        per_item,
+    )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -14320,9 +14701,7 @@ def _prepare_routing_problem(
         net_ports = {(p.x, p.y, p.z) for n in nets for p in (n.src, n.dst) if p is not None}
         shared_feed = {
             (port.x, port.y, port.z)
-            for ports in strip_in_ports
-            for item, port in ports.items()
-            if item in spec.external_inputs
+            for port, _strip_index in wanted.values()
         } & net_ports
         unreachable_ports.clear()
         stranded_ports.clear()
@@ -14435,49 +14814,48 @@ def _prepare_routing_problem(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
-    # The proliferator entry and its shared trunk are staked BEFORE the ports
-    # are held. Every coater drop is a sink-only leaf; the trunk is the one
-    # externally reachable source from which the detailed router branches.
-    internal_net_count = len(nets)
+    # Shared source trunks are staked on the fixed perimeter after the
+    # proliferator has claimed its north-west root.  Both kinds exist before
+    # the second port reservation, so their leaf routes cannot lose access.
+    net_roles = [NetRole.INTERNAL] * len(nets)
     if coater_list and prolif_item is not None:
         entry = _place_proliferator_entry(canvas, prolif_item, belt_id, belt_model, core)
         if entry is not None:
-            nets.extend(
-                _proliferator_supply_tree(
-                    canvas,
-                    entry,
-                    coater_list,
-                    prolif_item,
-                    belt_id=belt_id,
-                    belt_model=belt_model,
-                    core=core,
-                )
+            proliferator_nets = _proliferator_supply_tree(
+                canvas,
+                entry,
+                coater_list,
+                prolif_item,
+                belt_id=belt_id,
+                belt_model=belt_model,
+                core=core,
             )
+            nets.extend(proliferator_nets)
+            net_roles.extend([NetRole.PROLIFERATOR] * len(proliferator_nets))
 
+    shared_external_nets, shared_external_roots = _place_shared_external_input_trunks(
+        canvas,
+        shared_external_groups,
+        belt_id=belt_id,
+        belt_model=belt_model,
+        bounds=route_bounds,
+    )
+    nets.extend(shared_external_nets)
+    net_roles.extend([NetRole.INTERNAL] * len(shared_external_nets))
+    for item, port in shared_external_roots:
+        wanted[port.belt] = (port, -1)
+        carried[port.belt] = item
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-    # Again, now that every port exists -- strip lanes, coater drops and the
-    # proliferator entry alike. A drop is a one-tile lane and the sink of a
-    # proliferator net, so it is a port like any other, and it did not exist
-    # when the first claim was staked.
+    # Again, now that every port exists -- strip lanes, coater drops,
+    # proliferator trunks, and shared external-input trunks alike.
     if _reserve_ports:
         hold_ports()
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
-    # External-input nets retain the existing lane-deduplication and item
-    # precedence, while exposing their shared boundary cells immutably.
-    wanted: dict[int, tuple[_Port, int]] = {}
-    carried: dict[int, str] = {}
-    for strip_index, ports in enumerate(strip_in_ports):
-        if cancelled is not None and cancelled():
-            raise _PreparationDeadline
-        for item, port in sorted(ports.items()):
-            if item in spec.external_inputs:
-                wanted.setdefault(port.belt, (port, strip_index))
-        for item, port in sorted(ports.items(), reverse=True):
-            if item in spec.external_inputs:
-                carried[port.belt] = item
+    # The stack-aware sharing plan has reduced ``wanted`` to unshared roots;
+    # shared groups already have one zero-predecessor perimeter trunk each.
 
     requested_outputs = set(spec.outputs) | set(spec.surplus_outputs)
     wanted_outputs: dict[int, tuple[str, _Port]] = {}
@@ -14512,13 +14890,7 @@ def _prepare_routing_problem(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
-    tagged_nets = [
-        (
-            net,
-            NetRole.INTERNAL if i < internal_net_count else NetRole.PROLIFERATOR,
-        )
-        for i, net in enumerate(nets)
-    ]
+    tagged_nets = list(zip(nets, net_roles, strict=True))
     tagged_nets.extend(
         (
             _Net(
@@ -14843,6 +15215,8 @@ def _prepare_routing_problem(
         realized_direct=frozenset(realized_direct),
         ramped=canvas.ramped,
         sorter_tiers=canvas.sorter_tiers,
+        sorter_stacks=canvas.sorter_stacks,
+        lane_stacks=canvas.lane_stacks,
         world_taken=frozenset(canvas.world_taken),
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())
@@ -15477,7 +15851,18 @@ def _bridge(
     if span < 1 or span > catalog.SORTER_MAX_REACH:
         return None
 
-    tier, _ = _pick_sorter(rates.get(item, Fraction(1)), span, 1, canvas.sorter_tiers)
+    # A bridge is belt-to-belt: it picks the source lane's cargo and places it
+    # on the destination lane, so it keeps a promise at BOTH ends -- the entry
+    # lane's on the way in and the output lane's on the way out.
+    tier, _ = _pick_sorter(
+        rates.get(item, Fraction(1)),
+        span,
+        1,
+        canvas.sorter_tiers,
+        stacks=canvas.sorter_stacks,
+        min_pick_stack=canvas.lane_stacks.into(item),
+        min_place_stack=canvas.lane_stacks.out_of(item),
+    )
     for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
         if (column, src.y, 0) not in canvas.blocked:
             continue
