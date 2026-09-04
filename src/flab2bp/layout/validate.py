@@ -4226,11 +4226,12 @@ def _run_sorter_sources(ctx: Context) -> dict[int, tuple[int, ...]]:
 
 
 def _entry_runs(ctx: Context) -> dict[str, list[int]]:
-    """Runs the PLAYER has to fill, grouped by the item they want.
+    """Physical runs the PLAYER has to fill, grouped by the item they want.
 
-    A run carrying an external input that nothing inside the blueprint fills is,
-    by elimination, an entry point: it exists to be belted into, and
-    :mod:`flab2bp.layout.markers` puts an icon on its head saying which item.
+    A labelled external run is an entry only when nothing inside the blueprint
+    fills it *and* no upstream run or junction does.  Splitter branches and the
+    downstream half of a merge inherit their cargo from one or more physical
+    roots; counting those branches made one player connection look like several.
     """
     assert ctx.spec is not None
     cached = ctx.cache.entry_runs
@@ -4240,7 +4241,7 @@ def _entry_runs(ctx: Context) -> dict[str, list[int]]:
     internal = _close_over_junctions(ctx, _internal_seeds(ctx)[1])
     out: dict[str, list[int]] = defaultdict(list)
     for r, run in enumerate(ctx.runs):
-        if r in internal:
+        if r in internal or ctx.pred.get((RUN, r)):
             continue
         item = _external_item(ctx, run, external)
         if item is not None:

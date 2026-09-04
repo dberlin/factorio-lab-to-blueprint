@@ -54,25 +54,14 @@ def _spec(
     )
 
 
-def _fed_machine_typed() -> Placement:
-    """belt(2,0) -> belt(3,0) -> pile sorter -> assembler at (4,0).
-
-    The definition; ``_fed_machine`` delegates to it so the two cannot drift.
-    It exists separately because ``_fed_machine`` is unannotated and its dozen
-    existing call sites are counted in this repo's 184-error mypy baseline: a
-    new call to the untyped one would raise that number, and annotating it
-    would lower it.  Tests added since call this one.
-    """
+def _fed_machine() -> Placement:
+    """belt(2,0) -> belt(3,0) -> pile sorter -> assembler at (4,0)."""
     return place(
         belt(2, 0, out=1),
         belt(3, 0),
         machine(4, 0, recipe_id=6),
         sorter(3, 0, 4, 0, inp=1, out=2, item_id=PILE),
     )
-
-
-def _fed_machine():
-    return _fed_machine_typed()
 
 
 def _tiers(placement) -> list[int]:
@@ -154,7 +143,7 @@ def test_a_stacked_run_is_measured_in_cargo_not_items() -> None:
     carries 12 cargo/s -- so the same lane that needs a Mk.III loose fits the
     floor stacked, and the pass must not pay for the upgrade."""
     stacked = _spec(Fraction(20), ("conveyor-belt-3", 30), belt_stack=2)
-    out = retier_belts(_fed_machine_typed(), stacked)
+    out = retier_belts(_fed_machine(), stacked)
     assert _tiers(out) == [BELT2, BELT2]
     assert out.stats["belt_runs_upgraded"] == 0.0
 
@@ -162,7 +151,7 @@ def test_a_stacked_run_is_measured_in_cargo_not_items() -> None:
 def test_the_same_run_unstacked_still_takes_the_upgrade() -> None:
     """The other half of the pair: without the URL's stack, 20 items/s is 20
     cargo/s and the floor cannot carry it."""
-    out = retier_belts(_fed_machine_typed(), _spec(Fraction(20), ("conveyor-belt-3", 30)))
+    out = retier_belts(_fed_machine(), _spec(Fraction(20), ("conveyor-belt-3", 30)))
     assert _tiers(out) == [BELT3, BELT3]
     assert out.stats["belt_runs_upgraded"] == 1.0
 
@@ -172,5 +161,5 @@ def test_a_stacked_run_over_the_ceiling_is_still_set_to_the_ceiling() -> None:
     40 cargo/s, over the 30/s ceiling, so the run ends on the ceiling and
     `flow.belt_capacity` refuses it rather than this pass inventing a tier."""
     stacked = _spec(Fraction(80), ("conveyor-belt-3", 30), belt_stack=2)
-    out = retier_belts(_fed_machine_typed(), stacked)
+    out = retier_belts(_fed_machine(), stacked)
     assert _tiers(out) == [BELT3, BELT3]

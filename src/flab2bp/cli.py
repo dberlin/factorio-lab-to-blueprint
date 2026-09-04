@@ -93,15 +93,11 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
 
     tiers = build.spec.belt_tiers
     floor = tiers[0]
-    # The URL's own `ist`, said back with the field named: a reader who did not
-    # expect stacked belts has to be able to find where the number came from.
-    # Silent at 1, which is every save that does not stack, so no existing
-    # report line moves.
-    stack_note = (
-        f"; stack {build.spec.belt_stack} (URL ist={build.spec.belt_stack})"
-        if build.spec.belt_stack > 1
-        else ""
-    )
+    # Always report the effective cargo stack.  Only a stacked URL needs the
+    # source-field suffix; stack one is the ordinary, explicit default.
+    stack_note = f"; stack {build.spec.belt_stack}"
+    if build.spec.belt_stack > 1:
+        stack_note += f" (URL ist={build.spec.belt_stack})"
     if len(tiers) == 1:
         print(
             f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s); it is "

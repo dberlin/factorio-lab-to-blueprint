@@ -14098,6 +14098,202 @@ def _join_shard_islands(
     return extra
 
 
+def _plan_shared_external_inputs(
+    spec: BuildSpec,
+    strips: Sequence[Strip],
+    strip_in_ports: Sequence[Mapping[str, _Port]],
+    per_item: Mapping[str, tuple[Mapping[str, Fraction], Mapping[str, Fraction]]],
+) -> tuple[
+    dict[int, tuple[_Port, int]],
+    dict[int, str],
+    tuple[tuple[str, CargoDomain, tuple[_Port, ...]], ...],
+]:
+    """Plan capacity-bounded boundary roots for otherwise identical bus lanes.
+
+    Every consumer strip still owns its physical input lane.  When the URL's
+    bus is stacked, identical external lanes may share one perimeter trunk while
+    their combined item demand fits that feed.  Stack one deliberately keeps
+    the historical one-boundary-feed-per-lane path byte-for-byte in shape.
+    """
+    lane_ports: dict[int, tuple[_Port, int]] = {}
+    lane_items: dict[int, list[str]] = defaultdict(list)
+    for strip_index, ports in enumerate(strip_in_ports):
+        for item, port in sorted(ports.items()):
+            if item not in spec.external_inputs:
+                continue
+            lane_ports.setdefault(port.belt, (port, strip_index))
+            lane_items[port.belt].append(item)
+
+    carried_by_belt = {belt: min(items) for belt, items in lane_items.items()}
+    if spec.belt_stack == 1:
+        return lane_ports, carried_by_belt, ()
+
+    produced_items = {item for group in spec.groups for item in group.outputs_per_machine}
+    by_signature: dict[
+        tuple[tuple[str, ...], CargoDomain],
+        list[tuple[_Port, int]],
+    ] = defaultdict(list)
+    for belt, (port, strip_index) in lane_ports.items():
+        items = tuple(sorted(set(lane_items[belt])))
+        by_signature[items, port.cargo_domain].append((port, strip_index))
+
+    roots: dict[int, tuple[_Port, int]] = {}
+    carried: dict[int, str] = {}
+    sharing: list[tuple[str, CargoDomain, tuple[_Port, ...]]] = []
+
+    def commit_group(
+        lanes: Sequence[tuple[_Port, int]],
+        items: tuple[str, ...],
+        cargo_domain: CargoDomain,
+    ) -> None:
+        if len(lanes) == 1:
+            root, root_strip = lanes[0]
+            roots[root.belt] = (root, root_strip)
+            carried[root.belt] = items[0]
+            return
+        sharing.append(
+            (
+                items[0],
+                cargo_domain,
+                tuple(port for port, _strip_index in lanes),
+            )
+        )
+
+    def commit_capacity_group(
+        lanes: Sequence[tuple[_Port, int]],
+        load: Fraction,
+        items: tuple[str, ...],
+        cargo_domain: CargoDomain,
+    ) -> None:
+        # Deliverable B changes only lanes whose multiplicity came from the
+        # unstacked belt ceiling.  A pair that already fit at stack one was
+        # seated separately for geometry, so stacking must not merge it as a
+        # side effect (super-magnetic-ring in the deuteron build is the guard).
+        if load <= spec.lane_capacity:
+            for lane in lanes:
+                commit_group((lane,), items, cargo_domain)
+            return
+        commit_group(lanes, items, cargo_domain)
+
+    for (items, cargo_domain), lanes in sorted(
+        by_signature.items(),
+        key=lambda entry: (entry[0][0], entry[0][1].value),
+    ):
+        ordered = sorted(lanes, key=lambda lane: lane[0].belt)
+        # A bus-plus-producer lane has two independent sources.  Its sharing
+        # topology is governed by the internal producer allocation, not solely
+        # by external capacity, so retain the established per-lane roots.
+        if any(item in produced_items for item in items):
+            for lane in ordered:
+                commit_group((lane,), items, cargo_domain)
+            continue
+
+        capacity = spec.lane_capacity * min(
+            spec.planning_stack(item, external=True) for item in items
+        )
+        group: list[tuple[_Port, int]] = []
+        load = Fraction(0)
+        for lane in ordered:
+            port, strip_index = lane
+            strip = strips[strip_index]
+            input_rates = per_item.get(strip.group_key, ({}, {}))[0]
+            demand = strip.machines * sum(
+                (input_rates.get(item, Fraction(0)) for item in items),
+                Fraction(0),
+            )
+            if group and load + demand > capacity:
+                commit_capacity_group(group, load, items, cargo_domain)
+                group = []
+                load = Fraction(0)
+            group.append((port, strip_index))
+            load += demand
+        if group:
+            commit_capacity_group(group, load, items, cargo_domain)
+
+    return roots, carried, tuple(sharing)
+
+
+def _place_shared_external_input_trunks(
+    canvas: _Canvas,
+    groups: Sequence[tuple[str, CargoDomain, tuple[_Port, ...]]],
+    *,
+    belt_id: int,
+    belt_model: int,
+    bounds: tuple[int, int, int, int],
+) -> tuple[tuple[_Net, ...], tuple[tuple[str, _Port], ...]]:
+    """Place one perimeter distribution run for each shared bus group."""
+    min_x, min_y, max_x, max_y = bounds
+    sides = (
+        tuple((x, min_y, 0) for x in range(min_x, max_x + 1)),
+        tuple((max_x, y, 0) for y in range(min_y + 1, max_y + 1)),
+        tuple((x, max_y, 0) for x in range(max_x - 1, min_x - 1, -1)),
+        tuple((min_x, y, 0) for y in range(max_y - 1, min_y, -1)),
+    )
+    nets: list[_Net] = []
+    roots: list[tuple[str, _Port]] = []
+    for item, cargo_domain, destinations in groups:
+        length = len(destinations)
+        segment = next(
+            (
+                side[start : start + length]
+                for side in sides
+                for start in range(len(side) - length + 1)
+                if all(canvas.free(cell) for cell in side[start : start + length])
+            ),
+            None,
+        )
+        if segment is None:
+            raise _Unseatable(
+                f"no {length}-tile perimeter trunk fits the shared external input {item!r}"
+            )
+
+        indices = [
+            canvas.add(
+                PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=x,
+                    y=y,
+                    width=1,
+                    height=1,
+                    carries_item=item,
+                ),
+                level=level,
+            )
+            for x, y, level in segment
+        ]
+        for source_index, destination_index in zip(
+            indices, indices[1:], strict=False
+        ):
+            canvas.buildings[source_index] = _relink(
+                canvas.buildings[source_index],
+                output_obj=destination_index,
+            )
+        ports = tuple(
+            _Port(
+                index,
+                x,
+                y,
+                x,
+                x,
+                (index,),
+                cargo_domain=cargo_domain,
+            )
+            for index, (x, y, _level) in zip(indices, segment, strict=True)
+        )
+        roots.append((item, ports[0]))
+        for source, destination in zip(ports, destinations, strict=True):
+            nets.append(
+                _Net(
+                    src=source,
+                    dst=destination,
+                    item=item,
+                    cargo_domain=cargo_domain,
+                )
+            )
+    return tuple(nets), tuple(roots)
+
+
 def _prepare_routing_problem(
     spec: BuildSpec,
     strips: list[Strip],
@@ -14334,6 +14530,12 @@ def _prepare_routing_problem(
                     cargo_domain=cargo_domain,
                 )
             )
+    wanted, carried, shared_external_groups = _plan_shared_external_inputs(
+        spec,
+        strips,
+        strip_in_ports,
+        per_item,
+    )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -14359,9 +14561,7 @@ def _prepare_routing_problem(
         net_ports = {(p.x, p.y, p.z) for n in nets for p in (n.src, n.dst) if p is not None}
         shared_feed = {
             (port.x, port.y, port.z)
-            for ports in strip_in_ports
-            for item, port in ports.items()
-            if item in spec.external_inputs
+            for port, _strip_index in wanted.values()
         } & net_ports
         unreachable_ports.clear()
         _reserve_port_access(
@@ -14455,49 +14655,48 @@ def _prepare_routing_problem(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
-    # The proliferator entry and its shared trunk are staked BEFORE the ports
-    # are held. Every coater drop is a sink-only leaf; the trunk is the one
-    # externally reachable source from which the detailed router branches.
-    internal_net_count = len(nets)
+    # Shared source trunks are staked on the fixed perimeter after the
+    # proliferator has claimed its north-west root.  Both kinds exist before
+    # the second port reservation, so their leaf routes cannot lose access.
+    net_roles = [NetRole.INTERNAL] * len(nets)
     if coater_list and prolif_item is not None:
         entry = _place_proliferator_entry(canvas, prolif_item, belt_id, belt_model, core)
         if entry is not None:
-            nets.extend(
-                _proliferator_supply_tree(
-                    canvas,
-                    entry,
-                    coater_list,
-                    prolif_item,
-                    belt_id=belt_id,
-                    belt_model=belt_model,
-                    core=core,
-                )
+            proliferator_nets = _proliferator_supply_tree(
+                canvas,
+                entry,
+                coater_list,
+                prolif_item,
+                belt_id=belt_id,
+                belt_model=belt_model,
+                core=core,
             )
+            nets.extend(proliferator_nets)
+            net_roles.extend([NetRole.PROLIFERATOR] * len(proliferator_nets))
 
+    shared_external_nets, shared_external_roots = _place_shared_external_input_trunks(
+        canvas,
+        shared_external_groups,
+        belt_id=belt_id,
+        belt_model=belt_model,
+        bounds=route_bounds,
+    )
+    nets.extend(shared_external_nets)
+    net_roles.extend([NetRole.INTERNAL] * len(shared_external_nets))
+    for item, port in shared_external_roots:
+        wanted[port.belt] = (port, -1)
+        carried[port.belt] = item
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-    # Again, now that every port exists -- strip lanes, coater drops and the
-    # proliferator entry alike. A drop is a one-tile lane and the sink of a
-    # proliferator net, so it is a port like any other, and it did not exist
-    # when the first claim was staked.
+    # Again, now that every port exists -- strip lanes, coater drops,
+    # proliferator trunks, and shared external-input trunks alike.
     if _reserve_ports:
         hold_ports()
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
-    # External-input nets retain the existing lane-deduplication and item
-    # precedence, while exposing their shared boundary cells immutably.
-    wanted: dict[int, tuple[_Port, int]] = {}
-    carried: dict[int, str] = {}
-    for strip_index, ports in enumerate(strip_in_ports):
-        if cancelled is not None and cancelled():
-            raise _PreparationDeadline
-        for item, port in sorted(ports.items()):
-            if item in spec.external_inputs:
-                wanted.setdefault(port.belt, (port, strip_index))
-        for item, port in sorted(ports.items(), reverse=True):
-            if item in spec.external_inputs:
-                carried[port.belt] = item
+    # The stack-aware sharing plan has reduced ``wanted`` to unshared roots;
+    # shared groups already have one zero-predecessor perimeter trunk each.
 
     requested_outputs = set(spec.outputs) | set(spec.surplus_outputs)
     wanted_outputs: dict[int, tuple[str, _Port]] = {}
@@ -14532,13 +14731,7 @@ def _prepare_routing_problem(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
-    tagged_nets = [
-        (
-            net,
-            NetRole.INTERNAL if i < internal_net_count else NetRole.PROLIFERATOR,
-        )
-        for i, net in enumerate(nets)
-    ]
+    tagged_nets = list(zip(nets, net_roles, strict=True))
     tagged_nets.extend(
         (
             _Net(
