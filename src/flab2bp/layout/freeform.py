@@ -14723,7 +14723,7 @@ def _prepare_routing_problem(
                 strip.machine_start,
                 strip.machines,
             )
-            input_plans = (*strip.attachment_plan, *strip.port_dock_plan)
+            input_plans = strip.attachment_plan
             for item, port in ports.items():
                 lane_id = next(
                     (
