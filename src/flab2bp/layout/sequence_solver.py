@@ -72,6 +72,7 @@ from flab2bp.layout.freeform import (
     _PreparedRoutingProblem,
     _projection_no_good,
     _projection_strip_pair,
+    _routing_seed_clearance,
     _staged_static_clearance_keys,
     _staged_static_preclearance_proved,
     _strip_geometry_signature,
@@ -4662,7 +4663,21 @@ def _production_run(
             if variant_tables
             else sum(width * height for width, height in sizes)
         )
-        seeds = {height: _greedy_pack(strips, height) for height in _candidate_heights(strips)}
+        route_clearance = _routing_seed_clearance(
+            strips,
+            sprayed_lanes=len(spec.spray_lanes),
+        )
+
+        def greedy_seed(height: int) -> _Pack:
+            if route_clearance:
+                return _greedy_pack(
+                    strips,
+                    height,
+                    route_clearance=route_clearance,
+                )
+            return _greedy_pack(strips, height)
+
+        seeds = {height: greedy_seed(height) for height in _candidate_heights(strips)}
         coarse_heights = tuple(sorted(seeds, key=lambda height: (seeds[height].width, height)))
         narrowest_greedy_height = coarse_heights[0]
         coarse_height_count = len(coarse_heights)
@@ -4671,7 +4686,7 @@ def _production_run(
             neighbor = height + 2
             if neighbor in seeds:
                 continue
-            seeds[neighbor] = _greedy_pack(strips, neighbor)
+            seeds[neighbor] = greedy_seed(neighbor)
             neighbor_heights.append(neighbor)
         protected_followup_heights = tuple(neighbor_heights)
         legacy_heights = coarse_heights + protected_followup_heights
@@ -4699,7 +4714,7 @@ def _production_run(
         # over the boundary (160 and 162) and routed only the illegal one.
         heights = _ceiling_bounded_schedule(heights, boundary=boundary_height)
         for height in heights:
-            seeds.setdefault(height, _greedy_pack(strips, height))
+            seeds.setdefault(height, greedy_seed(height))
         coarse_heights = heights[:coarse_height_count]
         protected_followup_heights = heights[coarse_height_count:]
         # The height the large-sparse compact-seed role should be checked
@@ -4772,7 +4787,7 @@ def _production_run(
             )[0]
             telemetry.compact_seed_height = compact_height
             if compact_height not in seeds:
-                seeds[compact_height] = _greedy_pack(strips, compact_height)
+                seeds[compact_height] = greedy_seed(compact_height)
             if compact_height not in problems:
                 problems[compact_height] = replace(
                     template_problem,

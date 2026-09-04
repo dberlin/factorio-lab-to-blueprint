@@ -562,14 +562,14 @@ def test_candidate_focused_broad_phase_matches_all_pairs_without_peer_pair_work(
     band = planet.bands(SEGMENT)[0]
     _ = planet.collider_radius(model)
     square_roots = 0
-    sqrt = planet.math.sqrt
+    sqrt = math.sqrt
 
     def counted_sqrt(value: float) -> float:
         nonlocal square_roots
         square_roots += 1
         return sqrt(value)
 
-    monkeypatch.setattr(planet.math, "sqrt", counted_sqrt)
+    monkeypatch.setattr(math, "sqrt", counted_sqrt)
     all_pairs = planet.candidate_pairs(
         buildings,
         band,

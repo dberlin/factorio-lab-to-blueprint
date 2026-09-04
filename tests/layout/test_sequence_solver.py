@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from fractions import Fraction
 from types import SimpleNamespace
@@ -36,6 +36,7 @@ from flab2bp.layout.compact_seed import (
 from flab2bp.layout.freeform import (
     _ENTRY_RING,
     _box,
+    _coarsen_saturated_strip_plan,
     _direct_net_candidates,
     _greedy_pack,
     _nets_between,
@@ -72,18 +73,22 @@ from flab2bp.layout.sequence_alns import (
     operator_scale,
 )
 from flab2bp.layout.sequence_pair import (
+    AnnealConfig,
     AnnealIncumbent,
+    AnnealStageResult,
     AnnealState,
     DecodedPlacement,
     DirectInsertTarget,
     EliteCategory,
     EncodedPlacement,
     GapProfile,
+    PlacementCostContext,
     PlacementKey,
     PlacementProblem,
     SequencePair,
     StageBoundaryUpdate,
     TaggedAnnealIncumbent,
+    anneal_stage,
     apply_variant_move,
     build_elite_archive,
     decode_sequence_pair,
@@ -112,13 +117,16 @@ from flab2bp.layout.sequence_solver import (
     _variant_search_inputs,
 )
 from flab2bp.layout.strip_variants import (
+    CargoDomain,
     ProjectionPitchRequirement,
     StripFamily,
     StripInstanceId,
+    StripPoseId,
     StripVariant,
     generate_strip_families,
     partition_strip_family,
     projection_pitch_requirement,
+    projection_pitch_requirements,
     variant_with_minimum_pitch,
     variants_for_count,
 )
@@ -2447,15 +2455,30 @@ def test_first_ordinary_archive_preserves_unmeasured_detailed_completion(
     detailed_calls = 0
     exact = _placement(area=20, belt_tiles=4)
     fake = _FakeRouting()
-    original_anneal_stage = sequence_solver_module.anneal_stage
+    original_anneal_stage = anneal_stage
 
     def measured_anneal(
-        *args: object,
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+        *,
+        direct_targets_for_state: Callable[
+            [PlacementProblem, AnnealState],
+            tuple[DirectInsertTarget, ...],
+        ]
+        | None = None,
         cancelled: Callable[[], bool] | None = None,
-        **kwargs: object,
-    ) -> object:
+    ) -> AnnealStageResult:
         nonlocal now
-        result = original_anneal_stage(*args, cancelled=cancelled, **kwargs)
+        result = original_anneal_stage(
+            problem,
+            state,
+            config,
+            context,
+            direct_targets_for_state=direct_targets_for_state,
+            cancelled=cancelled,
+        )
         now += 1.0
         return result
 
@@ -2517,15 +2540,30 @@ def test_pending_routing_feedback_uses_zero_anneal_feedback_admission(
     detailed_calls = 0
     exact = _placement(area=20, belt_tiles=4)
     fake = _FakeRouting()
-    original_anneal_stage = sequence_solver_module.anneal_stage
+    original_anneal_stage = anneal_stage
 
     def measured_anneal(
-        *args: object,
+        problem: PlacementProblem,
+        state: AnnealState,
+        config: AnnealConfig,
+        context: PlacementCostContext | None = None,
+        *,
+        direct_targets_for_state: Callable[
+            [PlacementProblem, AnnealState],
+            tuple[DirectInsertTarget, ...],
+        ]
+        | None = None,
         cancelled: Callable[[], bool] | None = None,
-        **kwargs: object,
-    ) -> object:
+    ) -> AnnealStageResult:
         nonlocal now
-        result = original_anneal_stage(*args, cancelled=cancelled, **kwargs)
+        result = original_anneal_stage(
+            problem,
+            state,
+            config,
+            context,
+            direct_targets_for_state=direct_targets_for_state,
+            cancelled=cancelled,
+        )
         now += 3.0
         return result
 
@@ -3164,8 +3202,10 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
     height = run.solver._heights[0]
     decoded = decode_state(height.problem, height.restarts[0].anneal)
 
-    first = run.solver.adapters.prepare_exact(height.height, decoded)
-    second = run.solver.adapters.prepare_exact(height.height, decoded)
+    prepare_exact = run.solver.adapters.prepare_exact
+    assert prepare_exact is not None
+    first = prepare_exact(height.height, decoded)
+    second = prepare_exact(height.height, decoded)
 
     assert first.prepared is None
     assert first.preparation_error == "deadline"
@@ -3206,7 +3246,9 @@ def test_production_exact_preparation_reuses_realized_direct_insert(
     height = run.solver._heights[0]
     decoded = decode_state(height.problem, height.restarts[0].anneal)
 
-    candidate = run.solver.adapters.prepare_exact(height.height, decoded)
+    prepare_exact = run.solver.adapters.prepare_exact
+    assert prepare_exact is not None
+    candidate = prepare_exact(height.height, decoded)
 
     assert candidate.decoded.x == decoded.x
     assert candidate.decoded.y == decoded.y
@@ -3682,8 +3724,10 @@ def test_production_exact_preparation_replay_is_deterministic() -> None:
     height = run.solver._heights[0]
     decoded = decode_state(height.problem, height.restarts[0].anneal)
 
-    first = run.solver.adapters.prepare_exact(height.height, decoded)
-    second = run.solver.adapters.prepare_exact(height.height, decoded)
+    prepare_exact = run.solver.adapters.prepare_exact
+    assert prepare_exact is not None
+    first = prepare_exact(height.height, decoded)
+    second = prepare_exact(height.height, decoded)
 
     assert first == second
     assert first.prepared is not None
@@ -4632,7 +4676,7 @@ def test_a_reserve_boundary_swap_still_falls_back_to_the_balanced_height(
 def test_production_planning_generates_variant_families_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original = sequence_solver_module.generate_strip_families
+    original = generate_strip_families
     calls = 0
 
     def counted_families(
@@ -4690,7 +4734,7 @@ def test_validator_finishes_inside_atomic_completion_grace(
         now[0] = 2.0
         return Report()
 
-    monkeypatch.setattr(sequence_solver_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
     monkeypatch.setattr(validate, "certify", crossing_certify)
     run = _production_run(
         two_stage_spec(),
@@ -4730,7 +4774,7 @@ def test_validator_crossing_atomic_completion_grace_returns_incomplete_budget(
         now[0] = 6.2
         return Report()
 
-    monkeypatch.setattr(sequence_solver_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
     monkeypatch.setattr(validate, "certify", crossing_certify)
     run = _production_run(
         two_stage_spec(),
@@ -5041,7 +5085,7 @@ def test_sequence_reservation_and_child_rebuild_preserve_piler_tail_fields() -> 
     target = next(
         index
         for index, strip in enumerate(strips)
-        if strip.cargo_domain is freeform_module.CargoDomain.REQUIRES_SPRAY
+        if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
         and strip.machines > 1
         and strip.out_lanes
     )
@@ -5256,7 +5300,7 @@ def test_selected_variant_recomputes_its_own_staged_static_clearance(
     target = next(
         index
         for index, strip in enumerate(strips)
-        if strip.cargo_domain is freeform_module.CargoDomain.REQUIRES_SPRAY
+        if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
         and {variant.yaw for variant in variant_tables[index]} >= {0.0, 90.0}
     )
     problem = PlacementProblem(
@@ -5517,7 +5561,7 @@ def test_stage_projection_pitch_requirement_batches_ordered_failures_once(
     reversed_pair = replace(failure, buildings=tuple(reversed(failure.buildings)))
     failures = (unrelated, failure, reversed_pair)
     calls: list[tuple[finalize.ProjectionFailure, ...]] = []
-    mapper = sequence_solver_module.projection_pitch_requirements
+    mapper = projection_pitch_requirements
 
     def record_batch(
         placement: Placement,
@@ -5870,7 +5914,7 @@ def test_exact_projection_feedback_trials_stay_constant_for_many_strips(
             right_geometry=geometries[implicated[1]],
         ),
     )
-    original_decode = sequence_solver_module.decode_state
+    original_decode = decode_state
     decoded = 0
 
     def counted_decode(
@@ -7319,7 +7363,7 @@ def test_sequence_completion_cancels_projection_before_atomic_validation(
         validated = True
         return validate.Report(findings=())
 
-    monkeypatch.setattr(sequence_solver_module.time, "monotonic", monotonic)
+    monkeypatch.setattr(time, "monotonic", monotonic)
     monkeypatch.setattr(finalize, "compact_open_boundary_belts_certified", compact)
     monkeypatch.setattr(validate, "certify", certify)
 
@@ -7646,14 +7690,26 @@ def test_sequence_reuses_adaptive_coarse_strip_partition_before_problem_identity
         *,
         strip_len: int = 6,
         band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
-        **kwargs: object,
+        minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
+        families: Sequence[StripFamily] | None = None,
+        minimum_staged_static_clearance: Mapping[
+            freeform_module.StagedStaticClearanceKey,
+            int,
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[freeform_module.Strip]:
         coarse_replans.append((strip_len, band_policy))
         return real_plan_strips(
             selected_spec,
             strip_len=strip_len,
             band_policy=band_policy,
-            **kwargs,
+            minimum_pitch_x={} if minimum_pitch_x is None else minimum_pitch_x,
+            families=families,
+            minimum_staged_static_clearance=(
+                {} if minimum_staged_static_clearance is None else minimum_staged_static_clearance
+            ),
+            cancelled=cancelled,
         )
 
     monkeypatch.setattr(freeform_module, "plan_strips", track_coarse_replan)
@@ -8139,21 +8195,33 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
     plan_calls: list[tuple[int, BandPolicy]] = []
     coarsen_calls: list[BandPolicy] = []
     real_plan_strips = sequence_solver_module.plan_strips
-    real_coarsen = sequence_solver_module._coarsen_saturated_strip_plan
+    real_coarsen = _coarsen_saturated_strip_plan
 
     def track_plan(
         spec: BuildSpec,
         *,
         strip_len: int = 6,
         band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
-        **kwargs: object,
+        minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
+        families: Sequence[StripFamily] | None = None,
+        minimum_staged_static_clearance: Mapping[
+            freeform_module.StagedStaticClearanceKey,
+            int,
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[freeform_module.Strip]:
         plan_calls.append((strip_len, band_policy))
         return real_plan_strips(
             spec,
             strip_len=strip_len,
             band_policy=band_policy,
-            **kwargs,
+            minimum_pitch_x={} if minimum_pitch_x is None else minimum_pitch_x,
+            families=families,
+            minimum_staged_static_clearance=(
+                {} if minimum_staged_static_clearance is None else minimum_staged_static_clearance
+            ),
+            cancelled=cancelled,
         )
 
     def track_coarsen(
@@ -8162,7 +8230,14 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
         *,
         strip_len: int,
         band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
-        **kwargs: object,
+        minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
+        families: Sequence[StripFamily] | None = None,
+        minimum_staged_static_clearance: Mapping[
+            freeform_module.StagedStaticClearanceKey,
+            int,
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> tuple[list[freeform_module.Strip], int]:
         coarsen_calls.append(band_policy)
         return real_coarsen(
@@ -8170,7 +8245,12 @@ def test_production_forwards_fixed_band_through_initial_compact_and_coarsen_plan
             strips,
             strip_len=strip_len,
             band_policy=band_policy,
-            **kwargs,
+            minimum_pitch_x={} if minimum_pitch_x is None else minimum_pitch_x,
+            families=families,
+            minimum_staged_static_clearance=(
+                {} if minimum_staged_static_clearance is None else minimum_staged_static_clearance
+            ),
+            cancelled=cancelled,
         )
 
     monkeypatch.setattr(sequence_solver_module, "plan_strips", track_plan)
@@ -8218,7 +8298,14 @@ def test_production_forwards_fixed_band_through_fallback_replan(
         *,
         strip_len: int = 6,
         band_policy: BandPolicy = _PORTABLE_BAND_POLICY,
-        **kwargs: object,
+        minimum_pitch_x: Mapping[StripPoseId, int] | None = None,
+        families: Sequence[StripFamily] | None = None,
+        minimum_staged_static_clearance: Mapping[
+            freeform_module.StagedStaticClearanceKey,
+            int,
+        ]
+        | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> list[freeform_module.Strip]:
         plan_calls.append((strip_len, band_policy))
         if len(plan_calls) == 1:
@@ -8227,7 +8314,12 @@ def test_production_forwards_fixed_band_through_fallback_replan(
             selected_spec,
             strip_len=strip_len,
             band_policy=band_policy,
-            **kwargs,
+            minimum_pitch_x={} if minimum_pitch_x is None else minimum_pitch_x,
+            families=families,
+            minimum_staged_static_clearance=(
+                {} if minimum_staged_static_clearance is None else minimum_staged_static_clearance
+            ),
+            cancelled=cancelled,
         )
 
     monkeypatch.setattr(sequence_solver_module, "plan_strips", fail_once_then_plan)
@@ -8675,7 +8767,7 @@ def test_legacy_finalizer_crossing_deadline_returns_incomplete_budget(
         )
     )
     monkeypatch.setattr(
-        sequence_solver_module.time,
+        time,
         "monotonic",
         lambda: next(clock, completion_deadline + 1.0),
     )

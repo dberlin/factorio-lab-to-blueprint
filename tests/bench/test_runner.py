@@ -10,6 +10,8 @@ import pytest
 from flab2bp.bench import __main__ as bench_main
 from flab2bp.bench import runner
 from flab2bp.bench.corpus import URL_CORPUS
+from flab2bp.layout import finalize, validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     AreaFrame,
     LayoutStrategy,
@@ -174,11 +176,11 @@ def test_run_cell_preserves_completed_placement(
         pytest.fail("completed placement must bypass completion transforms")
 
     monkeypatch.setattr(
-        runner.finalize,
+        finalize,
         "compact_open_boundary_belts",
         fail_completion,
     )
-    monkeypatch.setattr(runner.finalize, "finalize_placement", fail_completion)
+    monkeypatch.setattr(finalize, "finalize_placement", fail_completion)
     _stub_cell_observers(monkeypatch, observed)
 
     runner._run_cell(
@@ -226,7 +228,7 @@ def test_run_cell_completes_raw_placement_once_in_order(
 
     def finalize_spy(
         placement: Placement,
-        policy: runner.BandPolicy,
+        policy: BandPolicy,
     ) -> Placement:
         del policy
         assert placement is compacted
@@ -234,11 +236,11 @@ def test_run_cell_completes_raw_placement_once_in_order(
         return finalized
 
     monkeypatch.setattr(
-        runner.finalize,
+        finalize,
         "compact_open_boundary_belts",
         compact_spy,
     )
-    monkeypatch.setattr(runner.finalize, "finalize_placement", finalize_spy)
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
     _stub_cell_observers(monkeypatch, observed)
 
     runner._run_cell(
@@ -299,5 +301,5 @@ def _stub_cell_observers(
         return report
 
     monkeypatch.setattr(runner, "measure", measure_spy)
-    monkeypatch.setattr(runner.validator, "validate", validate_spy)
+    monkeypatch.setattr(validate, "validate", validate_spy)
     monkeypatch.setattr(runner, "_id_map", lambda _spec: object())

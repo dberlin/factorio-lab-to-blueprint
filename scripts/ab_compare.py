@@ -200,7 +200,7 @@ def encode_with(spec: BuildSpec, placement: Placement) -> str:
     Cross-validating a placement the pipeline would not actually emit would
     check the wrong bytes.
     """
-    return codec.encode(markers.mark_external_inputs(placement, spec))
+    return codec.encode(markers.mark_external_belts(placement, spec))
 
 
 def collect(

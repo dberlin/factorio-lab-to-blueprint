@@ -64,7 +64,7 @@ def _fed_machine() -> Placement:
     )
 
 
-def _tiers(placement) -> list[int]:
+def _tiers(placement: Placement) -> list[int]:
     return [b.item_id for b in placement.buildings if b.item_id in (BELT1, BELT2, BELT3)]
 
 

@@ -7,7 +7,8 @@ from typing import cast
 import pytest
 
 from flab2bp.bench.corpus import URL_CORPUS
-from flab2bp.layout import validate
+from flab2bp.layout import finalize, validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, Placement, PlacementCompletion
 from flab2bp.rates import CandidatePolicy
 from flab2bp.spec import BuildSpec
@@ -96,11 +97,11 @@ def test_layout_call_preserves_completed_placement(
         lambda _vertical: CompletedStrategy(),
     )
     monkeypatch.setattr(
-        ab_compare.finalize,
+        finalize,
         "compact_open_boundary_belts",
         fail_completion,
     )
-    monkeypatch.setattr(ab_compare.finalize, "finalize_placement", fail_completion)
+    monkeypatch.setattr(finalize, "finalize_placement", fail_completion)
 
     result = ab_compare._LayoutCall(
         strategy="completed",
@@ -143,7 +144,7 @@ def test_layout_call_completes_raw_placement_once_in_order(
 
     def finalize_spy(
         placement: Placement,
-        policy: ab_compare.BandPolicy,
+        policy: BandPolicy,
     ) -> Placement:
         del policy
         assert placement is compacted
@@ -156,11 +157,11 @@ def test_layout_call_completes_raw_placement_once_in_order(
         lambda _vertical: RawStrategy(),
     )
     monkeypatch.setattr(
-        ab_compare.finalize,
+        finalize,
         "compact_open_boundary_belts",
         compact_spy,
     )
-    monkeypatch.setattr(ab_compare.finalize, "finalize_placement", finalize_spy)
+    monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
 
     result = ab_compare._LayoutCall(
         strategy="raw",

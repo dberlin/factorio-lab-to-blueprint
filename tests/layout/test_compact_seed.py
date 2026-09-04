@@ -463,9 +463,11 @@ def test_topology_beam_can_stop_at_the_first_width_admitted_incumbent() -> None:
     )
     observed_widths: list[int] = []
 
-    candidate = beam.solve_next(
-        stop_when_width_admits=lambda width: not observed_widths.append(width)
-    )
+    def stop_after_first(width: int) -> bool:
+        observed_widths.append(width)
+        return True
+
+    candidate = beam.solve_next(stop_when_width_admits=stop_after_first)
 
     assert candidate is not None
     assert observed_widths == [candidate.width]

@@ -5,7 +5,7 @@ import pickle
 import random
 import struct
 from array import array
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
 from typing import ClassVar, cast
 
@@ -57,6 +57,18 @@ from flab2bp.rates.candidates import (
     CandidatePolicy,
     build_candidates,
 )
+
+
+def _counted_call[**P, R](
+    function: Callable[P, R],
+    observe: Callable[[], None],
+) -> Callable[P, R]:
+    def counted(*args: P.args, **kwargs: P.kwargs) -> R:
+        observe()
+        return function(*args, **kwargs)
+
+    return counted
+
 
 _REFINERY_URL = (
     "https://factoriolab.github.io/dsp/list?z="
@@ -432,15 +444,14 @@ def test_direct_origin_deltas_use_compiled_kernel_with_exact_controls(
     assert compiled_decode_score is not None
     compiled_calls = 0
 
-    def observed_decode_score(*args: object) -> object:
+    def observe_call() -> None:
         nonlocal compiled_calls
         compiled_calls += 1
-        return compiled_decode_score(*args)
 
     monkeypatch.setattr(
         sequence_kernel_module,
         "_compiled_decode_score",
-        observed_decode_score,
+        _counted_call(compiled_decode_score, observe_call),
     )
     kernel = build_sequence_kernel(problem, direct_context)
     rejected = kernel.score_state(state)

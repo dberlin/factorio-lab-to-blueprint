@@ -474,7 +474,7 @@ def test_island_reuses_authoritative_search_validation_after_soft_deadline(
         "_with_observational_stats",
         lambda *_args, **_kwargs: placement,
     )
-    monkeypatch.setattr(islands_module.time, "monotonic", lambda: 101.0)
+    monkeypatch.setattr(time, "monotonic", lambda: 101.0)
 
     def reject_revalidation(*_args: object, **_kwargs: object) -> Never:
         raise AssertionError("island must reuse the solver's authoritative validation")
