@@ -384,9 +384,9 @@ OUTER_MAX = 3
 #: does not.  Seed 0 wired 34 of 50 height-groups; some seed of five wired 48.
 #:
 #: That is a real property and it is NOT a licence to spend the clock on it. See
-#: :meth:`FreeformLayout._sweep`, which gates arrangements past the first on
-#: having a routed pack to improve: they buy density where there is clock to
-#: spare and buy nothing at all where the deadline is the binding constraint.
+#: :meth:`FreeformLayout._sweep`, which stops later draws once they stop adding
+#: new assignments, while retaining the measured affordability gate after a
+#: routed pack exists.
 #:
 #: Three, because that is what the density measurement supports -- -1.98% area
 #: over four paired rounds at the budget where arrangements are affordable, and
@@ -395,6 +395,20 @@ OUTER_MAX = 3
 #: pass.  ``1`` is the search as it stood before this existed and is the control
 #: the A/B compares against; see ``audit.py --arrangements``.
 _ARRANGEMENTS = 3
+
+#: Consecutive draws that may add no new entry to ``routed_assignments`` before
+#: the sweep stops looking, when nothing has wired yet.
+#:
+#: MEASURED, not guessed.  R2 §6b bypassed the arrangement gate on
+#: `universe-matrix` at `--arrangements 16`: EIGHTY candidate slots produced FIVE
+#: routing evaluations and cost up to 10 s per cell, because every slot past
+#: arrangement 0 returned a byte-identical CP-SAT assignment and hit the
+#: duplicate-assignment skip.  Three draws is enough to see that the draw is not
+#: moving -- each costs one bounded CP-SAT solve at 0.06 to 0.09 s on those cells
+#: -- and it bounds the continuation's cost at the cost of PROVING there is
+#: nothing new, which is the only thing that makes it affordable at the audit's
+#: `--jobs 16`.
+C_SWEEP_STALE_DRAWS = 3
 
 #: CP-SAT's random seed for arrangement 0 -- the constant this always used.
 _PACK_RANDOM_SEED = 20260822
@@ -17253,6 +17267,12 @@ class FreeformLayout:
             if skipped_heights
             else ""
         )
+        stale_note = (
+            f"; the sweep stopped after {int(sweep_telemetry.get('stale_draws', 0))} "
+            "draws that produced no new packing"
+            if sweep_telemetry.get("stale_stop")
+            else ""
+        )
         refusal_stats: dict[str, float | str] = {
             **sweep_telemetry,
             "attempts": float(len(attempts)),
@@ -17269,7 +17289,8 @@ class FreeformLayout:
                 + "); a placement that fails validation is refused rather than "
                 "returned, because an invalid blueprint pastes and then does not "
                 "run"
-                + over_band,
+                + over_band
+                + stale_note,
                 spec_label=spec.label,
                 budget_s=budgets[-1],
                 projection_failures=projection_failures,
@@ -17361,7 +17382,7 @@ class FreeformLayout:
             seating = _port_seating_refusal(attempts)
             if seating is not None:
                 note = seating
-            note += over_band
+            note += over_band + stale_note
             raise NoValidLayout(
                 f"the {ceiling:g}s deadline passed with no completed packing of "
                 f"{len(strips)} strips; {note}. This is a REFUSAL and not a "
@@ -17399,7 +17420,7 @@ class FreeformLayout:
         else:
             base = f"no pack of {len(strips)} strips was ever produced at any candidate height"
         raise NoValidLayout(
-            (_port_seating_refusal(attempts) or base) + over_band,
+            (_port_seating_refusal(attempts) or base) + over_band + stale_note,
             spec_label=spec.label,
             budget_s=budgets[-1],
             stats=refusal_stats,
@@ -17700,6 +17721,7 @@ class FreeformLayout:
         #: Task 11 makes it move; it is published from here so the refused-row
         #: schema does not change again a task later.
         stale_draws = 0
+        stale_stop = False
         started_at: float | None = None
         candidate_index = 0
 
@@ -18019,7 +18041,33 @@ class FreeformLayout:
                     and not _room_for_another(deadline, improvement_soft, turn_cost)
                 ):
                     break
-                if not projection_retry and arrangement and best is None:
+                # A SECOND ARRANGEMENT WITH NOTHING TO IMPROVE USED TO BE A HARD
+                # STOP, and it stopped the sweep at slot 6 of 15 with 25 to 28 s
+                # of a 30 s ceiling still in hand (R2 §3).  That was right while
+                # every later draw was a byte-identical copy of the first; with a
+                # diversification cut behind it, a later draw is a genuinely
+                # different pack, and the honest stop condition is that the draws
+                # have stopped being new.
+                #
+                # `_room_for_another(deadline, improvement_soft, turn_cost)`, the
+                # `completion_reserve_s` check and the hard `remaining <= 0`
+                # break all sit immediately BELOW this gate and are unchanged, so
+                # a draw this gate now lets through still has to buy its clock
+                # from them: it can only ever extend a sweep INSIDE clock it
+                # already had.  (The `_room_for_another` call ABOVE this gate is
+                # the improvement one, guarded by `best is not None`; it never
+                # fires on this path.)
+                #
+                # `--arrangements` remains the hard cap: `candidate_packs` is not
+                # re-seeded, so the continuation cannot draw a slot the caller
+                # did not ask for.
+                if (
+                    not projection_retry
+                    and arrangement
+                    and best is None
+                    and stale_draws >= C_SWEEP_STALE_DRAWS
+                ):
+                    stale_stop = True
                     break
                 # `turn_cost` here is `dearest_candidate_s` under every reachable
                 # state: a window launches only from `arrangement == 0`, so every
@@ -18131,6 +18179,7 @@ class FreeformLayout:
                     )
                     candidate_pack_s = time.monotonic() - pack_started
                 if pack is None:
+                    stale_draws += 1
                     continue
                 assignment = (
                     pack.height,
@@ -18143,8 +18192,10 @@ class FreeformLayout:
                 # arrangement seeds; routing it again is the same deterministic
                 # multi-second search and can consume the candidate that would wire.
                 if assignment in routed_assignments:
+                    stale_draws += 1
                     continue
                 routed_assignments.add(assignment)
+                stale_draws = 0
                 if (
                     deadline is not None
                     and deadline - time.monotonic()
@@ -19004,6 +19055,7 @@ class FreeformLayout:
             telemetry["evaluations"] = float(evaluations)
             telemetry["distinct_assignments"] = float(len(routed_assignments))
             telemetry["stale_draws"] = float(stale_draws)
+            telemetry["stale_stop"] = float(stale_stop)
             telemetry["window_solves"] = float(window_solves)
             telemetry["window_accepted"] = float(window_accepted)
         # `stats["route_backend"]` is stamped in `lay_out`, where none of these

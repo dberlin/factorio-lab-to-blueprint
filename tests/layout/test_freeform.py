@@ -3786,20 +3786,30 @@ def test_a_proof_from_a_later_round_is_not_exhaustive_for_an_earlier_incumbent(
     assert result.exhaustive is False
 
 
-def _sweep_after_first_routing(
+def _routed() -> DetailedRouteResult:
+    """A fully routed result.
+
+    ``_routing_failures()`` with no kinds is also ROUTED, but every call site in
+    this file passes it as the FAILING fixture, so a separate, unambiguous name
+    is what stops the two being confused again.
+    """
+    return DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 1, 0)
+
+
+def _install_injected_packs(
     monkeypatch: pytest.MonkeyPatch,
-    first_routing: DetailedRouteResult,
+    spec: BuildSpec,
+    strips: list[Strip],
     *,
+    first_routing: DetailedRouteResult,
     arrangements: int = 2,
     forbid_finalization: bool = False,
     heights: tuple[int, ...] = (20,),
     subsequent_routing: DetailedRouteResult | None = None,
     distinct_arrangements: bool = True,
-    deadline: float | None = None,
     finalizer: Callable[..., Placement] | None = None,
     certifier: Callable[..., validate.Report] | None = None,
     before_build: Callable[[int, int], None] | None = None,
-    time_budget_s: float = 1.0,
     pack_transform: Callable[
         [
             tuple[int, int],
@@ -3809,9 +3819,7 @@ def _sweep_after_first_routing(
         freeform._Pack,
     ]
     | None = None,
-) -> tuple[Placement | None, list[tuple[int, int]], list[freeform.PackAttempt]]:
-    spec = two_stage_spec()
-    strips = plan_strips(spec)
+) -> tuple[list[tuple[int, int]], dict[int, tuple[int, int]]]:
     packs = {
         (height, arrangement): freeform._Pack(
             at={
@@ -3828,7 +3836,7 @@ def _sweep_after_first_routing(
         for height in heights
         for arrangement in range(arrangements)
     }
-    routed = subsequent_routing or _routing_failures()
+    routed = subsequent_routing or _routed()
     seen: list[tuple[int, int]] = []
     packed_candidates: dict[int, tuple[int, int]] = {}
 
@@ -3854,6 +3862,7 @@ def _sweep_after_first_routing(
         pack: freeform._Pack,
         **_kwargs: object,
     ) -> _BuildResult:
+        assert _spec is spec
         candidate = packed_candidates[id(pack)]
         if before_build is not None:
             before_build(*candidate)
@@ -3908,6 +3917,50 @@ def _sweep_after_first_routing(
             "finalize_placement",
             finalizer if finalizer is not None else lambda placement, _policy, **_kwargs: placement,
         )
+    return seen, packed_candidates
+
+
+def _sweep_after_first_routing(
+    monkeypatch: pytest.MonkeyPatch,
+    first_routing: DetailedRouteResult,
+    *,
+    arrangements: int = 2,
+    forbid_finalization: bool = False,
+    heights: tuple[int, ...] = (20,),
+    subsequent_routing: DetailedRouteResult | None = None,
+    distinct_arrangements: bool = True,
+    deadline: float | None = None,
+    finalizer: Callable[..., Placement] | None = None,
+    certifier: Callable[..., validate.Report] | None = None,
+    before_build: Callable[[int, int], None] | None = None,
+    time_budget_s: float = 1.0,
+    pack_transform: Callable[
+        [
+            tuple[int, int],
+            freeform._Pack,
+            tuple[freeform.ExactPackNoGood, ...],
+        ],
+        freeform._Pack,
+    ]
+    | None = None,
+) -> tuple[Placement | None, list[tuple[int, int]], list[freeform.PackAttempt]]:
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    seen, _packed_candidates = _install_injected_packs(
+        monkeypatch,
+        spec,
+        strips,
+        first_routing=first_routing,
+        arrangements=arrangements,
+        forbid_finalization=forbid_finalization,
+        heights=heights,
+        subsequent_routing=subsequent_routing,
+        distinct_arrangements=distinct_arrangements,
+        finalizer=finalizer,
+        certifier=certifier,
+        before_build=before_build,
+        pack_transform=pack_transform,
+    )
 
     attempts: list[freeform.PackAttempt] = []
     result = FreeformLayout(
@@ -3922,6 +3975,138 @@ def _sweep_after_first_routing(
         session=OperatorSession(),
     )
     return result, seen, attempts
+
+
+def _lay_out_with_injected_packs(
+    monkeypatch: pytest.MonkeyPatch,
+    spec: BuildSpec,
+    *,
+    first_routing: DetailedRouteResult,
+    arrangements: int = 2,
+    heights: tuple[int, ...] = (20,),
+    distinct_arrangements: bool = True,
+    time_budget_s: float = 1e6,
+    deadline_after: float | None = None,
+) -> Placement:
+    """Drive ``lay_out`` over the injected packs used by the sweep helper.
+
+    ``_sweep_after_first_routing`` returns the sweep's own value, which cannot
+    show the REFUSAL TEXT. This runs the same fixtures one level up so a test can
+    assert on ``NoValidLayout.reason``.
+    """
+    strips = plan_strips(spec)
+    _install_injected_packs(
+        monkeypatch,
+        spec,
+        strips,
+        first_routing=first_routing,
+        arrangements=arrangements,
+        heights=heights,
+        distinct_arrangements=distinct_arrangements,
+    )
+    absolute_deadline = (
+        None if deadline_after is None else time.monotonic() + deadline_after
+    )
+    return FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=arrangements,
+    ).lay_out(
+        spec,
+        time_budget_s=time_budget_s,
+        absolute_deadline=absolute_deadline,
+    )
+
+
+def test_repeating_packs_stop_after_the_stale_draw_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repeating packer stops after the measured number of stale draws."""
+    _result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(RouteFailureKind.SEALED_POCKET),
+        arrangements=8,
+        heights=(20,),
+        distinct_arrangements=False,
+        time_budget_s=1e6,
+    )
+
+    assert len(seen) == 1 + freeform.C_SWEEP_STALE_DRAWS
+    assert seen[0] == (20, 0)
+
+
+def test_packs_that_keep_producing_new_assignments_run_to_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+
+    def monotonic() -> float:
+        nonlocal clock
+        clock += 0.2
+        return clock
+
+    monkeypatch.setattr(freeform.time, "monotonic", monotonic)
+    _result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(RouteFailureKind.SEALED_POCKET),
+        subsequent_routing=_routing_failures(RouteFailureKind.SEALED_POCKET),
+        arrangements=8,
+        heights=(20,),
+        distinct_arrangements=True,
+        deadline=12.0,
+        time_budget_s=1e6,
+    )
+
+    assert len(seen) > 1 + freeform.C_SWEEP_STALE_DRAWS
+    assert len(seen) <= 8
+
+
+def test_a_stale_stop_names_staleness_in_the_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+
+    with pytest.raises(NoValidLayout) as stale:
+        _lay_out_with_injected_packs(
+            monkeypatch,
+            spec,
+            first_routing=_routing_failures(RouteFailureKind.SEALED_POCKET),
+            arrangements=8,
+            distinct_arrangements=False,
+        )
+
+    assert "produced no new packing" in stale.value.reason
+
+
+def test_a_cell_with_an_incumbent_after_arrangement_zero_draws_exactly_as_today(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The continuation runs only where ``best is None``."""
+    _result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routed(),
+        arrangements=2,
+        heights=(20, 30),
+        subsequent_routing=_routed(),
+        time_budget_s=1e6,
+    )
+
+    assert len(seen) == 4
+
+
+def test_one_explicit_arrangement_still_makes_one_draw_per_height(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--arrangements`` stays a hard cap; the continuation never re-seeds."""
+    _result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routing_failures(RouteFailureKind.SEALED_POCKET),
+        arrangements=1,
+        heights=(20, 30),
+        distinct_arrangements=False,
+        time_budget_s=1e6,
+    )
+
+    assert seen == [(20, 0), (30, 0)]
 
 
 def test_fully_routed_attempt_finishes_certification_inside_atomic_grace(
