@@ -188,6 +188,39 @@ def make_splitter(
     )
 
 
+def make_piler(
+    x: int,
+    y: int,
+    z: Fraction = Fraction(0),
+    *,
+    yaw: float = 0.0,
+) -> PlacedBuilding:
+    """An Automatic Piler at ``(x, y, z)`` facing ``yaw``.
+
+    The piler names neither neighbouring belt.  The belt before it names piler
+    port 1 as its output, and the belt after it names piler port 0 as its input;
+    that wiring makes ``CargoTraffic.RematchPilerConnection`` select Pile mode.
+    Its own four slot fields remain zero, exactly as the generic building branch
+    of ``BlueprintUtils.GenerateBlueprintData`` leaves them.
+
+    There is no stack argument or parameter block.  A piler doubles the stack
+    arriving on its input belt, capped at :data:`catalog.PILER_MAX_STACK`; lane
+    planning decides how many pilers a belt traverses.
+    """
+    info = catalog.building(catalog.PILER_ID)
+    width, height = catalog.oriented_footprint(catalog.PILER_ID, yaw)
+    return PlacedBuilding(
+        item_id=catalog.PILER_ID,
+        model_index=info.model_index,
+        x=x,
+        y=y,
+        z=z,
+        width=width,
+        height=height,
+        yaw=yaw,
+    )
+
+
 def splitter_stack_levels(level: int) -> tuple[int, ...]:
     """Blueprint anchors needed for a junction carrying routing ``level``.
 

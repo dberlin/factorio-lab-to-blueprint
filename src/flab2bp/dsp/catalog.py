@@ -217,6 +217,7 @@ def _optional_boolean(row: Mapping[object, object], key: str, path: str) -> bool
 BELT_IDS = range(2001, 2010)
 SORTER_IDS = range(2011, 2020)
 SPLITTER_ID = 2020
+PILER_ID = 2040
 #: Exact prefab models the Splitter item may select.
 #:
 #: Model 121 (Storage Tank) is a representative trap: it also exposes four
@@ -239,11 +240,19 @@ def is_sorter(item_id: int) -> bool:
 
 
 #: Buildings that share a tile with the belt they serve rather than reserving
-#: their own.  Sorters straddle their two endpoints; splitters sit *on* the belt
-#: line -- measured at dx=0.00, dy=0.00 from a belt in the corpus, i.e. exactly
-#: co-located.  A tile-occupancy overlap check must exclude these or it reports
-#: violations in blueprints the game itself produced.
-BELT_INTEGRATED_IDS = frozenset(BELT_IDS) | frozenset(SORTER_IDS) | {SPLITTER_ID}
+#: an independent belt corridor.  Sorters straddle their two endpoints;
+#: splitters sit *on* the belt line -- measured at dx=0.00, dy=0.00 from a belt
+#: in the corpus -- and an Automatic Piler is an inline device whose neighbouring
+#: belts carry its port references.  A tile-occupancy overlap check must exclude
+#: these or it reports violations in blueprints the game itself produced.
+BELT_INTEGRATED_IDS = (
+    frozenset(BELT_IDS)
+    | frozenset(SORTER_IDS)
+    | {
+        SPLITTER_ID,
+        PILER_ID,
+    }
+)
 
 
 def is_belt_integrated(item_id: int) -> bool:
