@@ -4188,6 +4188,95 @@ def test_a_repeated_draw_becomes_a_diversification_cut_at_the_next_arrangement(
     assert cuts_30[0].height == 30
 
 
+def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arrangement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The repaired pack supplements, rather than replaces, its source pack's cut."""
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: True)
+    monkeypatch.setattr(
+        freeform,
+        "destroy_strips",
+        lambda *_args, **_kwargs: frozenset({0}),
+    )
+    monkeypatch.setattr(
+        freeform,
+        "_pack_relation_pair",
+        lambda *_args, **_kwargs: SequencePair((0, 1), (0, 1)),
+    )
+    spec = two_stage_spec()
+    strips = plan_strips(spec)
+    seen_cuts: dict[tuple[int, int], tuple[freeform.ExactPackNoGood, ...]] = {}
+
+    def record(
+        candidate: tuple[int, int],
+        pack: freeform._Pack,
+        exact_no_goods: tuple[freeform.ExactPackNoGood, ...],
+    ) -> freeform._Pack:
+        seen_cuts[candidate] = exact_no_goods
+        return pack
+
+    _seen, packed_candidates = _install_injected_packs(
+        monkeypatch,
+        spec,
+        strips,
+        first_routing=_feedback_bearing_routing(count=3),
+        arrangements=2,
+        heights=(20, 30),
+        subsequent_routing=_feedback_bearing_routing(count=3),
+        pack_transform=record,
+    )
+    repaired_origins: list[tuple[tuple[int, int], ...]] = []
+
+    def repair_window(
+        *_args: object,
+        seed: freeform._Pack,
+        exact_pack_no_goods: tuple[freeform.ExactPackNoGood, ...],
+        **_kwargs: object,
+    ) -> freeform._Pack:
+        assert exact_pack_no_goods == (), "diversification is local, never global proof state"
+        repaired = replace(
+            seed,
+            at={
+                index: (x + (5 if index == 0 else 0), y)
+                for index, (x, y) in seed.at.items()
+            },
+        )
+        packed_candidates[id(repaired)] = (20, 0)
+        repaired_origins.append(tuple(repaired.at[index] for index in range(len(strips))))
+        return repaired
+
+    monkeypatch.setattr(freeform, "_pack_window", repair_window)
+    attempts: list[freeform.PackAttempt] = []
+
+    result = FreeformLayout(
+        band_policy=BandPolicy("portable"),
+        arrangements=2,
+    )._sweep(
+        spec,
+        strips,
+        1e6,
+        attempts=attempts,
+        session=OperatorSession(),
+    )
+
+    assert result is None
+    cuts_20 = seen_cuts[20, 1]
+    assert len(cuts_20) == 2
+    assert {cut.evidence[0].check for cut in cuts_20} == {"pack.diversification"}
+    original_origins = tuple(
+        (index * 10 + strip.west_channel, 0) for index, strip in enumerate(strips)
+    )
+    assert repaired_origins
+    assert {cut.origins for cut in cuts_20} == {
+        original_origins,
+        repaired_origins[0],
+    }
+    cuts_30 = seen_cuts[30, 1]
+    assert len(cuts_30) == 1
+    assert cuts_30[0].height == 30
+    assert cuts_30[0].evidence[0].check == "pack.diversification"
+
+
 def test_a_diversification_cut_is_never_taken_once_a_pack_has_wired(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -21296,7 +21385,7 @@ def _port_seating_attempt(count: int, *, expansions: int = 0) -> freeform.PackAt
             freeform.StrandedPort(
                 cell=(1, 10 + index, 0),
                 item="hydrogen",
-                strip_label="casimir-crystal#1",
+                strip_label=f"casimir-crystal#{index + 1}",
                 held=1,
                 wants=2,
                 options=1,
@@ -21323,6 +21412,26 @@ def test_a_pack_that_never_routed_is_reported_as_a_port_seating_defect() -> None
     assert "hydrogen" in message and "casimir-crystal#1" in message
     assert "wants 2" in message and "held 1" in message
     assert "PACKER defect" not in message
+
+
+def test_a_moving_logical_port_is_counted_as_one_lane_head() -> None:
+    """Candidate coordinates move; the logical strip input and count do not."""
+    first = _port_seating_attempt(1)
+    moved_port = replace(
+        first.stranded_ports[0],
+        cell=(99, 100, 0),
+        held=0,
+        options=0,
+    )
+    moved = replace(first, stranded_ports=(moved_port,))
+
+    message = freeform._port_seating_refusal([first, moved])
+
+    assert message is not None
+    assert "1 lane head" in message
+    assert "2 lane heads" not in message
+    assert "at (1, 10, 0)" in message
+    assert "wants 2, held 1, 1 free side(s)" in message
 
 
 def test_a_pack_the_router_ran_on_is_not_reported_as_port_seating() -> None:

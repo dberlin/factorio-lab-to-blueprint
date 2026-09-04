@@ -17281,6 +17281,11 @@ def _port_seating_refusal(attempts: Sequence[PackAttempt]) -> str | None:
     "the packer produced packs its own router cannot wire" is false twice over --
     nothing was routed and the packer is blameless.  Measured on all three
     freeform `universe-matrix` cells at `e0bf432` (R2 §3, R4 §1).
+
+    Logical identity is ``(strip_label, item)``: a strip plan assigns each input
+    item once, while packing may move its port cell on every attempt.  The first
+    attempt is the representative for held/wants/options detail, so the
+    diagnostic stays reproducible without multiplying one lane by coordinates.
     """
     if not attempts:
         return None
@@ -17294,22 +17299,33 @@ def _port_seating_refusal(attempts: Sequence[PackAttempt]) -> str | None:
             for failure in attempt.routing.failures
         ):
             return None
-    ports = {port.cell: port for attempt in attempts for port in attempt.stranded_ports}
+    ports: dict[tuple[str, str], StrandedPort] = {}
+    for attempt in attempts:
+        for port in attempt.stranded_ports:
+            ports.setdefault((port.strip_label, port.item), port)
     if not ports:
         return None
     named = ", ".join(
         f"{port.item} into {port.strip_label} at {port.cell} "
         f"(wants {port.wants}, held {port.held}, {port.options} free side(s))"
-        for port in sorted(ports.values(), key=lambda port: port.cell)[:3]
+        for port in sorted(
+            ports.values(),
+            key=lambda port: (port.strip_label, port.item, port.cell),
+        )[:3]
     )
-    counts = {len(attempt.stranded_ports) for attempt in attempts}
+    counts = {
+        len({(port.strip_label, port.item) for port in attempt.stranded_ports})
+        for attempt in attempts
+    }
     same = (
         f"every candidate height produced the same {next(iter(counts))} failures"
         if len(counts) == 1
         else "the failure count varied by candidate height"
     )
+    port_count = len(ports)
+    lane_noun = "lane head" if port_count == 1 else "lane heads"
     return (
-        f"no pack was ever routed: {len(ports)} lane heads could not obtain the "
+        f"no pack was ever routed: {port_count} {lane_noun} could not obtain the "
         f"belt approaches they need ({named}); this is a PORT-SEATING defect "
         f"independent of the packing -- {same}"
     )
@@ -18629,7 +18645,17 @@ class FreeformLayout:
                 routed_assignments.add(assignment)
                 stale_draws = 0
                 if best is None:
-                    diversification_no_goods[height, arrangement + 1] = (
+                    # A queued window repair re-enters this SAME arrangement
+                    # after its original pack already populated the next slot.
+                    # Preserve that destination's cut; `diversification_cuts`
+                    # came from the current slot and cannot recover it.
+                    next_candidate = (height, arrangement + 1)
+                    prior_destination_cuts = diversification_no_goods.get(
+                        next_candidate,
+                        (),
+                    )
+                    diversification_no_goods[next_candidate] = (
+                        *prior_destination_cuts,
                         *diversification_cuts,
                         ExactPackNoGood(
                             height=pack.height,

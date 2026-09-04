@@ -1516,6 +1516,52 @@ def test_an_ingredient_fed_from_outside_and_inside_takes_the_outermost_lane_row(
         assert strip.row_of_input("hydrogen") == 0, group_key
 
 
+def test_two_both_fed_ingredients_take_opposite_true_outer_rows() -> None:
+    """Two independent two-approach lanes use north-first and south-last."""
+    from flab2bp.layout.strip_variants import _logical_strip_plans
+
+    one = Fraction(1)
+    spec = BuildSpec(
+        groups=(
+            _group("make-alpha", "assembling-machine-1", 1, {}, {"alpha": one}),
+            _group("make-beta", "assembling-machine-1", 1, {}, {"beta": one}),
+            _group(
+                "consume-both",
+                "matrix-lab",
+                1,
+                {"alpha": one, "beta": one},
+                {"product": one},
+            ),
+        ),
+        external_inputs={"alpha": one, "beta": one},
+        outputs={"product": one},
+    )
+    target = next(
+        plan
+        for plan in _logical_strip_plans(spec)
+        if {"alpha", "beta"}
+        == {item for lane in (*plan.in_above, *plan.in_below) for item in lane}
+    )
+    both_fed = {"alpha", "beta"}
+
+    assert target.in_above and both_fed & set(target.in_above[0])
+    assert target.in_below and both_fed & set(target.in_below[-1])
+    assert sum(bool(both_fed & set(lane)) for lane in target.in_above) == 1
+    assert sum(bool(both_fed & set(lane)) for lane in target.in_below) == 1
+
+
+def test_three_separately_seated_both_fed_lanes_are_refused() -> None:
+    """A strip has only the north-first and south-last true outer rows."""
+    from flab2bp.layout.strip_variants import _seat_both_fed_outermost
+
+    with pytest.raises(ValueError, match="only two"):
+        _seat_both_fed_outermost(
+            (("alpha",), ("beta",), ("gamma",)),
+            (),
+            frozenset({"alpha", "beta", "gamma"}),
+        )
+
+
 def test_the_seating_rule_changes_no_strip_dimension() -> None:
     """R4 §6 E6 measured `box_height` and `width` unchanged on both strips."""
     from flab2bp.rates.candidates import CandidatePolicy
