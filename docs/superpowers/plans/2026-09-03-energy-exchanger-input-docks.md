@@ -1752,6 +1752,18 @@ Evidence file size is not a concern; do not trim it.
 > whose seven tests fail on the merge-base and pass on the branch. Full evidence:
 > `docs/superpowers/evidence/2026-09-03-energy-exchanger/broke6-gate/gate.md`.
 
+**Known limits**, recorded rather than fixed in the final review's fix wave (both
+noted, not changed; no producer today for either):
+
+- `Strip.input_lane_tiles` maps a lane index to the SORTED east docks while
+  `_dock_input_lane` takes the first UNUSED feasible dock, so a host with two or
+  more east docks (2103, 2104, 2316) could in principle have the emitter skip a
+  dock the planner counted; the corpus has no spec that exercises it.
+- `slots.belt_tile_hits_collider` rebuilds a `Preview` and its `target_boxes`
+  on every call (~10.6 microseconds each, measured); no regression has been
+  measured from this, and caching it is a later optimisation if one is ever
+  needed.
+
 ---
 
 ## Self-Review

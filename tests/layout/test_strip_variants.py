@@ -1630,3 +1630,54 @@ def test_an_ordinary_producer_keeps_its_sorter_derived_lane_capacity() -> None:
     plans = _plans_for(_two_sink_assembler_spec())
     producer = next(p for p in plans if p.recipe_id == "gear")
     assert len(producer.out_lanes) == 2
+
+
+def test_a_multi_dock_belt_port_host_keeps_its_full_drain_capacity() -> None:
+    """2316 has THREE north-facing docks at its lane-orientation yaw -- not one.
+
+    The cap's guard (`takes_belt_ports and not slot_poses`) covers every
+    belt-port host, not only the Energy Exchanger -- measured: all twelve such
+    buildings have falsy `slot_poses`.  A cap that assumed 'one dock' (the
+    Energy Exchanger's own shape) would flatten a two-destination producer onto
+    one DEST_SEP-joined lane the way a one-dock host is folded.  2316
+    (Advanced Mining Machine) has `slots.drain_dock_count(2316, 0.0) == 3`
+    (measured), so two destinations must stay two separate lanes -- capacity
+    to spare, no fold needed.
+    """
+    assert slots.drain_dock_count(2316, 0.0) == 3
+    plans = _plans_for(
+        BuildSpec(
+            groups=(
+                _group(
+                    "ore",
+                    "advanced-mining-machine",
+                    1,
+                    {},
+                    {"ore": Fraction(1)},
+                ),
+                _group(
+                    "ore-to-a",
+                    "assembling-machine-1",
+                    1,
+                    {"ore": Fraction(1)},
+                    {"a": Fraction(1)},
+                ),
+                _group(
+                    "ore-to-b",
+                    "assembling-machine-1",
+                    1,
+                    {"ore": Fraction(1)},
+                    {"b": Fraction(1)},
+                ),
+            ),
+            external_inputs={},
+            outputs={"a": Fraction(1), "b": Fraction(1)},
+        )
+    )
+    miner = [p for p in plans if p.recipe_id == "ore"]
+    assert len(miner) == 1, miner
+    assert len(miner[0].out_lanes) == 2, miner[0].out_lanes
+    assert {dest for _item, dest, _domain in miner[0].out_lanes} == {
+        "ore-to-a#1",
+        "ore-to-b#2",
+    }

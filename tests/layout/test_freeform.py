@@ -9564,6 +9564,28 @@ def test_a_ray_receiver_drain_is_byte_identical_after_the_lane_cap() -> None:
     assert shape == RAY_RECEIVER_SHAPE
 
 
+def test_a_belt_port_host_at_a_zero_dock_yaw_is_capped_and_refused_honestly() -> None:
+    """2208 has ZERO north-facing docks at yaw 90 -- the floor, and the refusal.
+
+    `slots.lane_orientation` always picks 2208's yaw 0 (a 1-dock yaw) for a real
+    spec, so there is no spec that reaches ``_logical_strip_plans`` at yaw 90 to
+    exercise the planner's ``or 1`` floor end-to-end.  Force it directly on a
+    real planned strip instead: `_drainable_by_port` and the refusal message
+    only read `item_id`, `yaw` and `out_lanes`, so overriding just those (and
+    clearing `port_dock_plan`, planned for the ORIGINAL yaw and otherwise
+    short-circuiting the refusal check before it is asked) is faithful to what
+    they actually consult.
+    """
+    (strip,) = plan_strips(_ray_receiver_spec())
+    strip = replace(strip, yaw=90.0, lane_plan=None, attachment_plan=(), port_dock_plan=())
+    assert slots.drain_dock_count(strip.item_id, strip.yaw) == 0
+    assert not freeform_module._drainable_by_port(strip)
+    assert _machines_without_poses([strip]) == [
+        "Ray Receiver (critical-photon): none of its 2 belt port(s) faces the "
+        "output lane below the machine band"
+    ]
+
+
 class TestModeDrivenMachines:
     """Some machines are configured by a MODE, not a recipe id.
 

@@ -688,17 +688,19 @@ GEOMETRY_SAFE_FIXTURES = (
 )
 
 #: Buildings whose extracted collider does not reproduce real blueprints, all of
-#: them large and none of them placed by the generator.  Their footprints are
-#: the derived value but should not be trusted without an in-game check: the
-#: corpus shows Interstellar Logistics Station, Energy Exchanger, Artificial
-#: Star, Satellite Substation, Wind Turbine, Solar Panel and Depot overlapping
-#: their neighbours.  Most such evidence comes from distorted fixtures, so this
-#: may be measurement error rather than a wrong table -- but it is unresolved.
+#: them large.  Their footprints are the derived value but should not be
+#: trusted without an in-game check: the corpus shows Interstellar Logistics
+#: Station, Energy Exchanger, Artificial Star, Satellite Substation, Wind
+#: Turbine, Solar Panel and Depot overlapping their neighbours.  Most such
+#: evidence comes from distorted fixtures, so this may be measurement error
+#: rather than a wrong table -- but it is unresolved.
+#:
+#: NOT "none of them placed by the generator" any more: the mode-driven feature
+#: made the Energy Exchanger (2209) a building we place, without touching this
+#: set.  Read :data:`UNPLACED_LOW_CONFIDENCE_FOOTPRINTS`, not this, when the
+#: question is "may a check skip this building?" -- this set is the raw
+#: distrust; that one is the distrust minus what we place.
 LOW_CONFIDENCE_FOOTPRINTS = frozenset({2101, 2104, 2203, 2205, 2209, 2210, 2212})
-
-# Read UNPLACED_LOW_CONFIDENCE_FOOTPRINTS, not this, when the question is "may
-# a check skip this building?".  This set is the raw distrust; that one is the
-# distrust minus what we place, which is what the claim above means.
 
 
 # --- recipes ---------------------------------------------------------------

@@ -5541,6 +5541,20 @@ def _port_approach_offset(probe: PlacedBuilding, dock: slots.PortDock, pitch_w: 
     the vertical leg's LENGTH changes the in-collider count, so passing a width
     here would answer a different question from the one the emitter asks and
     could pass a strip the emitter then refuses.
+
+    This probes with ``max_offset=pitch_w`` over ``range(-pitch_w, 2 * pitch_w)``
+    -- a wider, pitch-derived search than the emitter's own
+    ``_port_approach(machine, ..., machine.width + 2)`` over the strip's real
+    lane columns.  The two must still AGREE on the answer for a real host, and
+    ``test_the_reserved_pitch_contains_the_tap_column_for_every_belt_port_host``
+    is the test that checks it: offset 1 or 2 for every belt-port host at
+    every yaw, and stable for a reserved pitch anywhere in ``[w, w + 4]``.
+
+    Always probed below the machine band (``probe.height + 1``), even for an
+    ``in_above`` input lane -- symmetric today because nothing here has yet
+    told the two apart, not a decision that an above-band lane needs no
+    different geometry.  A future host with a genuinely asymmetric north/south
+    port layout would need this to ask the row it was actually given.
     """
     got = _port_approach(probe, dock, probe.height + 1, range(-pitch_w, 2 * pitch_w), pitch_w)
     return None if got is None else got[1] - dock.cell[0]
@@ -5589,7 +5603,17 @@ def _dock_input_lane(
             )
 
         approach = _port_approach(machine, dock, lane_y, lane_by_x, machine.width + 2)
-        assert approach is not None  # the dock filter above already asked
+        if approach is None:
+            # The dock filter above already asked this exact question and
+            # picked `dock` because it answered `is not None` -- an `assert`
+            # here would vanish under `-O` and turn this into a `TypeError` on
+            # the unpack below instead of naming what actually broke.
+            name = catalog.building(machine.item_id).name
+            raise RuntimeError(
+                f"{name} (yaw={machine.yaw}) lost its port approach between the "
+                "dock filter and this unpack; _port_approach must be deterministic "
+                "for the same arguments"
+            )
         branch_cells, tap_x = approach
         branch: list[int] = []
         for cell_index, (x, y) in enumerate(branch_cells):
@@ -16531,9 +16555,14 @@ def _fanout_shortfall(strips: list[Strip]) -> list[str]:
 
 
 def _drainable_by_port(strip: Strip) -> bool:
-    """Can every output lane claim a distinct port facing the lane band?"""
-    probe = slots.probe_building(strip.item_id, strip.yaw)
-    capacity = sum(dock.facing.delta[1] > 0 for dock in slots.port_docks(probe).values())
+    """Can every output lane claim a distinct port facing the lane band?
+
+    The raw, unfloored count: unlike the planner's `_logical_strip_plans`,
+    which floors a zero to "try one lane anyway" because it needs a strip to
+    exist before anything can be refused, this is the refusal itself, so a
+    true zero must stay zero -- flooring it would make `0 <= 0` read True.
+    """
+    capacity = slots.drain_dock_count(strip.item_id, strip.yaw)
     return bool(strip.out_lanes) and len(strip.out_lanes) <= capacity
 
 

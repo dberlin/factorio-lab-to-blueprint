@@ -4,7 +4,8 @@
 accumulator-full output lanes wanted two north-facing docks and it has one.
 Every OTHER pair built and pasted with red belts -- 8, 6, 8, 6 and 10 of them --
 because the approach column climbed the exchanger's collider and validate
-skipped the building.
+skipped the building.  (Counts measured from the CLI on 229c9a3, the pre-fix
+commit this branch starts from; see the task-5 report for the transcript.)
 
 Not a wall-clock test: it asserts on verdicts, never on seconds.
 """
@@ -21,7 +22,10 @@ from flab2bp.layout import validate
 from flab2bp.layout.base import NoValidLayout
 from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 
-pytestmark = pytest.mark.timeout(900)
+#: The project default is 120s; each case here is one 15s build plus
+#: finalization, measured around 10s, but the box's load can stretch that --
+#: 300s is a generous multiple of the measured case time, not a guess.
+pytestmark = pytest.mark.timeout(300)
 
 URL = (
     "https://factoriolab.github.io/dsp/list?z=eJxNzD8PgjAUBPBv0-Gm1.pvestriJsRE5WOig"
@@ -30,7 +34,7 @@ URL = (
 )
 
 
-@pytest.mark.parametrize("strategy", ["freeform", "sequence-pair"])
+@pytest.mark.parametrize("strategy", pipeline.PRODUCTION_STRATEGIES)
 @pytest.mark.parametrize("policy", DEFAULT_CANDIDATE_POLICIES, ids=lambda p: p.value)
 def test_the_pair_builds_and_pastes_clean(
     strategy: pipeline.ExplicitStrategyName, policy: CandidatePolicy
