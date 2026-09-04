@@ -93,10 +93,20 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
 
     tiers = build.spec.belt_tiers
     floor = tiers[0]
+    # The URL's own `ist`, said back with the field named: a reader who did not
+    # expect stacked belts has to be able to find where the number came from.
+    # Silent at 1, which is every save that does not stack, so no existing
+    # report line moves.
+    stack_note = (
+        f"; stack {build.spec.belt_stack} (URL ist={build.spec.belt_stack})"
+        if build.spec.belt_stack > 1
+        else ""
+    )
     if len(tiers) == 1:
         print(
             f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s); it is "
-            f"the fastest belt this save can build, so a lane over that rate is refused",
+            f"the fastest belt this save can build, so a lane over that rate is "
+            f"refused{stack_note}",
             file=out,
         )
     else:
@@ -110,7 +120,7 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
         print(
             f"  belts: {floor.item_id} ({float(floor.items_per_second)}/s) floor, "
             f"{ceiling.item_id} ({float(ceiling.items_per_second)}/s) ceiling; "
-            f"{upgrade_note}",
+            f"{upgrade_note}{stack_note}",
             file=out,
         )
 

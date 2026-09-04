@@ -90,6 +90,9 @@ def _belt_tiers(spec: BuildSpec, placement: Placement, report: validate.Report) 
     return {
         "floor": tiers[0].item_id,
         "ceiling": tiers[-1].item_id,
+        # The URL's `ist`.  Always present, even at 1, so a reader never has to
+        # tell "this save does not stack" from "this payload predates stacking".
+        "stack": spec.belt_stack,
         "runs_upgraded": int(placement.stats.get("belt_runs_upgraded", 0)),
         "upgrade_tiers": _array(sorted(upgraded)),
         "entry_lanes": _array(sorted_lanes),

@@ -1011,13 +1011,23 @@ def _with_belt(
     belt_id: str,
     *,
     researched: set[str] | None = None,
+    stack: Fraction | None = None,
 ) -> None:
+    """Rewrite the URL's belt, and optionally its technology set and its `ist`.
+
+    Patching the request rather than the URL string keeps the corpus URLs
+    verbatim -- no corpus URL carries `ist>1`, and inventing one by hand-editing
+    an encoded payload would be a fixture nobody could check against
+    FactorioLab.
+    """
     original = pipeline.parse_url  # type: ignore[attr-defined]
 
     def patched(url: str, **kwargs: object):  # type: ignore[no-untyped-def]
         replacements: dict[str, object] = {"belt_id": belt_id}
         if researched is not None:
             replacements["researched_technology_ids"] = set(researched)
+        if stack is not None:
+            replacements["stack"] = stack
         return dataclasses.replace(original(url, **kwargs), **replacements)  # type: ignore[arg-type]
 
     monkeypatch.setattr(pipeline, "parse_url", patched)
@@ -1701,3 +1711,43 @@ def test_racing_best_produces_the_same_attempt_shape_as_the_serial_one() -> None
 
     assert shape(raced) == shape(serial)
     assert len(raced.attempts) + len(raced.refused) == 2
+
+
+@pytest.mark.slow
+def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``ist=2`` with every technology researched: 40 items/s is 20 cargo/s, so
+    ONE Mk.III entry lane would carry all of it.
+
+    THE ONLY END-TO-END EVIDENCE OF THE STACKED PATH.  No corpus URL carries
+    `ist>1`, so the corpus gate cannot exercise any of it; this test is what
+    says the whole chain -- request, spec, plan, emit, retier, judge -- agrees
+    about a stacked bus.  Budgeted as the other slow tests.
+
+    What the stack changes here is the RATE ARITHMETIC, not the lane count.
+    Unstacked, `tests/test_cli.py` pins this same build's report at
+    ``entry lanes: hydrogen 2 (needs 2 at 30/s)``; stacked it becomes 2 lanes
+    needing 1 at 60/s.  The second lane survives because freeform seats one
+    in-lane per consumer strip and two strips want hydrogen -- a seating
+    decision, exactly as `super-magnetic-ring` gets two lanes for a reason
+    unrelated to rate.  Merging them is not this deliverable's job, and
+    asserting the finding away would be asserting something the build does not
+    do.
+    """
+    _with_belt(monkeypatch, "conveyor-belt-3", stack=Fraction(2))
+    build = pipeline.build(
+        DEUTERON_URL,
+        strategy="sequence-pair",
+        time_budget_s=45.0,
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    )
+    assert build.report.ok
+    assert build.spec.belt_stack == 2
+    (hydrogen,) = [
+        f
+        for f in build.report.by_check("flow.external_entry_points")
+        if f.detail["item"] == "hydrogen"
+    ]
+    # 40 items/s over a 30 cargo/s belt carrying two items per cargo.
+    assert hydrogen.detail["capacity"] == "60"
+    assert hydrogen.detail["lanes_needed"] == 1
+    assert hydrogen.detail["entry_lanes"] == 2
