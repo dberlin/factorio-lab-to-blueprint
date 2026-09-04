@@ -4316,6 +4316,40 @@ class _ProductionCandidate:
     projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
 
 
+type _ClusterRelationKey = tuple[
+    int,
+    tuple[tuple[int, int], ...],
+    tuple[int, ...],
+    tuple[tuple[int, int], ...],
+]
+
+
+@dataclass(slots=True)
+class _RelationNoGoodLedger:
+    proofs: dict[_ClusterRelationKey, ClusterRelationNoGood] = field(default_factory=dict)
+    restart_seeds: dict[_ClusterRelationKey, set[int]] = field(default_factory=dict)
+    order: list[_ClusterRelationKey] = field(default_factory=list)
+
+    def observe(self, no_good: ClusterRelationNoGood, *, base_seed: int) -> bool:
+        """Record one proof and report its first corroborating restart seed."""
+        key: _ClusterRelationKey = (
+            no_good.height,
+            no_good.outline,
+            no_good.strips,
+            no_good.deltas,
+        )
+        if key not in self.proofs:
+            self.proofs[key] = no_good
+            self.restart_seeds[key] = {base_seed}
+            self.order.append(key)
+            return False
+
+        seeds = self.restart_seeds[key]
+        prior_count = len(seeds)
+        seeds.add(base_seed)
+        return prior_count == 1 and len(seeds) == 2
+
+
 @dataclass(slots=True)
 class _ProductionTelemetry:
     planning_time_s: float = 0.0
@@ -4325,6 +4359,9 @@ class _ProductionTelemetry:
     detailed_expansions: int = 0
     best_overflow: int | None = None
     best_stranded: int | None = None
+    relation_no_goods_produced: int = 0
+    relation_no_goods_unique: int = 0
+    relation_no_goods_repeated: int = 0
     feedback_nets: int = 0
     feedback_cells: int = 0
     pose_feasibility_rejects: int = 0
@@ -4471,6 +4508,7 @@ def _production_run(
         return time.monotonic() >= deadline
 
     telemetry = _ProductionTelemetry()
+    relation_no_goods = _RelationNoGoodLedger()
     if compact_seed_attempt is not None and (
         type(compact_seed_attempt) is not int or compact_seed_attempt < 0
     ):
@@ -5248,7 +5286,7 @@ def _production_run(
                     strip,
                     padded,
                 )
-            elif detailed.placement is not None:
+            else:
                 selected = _selected_strips(
                     strips,
                     problem,
@@ -5261,38 +5299,39 @@ def _production_run(
                     decoded,
                     west_channels=tuple(strip.west_channel for strip in selected),
                 )
-                for failure in projection_failures:
-                    strip_pair = _projection_strip_pair(detailed.placement, failure)
-                    if strip_pair is None:
-                        continue
-                    projection_no_good = _projection_no_good(
-                        detailed.placement,
-                        pack,
-                        selected,
-                        failure,
-                        band_policy,
-                    )
-                    relation_no_good: _ProjectionPackNoGood = (
-                        projection_no_good
-                        if projection_no_good is not None
-                        else ExactPackNoGood(
-                            height=pack.height,
-                            outline=problem.selected_sizes(state.variant_indices),
-                            width=pack.width,
-                            origins=tuple(pack.at[index] for index in range(len(selected))),
-                            evidence=projection_failures,
-                            projection_pair=_exact_projection_pair(
-                                selected,
-                                strip_pair,
-                            ),
+                if detailed.placement is not None:
+                    for failure in projection_failures:
+                        strip_pair = _projection_strip_pair(detailed.placement, failure)
+                        if strip_pair is None:
+                            continue
+                        projection_no_good = _projection_no_good(
+                            detailed.placement,
+                            pack,
+                            selected,
+                            failure,
+                            band_policy,
                         )
-                    )
-                    projection_relation_feedback = (
-                        problem,
-                        projection_failures,
-                        relation_no_good,
-                    )
-                    break
+                        relation_no_good: _ProjectionPackNoGood = (
+                            projection_no_good
+                            if projection_no_good is not None
+                            else ExactPackNoGood(
+                                height=pack.height,
+                                outline=problem.selected_sizes(state.variant_indices),
+                                width=pack.width,
+                                origins=tuple(pack.at[index] for index in range(len(selected))),
+                                evidence=projection_failures,
+                                projection_pair=_exact_projection_pair(
+                                    selected,
+                                    strip_pair,
+                                ),
+                            )
+                        )
+                        projection_relation_feedback = (
+                            problem,
+                            projection_failures,
+                            relation_no_good,
+                        )
+                        break
                 if projection_relation_feedback is None:
                     report: LastMileReport | None = detailed.routing.last_mile
                     if report is not None and report.relation_strips:
@@ -5304,11 +5343,19 @@ def _production_run(
                             evidence=report.relation_evidence,
                         )
                         if cluster_no_good is not None:
-                            projection_relation_feedback = (
-                                problem,
-                                projection_failures,
+                            telemetry.relation_no_goods_produced += 1
+                            if relation_no_goods.observe(
                                 cluster_no_good,
-                            )
+                                base_seed=state.base_seed,
+                            ):
+                                telemetry.relation_no_goods_repeated += 1
+                            telemetry.relation_no_goods_unique = len(relation_no_goods.order)
+                            if detailed.placement is not None:
+                                projection_relation_feedback = (
+                                    problem,
+                                    projection_failures,
+                                    cluster_no_good,
+                                )
         if projection_feedback is not None:
             feedback_problem, feedback_failures, strip, padded = projection_feedback
             if feedback_problem == problem and feedback_failures == projection_failures:
@@ -6047,7 +6094,21 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
     """
     telemetry = run.telemetry
     session = run.solver.alns_session
+    observed_backends = {stage.backend for stage in run.solver._stage_stats}
+    accelerator = "mixed" if len(observed_backends) > 1 else next(iter(observed_backends), "python")
     return {
+        "backend": "sequence-pair",
+        "route_backend": route_kernel.selected_backend(),
+        "accelerator": accelerator,
+        "relation_no_goods_produced": float(telemetry.relation_no_goods_produced),
+        "relation_no_goods_unique": float(telemetry.relation_no_goods_unique),
+        "relation_no_goods_repeated": float(telemetry.relation_no_goods_repeated),
+        "best_stranded": float(
+            telemetry.best_stranded if telemetry.best_stranded is not None else -1
+        ),
+        "best_overflow": float(
+            telemetry.best_overflow if telemetry.best_overflow is not None else -1
+        ),
         "stages": float(len(run.solver._stage_stats)),
         "heights": float(len(run.heights)),
         "alns_choices": float(len(session.choices)),
@@ -6139,8 +6200,15 @@ def _with_observational_stats(
             "decoded_candidates": float(sum(stage.global_routes for stage in result.stages)),
             "global_routes": float(telemetry.global_routes),
             "detailed_routes": float(telemetry.detailed_routes),
-            "best_overflow": float(telemetry.best_overflow or 0),
-            "best_stranded": float(telemetry.best_stranded or 0),
+            "best_overflow": float(
+                telemetry.best_overflow if telemetry.best_overflow is not None else -1
+            ),
+            "best_stranded": float(
+                telemetry.best_stranded if telemetry.best_stranded is not None else -1
+            ),
+            "relation_no_goods_produced": float(telemetry.relation_no_goods_produced),
+            "relation_no_goods_unique": float(telemetry.relation_no_goods_unique),
+            "relation_no_goods_repeated": float(telemetry.relation_no_goods_repeated),
             "lns_invocations": float(sum(size > 0 for size in lns_sizes)),
             "lns_total_size": float(sum(lns_sizes)),
             "lns_max_size": float(max(lns_sizes, default=0)),

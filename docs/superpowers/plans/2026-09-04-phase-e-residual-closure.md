@@ -33,6 +33,7 @@
 
 **Files:**
 - Modify: `src/flab2bp/layout/sequence_solver.py`
+- Modify: `src/flab2bp/layout/base.py`
 - Modify: `tests/layout/test_sequence_solver.py`
 
 **Interfaces:**
@@ -114,16 +115,17 @@ Create one `_RelationNoGoodLedger` in `_production_run`. In `transform_stage`, a
 
 ```bash
 uv run pytest -q tests/layout/test_sequence_solver.py
-uv run ruff check src/flab2bp/layout/sequence_solver.py tests/layout/test_sequence_solver.py
+uv run ruff check src/flab2bp/layout/base.py src/flab2bp/layout/sequence_solver.py tests/layout/test_sequence_solver.py
 uv run mypy
 ```
 
 Expected: sequence-solver tests pass, Ruff clean, and no new MyPy diagnostic relative to the repository baseline.
 
-Commit only the two files:
+Commit only the three files:
 
 ```bash
-git add src/flab2bp/layout/sequence_solver.py tests/layout/test_sequence_solver.py
+git add src/flab2bp/layout/base.py src/flab2bp/layout/sequence_solver.py \
+  tests/layout/test_sequence_solver.py
 git commit -m "feat: measure reusable sequence relation proofs"
 ```
 

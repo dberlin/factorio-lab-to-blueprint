@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from fractions import Fraction
+from types import SimpleNamespace
 from typing import Any, Never, TypedDict
 
 import pytest
@@ -5867,6 +5868,7 @@ def _last_mile_relation_report() -> LastMileReport:
 class _StageHarness:
     """The `transform_stage` closure `_production_run` builds, plus its inputs."""
 
+    run: _ProductionRun
     transform_stage: StageBoundaryTransform
     height: int
     problem: PlacementProblem
@@ -5934,6 +5936,7 @@ def _stage_harness_with_two_strips() -> _StageHarness:
         band=0,
     )
     return _StageHarness(
+        run=run,
         transform_stage=transform,
         height=height,
         problem=problem,
@@ -5998,6 +6001,213 @@ def test_transform_stage_turns_a_routing_relation_into_stage_feedback(
 
     assert update is not None
     assert seen and isinstance(seen[0], ClusterRelationNoGood)
+
+
+def _relation_observation_counts(telemetry: Any) -> tuple[int, int, int]:
+    return (
+        int(telemetry.relation_no_goods_produced),
+        int(telemetry.relation_no_goods_unique),
+        int(telemetry.relation_no_goods_repeated),
+    )
+
+
+def _telemetry_with_relation_observations(
+    *,
+    produced: int,
+    unique: int,
+    repeated: int,
+    best_stranded: int | None,
+    best_overflow: int | None,
+) -> Any:
+    baseline = sequence_solver_module._ProductionTelemetry()
+    values = {
+        descriptor.name: getattr(baseline, descriptor.name) for descriptor in fields(baseline)
+    }
+    values.update(
+        {
+            "relation_no_goods_produced": produced,
+            "relation_no_goods_unique": unique,
+            "relation_no_goods_repeated": repeated,
+            "best_stranded": best_stranded,
+            "best_overflow": best_overflow,
+        }
+    )
+    return SimpleNamespace(**values)
+
+
+def test_relation_no_good_ledger_counts_cross_restart_repetition_once() -> None:
+    harness = _stage_harness_with_two_strips()
+    detailed = harness.detailed_with(
+        last_mile=replace(_last_mile_relation_report(), relation_evidence="first")
+    )
+
+    for base_seed in (11, 11, 22, 33):
+        harness.transform_stage(
+            harness.height,
+            harness.problem,
+            replace(harness.state, base_seed=base_seed),
+            harness.feedback,
+            detailed,
+            0,
+            (),
+            True,
+        )
+
+    assert _relation_observation_counts(harness.run.telemetry) == (4, 1, 1)
+
+
+def test_relation_no_good_observation_includes_refused_detailed_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _recorded_stage_update(monkeypatch)
+    harness = _stage_harness_with_two_strips()
+    routing = replace(
+        _routing(DetailedRouteStatus.STRANDED),
+        last_mile=_last_mile_relation_report(),
+    )
+
+    harness.transform_stage(
+        harness.height,
+        harness.problem,
+        harness.state,
+        harness.feedback,
+        DetailedStageResult(routing=routing, placement=None),
+        0,
+        (),
+        True,
+    )
+
+    assert _relation_observation_counts(harness.run.telemetry) == (1, 1, 0)
+    assert seen == []
+
+
+def test_relation_no_good_ledger_keeps_height_outline_strips_and_deltas_scoped() -> None:
+    ledger_type = sequence_solver_module._RelationNoGoodLedger
+    ledger = ledger_type()
+    base = ClusterRelationNoGood(
+        height=10,
+        outline=((3, 4), (5, 6)),
+        strips=(0, 1),
+        deltas=((0, 0), (8, 0)),
+        evidence=("first",),
+    )
+    observed = (
+        base,
+        replace(base, evidence=("second",)),
+        replace(base, height=11),
+        replace(base, outline=((3, 4), (5, 7))),
+        replace(base, strips=(0, 2)),
+        replace(base, deltas=((0, 0), (9, 0))),
+    )
+
+    outcomes = [ledger.observe(no_good, base_seed=11) for no_good in observed]
+    assert outcomes == [False] * len(observed)
+    assert ledger.order == [
+        (10, ((3, 4), (5, 6)), (0, 1), ((0, 0), (8, 0))),
+        (11, ((3, 4), (5, 6)), (0, 1), ((0, 0), (8, 0))),
+        (10, ((3, 4), (5, 7)), (0, 1), ((0, 0), (8, 0))),
+        (10, ((3, 4), (5, 6)), (0, 2), ((0, 0), (8, 0))),
+        (10, ((3, 4), (5, 6)), (0, 1), ((0, 0), (9, 0))),
+    ]
+
+
+def test_relation_no_good_observation_ignores_sibling_transform_calls() -> None:
+    harness = _stage_harness_with_two_strips()
+    detailed = harness.detailed_with(
+        last_mile=replace(_last_mile_relation_report(), relation_evidence="first")
+    )
+
+    for select_feedback_variant in (True, False):
+        harness.transform_stage(
+            harness.height,
+            harness.problem,
+            harness.state,
+            harness.feedback,
+            detailed,
+            0,
+            (),
+            select_feedback_variant,
+        )
+
+    assert _relation_observation_counts(harness.run.telemetry) == (1, 1, 0)
+
+
+def test_refusal_stats_publish_relation_no_good_observations() -> None:
+    harness = _stage_harness_with_two_strips()
+    telemetry = _telemetry_with_relation_observations(
+        produced=4,
+        unique=2,
+        repeated=1,
+        best_stranded=None,
+        best_overflow=0,
+    )
+    run = replace(harness.run, telemetry=telemetry)
+
+    stats = sequence_solver_module._refusal_stats(run)
+
+    assert {
+        key: stats[key]
+        for key in (
+            "relation_no_goods_produced",
+            "relation_no_goods_unique",
+            "relation_no_goods_repeated",
+            "best_stranded",
+            "best_overflow",
+            "backend",
+            "route_backend",
+            "accelerator",
+        )
+    } == {
+        "relation_no_goods_produced": 4.0,
+        "relation_no_goods_unique": 2.0,
+        "relation_no_goods_repeated": 1.0,
+        "best_stranded": -1.0,
+        "best_overflow": 0.0,
+        "backend": "sequence-pair",
+        "route_backend": route_kernel.selected_backend(),
+        "accelerator": "python",
+    }
+
+
+def test_clean_stats_publish_relation_no_good_observations() -> None:
+    config = SequenceSolverConfig.test()
+    exact = _placement(area=20, belt_tiles=4)
+    solver = _solver(
+        _FakeRouting(
+            detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),)
+        ),
+        heights=(40,),
+        config=config,
+    )
+    result = solver.search(max_stages=1)
+    harness = _stage_harness_with_two_strips()
+    telemetry = _telemetry_with_relation_observations(
+        produced=7,
+        unique=5,
+        repeated=3,
+        best_stranded=None,
+        best_overflow=None,
+    )
+    run = replace(harness.run, telemetry=telemetry, started=time.monotonic())
+
+    stats = sequence_solver_module._with_observational_stats(result, run, False, config).stats
+
+    assert {
+        key: stats[key]
+        for key in (
+            "relation_no_goods_produced",
+            "relation_no_goods_unique",
+            "relation_no_goods_repeated",
+            "best_stranded",
+            "best_overflow",
+        )
+    } == {
+        "relation_no_goods_produced": 7.0,
+        "relation_no_goods_unique": 5.0,
+        "relation_no_goods_repeated": 3.0,
+        "best_stranded": -1.0,
+        "best_overflow": -1.0,
+    }
 
 
 def test_a_projection_failure_takes_precedence_over_a_cluster_relation(
