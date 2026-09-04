@@ -8609,7 +8609,7 @@ def test_the_default_session_plays_every_shipped_arm() -> None:
     """
     solver = _never_certifying_solver(heights=(12,), deadline_reached=lambda: False)
     played: set[DestroyOperator] = set()
-    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
+    for _ in range(len(SHIPPED_DESTROY)):
         choice = solver.alns_session.select(
             OperatorContext(strip_count=20, stagnation=0, remaining_fraction=10)
         )
@@ -8630,7 +8630,7 @@ def test_the_production_session_arms_the_shipped_destroy_and_repair_portfolio() 
     session = run.solver.alns_session
     played_destroy: set[DestroyOperator] = set()
     played_repair: set[RepairOperator] = set()
-    for _ in range(len(SHIPPED_DESTROY) * len(SHIPPED_REPAIR)):
+    for _ in range(max(len(SHIPPED_DESTROY), len(SHIPPED_REPAIR))):
         choice = session.select(
             OperatorContext(
                 strip_count=8,
@@ -8643,6 +8643,32 @@ def test_the_production_session_arms_the_shipped_destroy_and_repair_portfolio() 
         session.observe(choice, (0.0,) * REWARD_RANKS, applied=True)
     assert played_destroy == set(SHIPPED_DESTROY)
     assert played_repair == set(SHIPPED_REPAIR)
+
+
+def test_the_production_factory_ships_with_the_probe_off() -> None:
+    """Ruling E11: the product probe is a switch, defaulted off in production.
+
+    `_shipped_operator_session` is the one factory both `SequenceSolver.__init__`'s
+    default and `_production_run`'s explicit session go through (its own
+    docstring says so), and it passes no `probe_product`, so the session it
+    builds carries the default -- master's own pairing.  Draw 1 is therefore
+    the window posed against BAND_BOUNDARY, not FAILED_ENDPOINTS: measured
+    (task-9-diagnosis.md) to cost `universe-matrix/output-products` its clean
+    wall when the probe pairs it with FAILED_ENDPOINTS instead.
+    """
+    session = sequence_solver_module._shipped_operator_session()
+    assert session._probe_product is False
+
+    context = OperatorContext(
+        strip_count=20, stagnation=0, remaining_fraction=C_CONTEXT_FRACTION_STEPS
+    )
+    session.observe(session.select(context), (0.0,) * REWARD_RANKS, applied=True)
+    draw1 = session.select(context)
+
+    assert (draw1.destroy, draw1.repair) == (
+        DestroyOperator.BAND_BOUNDARY,
+        RepairOperator.LOCAL_EXACT_PACK,
+    )
 
 
 def _forbid_the_legacy_substitution(monkeypatch: pytest.MonkeyPatch) -> None:

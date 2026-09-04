@@ -15,9 +15,12 @@ sequence of choices replays exactly.  ``routing_seconds`` is carried on the
 outcome and summed for telemetry, and is read nowhere else.
 
 The two ledgers are otherwise phi-isomorphic -- `observe` credits both from one
-reward vector and one `applied` flag -- so `select` walks the destroy x repair
-product on its first `|D| x |R|` draws.  Without that walk, half the shipped
-pairings are unreachable under every reward sequence (R3 section 1.2).
+reward vector and one `applied` flag -- so with `probe_product` on, `select`
+walks the destroy x repair product on its first `|D| x |R|` draws.  Without
+that walk, half the shipped pairings are unreachable under every reward
+sequence (R3 section 1.2).  `probe_product` defaults OFF (Ruling E11): it cost
+a clean cell its wall at budget 30 (task-9-diagnosis.md), so production ships
+master's own pairing and the probe is exercised by tests only.
 
 The shipped portfolio is deliberately four operators.  The other enum members
 exist so adding one later is a new dispatch branch rather than a redesign; the
@@ -429,6 +432,7 @@ class OperatorSession:
         repair_arms: Sequence[RepairOperator] = SHIPPED_REPAIR,
         discount: float = C_DUCB_DISCOUNT,
         exploration: float = C_DUCB_EXPLORATION,
+        probe_product: bool = False,
     ) -> None:
         if not 0.0 < discount <= 1.0:
             raise ValueError("discount must lie in (0, 1]")
@@ -442,6 +446,7 @@ class OperatorSession:
             raise ValueError("operator arms must be distinct")
         self._discount = discount
         self._exploration = exploration
+        self._probe_product = probe_product
         self._destroy = _Ledger.over([operator.value for operator in destroy])
         self._repair = _Ledger.over([operator.value for operator in repair])
         self._repair_arms = repair
@@ -495,14 +500,15 @@ class OperatorSession:
     def select(self, context: OperatorContext) -> OperatorChoice:
         """Choose the next destroy/repair pairing.  Consults no RNG, no clock.
 
-        THE FIRST ``|D| x |R|`` DRAWS WALK THE PRODUCT, and the rest is the
-        discounted UCB exactly as before.  Two independent ledgers whose untried
-        probes both return `untried[0]` are index-ISOMORPHIC forever: `observe`
-        credits both from the same reward vector and the same ``applied`` flag,
-        so `best` returns the same INDEX in each at every draw and half the
-        advertised portfolio is unreachable under every reward sequence.  R3 §1.2
-        proves it by induction and §1.3 confirms it over 60,000 randomized draws
-        and 166 real corpus selections: zero cross pairings.
+        WITH ``probe_product`` ON, THE FIRST ``|D| x |R|`` DRAWS WALK THE
+        PRODUCT, and the rest is the discounted UCB exactly as before.  Two
+        independent ledgers whose untried probes both return `untried[0]` are
+        index-ISOMORPHIC forever: `observe` credits both from the same reward
+        vector and the same ``applied`` flag, so `best` returns the same INDEX
+        in each at every draw and half the advertised portfolio is unreachable
+        under every reward sequence.  R3 §1.2 proves it by induction and §1.3
+        confirms it over 60,000 randomized draws and 166 real corpus
+        selections: zero cross pairings.
 
         A constant probe OFFSET does not fix it -- a shifted bijection is still a
         bijection, and it only rotates WHICH two pairings are reachable (R3 §5,
@@ -518,8 +524,21 @@ class OperatorSession:
         already was, and reversing the repair axis to reach the window one draw
         sooner was measured to move six solver-behaviour tests for no gain.
 
-        TWO LEDGERS ARE KEPT.  The product is PROBED, not LEARNED, so this
-        class's reason for not learning the product still holds.
+        ``probe_product`` DEFAULTS TO OFF (Ruling E11): measured
+        (``task-9-diagnosis.md``), with the probe on, sequence-pair
+        universe-matrix/output-products refused in 3 of 3 runs at budget 30 and
+        needed about 54 s at budget 60 against 25 s under master's own pairing,
+        because the window's accepted repair on draw 1 sends the search down a
+        slower path.  Under master's pairing the window is only ever drawn
+        against BAND_BOUNDARY, whose destroy set is always empty or the whole
+        problem, so it never actually reaches CP-SAT -- and probe draw 3,
+        ``(BAND_BOUNDARY, LOCAL_EXACT_PACK)``, was measured always dropped for
+        the same reason (review M1).  The production factory and freeform's
+        session both construct with the default, so the shipped behaviour is
+        master's pairing; the probe ships for the tests and future measurement.
+
+        TWO LEDGERS ARE KEPT regardless.  The product is PROBED, not LEARNED, so
+        this class's reason for not learning the product still holds.
 
         The probe is a pure function of ``len(self._choices)`` and the two arm
         tuples: no RNG, no clock, no reward.  Replay is preserved; the VALUES of
@@ -535,7 +554,7 @@ class OperatorSession:
         repair_order = self._repair.order
         probe = len(self._choices)
         pairing: tuple[str, str] | None = None
-        if probe < len(destroy_order) * len(repair_order):
+        if self._probe_product and probe < len(destroy_order) * len(repair_order):
             probed_destroy = destroy_order[probe // len(repair_order)]
             probed_repair = repair_order[probe % len(repair_order)]
             if probed_repair in affordable:
