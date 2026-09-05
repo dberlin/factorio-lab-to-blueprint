@@ -23,6 +23,7 @@ from flab2bp.lab.capture import UrlValidator, capture_flow_csv
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import (
     FlowError,
+    FlowProvenanceError,
     FlowSelection,
     _pin_request_canonical,
     canonicalize_dataset,
@@ -45,6 +46,7 @@ from flab2bp.layout.base import (
     PlacementCompletion,
     PlacementStats,
     ProjectionFailureRecord,
+    SpecInfeasible,
 )
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout, _validate_sequence_islands
@@ -54,6 +56,7 @@ from flab2bp.rates.candidates import (
     CandidatePolicy,
     _build_candidates_canonical,
 )
+from flab2bp.rates.solve import InfeasibleError
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
 ExplicitStrategyName = Literal["freeform", "sequence-pair"]
@@ -598,31 +601,43 @@ def build(
             "both a flow file and flow text were supplied. Pass one: they are "
             "two different recipe selections and there is no right guess."
         )
-    selection: FlowSelection | None = None
-    if flow is not None:
-        selection = load_flow(flow, url=url)
-    elif flow_text is not None:
-        selection = flow_from_text(flow_text, url=url)
-    elif fetch_flow:
-        selection = flow_from_text(
-            capture_flow_csv(
-                url,
-                timeout_s=fetch_timeout_s,
-                browser=browser,
-                url_validator=fetch_url_validator,
-            ),
-            url=url,
-        )
-    if selection is not None:
-        request = _pin_request_canonical(request, data, selection)
+    # `FlowProvenanceError` (a pinned flow that cannot satisfy this URL) and
+    # `InfeasibleError` (no recipe reaches a requested item) are both raised
+    # BELOW the layout stage -- `rates` and `lab.flow` know nothing about
+    # `NoValidLayout` and must not import it, so a bare `except` here at the
+    # pipeline boundary, the one place that already imports all three layers,
+    # is where they become the same REFUSED shape a failed layout gets rather
+    # than an unclassified crash. Every other exception here (a malformed flow
+    # file, a bad `--no-proliferator` request) is a caller mistake, not an
+    # infeasible spec, and is deliberately left to propagate as itself.
+    try:
+        selection: FlowSelection | None = None
+        if flow is not None:
+            selection = load_flow(flow, url=url)
+        elif flow_text is not None:
+            selection = flow_from_text(flow_text, url=url)
+        elif fetch_flow:
+            selection = flow_from_text(
+                capture_flow_csv(
+                    url,
+                    timeout_s=fetch_timeout_s,
+                    browser=browser,
+                    url_validator=fetch_url_validator,
+                ),
+                url=url,
+            )
+        if selection is not None:
+            request = _pin_request_canonical(request, data, selection)
 
-    spec_set = _build_candidates_canonical(
-        data,
-        request,
-        tier=proliferator_tier,
-        candidate_policies=candidate_policies,
-        flow=selection,
-    )
+        spec_set = _build_candidates_canonical(
+            data,
+            request,
+            tier=proliferator_tier,
+            candidate_policies=candidate_policies,
+            flow=selection,
+        )
+    except (FlowProvenanceError, InfeasibleError) as exc:
+        raise SpecInfeasible(str(exc)) from exc
 
     # With a flow pinned, a candidate that belts in something FactorioLab's own
     # flow does not is not a legal candidate for this build -- the boundary rule

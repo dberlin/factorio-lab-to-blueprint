@@ -542,6 +542,44 @@ class NoValidLayout(Exception):
         self.stats: dict[str, float | str] = dict(stats or {})
 
 
+class SpecInfeasible(NoValidLayout, ValueError):
+    """A spec the rate model or a pinned flow cannot satisfy -- not a failed layout.
+
+    ``pipeline.build`` reaches this before any layout is attempted: ``rates``
+    raised ``InfeasibleError`` because no recipe reaches an item the URL asks
+    for, or ``lab.flow`` raised ``FlowProvenanceError`` because the pinned flow
+    cannot satisfy this URL. Neither module may import this class -- doing so
+    would give ``rates``/``lab`` a dependency on ``layout``, and the point of
+    this type is the opposite direction: ``pipeline`` is the one place that
+    already imports all three, so it is the one place that translates their
+    exceptions into this shape at the boundary.
+
+    Subclassing :class:`NoValidLayout` means the CLI, the web job runner, and
+    the JSON payload builder need no changes at all: every one of them already
+    treats a ``NoValidLayout`` as a refusal -- REFUSED, with a reason, no
+    traceback -- rather than a crash, purely through that base class's public
+    attributes. Subclassing ``ValueError`` too preserves the promise
+    ``lab.flow.FlowError`` already made call sites: a caller that still catches
+    a bare ``ValueError`` around ``pipeline.build`` keeps catching this.
+
+    The inherited ``__init__`` is not reused: its message template narrates a
+    layout search ("no valid layout for ... after Ns: ... a layout-model
+    defect") that is simply false here -- no layout was attempted. This
+    constructor sets the same public attributes directly instead, with a
+    message that describes what actually happened.
+    """
+
+    def __init__(self, reason: str, *, item: str = "") -> None:
+        Exception.__init__(self, reason)
+        self.reason = reason
+        self.spec_label = item
+        self.budget_s = 0.0
+        self.attempt_reasons: tuple[str, ...] = ()
+        self.attempt_failures: tuple[LayoutAttemptFailure, ...] = ()
+        self.projection_failures: tuple[ProjectionFailureRecord, ...] = ()
+        self.stats: dict[str, float | str] = {}
+
+
 class LayoutStrategy(Protocol):
     """What every layout backend implements.
 

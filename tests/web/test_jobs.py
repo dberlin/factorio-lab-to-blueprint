@@ -268,6 +268,32 @@ def test_an_unexpected_operational_failure_finishes_as_error() -> None:
         builder.shutdown()
 
 
+#: ``iron-ore`` is mining-only -- see ``tests/test_pipeline.py``'s
+#: ``NO_BUILDABLE_RECIPE_URL`` for why this is infeasible by construction
+#: rather than by budget or layout luck. ``rates.solve`` raises a bare
+#: ``InfeasibleError`` for it, which is a ``RuntimeError`` -- exactly the shape
+#: ``test_an_unexpected_operational_failure_finishes_as_error`` above shows
+#: landing in ``error`` with the generic "build failed unexpectedly" message
+#: today. This exercises the REAL ``run_build`` (not a stub), because the fix
+#: belongs to ``pipeline.build`` translating the exception, not to this module.
+NO_BUILDABLE_RECIPE_URL = "https://factoriolab.github.io/dsp/flow?o=iron-ore*60&v=11"
+
+
+def test_an_infeasible_spec_is_a_refusal_not_an_unexpected_failure() -> None:
+    builder = Builder(solve=run_build)
+    try:
+        job = builder.submit(Options(url=NO_BUILDABLE_RECIPE_URL, budget_s=1.0))
+        snap = _settled(builder, job.id, timeout_s=20.0)
+        assert snap["state"] == "refused"
+        assert snap["error"] is None
+        assert snap["result"] is None
+        refused = _object(snap["refusal"])
+        assert "iron-ore" in str(refused["message"])
+        assert "Traceback" not in str(refused["message"])
+    finally:
+        builder.shutdown()
+
+
 def test_a_second_job_queues_behind_the_first(small_build: pipeline.Build) -> None:
     """One worker, so the second job waits -- and says how far back it is."""
     release = threading.Event()

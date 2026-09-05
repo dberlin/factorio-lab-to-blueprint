@@ -81,3 +81,22 @@ def test_cli_names_the_stack_when_the_url_carries_one(
         line for line in capsys.readouterr().err.splitlines() if line.strip().startswith("belts:")
     )
     assert "stack 2 (URL ist=2)" in line
+
+
+def test_cli_reports_an_infeasible_spec_as_a_refusal_not_a_crash(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``iron-ore`` is mining-only -- see ``tests/test_pipeline.py``'s
+    ``NO_BUILDABLE_RECIPE_URL`` for why this has no crafting column at all.
+
+    ``rates.solve`` raises a bare ``InfeasibleError`` for it, which today
+    propagates out of ``main`` uncaught rather than taking the same exit-3
+    refusal path a ``NoValidLayout`` already gets.
+    """
+    exit_code = cli.main(
+        ["https://factoriolab.github.io/dsp/flow?o=iron-ore*60&v=11", "--budget", "1"]
+    )
+    assert exit_code == 3
+    err = capsys.readouterr().err
+    assert "iron-ore" in err
+    assert "Traceback" not in err

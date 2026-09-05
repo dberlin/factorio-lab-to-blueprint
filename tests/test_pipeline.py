@@ -657,6 +657,30 @@ class TestFlowText:
             )
 
 
+#: ``iron-ore`` is mining-only in the vendored dataset -- no assembler recipe
+#: outputs it -- and an Output objective forces its extraction option off (see
+#: ``rates.solve._resolve_chain``), so nothing can ever craft it. That makes
+#: this URL infeasible by construction rather than by budget or layout luck.
+NO_BUILDABLE_RECIPE_URL = "https://factoriolab.github.io/dsp/flow?o=iron-ore*60&v=11"
+
+
+@pytest.mark.parametrize("strategy", ["freeform", "sequence-pair"])
+def test_a_target_with_no_buildable_recipe_is_refused_not_raised_bare(
+    strategy: pipeline.ExplicitStrategyName,
+) -> None:
+    """``rates.solve`` raises a bare ``InfeasibleError`` for this spec -- it is
+    unsatisfiable before any layout is even attempted.
+
+    That must not propagate as an unclassified crash: ``pipeline.build``
+    reports it exactly as it would a failed layout -- REFUSED, naming the
+    item, with no traceback -- on every strategy, since the rate solve runs
+    before either strategy is selected and both must see the same refusal.
+    """
+    with pytest.raises(NoValidLayout, match="iron-ore") as exc_info:
+        pipeline.build(NO_BUILDABLE_RECIPE_URL, strategy=strategy, time_budget_s=1.0)
+    assert "Traceback" not in str(exc_info.value)
+
+
 @pytest.mark.slow
 def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     monkeypatch: pytest.MonkeyPatch,

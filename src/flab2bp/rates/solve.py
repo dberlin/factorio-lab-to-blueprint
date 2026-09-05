@@ -979,7 +979,17 @@ def solve(
     if not any(not isinstance(column, _ExtractionColumn) for column in columns):
         # Extraction alone is not a factory: at least one crafting column must
         # reach the requested item, or there is nothing here to build.
-        raise InfeasibleError("no buildable recipes reach the requested item")
+        wanted = ", ".join(f"{item} at {rate}/s" for item, rate in sorted(targets.items()))
+        tried = (
+            ", ".join(request.machine_rank_ids)
+            if request.machine_rank_ids
+            else "the default machine ranking"
+        )
+        raise InfeasibleError(
+            f"no buildable recipes reach {wanted or 'the requested item'} with "
+            f"{tried} enabled ({len(excluded)} recipe(s) excluded, "
+            f"{len(producers)} intermediate item(s) reachable)"
+        )
     objective = _objective_coefficients(data, request, columns)
     balance_items = (
         sorted(set(internal_items) | set(objective.items)) if has_surplus_cost else internal_items
