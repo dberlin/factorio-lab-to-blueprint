@@ -4728,6 +4728,7 @@ def test_refinement_direct_targets_memo_returns_equal_targets() -> None:
             ),
         )
     )
+    sequence_solver_module._REFINED_TARGET_MEMO.clear()
 
 
 def test_refinement_direct_targets_memo_remembers_a_dropped_target() -> None:
@@ -4747,6 +4748,7 @@ def test_refinement_direct_targets_memo_remembers_a_dropped_target() -> None:
 
     assert sequence_solver_module._refinement_direct_targets((target,), strips) == ()
     assert sequence_solver_module._REFINED_TARGET_MEMO[(target, 0, 5)] is None
+    sequence_solver_module._REFINED_TARGET_MEMO.clear()
 
 
 def test_speculative_closure_allowance_reserves_half_for_fallback() -> None:

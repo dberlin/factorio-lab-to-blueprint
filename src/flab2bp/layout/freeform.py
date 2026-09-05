@@ -2782,6 +2782,50 @@ _DIRECT_ORIGIN_DELTAS_MEMO: dict[tuple[object, ...], tuple[int, ...]] = {}
 _DIRECT_ORIGIN_DELTAS_MEMO_LIMIT = 65536
 
 
+#: The ``Strip`` fields :func:`_direct_geometry_key` puts in the memo key, and
+#: the ones it deliberately leaves out.  Together they must PARTITION
+#: ``dataclasses.fields(Strip)``, which
+#: ``test_direct_geometry_key_classifies_every_strip_field`` enforces: a new
+#: field is a test failure until somebody decides which side it belongs on.
+#: That is the guard on the memo's whole correctness argument -- the key is
+#: exact only while it is the read set, and a helper that starts reading, say,
+#: ``west_channel`` would otherwise serve wrong cached answers in silence.
+_DIRECT_GEOMETRY_KEY_FIELDS: frozenset[str] = frozenset(
+    {
+        "machines",
+        "pw",
+        "ph",
+        "item_id",
+        "yaw",
+        "cargo_domain",
+        "in_above",
+        "in_below",
+        "out_lanes",
+        "lane_plan",
+        "attachment_plan",
+        "flank_outputs",
+    }
+)
+_UNREAD_BY_DIRECT_GEOMETRY: frozenset[str] = frozenset(
+    {
+        "group_key",
+        "recipe_id",
+        "model_index",
+        "mw",
+        "mh",
+        "box_height",
+        "physical_variant",
+        "port_dock_plan",
+        "mode_params",
+        "family_id",
+        "machine_start",
+        "west_channel",
+        "tail_extension",
+        "pilers",
+    }
+)
+
+
 def _direct_geometry_key(strip: Strip) -> tuple[object, ...] | None:
     """Everything :func:`_direct_origin_deltas` reads off one strip.
 
@@ -2817,6 +2861,13 @@ def _direct_geometry_key(strip: Strip) -> tuple[object, ...] | None:
 
     ``None`` means "do not memo": a strip without a realized pose belongs to a
     compatibility family, and those are rare enough not to be worth a key.
+
+    The two lists above are :data:`_DIRECT_GEOMETRY_KEY_FIELDS` and
+    :data:`_UNREAD_BY_DIRECT_GEOMETRY`; they partition ``Strip``'s fields and a
+    test says so, so a field added to ``Strip`` cannot slip past this decision.
+    The literal below is read back by that test rather than driven from the
+    constant, because the annealer builds this key 130k times a run and a
+    ``getattr`` loop is slower than the attribute loads.
     """
     if strip.physical_variant is None:
         return None

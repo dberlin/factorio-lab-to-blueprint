@@ -2145,6 +2145,75 @@ def test_direct_origin_deltas_memo_is_transparent() -> None:
     assert first == second
     freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
     assert _direct_net_candidates(strips, spec) == first
+    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+
+
+def test_direct_origin_deltas_memo_serves_value_equal_strips() -> None:
+    """Distinct-but-equal strips share one entry, for a filled and an empty answer."""
+    spec = spray_domain_spec(clean=True, sprayed=True)
+    strips = plan_strips(spec, strip_len=6)
+    source, destination = strips[0], strips[1]
+    twin_source, twin_destination = replace(source), replace(destination)
+    assert twin_source is not source and twin_destination is not destination
+    lane = next(
+        k
+        for k, (item, _destination, domain) in enumerate(source.out_lanes)
+        if item == "iron-ingot" and domain is CargoDomain.UNSPRAYED
+    )
+
+    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+    filled = freeform._direct_origin_deltas(source, destination, lane, "iron-ingot")
+    assert filled
+    assert freeform._direct_origin_deltas(twin_source, twin_destination, lane, "iron-ingot") == (
+        filled
+    )
+    assert len(freeform._DIRECT_ORIGIN_DELTAS_MEMO) == 1
+
+    # An unplanned item has no input attachment plan, so the answer is the
+    # empty tuple -- which the memo must store rather than treat as a miss.
+    assert freeform._direct_origin_deltas(source, destination, lane, "unplanned-item") == ()
+    assert (
+        freeform._direct_origin_deltas(twin_source, twin_destination, lane, "unplanned-item") == ()
+    )
+    assert len(freeform._DIRECT_ORIGIN_DELTAS_MEMO) == 2
+    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+
+
+class _FieldRecordingStrip:
+    """A strip that records which of its fields something read."""
+
+    def __init__(self, strip: Strip) -> None:
+        object.__setattr__(self, "strip", strip)
+        object.__setattr__(self, "read", set())
+
+    def __getattr__(self, name: str) -> object:
+        cast(set[str], object.__getattribute__(self, "read")).add(name)
+        return getattr(object.__getattribute__(self, "strip"), name)
+
+
+def test_direct_geometry_key_classifies_every_strip_field() -> None:
+    """Every ``Strip`` field is either in the memo key or declared unread.
+
+    A NEW ``Strip`` FIELD FAILS THIS TEST UNTIL IT IS CLASSIFIED, which is the
+    point: ``_direct_geometry_key`` is exact only while its tuple IS the set of
+    fields ``_direct_origin_deltas`` reads, and a field that quietly joins the
+    read set without joining the key makes the memo serve wrong answers with
+    nothing else to see.
+    """
+    spec = spray_domain_spec(clean=True, sprayed=True)
+    strips = plan_strips(spec, strip_len=6)
+    strip = next(candidate for candidate in strips if candidate.physical_variant is not None)
+    recorder = _FieldRecordingStrip(strip)
+
+    key = freeform._direct_geometry_key(cast(Strip, cast(object, recorder)))
+
+    assert key == freeform._direct_geometry_key(strip)
+    assert {field.name for field in dataclasses.fields(Strip)} == (
+        freeform._DIRECT_GEOMETRY_KEY_FIELDS | freeform._UNREAD_BY_DIRECT_GEOMETRY
+    )
+    assert not (freeform._DIRECT_GEOMETRY_KEY_FIELDS & freeform._UNREAD_BY_DIRECT_GEOMETRY)
+    # ``physical_variant`` is the gate: read, but never part of the key.
+    assert recorder.read == freeform._DIRECT_GEOMETRY_KEY_FIELDS | {"physical_variant"}
 
 
 def test_requested_output_is_unsprayed_beside_proliferated_internal_lane() -> None:
