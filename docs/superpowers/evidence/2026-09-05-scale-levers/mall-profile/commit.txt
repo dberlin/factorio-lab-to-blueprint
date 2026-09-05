@@ -1,0 +1,1 @@
+b5a63cb perf(layout): reuse power-node centres and a blocked-column set in the power plan

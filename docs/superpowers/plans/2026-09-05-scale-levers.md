@@ -1199,8 +1199,292 @@ git commit -m "evidence: scale-levers corpus gate and re-profile"
 
 ---
 
+## Tasks added from the mall profile (2026-09-05)
+
+Evidence: `docs/superpowers/evidence/2026-09-05-scale-levers/mall-profile/README.md`; design §3b. **Execution order: 7, 8, 10, 11, 12, 13, then 9 (the gate runs last).** Task 9's re-profile also runs the mall URL (`prof_harness.py mall --url "$(cat .../mall-profile/url.txt)" --policy all-products --strategy freeform --budget 100`) and reports `prepare_calls_s` and `reserve_port_access` before/after.
+
+### Task 10: Cap the access-corridor matcher's solves
+
+**Files:**
+- Modify: `src/flab2bp/layout/freeform.py` (`_match_access_corridors`, ~lines 11138-11258; `_ACCESS_TIE_DETERMINISTIC_WORK = 0.05` at ~line 365)
+- Test: `tests/layout/test_freeform.py` (corridor tests live around lines 10814-11099 and `test_boundary_access_rematches_away_from_unreachable_first_corridor` at ~23225)
+
+**Interfaces:**
+- Consumes: `cp_model.CpSolver` parameters `max_time_in_seconds`, `max_deterministic_time`; `_PreparationDeadline`; `_expired(deadline)`.
+- Produces: `_match_access_corridors(demands, corridors, *, validate=None, cancelled=None, deadline=None)` with the same signature and the same assignments whenever the solver reaches OPTIMAL within the caps; new module constants `_ACCESS_RANK_DETERMINISTIC_WORK = 2.0` (the per-rank `maximize` cap) and `_ACCESS_CUT_ROUNDS = 8` (validate/cut iterations before giving up).
+
+Why (design §3b item 7): with `validate` set, the tie-break `minimize` runs uncapped to the preparation deadline, then `UNKNOWN` raises `_PreparationDeadline` and the whole candidate is discarded; on the mall URL that is 71 of 100 s across 20 solves.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+def test_corridor_tie_break_never_outruns_its_work_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tie-break solve that hits the deterministic cap keeps the rank-optimal
+    assignment instead of raising the preparation deadline."""
+    seen: list[tuple[float, float]] = []
+    real_solve = cp_model.CpSolver.solve
+
+    def recording_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> int:
+        seen.append((self.parameters.max_deterministic_time, self.parameters.max_time_in_seconds))
+        return real_solve(self, model)
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", recording_solve)
+    demands, corridors = _two_ports_with_two_corridors_each()  # helper built from the fixture the corridor tests at ~10814 use
+    assigned = freeform._match_access_corridors(
+        demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
+    )
+    assert len(assigned) == len(demands)
+    assert seen, "the matcher solved nothing"
+    assert all(work > 0.0 for work, _wall in seen), seen
+    assert all(work <= freeform._ACCESS_RANK_DETERMINISTIC_WORK for work, _wall in seen), seen
+
+
+def test_corridor_matcher_falls_back_to_the_rank_solution_when_polish_is_cut_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force the polish solve to report UNKNOWN before the deadline: the matcher
+    must return the rank-optimal assignment, not raise."""
+    calls = {"n": 0}
+    real_solve = cp_model.CpSolver.solve
+
+    def flaky_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> int:
+        calls["n"] += 1
+        if calls["n"] == 2:  # the first solve is rank 0's maximize; the second is the polish
+            return cp_model.UNKNOWN
+        return real_solve(self, model)
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", flaky_solve)
+    demands, corridors = _two_ports_with_two_corridors_each()
+    assigned = freeform._match_access_corridors(
+        demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
+    )
+    assert len(assigned) == len(demands)
+```
+
+Build `_two_ports_with_two_corridors_each()` from the demand/corridor shapes the existing corridor tests construct (`PortAccessDemand`, `(access, exit)` cell pairs); two ports, each with two disjoint corridor options, so the rank solve assigns both and the polish has something to order.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `uv run pytest -q tests/layout/test_freeform.py -k "tie_break_never_outruns or falls_back_to_the_rank_solution"`
+Expected: FAIL (`_ACCESS_RANK_DETERMINISTIC_WORK` missing; the second raises `_PreparationDeadline`).
+
+- [ ] **Step 3: Implement**
+
+Add the constants beside `_ACCESS_TIE_DETERMINISTIC_WORK`:
+
+```python
+#: Deterministic work allowed to each per-rank `maximize` in the corridor
+#: matcher.  The rank solves decide which claims are served, so they get
+#: far more than the tie-break; on the mall profile (2026-09-05) the
+#: uncapped solves were 71 of 100 s and the candidate was then discarded
+#: at the deadline.
+_ACCESS_RANK_DETERMINISTIC_WORK = 2.0
+#: Validate/cut rounds the matcher runs before returning no assignment.
+_ACCESS_CUT_ROUNDS = 8
+```
+
+In `_match_access_corridors`, change `solve_model` to take the cap and to raise only when the wall deadline has actually passed:
+
+```python
+    def solve_model(work: float) -> cp_model.CpSolverStatus:
+        if (cancelled is not None and cancelled()) or _expired(deadline):
+            raise _PreparationDeadline
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _PreparationDeadline
+            solver.parameters.max_time_in_seconds = remaining
+        solver.parameters.max_deterministic_time = work
+        status = solver.solve(model)
+        if (cancelled is not None and cancelled()) or _expired(deadline):
+            raise _PreparationDeadline
+        return status
+```
+
+Rank loop: `status = solve_model(_ACCESS_RANK_DETERMINISTIC_WORK)`; keep `if status not in (OPTIMAL, FEASIBLE): return {}`. Tie-break: replace the `if validate is None: solver.parameters.max_deterministic_time = ...` with nothing (the cap is now passed per solve) and turn `while True:` into `for _round in range(_ACCESS_CUT_ROUNDS):` with `status = solve_model(_ACCESS_TIE_DETERMINISTIC_WORK)`; the existing `use_polished`/`ranked_values` fallback already handles a non-FEASIBLE polish, and after the loop `return {}`. Update the docstring: a capped tie-break keeps the rank-optimal assignment; the caps are deterministic work, so the result does not depend on the box.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `uv run pytest -q tests/layout/test_freeform.py -k "corridor or access or tie_break or rank_solution"`
+Expected: PASS (all pre-existing corridor tests unchanged).
+
+- [ ] **Step 5: Measure on the mall URL**
+
+Run: `uv run python docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py mall --url "$(cat docs/superpowers/evidence/2026-09-05-scale-levers/mall-profile/url.txt)" --policy all-products --strategy freeform --budget 100 --out /tmp/scale-levers-task10-mall` (needs Task 13's `--url`; if Task 13 has not landed yet, apply its two-line change locally first, it is part of the same plan). Report `prepare_calls_s` (were 3.8, 3.9, 33.9, 33.5, 9.7, 5.6) and `phases.reserve_port_access` (was 80 s). Also instrument once: print each `solve_model` wall time and status to stderr during that run and put the list in the report, so the plan owner knows which solve was slow.
+
+- [ ] **Step 6: Whole suite, lint, commit**
+
+```bash
+uv run pytest -q; echo "pytest exit $?"
+git add src/flab2bp/layout/freeform.py tests/layout/test_freeform.py
+git commit -m "perf(layout): cap the access-corridor matcher's solves"
+```
+
+---
+
+### Task 11: Share one grid across the corridor probes
+
+**Files:**
+- Modify: `src/flab2bp/layout/freeform.py` (`_reserve_port_access`, ~lines 11261-11453)
+- Test: `tests/layout/test_freeform.py`
+
+**Interfaces:**
+- Consumes: `_make_grid(canvas, box, span, history)`, `_route_box(canvas, bounds)`, `_span_for(box, starts, goals)`, `_astar(..., grid=)` which reuses a grid whose `box` matches and whose `span` contains every start and goal, else builds its own.
+- Produces: `_reserve_port_access` builds one `_Grid` per call and passes `grid=` to both `_astar` sites (the reachability probes and `assignment_boundary_cut`). Same results: the canvas does not change between the build and the last probe (reservations are written after matching).
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+def test_port_access_probes_share_one_grid(monkeypatch: pytest.MonkeyPatch) -> None:
+    builds = {"n": 0}
+    real_make_grid = freeform._make_grid
+
+    def counting_make_grid(*args: object, **kwargs: object) -> freeform._Grid:
+        builds["n"] += 1
+        return real_make_grid(*args, **kwargs)
+
+    monkeypatch.setattr(freeform, "_make_grid", counting_make_grid)
+    canvas, demands, boundary, bounds = _boundary_reachable_port_fixture()  # from the fixture behind test_boundary_access_rematches_away_from_unreachable_first_corridor (~23225)
+    reservation = freeform._reserve_port_access(canvas, demands, boundary=boundary, bounds=bounds)
+    assert reservation.assigned
+    assert builds["n"] == 1, builds
+```
+
+Factor the fixture out of `test_boundary_access_rematches_away_from_unreachable_first_corridor` so both tests use it; keep that test's assertions unchanged.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `uv run pytest -q tests/layout/test_freeform.py -k share_one_grid`
+Expected: FAIL with `builds["n"]` equal to the number of probes (many).
+
+- [ ] **Step 3: Implement**
+
+In `_reserve_port_access`, after `canvas.port_corridors.clear()` and the `bounds = bounds or canvas.limit` line, when `bounds is not None and boundary is not None`:
+
+```python
+    shared_grid: _Grid | None = None
+    if bounds is not None and boundary is not None:
+        probe_box = _route_box(canvas, bounds)
+        probe_cells = [
+            (key[0] + dx + ex, key[1] + dy + ey, key[2])
+            for demand in demands
+            for key in (demand.cell,)
+            for dx, dy in _STEPS
+            for ex, ey in _STEPS
+        ]
+        shared_grid = _make_grid(
+            canvas, probe_box, _span_for(probe_box, probe_cells, list(boundary_set)), {}
+        )
+```
+
+and pass `grid=shared_grid` to both `_astar(...)` calls in the function (`probe_cells` covers every exit cell any probe can start from; `_astar` falls back to a private grid for anything outside the span, so coverage errs safe). Add a two-sentence comment: one grid per reservation instead of one per probe; the canvas is not written between the build and the last probe.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `uv run pytest -q tests/layout/test_freeform.py -k "share_one_grid or corridor or access or rematches"`
+Expected: PASS.
+
+- [ ] **Step 5: Measure**
+
+Same mall run as Task 10 Step 5; report `phases.make_grid` count and seconds (were 872 / 3.9 s under cProfile).
+
+- [ ] **Step 6: Whole suite, lint, commit**
+
+```bash
+uv run pytest -q; echo "pytest exit $?"
+git add src/flab2bp/layout/freeform.py tests/layout/test_freeform.py
+git commit -m "perf(layout): share one grid across a reservation's corridor probes"
+```
+
+---
+
+### Task 12: Memoize selected strips across anneal states
+
+**Files:**
+- Modify: `src/flab2bp/layout/sequence_solver.py` (`_selected_strips`, ~line 3680; `_selected_direct_targets`, ~3753; `_variant_direct_eligibility`, ~4298; `_production_run`, ~4665 and its `selected_direct_targets` closure), `src/flab2bp/layout/freeform.py` (`_staged_static_clearance_keys`, ~line 1240)
+- Test: `tests/layout/test_sequence_solver.py` (`test_selected_strips_rebuild_from_child_instance_ranges` at ~5323 is the pinned behavior), `tests/layout/test_freeform.py`
+
+**Interfaces:**
+- Consumes: `Strip` is `@dataclass(frozen=True, slots=True)`, so a memoized `Strip` may be shared. `_selected_strips(strips, problem, variant_indices, *, band_policy)` returns `list[Strip]`.
+- Produces: `_selected_strips(..., memo: dict[tuple[int, StripInstanceId, int], Strip] | None = None)`: when `memo` is given, the pre-lift `replace(...)` result for `(index, instance_id, variant_indices[index])` is stored and reused; the coater `west_channel` lift is still evaluated every call (it reads `_staged_static_preclearance_proved`, whose proofs accumulate). `freeform._staged_static_clearance_keys` memoizes its frozenset per `(item_id, model_index, mw, mh, yaw, pw, machine_row, west_channel, in_lanes, machines, row_of_input per lane)` in a bounded module dict `_STAGED_CLEARANCE_KEYS_MEMO` (limit 65536, cleared on overflow), keyed only when `physical_variant is not None`. `_variant_direct_eligibility` and `_production_run` each create one `memo` dict per run and pass it through `_selected_direct_targets(..., memo=memo)`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def test_selected_strips_memo_returns_equal_strips_and_reuses_them() -> None:
+    strips, problem, indices, policy = _selected_strips_fixture()  # reuse the fixture of test_selected_strips_rebuild_from_child_instance_ranges
+    memo: dict[tuple[int, StripInstanceId, int], Strip] = {}
+    first = sequence_solver._selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
+    second = sequence_solver._selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
+    plain = sequence_solver._selected_strips(strips, problem, indices, band_policy=policy)
+    assert first == plain == second
+    assert memo and all(a is b or a == b for a, b in zip(first, second, strict=True))
+```
+
+In `tests/layout/test_freeform.py`, beside an existing `_staged_static_clearance_keys` test if one exists (search the name), else new:
+
+```python
+def test_staged_static_clearance_keys_memo_is_transparent() -> None:
+    strip = _coater_strip_with_variant()  # a REQUIRES_SPRAY strip carrying a physical_variant, from an existing fixture
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    keys = freeform._staged_static_clearance_keys(strip)
+    assert freeform._STAGED_CLEARANCE_KEYS_MEMO
+    assert freeform._staged_static_clearance_keys(replace(strip)) == keys
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `uv run pytest -q tests/layout/test_sequence_solver.py -k selected_strips_memo tests/layout/test_freeform.py -k clearance_keys_memo`
+Expected: FAIL (`memo` keyword / memo dict missing).
+
+- [ ] **Step 3: Implement**
+
+`_selected_strips`: split the body so the `replace(...)` producing `selected_strip` is computed via `memo.get(key)` / stored under `key = (index, instance_id, variant_indices[index])` when `memo is not None`; the `if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY:` lift stays after the memo lookup and runs every call. `_selected_direct_targets` gains `memo=None` and forwards it. In `_variant_direct_eligibility` create `memo: dict[...] = {}` once before its loops and pass it to both `_selected_direct_targets` calls (~4317, ~4345); in `_production_run` create one for the `selected_direct_targets` closure. `_staged_static_clearance_keys`: compute the key tuple named in Interfaces (read the function body: it uses `item_id`, `model_index`, `mw`, `mh`, `yaw`, `pw`, `machine_row`, `west_channel`, `in_lanes`, `machines`, `row_of_input(item)`), look up `_STAGED_CLEARANCE_KEYS_MEMO`, compute and store on a miss.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `uv run pytest -q tests/layout/test_sequence_solver.py tests/layout/test_freeform.py -k "selected_strips or clearance or direct" tests/layout/test_compact_seed.py`
+Expected: PASS.
+
+- [ ] **Step 5: Measure**
+
+Run: `uv run python docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py mall --url "$(cat docs/superpowers/evidence/2026-09-05-scale-levers/mall-profile/url.txt)" --policy all-products --strategy sequence-pair --budget 100 --cprofile --out /tmp/scale-levers-task12-mall` then `uv run python -c "import pstats; s=pstats.Stats('/tmp/scale-levers-task12-mall.pstats'); s.sort_stats('cumulative').print_stats('_selected_strips|_staged_static_clearance_keys|_variant_direct_eligibility', 6)"`. Report the cumulative seconds (were 30.8, 14.9, 33.4).
+
+- [ ] **Step 6: Whole suite, lint, commit**
+
+```bash
+uv run pytest -q; echo "pytest exit $?"
+git add src/flab2bp/layout/sequence_solver.py src/flab2bp/layout/freeform.py tests/layout/test_sequence_solver.py tests/layout/test_freeform.py
+git commit -m "perf(layout): memoize selected strips and clearance keys across anneal states"
+```
+
+---
+
+### Task 13: `--url` for the profile harness
+
+**Files:**
+- Modify: `docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py`
+
+- [ ] **Step 1: Add the flag**
+
+In `main()`: `ap.add_argument("--url", default=None, help="profile this FactorioLab URL instead of target/rate")` after the `target` positional, and `url = args.url or make_url(args.target, args.rate)`. Also store the full refusal reason: replace `exc.reason[:120]` with `exc.reason`.
+
+- [ ] **Step 2: Verify**
+
+Run: `uv run python docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py mall --url "$(cat docs/superpowers/evidence/2026-09-05-scale-levers/mall-profile/url.txt)" --policy all-products --strategy freeform --budget 5 --out /tmp/scale-levers-task13` and confirm a JSON line prints.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py
+git commit -m "docs(evidence): profile harness takes a raw FactorioLab URL"
+```
+
+---
+
 ## Self-review
 
+- Mall additions: §3b items 7-10 -> Tasks 10, 11, 12, 13; order 7, 8, 10, 11, 12, 13, 9. Task 10's tests monkeypatch `cp_model.CpSolver.solve` on the class (the matcher instantiates its own solver); Task 11's grid reuse depends on `_astar`'s existing `grid.box == box` and span-containment checks; Task 12 shares frozen `Strip` objects and keeps the proof-dependent lift outside the memo.
 - Spec coverage: §2 -> Tasks 2 and 3; §3 items 1-6 -> Tasks 1, 7, 6, 8, 4, 5; §4 -> Task 9; §5 follow-ups are recorded, not implemented.
 - Type consistency: `_committed_path_closes_cycle(canvas, indices, splitter_successors=None) -> bool` (Task 1); `_merge_lanes(..., *, supply=None)` (Task 3, consumed by `_logical_strip_plans` in the same task); `_altitude_profile_cached(path: tuple, ramped: bool) -> tuple | None` (Task 4); `_Canvas.clone() -> _Canvas` (Task 5); `_projected_power_peer_possible(..., candidate_centre=None, peer_centre=None)` (Task 6); `_DIRECT_ORIGIN_DELTAS_MEMO` / `_REFINED_TARGET_MEMO` (Task 7, tests reference the same names); `geometry_kernel._compiled_obb_overlap`, `_compiled_any_overlap`, `colliders._obb_overlap_python`, `colliders.any_box_overlap` (Task 8, tests and `planet.py` use the same names).
 - Task order: Task 2 before Task 3 so the *90 regression test is meaningful in both states; Task 1 first because it is the validated prototype the user asked to productionize; Task 8 last among code tasks because it adds a build step; Task 9 closes.
