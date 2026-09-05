@@ -150,6 +150,7 @@ def test_run_cell_preserves_typed_refusal_evidence(
             "strategy": "freeform",
             "reason": "candidate failed authoritative spherical projection",
             "projection_failures": [expected_projection],
+            "stats": {},
         }
     ]
     assert persisted["projection_failures"] == [expected_projection]

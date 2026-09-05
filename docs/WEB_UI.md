@@ -172,8 +172,9 @@ candidate races. Each race divides its share between Freeform and SequencePair, 
 SequencePair islands must fit the latter share. Otherwise candidate concurrency narrows or
 the two strategies run serially. `--workers` above 1 still permits concurrent jobs and can
 make every build slower because
-`time_budget_s` is wall-clock. There is no admission control beyond the queue and the 300s
-ceiling per job.
+`time_budget_s` is wall-clock. There is no admission control at all beyond the queue: the
+budget has no upper bound, and a projected total over 300s is warned about rather than
+refused.
 
 **A refusal leaves the previous blueprint on screen, and now says so.** The viewer keeps
 rendering whatever was loaded last, because clearing it would throw away the thing you were
@@ -223,11 +224,17 @@ selector. The retired `power` request key is rejected rather than ignored.
 one from an allowlisted FactorioLab page; the two are mutually exclusive. A poll echoes
 `flow_supplied` rather than the CSV itself (it can be hundreds of kB and the page already has
 it); `result.flow_pinned` is the proof it was honoured. A successful `result` also carries
-`primary_band` and literal `certified_bands`. Every bound is a refusal rather than a clamp: a
-job asking for more than 300s of solving comes back 400 with the arithmetic spelled out, never
-silently rounded down to something servable, because running a different build from the one
-that was asked for and reporting it as the one that was asked for is the failure mode this
+`primary_band` and literal `certified_bands`. Every bound is a refusal rather than a clamp,
+never silently rounded down to something servable, because running a different build from the
+one that was asked for and reporting it as the one that was asked for is the failure mode this
 whole project exists to avoid.
+
+`budget_s` is the one field with no upper bound, for that same reason: how long to search is
+the caller's call. It must be positive and finite, and that is all. A job whose projected
+total — `candidates × strategies × (budget + completion grace)` — exceeds 300s is accepted
+with a `warning` string on the job snapshot spelling out the arithmetic; `warning` is `null`
+otherwise. The page shows the same sum next to the budget box before you submit, and the
+Build button stays enabled: it is a warning, not a gate.
 
 `blueprint` is `null` when validation failed and `allow_invalid` was not set — the same refusal
 the CLI makes without `--allow-invalid`, moved to the place the string would be copied from.
