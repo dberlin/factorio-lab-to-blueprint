@@ -48,7 +48,7 @@ from flab2bp.lab.flow import (
     verify_provenance,
 )
 from flab2bp.lab.schema import Dataset
-from flab2bp.lab.url import parse_url
+from flab2bp.lab.url import Objective, ObjectiveType, ObjectiveUnit, parse_url
 from flab2bp.rates.solve import solve
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -274,6 +274,53 @@ class TestStructuralAgreement:
         assert {"graphene-advanced", "fire-ice-vein"} <= set(data.default_recipe_excluded)
         assert parse_url(GRAPHENE_URL).excluded_recipe_ids is None
         verify_against_request(pristine, data, parse_url(GRAPHENE_URL))
+
+    def test_an_input_on_a_requested_output_does_not_contradict_the_flow(
+        self, pristine: FlowSelection, data: Dataset
+    ) -> None:
+        """A URL may ask for an item AND declare a supply of it.
+
+        The Output objective wins -- ``_resolve_chain`` builds the item rather
+        than belting it in -- so a flow that produces it agrees with the URL
+        instead of contradicting it.  Reading the Input objective alone here
+        refused a flow export for the very URL it came from.
+        """
+        request = parse_url(GRAPHENE_URL)
+        both_fed = replace(
+            request,
+            objectives=(
+                *request.objectives,
+                Objective(
+                    id="2",
+                    target_id="graphene",
+                    value=Fraction(60),
+                    unit=ObjectiveUnit.Items,
+                    type=ObjectiveType.Input,
+                ),
+            ),
+        )
+        verify_against_request(pristine, data, both_fed)
+
+    def test_an_input_the_url_does_not_request_still_contradicts_the_flow(
+        self, pristine: FlowSelection, data: Dataset
+    ) -> None:
+        """The check survives for every supplied item the URL does not ask for."""
+        request = parse_url(GRAPHENE_URL)
+        supplied = replace(
+            request,
+            objectives=(
+                *request.objectives,
+                Objective(
+                    id="2",
+                    target_id="fire-ice",
+                    value=Fraction(60),
+                    unit=ObjectiveUnit.Items,
+                    type=ObjectiveType.Input,
+                ),
+            ),
+        )
+        with pytest.raises(FlowProvenanceError, match="but the flow builds"):
+            verify_against_request(pristine, data, supplied)
 
 
 class TestPin:

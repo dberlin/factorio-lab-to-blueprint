@@ -1235,3 +1235,80 @@ def test_a_belts_input_objective_counts_cargo_too(data: Dataset) -> None:
     assert supplied_rates(data, replace(request, stack=Fraction(2))) == {
         "super-magnetic-ring": Fraction(60)
     }
+
+
+# --- an item that is BOTH a requested output and a declared input ----------
+
+
+def _both_fed(item_id: str, *, output: int, supply: int) -> LabRequest:
+    """One Output objective and one Input objective on the SAME item."""
+    return replace(
+        parse_url(EXAMPLE_URL),
+        objectives=(
+            Objective(
+                id="1",
+                target_id=item_id,
+                value=Fraction(output),
+                unit=ObjectiveUnit.Items,
+                type=ObjectiveType.Output,
+            ),
+            Objective(
+                id="2",
+                target_id=item_id,
+                value=Fraction(supply),
+                unit=ObjectiveUnit.Items,
+                type=ObjectiveType.Input,
+            ),
+        ),
+    )
+
+
+def test_an_output_that_is_also_a_declared_input_is_still_crafted(data: Dataset) -> None:
+    """An Output objective asks for the item to be MADE, and that outranks a
+    supply declaration on the same item.
+
+    A real user URL carried ``copper-ingot`` twice: 2000/min as the Output and
+    600/min as an Input among fifteen declared supplies.  The chain walk cut
+    every supplied item to external before it looked at whether the item was
+    requested, so the ONE target left the walk as a belt-in, no crafting column
+    survived, and the solve died with a bare ``InfeasibleError`` -- which the
+    web front end can only report as "build failed unexpectedly".  The spec is
+    perfectly buildable: copper ore into arc smelters.
+
+    This is the same rule the extraction cut already obeys one line below --
+    "a blueprint of zero machines satisfies nobody" -- applied to the declared
+    supply as well.
+    """
+    solution = solve(data, _both_fed("copper-ingot", output=2000, supply=600), time_limit_s=10.0)
+    assert [group.recipe_id for group in solution.groups] == ["copper-ingot"]
+    assert solution.groups[0].machines > 0
+    # The ore still arrives on a belt: only the REQUESTED item is forced inside.
+    assert set(solution.external_inputs) == {"copper-ore"}
+
+
+def test_a_declared_input_that_is_not_requested_is_still_belted_in(data: Dataset) -> None:
+    """The cut survives for every item the URL does not ask to be built."""
+    request = replace(
+        parse_url(EXAMPLE_URL),
+        objectives=(
+            Objective(
+                id="1",
+                target_id="magnetic-coil",
+                value=Fraction(60),
+                unit=ObjectiveUnit.Items,
+                type=ObjectiveType.Output,
+            ),
+            Objective(
+                id="2",
+                target_id="magnet",
+                value=Fraction(60),
+                unit=ObjectiveUnit.Items,
+                type=ObjectiveType.Input,
+            ),
+        ),
+    )
+    solution = solve(data, request, time_limit_s=10.0)
+    recipes = {group.recipe_id for group in solution.groups}
+    assert "magnetic-coil" in recipes
+    assert "magnet" not in recipes
+    assert "magnet" in solution.external_inputs

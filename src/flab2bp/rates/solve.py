@@ -454,12 +454,14 @@ def _resolve_chain(
 
     Returns the producing recipes for each internal item, plus the set of items
     that must be belted in.  An item is belted in when the URL supplies it (an
-    Input objective) or when nothing here can make it.  Otherwise it stays
+    Input objective on an item it does not also request) or when nothing here
+    can make it.  Otherwise it stays
     internal, with its crafting recipes and (unless it is a requested output)
     its enabled extraction recipes (``_extraction_producers``) BOTH offered as
     producers: the production LP prices every one of them and picks whichever
     mix is globally cheapest, exactly as FactorioLab's ``adjustCosts`` does. A
-    requested output never gets an extraction option -- an Output objective
+    requested output never gets an extraction option, and is never cut to
+    external by a declared supply either -- an Output objective
     asks for the item to be MADE, and a blueprint of zero machines satisfies
     nobody -- so it is always crafted.  Known over-reach: that removes the
     extraction option for the item's INTERNAL demand too, so an Output
@@ -496,9 +498,21 @@ def _resolve_chain(
         if item_id in seen:
             continue
         seen.add(item_id)
-        if item_id in supplied:
+        if item_id in supplied and item_id not in requested:
             # Declared as externally supplied, so do not build it even though a
             # recipe exists -- that is the point of an Input objective.
+            #
+            # A REQUESTED output is the exception, for the same reason the
+            # extraction cut below spares it: an Output objective asks for the
+            # item to be made, and a blueprint of zero machines satisfies
+            # nobody.  A URL may legitimately carry both -- one real user URL
+            # asked for 2000/min copper ingot and listed 600/min copper ingot
+            # among fifteen declared supplies -- and cutting the target to
+            # external there left no crafting column at all, so the solve died
+            # with a bare InfeasibleError instead of building copper ore into
+            # arc smelters.  The declared supply is not a cap in any case (see
+            # ``supplied_rates``), so honouring it on a target could only ever
+            # mean "build nothing".
             external.add(item_id)
             continue
 

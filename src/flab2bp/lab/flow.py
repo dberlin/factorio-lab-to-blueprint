@@ -896,7 +896,11 @@ def _verify_against_request_canonical(
         for o in request.objectives
         if o.type is ObjectiveType.Input and not o.is_recipe_objective
     }
-    contradicted = sorted(supplied & producible)
+    # An item the URL ALSO requests is not a contradiction: the Output
+    # objective outranks the supply declaration, so ``_resolve_chain`` builds
+    # it and a flow that produces it agrees with the URL.  Without this the
+    # export downloaded from a both-fed URL was refused as stale.
+    contradicted = sorted((supplied - wanted) & producible)
     if contradicted:
         raise FlowProvenanceError(
             f"this URL supplies {contradicted!r} from outside, but the flow builds "
