@@ -3,13 +3,31 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 import pytest
 
 from flab2bp.dsp import catalog as cat
-from flab2bp.dsp import colliders, planet, rules
+from flab2bp.dsp import colliders, geometry_kernel, planet, rules
 
 SEGMENT = colliders.PLANET_SEGMENT
+
+
+@pytest.fixture(params=["python", "cython"])
+def geometry_backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Run a collision test on both overlap backends.
+
+    The compiled kernel is proven equal to the Python body in
+    ``tests/dsp/test_colliders.py``; this runs the band model's own verdicts
+    through each one, so a divergence shows up as a wrong answer here and not
+    only as a parity failure there.
+    """
+    if request.param == "cython" and not geometry_kernel.compiled_available():
+        pytest.skip("geometry kernel not built")
+    if request.param == "python":
+        monkeypatch.setattr(geometry_kernel, "_compiled_obb_overlap", None)
+        monkeypatch.setattr(geometry_kernel, "_compiled_any_overlap", None)
+    return request.param
 
 
 # --- the table and the quantisation ----------------------------------------
@@ -483,7 +501,7 @@ def test_every_shipped_collider_quaternion_is_identity() -> None:
             assert q == (0.0, 0.0, 0.0, 1.0), model
 
 
-def test_collisions_at_the_equator_reproduce_the_flat_model() -> None:
+def test_collisions_at_the_equator_reproduce_the_flat_model(geometry_backend: str) -> None:
     """At the equator the projection IS the flat grid, so the verdicts must match.
 
     Assembling Machine Mk.I is 3.82 world units wide against a 1.2566 tile, so
@@ -506,7 +524,9 @@ def test_collisions_at_the_equator_reproduce_the_flat_model() -> None:
         assert planet.collisions_at(pair, projection) == expected, pitch
 
 
-def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band() -> None:
+def test_a_pair_that_is_clear_flat_collides_at_the_poleward_edge_of_its_band(
+    geometry_backend: str,
+) -> None:
     """The gap the flat model leaves, made concrete.
 
     Two Matrix Labs five columns apart are clear at the equator and collide
@@ -598,6 +618,7 @@ def test_candidate_focused_pairs_preserve_near_edge_exact_verdict(
     dx: float,
     dy: float,
     quadrant: int,
+    geometry_backend: str,
 ) -> None:
     model = cat.building(2303).model_index
     buildings = (
@@ -659,9 +680,18 @@ def test_candidate_pairs_cancels_inside_focused_peer_scan() -> None:
     assert checks == 6
 
 
-def test_collisions_at_cancels_inside_obb_products_without_box_cache_artifact(
+def test_collisions_at_cancels_between_pairs_without_box_cache_artifact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Cancellation is checked once per candidate pair, and leaves no cache.
+
+    The box products themselves are one call into
+    :func:`colliders.any_box_overlap` -- the compiled kernel does not stop
+    half-way through a pair -- so the check that used to sit between two boxes
+    now sits between two pairs.  What the test is really here for is the second
+    assertion: a cancelled projection must not leave a partly-filled
+    ``_box_cache`` behind for the next call to trust.
+    """
     model = cat.building(2303).model_index
     buildings = tuple(colliders.Placed(model, 0.0, 0.0, 0.0, 0.0) for _ in range(3))
     projection = planet.Projection(
@@ -676,12 +706,15 @@ def test_collisions_at_cancels_inside_obb_products_without_box_cache_artifact(
         tuple[colliders.Box, ...],
     ] = {}
 
-    def overlap_once(_left: colliders.Box, _right: colliders.Box) -> bool:
+    def overlap_once(
+        _queries: Sequence[colliders.Box],
+        _targets: Sequence[colliders.Box],
+    ) -> bool:
         nonlocal overlaps
         overlaps += 1
         return False
 
-    monkeypatch.setattr(colliders, "obb_overlap", overlap_once)
+    monkeypatch.setattr(colliders, "any_box_overlap", overlap_once)
 
     with pytest.raises(planet.ProjectionCancelled):
         planet.collisions_at(

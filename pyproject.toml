@@ -56,7 +56,13 @@ include-package-data = false
 where = ["src"]
 
 [tool.setuptools.package-data]
-flab2bp = ["py.typed", "lab/vendored/*.json", "dsp/data/*.json", "layout/*.pyx"]
+flab2bp = [
+    "py.typed",
+    "lab/vendored/*.json",
+    "dsp/data/*.json",
+    "layout/*.pyx",
+    "dsp/*.pyx",
+]
 
 
 [tool.pytest.ini_options]

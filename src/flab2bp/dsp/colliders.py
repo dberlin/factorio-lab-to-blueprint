@@ -121,6 +121,8 @@ from functools import cache, lru_cache
 from pathlib import Path
 from typing import Protocol
 
+from flab2bp.dsp import geometry_kernel
+
 __all__ = [
     "BELT_PROBE_LIFT",
     "BELT_PROBE_RADIUS",
@@ -128,6 +130,7 @@ __all__ = [
     "GRID_ARC",
     "Preview",
     "StableBeltCollision",
+    "any_box_overlap",
     "belt_chain_excuses",
     "belt_collisions",
     "stable_belt_collisions",
@@ -932,8 +935,13 @@ def _box_radius(half: Vec3) -> float:
     return math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
 
 
-def obb_overlap(a: Box, b: Box) -> bool:
-    """Separating-axis test, matching ``Physics.OverlapBox`` on two boxes."""
+def _obb_overlap_python(a: Box, b: Box) -> bool:
+    """Separating-axis test, matching ``Physics.OverlapBox`` on two boxes.
+
+    The reference implementation.  :func:`obb_overlap` dispatches to a compiled
+    port of this when one is built, and ``tests/dsp/test_colliders.py`` proves
+    the two agree; this body is what "agree" means.
+    """
     delta = (
         b.centre[0] - a.centre[0],
         b.centre[1] - a.centre[1],
@@ -970,6 +978,38 @@ def obb_overlap(a: Box, b: Box) -> bool:
             if span > ra + rb:
                 return False
     return True
+
+
+def obb_overlap(a: Box, b: Box) -> bool:
+    """Separating-axis test, matching ``Physics.OverlapBox`` on two boxes.
+
+    Dispatches to the compiled kernel when one is selected (see
+    :mod:`flab2bp.dsp.geometry_kernel`); looked up per call so a test can
+    switch backends with ``monkeypatch``.  The Python body is the reference
+    the kernel is proven against.
+    """
+    compiled = geometry_kernel._compiled_obb_overlap
+    if compiled is not None:
+        # The extension is typed by `_geometry_kernel.pyi` and returns a bool;
+        # the backend holds it as a `Callable[..., object]` so a missing
+        # extension is a None rather than an import error.  `typing.cast` would
+        # say that in the type checker's language at the cost of a Python call
+        # per overlap, and this is the hottest call in the projection.
+        return compiled(a, b)  # type: ignore[return-value]
+    return _obb_overlap_python(a, b)
+
+
+def any_box_overlap(queries: Sequence[Box], targets: Sequence[Box]) -> bool:
+    """Whether ANY query box overlaps ANY target box.
+
+    One call instead of a Python nested loop: a building's collider set against
+    another's is the shape :func:`flab2bp.dsp.planet.collisions_at` asks for,
+    and the compiled kernel unpacks each target once for the whole product.
+    """
+    compiled = geometry_kernel._compiled_any_overlap
+    if compiled is not None:
+        return compiled(queries, targets)  # type: ignore[return-value]
+    return any(_obb_overlap_python(q, t) for q in queries for t in targets)
 
 
 @dataclass(frozen=True, slots=True)

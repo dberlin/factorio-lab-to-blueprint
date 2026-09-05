@@ -1144,19 +1144,7 @@ def collisions_at(
     for pair in pairs:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        collided = False
-        for query in boxes[pair[0]]:
-            if cancelled is not None and cancelled():
-                raise ProjectionCancelled
-            for target in boxes[pair[1]]:
-                if cancelled is not None and cancelled():
-                    raise ProjectionCancelled
-                if colliders.obb_overlap(query, target):
-                    collided = True
-                    break
-            if collided:
-                break
-        if collided:
+        if colliders.any_box_overlap(boxes[pair[0]], boxes[pair[1]]):
             hits.append(pair)
     if cancelled is not None and cancelled():
         raise ProjectionCancelled

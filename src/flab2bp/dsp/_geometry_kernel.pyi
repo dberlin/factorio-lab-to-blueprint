@@ -1,0 +1,6 @@
+from collections.abc import Sequence
+
+from flab2bp.dsp.colliders import Box
+
+def obb_overlap(a: Box, b: Box) -> bool: ...
+def any_box_overlap(queries: Sequence[Box], targets: Sequence[Box]) -> bool: ...

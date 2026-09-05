@@ -8,12 +8,15 @@ blueprint the model flags convicts the model, not the blueprint.
 
 from __future__ import annotations
 
+import math
 import pathlib
+import random
 from collections.abc import Sequence
 
 import pytest
 
 from flab2bp.dsp import catalog as cat
+from flab2bp.dsp import colliders, geometry_kernel
 from flab2bp.dsp import colliders as C
 from flab2bp.dsp.codec import decode
 from flab2bp.dsp.records import BlueprintBuilding
@@ -947,3 +950,71 @@ def test_the_longitude_segment_count_is_quantised_through_the_whole_table() -> N
     for lat_index in range(0, 200):
         got = C._longitude_segment_count(lat_index * step * 5, 200)
         assert got in set(C._SEGMENT_TABLE), (lat_index, got)
+
+
+# --- the compiled overlap kernel --------------------------------------------
+#
+# The Python body is the reference and the kernel is proven against it, on a
+# random sample large enough to walk both verdicts and on the boundary cases a
+# random sample never lands on exactly.
+
+
+def _random_box(rng: random.Random, *, spread: float) -> colliders.Box:
+    axis = (rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1))
+    norm = math.sqrt(sum(c * c for c in axis)) or 1.0
+    angle = rng.choice([0.0, math.pi / 2, math.pi, rng.uniform(0, 2 * math.pi)])
+    s = math.sin(angle / 2)
+    rot = (axis[0] / norm * s, axis[1] / norm * s, axis[2] / norm * s, math.cos(angle / 2))
+    return colliders.Box(
+        centre=(
+            rng.uniform(-spread, spread),
+            rng.uniform(-spread, spread),
+            rng.uniform(-spread, spread),
+        ),
+        half=(rng.uniform(0.1, 2.0), rng.uniform(0.1, 2.0), rng.uniform(0.1, 2.0)),
+        rot=rot,
+    )
+
+
+@pytest.mark.skipif(not geometry_kernel.compiled_available(), reason="geometry kernel not built")
+def test_compiled_obb_overlap_agrees_with_python_on_random_pairs() -> None:
+    rng = random.Random(20260905)
+    hits = 0
+    for _ in range(20000):
+        a = _random_box(rng, spread=3.0)
+        b = _random_box(rng, spread=3.0)
+        expected = colliders._obb_overlap_python(a, b)
+        hits += expected
+        assert geometry_kernel._compiled_obb_overlap(a, b) is expected, (a, b)
+    assert 2000 < hits < 18000, hits  # the sample exercises both verdicts
+
+
+@pytest.mark.skipif(not geometry_kernel.compiled_available(), reason="geometry kernel not built")
+def test_compiled_obb_overlap_agrees_on_touching_axis_aligned_boxes() -> None:
+    identity = (0.0, 0.0, 0.0, 1.0)
+    a = colliders.Box((0.0, 0.0, 0.0), (1.0, 1.0, 1.0), identity)
+    for gap in (-1e-9, 0.0, 1e-9, 1e-12, 2.0, 2.0000001, 1.9999999):
+        b = colliders.Box((gap + 2.0, 0.0, 0.0), (1.0, 1.0, 1.0), identity)
+        assert geometry_kernel._compiled_obb_overlap(a, b) is colliders._obb_overlap_python(a, b), (
+            gap
+        )
+
+
+@pytest.mark.skipif(not geometry_kernel.compiled_available(), reason="geometry kernel not built")
+def test_any_box_overlap_matches_the_nested_loop() -> None:
+    rng = random.Random(7)
+    for _ in range(500):
+        queries = [_random_box(rng, spread=2.0) for _ in range(rng.randint(0, 4))]
+        targets = [_random_box(rng, spread=2.0) for _ in range(rng.randint(0, 4))]
+        expected = any(colliders._obb_overlap_python(q, t) for q in queries for t in targets)
+        assert geometry_kernel._compiled_any_overlap(queries, targets) is expected
+
+
+def test_forced_python_backend_disables_the_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(geometry_kernel, "_compiled_obb_overlap", None)
+    monkeypatch.setattr(geometry_kernel, "_compiled_any_overlap", None)
+    assert geometry_kernel.selected_backend() == "python"
+    a = colliders.Box((0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 1.0))
+    assert colliders.obb_overlap(a, a) is True
+    assert colliders.any_box_overlap([a], [a]) is True
+    assert colliders.any_box_overlap([], [a]) is False
