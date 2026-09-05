@@ -3677,14 +3677,51 @@ def _sequence_reservation_strips(strips: Sequence[Strip]) -> list[Strip]:
     ]
 
 
+#: ``(strip index, instance id, selected variant)`` -> the pre-lift strip.
+#:
+#: The memo itself is CALLER-OWNED rather than module-level, because the answer
+#: is exact only against one fixed ``strips`` template list: the caller creates
+#: one dict per run, where ``strips`` is built once and never rebound, and a
+#: caller holding a different template list must hold a different dict.
+#:
+#: The key is the read set of the ``replace`` below, and nothing else:
+#:
+#: * the selected ``StripVariant`` -- footprint, yaw, pitches, lane plan,
+#:   attachment plan, port dock plan and box height all come off it.  The
+#:   VARIANT, not ``variant_indices[index]``: ``_stage_variant_update`` drops
+#:   superseded entries from one strip's variant table and appends a padded
+#:   pose while ``instance_ids`` stays put, so within a single production run
+#:   one variant index names two different poses.  ``StripVariant`` is a frozen
+#:   slots dataclass of ints, tuples and frozen dataclasses, and hashing one key
+#:   measured 1.0 us against 6.7 us for the ``replace`` it saves.
+#: * ``instance_id`` -- ``machines``, ``family_id`` and ``machine_start``, and
+#:   the exact-template lookup that picks the template strip.
+#: * ``index`` -- the positional fallback when no template matches the instance,
+#:   and the only thing separating two instances that compare equal.
+#:
+#: The template's own ``cargo_domain``, ``tail_extension`` and ``pilers`` are
+#: read too, but the template is a function of ``(instance_id, index)`` against
+#: a fixed ``strips``, so they are already pinned.  Bounded like the freeform
+#: geometry memo: clearing on overflow costs recomputation and stays exact.
+_SELECTED_STRIP_MEMO_LIMIT = 65536
+
+
 def _selected_strips(
     strips: list[Strip],
     problem: PlacementProblem,
     variant_indices: tuple[int, ...],
     *,
     band_policy: BandPolicy,
+    memo: dict[tuple[int, StripInstanceId, StripVariant], Strip] | None = None,
 ) -> list[Strip]:
-    """Project current instance ranges into exact Freeform physical plans."""
+    """Project current instance ranges into exact Freeform physical plans.
+
+    ``memo`` optionally shares the pre-lift ``replace`` result across anneal
+    states -- see :data:`_SELECTED_STRIP_MEMO_LIMIT` for the key.  The coater
+    ``west_channel`` lift below is deliberately OUTSIDE the memo: it consults
+    ``_staged_static_preclearance_proved``, whose proofs accumulate during a
+    run, so the same inputs legitimately give a taller channel later on.
+    """
     problem.selected_sizes(variant_indices)
     if not problem.variant_tables:
         return list(strips)
@@ -3708,29 +3745,39 @@ def _selected_strips(
                 raise ValueError("physical strip templates do not cover the placement instances")
             strip = strips[index]
         variant = problem.variant(index, variant_indices[index])
-        selected_strip = replace(
-            strip,
-            machines=instance_id.machine_count,
-            mw=variant.footprint_width,
-            mh=variant.footprint_height,
-            yaw=variant.yaw,
-            pw=variant.pitch_x,
-            ph=variant.pitch_y,
-            lane_plan=variant.lane_plan,
-            attachment_plan=variant.attachment_plan,
-            port_dock_plan=variant.port_dock_plan,
-            box_height=variant.box_height,
-            physical_variant=variant,
-            family_id=instance_id.family_id,
-            machine_start=instance_id.machine_start,
-            west_channel=(
-                _COATER_WEST_CHANNEL
-                if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
-                else WEST_CHANNEL
-            ),
-            tail_extension=strip.tail_extension,
-            pilers=strip.pilers,
-        )
+        memo_key: tuple[int, StripInstanceId, StripVariant] | None = None
+        selected_strip: Strip | None = None
+        if memo is not None:
+            memo_key = (index, instance_id, variant)
+            selected_strip = memo.get(memo_key)
+        if selected_strip is None:
+            selected_strip = replace(
+                strip,
+                machines=instance_id.machine_count,
+                mw=variant.footprint_width,
+                mh=variant.footprint_height,
+                yaw=variant.yaw,
+                pw=variant.pitch_x,
+                ph=variant.pitch_y,
+                lane_plan=variant.lane_plan,
+                attachment_plan=variant.attachment_plan,
+                port_dock_plan=variant.port_dock_plan,
+                box_height=variant.box_height,
+                physical_variant=variant,
+                family_id=instance_id.family_id,
+                machine_start=instance_id.machine_start,
+                west_channel=(
+                    _COATER_WEST_CHANNEL
+                    if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
+                    else WEST_CHANNEL
+                ),
+                tail_extension=strip.tail_extension,
+                pilers=strip.pilers,
+            )
+            if memo is not None and memo_key is not None:
+                if len(memo) >= _SELECTED_STRIP_MEMO_LIMIT:
+                    memo.clear()
+                memo[memo_key] = selected_strip
         if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY:
             selected_strip = replace(
                 selected_strip,
@@ -3757,6 +3804,7 @@ def _selected_direct_targets(
     variant_indices: tuple[int, ...],
     *,
     band_policy: BandPolicy,
+    memo: dict[tuple[int, StripInstanceId, StripVariant], Strip] | None = None,
 ) -> tuple[DirectInsertTarget, ...]:
     """Derive pair geometry only after both complete endpoint variants are selected."""
     selected = _selected_strips(
@@ -3764,6 +3812,7 @@ def _selected_direct_targets(
         problem,
         variant_indices,
         band_policy=band_policy,
+        memo=memo,
     )
     return _refinement_direct_targets(
         _direct_alignment_targets(_direct_net_candidates(selected, spec)),
@@ -4314,12 +4363,17 @@ def _variant_direct_eligibility(
     if cancelled is not None and cancelled():
         return ()
     defaults = (0,) * problem.size
+    # One dict for the whole scan: the two loops below re-select every unmoved
+    # strip for each producer/consumer variant pair, so all but two entries per
+    # projection repeat.  ``strips`` and ``problem`` are fixed here.
+    memo: dict[tuple[int, StripInstanceId, StripVariant], Strip] = {}
     baseline = _selected_direct_targets(
         spec,
         strips,
         problem,
         defaults,
         band_policy=band_policy,
+        memo=memo,
     )
     if not baseline:
         return ()
@@ -4348,6 +4402,7 @@ def _variant_direct_eligibility(
                         problem,
                         tuple(selection),
                         band_policy=band_policy,
+                        memo=memo,
                     )
                 }
                 target = selected.get(candidate.key)
@@ -5076,6 +5131,11 @@ def _production_run(
         tuple[tuple[StripInstanceId, ...], tuple[int, ...]],
         dict[tuple[int, int], _DirectCandidate],
     ] = {}
+    # ``selected_cache`` above keys whole selections, so a move that touches one
+    # strip misses it entirely; this one shares the 45 unmoved strips underneath.
+    # ``strips`` is built once in the setup block above and never rebound, which
+    # is what lets one dict serve every stage of this run.
+    selected_strip_memo: dict[tuple[int, StripInstanceId, StripVariant], Strip] = {}
     from flab2bp.layout import geometry_memo
 
     staged_static_cache = geometry_memo.for_spec(spec)
@@ -5093,6 +5153,7 @@ def _production_run(
                     problem,
                     variant_indices,
                     band_policy=band_policy,
+                    memo=selected_strip_memo,
                 )
             )
             selected_cache[key] = selected
@@ -5495,6 +5556,7 @@ def _production_run(
                     problem,
                     state.variant_indices,
                     band_policy=band_policy,
+                    memo=selected_strip_memo,
                 )
                 decoded = decode_state(problem, state)
                 pack = _decoded_pack(
@@ -5578,6 +5640,7 @@ def _production_run(
                     problem,
                     state.variant_indices,
                     band_policy=band_policy,
+                    memo=selected_strip_memo,
                 )
                 return _projection_feedback_stage_update(
                     problem,
@@ -5605,6 +5668,7 @@ def _production_run(
             transformed.problem,
             transformed.state.variant_indices,
             band_policy=band_policy,
+            memo=selected_strip_memo,
         )
         rebuilt = _rebuild_stage_problem_nets(
             transformed.problem,

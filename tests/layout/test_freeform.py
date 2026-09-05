@@ -2179,6 +2179,42 @@ def test_direct_origin_deltas_memo_serves_value_equal_strips() -> None:
     freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
 
 
+def _coater_strip_with_variant() -> Strip:
+    """A sprayed strip whose realized pose materializes Coater clearance keys."""
+    strips = plan_strips(proliferated_spec())
+    return next(strip for strip in strips if freeform._staged_static_clearance_keys(strip))
+
+
+def test_staged_static_clearance_keys_memo_is_transparent() -> None:
+    strip = _coater_strip_with_variant()
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+
+    keys = freeform._staged_static_clearance_keys(strip)
+    assert keys
+    assert freeform._STAGED_CLEARANCE_KEYS_MEMO
+
+    twin = replace(strip)
+    assert twin is not strip
+    assert freeform._staged_static_clearance_keys(twin) == keys
+    assert len(freeform._STAGED_CLEARANCE_KEYS_MEMO) == 1
+
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    assert freeform._staged_static_clearance_keys(strip) == keys
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+
+
+def test_staged_static_clearance_keys_memo_skips_unsprayed_strips() -> None:
+    """The empty answer is the gate's, not the memo's -- it must stay unkeyed."""
+    strips = plan_strips(proliferated_spec())
+    unsprayed = next(
+        strip for strip in strips if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY
+    )
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+
+    assert freeform._staged_static_clearance_keys(unsprayed) == frozenset()
+    assert not freeform._STAGED_CLEARANCE_KEYS_MEMO
+
+
 class _FieldRecordingStrip:
     """A strip that records which of its fields something read."""
 

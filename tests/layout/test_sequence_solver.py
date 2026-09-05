@@ -5322,7 +5322,14 @@ def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targe
     assert len(actual) == len(expected)
 
 
-def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
+def _selected_strips_split_fixture() -> tuple[
+    list[freeform_module.Strip],
+    PlacementProblem,
+    tuple[int, ...],
+    BandPolicy,
+    int,
+]:
+    """``_selected_strips`` inputs after one stage split, plus the split index."""
     spec = two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     instance_ids, variant_tables = _variant_search_inputs(
@@ -5349,22 +5356,82 @@ def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
     state = AnnealState.initial(problem.size, seed=17)
 
     split = split_stage_boundary(problem, state, family, target)
-    selected = _selected_strips(
+    return (
         strips,
         split.problem,
         split.state.variant_indices,
-        band_policy=BandPolicy("portable"),
+        BandPolicy("portable"),
+        target,
+    )
+
+
+def _selected_strips_fixture() -> tuple[
+    list[freeform_module.Strip],
+    PlacementProblem,
+    tuple[int, ...],
+    BandPolicy,
+]:
+    """The four positional/keyword inputs ``_selected_strips`` takes."""
+    strips, problem, indices, policy, _target = _selected_strips_split_fixture()
+    return strips, problem, indices, policy
+
+
+def test_selected_strips_rebuild_from_child_instance_ranges() -> None:
+    strips, problem, indices, policy, target = _selected_strips_split_fixture()
+
+    selected = _selected_strips(
+        strips,
+        problem,
+        indices,
+        band_policy=policy,
     )
 
     assert [strip.machines for strip in selected[target : target + 2]] == [
-        split.problem.instance_ids[target].machine_count,
-        split.problem.instance_ids[target + 1].machine_count,
+        problem.instance_ids[target].machine_count,
+        problem.instance_ids[target + 1].machine_count,
     ]
     assert [strip.machine_start for strip in selected[target : target + 2]] == [
-        split.problem.instance_ids[target].machine_start,
-        split.problem.instance_ids[target + 1].machine_start,
+        problem.instance_ids[target].machine_start,
+        problem.instance_ids[target + 1].machine_start,
     ]
     assert all(strip.family_id is not None for strip in selected)
+
+
+def test_selected_strips_memo_returns_equal_strips_and_reuses_them() -> None:
+    strips, problem, indices, policy = _selected_strips_fixture()
+    memo: dict[
+        tuple[int, StripInstanceId, StripVariant],
+        freeform_module.Strip,
+    ] = {}
+
+    first = _selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
+    second = _selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
+    plain = _selected_strips(strips, problem, indices, band_policy=policy)
+
+    assert first == plain == second
+    assert memo and all(a is b or a == b for a, b in zip(first, second, strict=True))
+
+
+def test_selected_strips_memo_keys_name_the_selected_variant() -> None:
+    """The key carries the variant itself, never the index that named it.
+
+    ``_stage_variant_update`` drops superseded entries and appends a padded
+    variant while ``instance_ids`` stays put, so within one run ``(index,
+    instance_id, variant index)`` can name two different poses.  Keying on the
+    selected ``StripVariant`` is what keeps the memo exact across that rebuild.
+    """
+    strips, problem, indices, policy = _selected_strips_fixture()
+    memo: dict[
+        tuple[int, StripInstanceId, StripVariant],
+        freeform_module.Strip,
+    ] = {}
+
+    _selected_strips(strips, problem, indices, band_policy=policy, memo=memo)
+
+    assert set(memo) == {
+        (index, instance_id, problem.variant(index, indices[index]))
+        for index, instance_id in enumerate(problem.instance_ids)
+    }
 
 
 def test_sequence_reservation_and_child_rebuild_preserve_piler_tail_fields() -> None:

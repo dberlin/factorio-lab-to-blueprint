@@ -1247,12 +1247,68 @@ def _staged_static_clearance_key(
     )
 
 
+#: strip clearance geometry -> the W3 machine/Coater relations it materializes.
+#:
+#: ``_selected_strips`` asks this for every sprayed strip in every anneal state
+#: (76k calls, 14.9 s of a 93 s ``mall`` run) and the answer is a pure function
+#: of the values read below, so nearly every ask repeats an earlier one.  The
+#: key holds those values DIRECTLY -- ``machine_row`` and ``row_of_input`` are
+#: derived properties whose own inputs span ``lane_plan``, ``flank_outputs``,
+#: ``in_above``, ``in_below``, ``out_lanes``, ``ph`` and ``attachment_plan``, so
+#: caching the two cheap derived numbers is both exact and narrower than
+#: re-deriving that whole closure.  What it buys is the ``machines * lanes``
+#: ``StagedStaticClearanceKey`` constructions, which is the actual cost.
+#:
+#: ``cargo_domain`` and ``physical_variant`` are absent because they gate the
+#: memo rather than feed it: an unsprayed or unrealized strip returns the empty
+#: set without ever reaching a key.  Bounded like the geometry memo above:
+#: clearing on overflow costs recomputation and keeps the answer exact.
+_STAGED_CLEARANCE_KEYS_MEMO: dict[tuple[object, ...], frozenset[StagedStaticClearanceKey]] = {}
+_STAGED_CLEARANCE_KEYS_MEMO_LIMIT = 65536
+
+
 def _staged_static_clearance_keys(
     strip: Strip,
 ) -> frozenset[StagedStaticClearanceKey]:
-    """Physical W3 machine/Coater relations this strip can materialize."""
+    """Physical W3 machine/Coater relations this strip can materialize.
+
+    Memoized on :data:`_STAGED_CLEARANCE_KEYS_MEMO`.
+    """
     if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY or strip.physical_variant is None:
         return frozenset()
+    if not strip.in_lanes or strip.machines <= 0:
+        # The comprehension below never evaluates its element expression here,
+        # so ``machine_row`` is never consulted -- and a strip with no legal
+        # slot pose would raise if the key computation consulted it eagerly.
+        return frozenset()
+    input_rows = tuple(strip.row_of_input(item) for item in strip.in_lanes)
+    memo_key = (
+        strip.item_id,
+        strip.model_index,
+        strip.mw,
+        strip.mh,
+        strip.yaw,
+        strip.pw,
+        strip.machines,
+        strip.west_channel,
+        strip.machine_row,
+        strip.in_lanes,
+        input_rows,
+    )
+    cached = _STAGED_CLEARANCE_KEYS_MEMO.get(memo_key)
+    if cached is not None:
+        return cached
+    keys = _staged_static_clearance_keys_uncached(strip)
+    if len(_STAGED_CLEARANCE_KEYS_MEMO) >= _STAGED_CLEARANCE_KEYS_MEMO_LIMIT:
+        _STAGED_CLEARANCE_KEYS_MEMO.clear()
+    _STAGED_CLEARANCE_KEYS_MEMO[memo_key] = keys
+    return keys
+
+
+def _staged_static_clearance_keys_uncached(
+    strip: Strip,
+) -> frozenset[StagedStaticClearanceKey]:
+    """Physical W3 machine/Coater relations this strip can materialize."""
     coater = catalog.building(catalog.SPRAY_COATER_ID)
     coater_x = 1 - strip.west_channel
     return frozenset(
