@@ -5014,7 +5014,6 @@ def test_refinement_direct_targets_memo_returns_equal_targets() -> None:
     )
     strips = [SimpleNamespace(west_channel=2), SimpleNamespace(west_channel=1)]
 
-    sequence_solver_module._REFINED_TARGET_MEMO.clear()
     first = sequence_solver_module._refinement_direct_targets((target,), strips)
     assert (target, 2, 1) in sequence_solver_module._REFINED_TARGET_MEMO
     second = sequence_solver_module._refinement_direct_targets((target,), strips)
@@ -5050,8 +5049,6 @@ def test_refinement_direct_targets_memo_remembers_a_dropped_target() -> None:
         origin_deltas=(0,),
     )
     strips = [SimpleNamespace(west_channel=0), SimpleNamespace(west_channel=5)]
-
-    sequence_solver_module._REFINED_TARGET_MEMO.clear()
 
     assert sequence_solver_module._refinement_direct_targets((target,), strips) == ()
     assert sequence_solver_module._REFINED_TARGET_MEMO[(target, 0, 5)] is None

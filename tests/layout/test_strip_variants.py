@@ -1970,6 +1970,52 @@ def test_an_ordinary_producer_keeps_its_sorter_derived_lane_capacity() -> None:
     assert len(producer.out_lanes) == 2
 
 
+def test_a_lane_item_absent_from_group_outputs_is_not_carried_as_supply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_merge_lanes`'s ``supply`` kwarg must OMIT an item a shard carries but
+    this group's own machines do not produce, not clamp it to a zero rate.
+
+    A clamped-to-zero entry would still pass `_merge_lanes`'s
+    ``item in supply`` guard and take ``carried = 0``, silently disabling the
+    capacity verdict for that item -- it would look "carried at 0/s" whatever
+    its destinations draw.  Omitting the key instead falls through to the
+    draw-based verdict, the behaviour before ``supply`` existed.
+
+    No real spec puts a non-output item into a group's own output shard --
+    ``_logical_strip_plans`` builds ``sinks`` by iterating
+    ``sorted(group.outputs)`` -- so this drives the scenario directly: it
+    makes ``freeform._shard_sinks`` hand back a shard with one extra, bogus
+    item alongside the real ones, and inspects the ``supply`` kwarg
+    ``_merge_lanes`` was actually called with.
+    """
+    real_shard_sinks = freeform._shard_sinks
+    real_merge_lanes = freeform._merge_lanes
+    captured: list[dict[str, Fraction]] = []
+
+    def _shard_sinks_with_a_ghost(sinks, **kwargs):  # type: ignore[no-untyped-def]
+        shards = real_shard_sinks(sinks, **kwargs)
+        if shards and shards[0]:
+            shards[0] = [*shards[0], ("ghost-item", "nowhere", CargoDomain.UNSPRAYED)]
+        return shards
+
+    def _capturing_merge_lanes(shard, reach, demand, capacity, *args, **kwargs):  # type: ignore[no-untyped-def]
+        supply = kwargs.get("supply")
+        if supply is not None:
+            captured.append(supply)
+        clean_shard = [sink for sink in shard if sink[0] != "ghost-item"]
+        return real_merge_lanes(clean_shard, reach, demand, capacity, *args, **kwargs)
+
+    monkeypatch.setattr(freeform, "_shard_sinks", _shard_sinks_with_a_ghost)
+    monkeypatch.setattr(freeform, "_merge_lanes", _capturing_merge_lanes)
+
+    strip_variants_module._logical_strip_plans(_two_sink_assembler_spec())
+
+    assert captured, "the patched _merge_lanes was never called"
+    for supply in captured:
+        assert "ghost-item" not in supply
+
+
 def test_a_multi_dock_belt_port_host_keeps_its_full_drain_capacity() -> None:
     """2316 has THREE north-facing docks at its lane-orientation yaw -- not one.
 

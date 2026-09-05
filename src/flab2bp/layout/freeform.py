@@ -5521,8 +5521,11 @@ class _Canvas:
         re-pointed with ``replace``.  Only the containers need to be fresh.
         ``belt_ban`` holds mutable sets, so those are copied one level down;
         every other value is immutable and shared.  Listing every field by
-        name is deliberate: a field added without a line here fails
-        ``test_clone_equals_the_original_field_for_field``.
+        name is deliberate: a field added to ``_Canvas`` without a matching
+        keyword here fails the structural guard,
+        ``TestCanvasClone.test_clone_passes_a_keyword_for_every_declared_field``,
+        which reads this method's own source rather than relying on some
+        test happening to populate and mutate the new field.
         """
         return _Canvas(
             ramped=self.ramped,
@@ -11411,14 +11414,19 @@ def _match_access_corridors(
 ) -> dict[PortAccessDemand, PortAccessCorridor]:
     """Assign cell-disjoint corridors, giving every port its first claim first.
 
-    Every solve carries a deterministic work cap, so the assignment does not
-    depend on how loaded the box is and only an exhausted wall-clock deadline
-    raises `_PreparationDeadline`.  A tie-break that is cut short by its cap
-    keeps a fallback assignment the solver already proved feasible rather than
-    discarding the candidate.  A validation cut invalidates that fallback, so
-    the next capped tie-break without an incumbent re-establishes one by
-    solving the cut model for feasibility alone, under the same cap the rank
-    solves use.  Rematching rounds are bounded by `_ACCESS_CUT_ROUNDS`.
+    Every solve carries a deterministic work cap, so it is bounded in the work
+    it does regardless of load -- but `solve_model` also arms the wall-clock
+    backstop (`solver.parameters.max_time_in_seconds = remaining`) alongside
+    it, and that one is real wall time.  Under load, a tie-break solve can
+    therefore hit the wall-clock deadline before its deterministic cap and
+    come back `UNKNOWN` rather than `OPTIMAL`/`FEASIBLE`, which takes the
+    fallback-value branch below: the rank-optimal assignment already proved
+    feasible is used instead of the tie-optimal one the polish was after.  An
+    exhausted deadline (`_expired`) or a cancellation still raises
+    `_PreparationDeadline` as before.  A validation cut invalidates that
+    fallback, so the next capped tie-break without an incumbent re-establishes
+    one by solving the cut model for feasibility alone, under the same cap the
+    rank solves use.  Rematching rounds are bounded by `_ACCESS_CUT_ROUNDS`.
     """
 
     def solve_model(work: float) -> cp_model.CpSolverStatus:

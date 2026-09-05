@@ -145,6 +145,26 @@ def _reset_junction_ban_offset_cache() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _cross_test_geometry_memos_start_clean() -> None:
+    """Clear the process-lifetime geometry/sequencing memos before each test.
+
+    ``freeform._DIRECT_ORIGIN_DELTAS_MEMO``, ``freeform._STAGED_CLEARANCE_KEYS_MEMO``
+    and ``sequence_solver._REFINED_TARGET_MEMO`` are keyed on value-equal
+    inputs across the whole process, exactly like ``_JUNCTION_BAN_OFFSET_CACHE``
+    above -- a test that monkeypatches one of their dependencies could
+    otherwise read an answer proved by an earlier, unpatched test for the
+    same value-equal key, or leave one behind for a later test to patch
+    around unknowingly.  Imported lazily to avoid a module-load-order
+    dependency between ``freeform`` and ``sequence_solver``.
+    """
+    from flab2bp.layout import sequence_solver
+
+    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    sequence_solver._REFINED_TARGET_MEMO.clear()
+
+
+@pytest.fixture(autouse=True)
 def _layout_memo_policy(request: pytest.FixtureRequest) -> Iterator[None]:
     global _enabled
     uses_monkeypatch = "monkeypatch" in request.fixturenames

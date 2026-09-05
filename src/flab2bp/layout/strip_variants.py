@@ -1316,8 +1316,9 @@ def _logical_strip_plans(
                     # producer puts on it, so that is what the capacity verdict
                     # is taken on.
                     supply={
-                        item: per_shard[shard_index] * group.outputs.get(item, Fraction(0))
+                        item: per_shard[shard_index] * group.outputs[item]
                         for item, _destination, _cargo_domain in shard
+                        if item in group.outputs
                     },
                 )
                 for shard_index, shard in enumerate(shards)

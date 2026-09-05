@@ -2136,7 +2136,6 @@ def test_direct_origin_deltas_memo_is_transparent() -> None:
     spec = spray_domain_spec(clean=True, sprayed=True)
     strips = plan_strips(spec, strip_len=6)
 
-    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
     first = _direct_net_candidates(strips, spec)
     assert freeform._DIRECT_ORIGIN_DELTAS_MEMO or all(
         strip.physical_variant is None for strip in strips
@@ -2161,7 +2160,6 @@ def test_direct_origin_deltas_memo_serves_value_equal_strips() -> None:
         if item == "iron-ingot" and domain is CargoDomain.UNSPRAYED
     )
 
-    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
     filled = freeform._direct_origin_deltas(source, destination, lane, "iron-ingot")
     assert filled
     assert freeform._direct_origin_deltas(twin_source, twin_destination, lane, "iron-ingot") == (
@@ -2187,6 +2185,11 @@ def _coater_strip_with_variant() -> Strip:
 
 def test_staged_static_clearance_keys_memo_is_transparent() -> None:
     strip = _coater_strip_with_variant()
+    # `_coater_strip_with_variant` calls `plan_strips`, which itself populates
+    # the memo for every strip it plans (`plan_strips` computes
+    # `clearance_keys` up front) -- this clear is not cosmetic isolation the
+    # autouse fixture already gives; it removes THAT side effect before this
+    # test's own transparency assertions below start counting entries.
     freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
 
     keys = freeform._staged_static_clearance_keys(strip)
@@ -2209,6 +2212,9 @@ def test_staged_static_clearance_keys_memo_skips_unsprayed_strips() -> None:
     unsprayed = next(
         strip for strip in strips if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY
     )
+    # `plan_strips` itself populates the memo for every strip it plans (it
+    # computes `clearance_keys` up front), so this clear removes THAT side
+    # effect before the assertion below checks the memo stays empty.
     freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
 
     assert freeform._staged_static_clearance_keys(unsprayed) == frozenset()
@@ -2251,6 +2257,32 @@ def test_direct_geometry_key_classifies_every_strip_field() -> None:
     # ``physical_variant`` is the gate: read, but never part of the key.
     assert recorder.read == freeform._DIRECT_GEOMETRY_KEY_FIELDS | {"physical_variant"}
 
+    # `_direct_origin_deltas_uncached` is the memo's ACTUAL read set; drive it
+    # directly, recording both the source and the destination side, and check
+    # that every `Strip` FIELD it touches (methods like `width`,
+    # `_output_attachment_plan`, `_input_attachment_plan`, `input_lane_tiles`
+    # and `lane_of_input` are not fields and are filtered out) is inside the
+    # same key.  A helper that starts reading an unclassified field would
+    # otherwise serve the memo wrong cached answers in silence.
+    source, destination = strips[0], strips[1]
+    lane = next(
+        k
+        for k, (item, _destination, domain) in enumerate(source.out_lanes)
+        if item == "iron-ingot" and domain is CargoDomain.UNSPRAYED
+    )
+    source_recorder = _FieldRecordingStrip(source)
+    destination_recorder = _FieldRecordingStrip(destination)
+    deltas = freeform._direct_origin_deltas_uncached(
+        cast(Strip, cast(object, source_recorder)),
+        cast(Strip, cast(object, destination_recorder)),
+        lane,
+        "iron-ingot",
+    )
+    assert deltas
+    strip_field_names = {field.name for field in dataclasses.fields(Strip)}
+    touched_fields = (source_recorder.read | destination_recorder.read) & strip_field_names
+    assert touched_fields <= freeform._DIRECT_GEOMETRY_KEY_FIELDS | {"physical_variant"}
+
 
 def test_staged_clearance_key_classifies_every_strip_field() -> None:
     """Every ``Strip`` field is either in the clearance memo key or declared unread.
@@ -2265,6 +2297,10 @@ def test_staged_clearance_key_classifies_every_strip_field() -> None:
     strip = _coater_strip_with_variant()
     recorder = _FieldRecordingStrip(strip)
 
+    # `_coater_strip_with_variant` calls `plan_strips`, which populates the
+    # memo for every strip it plans -- without this clear the call below could
+    # hit that pre-existing value-equal entry and never run the uncached body
+    # for the recorder, under-reporting the fields it actually touches.
     freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
     keys = freeform._staged_static_clearance_keys(cast(Strip, cast(object, recorder)))
     freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
@@ -10681,6 +10717,33 @@ class TestCanvasClone:
         original = self._populated()
         assert original.clone() == deepcopy(original)
 
+    def test_clone_passes_a_keyword_for_every_declared_field(self) -> None:
+        """Structural guard: `clone`'s hand-written field list cannot drift
+        from `_Canvas`'s actual fields without failing here.
+
+        `clone`'s docstring says listing every field by name is deliberate
+        and that a field added without a line there fails a test -- this is
+        that test.  It reads `clone`'s own source rather than exercising a
+        populated canvas, so it catches a missing (or misspelled, or
+        positional) field before anyone has to think to populate and mutate
+        the new one in the other `TestCanvasClone` tests.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        source = textwrap.dedent(inspect.getsource(_Canvas.clone))
+        call = next(
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_Canvas"
+        )
+        passed_keywords = {kw.arg for kw in call.keywords if kw.arg is not None}
+        assert not call.args, "clone must pass every field by keyword, not positionally"
+        assert passed_keywords == {f.name for f in fields(_Canvas)}
+
     def test_mutating_the_clone_leaves_the_original_alone(self) -> None:
         original = self._populated()
         clone = original.clone()
@@ -10694,6 +10757,7 @@ class TestCanvasClone:
         clone.belt_ban[(6, 6)].add(2)
         clone.belt_ban[(8, 8)] = {0}
         clone.junction_ban.add((8, 8, 0))
+        clone.port_corridors[(8, 8, 0)] = ()
         reference = self._populated()
         for f in fields(_Canvas):
             assert getattr(original, f.name) == getattr(reference, f.name), f.name
@@ -11829,6 +11893,11 @@ class TestOneLaneCanServeSeveralDestinations:
             _merge_lanes(shard, 2, demand, F(30))
         with pytest.raises(ValueError, match=r"33.*over the 30"):
             _merge_lanes(shard, 2, demand, F(30), supply={"hydrogen": F(60)})
+        # Supply below the draw (33) but still over capacity (30) takes the
+        # clamp -- `carried` becomes the supply figure, not the draw -- and
+        # still refuses, on the clamped number.
+        with pytest.raises(ValueError, match=r"31.*over the 30"):
+            _merge_lanes(shard, 2, demand, F(30), supply={"hydrogen": F(31)})
 
     def test_a_one_machine_producer_plans_and_serves_every_consumer(self) -> None:
         spec = one_machine_fan_out_spec(4)
