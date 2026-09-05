@@ -16,7 +16,7 @@ from enum import StrEnum
 from fractions import Fraction
 from itertools import islice
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 from flab2bp.layout import finalize, last_mile, route_kernel, validate
 from flab2bp.layout.band_policy import BandPolicy
@@ -51,6 +51,7 @@ from flab2bp.layout.freeform import (
     WEST_CHANNEL,
     DirectInsertId,
     ExactPackNoGood,
+    PreparedRoutingLowerBound,
     Strip,
     _box,
     _build_prepared,
@@ -69,6 +70,8 @@ from flab2bp.layout.freeform import (
     _pack_window,
     _PreparationDeadline,
     _prepare_routing_problem,
+    _prepared_candidate_area_lower_bound,
+    _prepared_routing_lower_bound,
     _PreparedRoutingProblem,
     _projection_no_good,
     _projection_strip_pair,
@@ -557,6 +560,9 @@ class DetailedStageResult:
     routing: DetailedRouteResult
     placement: Placement | None
     projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
+    prepared_lower_bound: tuple[int, PreparedRoutingLowerBound] | None = None
+    lower_bound_dominated: bool = False
+    detailed_skip_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -618,6 +624,9 @@ class StageAdapters[PreparedT]:
 
     prepare_exact: Callable[[int, DecodedPlacement], PreparedT] | None = None
     feedback_origins: Callable[[PreparedT], tuple[tuple[int, int], ...]] | None = None
+    exact_lower_bound: (
+        Callable[[PreparedT], tuple[int, PreparedRoutingLowerBound] | None] | None
+    ) = None
 
 
 #: The share of the attempt's WHOLE budget a role with no measured history must
@@ -813,6 +822,11 @@ class StageObservation:
     quality_entered: bool
     quality_exited: bool
     stagnation_count: int
+    prepared_lower_bound: PreparedRoutingLowerBound | None
+    prepared_lower_key: tuple[int, int] | None
+    lower_bound_dominated: bool
+    lower_bound_violation: bool
+    detailed_skip_reason: str | None
 
     @property
     def energy(self) -> SearchEnergy:
@@ -985,8 +999,8 @@ class SequenceSolver[PreparedT]:
         stage_boundary_transform: StageBoundaryTransform | None = None,
         stage_boundary_commit: StageBoundaryCommit | None = None,
         borrow_first_discovery: bool = False,
-        stop_on_stable_exact: bool = False,
         stage_admission: _MeasuredStageAdmission | None = None,
+        prune_dominated_prepared: bool = False,
         alns_session: OperatorSession | None = None,
         alns_adapters: _RepairAdapters | None = None,
         remaining_fraction: Callable[[], int] | None = None,
@@ -1018,15 +1032,15 @@ class SequenceSolver[PreparedT]:
             raise ValueError("routing seed allowance cap must be a non-negative integer or None")
         if type(borrow_first_discovery) is not bool:
             raise ValueError("borrow-first-discovery mode must be a bool")
-        if type(stop_on_stable_exact) is not bool:
-            raise ValueError("stable exact stopping mode must be a bool")
+        if type(prune_dominated_prepared) is not bool:
+            raise ValueError("prepared-bound pruning mode must be a bool")
         self.config = config or SequenceSolverConfig()
         self.adapters = adapters
         self.budget = expansion_budget
         self.deadline_reached = deadline_reached or (lambda: False)
-        self.stop_on_stable_exact = stop_on_stable_exact
         self.routing_seed_allowance_cap = routing_seed_allowance_cap
         self.stage_admission = stage_admission
+        self.prune_dominated_prepared = prune_dominated_prepared
         # A solver built without a window adapter still SKIPS LOCAL_EXACT_PACK
         # for a count and a zero reward, so arming it costs a bare-constructed
         # solver a turn and never a wrong credit.  BAND_BOUNDARY is likewise
@@ -1119,6 +1133,57 @@ class SequenceSolver[PreparedT]:
         if started is not None and self.stage_admission is not None:
             self.stage_admission.finish_completion(started)
 
+
+    def _run_detailed_route(
+        self,
+        prepared: PreparedT,
+        allowance: int,
+        *,
+        allow_proof_skip: bool,
+    ) -> tuple[DetailedStageResult, float]:
+        """Route or proof-skip one prepared candidate while retaining bound evidence."""
+        declared = (
+            None
+            if self.adapters.exact_lower_bound is None
+            else self.adapters.exact_lower_bound(prepared)
+        )
+        lower_key = (
+            None if declared is None else (declared[0], declared[1].total)
+        )
+        dominated = (
+            lower_key is not None
+            and self._incumbent is not None
+            and self._incumbent.exact_key <= lower_key
+        )
+        if dominated and self.prune_dominated_prepared and allow_proof_skip:
+            return (
+                DetailedStageResult(
+                    routing=DetailedRouteResult(
+                        status=DetailedRouteStatus.DOMINATED,
+                        routed=(),
+                        failures=(),
+                        iterations=0,
+                        expansions=0,
+                    ),
+                    placement=None,
+                    prepared_lower_bound=declared,
+                    lower_bound_dominated=True,
+                    detailed_skip_reason="prepared-lower-bound",
+                ),
+                0.0,
+            )
+        started = time.perf_counter()
+        detailed = self.adapters.detailed_route(prepared, allowance)
+        elapsed = time.perf_counter() - started
+        return (
+            replace(
+                detailed,
+                prepared_lower_bound=declared,
+                lower_bound_dominated=dominated,
+            ),
+            elapsed,
+        )
+
     @property
     def exact_incumbent_reason(self) -> str | None:
         """Routing role that produced the current exact incumbent, if one exists."""
@@ -1136,20 +1201,6 @@ class SequenceSolver[PreparedT]:
         )
         return observation.global_skip_reason if observation is not None else None
 
-    def _has_stable_exact_incumbent(self) -> bool:
-        current: tuple[int, int] | None = None
-        snapshots: list[tuple[int, int] | None] = []
-        for stage in self._stage_stats:
-            if stage.exact_key is not None and (current is None or stage.exact_key < current):
-                current = stage.exact_key
-            if stage.global_skip_reason not in (
-                "shared-pack",
-                "topology-beam",
-                "topology-refinement",
-                "projection-feedback",
-            ):
-                snapshots.append(current)
-        return len(snapshots) == 2 and snapshots[-1] is not None and snapshots[-1] == snapshots[-2]
 
     def _portfolio_pruned(self, height_state: _HeightState) -> bool:
         """Can this height still beat what the other racer already certified?
@@ -1220,17 +1271,8 @@ class SequenceSolver[PreparedT]:
                 feasibility_restart_batches += 1
                 stage_limit += len(self._heights)
                 continue
-            if (
-                self._incumbent is not None
-                and self._incumbent.exact_key[0] == self._area_lower_bound
-            ):
-                termination = "area-optimal"
-                break
             if self.deadline_reached():
                 termination = "deadline"
-                break
-            if self.stop_on_stable_exact and self._has_stable_exact_incumbent():
-                termination = "exact-stable"
                 break
             deferred_feedback_height = next(
                 (height for height in self._heights if height.deferred_feedback_budget is not None),
@@ -1735,9 +1777,11 @@ class SequenceSolver[PreparedT]:
             anneal_seeds=(),
         )
         measured_detailed_started = self._begin_measured_completion()
-        detailed_started = time.perf_counter()
-        detailed = self.adapters.detailed_route(prepared, allowance)
-        detailed_route_time_s = time.perf_counter() - detailed_started
+        detailed, detailed_route_time_s = self._run_detailed_route(
+            prepared,
+            allowance,
+            allow_proof_skip=True,
+        )
         self._finish_measured_completion(measured_detailed_started)
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
@@ -1901,9 +1945,11 @@ class SequenceSolver[PreparedT]:
         available = self.budget.detailed_discovery_allowance(height)
         allowance = available if allowance_cap is None else min(available, allowance_cap)
         measured_detailed_started = self._begin_measured_completion()
-        detailed_started = time.perf_counter()
-        detailed = self.adapters.detailed_route(prepared, allowance)
-        detailed_route_time_s = time.perf_counter() - detailed_started
+        detailed, detailed_route_time_s = self._run_detailed_route(
+            prepared,
+            allowance,
+            allow_proof_skip=True,
+        )
         self._finish_measured_completion(measured_detailed_started)
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
@@ -2204,9 +2250,11 @@ class SequenceSolver[PreparedT]:
             anneal_seeds=tuple(item.restart.seed for item in annealed),
         )
         measured_detailed_started = self._begin_measured_completion()
-        detailed_started = time.perf_counter()
-        detailed = self.adapters.detailed_route(selected.prepared, allowance)
-        detailed_route_time_s = time.perf_counter() - detailed_started
+        detailed, detailed_route_time_s = self._run_detailed_route(
+            selected.prepared,
+            allowance,
+            allow_proof_skip=True,
+        )
         self._finish_measured_completion(measured_detailed_started)
         spent = detailed.routing.expansions
         _check_spend(spent, allowance)
@@ -2359,9 +2407,11 @@ class SequenceSolver[PreparedT]:
             raise ValueError("detailed closure allowance cannot be smaller than proxy allowance")
         detailed_allowance = available_for_detail - spent
         measured_detailed_started = self._begin_measured_completion()
-        detailed_started = time.perf_counter()
-        detailed = self.adapters.detailed_route(selected.prepared, detailed_allowance)
-        detailed_route_time_s = time.perf_counter() - detailed_started
+        detailed, detailed_route_time_s = self._run_detailed_route(
+            selected.prepared,
+            detailed_allowance,
+            allow_proof_skip=True,
+        )
         self._finish_measured_completion(measured_detailed_started)
         _check_spend(detailed.routing.expansions, detailed_allowance)
         spent += detailed.routing.expansions
@@ -2482,6 +2532,66 @@ class SequenceSolver[PreparedT]:
                 quality_exited=False,
             )
             return spent, True
+        # Domination proves only that this candidate cannot improve the winner;
+        # it is neither routed evidence nor failure feedback.  Advance the
+        # anneal cursor while preserving every evidence-driven scheduling field.
+        if (
+            detailed.routing.status is DetailedRouteStatus.DOMINATED
+            and observation.continue_search
+        ):
+            source = selected.source
+            if source is None:
+                raise ValueError("continuing dominated stage must retain its annealed source")
+            restart = observation.restart
+            next_anneal = AnnealState(
+                pair=selected.state.pair,
+                gaps=selected.state.gaps,
+                base_seed=restart.seed,
+                stage_index=source.result.final_state.stage_index,
+                variant_indices=selected.state.variant_indices,
+            )
+            if self.alns_adapters.window_installed is not None:
+                self.alns_adapters.window_installed(next_anneal)
+            restart.anneal = next_anneal
+            height_state.pending_quality_exit = pending_quality_exit
+            height_state.stages += 1
+            height_state.spent += spent
+            stage_start_variants = source.stage_start.variant_indices or (0,) * problem.size
+            selected_variants = selected.state.variant_indices or (0,) * problem.size
+            variant_moves = sum(
+                before != after
+                for before, after in zip(
+                    stage_start_variants,
+                    selected_variants,
+                    strict=True,
+                )
+            )
+            self._record_routing_observation(
+                height_state,
+                selected,
+                detailed,
+                spent,
+                problem=problem,
+                observation=observation,
+                global_routes=global_routes,
+                global_overflow=global_overflow,
+                global_skip_reason=global_skip_reason,
+                exact_key=None,
+                validation_failures=(),
+                projection_failures=(),
+                pitch_requirement=None,
+                preparation_time_s=preparation_time_s,
+                global_route_time_s=global_route_time_s,
+                detailed_route_time_s=detailed_route_time_s,
+                validation_time_s=0.0,
+                lns_size=0,
+                variant_moves=variant_moves,
+                split_count=0,
+                merge_count=0,
+                quality_entered=False,
+                quality_exited=False,
+            )
+            return spent, False
         pitch_requirement = _stage_projection_pitch_requirement(
             problem,
             selected.state,
@@ -2894,6 +3004,30 @@ class SequenceSolver[PreparedT]:
                 expansions=spent,
                 lns_size=lns_size,
                 exact_key=exact_key,
+                prepared_lower_bound=(
+                    None
+                    if detailed.prepared_lower_bound is None
+                    else detailed.prepared_lower_bound[1]
+                ),
+                prepared_lower_key=(
+                    None
+                    if detailed.prepared_lower_bound is None
+                    else (
+                        detailed.prepared_lower_bound[0],
+                        detailed.prepared_lower_bound[1].total,
+                    )
+                ),
+                lower_bound_dominated=detailed.lower_bound_dominated,
+                detailed_skip_reason=detailed.detailed_skip_reason,
+                lower_bound_violation=(
+                    exact_key is not None
+                    and detailed.prepared_lower_bound is not None
+                    and exact_key
+                    < (
+                        detailed.prepared_lower_bound[0],
+                        detailed.prepared_lower_bound[1].total,
+                    )
+                ),
                 validation_failures=validation_failures,
                 projection_failures=projection_failures,
                 pitch_requirement=pitch_requirement,
@@ -3867,14 +4001,6 @@ def _search_stage_cap(
     return None
 
 
-def _uses_stable_exact_stop(
-    *,
-    machine_count: int,
-    strip_count: int,
-    sprayed_lanes: int,
-) -> bool:
-    """Enable dynamic convergence only for sufficiently occupied unsprayed strips."""
-    return strip_count > 0 and sprayed_lanes == 0 and machine_count >= 2 * strip_count
 
 
 def _needs_topology_beam(
@@ -4512,6 +4638,7 @@ def _production_run(
     compact_seed_config: CompactSeedConfig | None = None,
     portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
     publish_incumbent: Callable[[Placement], None] | None = None,
+    prepared_bound_pruning: bool = True,
 ) -> _ProductionRun:
     started = time.monotonic()
     ceiling = time_budget_s
@@ -4542,6 +4669,8 @@ def _production_run(
         chosen_compact_config = compact_seed_config
     else:
         raise ValueError("compact seed config must be exactly CompactSeedConfig")
+    if type(prepared_bound_pruning) is not bool:
+        raise ValueError("prepared-bound pruning mode must be a bool")
     chosen_compact_config = _budgeted_compact_seed_config(
         time_budget_s,
         chosen_compact_config,
@@ -5615,6 +5744,16 @@ def _production_run(
         except ValueError:
             return width
 
+    def exact_lower_bound(
+        candidate: _ProductionCandidate,
+    ) -> tuple[int, PreparedRoutingLowerBound] | None:
+        if candidate.prepared is None:
+            return None
+        return (
+            _prepared_candidate_area_lower_bound(candidate.prepared),
+            _prepared_routing_lower_bound(candidate.prepared),
+        )
+
     solver = SequenceSolver(
         stage_admission=stage_admission,
         heights=heights,
@@ -5628,22 +5767,20 @@ def _production_run(
             feedback_origins=lambda candidate: tuple(
                 candidate.pack.at[index] for index in range(len(candidate.selected_strips))
             ),
+            exact_lower_bound=exact_lower_bound,
         ),
         expansion_budget=ExpansionBudget(expansion_total),
         borrow_first_discovery=(bool(initial_states) or use_topology_beam or use_shared_pack),
         protected_followup_heights=protected_followup_heights,
         config=config,
+        prune_dominated_prepared=prepared_bound_pruning,
         deadline_reached=deadline_reached,
         initial_states=initial_states,
         routing_seed_allowance_cap=max(1, expansion_total // 12),
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
         stage_boundary_transform=transform_stage,
-        stop_on_stable_exact=_uses_stable_exact_stop(
-            machine_count=spec.machine_count,
-            strip_count=len(strips),
-            sprayed_lanes=len(spec.spray_lanes),
-        ),
+
         stage_boundary_commit=commit_stage,
         # The window adapter exists here, so LOCAL_EXACT_PACK has an
         # implementation behind it, and `band_target_for` above gives
@@ -6142,6 +6279,42 @@ class SequencePairLayout:
         return placement
 
 
+class _PreparedLowerBoundStats(TypedDict):
+    prepared_lower_bound_candidates: float
+    prepared_lower_bound_hits: float
+    prepared_lower_bound_skips: float
+    prepared_lower_bound_hit_time_s: float
+    prepared_lower_bound_hit_time_share: float
+    prepared_lower_bound_violations: float
+
+
+def _prepared_lower_bound_stats(
+    stages: Sequence[StageObservation],
+) -> _PreparedLowerBoundStats:
+    """Aggregate prepared-bound observations, including proof-based skips."""
+    prepared = tuple(stage for stage in stages if stage.prepared_lower_key is not None)
+    hits = tuple(stage for stage in prepared if stage.lower_bound_dominated)
+    detailed_seconds = sum(stage.detailed_route_time_s for stage in stages)
+    skips = tuple(
+        stage
+        for stage in hits
+        if stage.detailed_skip_reason == "prepared-lower-bound"
+    )
+    hit_seconds = sum(stage.detailed_route_time_s for stage in hits)
+    return {
+        "prepared_lower_bound_candidates": float(len(prepared)),
+        "prepared_lower_bound_hits": float(len(hits)),
+        "prepared_lower_bound_skips": float(len(skips)),
+        "prepared_lower_bound_hit_time_s": hit_seconds,
+        "prepared_lower_bound_hit_time_share": (
+            hit_seconds / detailed_seconds if detailed_seconds > 0.0 else 0.0
+        ),
+        "prepared_lower_bound_violations": float(
+            sum(stage.lower_bound_violation for stage in prepared)
+        ),
+    }
+
+
 def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
     """Telemetry for a run that produced no placement.
 
@@ -6156,6 +6329,7 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
     session = run.solver.alns_session
     observed_backends = {stage.backend for stage in run.solver._stage_stats}
     accelerator = "mixed" if len(observed_backends) > 1 else next(iter(observed_backends), "python")
+    bound_stats = _prepared_lower_bound_stats(run.solver._stage_stats)
     return {
         "backend": "sequence-pair",
         "route_backend": route_kernel.selected_backend(),
@@ -6184,6 +6358,14 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
         "alns_window_unchanged": float(telemetry.alns_window_unchanged),
         "global_routes": float(telemetry.global_routes),
         "detailed_routes": float(telemetry.detailed_routes),
+        "prepared_lower_bound_candidates": bound_stats["prepared_lower_bound_candidates"],
+        "prepared_lower_bound_hits": bound_stats["prepared_lower_bound_hits"],
+        "prepared_lower_bound_skips": bound_stats["prepared_lower_bound_skips"],
+        "prepared_lower_bound_hit_time_s": bound_stats["prepared_lower_bound_hit_time_s"],
+        "prepared_lower_bound_hit_time_share": bound_stats[
+            "prepared_lower_bound_hit_time_share"
+        ],
+        "prepared_lower_bound_violations": bound_stats["prepared_lower_bound_violations"],
     }
 
 
@@ -6244,6 +6426,7 @@ def _with_observational_stats(
     stats = placement.stats.copy()
     observed_backends = {stage.backend for stage in result.stages}
     accelerator = "mixed" if len(observed_backends) > 1 else next(iter(observed_backends), "python")
+    bound_stats = _prepared_lower_bound_stats(result.stages)
     stats.update(
         {
             "backend": "sequence-pair",
@@ -6260,6 +6443,20 @@ def _with_observational_stats(
             "decoded_candidates": float(sum(stage.global_routes for stage in result.stages)),
             "global_routes": float(telemetry.global_routes),
             "detailed_routes": float(telemetry.detailed_routes),
+            "prepared_lower_bound_candidates": bound_stats[
+                "prepared_lower_bound_candidates"
+            ],
+            "prepared_lower_bound_hits": bound_stats["prepared_lower_bound_hits"],
+            "prepared_lower_bound_skips": bound_stats["prepared_lower_bound_skips"],
+            "prepared_lower_bound_hit_time_s": bound_stats[
+                "prepared_lower_bound_hit_time_s"
+            ],
+            "prepared_lower_bound_hit_time_share": bound_stats[
+                "prepared_lower_bound_hit_time_share"
+            ],
+            "prepared_lower_bound_violations": bound_stats[
+                "prepared_lower_bound_violations"
+            ],
             "best_overflow": float(
                 telemetry.best_overflow if telemetry.best_overflow is not None else -1
             ),

@@ -35,6 +35,7 @@ from flab2bp.layout.compact_seed import (
 )
 from flab2bp.layout.freeform import (
     _ENTRY_RING,
+    PreparedRoutingLowerBound,
     _box,
     _coarsen_saturated_strip_plan,
     _direct_net_candidates,
@@ -101,6 +102,7 @@ from flab2bp.layout.sequence_solver import (
     DetailedStageResult,
     ExpansionBudget,
     SequencePairLayout,
+    SequenceSearchResult,
     SequenceSolver,
     SequenceSolverConfig,
     StageAdapters,
@@ -345,6 +347,7 @@ class _FakeRouting:
     prepared_candidates: list[Prepared] = field(default_factory=list)
     feedback_seen: list[FeedbackState] = field(default_factory=list)
     feedback_origins: Callable[[Prepared], tuple[tuple[int, int], ...]] | None = None
+    exact_lower_bounds: tuple[tuple[int, PreparedRoutingLowerBound], ...] = ()
     _detailed_index: int = 0
 
     def prepare(self, height: int, decoded: DecodedPlacement) -> Prepared:
@@ -359,6 +362,17 @@ class _FakeRouting:
         self.feedback_seen.append(feedback)
         self.global_allowances.append(allowance)
         return _global(expansions=allowance if self.spend_allowance else 0)
+
+    def exact_lower_bound(
+        self,
+        prepared: Prepared,
+    ) -> tuple[int, PreparedRoutingLowerBound] | None:
+        del prepared
+        if not self.exact_lower_bounds:
+            return None
+        return self.exact_lower_bounds[
+            min(self._detailed_index, len(self.exact_lower_bounds) - 1)
+        ]
 
     def detailed_route(self, prepared: Prepared, allowance: int) -> DetailedStageResult:
         del prepared
@@ -399,6 +413,7 @@ class _FakeRouting:
             detailed_route=self.detailed_route,
             validate=self.validate,
             feedback_origins=self.feedback_origins,
+            exact_lower_bound=self.exact_lower_bound,
         )
 
 
@@ -413,6 +428,7 @@ def _solver(
     routing_seed_allowance_cap: int | None = None,
     borrow_first_discovery: bool = False,
     stage_admission: sequence_solver_module._MeasuredStageAdmission | None = None,
+    prune_dominated_prepared: bool = False,
 ) -> SequenceSolver[Prepared]:
     return SequenceSolver(
         heights=heights,
@@ -436,6 +452,7 @@ def _solver(
         routing_seed_allowance_cap=routing_seed_allowance_cap,
         borrow_first_discovery=borrow_first_discovery,
         stage_admission=stage_admission,
+        prune_dominated_prepared=prune_dominated_prepared,
     )
 
 
@@ -746,7 +763,7 @@ def test_compact_seed_consumes_grouped_stage_for_every_restart() -> None:
     assert [restart.anneal.stage_index for restart in solver._heights[0].restarts] == [1, 1, 1]
 
 
-def test_stable_exact_role_stops_before_a_third_non_improving_stage() -> None:
+def test_stable_observations_do_not_hide_a_later_better_candidate() -> None:
     compact_exact = _placement(area=20, belt_tiles=4)
     worse = _placement(area=30, belt_tiles=1)
     late_better = _placement(area=10, belt_tiles=8)
@@ -768,16 +785,15 @@ def test_stable_exact_role_stops_before_a_third_non_improving_stage() -> None:
         ),
         initial_states={40: AnnealState.initial(1, 17)},
     )
-    solver.stop_on_stable_exact = True
 
     result = solver.search(max_stages=3)
 
-    assert result.placement is compact_exact
-    assert result.termination == "exact-stable"
-    assert len(fake.detailed_allowances) == 2
+    assert result.placement is late_better
+    assert result.termination == "stage-limit"
+    assert len(fake.detailed_allowances) == 3
 
 
-def test_stable_exact_role_does_not_stop_after_stage_two_changed_the_incumbent() -> None:
+def test_temporary_non_improvement_does_not_hide_later_better_candidate() -> None:
     compact = _placement(area=30, belt_tiles=1)
     second_better = _placement(area=20, belt_tiles=4)
     temporarily_stable = _placement(area=25, belt_tiles=2)
@@ -801,7 +817,6 @@ def test_stable_exact_role_does_not_stop_after_stage_two_changed_the_incumbent()
         ),
         initial_states={40: AnnealState.initial(1, 17)},
     )
-    solver.stop_on_stable_exact = True
 
     result = solver.search(max_stages=4)
 
@@ -847,18 +862,18 @@ def test_exact_decoded_closure_retains_coordinates_without_sequence_reencoding()
     assert budget.spent == 7
 
 
-def test_search_stops_when_exact_incumbent_meets_certified_area_floor() -> None:
-    optimal = _placement(area=1, belt_tiles=1)
-    unnecessary = _placement(area=2, belt_tiles=0)
+def test_equal_area_with_fewer_belts_remains_open() -> None:
+    first = _placement(area=1, belt_tiles=4)
+    later_better = _placement(area=1, belt_tiles=3)
     fake = _FakeRouting(
         detailed_results=(
             DetailedStageResult(
                 _routing(DetailedRouteStatus.ROUTED, expansions=3),
-                optimal,
+                first,
             ),
             DetailedStageResult(
                 _routing(DetailedRouteStatus.ROUTED, expansions=5),
-                unnecessary,
+                later_better,
             ),
         )
     )
@@ -877,9 +892,197 @@ def test_search_stops_when_exact_incumbent_meets_certified_area_floor() -> None:
     solver.close_exact_decoded(40, decoded, reason="topology-beam")
     result = solver.search(max_stages=1)
 
-    assert result.placement is optimal
-    assert result.termination == "area-optimal"
-    assert len(fake.detailed_allowances) == 1
+    assert result.placement is later_better
+    assert result.termination == "stage-limit"
+    assert len(fake.detailed_allowances) == 2
+
+
+def test_prepared_lower_bound_audit_records_dominated_work_without_skipping() -> None:
+    first = _placement(area=20, belt_tiles=4)
+    dominated = _placement(area=30, belt_tiles=8)
+    dominated_bound = PreparedRoutingLowerBound(4, 0, 0, 4)
+    empty = PreparedRoutingLowerBound(0, 0, 0, 0)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), first),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), dominated),
+        ),
+        exact_lower_bounds=((0, empty), (20, dominated_bound)),
+    )
+    solver = _solver(fake, heights=(40,))
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    solver.close_exact_decoded(40, decoded, reason="first")
+    solver.close_exact_decoded(40, decoded, reason="dominated")
+
+    assert len(fake.detailed_allowances) == 2
+    assert solver._stage_stats[1].prepared_lower_key == (20, 4)
+    assert solver._stage_stats[1].lower_bound_dominated
+    assert not solver._stage_stats[1].lower_bound_violation
+
+
+def test_proof_dominated_prepared_skip_is_on_off_equivalent() -> None:
+    first = _placement(area=20, belt_tiles=4)
+    dominated = _placement(area=30, belt_tiles=8)
+    empty = PreparedRoutingLowerBound(0, 0, 0, 0)
+    dominated_bound = PreparedRoutingLowerBound(4, 0, 0, 4)
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    def run(enabled: bool) -> tuple[SequenceSearchResult, _FakeRouting, SequenceSolver[Prepared]]:
+        fake = _FakeRouting(
+            detailed_results=(
+                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), first),
+                DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), dominated),
+            ),
+            exact_lower_bounds=((0, empty), (20, dominated_bound)),
+        )
+        solver = _solver(
+            fake,
+            heights=(40,),
+            prune_dominated_prepared=enabled,
+        )
+        solver.close_exact_decoded(40, decoded, reason="first")
+        solver.close_exact_decoded(40, decoded, reason="candidate")
+        return solver.search(max_stages=0), fake, solver
+
+    audit, audit_fake, _audit_solver = run(False)
+    pruned, pruned_fake, pruned_solver = run(True)
+
+    assert audit.exact_key == pruned.exact_key == (20, 4)
+    assert len(audit_fake.detailed_allowances) == 2
+    assert len(pruned_fake.detailed_allowances) == 1
+    skipped = pruned_solver._stage_stats[1]
+    assert skipped.detailed_status is DetailedRouteStatus.DOMINATED
+    assert skipped.detailed_skip_reason == "prepared-lower-bound"
+
+
+def test_stateful_dominated_candidate_preserves_later_better_frontier() -> None:
+    first = _placement(area=20, belt_tiles=4)
+    dominated = _placement(area=20, belt_tiles=5)
+    later_better = _placement(area=20, belt_tiles=3)
+    empty = PreparedRoutingLowerBound(0, 0, 0, 0)
+    dominated_bound = PreparedRoutingLowerBound(4, 0, 0, 4)
+
+    def run(enabled: bool) -> tuple[SequenceSearchResult, list[int], list[int]]:
+        prepared_ids: list[int] = []
+        detailed_ids: list[int] = []
+        placements = {1: first, 2: dominated, 3: later_better}
+
+        def prepare(_height: int, decoded: DecodedPlacement) -> Prepared:
+            prepared_id = len(prepared_ids) + 1
+            prepared_ids.append(prepared_id)
+            return prepared_id, decoded
+
+        def global_route(
+            _prepared: Prepared,
+            _feedback: FeedbackState,
+            _allowance: int,
+        ) -> GlobalRouteResult:
+            return _global()
+
+        def detailed_route(
+            prepared: Prepared,
+            _allowance: int,
+        ) -> DetailedStageResult:
+            prepared_id, _decoded = prepared
+            detailed_ids.append(prepared_id)
+            return DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED),
+                placements[prepared_id],
+            )
+
+        def lower_bound(
+            prepared: Prepared,
+        ) -> tuple[int, PreparedRoutingLowerBound]:
+            prepared_id, _decoded = prepared
+            return (20, dominated_bound) if prepared_id == 2 else (0, empty)
+
+        solver = SequenceSolver(
+            heights=(40,),
+            problem_for_height=lambda height: PlacementProblem(
+                sizes=((1, 1),),
+                nets=((0, 0),),
+                outline_height=height,
+                area_lower_bound=1,
+            ),
+            adapters=StageAdapters(
+                prepare=prepare,
+                global_route=global_route,
+                detailed_route=detailed_route,
+                validate=lambda placement: ValidationVerdict(True, (), placement),
+                exact_lower_bound=lower_bound,
+            ),
+            expansion_budget=ExpansionBudget(1_000),
+            config=SequenceSolverConfig(
+                stages=3,
+                moves_per_stage=1,
+                restarts_per_height=1,
+                global_elites=1,
+            ),
+            prune_dominated_prepared=enabled,
+        )
+        return solver.search(max_stages=3), prepared_ids, detailed_ids
+
+    audit, audit_prepared, audit_detailed = run(False)
+    pruned, pruned_prepared, pruned_detailed = run(True)
+
+    assert audit.exact_key == pruned.exact_key == (20, 3)
+    assert audit_prepared == pruned_prepared == [1, 2, 3]
+    assert audit_detailed == [1, 2, 3]
+    assert pruned_detailed == [1, 3]
+    skipped = pruned.stages[1]
+    assert skipped.detailed_status is DetailedRouteStatus.DOMINATED
+    assert skipped.objective_mode is sequence_solver_module.ObjectiveMode.QUALITY
+    assert not skipped.quality_exited
+    assert pruned.stages[2].global_skip_reason == "quality-mode"
+
+
+def test_prepared_lower_bound_audit_flags_a_validator_clean_violation() -> None:
+    exact = _placement(area=20, belt_tiles=4)
+    unsound = PreparedRoutingLowerBound(
+        protected_template_belts=5,
+        route_floor=0,
+        component_count=0,
+        total=5,
+    )
+    fake = _FakeRouting(
+        detailed_results=(DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), exact),),
+        exact_lower_bounds=((20, unsound),),
+    )
+    solver = _solver(fake, heights=(40,))
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    solver.close_exact_decoded(40, decoded, reason="audit")
+
+    assert solver._stage_stats[0].prepared_lower_key == (20, 5)
+    assert solver._stage_stats[0].lower_bound_violation
 
 
 def test_valid_topology_candidate_does_not_stop_better_exact_enumeration() -> None:
@@ -4053,28 +4256,6 @@ def test_search_stage_cap_follows_certified_and_small_complexity_roles(
     )
 
 
-@pytest.mark.parametrize(
-    ("machine_count", "strip_count", "sprayed_lanes", "expected"),
-    (
-        (8, 4, 0, True),
-        (7, 4, 0, False),
-        (8, 4, 1, False),
-    ),
-)
-def test_stable_exact_role_is_unsprayed_with_two_machines_per_strip(
-    machine_count: int,
-    strip_count: int,
-    sprayed_lanes: int,
-    expected: bool,
-) -> None:
-    assert (
-        sequence_solver_module._uses_stable_exact_stop(
-            machine_count=machine_count,
-            strip_count=strip_count,
-            sprayed_lanes=sprayed_lanes,
-        )
-        is expected
-    )
 
 
 @pytest.mark.parametrize(
@@ -7454,6 +7635,12 @@ def test_sequence_backend_returns_only_certified_powered_placements(
         "global_routes",
         "detailed_routes",
         "best_overflow",
+        "prepared_lower_bound_candidates",
+        "prepared_lower_bound_hits",
+        "prepared_lower_bound_skips",
+        "prepared_lower_bound_hit_time_s",
+        "prepared_lower_bound_hit_time_share",
+        "prepared_lower_bound_violations",
         "best_stranded",
         "lns_invocations",
         "lns_total_size",
@@ -7535,9 +7722,6 @@ def test_production_observability_preserves_categories_and_all_grouped_work() ->
         config=config,
     )
 
-    # This test audits every grouped stage; production's safe early stop is not
-    # the behavior under test.
-    run.solver.stop_on_stable_exact = False
     result = run.solver.search()
     original_stats = dict(result.placement.stats)
     placement = sequence_solver_module._with_observational_stats(

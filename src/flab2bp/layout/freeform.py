@@ -7891,6 +7891,156 @@ class _PreparedRoutingProblem:
         return self if len(routed) == len(self.nets) else replace(self, nets=routed)
 
 
+def _protected_template_belt_indices(
+    problem: _PreparedRoutingProblem,
+) -> frozenset[int]:
+    """Return fixed belts that validator-clean boundary cleanup cannot delete."""
+    templates = problem.building_templates
+    belt_indices = {
+        index for index, building in enumerate(templates) if catalog.is_belt(building.item_id)
+    }
+    return frozenset(
+        target
+        for building in templates
+        if not catalog.is_belt(building.item_id)
+        for target in (building.input_obj, building.output_obj)
+        if target in belt_indices
+    )
+
+
+def _prepared_candidate_area_lower_bound(problem: _PreparedRoutingProblem) -> int:
+    """Lower-bound finalized area by the candidate's cleanup-invariant skeleton.
+
+    Boundary cleanup removes only belts.  Non-belt templates and belts named by
+    their input/output references must therefore survive every validator-clean
+    completion of this prepared candidate.  Routing and final-frame padding can
+    enlarge, but cannot shrink, the axis-aligned extent of that skeleton.
+    """
+    protected = _protected_template_belt_indices(problem)
+    survivors = tuple(
+        building
+        for index, building in enumerate(problem.building_templates)
+        if index in protected or not catalog.is_belt(building.item_id)
+    )
+    if not survivors:
+        return 0
+    left = min(building.x for building in survivors)
+    bottom = min(building.y for building in survivors)
+    right = max(building.x + building.width - 1 for building in survivors)
+    top = max(building.y + building.height - 1 for building in survivors)
+    return (right - left + 1) * (top - bottom + 1)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedRoutingLowerBound:
+    """Immutable belt-tile floor for one concrete prepared routing problem."""
+
+    protected_template_belts: int
+    route_floor: int
+    component_count: int
+    total: int
+
+
+def _prepared_routing_lower_bound(
+    problem: _PreparedRoutingProblem,
+) -> PreparedRoutingLowerBound:
+    """Prove a belt-tile floor conditional on this prepared candidate.
+
+    The fixed term contains only distinct template belts named by a non-belt
+    template's input or output reference.  A validator-clean completion cannot
+    remove such a belt during boundary cleanup without leaving that reference
+    invalid.  The route term is computed from the actual prepared nets: direct
+    insertions are already absent, and prelinked piler transitions are ignored.
+
+    Each net pays the unobstructed planar Manhattan distance between every
+    access cell its prepared source-sharing group may legally use and every
+    access cell its destination-sharing group may legally use, including both
+    endpoint cells.  External nets use their prepared boundary goals.  Altitude,
+    obstacles, ramps, and access restrictions are deliberately ignored, so they
+    can only make an accepted route longer.  Nets joined by ``src_group`` or
+    ``dst_group`` form one legal-sharing component and pay only that component's
+    maximum floor; unrelated components add because the detailed router forbids
+    their route cells from being reused.
+
+    Thus ``total <= finalized belt_tiles`` for every validator-clean placement
+    emitted from ``problem``.  This says nothing about unprepared placements,
+    minimum-cost routing, or whole-search optimality.
+    """
+    protected = _protected_template_belt_indices(problem)
+
+    nets = tuple(
+        net
+        for net in (*problem.nets, *problem.external_output_nets)
+        if not net.prelinked
+    )
+    net_by_id = {net.net_id: net for net in nets}
+    parent = {net_id: net_id for net_id in net_by_id}
+
+    def find(net_id: NetId) -> NetId:
+        while parent[net_id] != net_id:
+            parent[net_id] = parent[parent[net_id]]
+            net_id = parent[net_id]
+        return net_id
+
+    def union(left: NetId, right: NetId) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for net in nets:
+        for sibling in (*net.src_group, *net.dst_group):
+            if sibling in net_by_id:
+                union(net.net_id, sibling)
+
+    def adjacent(port: _PreparedPort) -> tuple[tuple[int, int], ...]:
+        return tuple((port.x + dx, port.y + dy) for dx, dy in _STEPS)
+
+    def starts(net: _PreparedNet) -> tuple[tuple[int, int], ...]:
+        if net.net_id.role is NetRole.EXTERNAL:
+            return tuple((x, y) for x, y, _level in net.boundary_goals)
+        return () if net.src is None else adjacent(net.src)
+
+    def goals(net: _PreparedNet) -> tuple[tuple[int, int], ...]:
+        if net.net_id.role is NetRole.EXTERNAL_OUTPUT:
+            return tuple((x, y) for x, y, _level in net.boundary_goals)
+        return adjacent(net.dst)
+
+    def route_floor(net: _PreparedNet) -> int:
+        legal_starts = tuple(
+            cell
+            for net_id in (net.net_id, *net.src_group)
+            if (sibling := net_by_id.get(net_id)) is not None
+            for cell in starts(sibling)
+        )
+        legal_goals = tuple(
+            cell
+            for net_id in (net.net_id, *net.dst_group)
+            if (sibling := net_by_id.get(net_id)) is not None
+            for cell in goals(sibling)
+        )
+        return min(
+            (
+                abs(sx - gx) + abs(sy - gy) + 1
+                for sx, sy in legal_starts
+                for gx, gy in legal_goals
+            ),
+            default=0,
+        )
+
+    component_floors: dict[NetId, int] = {}
+    for net in nets:
+        root = find(net.net_id)
+        component_floors[root] = max(component_floors.get(root, 0), route_floor(net))
+    route_total = sum(component_floors.values())
+    return PreparedRoutingLowerBound(
+        protected_template_belts=len(protected),
+        route_floor=route_total,
+        component_count=len(component_floors),
+        total=len(protected) + route_total,
+    )
+
+
 def _bind_prepared_net(net: _PreparedNet, buildings: list[PlacedBuilding]) -> _Net:
     return _Net(
         src=(_bind_prepared_port(net.src, buildings) if net.src is not None else None),

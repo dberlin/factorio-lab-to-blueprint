@@ -79,6 +79,9 @@ from flab2bp.layout.freeform import (
     _Port,
     _power_plan,
     _prepare_routing_problem,
+    _PreparedNet,
+    _PreparedPort,
+    _PreparedRoutingProblem,
     _proliferator_supply_tree,
     _relink,
     _reserve_port_access,
@@ -22179,3 +22182,230 @@ def test_three_destination_shared_external_bucket_commits_one_physical_root() ->
         if offset == 0:
             assert not canvas.junction_is_clear(source.x + 1, source.y, 0)
             assert canvas.junction_is_clear(source.x + 2, source.y, 0)
+
+
+def _prepared_bound_problem(
+    *,
+    buildings: tuple[PlacedBuilding, ...] = (),
+    nets: tuple[_PreparedNet, ...] = (),
+    external_output_nets: tuple[_PreparedNet, ...] = (),
+    realized_direct: frozenset[DirectInsertId] = frozenset(),
+) -> _PreparedRoutingProblem:
+    return _PreparedRoutingProblem(
+        building_templates=buildings,
+        blocked=(),
+        solid=frozenset(),
+        reserved=(),
+        port_corridors=(),
+        keep_out=frozenset(),
+        guard=frozenset(),
+        nets=nets,
+        core=(0, 0, 0, 0),
+        route_bounds=(0, 0, 0, 0),
+        limit=None,
+        power_sites=(),
+        sorters=0,
+        coaters=0,
+        direct_inserts=len(realized_direct),
+        realized_direct=realized_direct,
+        external_output_nets=external_output_nets,
+    )
+
+
+def _prepared_bound_port(x: int, y: int, *, belt_index: int = 0) -> _PreparedPort:
+    return _PreparedPort(
+        belt_index=belt_index,
+        x=x,
+        y=y,
+        x0=x,
+        x1=x,
+        tiles=(belt_index,),
+        machines=1,
+    )
+
+
+def _prepared_bound_net(
+    ordinal: int,
+    src: tuple[int, int] | None,
+    dst: tuple[int, int],
+    *,
+    role: NetRole = NetRole.INTERNAL,
+    boundary_goals: tuple[Cell, ...] = (),
+    src_group: tuple[NetId, ...] = (),
+    prelinked: bool = False,
+) -> _PreparedNet:
+    net_id = NetId(0 if src is not None else None, 1, f"item-{ordinal}", role, ordinal)
+    return _PreparedNet(
+        net_id=net_id,
+        src=None if src is None else _prepared_bound_port(*src),
+        dst=_prepared_bound_port(*dst),
+        item=net_id.item,
+        boundary_goals=boundary_goals,
+        src_group=src_group,
+        prelinked=prelinked,
+    )
+
+
+def test_prepared_routing_bound_counts_only_cleanup_protected_fixed_belts() -> None:
+    belt_id = min(catalog.BELT_IDS)
+    belt_model = catalog.building(belt_id).model_index
+    belts = tuple(
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=belt_model,
+            x=x,
+            y=0,
+            input_obj=x - 1 if x else None,
+            output_obj=x + 1 if x < 2 else None,
+        )
+        for x in range(3)
+    )
+    sorter_id = min(catalog.SORTER_IDS)
+    sorter = PlacedBuilding(
+        item_id=sorter_id,
+        model_index=catalog.building(sorter_id).model_index,
+        x=1,
+        y=0,
+        input_obj=1,
+    )
+    problem = _prepared_bound_problem(buildings=(*belts, sorter))
+
+    bound = freeform_module._prepared_routing_lower_bound(problem)
+
+    assert sum(catalog.is_belt(building.item_id) for building in problem.building_templates) == 3
+    assert bound.protected_template_belts == 1
+    assert bound.route_floor == 0
+    assert bound.total == 1
+    assert freeform_module._prepared_candidate_area_lower_bound(problem) == 1
+
+
+def test_prepared_routing_bound_uses_component_max_and_unrelated_component_sum() -> None:
+    first_id = NetId(0, 1, "shared", NetRole.INTERNAL, 0)
+    second_id = NetId(0, 2, "shared", NetRole.INTERNAL, 1)
+    first = _PreparedNet(
+        net_id=first_id,
+        src=_prepared_bound_port(0, 0),
+        dst=_prepared_bound_port(6, 0),
+        item="shared",
+        src_group=(second_id,),
+    )
+    second = _PreparedNet(
+        net_id=second_id,
+        src=_prepared_bound_port(0, 0),
+        dst=_prepared_bound_port(4, 0),
+        item="shared",
+        src_group=(first_id,),
+    )
+    unrelated = _prepared_bound_net(2, (0, 10), (3, 10))
+
+    bound = freeform_module._prepared_routing_lower_bound(
+        _prepared_bound_problem(nets=(first, second, unrelated))
+    )
+
+    assert bound.component_count == 2
+    assert bound.route_floor == 7
+    assert bound.total == 7
+
+
+def test_prepared_routing_bound_allows_differing_shared_source_taps() -> None:
+    belt_id = min(catalog.BELT_IDS)
+    belt_model = catalog.building(belt_id).model_index
+    fixed_belts = tuple(
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=belt_model,
+            x=x,
+            y=y,
+            input_obj=(index - 1 if y == 0 and index > 0 else None),
+            output_obj=(index + 1 if y == 0 and index < 10 else None),
+        )
+        for index, (x, y) in enumerate(
+            (*((x, 0) for x in range(11)), (11, 1), (12, 1))
+        )
+    )
+    sorter_id = min(catalog.SORTER_IDS)
+    sorters = tuple(
+        PlacedBuilding(
+            item_id=sorter_id,
+            model_index=catalog.building(sorter_id).model_index,
+            x=building.x,
+            y=2,
+            input_obj=index,
+        )
+        for index, building in enumerate(fixed_belts)
+    )
+    first_id = NetId(0, 1, "shared", NetRole.INTERNAL, 0)
+    second_id = NetId(0, 2, "shared", NetRole.INTERNAL, 1)
+
+    def source_port(*, belt_index: int, x: int) -> _PreparedPort:
+        return _PreparedPort(
+            belt_index=belt_index,
+            x=x,
+            y=0,
+            x0=0,
+            x1=10,
+            tiles=tuple(range(11)),
+            machines=1,
+        )
+
+    first = _PreparedNet(
+        net_id=first_id,
+        src=source_port(belt_index=0, x=0),
+        dst=_prepared_bound_port(12, 1, belt_index=12),
+        item="shared",
+        src_group=(second_id,),
+    )
+    second = _PreparedNet(
+        net_id=second_id,
+        src=source_port(belt_index=10, x=10),
+        dst=_prepared_bound_port(11, 1, belt_index=11),
+        item="shared",
+        src_group=(first_id,),
+    )
+
+    bound = freeform_module._prepared_routing_lower_bound(
+        _prepared_bound_problem(
+            buildings=(*fixed_belts, *sorters),
+            nets=(first, second),
+        )
+    )
+    # B can route through (11, 0), then A can branch from that sibling path
+    # through (12, 0).  The west-selected tap is not a mandatory route root.
+    actual_belt_tiles = len(fixed_belts) + 2
+
+    assert bound.protected_template_belts == len(fixed_belts)
+    assert bound.route_floor == 2
+    assert bound.total <= actual_belt_tiles
+
+
+def test_prepared_routing_bound_uses_nearest_boundary_goal() -> None:
+    external = _prepared_bound_net(
+        0,
+        None,
+        (5, 5),
+        role=NetRole.EXTERNAL,
+        boundary_goals=((0, 0, 0), (5, 2, 0), (9, 9, 0)),
+    )
+
+    bound = freeform_module._prepared_routing_lower_bound(
+        _prepared_bound_problem(nets=(external,))
+    )
+
+    assert bound.component_count == 1
+    assert bound.route_floor == 3
+
+
+def test_prepared_routing_bound_omits_direct_and_prelinked_route_demand() -> None:
+    direct = DirectInsertId(0, 1, "direct", CargoDomain.UNSPRAYED)
+    prelinked = _prepared_bound_net(0, (0, 0), (20, 0), prelinked=True)
+
+    bound = freeform_module._prepared_routing_lower_bound(
+        _prepared_bound_problem(
+            nets=(prelinked,),
+            realized_direct=frozenset({direct}),
+        )
+    )
+
+    assert bound.component_count == 0
+    assert bound.route_floor == 0
+    assert bound.total == 0

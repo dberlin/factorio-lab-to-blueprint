@@ -314,6 +314,12 @@ class PlacementStats(TypedDict, total=False):
     pose_yaw_90: float
     power: float
     power_uncovered: float
+    prepared_lower_bound_candidates: float
+    prepared_lower_bound_hits: float
+    prepared_lower_bound_hit_time_s: float
+    prepared_lower_bound_hit_time_share: float
+    prepared_lower_bound_skips: float
+    prepared_lower_bound_violations: float
     preparation_time_s: float
     quality_entries: float
     quality_exits: float
