@@ -3522,8 +3522,20 @@ def _forbidden_window_pack(strips: object, **kwargs: Any) -> Any:
     raise AssertionError("the window must not be solved here")
 
 
+def _window_outcome(pack: freeform_module._Pack) -> freeform_module._PackSolveOutcome:
+    return freeform_module._PackSolveOutcome(
+        pack=pack,
+        status="OPTIMAL",
+        objective_value=float(pack.width),
+        best_objective_bound=float(pack.width),
+        wall_time_s=0.25,
+        deterministic_time_s=0.01,
+        model_fingerprint="fixture-window-model",
+    )
+
+
 def _unchanged_window_pack(strips: object, **kwargs: Any) -> Any:
-    return kwargs["seed"]
+    return _window_outcome(kwargs["seed"])
 
 
 def _shifted_window_pack(strips: object, **kwargs: Any) -> Any:
@@ -3533,7 +3545,8 @@ def _shifted_window_pack(strips: object, **kwargs: Any) -> Any:
     encoder sees a valid placement and the adapter's own accept path runs.
     """
     seed = kwargs["seed"]
-    return replace(seed, at={index: (x + 1, y) for index, (x, y) in seed.at.items()})
+    repaired = replace(seed, at={index: (x + 1, y) for index, (x, y) in seed.at.items()})
+    return _window_outcome(repaired)
 
 
 def _selected_candidates(
@@ -3731,7 +3744,7 @@ def test_the_window_adapter_drops_a_pack_that_did_not_move(
 
     def unchanged_after_three_seconds(strips: object, **kwargs: Any) -> Any:
         now[0] += solve_seconds
-        return kwargs["seed"]
+        return _window_outcome(kwargs["seed"])
 
     monkeypatch.setattr(sequence_solver_module, "_pack_window", unchanged_after_three_seconds)
     monkeypatch.setattr("flab2bp.layout.sequence_solver.time.monotonic", lambda: now[0])
@@ -3795,6 +3808,10 @@ def test_the_window_adapter_counts_an_inexact_encoding_and_only_that(
     exact_before = run.telemetry.alns_encode_inexact
     assert adapter(frozenset({0}), problem, state, decoded) is not None
     assert run.telemetry.alns_encode_inexact == exact_before
+    assert run.telemetry.alns_window_optimal == 3
+    assert run.telemetry.alns_window_distinct_submodels == 1
+    assert run.telemetry.alns_window_repeated_submodels == 2
+    assert run.telemetry.alns_window_repeated_submodel_seconds == pytest.approx(0.5)
 
 
 def test_a_window_accept_counts_only_when_the_search_installs_the_state(

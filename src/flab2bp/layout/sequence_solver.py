@@ -4524,6 +4524,17 @@ class _ProductionTelemetry:
     alns_window_solves: int = 0
     alns_window_accepted: int = 0
     alns_window_seconds: float = 0.0
+    alns_window_optimal: int = 0
+    alns_window_feasible: int = 0
+    alns_window_infeasible: int = 0
+    alns_window_model_invalid: int = 0
+    alns_window_unknown: int = 0
+    alns_window_last_status: str = "NOT_RUN"
+    alns_window_last_objective: float | None = None
+    alns_window_last_best_bound: float | None = None
+    alns_window_distinct_submodels: int = 0
+    alns_window_repeated_submodels: int = 0
+    alns_window_repeated_submodel_seconds: float = 0.0
     alns_encode_inexact: int = 0
     alns_encode_errors: int = 0
     alns_skipped_no_goods: int = 0
@@ -5618,6 +5629,7 @@ def _production_run(
     #: about to install, and only the state carrying this encoding's pair is the
     #: window's own repair.
     window_repair: list[EncodedPlacement] = []
+    window_submodels: set[str] = set()
 
     def window_pack(
         window: frozenset[int],
@@ -5654,7 +5666,7 @@ def _production_run(
         )
         telemetry.alns_window_solves += 1
         started_window = time.monotonic()
-        repaired = _pack_window(
+        outcome = _pack_window(
             list(selected),
             height=problem.outline_height,
             width_bound=decoded.width,
@@ -5667,9 +5679,29 @@ def _production_run(
             on_skipped=_count_skipped_no_goods,
         )
         telemetry.alns_window_seconds += time.monotonic() - started_window
+        if outcome is None:
+            return None
+        telemetry.alns_window_last_status = outcome.status
+        telemetry.alns_window_last_objective = outcome.objective_value
+        telemetry.alns_window_last_best_bound = outcome.best_objective_bound
+        if outcome.status == "OPTIMAL":
+            telemetry.alns_window_optimal += 1
+        elif outcome.status == "FEASIBLE":
+            telemetry.alns_window_feasible += 1
+        elif outcome.status == "INFEASIBLE":
+            telemetry.alns_window_infeasible += 1
+        elif outcome.status == "MODEL_INVALID":
+            telemetry.alns_window_model_invalid += 1
+        else:
+            telemetry.alns_window_unknown += 1
+        if outcome.model_fingerprint in window_submodels:
+            telemetry.alns_window_repeated_submodels += 1
+            telemetry.alns_window_repeated_submodel_seconds += outcome.wall_time_s
+        else:
+            window_submodels.add(outcome.model_fingerprint)
+            telemetry.alns_window_distinct_submodels += 1
+        repaired = outcome.pack
         if repaired is None:
-            # INFEASIBLE, UNKNOWN or unaffordable -- CP-SAT ran and gave nothing
-            # to install.  The caller credits the choice as unapplied.
             return None
         if repaired.at == pack.at:
             # It solved and returned the incumbent.  Not a repair, and a distinct
@@ -6352,6 +6384,25 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
         "alns_window_solves": float(telemetry.alns_window_solves),
         "alns_window_accepted": float(telemetry.alns_window_accepted),
         "alns_window_seconds": telemetry.alns_window_seconds,
+        "alns_window_optimal": float(telemetry.alns_window_optimal),
+        "alns_window_feasible": float(telemetry.alns_window_feasible),
+        "alns_window_infeasible": float(telemetry.alns_window_infeasible),
+        "alns_window_model_invalid": float(telemetry.alns_window_model_invalid),
+        "alns_window_unknown": float(telemetry.alns_window_unknown),
+        "alns_window_last_status": telemetry.alns_window_last_status,
+        "alns_window_last_objective": (
+            telemetry.alns_window_last_objective
+            if telemetry.alns_window_last_objective is not None
+            else float("nan")
+        ),
+        "alns_window_last_best_bound": (
+            telemetry.alns_window_last_best_bound
+            if telemetry.alns_window_last_best_bound is not None
+            else float("nan")
+        ),
+        "alns_window_distinct_submodels": float(telemetry.alns_window_distinct_submodels),
+        "alns_window_repeated_submodels": float(telemetry.alns_window_repeated_submodels),
+        "alns_window_repeated_submodel_seconds": telemetry.alns_window_repeated_submodel_seconds,
         "alns_skipped_no_goods": float(telemetry.alns_skipped_no_goods),
         "alns_window_dropped_empty": float(telemetry.alns_window_dropped_empty),
         "alns_window_dropped_whole": float(telemetry.alns_window_dropped_whole),
@@ -6547,6 +6598,31 @@ def _with_observational_stats(
             "alns_window_solves": float(telemetry.alns_window_solves),
             "alns_window_accepted": float(telemetry.alns_window_accepted),
             "alns_window_seconds": telemetry.alns_window_seconds,
+            "alns_window_optimal": float(telemetry.alns_window_optimal),
+            "alns_window_feasible": float(telemetry.alns_window_feasible),
+            "alns_window_infeasible": float(telemetry.alns_window_infeasible),
+            "alns_window_model_invalid": float(telemetry.alns_window_model_invalid),
+            "alns_window_unknown": float(telemetry.alns_window_unknown),
+            "alns_window_last_status": telemetry.alns_window_last_status,
+            "alns_window_last_objective": (
+                telemetry.alns_window_last_objective
+                if telemetry.alns_window_last_objective is not None
+                else float("nan")
+            ),
+            "alns_window_last_best_bound": (
+                telemetry.alns_window_last_best_bound
+                if telemetry.alns_window_last_best_bound is not None
+                else float("nan")
+            ),
+            "alns_window_distinct_submodels": float(
+                telemetry.alns_window_distinct_submodels
+            ),
+            "alns_window_repeated_submodels": float(
+                telemetry.alns_window_repeated_submodels
+            ),
+            "alns_window_repeated_submodel_seconds": (
+                telemetry.alns_window_repeated_submodel_seconds
+            ),
             "alns_encode_inexact": float(telemetry.alns_encode_inexact),
             "alns_encode_errors": float(telemetry.alns_encode_errors),
             "alns_skipped_no_goods": float(telemetry.alns_skipped_no_goods),

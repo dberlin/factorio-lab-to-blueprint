@@ -129,6 +129,95 @@ def test_outcomes_round_trip_through_pickle(outcome: _StrategyRaceOutcome) -> No
     assert pickle.loads(pickle.dumps(outcome)) == outcome
 
 
+def test_race_leg_records_its_own_process_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Completed:
+        def lay_out(self, *_args: object, **_kwargs: object) -> Placement:
+            return Placement(buildings=())
+
+    monkeypatch.setattr(strategy_race_module, "_build_layout", lambda *_a, **_kw: _Completed())
+    outcome = _run_race_leg(
+        replace(
+            _request(),
+            share=False,
+            soft_deadline=time.monotonic() + 30.0,
+        )
+    )
+
+    assert outcome.status == "completed"
+    assert outcome.process_wall_time_s >= 0.0
+    assert outcome.process_user_cpu_s >= 0.0
+    assert outcome.process_system_cpu_s >= 0.0
+    assert outcome.process_peak_rss_kib > 0
+
+
+@pytest.mark.parametrize(
+    ("platform", "raw", "expected"),
+    [
+        ("linux", 4096, 4096),
+        ("darwin", 4096, 4),
+        ("darwin", 4097, 5),
+    ],
+)
+def test_process_peak_rss_is_normalized_to_kib(
+    platform: str,
+    raw: int,
+    expected: int,
+) -> None:
+    assert strategy_race_module._peak_rss_kib(raw, platform=platform) == expected
+
+
+def test_retained_solver_profiles_are_declared_in_placement_stats() -> None:
+    hints = get_type_hints(PlacementStats)
+    expected: dict[str, object] = {
+        "process_wall_time_s": float,
+        "process_user_cpu_s": float,
+        "process_system_cpu_s": float,
+        "process_peak_rss_kib": int,
+        "pipeline_compaction_time_s": float,
+        "pipeline_finalization_time_s": float,
+        "pipeline_validation_time_s": float,
+        "pipeline_encoding_time_s": float,
+        "pack_time_s": float,
+        "compaction_time_s": float,
+        "finalization_time_s": float,
+        "pack_cp_wall_time_s": float,
+        "pack_cp_deterministic_time_s": float,
+        "pack_cp_solves": float,
+        "pack_cp_optimal": float,
+        "pack_cp_feasible": float,
+        "pack_cp_infeasible": float,
+        "pack_cp_model_invalid": float,
+        "pack_cp_unknown": float,
+        "pack_cp_last_status": str,
+        "pack_cp_last_objective": float,
+        "pack_cp_last_best_bound": float,
+        "pack_window_solves": float,
+        "pack_window_optimal": float,
+        "pack_window_feasible": float,
+        "pack_window_infeasible": float,
+        "pack_window_model_invalid": float,
+        "pack_window_unknown": float,
+        "pack_window_distinct_submodels": float,
+        "pack_window_repeated_submodels": float,
+        "pack_window_repeated_submodel_seconds": float,
+        "alns_window_optimal": float,
+        "alns_window_feasible": float,
+        "alns_window_infeasible": float,
+        "alns_window_model_invalid": float,
+        "alns_window_unknown": float,
+        "alns_window_last_status": str,
+        "alns_window_last_objective": float,
+        "alns_window_last_best_bound": float,
+        "alns_window_distinct_submodels": float,
+        "alns_window_repeated_submodels": float,
+        "alns_window_repeated_submodel_seconds": float,
+    }
+
+    assert {key: hints.get(key) for key in expected} == expected
+
+
 def test_messages_round_trip_through_pickle() -> None:
     incumbent = IncumbentMessage("freeform", (480, 62))
     no_good = NoGoodMessage(

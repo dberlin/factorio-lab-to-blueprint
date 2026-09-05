@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from flab2bp.dsp import catalog, codec
 from flab2bp.lab.capture import UrlValidator, capture_flow_csv
@@ -43,6 +43,7 @@ from flab2bp.layout.base import (
     NoValidLayout,
     Placement,
     PlacementCompletion,
+    PlacementStats,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.freeform import FreeformLayout
@@ -175,13 +176,58 @@ def _raced_result(
     admitting it as an ``Attempt`` would put a hole into the selection below.
     """
     if outcome.status == "completed" and outcome.placement is not None:
+        outcome.placement.stats.update(
+            {
+                "process_wall_time_s": outcome.process_wall_time_s,
+                "process_user_cpu_s": outcome.process_user_cpu_s,
+                "process_system_cpu_s": outcome.process_system_cpu_s,
+                "process_peak_rss_kib": outcome.process_peak_rss_kib,
+            }
+        )
         return outcome.placement
     return NoValidLayout(
         outcome.refusal_reason or f"{outcome.strategy} produced nothing",
         spec_label=spec_label,
         budget_s=budget_s,
         projection_failures=outcome.refusal_projection_failures,
+        stats={
+            "process_wall_time_s": outcome.process_wall_time_s,
+            "process_user_cpu_s": outcome.process_user_cpu_s,
+            "process_system_cpu_s": outcome.process_system_cpu_s,
+            "process_peak_rss_kib": outcome.process_peak_rss_kib,
+        },
     )
+
+
+def _postprocess_failure_stats(
+    placement: Placement,
+    *,
+    pipeline_compaction_time_s: float,
+    pipeline_finalization_time_s: float,
+    pipeline_validation_time_s: float,
+    pipeline_encoding_time_s: float,
+    attempt_started: float,
+    settlement_wait_s: float,
+    time_budget_s: float,
+    completion_grace_s: float,
+) -> PlacementStats:
+    """Snapshot phase and wall measurements before a refused attempt is discarded."""
+    stats = placement.stats.copy()
+    stats.update(
+        {
+            "pipeline_compaction_time_s": pipeline_compaction_time_s,
+            "pipeline_finalization_time_s": pipeline_finalization_time_s,
+            "pipeline_validation_time_s": pipeline_validation_time_s,
+            "pipeline_encoding_time_s": pipeline_encoding_time_s,
+        }
+    )
+    attempt_wall_s = time.monotonic() - attempt_started - settlement_wait_s
+    stats["attempt_wall_s"] = attempt_wall_s
+    stats["wall_overshoot_s"] = max(
+        0.0,
+        attempt_wall_s - time_budget_s - completion_grace_s,
+    )
+    return stats
 
 
 #: Outputs named in a title before it gives up and counts the rest.
@@ -821,6 +867,7 @@ def build(
                     strategy=sname,
                     reason=result.reason,
                     projection_failures=result.projection_failures,
+                    stats=cast(PlacementStats, result.stats),
                 )
                 refused.append(failure)
                 if on_progress is not None:
@@ -836,6 +883,10 @@ def build(
                         )
                     )
                 continue
+            pipeline_compaction_time_s = 0.0
+            pipeline_finalization_time_s = 0.0
+            pipeline_validation_time_s = 0.0
+            pipeline_encoding_time_s = 0.0
             placement = result
             # Candidate peers may finish later, and the previous arm's
             # settlement runs serially. Neither delay belongs to this attempt.
@@ -861,17 +912,25 @@ def build(
                 return time.monotonic() >= _deadline
 
             if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
-                placement = finalize.compact_open_boundary_belts(
-                    placement,
-                    spec,
-                    expect_power=True,
-                )
+                phase_started = time.monotonic()
                 try:
-                    placement = finalize.finalize_placement(
+                    placement = finalize.compact_open_boundary_belts(
                         placement,
-                        policy,
-                        cancelled=attempt_expired,
+                        spec,
+                        expect_power=True,
                     )
+                finally:
+                    pipeline_compaction_time_s = time.monotonic() - phase_started
+                phase_started = time.monotonic()
+                try:
+                    try:
+                        placement = finalize.finalize_placement(
+                            placement,
+                            policy,
+                            cancelled=attempt_expired,
+                        )
+                    finally:
+                        pipeline_finalization_time_s = time.monotonic() - phase_started
                 except finalize.ProjectionRefusal as exc:
                     reason = str(exc)
                     failure = LayoutAttemptFailure(
@@ -879,6 +938,17 @@ def build(
                         strategy=sname,
                         reason=reason,
                         projection_failures=_projection_records(exc.failures),
+                        stats=_postprocess_failure_stats(
+                            placement,
+                            pipeline_compaction_time_s=pipeline_compaction_time_s,
+                            pipeline_finalization_time_s=pipeline_finalization_time_s,
+                            pipeline_validation_time_s=pipeline_validation_time_s,
+                            pipeline_encoding_time_s=pipeline_encoding_time_s,
+                            attempt_started=attempt_started,
+                            settlement_wait_s=settlement_wait_s,
+                            time_budget_s=time_budget_s,
+                            completion_grace_s=completion_grace_s,
+                        ),
                     )
                     refused.append(failure)
                     if on_progress is not None:
@@ -922,6 +992,17 @@ def build(
                         candidate=spec.label,
                         strategy=sname,
                         reason=reason,
+                        stats=_postprocess_failure_stats(
+                            placement,
+                            pipeline_compaction_time_s=pipeline_compaction_time_s,
+                            pipeline_finalization_time_s=pipeline_finalization_time_s,
+                            pipeline_validation_time_s=pipeline_validation_time_s,
+                            pipeline_encoding_time_s=pipeline_encoding_time_s,
+                            attempt_started=attempt_started,
+                            settlement_wait_s=settlement_wait_s,
+                            time_budget_s=time_budget_s,
+                            completion_grace_s=completion_grace_s,
+                        ),
                     )
                     refused.append(failure)
                     if on_progress is not None:
@@ -943,6 +1024,7 @@ def build(
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.
+            phase_started = time.monotonic()
             report = validate.validate(
                 placement,
                 spec,
@@ -951,6 +1033,7 @@ def build(
                 max_belt_z=belt_rules.max_z,
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
+            pipeline_validation_time_s = time.monotonic() - phase_started
             marked = markers.mark_external_belts(placement, spec)
             labelled = replace(
                 marked,
@@ -960,17 +1043,31 @@ def build(
                     f"{spec.machine_count} machines, {placement.area} tiles"
                 ),
             )
+            phase_started = time.monotonic()
             try:
-                blueprint = codec.encode(labelled)
+                try:
+                    blueprint = codec.encode(labelled)
+                finally:
+                    pipeline_encoding_time_s = time.monotonic() - phase_started
             except ValueError as exc:
                 reason = f"blueprint encoding failed: {exc}"
-                refused.append(
-                    LayoutAttemptFailure(
-                        candidate=spec.label,
-                        strategy=sname,
-                        reason=reason,
-                    )
+                failure = LayoutAttemptFailure(
+                    candidate=spec.label,
+                    strategy=sname,
+                    reason=reason,
+                    stats=_postprocess_failure_stats(
+                        labelled,
+                        pipeline_compaction_time_s=pipeline_compaction_time_s,
+                        pipeline_finalization_time_s=pipeline_finalization_time_s,
+                        pipeline_validation_time_s=pipeline_validation_time_s,
+                        pipeline_encoding_time_s=pipeline_encoding_time_s,
+                        attempt_started=attempt_started,
+                        settlement_wait_s=settlement_wait_s,
+                        time_budget_s=time_budget_s,
+                        completion_grace_s=completion_grace_s,
+                    ),
                 )
+                refused.append(failure)
                 if on_progress is not None:
                     on_progress(
                         AttemptProgress(
@@ -983,6 +1080,14 @@ def build(
                         )
                     )
                 continue
+            labelled.stats.update(
+                {
+                    "pipeline_compaction_time_s": pipeline_compaction_time_s,
+                    "pipeline_finalization_time_s": pipeline_finalization_time_s,
+                    "pipeline_validation_time_s": pipeline_validation_time_s,
+                    "pipeline_encoding_time_s": pipeline_encoding_time_s,
+                }
+            )
             # Each raced arm is charged its shared race plus only its own
             # post-processing. Waiting for peer candidates or earlier arms to
             # settle is deliberately excluded.

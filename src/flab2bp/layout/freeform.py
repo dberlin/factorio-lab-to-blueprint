@@ -61,6 +61,7 @@ rather than tidiness.
 from __future__ import annotations
 
 import heapq
+import hashlib
 import math
 import time
 from array import array
@@ -3543,6 +3544,121 @@ C_WINDOW_WORKERS = 1
 C_WINDOW_DEADLINE_SAFETY_SECONDS = 0.05
 
 
+@dataclass(slots=True)
+class _PackCpProfile:
+    """Aggregate CP-SAT work for one Freeform layout attempt."""
+
+    wall_time_s: float = 0.0
+    deterministic_time_s: float = 0.0
+    solves: int = 0
+    optimal: int = 0
+    feasible: int = 0
+    infeasible: int = 0
+    model_invalid: int = 0
+    unknown: int = 0
+    last_status: str = "UNKNOWN"
+    last_objective: float = math.nan
+    last_best_bound: float = math.nan
+    window_solves: int = 0
+    window_optimal: int = 0
+    window_feasible: int = 0
+    window_infeasible: int = 0
+    window_model_invalid: int = 0
+    window_unknown: int = 0
+    window_repeated_submodels: int = 0
+    window_repeated_submodel_seconds: float = 0.0
+    window_fingerprints: set[str] = field(default_factory=set)
+
+    def observe(
+        self,
+        solver: cp_model.CpSolver,
+        status: cp_model.CpSolverStatus,
+        wall_s: float,
+    ) -> None:
+        name = solver.StatusName(status)
+        self.wall_time_s += wall_s
+        self.deterministic_time_s += solver.response_proto.deterministic_time
+        self.solves += 1
+        self.last_status = name
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            self.last_objective = solver.ObjectiveValue()
+            self.last_best_bound = solver.BestObjectiveBound()
+        else:
+            self.last_objective = math.nan
+            self.last_best_bound = math.nan
+        if name == "OPTIMAL":
+            self.optimal += 1
+        elif name == "FEASIBLE":
+            self.feasible += 1
+        elif name == "INFEASIBLE":
+            self.infeasible += 1
+        elif name == "MODEL_INVALID":
+            self.model_invalid += 1
+        else:
+            self.unknown += 1
+
+    def observe_window(self, outcome: _PackSolveOutcome) -> None:
+        self.window_solves += 1
+        if outcome.status == "OPTIMAL":
+            self.window_optimal += 1
+        elif outcome.status == "FEASIBLE":
+            self.window_feasible += 1
+        elif outcome.status == "INFEASIBLE":
+            self.window_infeasible += 1
+        elif outcome.status == "MODEL_INVALID":
+            self.window_model_invalid += 1
+        else:
+            self.window_unknown += 1
+        if outcome.model_fingerprint in self.window_fingerprints:
+            self.window_repeated_submodels += 1
+            self.window_repeated_submodel_seconds += outcome.wall_time_s
+        else:
+            self.window_fingerprints.add(outcome.model_fingerprint)
+
+    def stats(self) -> dict[str, float | str]:
+        return {
+            "pack_cp_wall_time_s": self.wall_time_s,
+            "pack_cp_deterministic_time_s": self.deterministic_time_s,
+            "pack_cp_solves": float(self.solves),
+            "pack_cp_optimal": float(self.optimal),
+            "pack_cp_feasible": float(self.feasible),
+            "pack_cp_infeasible": float(self.infeasible),
+            "pack_cp_model_invalid": float(self.model_invalid),
+            "pack_cp_unknown": float(self.unknown),
+            "pack_cp_last_status": self.last_status,
+            "pack_cp_last_objective": self.last_objective,
+            "pack_cp_last_best_bound": self.last_best_bound,
+            "pack_window_solves": float(self.window_solves),
+            "pack_window_optimal": float(self.window_optimal),
+            "pack_window_feasible": float(self.window_feasible),
+            "pack_window_infeasible": float(self.window_infeasible),
+            "pack_window_model_invalid": float(self.window_model_invalid),
+            "pack_window_unknown": float(self.window_unknown),
+            "pack_window_distinct_submodels": float(len(self.window_fingerprints)),
+            "pack_window_repeated_submodels": float(self.window_repeated_submodels),
+            "pack_window_repeated_submodel_seconds": self.window_repeated_submodel_seconds,
+        }
+
+
+_PACK_CP_PROFILE: ContextVar[_PackCpProfile | None] = ContextVar(
+    "_PACK_CP_PROFILE",
+    default=None,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _PackSolveOutcome:
+    """Typed result of one concrete CP-SAT pack submodel."""
+
+    pack: _Pack | None
+    status: str
+    objective_value: float | None
+    best_objective_bound: float | None
+    wall_time_s: float
+    deterministic_time_s: float
+    model_fingerprint: str
+
+
 @dataclass(frozen=True, slots=True)
 class _PackModel:
     """One built packing model and the handles a caller needs to read it back."""
@@ -4081,30 +4197,53 @@ def _pack_result(
     direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
     height: int,
     admission: cp_model.CpSolverSolutionCallback | None,
-) -> _Pack | None:
-    """Solve one built model and read its assignment back as a `_Pack`."""
+    *,
+    model_fingerprint: str = "",
+) -> _PackSolveOutcome:
+    """Solve one built model and retain the exact CP status and bound."""
+    solve_started = time.perf_counter()
     status = solver.Solve(built.model, admission)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None
-    return _Pack(
-        at={
-            i: (solver.Value(built.xs[i]) + strips[i].west_channel, solver.Value(built.ys[i]))
-            for i in range(len(strips))
-        },
-        width=solver.Value(built.w_var),
-        height=height,
-        status=solver.StatusName(status),
-        hit_budget=status == cp_model.FEASIBLE,
-        direct=frozenset(
-            DirectInsertId(
-                i,
-                j,
-                direct_candidates[i, j].item,
-                direct_candidates[i, j].cargo_domain,
-            )
-            for (i, j), di in built.direct_vars.items()
-            if solver.Value(di)
-        ),
+    elapsed = time.perf_counter() - solve_started
+    profile = _PACK_CP_PROFILE.get()
+    if profile is not None:
+        profile.observe(solver, status, elapsed)
+    status_name = solver.StatusName(status)
+    solved = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    pack = (
+        _Pack(
+            at={
+                i: (
+                    solver.Value(built.xs[i]) + strips[i].west_channel,
+                    solver.Value(built.ys[i]),
+                )
+                for i in range(len(strips))
+            },
+            width=solver.Value(built.w_var),
+            height=height,
+            status=status_name,
+            hit_budget=status == cp_model.FEASIBLE,
+            direct=frozenset(
+                DirectInsertId(
+                    i,
+                    j,
+                    direct_candidates[i, j].item,
+                    direct_candidates[i, j].cargo_domain,
+                )
+                for (i, j), di in built.direct_vars.items()
+                if solver.Value(di)
+            ),
+        )
+        if solved
+        else None
+    )
+    return _PackSolveOutcome(
+        pack=pack,
+        status=status_name,
+        objective_value=solver.ObjectiveValue() if solved else None,
+        best_objective_bound=solver.BestObjectiveBound() if solved else None,
+        wall_time_s=elapsed,
+        deterministic_time_s=solver.response_proto.deterministic_time,
+        model_fingerprint=model_fingerprint,
     )
 
 
@@ -4127,7 +4266,7 @@ def _pack_window(
     time_budget_s: float = C_WINDOW_SECONDS,
     deterministic_work: float = C_WINDOW_DETERMINISTIC_WORK,
     on_skipped: Callable[[int], None] | None = None,
-) -> _Pack | None:
+) -> _PackSolveOutcome | None:
     """Re-solve `_pack`'s formulation for ``window`` with everything else pinned.
 
     This is a sub-model, not a re-solve: every strip, constraint, no-good and
@@ -4139,10 +4278,9 @@ def _pack_window(
     ``width_bound`` is the incumbent's width, so a window may NARROW the block
     and can never widen it.
 
-    Returns ``None`` only when the sub-model is infeasible or the solve returns
-    no incumbent.  An assignment identical to the seed's is returned as-is: the
-    caller decides what that means, because "the window found nothing better" is
-    a signal, not an error.
+    A CP-SAT invocation returns its typed status and objective bound even when it
+    has no incumbent.  ``None`` means no model was solved because the request was
+    statically unaffordable or inconsistent.
     """
     if not window:
         raise ValueError("a repair window must name at least one strip")
@@ -4179,7 +4317,20 @@ def _pack_window(
     solver.parameters.max_deterministic_time = min(time_budget_s, deterministic_work)
     # A function of `arrangement` and nothing else -- see `_pack`.
     solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
-    return _pack_result(built, solver, strips, direct_candidates, height, None)
+    fingerprint = hashlib.sha256(str(built.model.Proto()).encode()).hexdigest()
+    outcome = _pack_result(
+        built,
+        solver,
+        strips,
+        direct_candidates,
+        height,
+        None,
+        model_fingerprint=fingerprint,
+    )
+    profile = _PACK_CP_PROFILE.get()
+    if profile is not None:
+        profile.observe_window(outcome)
+    return outcome
 
 
 def _decoded_from_pack(pack: _Pack, strips: Sequence[Strip], height: int) -> DecodedPlacement:
@@ -4338,7 +4489,14 @@ def _pack(
                 self.StopSearch()
 
     admission = SeedAdmission() if stop_when_seed_admissible and seed is not None else None
-    return _pack_result(built, solver, strips, direct_candidates, height, admission)
+    return _pack_result(
+        built,
+        solver,
+        strips,
+        direct_candidates,
+        height,
+        admission,
+    ).pack
 
 
 # --- emission --------------------------------------------------------------
@@ -16111,6 +16269,8 @@ class _BuildResult:
     promised_direct: frozenset[DirectInsertId] = frozenset()
     realized_direct: frozenset[DirectInsertId] = frozenset()
     stranded_ports: tuple[StrandedPort, ...] = ()
+    preparation_time_s: float = 0.0
+    detailed_route_time_s: float = 0.0
 
 
 def _build(
@@ -16128,6 +16288,7 @@ def _build(
 ) -> _BuildResult:
     """Prepare one pack, then emit it through the reusable detailed entry point."""
     cancelled = None if deadline is None else lambda: time.monotonic() >= deadline
+    preparation_started = time.monotonic()
     try:
         prepared = _prepare_routing_problem(
             spec,
@@ -16152,7 +16313,9 @@ def _build(
             ),
             towers=(),
             budget_stage=_BuildBudgetStage.PREPARATION,
+            preparation_time_s=time.monotonic() - preparation_started,
         )
+    preparation_time_s = time.monotonic() - preparation_started
     if cancelled is not None and cancelled():
         return _BuildResult(
             placement=None,
@@ -16166,8 +16329,9 @@ def _build(
             towers=(),
             budget_stage=_BuildBudgetStage.PREPARATION,
             stranded_ports=prepared.stranded_ports,
+            preparation_time_s=preparation_time_s,
         )
-    return _build_prepared(
+    built = _build_prepared(
         spec,
         strips,
         prepared,
@@ -16175,6 +16339,10 @@ def _build(
         route=route,
         deadline=deadline,
         budget=budget,
+    )
+    return replace(
+        built,
+        preparation_time_s=preparation_time_s,
     )
 
 
@@ -16231,6 +16399,7 @@ def _build_prepared(
     internal_routing = empty_routing
     late_output_routing = empty_routing
 
+    detailed_route_started = time.monotonic()
     if route and prepared.preparation_failures:
         internal_routing = DetailedRouteResult(
             DetailedRouteStatus.STRANDED,
@@ -16294,6 +16463,7 @@ def _build_prepared(
             deadline,
             budget,
         )
+    detailed_route_time_s = time.monotonic() - detailed_route_started
 
     failures = (
         external_routing.failures
@@ -16356,6 +16526,7 @@ def _build_prepared(
             promised_direct=prepared.promised_direct,
             realized_direct=prepared.realized_direct,
             stranded_ports=prepared.stranded_ports,
+            detailed_route_time_s=detailed_route_time_s,
         )
 
     # Reservations and tentative markers are attempt-local and are spent before
@@ -16436,6 +16607,7 @@ def _build_prepared(
         promised_direct=prepared.promised_direct,
         realized_direct=prepared.realized_direct,
         stranded_ports=prepared.stranded_ports,
+        detailed_route_time_s=detailed_route_time_s,
     )
 
 
@@ -18137,6 +18309,7 @@ class FreeformLayout:
 
         ceiling = time_budget_s
         started = time.monotonic()
+        _PACK_CP_PROFILE.set(_PackCpProfile())
         # A racing child starts the budget its PARENT started, so it must be
         # told the wall rather than compute one: spawn, interpreter start and
         # unpickling the spec all happen after the clock began.  Same expression
@@ -18259,6 +18432,7 @@ class FreeformLayout:
                 budget_s=0.0,
             )
 
+        planning_time_s = time.monotonic() - started
         budgets = (time_budget_s,)
 
         #: Ordered authoritative findings from candidates rejected after packing.
@@ -18312,6 +18486,8 @@ class FreeformLayout:
                 from flab2bp.layout import route_kernel
 
                 best.stats["route_backend"] = route_kernel.selected_backend()
+                best.stats["planning_time_s"] = planning_time_s
+                best.stats["total_time_s"] = time.monotonic() - started
                 return best
 
         deadline_expired = _expired(deadline)
@@ -18796,6 +18972,12 @@ class FreeformLayout:
         #: This candidate's own `_pack` span, reset when its turn starts and
         #: left at zero for a queued repair, whose pack was already bought.
         candidate_pack_s = 0.0
+        pack_time_s = 0.0
+        preparation_time_s = 0.0
+        detailed_route_time_s = 0.0
+        compaction_time_s = 0.0
+        finalization_time_s = 0.0
+        validation_time_s = 0.0
         #: Window repairs waiting to be evaluated, and the queue that drains
         #: them.  `candidate_packs` is iterated by index and already mutated in
         #: four places; a separate queue adds no fifth mutation.
@@ -19300,6 +19482,7 @@ class FreeformLayout:
                         ),
                     )
                     candidate_pack_s = time.monotonic() - pack_started
+                    pack_time_s += candidate_pack_s
                 if pack is None:
                     stale_draws += 1
                     continue
@@ -19470,6 +19653,8 @@ class FreeformLayout:
                         budget=budget,
                         staged_static_cache=staged_static_cache,
                     )
+                    preparation_time_s += result.preparation_time_s
+                    detailed_route_time_s += result.detailed_route_time_s
                 except finalize.ProjectionRefusal as exc:
                     if rejected is not None:
                         for failure in exc.failures:
@@ -19875,7 +20060,7 @@ class FreeformLayout:
                                     solved_windows.add(window_key)
                                     window_solves += 1
                                     window_started = time.monotonic()
-                                    repaired = _pack_window(
+                                    outcome = _pack_window(
                                         strips,
                                         height=height,
                                         width_bound=pack.width,
@@ -19903,6 +20088,7 @@ class FreeformLayout:
                                         on_skipped=_count_window_skips,
                                     )
                                     window_seconds += time.monotonic() - window_started
+                                    repaired = None if outcome is None else outcome.pack
                                     if repaired is None or repaired.at == pack.at:
                                         session.observe(
                                             choice,
@@ -19972,12 +20158,20 @@ class FreeformLayout:
                     )
                     compaction_started = time.monotonic()
                     try:
-                        compacted = finalize.compact_open_boundary_belts_certified(
-                            placement,
-                            spec,
-                            expect_power=True,
-                            cancelled=completion_cancelled,
-                        )
+                        try:
+                            compacted = finalize.compact_open_boundary_belts_certified(
+                                placement,
+                                spec,
+                                expect_power=True,
+                                cancelled=completion_cancelled,
+                            )
+                        finally:
+                            compaction_elapsed = time.monotonic() - compaction_started
+                            compaction_time_s += compaction_elapsed
+                            compaction_reserve_s = max(
+                                compaction_reserve_s,
+                                compaction_elapsed,
+                            )
                     except finalize.ProjectionCancelled:
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
@@ -19985,17 +20179,18 @@ class FreeformLayout:
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
                     placement = compacted.placement
-                    compaction_reserve_s = max(
-                        compaction_reserve_s,
-                        time.monotonic() - compaction_started,
-                    )
                     finalize_started = time.monotonic()
                     try:
-                        placement = finalize.finalize_placement(
-                            placement,
-                            self.band_policy,
-                            cancelled=completion_cancelled,
-                        )
+                        try:
+                            placement = finalize.finalize_placement(
+                                placement,
+                                self.band_policy,
+                                cancelled=completion_cancelled,
+                            )
+                        finally:
+                            finalize_elapsed = time.monotonic() - finalize_started
+                            finalization_time_s += finalize_elapsed
+                            finalize_reserve_s = max(finalize_reserve_s, finalize_elapsed)
                     except finalize.ProjectionCancelled:
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
@@ -20119,12 +20314,9 @@ class FreeformLayout:
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
-                    finalize_reserve_s = max(
-                        finalize_reserve_s,
-                        time.monotonic() - finalize_started,
-                    )
                     certify_started = time.monotonic()
                     report = validate.certify(placement, spec, expect_power=True)
+                    validation_time_s += time.monotonic() - certify_started
                     if (
                         inbound_choice is not None
                         and window_choices.get((height, arrangement)) is inbound_choice
@@ -20211,6 +20403,7 @@ class FreeformLayout:
                     after=None,
                     routing_seconds=0.0,
                 )
+        cp_stats = (_PACK_CP_PROFILE.get() or _PackCpProfile()).stats()
         if telemetry is not None:
             telemetry["alns_choices"] = float(len(session.choices))
             telemetry["alns_applied"] = float(session.applied)
@@ -20230,6 +20423,17 @@ class FreeformLayout:
             telemetry["stale_stop"] = float(stale_stop)
             telemetry["window_solves"] = float(window_solves)
             telemetry["window_accepted"] = float(window_accepted)
+            telemetry.update(
+                {
+                    "pack_time_s": pack_time_s,
+                    "preparation_time_s": preparation_time_s,
+                    "detailed_route_time_s": detailed_route_time_s,
+                    "compaction_time_s": compaction_time_s,
+                    "finalization_time_s": finalization_time_s,
+                    "validation_time_s": validation_time_s,
+                    **cp_stats,
+                }
+            )
         # `stats["route_backend"]` is stamped in `lay_out`, where none of these
         # locals exist, so the operator telemetry is stamped here instead --
         # guarded, because a sweep that refuses has no placement to carry it.
@@ -20244,6 +20448,17 @@ class FreeformLayout:
             best.stats["alns_window_seconds"] = window_seconds
             best.stats["alns_encode_errors"] = float(window_encode_errors)
             best.stats["alns_skipped_no_goods"] = float(window_skipped_no_goods)
+            best.stats.update(
+                {
+                    "pack_time_s": pack_time_s,
+                    "preparation_time_s": preparation_time_s,
+                    "detailed_route_time_s": detailed_route_time_s,
+                    "compaction_time_s": compaction_time_s,
+                    "finalization_time_s": finalization_time_s,
+                    "validation_time_s": validation_time_s,
+                }
+            )
+            best.stats.update(cast(PlacementStats, cp_stats))
         return best
 
 

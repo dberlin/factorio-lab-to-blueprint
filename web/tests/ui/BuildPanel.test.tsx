@@ -416,6 +416,7 @@ test('a refusal is shown as a result, with one line per pair', async () => {
             candidate: 'no-proliferator',
             strategy: 'sequence-pair',
             reason: 'too tall; exact projection failed',
+            stats: {},
             projection_failures: [
               {
                 band: 160,
@@ -435,12 +436,14 @@ test('a refusal is shown as a result, with one line per pair', async () => {
             candidate: 'max-proliferation',
             strategy: 'freeform',
             reason: 'unroutable',
+            stats: {},
             projection_failures: [],
           },
           {
             candidate: 'direct-spec',
             strategy: null,
             reason: 'request has no legal layout',
+            stats: {},
             projection_failures: [],
           },
         ],
@@ -797,6 +800,7 @@ test('a refusal marks the blueprint on screen as the previous build', async () =
             candidate: 'x',
             strategy: 'freeform',
             reason: 'unroutable',
+            stats: {},
             projection_failures: [],
           },
         ],
