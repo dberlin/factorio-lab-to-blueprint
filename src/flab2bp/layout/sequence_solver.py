@@ -559,6 +559,9 @@ class DetailedStageResult:
 
     routing: DetailedRouteResult
     placement: Placement | None
+    # Routing telemetry may include diagnostic work outside the charged attempt.
+    # This ledger value is authoritative for every Sequence budget settlement.
+    charged_expansions: int
     projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
     prepared_lower_bound: tuple[int, PreparedRoutingLowerBound] | None = None
     lower_bound_dominated: bool = False
@@ -1166,6 +1169,7 @@ class SequenceSolver[PreparedT]:
                         expansions=0,
                     ),
                     placement=None,
+                    charged_expansions=0,
                     prepared_lower_bound=declared,
                     lower_bound_dominated=True,
                     detailed_skip_reason="prepared-lower-bound",
@@ -1783,7 +1787,7 @@ class SequenceSolver[PreparedT]:
             allow_proof_skip=True,
         )
         self._finish_measured_completion(measured_detailed_started)
-        spent = detailed.routing.expansions
+        spent = detailed.charged_expansions
         _check_spend(spent, allowance)
         # `_complete_routing_stage` folds this very candidate's own failures
         # into `height_state.feedback` before it returns.  Capture the feedback
@@ -1951,7 +1955,7 @@ class SequenceSolver[PreparedT]:
             allow_proof_skip=True,
         )
         self._finish_measured_completion(measured_detailed_started)
-        spent = detailed.routing.expansions
+        spent = detailed.charged_expansions
         _check_spend(spent, allowance)
         self.budget.charge_detailed_discovery(height, spent)
         self._complete_routing_stage(
@@ -2256,7 +2260,7 @@ class SequenceSolver[PreparedT]:
             allow_proof_skip=True,
         )
         self._finish_measured_completion(measured_detailed_started)
-        spent = detailed.routing.expansions
+        spent = detailed.charged_expansions
         _check_spend(spent, allowance)
         return self._complete_routing_stage(
             height_state,
@@ -2413,8 +2417,8 @@ class SequenceSolver[PreparedT]:
             allow_proof_skip=True,
         )
         self._finish_measured_completion(measured_detailed_started)
-        _check_spend(detailed.routing.expansions, detailed_allowance)
-        spent += detailed.routing.expansions
+        _check_spend(detailed.charged_expansions, detailed_allowance)
+        spent += detailed.charged_expansions
         selected_source = selected.source
         if selected_source is None:
             raise ValueError("annealed global candidate must retain its restart source")
@@ -4592,6 +4596,7 @@ def _closed_detailed_result(
         ),
         placement=None,
         projection_failures=projection_failures,
+        charged_expansions=expansions,
     )
 
 
@@ -4624,13 +4629,17 @@ def _route_detailed_candidate(
             DetailedRouteStatus.UNPOWERABLE,
             expansions=expansions,
         )
+    spent = allowance - attempt_budget["left"]
+    _check_spend(spent, allowance)
+    routing = built.routing
     placement: Placement | None = None
-    if built.routing.status is DetailedRouteStatus.ROUTED:
+    if routing.status is DetailedRouteStatus.ROUTED:
         placement = built.placement
         assert placement is not None
     return DetailedStageResult(
-        routing=built.routing,
+        routing=routing,
         placement=placement,
+        charged_expansions=spent,
     )
 
 
