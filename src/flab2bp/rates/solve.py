@@ -298,13 +298,22 @@ def supplied_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
     """Items the URL declares as externally supplied, in items/second.
 
     FactorioLab's ``Input`` objective means "I already have this much of this
-    item", which is exactly what an input belt is here: the item arrives at the
-    boundary and nothing inside the blueprint makes it.  Mapping it onto
-    ``external_inputs`` is the whole of the support -- an Input objective on
+    item": the item arrives at the boundary at up to the declared rate, and
+    demand is served from it before anything is built.  An Input objective on
     ``proliferator-3`` is simply a proliferator belt with a declared rate.
 
-    The declared rate is a *supply*, not a demand: it caps nothing and is
-    recorded so the belt can be sized and labelled.
+    The declared rate BOUNDS that supply, and every consumer nets against it --
+    the requested output and the chain's own intermediate demand alike -- so
+    only the remainder is crafted (:func:`net_target_rates`, and the LP demand
+    in :func:`solve`).  Captured from FactorioLab for the URL that prompted
+    this: 2000/min copper ingot requested with 600/min declared as an Input
+    exports ``=70/3`` arc smelters and ``=1400`` copper ore, i.e. 1400/min
+    crafted.  A supply beyond the demand is simply unused.
+
+    A rate of zero or less is not a quantity to net against; it keeps the older
+    all-or-nothing reading (belted in, never built).  No URL produces one --
+    ``parse_url`` defaults a missing objective value to 1 -- so this is only
+    reachable from a hand-built request.
     """
     period = _SECONDS_PER_PERIOD[request.display_rate]
     out: dict[str, Fraction] = {}
@@ -329,6 +338,50 @@ def supplied_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
             )
         out[objective.target_id] = out.get(objective.target_id, Fraction(0)) + rate
     return out
+
+
+def _supply_cap(supplied: Mapping[str, Fraction], item_id: str) -> Fraction:
+    """The bounded part of a declared supply: never negative, never a demand."""
+    return max(Fraction(0), supplied.get(item_id, Fraction(0)))
+
+
+def net_target_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
+    """What the blueprint must MAKE: each requested rate less its declared supply.
+
+    FactorioLab serves demand from an ``Input`` objective first and builds the
+    remainder, so a URL asking for 2000/min of an item it also supplies at
+    600/min describes a 1400/min factory.  The block delivers that 1400/min at
+    its boundary; the player's own 600/min never enters the blueprint, exactly
+    as the other declared supplies never do.
+
+    Clamped at zero: a supply larger than the request leaves nothing to build
+    for that item rather than a negative objective.
+    """
+    targets = target_rates(data, request)
+    supplied = supplied_rates(data, request)
+    return {
+        item_id: max(Fraction(0), rate - _supply_cap(supplied, item_id))
+        for item_id, rate in targets.items()
+    }
+
+
+def _lp_demand(
+    targets: Mapping[str, Fraction], supplied: Mapping[str, Fraction]
+) -> dict[str, Fraction]:
+    """The balance row right-hand sides: demand net of the declared supply.
+
+    UNCLAMPED, unlike :func:`net_target_rates`.  Each row reads "net production
+    of this item is at least this", so a negative value is the statement that
+    the block may consume up to the surplus supply -- which is how an
+    intermediate with a partial Input gets its remainder crafted and its
+    declared share belted in.  Clamping here would silently re-craft supply the
+    player already has.
+    """
+    items = set(targets) | set(supplied)
+    return {
+        item_id: targets.get(item_id, Fraction(0)) - _supply_cap(supplied, item_id)
+        for item_id in items
+    }
 
 
 def _excluded_recipes(data: Dataset, request: LabRequest) -> frozenset[str]:
@@ -446,22 +499,23 @@ def _resolve_chain(
     data: Dataset,
     targets: Iterable[str],
     excluded: frozenset[str],
-    supplied: frozenset[str] = frozenset(),
+    supplied: Mapping[str, Fraction] = MappingProxyType({}),
     *,
     include_consumers: bool = False,
 ) -> tuple[dict[str, tuple[Recipe, ...]], set[str]]:
     """Walk the recipe graph from the targets.
 
     Returns the producing recipes for each internal item, plus the set of items
-    that must be belted in.  An item is belted in when the URL supplies it (an
-    Input objective on an item it does not also request) or when nothing here
-    can make it.  Otherwise it stays
+    that may be belted in.  An item is belted in when the URL supplies it (an
+    Input objective) or when nothing here can make it.  A declared supply with
+    a rate does NOT stop the walk: the item is external AND internal at once,
+    belted in up to the declared rate and crafted for whatever demand is left
+    over (``_lp_demand``).  Otherwise the item stays
     internal, with its crafting recipes and (unless it is a requested output)
     its enabled extraction recipes (``_extraction_producers``) BOTH offered as
     producers: the production LP prices every one of them and picks whichever
     mix is globally cheapest, exactly as FactorioLab's ``adjustCosts`` does. A
-    requested output never gets an extraction option, and is never cut to
-    external by a declared supply either -- an Output objective
+    requested output never gets an extraction option -- an Output objective
     asks for the item to be MADE, and a blueprint of zero machines satisfies
     nobody -- so it is always crafted.  Known over-reach: that removes the
     extraction option for the item's INTERNAL demand too, so an Output
@@ -498,21 +552,25 @@ def _resolve_chain(
         if item_id in seen:
             continue
         seen.add(item_id)
-        if item_id in supplied and item_id not in requested:
-            # Declared as externally supplied, so do not build it even though a
+        declared = supplied.get(item_id)
+        if declared is not None and declared > 0:
+            # A declared RATE is a bounded supply, so the item is belted in AND
+            # kept internal: demand nets against the supply and the LP crafts
+            # only the remainder.  One real user URL asked for 2000/min copper
+            # ingot and listed 600/min copper ingot among fifteen declared
+            # supplies; FactorioLab builds the 1400/min difference, so cutting
+            # the item to external here (which is what a supply used to do)
+            # would build nothing at all and ask the player for the lot.
+            external.add(item_id)
+        elif declared is not None and item_id not in requested:
+            # A supply with no usable rate is not a quantity to net against, so
+            # it keeps the all-or-nothing reading: do not build it even though a
             # recipe exists -- that is the point of an Input objective.
             #
             # A REQUESTED output is the exception, for the same reason the
             # extraction cut below spares it: an Output objective asks for the
             # item to be made, and a blueprint of zero machines satisfies
-            # nobody.  A URL may legitimately carry both -- one real user URL
-            # asked for 2000/min copper ingot and listed 600/min copper ingot
-            # among fifteen declared supplies -- and cutting the target to
-            # external there left no crafting column at all, so the solve died
-            # with a bare InfeasibleError instead of building copper ore into
-            # arc smelters.  The declared supply is not a cap in any case (see
-            # ``supplied_rates``), so honouring it on a target could only ever
-            # mean "build nothing".
+            # nobody.
             external.add(item_id)
             continue
 
@@ -954,16 +1012,34 @@ def solve(
     ``proliferable`` (or every recipe when it is ``None``), falling back to
     ``NONE`` where products are illegal. ``fixed_modes`` instead preserves
     authored per-recipe flow modes.
+
+    Demand is served from the URL's declared ``Input`` supplies before anything
+    is built, exactly as FactorioLab does it, so what comes back is the factory
+    for the REMAINDER: ``target_rates`` records what the URL asked for and
+    ``outputs`` what this block actually makes.
     """
     targets = target_rates(data, request)
     supplied = supplied_rates(data, request)
+    # Demand is served from the declared supply first, so what this factory has
+    # to MAKE is the remainder. ``demand`` carries that netting into every
+    # balance row; ``targets`` stays the URL's ask, for reporting.
+    demand = _lp_demand(targets, supplied)
+    if targets and not any(
+        rate > _supply_cap(supplied, item_id) for item_id, rate in targets.items()
+    ):
+        raise UnsupportedObjectiveError(
+            "this URL already supplies every item it asks for -- "
+            + ", ".join(sorted(targets))
+            + " -- at or above the requested rate, so netting the declared Input "
+            "objectives against the request leaves nothing to build"
+        )
     excluded = _excluded_recipes(data, request)
     has_surplus_cost = _cost(request.costs.surplus, 0) > 0
     producers, external = _resolve_chain(
         data,
         targets,
         excluded,
-        frozenset(supplied),
+        supplied,
         include_consumers=has_surplus_cost,
     )
     internal_items = sorted(producers)
@@ -1002,7 +1078,7 @@ def solve(
             raw_crafts = _run_continuous_lp(
                 columns,
                 balance_items,
-                targets,
+                demand,
                 objective=objective,
                 time_limit_s=time_limit_s,
             )
@@ -1010,7 +1086,7 @@ def solve(
                 columns,
                 raw_crafts,
                 balance_items,
-                targets,
+                demand,
                 objective,
             )
         except InfeasibleError:
@@ -1020,7 +1096,7 @@ def solve(
         _, raw_machines = _run_milp(
             columns,
             balance_items,
-            targets,
+            demand,
             objective=objective,
             time_limit_s=time_limit_s,
         )
@@ -1028,7 +1104,7 @@ def solve(
             columns,
             raw_machines,
             balance_items,
-            targets,
+            demand,
             objective,
         )
 
@@ -1038,7 +1114,7 @@ def solve(
             lower_raw = _run_continuous_lp(
                 columns,
                 balance_items,
-                targets,
+                demand,
                 objective=geometric_objective,
                 time_limit_s=time_limit_s,
             )
@@ -1119,7 +1195,14 @@ def solve(
             )
     for item_id in balance_items:
         required = consumed.get(item_id, Fraction()) + targets.get(item_id, Fraction())
-        available = produced.get(item_id, Fraction()) + extracted.get(item_id, Fraction())
+        # The declared supply counts toward what is available, capped at the
+        # declared rate: that is the whole of the netting, restated here so a
+        # solve that leant on more supply than the URL offers cannot ship.
+        available = (
+            produced.get(item_id, Fraction())
+            + extracted.get(item_id, Fraction())
+            + _supply_cap(supplied, item_id)
+        )
         if available < required:
             raise InfeasibleError(
                 f"the exact rate solve leaves {item_id} short: "
@@ -1153,15 +1236,21 @@ def solve(
     if proliferator_total > 0 and proliferator_item is not None:
         external_inputs[proliferator_item] = proliferator_total
 
-    outputs = {item_id: targets[item_id] for item_id in targets}
     surplus: dict[str, Fraction] = {}
     for item_id, rate in produced.items():
         spare = rate - consumed.get(item_id, Fraction(0)) - targets.get(item_id, Fraction(0))
         if spare > 0:
             surplus[item_id] = spare
+    # What leaves the boundary is what this block MAKES, which for a requested
+    # item the URL also supplies is the netted remainder: the player's declared
+    # rate covers the difference and never enters the blueprint, so claiming the
+    # full request here would label a lane with a rate it does not carry.
+    outputs: dict[str, Fraction] = {}
     for item_id in targets:
         made = produced.get(item_id, Fraction(0)) - consumed.get(item_id, Fraction(0))
-        outputs[item_id] = max(targets[item_id], made)
+        rate = max(targets[item_id] - _supply_cap(supplied, item_id), made)
+        if rate > 0:
+            outputs[item_id] = rate
 
     return RateSolution(
         groups=tuple(groups),

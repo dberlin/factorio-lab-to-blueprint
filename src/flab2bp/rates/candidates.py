@@ -29,9 +29,9 @@ from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.solve import (
     RateSolution,
     cargo_stack,
+    net_target_rates,
     solve,
     target_producer_ids,
-    target_rates,
 )
 from flab2bp.spec import (
     BeltTier,
@@ -583,8 +583,13 @@ def _is_runaway(spec: BuildSpec, baseline_machines: int) -> bool:
 
 
 def _assert_same_objective(data: Dataset, request: LabRequest, specs: list[BuildSpec]) -> None:
-    """Every candidate must build the same thing, or the set is meaningless."""
-    wanted = target_rates(data, request)
+    """Every candidate must build the same thing, or the set is meaningless.
+
+    Measured against the NET objective: a rate the URL declares as an Input is
+    supplied by the player, so no candidate builds it and demanding it here
+    would reject every candidate for a both-fed URL (``net_target_rates``).
+    """
+    wanted = net_target_rates(data, request)
     for spec in specs:
         for item_id, rate in wanted.items():
             made = spec.outputs.get(item_id, Fraction(0))

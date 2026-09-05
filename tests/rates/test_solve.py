@@ -19,6 +19,7 @@ from flab2bp.rates.adjust import AdjustedRecipe, ProliferatorTier
 from flab2bp.rates.solve import (
     InfeasibleError,
     RateSolution,
+    UnsupportedObjectiveError,
     _buildable_producers,
     _exact_continuous_rates,
     _exact_rates,
@@ -1264,20 +1265,18 @@ def _both_fed(item_id: str, *, output: int, supply: int) -> LabRequest:
 
 
 def test_an_output_that_is_also_a_declared_input_is_still_crafted(data: Dataset) -> None:
-    """An Output objective asks for the item to be MADE, and that outranks a
-    supply declaration on the same item.
+    """An Output objective on a supplied item is still built here.
 
     A real user URL carried ``copper-ingot`` twice: 2000/min as the Output and
     600/min as an Input among fifteen declared supplies.  The chain walk cut
-    every supplied item to external before it looked at whether the item was
-    requested, so the ONE target left the walk as a belt-in, no crafting column
-    survived, and the solve died with a bare ``InfeasibleError`` -- which the
-    web front end can only report as "build failed unexpectedly".  The spec is
-    perfectly buildable: copper ore into arc smelters.
+    every supplied item to external, so the ONE target left the walk as a
+    belt-in, no crafting column survived, and the solve died with a bare
+    ``InfeasibleError`` -- which the web front end can only report as "build
+    failed unexpectedly".  The spec is perfectly buildable: copper ore into arc
+    smelters.
 
-    This is the same rule the extraction cut already obeys one line below --
-    "a blueprint of zero machines satisfies nobody" -- applied to the declared
-    supply as well.
+    How MUCH is built is the netting rule tested below; what this pins is that
+    a supply short of the request never leaves the factory empty.
     """
     solution = solve(data, _both_fed("copper-ingot", output=2000, supply=600), time_limit_s=10.0)
     assert [group.recipe_id for group in solution.groups] == ["copper-ingot"]
@@ -1312,3 +1311,78 @@ def test_a_declared_input_that_is_not_requested_is_still_belted_in(data: Dataset
     assert "magnetic-coil" in recipes
     assert "magnet" not in recipes
     assert "magnet" in solution.external_inputs
+
+
+def test_a_declared_input_supply_is_netted_against_a_requested_output(data: Dataset) -> None:
+    """FactorioLab serves demand from the declared supply first and crafts the rest.
+
+    Captured from FactorioLab itself for the URL this came from (2000/min
+    copper ingot requested, 600/min declared as an Input): its CSV export runs
+    ``copper-ingot`` on ``=70/3`` arc smelters and belts in ``=1400`` copper
+    ore -- 1400/min crafted, not 2000.  The declared rate is a supply the
+    factory does not have to make.
+    """
+    request = _both_fed("copper-ingot", output=2000, supply=600)
+    per_minute = target_rates(data, request)["copper-ingot"] / 2000
+    solution = solve(data, request, time_limit_s=10.0)
+
+    assert [group.recipe_id for group in solution.groups] == ["copper-ingot"]
+    (ingots,) = solution.groups
+    assert ingots.crafts_per_second == 1400 * per_minute
+    # An arc smelter runs this recipe at one craft a second: ceil(1400/60).
+    assert ingots.machines == 24
+    # The ore scales with what is actually crafted, not with what was asked.
+    assert solution.external_inputs == {"copper-ore": 1400 * per_minute}
+    # The block delivers what it makes; the player's own 600/min makes up the
+    # 2000/min the URL asked for, and never enters the blueprint.
+    assert solution.outputs["copper-ingot"] == 1400 * per_minute
+    assert solution.target_rates["copper-ingot"] == 2000 * per_minute
+
+
+def test_a_supply_that_covers_the_whole_request_leaves_nothing_to_build(data: Dataset) -> None:
+    """Netting can take the remainder to zero, and zero machines is not a factory.
+
+    The blueprint would be empty: every item the URL asks for already arrives
+    on the player's own belt.  Refused by name rather than returned as a spec
+    with no groups, which nothing downstream can lay out or paste.
+    """
+    with pytest.raises(UnsupportedObjectiveError, match="already supplies"):
+        solve(data, _both_fed("copper-ingot", output=2000, supply=3000), time_limit_s=10.0)
+
+
+def test_a_partial_supply_on_an_intermediate_crafts_the_remainder(data: Dataset) -> None:
+    """The netting is per item, not per objective: an intermediate nets too.
+
+    100/min of gear needs 100/min of iron ingot; 10/min of it is declared, so
+    90/min is smelted here and the declared 10/min arrives on the belt beside
+    it.  Cutting the whole item to external (what a declared Input used to do)
+    built no smelter at all and asked the player for the full 100/min.
+    """
+    request = replace(
+        parse_url(EXAMPLE_URL),
+        objectives=(
+            Objective(
+                id="1",
+                target_id="gear",
+                value=Fraction(100),
+                unit=ObjectiveUnit.Items,
+                type=ObjectiveType.Output,
+            ),
+            Objective(
+                id="2",
+                target_id="iron-ingot",
+                value=Fraction(10),
+                unit=ObjectiveUnit.Items,
+                type=ObjectiveType.Input,
+            ),
+        ),
+    )
+    per_minute = target_rates(data, request)["gear"] / 100
+    solution = solve(data, request, time_limit_s=10.0)
+
+    by_recipe = {group.recipe_id: group for group in solution.groups}
+    assert set(by_recipe) == {"gear", "iron-ingot"}
+    assert by_recipe["gear"].crafts_per_second == 100 * per_minute
+    assert by_recipe["iron-ingot"].crafts_per_second == 90 * per_minute
+    assert solution.external_inputs["iron-ingot"] == 10 * per_minute
+    assert solution.external_inputs["iron-ore"] == 90 * per_minute

@@ -56,7 +56,7 @@ from flab2bp.rates.candidates import (
     CandidatePolicy,
     _build_candidates_canonical,
 )
-from flab2bp.rates.solve import InfeasibleError
+from flab2bp.rates.solve import InfeasibleError, supplied_rates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
 ExplicitStrategyName = Literal["freeform", "sequence-pair"]
@@ -660,6 +660,12 @@ def build(
             if selection.uses_proliferator
             else frozenset()
         )
+        # An item the URL itself declares as an Input is the player's own belt,
+        # so belting it in never invents an input however the flow lists it.
+        # It has to be exempt: a partial supply is netted, so FactorioLab's
+        # export shows the item's recipe running for the remainder and
+        # `external_items` cannot see the supply at all.
+        exempt |= frozenset(supplied_rates(data, request))
         legal: list[tuple[BuildSpec, tuple[str, ...]]] = []
         illegal: list[tuple[BuildSpec, tuple[str, ...]]] = []
         for spec in spec_set.candidates:

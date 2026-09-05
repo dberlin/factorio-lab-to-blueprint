@@ -891,21 +891,15 @@ def _verify_against_request_canonical(
             "you are building."
         )
 
-    supplied = {
-        o.target_id
-        for o in request.objectives
-        if o.type is ObjectiveType.Input and not o.is_recipe_objective
-    }
-    # An item the URL ALSO requests is not a contradiction: the Output
-    # objective outranks the supply declaration, so ``_resolve_chain`` builds
-    # it and a flow that produces it agrees with the URL.  Without this the
-    # export downloaded from a both-fed URL was refused as stale.
-    contradicted = sorted((supplied - wanted) & producible)
-    if contradicted:
-        raise FlowProvenanceError(
-            f"this URL supplies {contradicted!r} from outside, but the flow builds "
-            "it. The export predates that Input objective; re-download it."
-        )
+    # A supplied item the flow ALSO builds used to be refused here as a stale
+    # export.  It is not: an Input objective declares a bounded supply, and
+    # FactorioLab serves demand from it before crafting the remainder
+    # (``solve.supplied_rates``).  Its own export for a URL asking 2000/min of
+    # copper ingot while supplying 600/min runs the copper-ingot recipe on
+    # =70/3 arc smelters -- the item is supplied and built at once, and there is
+    # nothing in the recipe set that separates that from an export predating the
+    # objective.  ``cross_check`` still names a machine-count divergence, which
+    # is what a genuinely stale export shows up as.
 
 
 def pin_request(request: LabRequest, data: Dataset, flow: FlowSelection) -> LabRequest:

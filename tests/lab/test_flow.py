@@ -280,10 +280,10 @@ class TestStructuralAgreement:
     ) -> None:
         """A URL may ask for an item AND declare a supply of it.
 
-        The Output objective wins -- ``_resolve_chain`` builds the item rather
-        than belting it in -- so a flow that produces it agrees with the URL
-        instead of contradicting it.  Reading the Input objective alone here
-        refused a flow export for the very URL it came from.
+        FactorioLab nets the supply against the demand and builds the
+        remainder, so a flow that produces the item agrees with the URL instead
+        of contradicting it.  Reading the Input objective alone here refused a
+        flow export for the very URL it came from.
         """
         request = parse_url(GRAPHENE_URL)
         both_fed = replace(
@@ -301,10 +301,18 @@ class TestStructuralAgreement:
         )
         verify_against_request(pristine, data, both_fed)
 
-    def test_an_input_the_url_does_not_request_still_contradicts_the_flow(
+    def test_an_input_on_an_item_the_flow_builds_is_the_netting_case(
         self, pristine: FlowSelection, data: Dataset
     ) -> None:
-        """The check survives for every supplied item the URL does not ask for."""
+        """A supplied item the flow also builds is normal, not a stale export.
+
+        A declared Input is a bounded supply: FactorioLab serves demand from it
+        first and crafts the rest, so its own export shows the item's recipe
+        running at the remainder.  Refusing that here -- which is what the
+        classification did while a supply meant "never built" -- rejected every
+        export for a URL with a partial Input.  A genuinely stale export is
+        still named by :func:`cross_check`, which compares machine counts.
+        """
         request = parse_url(GRAPHENE_URL)
         supplied = replace(
             request,
@@ -319,8 +327,7 @@ class TestStructuralAgreement:
                 ),
             ),
         )
-        with pytest.raises(FlowProvenanceError, match="but the flow builds"):
-            verify_against_request(pristine, data, supplied)
+        verify_against_request(pristine, data, supplied)
 
 
 class TestPin:
