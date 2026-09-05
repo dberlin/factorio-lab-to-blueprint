@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from flab2bp.dsp import catalog, codec
 from flab2bp.lab.capture import UrlValidator, capture_flow_csv
@@ -43,6 +43,7 @@ from flab2bp.layout.base import (
     NoValidLayout,
     Placement,
     PlacementCompletion,
+    PlacementStats,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.freeform import FreeformLayout
@@ -189,7 +190,44 @@ def _raced_result(
         spec_label=spec_label,
         budget_s=budget_s,
         projection_failures=outcome.refusal_projection_failures,
+        stats={
+            "process_wall_time_s": outcome.process_wall_time_s,
+            "process_user_cpu_s": outcome.process_user_cpu_s,
+            "process_system_cpu_s": outcome.process_system_cpu_s,
+            "process_peak_rss_kib": outcome.process_peak_rss_kib,
+        },
     )
+
+
+def _postprocess_failure_stats(
+    placement: Placement,
+    *,
+    pipeline_compaction_time_s: float,
+    pipeline_finalization_time_s: float,
+    pipeline_validation_time_s: float,
+    pipeline_encoding_time_s: float,
+    attempt_started: float,
+    settlement_wait_s: float,
+    time_budget_s: float,
+    completion_grace_s: float,
+) -> PlacementStats:
+    """Snapshot phase and wall measurements before a refused attempt is discarded."""
+    stats = placement.stats.copy()
+    stats.update(
+        {
+            "pipeline_compaction_time_s": pipeline_compaction_time_s,
+            "pipeline_finalization_time_s": pipeline_finalization_time_s,
+            "pipeline_validation_time_s": pipeline_validation_time_s,
+            "pipeline_encoding_time_s": pipeline_encoding_time_s,
+        }
+    )
+    attempt_wall_s = time.monotonic() - attempt_started - settlement_wait_s
+    stats["attempt_wall_s"] = attempt_wall_s
+    stats["wall_overshoot_s"] = max(
+        0.0,
+        attempt_wall_s - time_budget_s - completion_grace_s,
+    )
+    return stats
 
 
 #: Outputs named in a title before it gives up and counts the rest.
@@ -829,6 +867,7 @@ def build(
                     strategy=sname,
                     reason=result.reason,
                     projection_failures=result.projection_failures,
+                    stats=cast(PlacementStats, result.stats),
                 )
                 refused.append(failure)
                 if on_progress is not None:
@@ -846,6 +885,8 @@ def build(
                 continue
             pipeline_compaction_time_s = 0.0
             pipeline_finalization_time_s = 0.0
+            pipeline_validation_time_s = 0.0
+            pipeline_encoding_time_s = 0.0
             placement = result
             # Candidate peers may finish later, and the previous arm's
             # settlement runs serially. Neither delay belongs to this attempt.
@@ -882,11 +923,14 @@ def build(
                     pipeline_compaction_time_s = time.monotonic() - phase_started
                 phase_started = time.monotonic()
                 try:
-                    placement = finalize.finalize_placement(
-                        placement,
-                        policy,
-                        cancelled=attempt_expired,
-                    )
+                    try:
+                        placement = finalize.finalize_placement(
+                            placement,
+                            policy,
+                            cancelled=attempt_expired,
+                        )
+                    finally:
+                        pipeline_finalization_time_s = time.monotonic() - phase_started
                 except finalize.ProjectionRefusal as exc:
                     reason = str(exc)
                     failure = LayoutAttemptFailure(
@@ -894,6 +938,17 @@ def build(
                         strategy=sname,
                         reason=reason,
                         projection_failures=_projection_records(exc.failures),
+                        stats=_postprocess_failure_stats(
+                            placement,
+                            pipeline_compaction_time_s=pipeline_compaction_time_s,
+                            pipeline_finalization_time_s=pipeline_finalization_time_s,
+                            pipeline_validation_time_s=pipeline_validation_time_s,
+                            pipeline_encoding_time_s=pipeline_encoding_time_s,
+                            attempt_started=attempt_started,
+                            settlement_wait_s=settlement_wait_s,
+                            time_budget_s=time_budget_s,
+                            completion_grace_s=completion_grace_s,
+                        ),
                     )
                     refused.append(failure)
                     if on_progress is not None:
@@ -937,6 +992,17 @@ def build(
                         candidate=spec.label,
                         strategy=sname,
                         reason=reason,
+                        stats=_postprocess_failure_stats(
+                            placement,
+                            pipeline_compaction_time_s=pipeline_compaction_time_s,
+                            pipeline_finalization_time_s=pipeline_finalization_time_s,
+                            pipeline_validation_time_s=pipeline_validation_time_s,
+                            pipeline_encoding_time_s=pipeline_encoding_time_s,
+                            attempt_started=attempt_started,
+                            settlement_wait_s=settlement_wait_s,
+                            time_budget_s=time_budget_s,
+                            completion_grace_s=completion_grace_s,
+                        ),
                     )
                     refused.append(failure)
                     if on_progress is not None:
@@ -951,8 +1017,6 @@ def build(
                             )
                         )
                     continue
-                finally:
-                    pipeline_finalization_time_s = time.monotonic() - phase_started
                 placement = replace(
                     placement,
                     completion=PlacementCompletion.COMPACTED_AND_FINALIZED,

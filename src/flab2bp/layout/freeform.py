@@ -20158,30 +20158,39 @@ class FreeformLayout:
                     )
                     compaction_started = time.monotonic()
                     try:
-                        compacted = finalize.compact_open_boundary_belts_certified(
-                            placement,
-                            spec,
-                            expect_power=True,
-                            cancelled=completion_cancelled,
-                        )
+                        try:
+                            compacted = finalize.compact_open_boundary_belts_certified(
+                                placement,
+                                spec,
+                                expect_power=True,
+                                cancelled=completion_cancelled,
+                            )
+                        finally:
+                            compaction_elapsed = time.monotonic() - compaction_started
+                            compaction_time_s += compaction_elapsed
+                            compaction_reserve_s = max(
+                                compaction_reserve_s,
+                                compaction_elapsed,
+                            )
                     except finalize.ProjectionCancelled:
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
-                    finally:
-                        compaction_elapsed = time.monotonic() - compaction_started
-                        compaction_time_s += compaction_elapsed
-                        compaction_reserve_s = max(compaction_reserve_s, compaction_elapsed)
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
                     placement = compacted.placement
                     finalize_started = time.monotonic()
                     try:
-                        placement = finalize.finalize_placement(
-                            placement,
-                            self.band_policy,
-                            cancelled=completion_cancelled,
-                        )
+                        try:
+                            placement = finalize.finalize_placement(
+                                placement,
+                                self.band_policy,
+                                cancelled=completion_cancelled,
+                            )
+                        finally:
+                            finalize_elapsed = time.monotonic() - finalize_started
+                            finalization_time_s += finalize_elapsed
+                            finalize_reserve_s = max(finalize_reserve_s, finalize_elapsed)
                     except finalize.ProjectionCancelled:
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
@@ -20302,10 +20311,6 @@ class FreeformLayout:
                                 (height, arrangement, True),
                             )
                         continue
-                    finally:
-                        finalize_elapsed = time.monotonic() - finalize_started
-                        finalization_time_s += finalize_elapsed
-                        finalize_reserve_s = max(finalize_reserve_s, finalize_elapsed)
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
