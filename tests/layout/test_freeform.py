@@ -7512,7 +7512,9 @@ def test_pack_window_keeps_pins_the_free_model_would_have_broken() -> None:
     assert windowed.width == 8
 
 
-def test_pack_window_pins_one_worker_and_a_deterministic_work_bound() -> None:
+def test_pack_window_pins_one_worker_and_a_deterministic_work_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Both solver parameters are load-bearing and neither is observable in a result.
 
     A window runs beside a packer that already saturates the box, so it takes one
@@ -7533,22 +7535,18 @@ def test_pack_window_pins_one_worker_and_a_deterministic_work_bound() -> None:
         seen.append(solver)
         return None
 
-    original = freeform._pack_result
-    try:
-        freeform._pack_result = _capture
-        for budget, work in ((4.0, 0.25), (0.1, 0.5)):
-            freeform._pack_window(
-                strips,
-                height=6,
-                width_bound=8,
-                direct_candidates={},
-                window=frozenset({0}),
-                fixed_at={1: (4, 0), 2: (6, 2)},
-                time_budget_s=budget,
-                deterministic_work=work,
-            )
-    finally:
-        freeform._pack_result = original
+    monkeypatch.setattr(freeform, "_pack_result", _capture)
+    for budget, work in ((4.0, 0.25), (0.1, 0.5)):
+        freeform._pack_window(
+            strips,
+            height=6,
+            width_bound=8,
+            direct_candidates={},
+            window=frozenset({0}),
+            fixed_at={1: (4, 0), 2: (6, 2)},
+            time_budget_s=budget,
+            deterministic_work=work,
+        )
 
     assert len(seen) == 2
     for solver, budget, expected in ((seen[0], 4.0, 0.25), (seen[1], 0.1, 0.1)):
@@ -20369,7 +20367,9 @@ def _sweep_over_a_stranded_first_candidate(
     heights: tuple[int, ...] = (20, 21),
     time_budget_s: float = 1.0,
     pack_width: int = 60,
-    pitch_requirements: Callable[..., tuple[ProjectionPitchRequirement, ...]] | None = None,
+    pitch_requirements: (
+        Callable[..., tuple[ProjectionPitchRequirement | None, ...]] | None
+    ) = None,
     replanned_strips: list[Strip] | None = None,
     telemetry: dict[str, float | str] | None = None,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[str]]:
@@ -20589,11 +20589,23 @@ def test_sweep_charges_refused_finalization_to_telemetry(
             )
         )
 
+    original_pitch_requirements = freeform._projection_pitch_requirements
+
+    def spend_refusal_handler_time(
+        placement: Placement,
+        strips: list[Strip],
+        failures: tuple[finalize.ProjectionFailure, ...],
+    ) -> tuple[ProjectionPitchRequirement | None, ...]:
+        result = original_pitch_requirements(placement, strips, failures)
+        now[0] += 7.0
+        return result
+
     result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
         monkeypatch,
         session=OperatorSession(),
         room_for_another=lambda *_args, **_kwargs: False,
         finalize_placement=refuse_finalization,
+        pitch_requirements=spend_refusal_handler_time,
         wires=frozenset({(20, 0)}),
         heights=(20,),
         telemetry=telemetry,

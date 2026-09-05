@@ -475,6 +475,7 @@ class LayoutAttemptFailure:
     strategy: str | None
     reason: str
     projection_failures: tuple[ProjectionFailureRecord, ...] = ()
+    stats: PlacementStats = field(default_factory=PlacementStats)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -482,6 +483,9 @@ class LayoutAttemptFailure:
             "projection_failures",
             tuple(dict.fromkeys(self.projection_failures)),
         )
+        stats = PlacementStats()
+        stats.update(self.stats)
+        object.__setattr__(self, "stats", stats)
 
     def __str__(self) -> str:
         pair = "/".join(part for part in (self.strategy, self.candidate) if part)
