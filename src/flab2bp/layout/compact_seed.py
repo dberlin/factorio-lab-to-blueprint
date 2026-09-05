@@ -397,18 +397,13 @@ class CompactTopologyBeam:
                 )
                 model.add(row_gap >= 1).only_enforce_if(direct)
                 model.add(row_gap <= catalog.SORTER_MAX_REACH).only_enforce_if(direct)
-                origin_delta = model.new_int_var(
-                    -(target.consumer_span - 1),
-                    target.producer_span - 1,
+                origin_delta = model.new_int_var_from_domain(
+                    cp_model.Domain.from_values(target.origin_deltas),
                     f"direct_origin_delta{target.producer}_{target.consumer}",
                 )
                 model.add(origin_delta == x[target.consumer] - x[target.producer]).only_enforce_if(
                     direct
                 )
-                model.add_allowed_assignments(
-                    [origin_delta],
-                    [(delta,) for delta in target.origin_deltas],
-                ).only_enforce_if(direct)
                 direct_successes.append(direct)
             width_weight = (
                 len(hpwl_terms) * (self.width_bound + self.problem.outline_height)
@@ -915,18 +910,13 @@ def _build_model(
             )
             model.add(row_gap >= 1).only_enforce_if(success)
             model.add(row_gap <= catalog.SORTER_MAX_REACH).only_enforce_if(success)
-            origin_delta = model.new_int_var(
-                -(target.consumer_span - 1),
-                target.producer_span - 1,
+            origin_delta = model.new_int_var_from_domain(
+                cp_model.Domain.from_values(target.origin_deltas),
                 f"direct_origin_delta_{direct_index}_{combo_index}",
             )
             model.add(origin_delta == x[target.consumer] - x[target.producer]).only_enforce_if(
                 success
             )
-            model.add_allowed_assignments(
-                [origin_delta],
-                [(delta,) for delta in target.origin_deltas],
-            ).only_enforce_if(success)
             successes.append(success)
             direct_successes.append((key, success))
         missed = model.new_bool_var(f"direct_missed_{direct_index}")

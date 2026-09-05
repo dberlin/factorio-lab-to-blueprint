@@ -240,13 +240,15 @@ class DirectInsertTarget:
             or any(type(delta) is not int for delta in self.origin_deltas)
             or self.origin_deltas != tuple(sorted(set(self.origin_deltas)))
             or any(
-                not -(self.consumer_span - 1) <= delta <= self.producer_span - 1
+                not -(self.consumer_span - 1) - catalog.SORTER_MAX_REACH
+                <= delta
+                <= self.producer_span - 1 + catalog.SORTER_MAX_REACH
                 for delta in self.origin_deltas
             )
         ):
             raise ValueError(
                 "direct-insert origin deltas must be a non-empty sorted unique tuple "
-                "inside the lane-overlap range"
+                "inside sorter reach of both lane spans"
             )
 
 

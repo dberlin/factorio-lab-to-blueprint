@@ -2140,18 +2140,51 @@ def test_direct_origin_deltas_memo_serves_value_equal_strips() -> None:
         if item == "iron-ingot" and domain is CargoDomain.UNSPRAYED
     )
 
-    filled = freeform._direct_origin_deltas(source, destination, lane, "iron-ingot")
+    filled = freeform._direct_origin_deltas(
+        source,
+        destination,
+        lane,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
+    )
     assert filled
-    assert freeform._direct_origin_deltas(twin_source, twin_destination, lane, "iron-ingot") == (
-        filled
+    assert (
+        freeform._direct_origin_deltas(
+            twin_source,
+            twin_destination,
+            lane,
+            "iron-ingot",
+            source_rate=F(1),
+            required_rate=F(4),
+        )
+        == filled
     )
     assert len(freeform._DIRECT_ORIGIN_DELTAS_MEMO) == 1
 
     # An unplanned item has no input attachment plan, so the answer is the
     # empty tuple -- which the memo must store rather than treat as a miss.
-    assert freeform._direct_origin_deltas(source, destination, lane, "unplanned-item") == ()
     assert (
-        freeform._direct_origin_deltas(twin_source, twin_destination, lane, "unplanned-item") == ()
+        freeform._direct_origin_deltas(
+            source,
+            destination,
+            lane,
+            "unplanned-item",
+            source_rate=F(1),
+            required_rate=F(4),
+        )
+        == ()
+    )
+    assert (
+        freeform._direct_origin_deltas(
+            twin_source,
+            twin_destination,
+            lane,
+            "unplanned-item",
+            source_rate=F(1),
+            required_rate=F(4),
+        )
+        == ()
     )
     assert len(freeform._DIRECT_ORIGIN_DELTAS_MEMO) == 2
     freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
@@ -2257,6 +2290,8 @@ def test_direct_geometry_key_classifies_every_strip_field() -> None:
         cast(Strip, cast(object, destination_recorder)),
         lane,
         "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
     )
     assert deltas
     strip_field_names = {field.name for field in dataclasses.fields(Strip)}
@@ -3119,7 +3154,14 @@ def _direct_flow_order_strips() -> tuple[Strip, Strip]:
 def test_direct_origin_deltas_reject_columns_before_the_final_source_injection() -> None:
     source, destination = _direct_flow_order_strips()
 
-    deltas = _direct_origin_deltas(source, destination, 0, "iron-ingot")
+    deltas = _direct_origin_deltas(
+        source,
+        destination,
+        0,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
+    )
 
     assert 5 not in deltas, "source column 5 is before its final injection at column 9"
 
@@ -3127,15 +3169,47 @@ def test_direct_origin_deltas_reject_columns_before_the_final_source_injection()
 def test_direct_origin_deltas_reject_columns_after_the_first_destination_pickup() -> None:
     source, destination = _direct_flow_order_strips()
 
-    deltas = _direct_origin_deltas(source, destination, 0, "iron-ingot")
+    deltas = _direct_origin_deltas(
+        source,
+        destination,
+        0,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
+    )
 
-    assert 7 not in deltas, "destination column 3 is after its first pickup at column 2"
+    assert 15 not in deltas, "the only destination columns at that offset follow a pickup"
 
 
 def test_direct_origin_deltas_keep_source_tail_to_destination_head_alignment() -> None:
     source, destination = _direct_flow_order_strips()
 
-    assert _direct_origin_deltas(source, destination, 0, "iron-ingot") == (9, 10, 11)
+    assert (
+        _direct_origin_deltas(
+            source,
+            destination,
+            0,
+            "iron-ingot",
+            source_rate=F(1),
+            required_rate=F(4),
+        )
+        == tuple(range(6, 15))
+    )
+
+
+def test_direct_origin_deltas_admit_a_bridge_after_sufficient_partial_supply() -> None:
+    source, destination = _direct_flow_order_strips()
+
+    deltas = _direct_origin_deltas(
+        source,
+        destination,
+        0,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(2),
+    )
+
+    assert 5 in deltas, "two upstream producers satisfy the bridge without waiting for all four"
 
 
 def _direct_flow_order_canvas(
@@ -3226,15 +3300,80 @@ def test_bridge_refuses_emitted_lane_attachments_outside_flow_safe_order(
         destination_pickup_column,
     )
 
-    assert _bridge(
-        canvas,
-        source,
-        destination,
-        {"iron-ingot": F(1)},
-        "iron-ingot",
-        standing,
-        direct,
-    ) is None
+    assert (
+        _bridge(
+            canvas,
+            source,
+            destination,
+            {"iron-ingot": F(1)},
+            "iron-ingot",
+            standing,
+            direct,
+            source_rate=F(1),
+            required_rate=F(1),
+        )
+        is None
+    )
+
+
+def test_bridge_emits_after_enough_upstream_supply_before_the_final_injection() -> None:
+    canvas, source, destination, _standing, direct = _direct_flow_order_canvas(4, 6)
+    second_machine = canvas.add(
+        replace(
+            canvas.buildings[0],
+            x=5,
+        ),
+        solid=True,
+    )
+    canvas.buildings.append(
+        replace(
+            canvas.buildings[8],
+            x=6,
+            x2=6,
+            input_obj=second_machine,
+            output_obj=4,
+        )
+    )
+    standing = slots.sorter_seat_boxes(canvas.buildings)
+
+    assert (
+        _bridge(
+            canvas,
+            source,
+            destination,
+            {"iron-ingot": F(1)},
+            "iron-ingot",
+            standing,
+            direct,
+            source_rate=F(1),
+            required_rate=F(1),
+        )
+        == direct
+    )
+    assert canvas.buildings[-1].x == 5
+
+
+def test_bridge_uses_a_flow_safe_diagonal_when_no_shared_column_is_safe() -> None:
+    canvas, source, destination, _standing, direct = _direct_flow_order_canvas(4, 6)
+    source = replace(source, x0=6)
+    standing = slots.sorter_seat_boxes(canvas.buildings)
+
+    assert (
+        _bridge(
+            canvas,
+            source,
+            destination,
+            {"iron-ingot": F(1)},
+            "iron-ingot",
+            standing,
+            direct,
+            source_rate=F(1),
+            required_rate=F(1),
+        )
+        == direct
+    )
+    bridge = canvas.buildings[-1]
+    assert (bridge.x, bridge.x2) == (6, 5)
 
 
 def test_bridge_emits_a_source_tail_to_destination_head_alignment() -> None:
@@ -3249,6 +3388,8 @@ def test_bridge_emits_a_source_tail_to_destination_head_alignment() -> None:
             "iron-ingot",
             standing,
             direct,
+            source_rate=F(1),
+            required_rate=F(1),
         )
         == direct
     )
@@ -3259,7 +3400,7 @@ def _forced_direct_pack(strips: list[Strip], spec: BuildSpec) -> freeform._Pack:
     """Place one proved direct relation even when width outranks its reward."""
     candidates = _direct_net_candidates(strips, spec)
     ((source, destination), candidate) = next(iter(candidates.items()))
-    delta_x = candidate.origin_deltas[0]
+    delta_x = candidate.origin_deltas[len(candidate.origin_deltas) // 2]
     delta_y = strips[source].height + 1
     row_gap = delta_y + candidate.cons_row - candidate.prod_row
     assert 1 <= row_gap <= catalog.SORTER_MAX_REACH
@@ -3394,7 +3535,9 @@ class TestDirectInsertion:
             input_obj=1,
             output_obj=0,
         )
-        canvas = _Canvas(buildings=[machine, *lane, standing])
+        source_machine = replace(machine, y=-3, owner_strip=0, recipe_id=1)
+        lane[2] = replace(lane[2], input_obj=6)
+        canvas = _Canvas(buildings=[machine, *lane, standing, source_machine])
         canvas.blocked = {(b.x, b.y, 0): i + 1 for i, b in enumerate(lane)}
         src = _Port(3, 5, 0, 5, 6, (3, 4), 1)
         dst = _Port(1, 5, 2, 5, 6, (1, 2), 1)
@@ -3407,6 +3550,8 @@ class TestDirectInsertion:
             "iron-ingot",
             boxes,
             DirectInsertId(0, 1, "iron-ingot", CargoDomain.UNSPRAYED),
+            source_rate=F(1),
+            required_rate=F(1),
         )
         bridge = canvas.buildings[-1]
         assert catalog.is_sorter(bridge.item_id)
@@ -3476,7 +3621,7 @@ class TestDirectInsertion:
             if not catalog.is_sorter(b.item_id):
                 continue
             assert b.x2 is not None and b.y2 is not None
-            span = abs(b.x - b.x2) + abs(b.y - b.y2)
+            span = max(abs(b.x - b.x2), abs(b.y - b.y2))
             assert 1 <= span <= catalog.SORTER_MAX_REACH
             assert b.z == (b.z2 or 0), "sorters never span altitudes"
 
