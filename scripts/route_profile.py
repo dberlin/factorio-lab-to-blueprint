@@ -30,7 +30,7 @@ import sys
 import time
 from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -301,16 +301,12 @@ def install(tally: Tally) -> Callable[[], None]:
         orig_landmarks(self, count)
         tally.add("build_landmarks", time.perf_counter() - t0)
 
-    def reserve(
-        canvas: freeform._Canvas,
-        nets: list[freeform._Net],
-        *,
-        twice: Collection[Cell] = (),
-        failed_ports: set[Cell] | None = None,
-        demands: dict[Cell, tuple[int, int, int]] | None = None,
-    ) -> int:
+    # Signature-agnostic on purpose: this only times the call, and pinning the
+    # parameter list here is what broke the harness when the real
+    # `_reserve_port_access` grew `boundary`/`deadline`.
+    def reserve(*args: Any, **kwargs: Any) -> Any:
         t0 = time.perf_counter()
-        out = orig_reserve(canvas, nets, twice=twice, failed_ports=failed_ports, demands=demands)
+        out = orig_reserve(*args, **kwargs)
         tally.add("reserve_port_access", time.perf_counter() - t0)
         return out
 
