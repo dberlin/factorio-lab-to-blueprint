@@ -1266,6 +1266,49 @@ def _staged_static_clearance_key(
 _STAGED_CLEARANCE_KEYS_MEMO: dict[tuple[object, ...], frozenset[StagedStaticClearanceKey]] = {}
 _STAGED_CLEARANCE_KEYS_MEMO_LIMIT = 65536
 
+#: The ``Strip`` fields the memo key above holds, and the ones it deliberately
+#: leaves out.  Together they must PARTITION ``dataclasses.fields(Strip)``,
+#: which ``test_staged_clearance_key_classifies_every_strip_field`` enforces: a
+#: new field is a test failure until somebody decides which side it belongs
+#: on.  ``cargo_domain`` and ``physical_variant`` gate the memo rather than
+#: feed it, so they sit in the unread set despite being read; ``machine_row``
+#: and ``row_of_input`` are derived properties/methods, not ``Strip`` fields,
+#: so they cannot appear in either set even though the key reads them too.
+_STAGED_CLEARANCE_KEY_FIELDS: frozenset[str] = frozenset(
+    {
+        "item_id",
+        "model_index",
+        "mw",
+        "mh",
+        "yaw",
+        "pw",
+        "machines",
+        "west_channel",
+    }
+)
+_UNREAD_BY_STAGED_CLEARANCE: frozenset[str] = frozenset(
+    {
+        "group_key",
+        "recipe_id",
+        "cargo_domain",
+        "ph",
+        "in_above",
+        "out_lanes",
+        "in_below",
+        "lane_plan",
+        "attachment_plan",
+        "box_height",
+        "physical_variant",
+        "port_dock_plan",
+        "mode_params",
+        "flank_outputs",
+        "family_id",
+        "machine_start",
+        "tail_extension",
+        "pilers",
+    }
+)
+
 
 def _staged_static_clearance_keys(
     strip: Strip,

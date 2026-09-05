@@ -3688,7 +3688,7 @@ def _sequence_reservation_strips(strips: Sequence[Strip]) -> list[Strip]:
 #:
 #: * the selected ``StripVariant`` -- footprint, yaw, pitches, lane plan,
 #:   attachment plan, port dock plan and box height all come off it.  The
-#:   VARIANT, not ``variant_indices[index]``: ``_stage_variant_update`` drops
+#:   VARIANT, not ``variant_indices[index]``: ``enable_variant_stage_boundary`` drops
 #:   superseded entries from one strip's variant table and appends a padded
 #:   pose while ``instance_ids`` stays put, so within a single production run
 #:   one variant index names two different poses.  ``StripVariant`` is a frozen

@@ -5409,13 +5409,25 @@ def test_selected_strips_memo_returns_equal_strips_and_reuses_them() -> None:
     plain = _selected_strips(strips, problem, indices, band_policy=policy)
 
     assert first == plain == second
-    assert memo and all(a is b or a == b for a, b in zip(first, second, strict=True))
+    # Equality alone proves nothing here: a bypassed memo still runs the same
+    # ``replace`` and produces an equal-but-fresh strip.  Pin identity
+    # instead.  The coater west_channel lift builds a NEW object on every
+    # call even from a cached pre-lift strip, so only non-coater strips are
+    # reused verbatim across the two memoized calls.
+    assert len(memo) == len(first)
+    non_coater_indices = [
+        index
+        for index, strip in enumerate(first)
+        if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY
+    ]
+    assert non_coater_indices
+    assert all(second[index] is first[index] for index in non_coater_indices)
 
 
 def test_selected_strips_memo_keys_name_the_selected_variant() -> None:
     """The key carries the variant itself, never the index that named it.
 
-    ``_stage_variant_update`` drops superseded entries and appends a padded
+    ``enable_variant_stage_boundary`` drops superseded entries and appends a padded
     variant while ``instance_ids`` stays put, so within one run ``(index,
     instance_id, variant index)`` can name two different poses.  Keying on the
     selected ``StripVariant`` is what keeps the memo exact across that rebuild.

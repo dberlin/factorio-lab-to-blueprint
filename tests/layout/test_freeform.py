@@ -2252,6 +2252,41 @@ def test_direct_geometry_key_classifies_every_strip_field() -> None:
     assert recorder.read == freeform._DIRECT_GEOMETRY_KEY_FIELDS | {"physical_variant"}
 
 
+def test_staged_clearance_key_classifies_every_strip_field() -> None:
+    """Every ``Strip`` field is either in the clearance memo key or declared unread.
+
+    A NEW ``Strip`` FIELD FAILS THIS TEST UNTIL IT IS CLASSIFIED, which is the
+    point: the memo key built in ``_staged_static_clearance_keys`` is exact
+    only while its tuple IS the set of fields that function and
+    ``_staged_static_clearance_keys_uncached`` read, and a field that quietly
+    joins the read set without joining the key makes the memo serve wrong
+    answers with nothing else to see.
+    """
+    strip = _coater_strip_with_variant()
+    recorder = _FieldRecordingStrip(strip)
+
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    keys = freeform._staged_static_clearance_keys(cast(Strip, cast(object, recorder)))
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+
+    assert keys == freeform._staged_static_clearance_keys(strip)
+    freeform._STAGED_CLEARANCE_KEYS_MEMO.clear()
+    assert {field.name for field in dataclasses.fields(Strip)} == (
+        freeform._STAGED_CLEARANCE_KEY_FIELDS | freeform._UNREAD_BY_STAGED_CLEARANCE
+    )
+    assert not (freeform._STAGED_CLEARANCE_KEY_FIELDS & freeform._UNREAD_BY_STAGED_CLEARANCE)
+    # ``cargo_domain`` and ``physical_variant`` are the gate; ``machine_row``,
+    # ``in_lanes`` and ``row_of_input`` are derived properties/methods, not
+    # ``Strip`` fields -- all five are read but none is part of the key.
+    assert recorder.read == freeform._STAGED_CLEARANCE_KEY_FIELDS | {
+        "cargo_domain",
+        "physical_variant",
+        "machine_row",
+        "in_lanes",
+        "row_of_input",
+    }
+
+
 def test_requested_output_is_unsprayed_beside_proliferated_internal_lane() -> None:
     spec = spray_domain_spec(clean=False, sprayed=True, boundary=True)
 
