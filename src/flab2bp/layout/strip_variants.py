@@ -1690,10 +1690,28 @@ def generate_strip_families(
 
     groups = _adapt(spec)
     families: list[StripFamily] = []
-    for plan in _logical_strip_plans(
-        spec,
-        prefer_shared_proliferation=prefer_shared_proliferation,
-    ):
+    try:
+        plans = tuple(
+            _logical_strip_plans(
+                spec,
+                prefer_shared_proliferation=prefer_shared_proliferation,
+            )
+        )
+    except (ValueError, KeyError) as exc:
+        # `_logical_strip_plans` and `_merge_lanes` speak ValueError to each
+        # other; every caller of this function -- both strategies, the race
+        # and the pipeline -- catches only NoValidLayout, so a plan that
+        # cannot be made used to escape as a CRASH.  Same seam and same
+        # shape as `_machine_cap`'s early refusal below.
+        raise NoValidLayout(
+            f"the spec cannot be planned into strips: {exc}",
+            spec_label=spec.label,
+            budget_s=0.0,
+            attempt_reasons=(),
+            attempt_failures=(),
+            projection_failures=(),
+        ) from exc
+    for plan in plans:
         family_id = StripFamilyId(plan.group_key, plan.shard_index)
         building = catalog.building(plan.item_id)
         input_lanes, output_lanes = _logical_lanes(plan, spec=spec)

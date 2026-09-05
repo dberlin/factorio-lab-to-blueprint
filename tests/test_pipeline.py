@@ -35,10 +35,12 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
+from flab2bp.layout.strip_variants import generate_strip_families
 from flab2bp.rates.candidates import (
     DEFAULT_CANDIDATE_POLICIES,
     CandidatePolicy,
     _build_candidates_canonical,
+    build_candidates,
 )
 from flab2bp.spec import BeltTier, BuildSpec, BuildSpecSet, MachineGroup
 from flab2bp.web.payload import describe
@@ -1011,6 +1013,27 @@ DEUTERON_URL = (
     ".XSrGdHvu4K6TCOet6YQVnLWAG3weOWbP4O2.JybJOxSjqU--ZbKCnya.8pIc3n.hjeKr06GWYPr6KWtEHNHgDq7"
     "ALbgHG-UFvCIsNCwRSg0b07a9RKXOtTQPce4DLu01vA__&v=11"
 )
+
+UNIVERSE_MATRIX_90_URL = (
+    "https://factoriolab.github.io/dsp/list?o=universe-matrix*90&ibe=conveyor-belt-3"
+    "&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11"
+)
+
+
+def test_universe_matrix_at_90_per_minute_never_crashes_strip_planning() -> None:
+    """Until 2026-09-05 this URL escaped both strategies as a ValueError from
+    `_logical_strip_plans`; a plan that cannot be made is a refusal."""
+    spec = build_candidates(
+        load_vendored(),
+        parse_url(UNIVERSE_MATRIX_90_URL),
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+    ).candidates[0]
+    try:
+        families = generate_strip_families(spec)
+    except NoValidLayout as refusal:
+        assert "cannot be planned into strips" in refusal.reason
+    else:
+        assert len(families) >= 40
 
 
 def _with_belt(

@@ -135,6 +135,20 @@ def test_a_single_machine_over_the_ceiling_is_refused_early_with_the_rate() -> N
         generate_strip_families(_rated_spec(Fraction(31)))
 
 
+def test_an_unplannable_shard_is_a_refusal_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_logical_strip_plans` speaks ValueError; every caller of
+    `generate_strip_families` speaks NoValidLayout.  The boundary is here."""
+
+    def unplannable(*_args: object, **_kwargs: object) -> tuple[()]:
+        raise ValueError("hydrogen: destinations ['a', 'b'] have to share one output lane")
+
+    monkeypatch.setattr(strip_variants_module, "_logical_strip_plans", unplannable)
+    with pytest.raises(NoValidLayout, match=r"cannot be planned into strips.*hydrogen") as caught:
+        generate_strip_families(_rated_spec(Fraction(4)))
+    assert caught.value.spec_label == _rated_spec(Fraction(4)).label
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
 def test_sequence_families_keep_same_group_feedback_destination(
     refined_oil_feedback_spec: BuildSpec,
 ) -> None:
