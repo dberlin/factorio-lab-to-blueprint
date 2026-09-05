@@ -3057,11 +3057,15 @@ def _direct_origin_deltas_uncached(
         for machine in range(destination.machines)
         for attachment in destination_plan.attachments
     )
-    source_columns = sorted(
-        column
-        for column in _direct_clear_columns(source, source_plan, source.width)
-        if column > last_source_injection
-    )
+    if _piler_plan_for_output(source, source_lane) is not None:
+        # Emission replaces the original lane with one belt after the piler.
+        source_columns = (source.width + source.tail_extension,)
+    else:
+        source_columns = tuple(
+            column
+            for column in _direct_clear_columns(source, source_plan, source.width)
+            if column > last_source_injection
+        )
     destination_span = destination.input_lane_tiles(destination.lane_of_input(item))
     destination_columns = sorted(
         column

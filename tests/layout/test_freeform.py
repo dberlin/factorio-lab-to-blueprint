@@ -3082,35 +3082,38 @@ def test_direct_column_delta_work_is_linear_in_packed_bytes(
     assert CountedBytearray.writes <= (len(source) + len(destination) + extraction_reads)
 
 
+def _strip_with_attachment_column(strip: Strip, kind: str, column: int) -> Strip:
+    plans = []
+    probe = slots.probe_building(strip.item_id, strip.yaw)
+    for plan in strip.attachment_plan:
+        if plan.lane.kind != kind:
+            plans.append(plan)
+            continue
+        pose = slots.attachable_columns(probe, plan.lane_y)[column]
+        plans.append(
+            replace(
+                plan,
+                attachments=tuple(
+                    replace(
+                        attachment,
+                        column=column,
+                        cell=pose.cell,
+                        slot=pose.slot,
+                        span=pose.span,
+                    )
+                    for attachment in plan.attachments
+                ),
+            )
+        )
+    return replace(strip, attachment_plan=tuple(plans))
+
+
 def _direct_flow_order_strips() -> tuple[Strip, Strip]:
     source, destination = plan_strips(two_stage_spec(), strip_len=6)
-
-    def with_column(strip: Strip, kind: str, column: int) -> Strip:
-        plans = []
-        probe = slots.probe_building(strip.item_id, strip.yaw)
-        for plan in strip.attachment_plan:
-            if plan.lane.kind != kind:
-                plans.append(plan)
-                continue
-            pose = slots.attachable_columns(probe, plan.lane_y)[column]
-            plans.append(
-                replace(
-                    plan,
-                    attachments=tuple(
-                        replace(
-                            attachment,
-                            column=column,
-                            cell=pose.cell,
-                            slot=pose.slot,
-                            span=pose.span,
-                        )
-                        for attachment in plan.attachments
-                    ),
-                )
-            )
-        return replace(strip, attachment_plan=tuple(plans))
-
-    return with_column(source, "output", 0), with_column(destination, "input", 2)
+    return (
+        _strip_with_attachment_column(source, "output", 0),
+        _strip_with_attachment_column(destination, "input", 2),
+    )
 
 
 def test_direct_origin_deltas_reject_columns_before_the_final_source_injection() -> None:
@@ -19385,6 +19388,40 @@ def test_one_planned_piler_extends_its_producer_strip_and_box_by_three() -> None
     assert producer.tail_extension == 3
     assert _box(producer)[0] == _box(unextended)[0] + 3
     assert all(not strip.pilers for strip in strips if strip is not producer)
+
+
+def test_direct_candidate_uses_the_emitted_post_piler_tail() -> None:
+    spec = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
+    strips = plan_strips(spec, strip_len=1)
+    source_index, source = next(
+        (index, strip)
+        for index, strip in enumerate(strips)
+        if strip.recipe_id == "iron-ingot"
+    )
+    destination_index, destination = next(
+        (index, strip)
+        for index, strip in enumerate(strips)
+        if strip.recipe_id == "gear"
+    )
+    strips[destination_index] = _strip_with_attachment_column(destination, "input", 2)
+
+    canvas = _Canvas()
+    _inputs, outputs, _sorters, _nets = _emit_strip(
+        canvas,
+        source,
+        0,
+        0,
+        2003,
+        catalog.building(2003).model_index,
+        {},
+        owner_strip=source_index,
+    )
+    emitted_tail = next(iter(outputs.values()))
+    candidate = _direct_net_candidates(strips, spec)[source_index, destination_index]
+
+    assert emitted_tail.tiles == (emitted_tail.belt,)
+    assert emitted_tail.x == source.width + source.tail_extension
+    assert candidate.origin_deltas == (emitted_tail.x - 1, emitted_tail.x)
 
 
 def test_belt_port_output_starts_unstacked_and_emits_one_piler() -> None:
