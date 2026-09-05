@@ -10,37 +10,37 @@ Configuration was `strategy="best"`, `time_budget_s=30`, `race=True`, `share=Tru
 
 Raw evidence:
 
-- `experiment1-serial.json` at instrumentation commit `b51b6cb`
-- `experiment1-three-way.json` at instrumentation commit `b51b6cb`
+- `experiment1-serial.json` at corrected instrumentation commit `9315500`
+- `experiment1-three-way.json` at corrected instrumentation commit `9315500`
 - `experiments2-4-three-way-audit.json` with audit prototypes at `d3e15d1`
 
-The audit prototypes were subsequently reverted. No E2-E4 pruning or refusal path remains live.
+The E1 profiles were rerun after correcting Freeform preparation timing, CP outcome state, phase-finally accounting, and RSS normalization. The E2-E4 audit remains historical evidence from `d3e15d1`: its SequencePair helper, detailed-route, separator, and end-to-end measurements do not depend on the corrected Freeform preparation counter. Its raw Freeform `preparation_time_s` values predate the correction and are excluded from every E2-E4 verdict. The audit prototypes were subsequently reverted; no E2-E4 pruning or refusal path remains live.
 
 ## Experiment 1 — exact CPU and phase profile: STOP on preservation gate
 
-Both baseline profiles produced all six expected attempts, all six were `CLEAN`, and neither had a refusal. The measured winners did not preserve a common key and did not reproduce the historical `(4176,2297)` key:
+Both corrected profiles produced all six expected attempts, all six were `CLEAN`, and neither had a refusal. Every per-attempt key is recorded below and in the raw records. The measured winners did not preserve a common key and did not reproduce the historical `(4176,2297)` key:
 
 | mode | wall | summed child CPU | winner |
 |---|---:|---:|---|
-| serial candidates | 65.831 s | 90.992 s | all-products / SequencePair `(4453,2506)` |
-| three-way candidates | 27.857 s | 97.700 s | all-products / SequencePair `(3960,2542)` |
+| serial candidates | 66.492 s | 97.226 s | all-products / SequencePair `(3960,2542)` |
+| three-way candidates | 28.150 s | 96.253 s | all-products / SequencePair `(4453,2506)` |
 
-Thus candidate concurrency overlapped work but did not establish CPU savings: wall fell 37.973 s while measured child CPU rose 6.709 s. The profile is useful, but the winner-preservation gate is not met.
+Candidate concurrency overlapped work and reduced wall by 38.342 s. The 0.973 s (1.0%) child-CPU difference is not evidence of CPU savings from concurrency. The winner-preservation gate is not met.
 
-Serial attempt evidence (wall, process CPU, peak RSS, dominant named phases):
+Corrected serial attempt evidence (wall, process CPU, peak RSS, dominant named phases):
 
 | candidate / strategy | key | wall | CPU | peak RSS | named phases |
 |---|---:|---:|---:|---:|---|
-| no-proliferator / Freeform | `(8030,2983)` | 13.927 s | 3.811 s | 175.3 MiB | prep 1.723, detailed 0.715, finalize 0.841 s |
-| no-proliferator / SequencePair | `(8030,2951)` | 13.908 s | 11.819 s | 195.1 MiB | prep 2.025, detailed 5.415, completion/validation 0.850 s |
-| all-products / Freeform | `(5355,2869)` | 25.670 s | 11.448 s | 204.1 MiB | prep 7.233, detailed 1.092, finalize 2.334 s |
-| all-products / SequencePair | `(4453,2506)` | 25.373 s | 23.303 s | 226.4 MiB | prep 14.232, global 2.094, detailed 0.992, completion/validation 1.961 s |
-| output-products / Freeform | `(5856,2684)` | 25.046 s | 17.741 s | 204.7 MiB | prep 12.879, detailed 7.970, finalize 1.790 s |
-| output-products / SequencePair | `(5394,2555)` | 25.094 s | 22.870 s | 251.4 MiB | prep 7.394, global 2.589, detailed 5.659, completion/validation 0.982 s |
+| no-proliferator / Freeform | `(8030,2983)` | 13.325 s | 6.098 s | 186.8 MiB | prep 1.453, detailed 1.102, finalize 1.343 s |
+| no-proliferator / SequencePair | `(8030,2951)` | 13.297 s | 10.539 s | 189.9 MiB | prep 1.812, detailed 4.027, completion/validation 1.311 s |
+| all-products / Freeform | `(5355,2869)` | 26.215 s | 13.390 s | 209.2 MiB | prep 6.973, detailed 1.257, finalize 2.627 s |
+| all-products / SequencePair | `(3960,2542)` | 26.058 s | 23.380 s | 222.4 MiB | prep 12.497, global 1.438, detailed 1.211, completion/validation 2.360 s |
+| output-products / Freeform | `(5856,2684)` | 25.361 s | 22.708 s | 205.0 MiB | prep 6.146, detailed 11.278, finalize 2.809 s |
+| output-products / SequencePair | `(5394,2555)` | 25.361 s | 21.112 s | 236.7 MiB | prep 7.468, global 1.993, detailed 5.120, completion/validation 1.064 s |
 
-The three-way record independently shows the same component gate: preparation exceeded one second in all six attempts; detailed routing exceeded one second in five attempts; SequencePair global routing exceeded one second in two attempts; Freeform finalization exceeded one second in all three attempts; and SequencePair completion/validation exceeded one second in one attempt. Freeform CP-SAT packing was only 0.186–0.532 s serial and 0.291–0.514 s three-way, below the component gate. Full CP deterministic time/status/objective/bound values are in the raw files. Pipeline compaction/finalization were zero because these placements arrived `COMPACTED_AND_FINALIZED`; pipeline validation and encoding are separately recorded. SequencePair's existing `validation_time_s` measures its atomic compact/finalize/certify adapter as one completion phase, so the record does not claim an internal split that was not observed.
+The corrected three-way record independently shows the same component gate: preparation exceeded one second in all six attempts; detailed routing exceeded one second in all six serial attempts and five three-way attempts; SequencePair global routing exceeded one second in two serial attempts and one three-way attempt; Freeform finalization exceeded one second in all three attempts in both modes; and SequencePair completion/validation exceeded one second in all three serial attempts and two three-way attempts. Freeform CP-SAT packing was only 0.299–0.638 s serial and 0.317–0.660 s three-way, below the one-second component gate. Full CP deterministic time/status/objective/bound values are in the raw files. Pipeline compaction/finalization were zero because these placements arrived `COMPACTED_AND_FINALIZED`; pipeline validation and encoding are separately recorded. SequencePair's existing `validation_time_s` is its measured completion/validation span.
 
-Prepared-bound totals in the serial SequencePair attempts were 5/4/6 candidates, 0/1/0 hits, 0/1/0 skips, and zero accepted-placement violations. The three-way profile was 4/4/6 candidates, 0/1/0 hits, 0/1/0 skips, and zero violations.
+Prepared-bound totals in the serial SequencePair attempts were 3/4/5 candidates, 0/1/0 hits, 0/1/0 skips, and zero accepted-placement violations. The three-way profile was 3/3/5 candidates, 0/1/0 hits, 0/1/0 skips, and zero violations.
 
 ## Experiment 2 — obstacle-aware prepared route floor: STOP
 
@@ -54,7 +54,7 @@ The audit-only graph retained immutable prepared occupancy, route bounds, levels
 
 This misses every promotion threshold: overhead is above 2% end-to-end and 10% of detailed routing, and additional hits cover 0% of detailed-route wall rather than at least 10%. Worse, the relaxation reported 2/3/5 disconnected prepared states even though the attempts emitted validator-clean placements. Those false disconnections show the prototype did not permissively model every legal sibling/junction endpoint evolution. It cannot support `STRANDED` or pruning. The prototype was reverted.
 
-The audit run remained 6/6 `CLEAN` with no refusals, but its winner `(4453,2506)` differed from the three-way Experiment 1 winner `(3960,2542)`, independently failing winner preservation.
+The audit run remained 6/6 `CLEAN` with no refusals and winner `(4453,2506)`. That matches the corrected three-way winner but differs from the corrected serial winner `(3960,2542)`, so it does not restore winner preservation.
 
 ## Experiment 3 — incumbent rectangle feasibility: STOP
 
@@ -79,7 +79,7 @@ Across both exact Experiment 1 profiles, all six attempts reported **zero repeat
 
 ## Retained mechanisms ranked by measured value
 
-1. **Per-child resource and named phase instrumentation.** Highest value: it distinguishes the 37.973 s concurrency wall overlap from aggregate CPU, identifies preparation/routing/completion as the components passing the experiment-entry threshold, and records 175–251 MiB child peak RSS.
+1. **Per-child resource and named phase instrumentation.** Highest value: it distinguishes the 38.342 s concurrency wall overlap from aggregate CPU, identifies preparation/routing/completion as the components passing the experiment-entry threshold, and records 187–237 MiB child peak RSS.
 2. **Typed local CP-SAT outcome and fingerprint instrumentation.** Retained because it removes status ambiguity at negligible observed workload impact and directly falsified the memoization hypothesis (zero repeats). It does not alter acceptance or pruning.
 3. **Existing Manhattan prepared lower bound.** Unchanged production behavior; it retained zero accepted violations and one real exact-case skip in each baseline mode. No stronger experimental path survived.
 
