@@ -83,6 +83,7 @@ class IdleLease:
     generation: int
     cancelled: threading.Event
 
+
 class ForegroundGate:
     def foreground_submitted(self) -> None: ...
     def foreground_finished(self) -> None: ...
