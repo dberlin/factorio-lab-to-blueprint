@@ -1045,16 +1045,29 @@ def build(
             )
             phase_started = time.monotonic()
             try:
-                blueprint = codec.encode(labelled)
+                try:
+                    blueprint = codec.encode(labelled)
+                finally:
+                    pipeline_encoding_time_s = time.monotonic() - phase_started
             except ValueError as exc:
                 reason = f"blueprint encoding failed: {exc}"
-                refused.append(
-                    LayoutAttemptFailure(
-                        candidate=spec.label,
-                        strategy=sname,
-                        reason=reason,
-                    )
+                failure = LayoutAttemptFailure(
+                    candidate=spec.label,
+                    strategy=sname,
+                    reason=reason,
+                    stats=_postprocess_failure_stats(
+                        labelled,
+                        pipeline_compaction_time_s=pipeline_compaction_time_s,
+                        pipeline_finalization_time_s=pipeline_finalization_time_s,
+                        pipeline_validation_time_s=pipeline_validation_time_s,
+                        pipeline_encoding_time_s=pipeline_encoding_time_s,
+                        attempt_started=attempt_started,
+                        settlement_wait_s=settlement_wait_s,
+                        time_budget_s=time_budget_s,
+                        completion_grace_s=completion_grace_s,
+                    ),
                 )
+                refused.append(failure)
                 if on_progress is not None:
                     on_progress(
                         AttemptProgress(
@@ -1067,7 +1080,6 @@ def build(
                         )
                     )
                 continue
-            pipeline_encoding_time_s = time.monotonic() - phase_started
             labelled.stats.update(
                 {
                     "pipeline_compaction_time_s": pipeline_compaction_time_s,

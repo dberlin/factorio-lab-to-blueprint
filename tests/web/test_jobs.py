@@ -145,6 +145,10 @@ def test_direct_refusal_without_attempt_strategy_serializes_null_not_an_invalid_
             "request has no legal layout",
             spec_label="direct-spec",
             budget_s=1.0,
+            stats={
+                "process_wall_time_s": 1.25,
+                "process_peak_rss_kib": 123_456,
+            },
         )
 
     builder = Builder(solve=refuse)
@@ -158,6 +162,10 @@ def test_direct_refusal_without_attempt_strategy_serializes_null_not_an_invalid_
             "candidate": "direct-spec",
             "strategy": None,
             "reason": "request has no legal layout",
+            "stats": {
+                "process_wall_time_s": 1.25,
+                "process_peak_rss_kib": 123_456,
+            },
             "projection_failures": [],
         }
     finally:
@@ -182,6 +190,10 @@ def test_projection_evidence_semicolons_stay_structured_inside_attempt_payload()
         "sequence-pair",
         "no scheduled stage produced an exact layout; exact validation failed",
         (first, second),
+        stats={
+            "process_wall_time_s": 8.0,
+            "pipeline_finalization_time_s": 1.5,
+        },
     )
 
     def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
@@ -202,6 +214,10 @@ def test_projection_evidence_semicolons_stay_structured_inside_attempt_payload()
         assert isinstance(attempts, list) and len(attempts) == 1
         serialized = _object(attempts[0])
         assert serialized["reason"] == attempt.reason
+        assert serialized["stats"] == {
+            "process_wall_time_s": 8.0,
+            "pipeline_finalization_time_s": 1.5,
+        }
         assert serialized["projection_failures"] == [
             {
                 "band": 160,
