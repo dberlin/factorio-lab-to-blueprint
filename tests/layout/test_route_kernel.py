@@ -103,7 +103,12 @@ def _require_both_backends() -> Callable[..., object]:
     return compiled
 
 
-def _replay(case: Case, budget: dict[str, int] | None = None) -> _PathSearchResult:
+def _replay(
+    case: Case,
+    budget: dict[str, int] | None = None,
+    *,
+    deadline: float | None = None,
+) -> _PathSearchResult:
     return freeform_module._astar(
         case["canvas"],
         case["starts"],
@@ -112,7 +117,7 @@ def _replay(case: Case, budget: dict[str, int] | None = None) -> _PathSearchResu
         case["pressure"],
         case["bounds"],
         {"left": 1 << 40} if budget is None else budget,
-        None,
+        deadline,
         {},
         case["grid"],
         case["owned_starts"],
@@ -190,6 +195,43 @@ def test_compiled_astar_honours_expansion_cap_and_budget(monkeypatch: pytest.Mon
     assert from_cython.kind is RouteFailureKind.BUDGET
     assert from_cython.expansions == 3  # cap + 1, exactly as the Python loop counts it
     assert cython_cap["left"] == (1 << 40) - 2
+
+
+def test_compiled_astar_deadline_checkpoint_preserves_raw_telemetry_and_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compiled = _require_both_backends()
+    cases = _capture_searches(two_stage_spec(), budget_s=2.0)
+    found = [case for case in cases if _replay(case).expansions >= 3]
+    assert found
+    case = found[0]
+
+    def under(
+        backend: Callable[..., object] | None,
+        budget: dict[str, int],
+    ) -> _PathSearchResult:
+        expired_checks = 0
+
+        def expire_at_checkpoint(_deadline: float | None) -> bool:
+            nonlocal expired_checks
+            expired_checks += 1
+            return expired_checks > 1
+
+        with monkeypatch.context() as forced:
+            forced.setattr(route_kernel, "_compiled_astar", backend)
+            forced.setattr(freeform_module, "_DEADLINE_CHECK_EVERY", 1)
+            forced.setattr(freeform_module, "_expired", expire_at_checkpoint)
+            return _replay(case, budget, deadline=0.0)
+    cython_budget, python_budget = {"left": 3}, {"left": 3}
+    from_cython = under(compiled, cython_budget)
+    from_python = under(None, python_budget)
+
+    assert from_cython == from_python
+    assert cython_budget == python_budget
+    assert from_cython.path is None
+    assert from_cython.kind is RouteFailureKind.BUDGET
+    assert from_cython.expansions == 1
+    assert cython_budget["left"] == 3
 
 
 def test_a_start_in_the_pad_degrades_the_backend_and_keeps_the_grid(
