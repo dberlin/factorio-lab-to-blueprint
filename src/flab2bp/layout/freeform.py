@@ -60,8 +60,8 @@ rather than tidiness.
 
 from __future__ import annotations
 
-import heapq
 import hashlib
+import heapq
 import math
 import time
 from array import array
@@ -11194,11 +11194,12 @@ def _match_access_corridors(
             choice: solver.boolean_value(variable) for choice, variable in choices.items()
         }
 
+    ranked_values = solution_values()
     fallback_values: dict[tuple[PortAccessDemand, Cell, Cell], bool] | None = (
-        solution_values()
+        ranked_values
     )
     for choice, variable in choices.items():
-        model.add_hint(variable, int(fallback_values[choice]))
+        model.add_hint(variable, int(ranked_values[choice]))
     tie_objective = sum(
         ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1)
     )
@@ -11218,7 +11219,7 @@ def _match_access_corridors(
             # The bounded tie polish found no incumbent after a validation cut.
             # Re-establish a model-valid fallback without the polish objective;
             # the previous ranked solution is forbidden by the new cut.
-            model.clear_objective()
+            model.clear_objective()  # type: ignore[no-untyped-call]
             solver.parameters.max_deterministic_time = math.inf
             try:
                 fallback_status = solve_model()
@@ -11230,7 +11231,7 @@ def _match_access_corridors(
             if fallback_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 return {}
             fallback_values = solution_values()
-            model.clear_hints()
+            model.clear_hints()  # type: ignore[no-untyped-call]
             for choice, variable in choices.items():
                 model.add_hint(variable, int(fallback_values[choice]))
             selected_values = fallback_values
@@ -11424,7 +11425,11 @@ def _reserve_port_access(
             sorted(
                 assigned,
                 key=lambda corridor: (
-                    kind_order.get(corridor.kind, len(kind_order)),
+                    (
+                        kind_order[corridor.kind]
+                        if corridor.kind is not None
+                        else len(kind_order)
+                    ),
                     corridor.access,
                     corridor.exit,
                 ),
@@ -11434,7 +11439,9 @@ def _reserve_port_access(
     }
     missing = tuple(demand for demand in demands if demand not in assignments)
     return PortAccessReservation(
-        assigned=tuple((demand, assignments[demand]) for demand in demands if demand in assignments),
+        assigned=tuple(
+            (demand, assignments[demand]) for demand in demands if demand in assignments
+        ),
         missing=missing,
         evidence=tuple(
             PortAccessEvidence(
@@ -15834,7 +15841,7 @@ def _prepare_routing_problem(
         if net.src is not None and not net.prelinked
     }
     late_output_belts = frozenset(wanted_outputs) & internal_source_belts
-    provisional_boundary_inputs = [
+    provisional_boundary_inputs: list[tuple[str, _Port, int | None]] = [
         (carried[belt], port, strip_index)
         for belt, (port, strip_index) in wanted.items()
     ]
@@ -16224,7 +16231,11 @@ def _prepare_routing_problem(
         if demand.kind is PortAccessKind.EARLY_BOUNDARY_DEPARTURE:
             return prepared.net_id.role is NetRole.EXTERNAL_OUTPUT and source == demand.cell
         if demand.kind is PortAccessKind.INTERNAL_DEPARTURE:
-            return prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT) and source == demand.cell
+            return (
+                prepared.net_id.role
+                not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
+                and source == demand.cell
+            )
         return (
             demand.kind is PortAccessKind.INTERNAL_ARRIVAL
             and prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
