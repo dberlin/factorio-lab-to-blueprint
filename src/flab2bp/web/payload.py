@@ -25,7 +25,11 @@ from typing import cast
 
 from flab2bp import pipeline
 from flab2bp.layout import markers, validate
-from flab2bp.layout.base import LayoutAttemptFailure, Placement, ProjectionFailureRecord
+from flab2bp.layout.base import (
+    LayoutAttemptFailure,
+    Placement,
+    ProjectionFailureRecord,
+)
 from flab2bp.spec import BuildSpec
 
 #: Recursive JSON values, with no escape hatch for non-serialisable objects.
@@ -141,6 +145,7 @@ def attempt_failure(attempt: LayoutAttemptFailure) -> Json:
         "candidate": attempt.candidate,
         "strategy": attempt.strategy,
         "reason": attempt.reason,
+        "stats": cast(Json, dict(attempt.stats)),
         "projection_failures": _array(
             projection_failure(failure) for failure in attempt.projection_failures
         ),

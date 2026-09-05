@@ -324,6 +324,8 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
     completed_layout: Placement,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    completed_layout.stats["planning_time_s"] = 0.125
+    completed_layout.stats["process_user_cpu_s"] = 2.5
     encode = codec.encode
     calls = 0
 
@@ -331,6 +333,7 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
         nonlocal calls
         calls += 1
         if calls == 1:
+            time.sleep(0.01)
             raise ValueError("invalid splitter port anchor")
         return encode(placement)
 
@@ -348,6 +351,12 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
     assert len(result.refused) == 1
     assert result.refused[0].strategy == "freeform"
     assert result.refused[0].reason == ("blueprint encoding failed: invalid splitter port anchor")
+    failure_stats = result.refused[0].stats
+    assert failure_stats["planning_time_s"] == 0.125
+    assert failure_stats["process_user_cpu_s"] == 2.5
+    assert failure_stats["pipeline_validation_time_s"] >= 0.0
+    assert failure_stats["pipeline_encoding_time_s"] >= 0.01
+    assert failure_stats["attempt_wall_s"] >= failure_stats["pipeline_encoding_time_s"]
 
 
 @pytest.mark.slow

@@ -26,12 +26,12 @@ from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from flab2bp import pipeline
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
-from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout
+from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout, PlacementStats
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
@@ -491,6 +491,7 @@ def _attempt_failures(exc: NoValidLayout) -> tuple[LayoutAttemptFailure, ...]:
             None,
             reason,
             exc.projection_failures if len(reasons) == 1 else (),
+            cast(PlacementStats, exc.stats),
         )
         for reason in reasons
     )

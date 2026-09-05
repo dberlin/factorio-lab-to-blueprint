@@ -236,6 +236,10 @@ test('a refusal settles the job like any other answer', async () => {
             candidate: 'a',
             strategy: 'freeform',
             reason: 'too tall; after exact projection',
+            stats: {
+              process_wall_time_s: 4.5,
+              pipeline_finalization_time_s: 0.75,
+            },
             projection_failures: [
               {
                 band: 160,
@@ -249,6 +253,7 @@ test('a refusal settles the job like any other answer', async () => {
             candidate: 'direct-spec',
             strategy: null,
             reason: 'request has no legal layout',
+            stats: {},
             projection_failures: [],
           },
         ],
@@ -260,6 +265,10 @@ test('a refusal settles the job like any other answer', async () => {
   expect(settled.refusal?.attempts[0]?.projection_failures[0]?.detail).toBe(
     'first collision; left machine; right machine',
   );
+  expect(settled.refusal?.attempts[0]?.stats).toEqual({
+    process_wall_time_s: 4.5,
+    pipeline_finalization_time_s: 0.75,
+  });
   expect(settled.refusal?.attempts[1]?.strategy).toBeNull();
 });
 
