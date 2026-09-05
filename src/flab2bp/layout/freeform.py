@@ -78,7 +78,6 @@ from collections.abc import (
     Set,
 )
 from contextvars import ContextVar
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from fractions import Fraction
@@ -5253,6 +5252,38 @@ class _Canvas:
                 return False
         port = self.reserved.get(cell)
         return port is None or port in self.routing_ports
+
+    def clone(self) -> _Canvas:
+        """A disposable copy for proving a commit without touching this canvas.
+
+        ``deepcopy`` used to do this and was 0.7-1.2 s of every attempt: it
+        re-created every frozen ``PlacedBuilding`` (800k ``deepcopy`` calls on
+        ``universe-matrix``) although nothing ever mutates one -- links are
+        re-pointed with ``replace``.  Only the containers need to be fresh.
+        ``belt_ban`` holds mutable sets, so those are copied one level down;
+        every other value is immutable and shared.  Listing every field by
+        name is deliberate: a field added without a line here fails
+        ``test_clone_equals_the_original_field_for_field``.
+        """
+        return _Canvas(
+            ramped=self.ramped,
+            sorter_tiers=self.sorter_tiers,
+            sorter_stacks=self.sorter_stacks,
+            lane_stacks=self.lane_stacks,
+            buildings=list(self.buildings),
+            blocked=dict(self.blocked),
+            world_taken=set(self.world_taken),
+            solid=set(self.solid),
+            reserved=dict(self.reserved),
+            routing_ports=self.routing_ports,
+            port_corridors=dict(self.port_corridors),
+            limit=self.limit,
+            keep_out=set(self.keep_out),
+            guard=set(self.guard),
+            belt_ban={column: set(levels) for column, levels in self.belt_ban.items()},
+            junction_ban=set(self.junction_ban),
+            junction_geometry_prepared=self.junction_geometry_prepared,
+        )
 
 
 def _core_bounds(canvas: _Canvas) -> tuple[int, int, int, int]:
@@ -10646,7 +10677,7 @@ def _route_all(
                 return (), {}
             details: dict[int, _CommitFailure] = {}
             unlinked = _commit_paths(
-                deepcopy(canvas),
+                canvas.clone(),
                 nets,
                 paths,
                 belt_id,

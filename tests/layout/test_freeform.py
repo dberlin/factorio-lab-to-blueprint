@@ -13,7 +13,8 @@ import math
 import random
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from dataclasses import replace
+from copy import deepcopy
+from dataclasses import fields, replace
 from fractions import Fraction
 from fractions import Fraction as F
 from pathlib import Path
@@ -10491,6 +10492,56 @@ class TestCommittedPathClosesCycle:
             assert freeform._committed_path_closes_cycle(canvas, indices) == self._reference(
                 canvas, indices
             ), (buildings, indices)
+
+
+class TestCanvasClone:
+    """``_Canvas.clone`` proves a commit without ``deepcopy``'s per-object cost."""
+
+    def _populated(self) -> _Canvas:
+        canvas = _Canvas(ramped=True, limit=(0, 0, 9, 9))
+        canvas.buildings.append(_linked_belt(0, None))
+        canvas.blocked[(1, 1, 0)] = 0
+        canvas.world_taken.add((1, 1, Fraction(0)))
+        canvas.solid.add((2, 2))
+        canvas.reserved[(3, 3, 0)] = (3, 3, 0)
+        canvas.keep_out.add((4, 4))
+        canvas.guard.add((5, 5, 0))
+        canvas.belt_ban[(6, 6)] = {1}
+        canvas.junction_ban.add((7, 7, 0))
+        return canvas
+
+    def test_clone_equals_the_original_field_for_field(self) -> None:
+        original = self._populated()
+        clone = original.clone()
+        for f in fields(_Canvas):
+            assert getattr(clone, f.name) == getattr(original, f.name), f.name
+
+    def test_clone_matches_deepcopy(self) -> None:
+        # Every field on `_Canvas` is either an immutable value (shared by
+        # `clone`, re-created by `deepcopy`) or a plain container of those, so
+        # `==` on the dataclass compares them the same way regardless of which
+        # one built them. There is no field here (like a compiled kernel
+        # handle or a callable) that lacks value equality, so nothing needs to
+        # be excluded from this comparison.
+        original = self._populated()
+        assert original.clone() == deepcopy(original)
+
+    def test_mutating_the_clone_leaves_the_original_alone(self) -> None:
+        original = self._populated()
+        clone = original.clone()
+        clone.buildings.append(_linked_belt(1, None))
+        clone.blocked[(8, 8, 0)] = 1
+        clone.world_taken.add((8, 8, Fraction(0)))
+        clone.solid.add((8, 8))
+        clone.reserved[(8, 8, 0)] = (8, 8, 0)
+        clone.keep_out.add((8, 8))
+        clone.guard.add((8, 8, 0))
+        clone.belt_ban[(6, 6)].add(2)
+        clone.belt_ban[(8, 8)] = {0}
+        clone.junction_ban.add((8, 8, 0))
+        reference = self._populated()
+        for f in fields(_Canvas):
+            assert getattr(original, f.name) == getattr(reference, f.name), f.name
 
 
 class TestAltitudeProfileCache:
