@@ -364,6 +364,15 @@ _DETERMINISTIC_PACK_WORK = 0.02
 #: bounded polish must never turn a preparation step into an unbounded search.
 _ACCESS_TIE_DETERMINISTIC_WORK = 0.05
 
+#: Deterministic work allowed to each per-rank `maximize` in the corridor
+#: matcher.  The rank solves decide which claims are served, so they get
+#: far more than the tie-break; on the mall profile (2026-09-05) the
+#: uncapped solves were 71 of 100 s and the candidate was then discarded
+#: at the deadline.
+_ACCESS_RANK_DETERMINISTIC_WORK = 2.0
+#: Validate/cut rounds the matcher runs before returning no assignment.
+_ACCESS_CUT_ROUNDS = 8
+
 
 #: Rip-up rounds with no improvement in the failure count before giving up.
 #:
@@ -11301,8 +11310,15 @@ def _match_access_corridors(
     cancelled: Callable[[], bool] | None = None,
     deadline: float | None = None,
 ) -> dict[PortAccessDemand, PortAccessCorridor]:
-    """Assign cell-disjoint corridors, giving every port its first claim first."""
-    def solve_model() -> cp_model.CpSolverStatus:
+    """Assign cell-disjoint corridors, giving every port its first claim first.
+
+    Every solve carries a deterministic work cap, so the assignment does not
+    depend on how loaded the box is.  A tie-break that is cut short by its cap
+    keeps the rank-optimal assignment the rank solves already proved feasible
+    rather than raising the preparation deadline and discarding the candidate.
+    """
+
+    def solve_model(work: float) -> cp_model.CpSolverStatus:
         if (cancelled is not None and cancelled()) or _expired(deadline):
             raise _PreparationDeadline
         if deadline is not None:
@@ -11310,10 +11326,9 @@ def _match_access_corridors(
             if remaining <= 0:
                 raise _PreparationDeadline
             solver.parameters.max_time_in_seconds = remaining
+        solver.parameters.max_deterministic_time = work
         status = solver.solve(model)
         if (cancelled is not None and cancelled()) or _expired(deadline):
-            raise _PreparationDeadline
-        if deadline is not None and status == cp_model.UNKNOWN:
             raise _PreparationDeadline
         return status
 
@@ -11362,7 +11377,7 @@ def _match_access_corridors(
         if not rank_vars:
             continue
         model.maximize(sum(rank_vars))
-        status = solve_model()
+        status = solve_model(_ACCESS_RANK_DETERMINISTIC_WORK)
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             return {}
         model.add(sum(rank_vars) == round(solver.objective_value))
@@ -11376,10 +11391,8 @@ def _match_access_corridors(
     model.minimize(
         sum(ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1))
     )
-    if validate is None:
-        solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
-    while True:
-        status = solve_model()
+    for _round in range(_ACCESS_CUT_ROUNDS):
+        status = solve_model(_ACCESS_TIE_DETERMINISTIC_WORK)
         use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
         if not use_polished:
             if validate is not None and status == cp_model.INFEASIBLE:
@@ -11408,6 +11421,7 @@ def _match_access_corridors(
         if not cut_variables:
             return {}
         model.add(sum(cut_variables) <= len(cut_variables) - 1)
+    return {}
 
 
 def _reserve_port_access(

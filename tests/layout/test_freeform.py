@@ -11193,6 +11193,66 @@ def test_a_middle_lane_head_in_twice_cannot_hold_its_second_corridor() -> None:
     assert {demand.cell for demand in reservation.missing} == {middle}
 
 
+def _two_ports_with_two_corridors_each() -> tuple[
+    tuple[freeform.PortAccessDemand, ...],
+    dict[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]],
+]:
+    """Two lane heads, each with two disjoint corridor options.
+
+    The rank solve can serve both claims, and the tie-break then has a real
+    ordering choice to polish -- the shape the boundary rematch tests use.
+    """
+    first = _access_demand((0, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=1)
+    second = _access_demand((4, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=2)
+    return (first, second), {
+        first: (((1, 0, 0), (2, 0, 0)), ((0, 1, 0), (0, 2, 0))),
+        second: (((3, 0, 0), (2, 0, 0)), ((4, 1, 0), (4, 2, 0))),
+    }
+
+
+def test_corridor_tie_break_never_outruns_its_work_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tie-break solve that hits the deterministic cap keeps the rank-optimal
+    assignment instead of raising the preparation deadline."""
+    seen: list[tuple[float, float]] = []
+    real_solve = cp_model.CpSolver.solve
+
+    def recording_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> int:
+        seen.append((self.parameters.max_deterministic_time, self.parameters.max_time_in_seconds))
+        return real_solve(self, model)
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", recording_solve)
+    demands, corridors = _two_ports_with_two_corridors_each()
+    assigned = freeform._match_access_corridors(
+        demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
+    )
+    assert len(assigned) == len(demands)
+    assert seen, "the matcher solved nothing"
+    assert all(work > 0.0 for work, _wall in seen), seen
+    assert all(work <= freeform._ACCESS_RANK_DETERMINISTIC_WORK for work, _wall in seen), seen
+
+
+def test_corridor_matcher_falls_back_to_the_rank_solution_when_polish_is_cut_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force the polish solve to report UNKNOWN before the deadline: the matcher
+    must return the rank-optimal assignment, not raise."""
+    calls = {"n": 0}
+    real_solve = cp_model.CpSolver.solve
+
+    def flaky_solve(self: cp_model.CpSolver, model: cp_model.CpModel) -> int:
+        calls["n"] += 1
+        if calls["n"] == 2:  # the first solve is rank 0's maximize; the second is the polish
+            return cp_model.UNKNOWN
+        return real_solve(self, model)
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", flaky_solve)
+    demands, corridors = _two_ports_with_two_corridors_each()
+    assigned = freeform._match_access_corridors(
+        demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
+    )
+    assert len(assigned) == len(demands)
+
+
 class TestProliferatorSupplyIsOneReachableTree:
     """Every coater drop belongs to one externally fed terminal supply run."""
 
