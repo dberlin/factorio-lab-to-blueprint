@@ -608,40 +608,6 @@ def test_topology_refinement_rewards_only_allowed_direct_origin_delta() -> None:
 
 
 
-def test_topology_refinement_accepts_a_direct_diagonal_beyond_lane_overlap() -> None:
-    problem = _fixed_problem(
-        sizes=((2, 1), (2, 1), (4, 1)),
-        height=3,
-        nets=((0, 1),),
-    )
-    hint = DecodedPlacement(
-        x=(0, 0, 0),
-        y=(0, 1, 2),
-        width=4,
-        used_height=3,
-        x_windows=((0, 2), (0, 2), (0, 0)),
-        y_windows=((0, 2), (0, 2), (0, 2)),
-        gap_area=0,
-    )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (2,))
-    beam = CompactTopologyBeam(
-        problem,
-        variant_indices=(0, 0, 0),
-        width_bound=4,
-        base_seed=29,
-        coordinate_hint=hint,
-        direct_targets=(target,),
-        config=CompactTopologyBeamConfig(
-            max_candidates=1,
-            max_deterministic_time=0.2,
-            refine_width_first=True,
-        ),
-    )
-
-    candidate = beam.solve_next()
-
-    assert candidate is not None
-    assert candidate.x[target.consumer] - candidate.x[target.producer] == 2
 
 def test_topology_beam_rejects_foreign_or_duplicate_no_goods() -> None:
     problem = _fixed_problem(nets=())
@@ -758,27 +724,6 @@ def test_normal_compact_seed_requires_allowed_direct_origin_delta(
     assert compact_seed_module._decoded_direct_keys(decoded, (0, 0), eligibility) == expected
 
 
-def test_normal_compact_seed_accepts_a_direct_diagonal_beyond_lane_overlap() -> None:
-    problem = _fixed_problem(
-        sizes=((2, 1), (2, 1)),
-        height=2,
-        nets=((0, 1),),
-    )
-    target = DirectInsertTarget((0, 1), 0, 1, 0, 0, 2, 2, (2,))
-    eligibility = (VariantDirectInsertTarget(0, 0, target),)
-    plan = compact_seed_module._prepare_model_plan(problem, eligibility, 31)
-    model, variables = compact_seed_module._build_model(problem, plan)
-    model.add(variables.x[0] == 0)
-    model.add(variables.x[1] == 2)
-    model.add(variables.y[0] == 0)
-    model.add(variables.y[1] == 1)
-    solver = cp_model.CpSolver()
-    solver.parameters.num_workers = 1
-
-    assert solver.solve(model) == cp_model.OPTIMAL
-    assert frozenset(
-        key for key, success in variables.direct_successes if solver.value(success)
-    ) == frozenset({(0, 1)})
 
 
 def test_cp_coordinate_direct_success_is_not_accepted_as_zero_gap_decoded_truth() -> None:

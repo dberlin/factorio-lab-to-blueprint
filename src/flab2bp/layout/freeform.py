@@ -2719,7 +2719,14 @@ def _direct_insert_candidates(spec: BuildSpec) -> list[tuple[str, str]]:
     a zero bound would let ``-MU_DIRECT`` mislead the search toward placements
     whose apparent reward is unrealisable.
     """
-    groups = _adapt(spec)
+    return _direct_insert_candidates_from_groups(spec, _adapt(spec))
+
+
+def _direct_insert_candidates_from_groups(
+    spec: BuildSpec,
+    groups: Mapping[str, _Group],
+) -> list[tuple[str, str]]:
+    """Direct-insert eligibility from one already adapted group graph."""
     proliferated = {g.recipe_id for g in groups.values() if g.proliferated}
     producers: dict[str, list[str]] = defaultdict(list)
     for g in groups.values():
@@ -2767,9 +2774,9 @@ class _DirectCandidate:
     """A net a single sorter could replace, and its proved legal alignments.
 
     ``prod_row`` and ``cons_row`` are offsets from each strip's origin to the
-    lane rows the sorter would span. ``origin_deltas`` are consumer-minus-
-    producer strip-origin x offsets with at least one occupied, sorter-clear
-    endpoint pair within the sorter's horizontal reach.
+    lane row the sorter would span. ``origin_deltas`` are consumer-minus-
+    producer strip-origin x offsets with at least one occupied column that no
+    sorter already seated on either lane meets.
     """
 
     item: str
@@ -2777,9 +2784,9 @@ class _DirectCandidate:
     prod_row: int
     cons_row: int
     #: Belt tiles each lane occupies, counted east from its strip's west edge.
-    #: The sorter needs endpoints within horizontal reach, and an input lane is
-    #: trimmed to its last sorter, so the consumer's span is usually SHORTER
-    #: than its strip.
+    #: The sorter needs a column both lanes cover, and an input lane is trimmed
+    #: to its last sorter, so the consumer's span is usually SHORTER than its
+    #: strip.
     prod_span: int
     cons_span: int
     origin_deltas: tuple[int, ...]
@@ -3108,19 +3115,7 @@ def _direct_origin_deltas_uncached(
     if not source_columns or not destination_columns:
         return ()
 
-    aligned_deltas = _direct_column_deltas(source_columns, destination_columns)
-    reach = catalog.SORTER_MAX_REACH
-    expanded: list[int] = []
-    covered_through: int | None = None
-    for delta in aligned_deltas:
-        start = delta - reach
-        stop = delta + reach
-        if covered_through is None or start > covered_through + 1:
-            expanded.extend(range(start, stop + 1))
-        elif stop > covered_through:
-            expanded.extend(range(covered_through + 1, stop + 1))
-        covered_through = max(covered_through or stop, stop)
-    return tuple(expanded)
+    return _direct_column_deltas(source_columns, destination_columns)
 
 
 def _direct_net_candidates(
@@ -3133,10 +3128,10 @@ def _direct_net_candidates(
     can be split across several strips, and each of those nets is separately
     eligible.
     """
-    eligible = set(_direct_insert_candidates(spec))
+    groups = _adapt(spec)
+    eligible = set(_direct_insert_candidates_from_groups(spec, groups))
     if not eligible:
         return {}
-    groups = _adapt(spec)
 
     out: dict[tuple[int, int], _DirectCandidate] = {}
     for i, j in _nets_between(strips):
@@ -3173,9 +3168,9 @@ def _direct_net_candidates(
             required_rate=required_rate,
         )
         if not origin_deltas:
-            # With no occupied endpoint pair clear of both strips' already
-            # seated sorters, emission cannot prove a bridge. Do not create a
-            # Boolean: an absent variable cannot earn the direct-insert reward.
+            # With no occupied lane column clear of both strips' already seated
+            # sorters, emission cannot prove a bridge. Do not create a Boolean:
+            # an absent variable cannot earn the direct-insert reward.
             continue
         piled_tail_column = _piled_output_tail_column(src, k)
         out[i, j] = _DirectCandidate(
@@ -4306,19 +4301,19 @@ def _pack_model(
     # Direct insertion: one Boolean per eligible net, reified against the
     # geometry that would let a single sorter replace the whole belt route.
     #
-    # The consumer sits directly SOUTH of the producer. Their lane rows are
-    # separated by at most the sorter's reach, and their safe x endpoints may
-    # differ by the same bound. Both lane rows are at z=0 by construction, so
-    # alignment in y is the whole altitude story.
-    #
+    # The condition is deliberately strict: the consumer lane sits south of the
+    # producer lane and their occupied endpoints share an exact x coordinate,
+    # because a DSP sorter runs straight rather than diagonally. Both lanes are
+    # at z=0 by construction, so alignment in y is the whole altitude story.
+
     # The gap floor is MARGIN + 1 rather than 1: the packed boxes carry a margin,
     # so anything tighter would collide with `no_overlap_2d` and make the
     # Boolean unsatisfiable rather than merely unattractive.
     direct_vars: dict[tuple[int, int], cp_model.IntVar] = {}
     for (i, j), cand in direct_candidates.items():
         di = model.new_bool_var(f"di{i}_{j}")
-        # The consumer sits BELOW the producer, and the sorter runs between
-        # occupied endpoints within its horizontal reach.
+        # The consumer sits BELOW the producer, and the sorter runs vertically
+        # down a column both lanes share.
         #
         # Vertical is the geometry this architecture actually wants. A strip is
         # input lanes / machines / output lanes stacked top to bottom, so a
@@ -4332,11 +4327,11 @@ def _pack_model(
         gap = (ys[j] + cand.cons_row) - (ys[i] + cand.prod_row)
         model.add(gap >= 1).only_enforce_if(di)
         model.add(gap <= catalog.SORTER_MAX_REACH).only_enforce_if(di)
-        # Reward only exact x offsets with a witness endpoint pair that is
-        # occupied by both lanes, mutually reachable, and clear of every sorter
-        # already seated on either lane. Encoding the witness set here keeps an
-        # unprovable candidate out of the objective instead of letting emission
-        # discover the missing precondition after the reward shaped the pack.
+        # Reward only exact x offsets with a witness column that is occupied by
+        # both lanes and clear of every sorter already seated on either lane.
+        # Encoding the witness set here keeps an unprovable candidate out of the
+        # objective instead of letting emission discover the missing precondition
+        # after the reward has already influenced the pack.
         origin_delta = (xs[j] + strips[j].west_channel) - (xs[i] + strips[i].west_channel)
         permitted_delta = model.new_int_var_from_domain(
             cp_model.Domain.from_values(cand.origin_deltas),
@@ -17570,8 +17565,7 @@ def _bridge(
     the unrealized promise as typed static-access evidence at the caller; it
     never restores the rewarded net as an ordinary belt route.
 
-    **NOT ANY ENDPOINT PAIR WILL DO**, and this used to take the westmost shared
-    column.
+    **NOT ANY SHARED COLUMN WILL DO**, and this used to take the westmost one.
     A bridge is a BELT-TO-BELT sorter, so the game grows its collider by
     ``colliders.SORTER_END_EXTENSION`` past BOTH ends -- 0.7 units, more than
     half a tile, at each end -- while a sorter serving a machine grows at one
@@ -17584,11 +17578,10 @@ def _bridge(
     ``validate.game.sorter_collide``.
 
     ``standing`` is that answer prepared: the seated box of every sorter already
-    placed, which the caller builds once and this extends.  Candidate endpoint
-    pairs are tried from west to east, preferring the nearest destination
-    endpoint for each source. The first pair whose seated box clears them all is
-    taken. When none does, the promise remains unrealized and the containing
-    pack attempt fails with typed evidence.
+    placed, which the caller builds once and this extends.  Every shared column
+    is tried, west to east, and the first one whose seated box clears them all
+    is the one taken. When none does, the promise remains unrealized and the
+    containing pack attempt fails with typed evidence.
 
     Flow order is the independent precondition.  The bridge must draw strictly
     after enough emitted source injections to cover ``required_rate`` and land
@@ -17666,63 +17659,50 @@ def _bridge(
     # A bridge is belt-to-belt: it picks the source lane's cargo and places it
     # on the destination lane, so it keeps a promise at BOTH ends -- the entry
     # lane's on the way in and the output lane's on the way out.
-    tiers = {
-        bridge_span: _pick_sorter(
-            rates.get(item, Fraction(1)),
-            bridge_span,
-            1,
-            canvas.sorter_tiers,
-            stacks=canvas.sorter_stacks,
-            min_pick_stack=canvas.lane_stacks.into(item),
-            min_place_stack=canvas.lane_stacks.out_of(item),
-        )[0]
-        for bridge_span in range(span, catalog.SORTER_MAX_REACH + 1)
-    }
-    destination_columns = tuple(
-        column
-        for column in range(dst.x0, dst.x1 + 1)
-        if (first_destination_pickup is None or column < first_destination_pickup)
-        and (column, dst.y, 0) in canvas.blocked
+    tier, _ = _pick_sorter(
+        rates.get(item, Fraction(1)),
+        span,
+        1,
+        canvas.sorter_tiers,
+        stacks=canvas.sorter_stacks,
+        min_pick_stack=canvas.lane_stacks.into(item),
+        min_place_stack=canvas.lane_stacks.out_of(item),
     )
-    for source_column in range(src.x0, src.x1 + 1):
-        if source_column <= last_source_injection:
+    for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
+        if column <= last_source_injection:
             continue
-        if (source_column, src.y, 0) not in canvas.blocked:
+        if first_destination_pickup is not None and column >= first_destination_pickup:
             continue
-        for destination_column in sorted(
-            destination_columns,
-            key=lambda column: (abs(column - source_column), column),
-        ):
-            bridge_span = max(span, abs(destination_column - source_column))
-            if bridge_span > catalog.SORTER_MAX_REACH:
-                continue
-            src_belt = canvas.blocked[source_column, src.y, 0]
-            dst_belt = canvas.blocked[destination_column, dst.y, 0]
-            if src_belt == dst_belt:
-                continue
-            tier = tiers[bridge_span]
-            bridge = PlacedBuilding(
-                item_id=tier,
-                model_index=catalog.building(tier).model_index,
-                x=source_column,
-                y=src.y,
-                width=1,
-                height=1,
-                x2=destination_column,
-                y2=dst.y,
-                z2=Fraction(0),
-                yaw=Facing.SOUTH.value,
-                yaw2=Facing.SOUTH.value,
-                input_obj=src_belt,
-                output_obj=dst_belt,
-            )
-            if not slots.sorter_seat_is_clear(bridge, canvas.buildings, standing):
-                continue
-            canvas.buildings.append(bridge)
-            seat = slots.seated_sorter(bridge, canvas.buildings)
-            if seat is not None:
-                standing.append(colliders.sorter_box(seat))
-            return direct_id
+        if (column, src.y, 0) not in canvas.blocked:
+            continue
+        if (column, dst.y, 0) not in canvas.blocked:
+            continue
+        src_belt = canvas.blocked[column, src.y, 0]
+        dst_belt = canvas.blocked[column, dst.y, 0]
+        if src_belt == dst_belt:
+            continue
+        bridge = PlacedBuilding(
+            item_id=tier,
+            model_index=catalog.building(tier).model_index,
+            x=column,
+            y=src.y,
+            width=1,
+            height=1,
+            x2=column,
+            y2=dst.y,
+            z2=Fraction(0),
+            yaw=Facing.SOUTH.value,
+            yaw2=Facing.SOUTH.value,
+            input_obj=src_belt,
+            output_obj=dst_belt,
+        )
+        if not slots.sorter_seat_is_clear(bridge, canvas.buildings, standing):
+            continue
+        canvas.buildings.append(bridge)
+        seat = slots.seated_sorter(bridge, canvas.buildings)
+        if seat is not None:
+            standing.append(colliders.sorter_box(seat))
+        return direct_id
     return None
 
 

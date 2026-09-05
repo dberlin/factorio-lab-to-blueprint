@@ -2114,6 +2114,25 @@ def test_mixed_spray_domain_direct_candidate_requires_flow_safe_alignment() -> N
     assert _direct_net_candidates(strips, spec) == {}
 
 
+def test_direct_net_candidates_adapt_the_spec_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = list(_direct_flow_order_strips())
+    adapt = freeform._adapt
+    calls = 0
+
+    def counted(candidate: BuildSpec) -> dict[str, freeform._Group]:
+        nonlocal calls
+        calls += 1
+        return adapt(candidate)
+
+    monkeypatch.setattr(freeform, "_adapt", counted)
+
+    assert _direct_net_candidates(strips, spec)
+    assert calls == 1
+
+
 def test_direct_origin_deltas_memo_is_transparent() -> None:
     spec = spray_domain_spec(clean=True, sprayed=True)
     strips = plan_strips(spec, strip_len=6)
@@ -3193,7 +3212,7 @@ def test_direct_origin_deltas_keep_source_tail_to_destination_head_alignment() -
             source_rate=F(1),
             required_rate=F(4),
         )
-        == tuple(range(6, 15))
+        == (9, 10, 11)
     )
 
 
@@ -3353,10 +3372,11 @@ def test_bridge_emits_after_enough_upstream_supply_before_the_final_injection() 
     assert canvas.buildings[-1].x == 5
 
 
-def test_bridge_uses_a_flow_safe_diagonal_when_no_shared_column_is_safe() -> None:
+def test_bridge_rejects_a_diagonal_even_when_both_endpoints_are_flow_safe() -> None:
     canvas, source, destination, _standing, direct = _direct_flow_order_canvas(4, 6)
     source = replace(source, x0=6)
     standing = slots.sorter_seat_boxes(canvas.buildings)
+    before = len(canvas.buildings)
 
     assert (
         _bridge(
@@ -3370,10 +3390,9 @@ def test_bridge_uses_a_flow_safe_diagonal_when_no_shared_column_is_safe() -> Non
             source_rate=F(1),
             required_rate=F(1),
         )
-        == direct
+        is None
     )
-    bridge = canvas.buildings[-1]
-    assert (bridge.x, bridge.x2) == (6, 5)
+    assert len(canvas.buildings) == before
 
 
 def test_bridge_emits_a_source_tail_to_destination_head_alignment() -> None:
@@ -3400,7 +3419,7 @@ def _forced_direct_pack(strips: list[Strip], spec: BuildSpec) -> freeform._Pack:
     """Place one proved direct relation even when width outranks its reward."""
     candidates = _direct_net_candidates(strips, spec)
     ((source, destination), candidate) = next(iter(candidates.items()))
-    delta_x = candidate.origin_deltas[len(candidate.origin_deltas) // 2]
+    delta_x = candidate.origin_deltas[0]
     delta_y = strips[source].height + 1
     row_gap = delta_y + candidate.cons_row - candidate.prod_row
     assert 1 <= row_gap <= catalog.SORTER_MAX_REACH
@@ -3621,8 +3640,9 @@ class TestDirectInsertion:
             if not catalog.is_sorter(b.item_id):
                 continue
             assert b.x2 is not None and b.y2 is not None
-            span = max(abs(b.x - b.x2), abs(b.y - b.y2))
-            assert 1 <= span <= catalog.SORTER_MAX_REACH
+            dx, dy = abs(b.x - b.x2), abs(b.y - b.y2)
+            assert not (dx and dy), "DSP sorters are straight-line"
+            assert 1 <= max(dx, dy) <= catalog.SORTER_MAX_REACH
             assert b.z == (b.z2 or 0), "sorters never span altitudes"
 
 
