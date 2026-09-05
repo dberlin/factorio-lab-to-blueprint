@@ -78,6 +78,7 @@ from flab2bp.layout.freeform import (
     _routing_seed_clearance,
     _staged_static_clearance_keys,
     _staged_static_preclearance_proved,
+    _StagedStaticCache,
     _strip_geometry_signature,
     _Unpowerable,
     _Unseatable,
@@ -4452,6 +4453,12 @@ def _pose_stage_boundary_update(
     return None
 
 
+class _OptionalPreparationKwargs(TypedDict, total=False):
+    staged_static_cache: _StagedStaticCache
+    cancelled: Callable[[], bool]
+    deadline: float | None
+
+
 @dataclass(frozen=True, slots=True)
 class _ProductionCandidate:
     height: int
@@ -5156,11 +5163,7 @@ def _production_run(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in preparation_parameters.values()
             )
-            preparation_kwargs: dict[str, object] = {
-                "power": power,
-                "policy": band_policy,
-                "ramped": not belt_vertical_construction,
-            }
+            preparation_kwargs: _OptionalPreparationKwargs = {}
             if (
                 "staged_static_cache" in preparation_parameters
                 or accepts_preparation_keywords
@@ -5174,6 +5177,9 @@ def _production_run(
                 spec,
                 list(selected),
                 pack,
+                power=power,
+                policy=band_policy,
+                ramped=not belt_vertical_construction,
                 **preparation_kwargs,
             )
         except _PreparationDeadline, finalize.ProjectionCancelled:
