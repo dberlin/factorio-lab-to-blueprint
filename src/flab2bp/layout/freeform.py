@@ -11464,6 +11464,32 @@ def _reserve_port_access(
     frontiers: dict[PortAccessDemand, set[Cell]] = defaultdict(set)
     boundary_set = set(boundary or ())
 
+    # ONE GRID PER RESERVATION INSTEAD OF ONE PER PROBE, because every
+    # reachability probe below -- and every re-probe the matcher's validate
+    # callback runs -- searches the same box towards the same boundary, and a
+    # mall-sized reservation flattened the canvas 872 times for 3.9s.
+    #
+    # The canvas is NOT WRITTEN between this build and the last probe: the
+    # reservations and corridors were cleared just above, and the assignments
+    # are only written after the matcher returns -- so the shared grid carries
+    # exactly the state a per-probe build would have derived.  `probe_cells`
+    # names every cell two steps from a demand, which is every exit cell any
+    # probe can start from; `_astar` falls back to a private grid for a start
+    # or goal outside the span, so a miss costs a build and never a result.
+    shared_grid: _Grid | None = None
+    if bounds is not None and boundary is not None:
+        probe_box = _route_box(canvas, bounds)
+        probe_cells = [
+            (key[0] + dx + ex, key[1] + dy + ey, key[2])
+            for demand in demands
+            for key in (demand.cell,)
+            for dx, dy in _STEPS
+            for ex, ey in _STEPS
+        ]
+        shared_grid = _make_grid(
+            canvas, probe_box, _span_for(probe_box, probe_cells, list(boundary_set)), {}
+        )
+
     for demand in demands:
         check_cancelled()
         key = demand.cell
@@ -11500,6 +11526,7 @@ def _reserve_port_access(
                 0.0,
                 bounds,
                 deadline=deadline,
+                grid=shared_grid,
             )
             check_cancelled()
             if result.path is not None:
@@ -11544,6 +11571,7 @@ def _reserve_port_access(
                 0.0,
                 bounds,
                 deadline=deadline,
+                grid=shared_grid,
                 forbidden=forbidden,
                 blocking_owners={
                     cell: owner_index[owner]

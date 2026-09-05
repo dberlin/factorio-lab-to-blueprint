@@ -23351,17 +23351,53 @@ def _corridor_scene(*, internal: bool = False) -> tuple[_Canvas, freeform.PortAc
     return canvas, _access_demand(port_cell, kind, belt=port)
 
 
-def test_boundary_access_rematches_away_from_unreachable_first_corridor() -> None:
+def _boundary_reachable_port_fixture() -> tuple[
+    _Canvas,
+    tuple[freeform.PortAccessDemand, ...],
+    tuple[tuple[int, int, int], ...],
+    tuple[int, int, int, int] | None,
+]:
+    """The corridor scene as one `_reserve_port_access` call's arguments.
+
+    The first corridor a greedy match would take is walled off from the
+    boundary, so the reachability probes really run and the matcher really
+    rematches -- which is what makes this the scene both the behaviour test and
+    the grid-sharing test want.
+    """
     canvas, demand = _corridor_scene()
+    return canvas, (demand,), ((0, 3, 0),), None
+
+
+def test_boundary_access_rematches_away_from_unreachable_first_corridor() -> None:
+    canvas, demands, boundary, bounds = _boundary_reachable_port_fixture()
+    demand = demands[0]
     reservation = freeform._reserve_port_access(
         canvas,
-        (demand,),
-        boundary=((0, 3, 0),),
+        demands,
+        boundary=boundary,
+        bounds=bounds,
     )
     assert reservation.complete
     corridor = dict(reservation.assigned)[demand]
     assert corridor.access == (2, 3, 0)
     assert not reservation.evidence
+
+
+def test_port_access_probes_share_one_grid(monkeypatch: pytest.MonkeyPatch) -> None:
+    builds = {"n": 0}
+    real_make_grid = freeform._make_grid
+
+    def counting_make_grid(*args: object, **kwargs: object) -> freeform._Grid:
+        builds["n"] += 1
+        return real_make_grid(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(freeform, "_make_grid", counting_make_grid)
+    canvas, demands, boundary, bounds = _boundary_reachable_port_fixture()
+    reservation = freeform._reserve_port_access(
+        canvas, demands, boundary=boundary, bounds=bounds
+    )
+    assert reservation.assigned
+    assert builds["n"] == 1, builds
 
 
 def test_internal_only_enclosed_ports_are_not_boundary_filtered() -> None:
