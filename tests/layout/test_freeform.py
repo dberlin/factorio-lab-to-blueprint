@@ -4270,7 +4270,7 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
         seed: freeform._Pack,
         exact_pack_no_goods: tuple[freeform.ExactPackNoGood, ...],
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> freeform._PackSolveOutcome:
         assert exact_pack_no_goods == (), "diversification is local, never global proof state"
         repaired = replace(
             seed,
@@ -4278,7 +4278,15 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
         )
         packed_candidates[id(repaired)] = (20, 0)
         repaired_origins.append(tuple(repaired.at[index] for index in range(len(strips))))
-        return repaired
+        return freeform._PackSolveOutcome(
+            pack=repaired,
+            status="OPTIMAL",
+            objective_value=float(repaired.width),
+            best_objective_bound=float(repaired.width),
+            wall_time_s=0.25,
+            deterministic_time_s=0.01,
+            model_fingerprint="fixture-window-model",
+        )
 
     monkeypatch.setattr(freeform, "_pack_window", repair_window)
     attempts: list[freeform.PackAttempt] = []
@@ -7339,7 +7347,7 @@ def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
         deterministic=True,
     )
     assert full is not None
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=height,
         width_bound=bound,
@@ -7350,10 +7358,52 @@ def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
         time_budget_s=5.0,
         deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
     )
+    assert outcome is not None
+    windowed = outcome.pack
     assert windowed is not None
     assert windowed.width == full.width
     assert windowed.at == full.at
     assert windowed.direct == full.direct
+
+
+def test_pack_window_reports_its_exact_cp_sat_outcome() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    outcome = freeform._pack_window(
+        strips,
+        height=height,
+        width_bound=bound,
+        direct_candidates=candidates,
+        window=frozenset(range(len(strips))),
+        fixed_at={},
+        seed=None,
+        time_budget_s=5.0,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+    )
+    assert outcome is not None
+    assert outcome.status == "OPTIMAL"
+    assert outcome.pack is not None
+    assert outcome.objective_value is not None
+    assert outcome.best_objective_bound == outcome.objective_value
+    assert outcome.wall_time_s >= 0.0
+    assert outcome.deterministic_time_s >= 0.0
+    assert len(outcome.model_fingerprint) == 64
+
+
+def test_pack_window_distinguishes_infeasible_from_unknown() -> None:
+    strips = _three_unit_strips()
+    outcome = freeform._pack_window(
+        strips,
+        height=6,
+        width_bound=8,
+        direct_candidates={},
+        window=frozenset({0}),
+        fixed_at={1: (0, 0), 2: (0, 0)},
+    )
+    assert outcome is not None
+    assert outcome.status == "INFEASIBLE"
+    assert outcome.pack is None
+    assert outcome.objective_value is None
+    assert outcome.best_objective_bound is None
 
 
 def test_pack_window_leaves_every_pinned_strip_where_it_was() -> None:
@@ -7370,7 +7420,7 @@ def test_pack_window_leaves_every_pinned_strip_where_it_was() -> None:
     assert seed is not None
     window = frozenset({0})
     fixed = {index: origin for index, origin in seed.at.items() if index not in window}
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=height,
         width_bound=seed.width,
@@ -7379,6 +7429,8 @@ def test_pack_window_leaves_every_pinned_strip_where_it_was() -> None:
         fixed_at=fixed,
         seed=seed,
     )
+    assert outcome is not None
+    windowed = outcome.pack
     assert windowed is not None
     for index, origin in fixed.items():
         assert windowed.at[index] == origin
@@ -7398,7 +7450,7 @@ def test_pack_window_never_widens_past_its_bound() -> None:
     )
     assert seed is not None
     free = min(3, len(strips))
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=height,
         width_bound=seed.width,
@@ -7407,7 +7459,7 @@ def test_pack_window_never_widens_past_its_bound() -> None:
         fixed_at={index: origin for index, origin in seed.at.items() if index >= free},
         seed=seed,
     )
-    assert windowed is None or windowed.width <= seed.width
+    assert outcome is None or outcome.pack is None or outcome.pack.width <= seed.width
 
 
 def test_pack_window_keeps_pins_the_free_model_would_have_broken() -> None:
@@ -7420,7 +7472,7 @@ def test_pack_window_keeps_pins_the_free_model_would_have_broken() -> None:
     """
     strips = _three_unit_strips()
     fixed = {1: (4, 0), 2: (6, 2)}
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=6,
         width_bound=8,
@@ -7428,6 +7480,8 @@ def test_pack_window_keeps_pins_the_free_model_would_have_broken() -> None:
         window=frozenset({0}),
         fixed_at=fixed,
     )
+    assert outcome is not None
+    windowed = outcome.pack
     assert windowed is not None
     assert windowed.at[1] == (4, 0)
     assert windowed.at[2] == (6, 2)
@@ -7567,7 +7621,7 @@ def test_pack_window_keeps_a_no_good_that_still_has_a_free_strip() -> None:
     )
     assert seed is not None
     skipped: list[int] = []
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=height,
         width_bound=seed.width,
@@ -7581,7 +7635,7 @@ def test_pack_window_keeps_a_no_good_that_still_has_a_free_strip() -> None:
     assert skipped == []
     # The forbidden assignment is the seed's, so the solve must move strip 0 or
     # find nothing at all -- it must not hand back the pack it was told to reject.
-    assert windowed is None or windowed.at[0] != seed.at[0]
+    assert outcome is None or outcome.pack is None or outcome.pack.at[0] != seed.at[0]
 
 
 def test_pack_window_reports_a_skip_through_on_skipped() -> None:
@@ -18159,6 +18213,10 @@ def test_freeform_placement_records_route_backend() -> None:
         "pack_cp_wall_time_s",
         "pack_cp_deterministic_time_s",
         "pack_cp_solves",
+        "pack_window_solves",
+        "pack_window_distinct_submodels",
+        "pack_window_repeated_submodels",
+        "pack_window_repeated_submodel_seconds",
         "preparation_time_s",
         "detailed_route_time_s",
         "compaction_time_s",

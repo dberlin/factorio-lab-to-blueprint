@@ -61,6 +61,7 @@ rather than tidiness.
 from __future__ import annotations
 
 import heapq
+import hashlib
 import math
 import time
 from array import array
@@ -3558,6 +3559,15 @@ class _PackCpProfile:
     last_status: str = "UNKNOWN"
     last_objective: float = math.nan
     last_best_bound: float = math.nan
+    window_solves: int = 0
+    window_optimal: int = 0
+    window_feasible: int = 0
+    window_infeasible: int = 0
+    window_model_invalid: int = 0
+    window_unknown: int = 0
+    window_repeated_submodels: int = 0
+    window_repeated_submodel_seconds: float = 0.0
+    window_fingerprints: set[str] = field(default_factory=set)
 
     def observe(self, solver: cp_model.CpSolver, status: cp_model.CpSolverStatus, wall_s: float) -> None:
         name = solver.StatusName(status)
@@ -3579,6 +3589,24 @@ class _PackCpProfile:
         else:
             self.unknown += 1
 
+    def observe_window(self, outcome: _PackSolveOutcome) -> None:
+        self.window_solves += 1
+        if outcome.status == "OPTIMAL":
+            self.window_optimal += 1
+        elif outcome.status == "FEASIBLE":
+            self.window_feasible += 1
+        elif outcome.status == "INFEASIBLE":
+            self.window_infeasible += 1
+        elif outcome.status == "MODEL_INVALID":
+            self.window_model_invalid += 1
+        else:
+            self.window_unknown += 1
+        if outcome.model_fingerprint in self.window_fingerprints:
+            self.window_repeated_submodels += 1
+            self.window_repeated_submodel_seconds += outcome.wall_time_s
+        else:
+            self.window_fingerprints.add(outcome.model_fingerprint)
+
     def stats(self) -> dict[str, float | str]:
         return {
             "pack_cp_wall_time_s": self.wall_time_s,
@@ -3592,6 +3620,15 @@ class _PackCpProfile:
             "pack_cp_last_status": self.last_status,
             "pack_cp_last_objective": self.last_objective,
             "pack_cp_last_best_bound": self.last_best_bound,
+            "pack_window_solves": float(self.window_solves),
+            "pack_window_optimal": float(self.window_optimal),
+            "pack_window_feasible": float(self.window_feasible),
+            "pack_window_infeasible": float(self.window_infeasible),
+            "pack_window_model_invalid": float(self.window_model_invalid),
+            "pack_window_unknown": float(self.window_unknown),
+            "pack_window_distinct_submodels": float(len(self.window_fingerprints)),
+            "pack_window_repeated_submodels": float(self.window_repeated_submodels),
+            "pack_window_repeated_submodel_seconds": self.window_repeated_submodel_seconds,
         }
 
 
@@ -3599,6 +3636,19 @@ _PACK_CP_PROFILE: ContextVar[_PackCpProfile | None] = ContextVar(
     "_PACK_CP_PROFILE",
     default=None,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _PackSolveOutcome:
+    """Typed result of one concrete CP-SAT pack submodel."""
+
+    pack: _Pack | None
+    status: str
+    objective_value: float | None
+    best_objective_bound: float | None
+    wall_time_s: float
+    deterministic_time_s: float
+    model_fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -4139,35 +4189,53 @@ def _pack_result(
     direct_candidates: Mapping[tuple[int, int], _DirectCandidate],
     height: int,
     admission: cp_model.CpSolverSolutionCallback | None,
-) -> _Pack | None:
-    """Solve one built model, profile its exact CP outcome, and read its assignment."""
+    *,
+    model_fingerprint: str = "",
+) -> _PackSolveOutcome:
+    """Solve one built model and retain the exact CP status and bound."""
     solve_started = time.perf_counter()
     status = solver.Solve(built.model, admission)
     elapsed = time.perf_counter() - solve_started
     profile = _PACK_CP_PROFILE.get()
     if profile is not None:
         profile.observe(solver, status, elapsed)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None
-    return _Pack(
-        at={
-            i: (solver.Value(built.xs[i]) + strips[i].west_channel, solver.Value(built.ys[i]))
-            for i in range(len(strips))
-        },
-        width=solver.Value(built.w_var),
-        height=height,
-        status=solver.StatusName(status),
-        hit_budget=status == cp_model.FEASIBLE,
-        direct=frozenset(
-            DirectInsertId(
-                i,
-                j,
-                direct_candidates[i, j].item,
-                direct_candidates[i, j].cargo_domain,
-            )
-            for (i, j), di in built.direct_vars.items()
-            if solver.Value(di)
-        ),
+    status_name = solver.StatusName(status)
+    solved = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+    pack = (
+        _Pack(
+            at={
+                i: (
+                    solver.Value(built.xs[i]) + strips[i].west_channel,
+                    solver.Value(built.ys[i]),
+                )
+                for i in range(len(strips))
+            },
+            width=solver.Value(built.w_var),
+            height=height,
+            status=status_name,
+            hit_budget=status == cp_model.FEASIBLE,
+            direct=frozenset(
+                DirectInsertId(
+                    i,
+                    j,
+                    direct_candidates[i, j].item,
+                    direct_candidates[i, j].cargo_domain,
+                )
+                for (i, j), di in built.direct_vars.items()
+                if solver.Value(di)
+            ),
+        )
+        if solved
+        else None
+    )
+    return _PackSolveOutcome(
+        pack=pack,
+        status=status_name,
+        objective_value=solver.ObjectiveValue() if solved else None,
+        best_objective_bound=solver.BestObjectiveBound() if solved else None,
+        wall_time_s=elapsed,
+        deterministic_time_s=solver.response_proto.deterministic_time,
+        model_fingerprint=model_fingerprint,
     )
 
 
@@ -4190,7 +4258,7 @@ def _pack_window(
     time_budget_s: float = C_WINDOW_SECONDS,
     deterministic_work: float = C_WINDOW_DETERMINISTIC_WORK,
     on_skipped: Callable[[int], None] | None = None,
-) -> _Pack | None:
+) -> _PackSolveOutcome | None:
     """Re-solve `_pack`'s formulation for ``window`` with everything else pinned.
 
     This is a sub-model, not a re-solve: every strip, constraint, no-good and
@@ -4202,10 +4270,9 @@ def _pack_window(
     ``width_bound`` is the incumbent's width, so a window may NARROW the block
     and can never widen it.
 
-    Returns ``None`` only when the sub-model is infeasible or the solve returns
-    no incumbent.  An assignment identical to the seed's is returned as-is: the
-    caller decides what that means, because "the window found nothing better" is
-    a signal, not an error.
+    A CP-SAT invocation returns its typed status and objective bound even when it
+    has no incumbent.  ``None`` means no model was solved because the request was
+    statically unaffordable or inconsistent.
     """
     if not window:
         raise ValueError("a repair window must name at least one strip")
@@ -4242,7 +4309,20 @@ def _pack_window(
     solver.parameters.max_deterministic_time = min(time_budget_s, deterministic_work)
     # A function of `arrangement` and nothing else -- see `_pack`.
     solver.parameters.random_seed = _PACK_RANDOM_SEED + _ARRANGEMENT_STRIDE * arrangement
-    return _pack_result(built, solver, strips, direct_candidates, height, None)
+    fingerprint = hashlib.sha256(str(built.model.Proto()).encode()).hexdigest()
+    outcome = _pack_result(
+        built,
+        solver,
+        strips,
+        direct_candidates,
+        height,
+        None,
+        model_fingerprint=fingerprint,
+    )
+    profile = _PACK_CP_PROFILE.get()
+    if profile is not None:
+        profile.observe_window(outcome)
+    return outcome
 
 
 def _decoded_from_pack(pack: _Pack, strips: Sequence[Strip], height: int) -> DecodedPlacement:
@@ -4401,7 +4481,14 @@ def _pack(
                 self.StopSearch()
 
     admission = SeedAdmission() if stop_when_seed_admissible and seed is not None else None
-    return _pack_result(built, solver, strips, direct_candidates, height, admission)
+    return _pack_result(
+        built,
+        solver,
+        strips,
+        direct_candidates,
+        height,
+        admission,
+    ).pack
 
 
 # --- emission --------------------------------------------------------------
@@ -19964,7 +20051,7 @@ class FreeformLayout:
                                     solved_windows.add(window_key)
                                     window_solves += 1
                                     window_started = time.monotonic()
-                                    repaired = _pack_window(
+                                    outcome = _pack_window(
                                         strips,
                                         height=height,
                                         width_bound=pack.width,
@@ -19992,6 +20079,7 @@ class FreeformLayout:
                                         on_skipped=_count_window_skips,
                                     )
                                     window_seconds += time.monotonic() - window_started
+                                    repaired = None if outcome is None else outcome.pack
                                     if repaired is None or repaired.at == pack.at:
                                         session.observe(
                                             choice,
