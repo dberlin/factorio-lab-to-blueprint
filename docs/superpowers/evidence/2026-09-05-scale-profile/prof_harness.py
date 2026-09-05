@@ -15,7 +15,9 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path("/home/dannyb/sources/factorio-lab-to-blueprint")
+#: The checkout this file lives in (docs/superpowers/evidence/<dir>/), so a
+#: worktree measures its own code rather than the main checkout's.
+ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
