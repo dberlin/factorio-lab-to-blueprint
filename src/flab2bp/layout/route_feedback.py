@@ -84,6 +84,7 @@ class DetailedRouteStatus(StrEnum):
     UNPOWERABLE = "unpowerable"
     BUDGET = "budget"
     INVALID = "invalid"
+    DOMINATED = "dominated"
 
 
 @dataclass(frozen=True, slots=True)
