@@ -11098,8 +11098,24 @@ def _match_access_corridors(
         ]
         | None
     ) = None,
+    cancelled: Callable[[], bool] | None = None,
+    deadline: float | None = None,
 ) -> dict[PortAccessDemand, PortAccessCorridor]:
     """Assign cell-disjoint corridors, giving every port its first claim first."""
+    def solve_model() -> cp_model.CpSolverStatus:
+        if (cancelled is not None and cancelled()) or _expired(deadline):
+            raise _PreparationDeadline
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _PreparationDeadline
+            solver.parameters.max_time_in_seconds = remaining
+        status = solver.solve(model)
+        if (cancelled is not None and cancelled()) or _expired(deadline):
+            raise _PreparationDeadline
+        if deadline is not None and status == cp_model.UNKNOWN:
+            raise _PreparationDeadline
+        return status
 
     by_port: dict[Cell, list[PortAccessDemand]] = defaultdict(list)
     widths: dict[Cell, int] = {}
@@ -11146,7 +11162,7 @@ def _match_access_corridors(
         if not rank_vars:
             continue
         model.maximize(sum(rank_vars))
-        status = solver.solve(model)
+        status = solve_model()
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             return {}
         model.add(sum(rank_vars) == round(solver.objective_value))
@@ -11163,7 +11179,7 @@ def _match_access_corridors(
     if validate is None:
         solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
     while True:
-        status = solver.solve(model)
+        status = solve_model()
         use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
         if not use_polished:
             if validate is not None and status == cp_model.INFEASIBLE:
@@ -11182,6 +11198,8 @@ def _match_access_corridors(
             assigned[demand] = PortAccessCorridor(access, exit_cell, demand.kind)
             selected_by_demand[demand] = choices[choice]
         witness = None if validate is None else validate(assigned)
+        if (cancelled is not None and cancelled()) or _expired(deadline):
+            raise _PreparationDeadline
         if validate is None or witness is None:
             return assigned
         cut_variables = [
@@ -11198,6 +11216,8 @@ def _reserve_port_access(
     *,
     boundary: Sequence[Cell] | None = None,
     bounds: tuple[int, int, int, int] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    deadline: float | None = None,
 ) -> PortAccessReservation:
     """Enumerate and jointly hold one complete corridor per physical claim.
 
@@ -11207,7 +11227,22 @@ def _reserve_port_access(
     joint matcher has selected every compatible corridor.
     """
 
+    if (cancelled is not None and cancelled()) or _expired(deadline):
+        raise _PreparationDeadline
+    saved_reserved = dict(canvas.reserved)
+    saved_corridors = dict(canvas.port_corridors)
     canvas.reserved.clear()
+    canvas.port_corridors.clear()
+
+    def check_cancelled() -> None:
+        if not ((cancelled is not None and cancelled()) or _expired(deadline)):
+            return
+        canvas.reserved.clear()
+        canvas.reserved.update(saved_reserved)
+        canvas.port_corridors.clear()
+        canvas.port_corridors.update(saved_corridors)
+        raise _PreparationDeadline
+
     bounds = bounds or canvas.limit
     local_options: dict[PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
     reachable_options: dict[PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
@@ -11216,6 +11251,7 @@ def _reserve_port_access(
     boundary_set = set(boundary or ())
 
     for demand in demands:
+        check_cancelled()
         key = demand.cell
         access_cells = tuple(
             cell
@@ -11249,7 +11285,9 @@ def _reserve_port_access(
                 {},
                 0.0,
                 bounds,
+                deadline=deadline,
             )
+            check_cancelled()
             if result.path is not None:
                 candidates.append((access, exit_cell))
             elif result.kind is RouteFailureKind.SEALED_POCKET:
@@ -11291,6 +11329,7 @@ def _reserve_port_access(
                 {},
                 0.0,
                 bounds,
+                deadline=deadline,
                 forbidden=forbidden,
                 blocking_owners={
                     cell: owner_index[owner]
@@ -11298,6 +11337,7 @@ def _reserve_port_access(
                     if owner != demand
                 },
             )
+            check_cancelled()
             if result.path is not None or result.kind is RouteFailureKind.BUDGET:
                 continue
             frontiers[demand].update(result.wall)
@@ -11312,11 +11352,21 @@ def _reserve_port_access(
             return (demand, *sorted(blocking_demands, key=lambda blocked: blocked.cell))
         return None
 
-    assignments = _match_access_corridors(
-        demands,
-        reachable_options,
-        validate=assignment_boundary_cut if boundary is not None else None,
-    )
+    try:
+        assignments = _match_access_corridors(
+            demands,
+            reachable_options,
+            validate=assignment_boundary_cut if boundary is not None else None,
+            cancelled=cancelled,
+            deadline=deadline,
+        )
+    except _PreparationDeadline:
+        canvas.reserved.clear()
+        canvas.reserved.update(saved_reserved)
+        canvas.port_corridors.clear()
+        canvas.port_corridors.update(saved_corridors)
+        raise
+    check_cancelled()
     assigned_by_port: dict[Cell, list[PortAccessCorridor]] = defaultdict(list)
     for demand, corridor in assignments.items():
         canvas.reserved[corridor.access] = demand.cell
@@ -15304,6 +15354,7 @@ def _prepare_routing_problem(
     _reserve_ports: bool = True,
     staged_static_cache: _StagedStaticCache | None = None,
     cancelled: Callable[[], bool] | None = None,
+    deadline: float | None = None,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
@@ -15698,6 +15749,8 @@ def _prepare_routing_problem(
             inventory.demands,
             boundary=boundary_cells,
             bounds=routing_bounds,
+            cancelled=cancelled,
+            deadline=deadline,
         )
         stranded_ports.clear()
         for evidence in reservation.evidence:
@@ -16559,6 +16612,7 @@ def _build(
             ramped=ramped,
             staged_static_cache=staged_static_cache,
             cancelled=cancelled,
+            deadline=deadline,
         )
     except _PreparationDeadline, finalize.ProjectionCancelled:
         return _BuildResult(

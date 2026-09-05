@@ -23121,3 +23121,51 @@ def test_broke7_recorded_pack_outcomes_after_boundary_role_repair(
             failure.kind is not RouteFailureKind.STATIC_ACCESS
             for failure in built.routing.failures
         )
+
+
+def test_port_access_cancellation_inside_candidate_scan_restores_canvas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas, demand = _corridor_scene()
+    sentinel = (0, 0, 0)
+    old_corridor = freeform.PortAccessCorridor((0, 1, 0), (0, 2, 0))
+    canvas.reserved = {(0, 1, 0): sentinel, (0, 2, 0): sentinel}
+    canvas.port_corridors = {sentinel: (old_corridor,)}
+    stopped = False
+
+    def stop_after_search(*_args: object, **_kwargs: object) -> freeform._PathSearchResult:
+        nonlocal stopped
+        stopped = True
+        return freeform._PathSearchResult(((2, 3, 0),), None, (), 1)
+
+    monkeypatch.setattr(freeform, "_astar", stop_after_search)
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._reserve_port_access(
+            canvas,
+            (demand,),
+            boundary=((0, 3, 0),),
+            cancelled=lambda: stopped,
+        )
+
+    assert canvas.reserved == {(0, 1, 0): sentinel, (0, 2, 0): sentinel}
+    assert canvas.port_corridors == {sentinel: (old_corridor,)}
+
+
+def test_port_access_cancellation_before_matching_resolve_aborts() -> None:
+    first = _access_demand((0, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL)
+    stopped = False
+
+    def stop_for_resolve(
+        _assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> tuple[freeform.PortAccessDemand, ...]:
+        nonlocal stopped
+        stopped = True
+        return (first,)
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._match_access_corridors(
+            (first,),
+            {first: (((1, 0, 0), (2, 0, 0)), ((0, 1, 0), (0, 2, 0)))},
+            validate=stop_for_resolve,
+            cancelled=lambda: stopped,
+        )
