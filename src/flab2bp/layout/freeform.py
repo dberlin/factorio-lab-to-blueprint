@@ -4516,6 +4516,27 @@ def _collision_pose(building: PlacedBuilding) -> colliders.Placed:
     )
 
 
+def _relative_rigid_frame_pose(
+    building: colliders.Placed,
+    origin: colliders.Placed,
+    materialized_origin: colliders.Placed,
+    *,
+    rotated: bool,
+) -> colliders.Placed:
+    """Apply one finalizer frame to a pose relative to its materialized origin."""
+    delta_x = building.x - origin.x
+    delta_y = building.y - origin.y
+    if rotated:
+        delta_x, delta_y = -delta_y, delta_x
+    return replace(
+        building,
+        x=materialized_origin.x + delta_x,
+        y=materialized_origin.y + delta_y,
+        z=materialized_origin.z + building.z - origin.z,
+        yaw=(building.yaw - 90.0) % 360.0 if rotated else building.yaw,
+    )
+
+
 def _building_collider_hits(
     buildings: Sequence[PlacedBuilding],
     candidate: PlacedBuilding,
@@ -13539,10 +13560,6 @@ def _projected_coater_junction_bans_by_frame(
     min_x, min_y, max_x, max_y = junction_bounds
     splitter_span = catalog.collider_span(catalog.SPLITTER_ID, 0.0)
     banned_by_frame: list[set[Cell]] = [set() for _frame in frames]
-    materialized_splitters: dict[
-        tuple[Cell, tuple[int, int, int, int], finalize.FrameCandidate],
-        tuple[colliders.Placed, ...],
-    ] = {}
     projected_splitter_boxes: dict[
         tuple[colliders.Placed, planet.Projection],
         list[colliders.Box],
@@ -13560,6 +13577,7 @@ def _projected_coater_junction_bans_by_frame(
     for coater_index, coater_building in coaters:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
+        coater_pose = _collision_pose(coater_building)
         prepared_frames: list[
             tuple[
                 int,
@@ -13724,7 +13742,10 @@ def _projected_coater_junction_bans_by_frame(
                     cell = (x, y, level)
                     if cell in already_banned:
                         continue
-                    splitter_stack = _splitter_stack_geometry(x, y, level)
+                    splitter_stack = tuple(
+                        _collision_pose(building)
+                        for building in _splitter_stack_geometry(x, y, level)
+                    )
                     for (
                         frame_index,
                         frame,
@@ -13736,24 +13757,15 @@ def _projected_coater_junction_bans_by_frame(
                         if cell in banned_by_frame[frame_index]:
                             continue
                         rejected = False
-                        materialized_key = (
-                            cell,
-                            frame.bounds,
-                            frame.candidate,
-                        )
-                        materialized_stack = materialized_splitters.get(materialized_key)
-                        if materialized_stack is None:
-                            materialized_stack = tuple(
-                                _collision_pose(
-                                    finalize.materialize_frame_building(
-                                        stack_member,
-                                        bounds=frame.bounds,
-                                        candidate=frame.candidate,
-                                    )
-                                )
-                                for stack_member in splitter_stack
+                        materialized_stack = tuple(
+                            _relative_rigid_frame_pose(
+                                splitter,
+                                coater_pose,
+                                materialized_coater[1],
+                                rotated=frame.candidate.frame.rotated,
                             )
-                            materialized_splitters[materialized_key] = materialized_stack
+                            for splitter in splitter_stack
+                        )
                         for materialized_splitter in materialized_stack:
                             cell_dx = abs(materialized_splitter.x - materialized_coater[1].x)
                             cell_dy = abs(materialized_splitter.y - materialized_coater[1].y)
