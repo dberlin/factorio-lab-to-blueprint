@@ -24,11 +24,12 @@ from __future__ import annotations
 import multiprocessing
 import os
 import queue
+import resource
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
 
@@ -335,6 +336,14 @@ class _StrategyRaceOutcome:
     published_no_goods: int = 0
     consumed_no_goods: int = 0
     dropped_messages: int = 0
+    #: Process-local measurements for exactly this strategy child. Peak RSS is
+    #: Linux ``ru_maxrss`` in KiB; CPU deltas exclude the spawned interpreter's
+    #: startup before this request begins, while wall covers layout construction
+    #: through its returned/refused outcome.
+    process_wall_time_s: float = 0.0
+    process_user_cpu_s: float = 0.0
+    process_system_cpu_s: float = 0.0
+    process_peak_rss_kib: int = 0
 
     @classmethod
     def refused(
@@ -513,6 +522,8 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
     # code today.  When the wiring task lands, they are rebuilt in this frame,
     # because the channel, the inbox and the counter they would close over all
     # live in it.
+    usage_started = resource.getrusage(resource.RUSAGE_SELF)
+    process_started = time.monotonic()
     layout = _build_layout(
         request,
         portfolio_incumbent=portfolio_incumbent,
@@ -525,7 +536,7 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
             absolute_deadline=request.soft_deadline,
         )
     except NoValidLayout as exc:
-        return _StrategyRaceOutcome.refused(
+        outcome = _StrategyRaceOutcome.refused(
             request.strategy,
             exc.reason,
             exc.spec_label,
@@ -537,26 +548,35 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
             consumed_no_goods=len(inbox.applicable(frozenset())),
             dropped_messages=(0 if channels is None else channels.dropped) + inbox.dropped,
         )
+    else:
+        outcome = _StrategyRaceOutcome(
+            request.strategy,
+            "completed",
+            placement=placement,
+            published_incumbents=published,
+            consumed_incumbents=consumed,
+            published_no_goods=published_no_goods,
+            # Against the EMPTY set, which is always 0, because the leg holds no
+            # strip set of its own -- the receivers do, and they get the live one
+            # through `external_no_goods`.  The field has exactly one writer, and the
+            # wiring task replaces this argument rather than this line's shape.
+            consumed_no_goods=len(inbox.applicable(frozenset())),
+            # Both halves of "a hint that never arrived": what the outbound queue
+            # refused, and what the inbox could not hold.
+            dropped_messages=(0 if channels is None else channels.dropped) + inbox.dropped,
+        )
     finally:
         # In a `finally` because refusing is the common path, and a child that
         # refused still holds whatever it published.
         if channels is not None:
             channels.close()
-    return _StrategyRaceOutcome(
-        request.strategy,
-        "completed",
-        placement=placement,
-        published_incumbents=published,
-        consumed_incumbents=consumed,
-        published_no_goods=published_no_goods,
-        # Against the EMPTY set, which is always 0, because the leg holds no
-        # strip set of its own -- the receivers do, and they get the live one
-        # through `external_no_goods`.  The field has exactly one writer, and the
-        # wiring task replaces this argument rather than this line's shape.
-        consumed_no_goods=len(inbox.applicable(frozenset())),
-        # Both halves of "a hint that never arrived": what the outbound queue
-        # refused, and what the inbox could not hold.
-        dropped_messages=(0 if channels is None else channels.dropped) + inbox.dropped,
+    usage_finished = resource.getrusage(resource.RUSAGE_SELF)
+    return replace(
+        outcome,
+        process_wall_time_s=time.monotonic() - process_started,
+        process_user_cpu_s=usage_finished.ru_utime - usage_started.ru_utime,
+        process_system_cpu_s=usage_finished.ru_stime - usage_started.ru_stime,
+        process_peak_rss_kib=usage_finished.ru_maxrss,
     )
 
 

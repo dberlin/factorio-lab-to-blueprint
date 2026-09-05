@@ -720,6 +720,13 @@ def test_every_attempt_reports_its_wall_and_its_overshoot() -> None:
         assert stats["wall_overshoot_s"] == max(
             0.0, stats["attempt_wall_s"] - 5.0 - ATOMIC_COMPLETION_GRACE_S
         )
+        for key in (
+            "pipeline_compaction_time_s",
+            "pipeline_finalization_time_s",
+            "pipeline_validation_time_s",
+            "pipeline_encoding_time_s",
+        ):
+            assert stats[key] >= 0.0
 
 
 def _stub_needs_finalization(

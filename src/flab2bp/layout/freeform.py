@@ -3543,6 +3543,64 @@ C_WINDOW_WORKERS = 1
 C_WINDOW_DEADLINE_SAFETY_SECONDS = 0.05
 
 
+@dataclass(slots=True)
+class _PackCpProfile:
+    """Aggregate CP-SAT work for one Freeform layout attempt."""
+
+    wall_time_s: float = 0.0
+    deterministic_time_s: float = 0.0
+    solves: int = 0
+    optimal: int = 0
+    feasible: int = 0
+    infeasible: int = 0
+    model_invalid: int = 0
+    unknown: int = 0
+    last_status: str = "UNKNOWN"
+    last_objective: float = math.nan
+    last_best_bound: float = math.nan
+
+    def observe(self, solver: cp_model.CpSolver, status: cp_model.CpSolverStatus, wall_s: float) -> None:
+        name = solver.StatusName(status)
+        self.wall_time_s += wall_s
+        self.deterministic_time_s += solver.response_proto.deterministic_time
+        self.solves += 1
+        self.last_status = name
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            self.last_objective = solver.ObjectiveValue()
+            self.last_best_bound = solver.BestObjectiveBound()
+        if name == "OPTIMAL":
+            self.optimal += 1
+        elif name == "FEASIBLE":
+            self.feasible += 1
+        elif name == "INFEASIBLE":
+            self.infeasible += 1
+        elif name == "MODEL_INVALID":
+            self.model_invalid += 1
+        else:
+            self.unknown += 1
+
+    def stats(self) -> dict[str, float | str]:
+        return {
+            "pack_cp_wall_time_s": self.wall_time_s,
+            "pack_cp_deterministic_time_s": self.deterministic_time_s,
+            "pack_cp_solves": float(self.solves),
+            "pack_cp_optimal": float(self.optimal),
+            "pack_cp_feasible": float(self.feasible),
+            "pack_cp_infeasible": float(self.infeasible),
+            "pack_cp_model_invalid": float(self.model_invalid),
+            "pack_cp_unknown": float(self.unknown),
+            "pack_cp_last_status": self.last_status,
+            "pack_cp_last_objective": self.last_objective,
+            "pack_cp_last_best_bound": self.last_best_bound,
+        }
+
+
+_PACK_CP_PROFILE: ContextVar[_PackCpProfile | None] = ContextVar(
+    "_PACK_CP_PROFILE",
+    default=None,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class _PackModel:
     """One built packing model and the handles a caller needs to read it back."""
@@ -4082,8 +4140,13 @@ def _pack_result(
     height: int,
     admission: cp_model.CpSolverSolutionCallback | None,
 ) -> _Pack | None:
-    """Solve one built model and read its assignment back as a `_Pack`."""
+    """Solve one built model, profile its exact CP outcome, and read its assignment."""
+    solve_started = time.perf_counter()
     status = solver.Solve(built.model, admission)
+    elapsed = time.perf_counter() - solve_started
+    profile = _PACK_CP_PROFILE.get()
+    if profile is not None:
+        profile.observe(solver, status, elapsed)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None
     return _Pack(
@@ -16111,6 +16174,8 @@ class _BuildResult:
     promised_direct: frozenset[DirectInsertId] = frozenset()
     realized_direct: frozenset[DirectInsertId] = frozenset()
     stranded_ports: tuple[StrandedPort, ...] = ()
+    preparation_time_s: float = 0.0
+    detailed_route_time_s: float = 0.0
 
 
 def _build(
@@ -16128,6 +16193,7 @@ def _build(
 ) -> _BuildResult:
     """Prepare one pack, then emit it through the reusable detailed entry point."""
     cancelled = None if deadline is None else lambda: time.monotonic() >= deadline
+    preparation_started = time.monotonic()
     try:
         prepared = _prepare_routing_problem(
             spec,
@@ -16152,6 +16218,7 @@ def _build(
             ),
             towers=(),
             budget_stage=_BuildBudgetStage.PREPARATION,
+            preparation_time_s=time.monotonic() - preparation_started,
         )
     if cancelled is not None and cancelled():
         return _BuildResult(
@@ -16166,8 +16233,9 @@ def _build(
             towers=(),
             budget_stage=_BuildBudgetStage.PREPARATION,
             stranded_ports=prepared.stranded_ports,
+            preparation_time_s=time.monotonic() - preparation_started,
         )
-    return _build_prepared(
+    built = _build_prepared(
         spec,
         strips,
         prepared,
@@ -16175,6 +16243,10 @@ def _build(
         route=route,
         deadline=deadline,
         budget=budget,
+    )
+    return replace(
+        built,
+        preparation_time_s=time.monotonic() - preparation_started,
     )
 
 
@@ -16231,6 +16303,7 @@ def _build_prepared(
     internal_routing = empty_routing
     late_output_routing = empty_routing
 
+    detailed_route_started = time.monotonic()
     if route and prepared.preparation_failures:
         internal_routing = DetailedRouteResult(
             DetailedRouteStatus.STRANDED,
@@ -16294,6 +16367,7 @@ def _build_prepared(
             deadline,
             budget,
         )
+    detailed_route_time_s = time.monotonic() - detailed_route_started
 
     failures = (
         external_routing.failures
@@ -16356,6 +16430,7 @@ def _build_prepared(
             promised_direct=prepared.promised_direct,
             realized_direct=prepared.realized_direct,
             stranded_ports=prepared.stranded_ports,
+            detailed_route_time_s=detailed_route_time_s,
         )
 
     # Reservations and tentative markers are attempt-local and are spent before
@@ -16436,6 +16511,7 @@ def _build_prepared(
         promised_direct=prepared.promised_direct,
         realized_direct=prepared.realized_direct,
         stranded_ports=prepared.stranded_ports,
+        detailed_route_time_s=detailed_route_time_s,
     )
 
 
@@ -18137,6 +18213,7 @@ class FreeformLayout:
 
         ceiling = time_budget_s
         started = time.monotonic()
+        _PACK_CP_PROFILE.set(_PackCpProfile())
         # A racing child starts the budget its PARENT started, so it must be
         # told the wall rather than compute one: spawn, interpreter start and
         # unpickling the spec all happen after the clock began.  Same expression
@@ -18259,6 +18336,7 @@ class FreeformLayout:
                 budget_s=0.0,
             )
 
+        planning_time_s = time.monotonic() - started
         budgets = (time_budget_s,)
 
         #: Ordered authoritative findings from candidates rejected after packing.
@@ -18312,6 +18390,8 @@ class FreeformLayout:
                 from flab2bp.layout import route_kernel
 
                 best.stats["route_backend"] = route_kernel.selected_backend()
+                best.stats["planning_time_s"] = planning_time_s
+                best.stats["total_time_s"] = time.monotonic() - started
                 return best
 
         deadline_expired = _expired(deadline)
@@ -18796,6 +18876,12 @@ class FreeformLayout:
         #: This candidate's own `_pack` span, reset when its turn starts and
         #: left at zero for a queued repair, whose pack was already bought.
         candidate_pack_s = 0.0
+        pack_time_s = 0.0
+        preparation_time_s = 0.0
+        detailed_route_time_s = 0.0
+        compaction_time_s = 0.0
+        finalization_time_s = 0.0
+        validation_time_s = 0.0
         #: Window repairs waiting to be evaluated, and the queue that drains
         #: them.  `candidate_packs` is iterated by index and already mutated in
         #: four places; a separate queue adds no fifth mutation.
@@ -19300,6 +19386,7 @@ class FreeformLayout:
                         ),
                     )
                     candidate_pack_s = time.monotonic() - pack_started
+                    pack_time_s += candidate_pack_s
                 if pack is None:
                     stale_draws += 1
                     continue
@@ -19470,6 +19557,8 @@ class FreeformLayout:
                         budget=budget,
                         staged_static_cache=staged_static_cache,
                     )
+                    preparation_time_s += result.preparation_time_s
+                    detailed_route_time_s += result.detailed_route_time_s
                 except finalize.ProjectionRefusal as exc:
                     if rejected is not None:
                         for failure in exc.failures:
@@ -19985,10 +20074,9 @@ class FreeformLayout:
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
                     placement = compacted.placement
-                    compaction_reserve_s = max(
-                        compaction_reserve_s,
-                        time.monotonic() - compaction_started,
-                    )
+                    compaction_elapsed = time.monotonic() - compaction_started
+                    compaction_time_s += compaction_elapsed
+                    compaction_reserve_s = max(compaction_reserve_s, compaction_elapsed)
                     finalize_started = time.monotonic()
                     try:
                         placement = finalize.finalize_placement(
@@ -20119,12 +20207,12 @@ class FreeformLayout:
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
-                    finalize_reserve_s = max(
-                        finalize_reserve_s,
-                        time.monotonic() - finalize_started,
-                    )
+                    finalize_elapsed = time.monotonic() - finalize_started
+                    finalization_time_s += finalize_elapsed
+                    finalize_reserve_s = max(finalize_reserve_s, finalize_elapsed)
                     certify_started = time.monotonic()
                     report = validate.certify(placement, spec, expect_power=True)
+                    validation_time_s += time.monotonic() - certify_started
                     if (
                         inbound_choice is not None
                         and window_choices.get((height, arrangement)) is inbound_choice
@@ -20230,6 +20318,17 @@ class FreeformLayout:
             telemetry["stale_stop"] = float(stale_stop)
             telemetry["window_solves"] = float(window_solves)
             telemetry["window_accepted"] = float(window_accepted)
+            telemetry.update(
+                {
+                    "pack_time_s": pack_time_s,
+                    "preparation_time_s": preparation_time_s,
+                    "detailed_route_time_s": detailed_route_time_s,
+                    "compaction_time_s": compaction_time_s,
+                    "finalization_time_s": finalization_time_s,
+                    "validation_time_s": validation_time_s,
+                    **(_PACK_CP_PROFILE.get() or _PackCpProfile()).stats(),
+                }
+            )
         # `stats["route_backend"]` is stamped in `lay_out`, where none of these
         # locals exist, so the operator telemetry is stamped here instead --
         # guarded, because a sweep that refuses has no placement to carry it.
@@ -20244,6 +20343,17 @@ class FreeformLayout:
             best.stats["alns_window_seconds"] = window_seconds
             best.stats["alns_encode_errors"] = float(window_encode_errors)
             best.stats["alns_skipped_no_goods"] = float(window_skipped_no_goods)
+            best.stats.update(
+                {
+                    "pack_time_s": pack_time_s,
+                    "preparation_time_s": preparation_time_s,
+                    "detailed_route_time_s": detailed_route_time_s,
+                    "compaction_time_s": compaction_time_s,
+                    "finalization_time_s": finalization_time_s,
+                    "validation_time_s": validation_time_s,
+                    **(_PACK_CP_PROFILE.get() or _PackCpProfile()).stats(),
+                }
+            )
         return best
 
 
