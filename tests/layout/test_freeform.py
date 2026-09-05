@@ -19375,6 +19375,42 @@ def _prepare_piler_strips(
     )
 
 
+def _two_output_piler_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            group(
+                "plasma-refining",
+                "chemical-plant",
+                1,
+                {"crude-oil": F(1)},
+                {"refined-oil": F(40), "hydrogen": F(100)},
+            ),
+            group(
+                "plastic",
+                "assembling-machine-2",
+                1,
+                {"refined-oil": F(40)},
+                {"plastic": F(1)},
+            ),
+            group(
+                "deuterium",
+                "miniature-particle-collider",
+                1,
+                {"hydrogen": F(100)},
+                {"deuterium": F(1)},
+            ),
+        ),
+        external_inputs={"crude-oil": F(1)},
+        outputs={"plastic": F(1), "deuterium": F(1)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        belt_stack=4,
+        sorter_pick_stacks=(1, 1, 1, 4),
+        sorter_place_stacks=(1, 1, 1, 1),
+        piler_unlocked=True,
+    )
+
+
 def test_one_planned_piler_extends_its_producer_strip_and_box_by_three() -> None:
     spec = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
     strips = plan_strips(spec, strip_len=1)
@@ -19439,6 +19475,53 @@ def test_piled_direct_alignment_target_includes_the_emitted_tail() -> None:
     (target,) = freeform_module._direct_alignment_targets(candidates)
 
     assert target.producer_span == source.width + source.tail_extension + 1
+
+
+def test_each_piled_output_candidate_uses_its_own_emitted_tail() -> None:
+    spec = _two_output_piler_spec()
+    strips = plan_strips(spec, strip_len=1)
+    source_index, source = next(
+        (index, strip)
+        for index, strip in enumerate(strips)
+        if strip.recipe_id == "plasma-refining"
+    )
+    assert sorted(plan.count for plan in source.pilers) == [1, 2]
+    for index, strip in enumerate(strips):
+        if strip.recipe_id in {"plastic", "deuterium"}:
+            strips[index] = _strip_with_attachment_column(strip, "input", 2)
+
+    canvas = _Canvas()
+    _inputs, outputs, _sorters, _nets = _emit_strip(
+        canvas,
+        source,
+        0,
+        0,
+        2003,
+        catalog.building(2003).model_index,
+        {},
+        owner_strip=source_index,
+    )
+    emitted_tails = {
+        item: port for (item, _destination, _domain), port in outputs.items()
+    }
+    candidates = _direct_net_candidates(strips, spec)
+    candidate_by_item = {
+        candidate.item: (key, candidate)
+        for key, candidate in candidates.items()
+        if key[0] == source_index
+    }
+    targets = {
+        target.key: target
+        for target in freeform_module._direct_alignment_targets(candidates)
+    }
+
+    assert set(candidate_by_item) == {"refined-oil", "hydrogen"}
+    assert len({port.x for port in emitted_tails.values()}) == 2
+    for item, (key, candidate) in candidate_by_item.items():
+        emitted_tail = emitted_tails[item]
+        assert candidate.origin_deltas == (emitted_tail.x - 1, emitted_tail.x)
+        assert candidate.prod_span == emitted_tail.x + 1
+        assert targets[key].producer_span == emitted_tail.x + 1
 
 
 def test_belt_port_output_starts_unstacked_and_emits_one_piler() -> None:

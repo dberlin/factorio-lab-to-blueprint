@@ -2909,6 +2909,7 @@ _DIRECT_GEOMETRY_KEY_FIELDS: frozenset[str] = frozenset(
         "in_above",
         "in_below",
         "out_lanes",
+        "pilers",
         "lane_plan",
         "attachment_plan",
         "flank_outputs",
@@ -2929,7 +2930,6 @@ _UNREAD_BY_DIRECT_GEOMETRY: frozenset[str] = frozenset(
         "machine_start",
         "west_channel",
         "tail_extension",
-        "pilers",
     }
 )
 
@@ -2952,6 +2952,8 @@ def _direct_geometry_key(strip: Strip) -> tuple[object, ...] | None:
     * ``in_above``, ``in_below`` -- ``lane_of_input``, the lane's side and
       index, ``column_offset``, and ``machine_row``.
     * ``out_lanes`` -- the south side's lane index, via ``column_offset``.
+    * ``pilers`` -- whether the selected output lane has a piler and its exact
+      serial count, which fixes the emitted tail column.
     * ``lane_plan`` -- ``machine_row``.
     * ``attachment_plan`` -- both attachment-plan lookups.
     * ``flank_outputs`` -- the synthesized-plan branch, ``machine_row``, and
@@ -2963,7 +2965,7 @@ def _direct_geometry_key(strip: Strip) -> tuple[object, ...] | None:
     lane and attachment plans it produced are carried on the strip and are in
     the key already), ``port_dock_plan`` (``input_lane_tiles`` probes the
     building's docks, not the strip's plan), ``mode_params``, ``family_id``,
-    ``machine_start``, ``west_channel``, ``tail_extension`` and ``pilers``.
+    ``machine_start``, ``west_channel`` and ``tail_extension``.
     Every field kept is hashable -- strings, ints, floats, an enum, and frozen
     dataclasses of those.
 
@@ -2989,6 +2991,7 @@ def _direct_geometry_key(strip: Strip) -> tuple[object, ...] | None:
         strip.in_above,
         strip.in_below,
         strip.out_lanes,
+        strip.pilers,
         strip.lane_plan,
         strip.attachment_plan,
         strip.flank_outputs,
@@ -3057,9 +3060,10 @@ def _direct_origin_deltas_uncached(
         for machine in range(destination.machines)
         for attachment in destination_plan.attachments
     )
-    if _piler_plan_for_output(source, source_lane) is not None:
+    piled_tail_column = _piled_output_tail_column(source, source_lane)
+    if piled_tail_column is not None:
         # Emission replaces the original lane with one belt after the piler.
-        source_columns = (source.width + source.tail_extension,)
+        source_columns = (piled_tail_column,)
     else:
         source_columns = tuple(
             column
@@ -3123,13 +3127,14 @@ def _direct_net_candidates(
             # sorters, emission cannot prove a bridge. Do not create a Boolean:
             # an absent variable cannot earn the direct-insert reward.
             continue
+        piled_tail_column = _piled_output_tail_column(src, k)
         out[i, j] = _DirectCandidate(
             item=item,
             prod_row=src.row_of_output(k),
             cons_row=dst.row_of_input(item),
             prod_span=(
-                src.width + src.tail_extension + 1
-                if _piler_plan_for_output(src, k) is not None
+                piled_tail_column + 1
+                if piled_tail_column is not None
                 else src.width
             ),
             cons_span=dst.input_lane_tiles(dst.lane_of_input(item)),
@@ -5993,6 +5998,15 @@ def _piler_plan_for_output(strip: Strip, lane_index: int) -> PilerPlan | None:
         ),
         None,
     )
+
+
+def _piled_output_tail_column(strip: Strip, lane_index: int) -> int | None:
+    """Return the local x-coordinate emitted after this lane's last piler."""
+    plan = _piler_plan_for_output(strip, lane_index)
+    if plan is None:
+        return None
+    piler_tiles = catalog.building(catalog.PILER_ID).height
+    return strip.width + piler_tiles * plan.count + plan.count - 1
 
 
 def _emit_piler_tail(
