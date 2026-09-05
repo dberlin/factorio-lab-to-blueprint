@@ -564,3 +564,35 @@ def test_the_saves_stacking_levels_reach_the_spec(data: Dataset) -> None:
         assert spec.sorter_place_stacks == (1, 1, 1, 4)
         assert spec.piler_unlocked is True
         assert spec.max_stack == 4
+
+
+def test_output_products_builds_a_url_that_nets_a_supplied_intermediate() -> None:
+    """A supplied item the chain also eats must still get its remainder crafted.
+
+    This URL declares 50/min of ``copper-ingot`` as an Input while the chain
+    consumes 71.5/min of it, so the fixed-charge solve has to build the 21.5/min
+    difference.  It came back with no copper smelter at all and died on the
+    balance check ("the exact rate solve leaves copper-ingot short: produces
+    5/6, requires 143/120"): sympy's exact simplex oscillated in phase 1 on the
+    newly netted system and answered with a point that violates its own rows
+    (see ``_linprog_checked``).
+    """
+    url = (
+        "https://factoriolab.github.io/dsp/flow?"
+        "z=eJw9zMkOgjAQBuC36eFPTCiyeJnLNKAHY8Q1vaocEAkR3A99dgOFXqZf.1lqSgOEoi"
+        "Yu4IuaFsf-4aUNY.s7Q4aA7Ph1jOEPOiD0rHZOPEHkjdaQ.sCD228RDOEU0o1e4Y-8Q"
+        "458O3ahG1aYWT0QWfwQjc3tcCknpKIiDU9UxH1N4InilBOLJv.QGhoXlHiCV-A9uDR8"
+        "A7dQc6jMqI2oqoa0YZOYTLxIyj9n20xV&v=11"
+    )
+    specs = build_candidates(
+        load_vendored(),
+        parse_url(url),
+        candidate_policies=(CandidatePolicy("output-products"),),
+    ).candidates
+    assert specs
+    (spec,) = specs
+    # The remainder is smelted here, and the declared 50/min arrives on a belt
+    # beside it: both halves of the netting, which is what went missing.
+    assert "copper-ingot" in {group.recipe_id for group in spec.groups}
+    assert spec.external_inputs["copper-ingot"] == Fraction(5, 6)
+    assert spec.external_inputs["copper-ore"] > 0

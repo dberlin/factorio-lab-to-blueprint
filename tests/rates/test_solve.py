@@ -11,6 +11,8 @@ from typing import Protocol, TypeGuard
 
 import pytest
 from ortools.linear_solver import pywraplp  # type: ignore[import-untyped]
+from sympy import Rational  # type: ignore[import-untyped]
+from sympy.solvers.simplex import linprog  # type: ignore[import-untyped]
 
 from flab2bp.lab.data import load_dataset
 from flab2bp.lab.schema import Dataset
@@ -24,6 +26,7 @@ from flab2bp.rates.solve import (
     _exact_continuous_rates,
     _exact_rates,
     _excluded_recipes,
+    _linprog_checked,
     solve,
     supplied_rates,
     target_rates,
@@ -1386,3 +1389,42 @@ def test_a_partial_supply_on_an_intermediate_crafts_the_remainder(data: Dataset)
     assert by_recipe["iron-ingot"].crafts_per_second == 90 * per_minute
     assert solution.external_inputs["iron-ingot"] == 10 * per_minute
     assert solution.external_inputs["iron-ore"] == 90 * per_minute
+
+
+def test_the_exact_lp_refuses_a_point_the_simplex_never_proved() -> None:
+    """sympy's simplex can answer with a point that breaks its own constraints.
+
+    ``sympy.solvers.simplex._simplex`` gives up when phase 1 starts oscillating:
+    it breaks out with an infeasible basis, optimises from there anyway, and
+    validates only that the answer is non-negative.  So an oscillating system
+    comes back looking like a solution.  The 5x3 system below is that failure
+    shrunk out of the URL in
+    ``tests/rates/test_candidates.py::test_output_products_builds_a_url_that_nets_a_supplied_intermediate``
+    -- sympy answers ``[1/24, 1/30, 1/30]``, which breaks ``4*x0 <= 0``, and a
+    rate solve that believed it built no copper smelter at all.
+
+    If sympy ever fixes this, the first assertion is what fails, and the retry
+    in ``_solve_exact_lp`` can go.
+    """
+    cost = [Fraction(4), Fraction(1), Fraction(4)]
+    rows = [
+        [Fraction(0), Fraction(0), Fraction(-1)],
+        [Fraction(4), Fraction(0), Fraction(0)],
+        [Fraction(4), Fraction(1), Fraction(2)],
+        [Fraction(0), Fraction(-1), Fraction(0)],
+        [Fraction(-2), Fraction(0), Fraction(0)],
+    ]
+    limits = [Fraction(-1, 30), Fraction(0), Fraction(1, 4), Fraction(-1, 30), Fraction(-1, 12)]
+
+    _optimum, raw = linprog(
+        [Rational(value.numerator, value.denominator) for value in cost],
+        [[Rational(v.numerator, v.denominator) for v in row] for row in rows],
+        [Rational(value.numerator, value.denominator) for value in limits],
+    )
+    unproven = [Fraction(int(value.p), int(value.q)) for value in raw]
+    assert any(
+        sum(coefficient * value for coefficient, value in zip(row, unproven, strict=True)) > limit
+        for row, limit in zip(rows, limits, strict=True)
+    ), "sympy no longer returns an infeasible point here"
+
+    assert _linprog_checked(cost, rows, limits) is None

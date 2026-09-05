@@ -814,6 +814,64 @@ def _fraction(value: Expr) -> Fraction:
     return Fraction(int(number.p), int(number.q))
 
 
+def _linprog_checked(
+    cost: Sequence[Fraction],
+    rows: Sequence[Sequence[Fraction]],
+    limits: Sequence[Fraction],
+    bounds: Mapping[int, tuple[Fraction, Fraction | None]] | None = None,
+) -> list[Fraction] | None:
+    """Minimise ``cost . x`` over ``rows . x <= limits``, or ``None`` if unproven.
+
+    sympy's two-phase simplex has an escape hatch: when phase 1 starts
+    oscillating between the same pivot twice it breaks out with an INFEASIBLE
+    basis, optimises from there anyway, and validates only that the answer is
+    non-negative (``_simplex`` in ``sympy/solvers/simplex.py``, "Not sure what
+    to do here").  An oscillating system therefore comes back as a
+    plausible-looking point that violates its own constraints -- for the rate
+    solve, a factory that eats an item nothing makes.  So every answer is
+    re-checked here in exact rationals and ``None`` means "sympy answered, but
+    the answer is not a solution".  Genuine infeasibility still raises
+    ``InfeasibleLPError``/``UnboundedLPError`` for the caller to name.
+
+    ``bounds`` gives per-variable ``(low, high)`` ranges (``high`` ``None`` for
+    unbounded), keyed by column position; sympy rewrites those with auxiliary
+    variables rather than as rows, which is a different matrix and so pivots
+    differently.  They are checked here too, since they are not in ``rows``.
+    """
+    _optimum, solution = linprog(
+        [_rational(value) for value in cost],
+        [[_rational(value) for value in row] for row in rows],
+        [_rational(value) for value in limits],
+        # sympy empties the dict it is handed, so this is always a fresh one.
+        bounds=(
+            None
+            if not bounds
+            else {
+                position: (
+                    _rational(low),
+                    None if high is None else _rational(high),
+                )
+                for position, (low, high) in bounds.items()
+            }
+        ),
+    )
+    values = [_fraction(cast(Expr, value)) for value in solution]
+    # Only the columns the solver actually used can move a row off its limit.
+    support = [(position, value) for position, value in enumerate(values) if value]
+    for row, limit in zip(rows, limits, strict=True):
+        total = Fraction(0)
+        for position, value in support:
+            coefficient = row[position]
+            if coefficient:
+                total += coefficient * value
+        if total > limit:
+            return None
+    for position, (low, high) in (bounds or {}).items():
+        if values[position] < low or (high is not None and values[position] > high):
+            return None
+    return values
+
+
 def _solve_exact_lp(
     columns: Sequence[AdjustedRecipe],
     active: Sequence[int],
@@ -834,22 +892,22 @@ def _solve_exact_lp(
         )
 
     items = [item_id for item_id in internal_items if any(net(i, item_id) > 0 for i in active)]
-    matrix: list[list[Rational]] = []
-    limits: list[Rational] = []
+    balance_rows: list[list[Fraction]] = []
+    balance_limits: list[Fraction] = []
     for item_id in items:
-        matrix.append([_rational(-net(index, item_id)) for index in active])
-        limits.append(_rational(-demand.get(item_id, Fraction())))
+        balance_rows.append([-net(index, item_id) for index in active])
+        balance_limits.append(-demand.get(item_id, Fraction()))
 
+    # The single-variable constraints are collected apart from the balance rows
+    # so the retry below can hand them to sympy as variable bounds instead.
+    ranges: dict[int, tuple[Fraction, Fraction | None]] = {}
     if minimum_rates:
         active_positions = {index: position for position, index in enumerate(active)}
         for index, minimum in minimum_rates.items():
             position = active_positions.get(index)
             if position is None:
                 raise ValueError("minimum_rates must name active columns")
-            row = [_rational(Fraction())] * len(active)
-            row[position] = _rational(Fraction(-1))
-            matrix.append(row)
-            limits.append(_rational(-minimum))
+            ranges[position] = (minimum, None)
 
     if machine_caps is not None:
         if len(machine_caps) != len(active):
@@ -859,25 +917,53 @@ def _solve_exact_lp(
                 # Extraction columns are never capped: they never buy integer
                 # machines, so there is nothing to cap.
                 continue
-            row = [_rational(Fraction())] * len(active)
-            row[position] = _rational(Fraction(1))
-            matrix.append(row)
-            limits.append(_rational(Fraction(machines) * columns[index].crafts_per_second))
+            low, _high = ranges.get(position, (Fraction(0), None))
+            ranges[position] = (low, Fraction(machines) * columns[index].crafts_per_second)
+
+    matrix = list(balance_rows)
+    limits = list(balance_limits)
+    for position, (low, _high) in ranges.items():
+        if not low:
+            continue
+        row = [Fraction()] * len(active)
+        row[position] = Fraction(-1)
+        matrix.append(row)
+        limits.append(-low)
+    for position, (_low, high) in ranges.items():
+        if high is None:
+            continue
+        row = [Fraction()] * len(active)
+        row[position] = Fraction(1)
+        matrix.append(row)
+        limits.append(high)
 
     objective = objective or _default_objective(columns)
-    cost = [_rational(objective.continuous[index]) for index in active]
+    cost = [objective.continuous[index] for index in active]
     try:
-        _optimum, solution = linprog(cost, matrix, limits)
+        solution = _linprog_checked(cost, matrix, limits)
+        if solution is None and ranges:
+            # sympy oscillated on the row form and answered with a point that
+            # is not a solution. The same system with the single-variable
+            # constraints as bounds is a different matrix, so it pivots
+            # differently; it is still checked before it is believed.
+            solution = _linprog_checked(cost, balance_rows, balance_limits, ranges)
     except (InfeasibleLPError, UnboundedLPError) as exc:
         raise InfeasibleError(
             "the exact rate solve found no balanced, non-negative craft rates "
             f"over {', '.join(sorted({columns[i].recipe_id for i in active}))} "
             f"({type(exc).__name__})"
         ) from exc
+    if solution is None:
+        raise InfeasibleError(
+            "the exact rate solve could not prove balanced, non-negative craft "
+            f"rates over {', '.join(sorted({columns[i].recipe_id for i in active}))} "
+            "(the simplex oscillated and returned a point that breaks its own "
+            "constraints)"
+        )
 
     crafts = [Fraction()] * len(columns)
     for position, index in enumerate(active):
-        rate = _fraction(cast(Expr, solution[position]))
+        rate = solution[position]
         if rate < 0:
             raise InfeasibleError(
                 f"the exact rate solve returned a negative craft rate for "
