@@ -4349,6 +4349,317 @@ def test_flow_lane_sourced_clean_on_a_lane_fed_only_by_a_transfer() -> None:
 # them are on a lane with no path to them.
 
 
+DIRECTIONAL_FLOW_IDS = IdMap(
+    recipes={
+        "producer": 10,
+        "producer-fast": 11,
+        "producer-slow": 12,
+        "consumer": 20,
+        "consumer-fast": 21,
+        "consumer-slow": 22,
+        "loop": 30,
+    },
+    items={
+        "arc-smelter": SMELTER,
+        "assembling-machine-2": ASSEMBLER,
+        "intermediate": IRON_ID,
+    },
+)
+
+
+def directional_flow_spec(*, count: int = 1) -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="producer",
+                machine_item_id="arc-smelter",
+                count=count,
+                outputs_per_machine={"intermediate": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="consumer",
+                machine_item_id="assembling-machine-2",
+                count=count,
+                inputs_per_machine={"intermediate": Fraction(1)},
+            ),
+        ),
+    )
+
+
+def directed_lane_placement(*, producer_upstream: bool) -> Placement:
+    producer_belt, consumer_belt = ((1, 4) if producer_upstream else (4, 1))
+    return place(
+        *(belt(x, 0, out=x + 1 if x < 4 else None, carries="intermediate") for x in range(5)),
+        machine(3, 2, item_id=SMELTER, recipe_id=10),  # 5 producer
+        machine(0, -4, recipe_id=20),  # 6 consumer
+        sorter(
+            producer_belt,
+            2,
+            producer_belt,
+            0,
+            inp=5,
+            out=producer_belt,
+            carries="intermediate",
+        ),
+        sorter(
+            consumer_belt,
+            0,
+            consumer_belt,
+            -2,
+            inp=consumer_belt,
+            out=6,
+            carries="intermediate",
+        ),
+    )
+
+
+def test_flow_conservation_rejects_supply_injected_downstream_of_demand() -> None:
+    report = validate(
+        directed_lane_placement(producer_upstream=False),
+        directional_flow_spec(),
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.conservation"},
+    )
+
+    (finding,) = report.by_check("flow.conservation")
+    assert finding.severity is Severity.ERROR
+    assert finding.detail["item"] == "intermediate"
+    assert finding.detail["demand"] == "1"
+    assert finding.detail["supply"] == "0"
+    assert finding.detail["shortfall"] == "1"
+
+
+def test_flow_conservation_accepts_supply_injected_upstream_of_demand() -> None:
+    report = validate(
+        directed_lane_placement(producer_upstream=True),
+        directional_flow_spec(),
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.conservation"},
+    )
+
+    assert not report.errors
+
+
+def directional_hop_placement() -> Placement:
+    return place(
+        *(belt(x, 0, out=x + 1 if x < 4 else None, carries="intermediate") for x in range(5)),
+        *(
+            belt(
+                x,
+                3,
+                out=6 + x if x < 4 else None,
+                carries="intermediate",
+            )
+            for x in range(5)
+        ),
+        machine(0, -4, item_id=SMELTER, recipe_id=10),  # 10 producer before hop
+        machine(3, -4, item_id=SMELTER, recipe_id=10),  # 11 producer after hop
+        machine(0, 5, recipe_id=20),  # 12 consumer before landing
+        machine(3, 5, recipe_id=20),  # 13 consumer after landing
+        sorter(0, -2, 0, 0, inp=10, out=0, carries="intermediate"),
+        sorter(4, -2, 4, 0, inp=11, out=4, carries="intermediate"),
+        sorter(1, 0, 3, 3, inp=1, out=8, carries="intermediate"),
+        sorter(1, 3, 1, 5, inp=6, out=12, carries="intermediate"),
+        sorter(4, 3, 4, 5, inp=9, out=13, carries="intermediate"),
+    )
+
+
+def test_flow_conservation_exposes_directional_shortfall_across_a_bad_hop() -> None:
+    report = validate(
+        directional_hop_placement(),
+        directional_flow_spec(count=2),
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.conservation"},
+    )
+
+    (finding,) = report.by_check("flow.conservation")
+    assert finding.detail["item"] == "intermediate"
+    assert finding.detail["demand"] == "2"
+    assert finding.detail["supply"] == "1"
+    assert finding.detail["shortfall"] == "1"
+
+
+def test_flow_conservation_does_not_self_connect_one_machine() -> None:
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="loop",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"intermediate": Fraction(1)},
+                outputs_per_machine={"intermediate": Fraction(1)},
+            ),
+        ),
+    )
+    placement = place(
+        belt(0, 0, carries="intermediate"),  # 0 stranded output
+        belt(3, 0, carries="intermediate"),  # 1 isolated input
+        machine(1, 2, recipe_id=30),  # 2
+        sorter(1, 2, 0, 0, inp=2, out=0, carries="intermediate"),
+        sorter(3, 0, 2, 2, inp=1, out=2, carries="intermediate"),
+    )
+
+    report = validate(
+        placement,
+        spec,
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.conservation"},
+    )
+
+    (finding,) = report.by_check("flow.conservation")
+    assert finding.detail["supply"] == "0"
+    assert finding.detail["shortfall"] == "1"
+
+
+def test_flow_conservation_allocates_external_supply_only_once() -> None:
+    spec = BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="producer",
+                machine_item_id="arc-smelter",
+                count=1,
+                outputs_per_machine={"intermediate": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="consumer",
+                machine_item_id="assembling-machine-2",
+                count=3,
+                inputs_per_machine={"intermediate": Fraction(1)},
+            ),
+        ),
+        external_inputs={"intermediate": Fraction(2)},
+    )
+    placement = place(
+        machine(0, -4, item_id=SMELTER, recipe_id=10),  # 0 isolated producer
+        machine(0, 3, recipe_id=20),  # 1 consumer A
+        machine(3, 3, recipe_id=20),  # 2 consumer B
+        machine(6, 3, recipe_id=20),  # 3 consumer C
+        belt(0, 0, carries="intermediate"),  # 4 entry A
+        belt(3, 0, carries="intermediate"),  # 5 entry B
+        belt(6, 0, carries="intermediate"),  # 6 entry C
+        sorter(0, 0, 0, 2, inp=4, out=1, carries="intermediate"),
+        sorter(3, 0, 3, 2, inp=5, out=2, carries="intermediate"),
+        sorter(6, 0, 6, 2, inp=6, out=3, carries="intermediate"),
+    )
+
+    report = validate(
+        placement,
+        spec,
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.conservation"},
+    )
+
+    (finding,) = report.by_check("flow.conservation")
+    assert finding.detail["demand"] == "3"
+    assert finding.detail["supply"] == "2"
+    assert finding.detail["shortfall"] == "1"
+
+
+def splitter_balance_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="producer",
+                machine_item_id="arc-smelter",
+                count=1,
+                outputs_per_machine={"intermediate": Fraction(2)},
+            ),
+            MachineGroup(
+                recipe_id="consumer-fast",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"intermediate": Fraction(3, 2)},
+            ),
+            MachineGroup(
+                recipe_id="consumer-slow",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"intermediate": Fraction(1, 2)},
+            ),
+        ),
+    )
+
+
+def test_flow_conservation_preserves_splitter_backpressure_balancing() -> None:
+    placement = place(
+        machine(0, -4, item_id=SMELTER, recipe_id=10),  # 0 producer
+        belt(1, 0, out=2, carries="intermediate"),  # 1 trunk
+        splitter(2, 0, carries="intermediate"),  # 2
+        belt(3, -1, inp=2, carries="intermediate"),  # 3 branch A
+        belt(3, 1, inp=2, carries="intermediate"),  # 4 branch B
+        machine(5, -3, recipe_id=21),  # 5 fast consumer
+        machine(5, 1, recipe_id=22),  # 6 slow consumer
+        sorter(1, -2, 1, 0, inp=0, out=1, carries="intermediate"),
+        sorter(3, -1, 5, -1, inp=3, out=5, carries="intermediate"),
+        sorter(3, 1, 5, 1, inp=4, out=6, carries="intermediate"),
+    )
+
+    report = validate(
+        placement,
+        splitter_balance_spec(),
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.conservation"},
+    )
+
+    assert not report.errors
+
+
+def fan_in_balance_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="producer-fast",
+                machine_item_id="arc-smelter",
+                count=1,
+                outputs_per_machine={"intermediate": Fraction(3, 2)},
+            ),
+            MachineGroup(
+                recipe_id="producer-slow",
+                machine_item_id="arc-smelter",
+                count=1,
+                outputs_per_machine={"intermediate": Fraction(1, 2)},
+            ),
+            MachineGroup(
+                recipe_id="consumer",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"intermediate": Fraction(2)},
+            ),
+        ),
+    )
+
+
+def test_flow_conservation_preserves_fan_in_backpressure_balancing() -> None:
+    placement = place(
+        machine(0, -4, item_id=SMELTER, recipe_id=11),  # 0 fast producer
+        machine(3, -4, item_id=SMELTER, recipe_id=12),  # 1 slow producer
+        belt(0, 0, out=4, carries="intermediate"),  # 2 merge input A
+        belt(2, 0, out=4, carries="intermediate"),  # 3 merge input B
+        belt(1, 0, out=5, carries="intermediate"),  # 4 merge
+        belt(1, 1, carries="intermediate"),  # 5 downstream
+        machine(0, 3, recipe_id=20),  # 6 consumer
+        sorter(0, -2, 0, 0, inp=0, out=2, carries="intermediate"),
+        sorter(3, -2, 2, 0, inp=1, out=3, carries="intermediate"),
+        sorter(1, 1, 1, 3, inp=5, out=6, carries="intermediate"),
+    )
+
+    report = validate(
+        placement,
+        fan_in_balance_spec(),
+        ids=DIRECTIONAL_FLOW_IDS,
+        expect_power=False,
+        only={"flow.conservation"},
+    )
+
+    assert not report.errors
+
+
 SPLIT_ISLAND_IDS = IdMap(
     recipes={"iron-ingot": 10, "gear": 20, "magnetic-coil": 6},
     items={

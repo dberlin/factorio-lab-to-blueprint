@@ -3001,7 +3001,7 @@ def _direct_origin_deltas(
     source_lane: int,
     item: str,
 ) -> tuple[int, ...]:
-    """Consumer origin offsets with an occupied, sorter-clear shared column.
+    """Memoize occupied, sorter-clear direct origin offsets.
 
     Memoized on :func:`_direct_geometry_key` because the annealer re-asks the
     same question for every unmoved strip pair in every state.  An empty answer
@@ -3035,20 +3035,42 @@ def _direct_origin_deltas_uncached(
     source_lane: int,
     item: str,
 ) -> tuple[int, ...]:
-    """Consumer origin offsets with an occupied, sorter-clear shared column."""
+    """Consumer offsets with a collision-clear, directionally safe column.
+
+    Cargo already on the source lane can reach a bridge only after every
+    machine has injected, and cargo landed on the destination lane can feed
+    every machine only before the first pickup.  The strict inequalities are
+    therefore part of candidate geometry, not an emission preference.
+    """
     try:
         source_plan = source._output_attachment_plan(source_lane)
         destination_plan = destination._input_attachment_plan(item)
     except IndexError, KeyError:
         return ()
-    source_columns = sorted(_direct_clear_columns(source, source_plan, source.width))
+    last_source_injection = max(
+        machine * source.pw + attachment.column
+        for machine in range(source.machines)
+        for attachment in source_plan.attachments
+    )
+    first_destination_pickup = min(
+        machine * destination.pw + attachment.column
+        for machine in range(destination.machines)
+        for attachment in destination_plan.attachments
+    )
+    source_columns = sorted(
+        column
+        for column in _direct_clear_columns(source, source_plan, source.width)
+        if column > last_source_injection
+    )
     destination_span = destination.input_lane_tiles(destination.lane_of_input(item))
     destination_columns = sorted(
-        _direct_clear_columns(
+        column
+        for column in _direct_clear_columns(
             destination,
             destination_plan,
             destination_span,
         )
+        if column < first_destination_pickup
     )
     if not source_columns or not destination_columns:
         return ()
@@ -17477,6 +17499,12 @@ def _bridge(
     is tried, west to east, and the first one whose seated box clears them all
     is the one taken. When none does, the promise remains unrealized and the
     containing pack attempt fails with typed evidence.
+
+    Flow order is the independent precondition.  The bridge must draw strictly
+    after every emitted injection onto its source lane and land strictly before
+    every emitted pickup from its destination lane.  Candidate geometry proves
+    that from the strip plan; repeating it from the emitted object links keeps a
+    stale plan or emission drift from turning a rewarded bridge into starvation.
     """
     if (
         src.cargo_domain is not CargoDomain.UNSPRAYED
@@ -17486,6 +17514,56 @@ def _bridge(
     span = dst.y - src.y
     if span < 1 or span > catalog.SORTER_MAX_REACH:
         return None
+
+    buildings = canvas.buildings
+    source_tiles = set(src.tiles)
+    destination_tiles = set(dst.tiles)
+
+    def is_machine(index: int) -> bool:
+        if not 0 <= index < len(buildings):
+            return False
+        building = buildings[index]
+        return (
+            building.owner_strip is not None
+            and not catalog.is_belt(building.item_id)
+            and not catalog.is_sorter(building.item_id)
+            and (building.recipe_id not in (None, 0) or bool(building.parameters))
+        )
+
+    source_injections = [
+        buildings[target].x
+        for sorter in buildings
+        if catalog.is_sorter(sorter.item_id)
+        and (origin := sorter.input_obj) is not None
+        and is_machine(origin)
+        and (target := sorter.output_obj) is not None
+        and target in source_tiles
+    ]
+    destination_pickups = [
+        buildings[source].x
+        for sorter in buildings
+        if catalog.is_sorter(sorter.item_id)
+        and (source := sorter.input_obj) is not None
+        and source in destination_tiles
+        and (target := sorter.output_obj) is not None
+        and is_machine(target)
+    ]
+    # Port-driven machines attach directly to a belt rather than through a
+    # sorter.  Direct candidates currently exclude port-driven sources, but
+    # reading both shapes here makes the emission guard describe the placement
+    # rather than that candidate-filter convention.
+    source_injections.extend(
+        buildings[index].x
+        for index in source_tiles
+        if (peer := buildings[index].input_obj) is not None and is_machine(peer)
+    )
+    destination_pickups.extend(
+        buildings[index].x
+        for index in destination_tiles
+        if (peer := buildings[index].output_obj) is not None and is_machine(peer)
+    )
+    last_source_injection = max(source_injections, default=None)
+    first_destination_pickup = min(destination_pickups, default=None)
 
     # A bridge is belt-to-belt: it picks the source lane's cargo and places it
     # on the destination lane, so it keeps a promise at BOTH ends -- the entry
@@ -17500,6 +17578,10 @@ def _bridge(
         min_place_stack=canvas.lane_stacks.out_of(item),
     )
     for column in range(max(src.x0, dst.x0), min(src.x1, dst.x1) + 1):
+        if last_source_injection is not None and column <= last_source_injection:
+            continue
+        if first_destination_pickup is not None and column >= first_destination_pickup:
+            continue
         if (column, src.y, 0) not in canvas.blocked:
             continue
         if (column, dst.y, 0) not in canvas.blocked:
