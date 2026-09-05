@@ -4270,7 +4270,7 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
         seed: freeform._Pack,
         exact_pack_no_goods: tuple[freeform.ExactPackNoGood, ...],
         **_kwargs: object,
-    ) -> freeform._Pack:
+    ) -> freeform._PackSolveOutcome:
         assert exact_pack_no_goods == (), "diversification is local, never global proof state"
         repaired = replace(
             seed,
@@ -4278,7 +4278,15 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
         )
         packed_candidates[id(repaired)] = (20, 0)
         repaired_origins.append(tuple(repaired.at[index] for index in range(len(strips))))
-        return repaired
+        return freeform._PackSolveOutcome(
+            pack=repaired,
+            status="OPTIMAL",
+            objective_value=float(repaired.width),
+            best_objective_bound=float(repaired.width),
+            wall_time_s=0.25,
+            deterministic_time_s=0.01,
+            model_fingerprint="fixture-window-model",
+        )
 
     monkeypatch.setattr(freeform, "_pack_window", repair_window)
     attempts: list[freeform.PackAttempt] = []
@@ -7339,7 +7347,7 @@ def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
         deterministic=True,
     )
     assert full is not None
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=height,
         width_bound=bound,
@@ -7350,10 +7358,76 @@ def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
         time_budget_s=5.0,
         deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
     )
+    assert outcome is not None
+    windowed = outcome.pack
     assert windowed is not None
     assert windowed.width == full.width
     assert windowed.at == full.at
     assert windowed.direct == full.direct
+
+
+def test_pack_window_reports_its_exact_cp_sat_outcome() -> None:
+    strips, height, bound, candidates = _plastic_pack_inputs()
+    outcome = freeform._pack_window(
+        strips,
+        height=height,
+        width_bound=bound,
+        direct_candidates=candidates,
+        window=frozenset(range(len(strips))),
+        fixed_at={},
+        seed=None,
+        time_budget_s=5.0,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+    )
+    assert outcome is not None
+    assert outcome.status == "OPTIMAL"
+    assert outcome.pack is not None
+    assert outcome.objective_value is not None
+    assert outcome.best_objective_bound == outcome.objective_value
+    assert outcome.wall_time_s >= 0.0
+    assert outcome.deterministic_time_s >= 0.0
+    assert len(outcome.model_fingerprint) == 64
+
+
+def test_pack_window_distinguishes_infeasible_from_unknown() -> None:
+    strips = _three_unit_strips()
+    outcome = freeform._pack_window(
+        strips,
+        height=6,
+        width_bound=8,
+        direct_candidates={},
+        window=frozenset({0}),
+        fixed_at={1: (0, 0), 2: (0, 0)},
+    )
+    assert outcome is not None
+    assert outcome.status == "INFEASIBLE"
+    assert outcome.pack is None
+    assert outcome.objective_value is None
+    assert outcome.best_objective_bound is None
+
+
+def test_pack_cp_profile_clears_objective_values_for_an_unsolved_outcome() -> None:
+    profile = freeform._PackCpProfile()
+    feasible_model = cp_model.CpModel()
+    value = feasible_model.new_int_var(0, 1, "value")
+    feasible_model.maximize(value)
+    feasible_solver = cp_model.CpSolver()
+    feasible_status = feasible_solver.solve(feasible_model)
+    profile.observe(feasible_solver, feasible_status, 0.0)
+    assert profile.last_objective == 1.0
+    assert profile.last_best_bound == 1.0
+
+    infeasible_model = cp_model.CpModel()
+    impossible = infeasible_model.new_bool_var("impossible")
+    infeasible_model.add(impossible == 0)
+    infeasible_model.add(impossible == 1)
+    infeasible_solver = cp_model.CpSolver()
+    infeasible_status = infeasible_solver.solve(infeasible_model)
+    profile.observe(infeasible_solver, infeasible_status, 0.0)
+
+    assert profile.last_status == "INFEASIBLE"
+    assert math.isnan(profile.last_objective)
+    assert math.isnan(profile.last_best_bound)
 
 
 def test_pack_window_leaves_every_pinned_strip_where_it_was() -> None:
@@ -7370,7 +7444,7 @@ def test_pack_window_leaves_every_pinned_strip_where_it_was() -> None:
     assert seed is not None
     window = frozenset({0})
     fixed = {index: origin for index, origin in seed.at.items() if index not in window}
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=height,
         width_bound=seed.width,
@@ -7379,6 +7453,8 @@ def test_pack_window_leaves_every_pinned_strip_where_it_was() -> None:
         fixed_at=fixed,
         seed=seed,
     )
+    assert outcome is not None
+    windowed = outcome.pack
     assert windowed is not None
     for index, origin in fixed.items():
         assert windowed.at[index] == origin
@@ -7398,7 +7474,7 @@ def test_pack_window_never_widens_past_its_bound() -> None:
     )
     assert seed is not None
     free = min(3, len(strips))
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=height,
         width_bound=seed.width,
@@ -7407,7 +7483,7 @@ def test_pack_window_never_widens_past_its_bound() -> None:
         fixed_at={index: origin for index, origin in seed.at.items() if index >= free},
         seed=seed,
     )
-    assert windowed is None or windowed.width <= seed.width
+    assert outcome is None or outcome.pack is None or outcome.pack.width <= seed.width
 
 
 def test_pack_window_keeps_pins_the_free_model_would_have_broken() -> None:
@@ -7420,7 +7496,7 @@ def test_pack_window_keeps_pins_the_free_model_would_have_broken() -> None:
     """
     strips = _three_unit_strips()
     fixed = {1: (4, 0), 2: (6, 2)}
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=6,
         width_bound=8,
@@ -7428,13 +7504,17 @@ def test_pack_window_keeps_pins_the_free_model_would_have_broken() -> None:
         window=frozenset({0}),
         fixed_at=fixed,
     )
+    assert outcome is not None
+    windowed = outcome.pack
     assert windowed is not None
     assert windowed.at[1] == (4, 0)
     assert windowed.at[2] == (6, 2)
     assert windowed.width == 8
 
 
-def test_pack_window_pins_one_worker_and_a_deterministic_work_bound() -> None:
+def test_pack_window_pins_one_worker_and_a_deterministic_work_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Both solver parameters are load-bearing and neither is observable in a result.
 
     A window runs beside a packer that already saturates the box, so it takes one
@@ -7455,22 +7535,18 @@ def test_pack_window_pins_one_worker_and_a_deterministic_work_bound() -> None:
         seen.append(solver)
         return None
 
-    original = freeform._pack_result
-    try:
-        freeform._pack_result = _capture
-        for budget, work in ((4.0, 0.25), (0.1, 0.5)):
-            freeform._pack_window(
-                strips,
-                height=6,
-                width_bound=8,
-                direct_candidates={},
-                window=frozenset({0}),
-                fixed_at={1: (4, 0), 2: (6, 2)},
-                time_budget_s=budget,
-                deterministic_work=work,
-            )
-    finally:
-        freeform._pack_result = original
+    monkeypatch.setattr(freeform, "_pack_result", _capture)
+    for budget, work in ((4.0, 0.25), (0.1, 0.5)):
+        freeform._pack_window(
+            strips,
+            height=6,
+            width_bound=8,
+            direct_candidates={},
+            window=frozenset({0}),
+            fixed_at={1: (4, 0), 2: (6, 2)},
+            time_budget_s=budget,
+            deterministic_work=work,
+        )
 
     assert len(seen) == 2
     for solver, budget, expected in ((seen[0], 4.0, 0.25), (seen[1], 0.1, 0.1)):
@@ -7567,7 +7643,7 @@ def test_pack_window_keeps_a_no_good_that_still_has_a_free_strip() -> None:
     )
     assert seed is not None
     skipped: list[int] = []
-    windowed = freeform._pack_window(
+    outcome = freeform._pack_window(
         strips,
         height=height,
         width_bound=seed.width,
@@ -7581,7 +7657,7 @@ def test_pack_window_keeps_a_no_good_that_still_has_a_free_strip() -> None:
     assert skipped == []
     # The forbidden assignment is the seed's, so the solve must move strip 0 or
     # find nothing at all -- it must not hand back the pack it was told to reject.
-    assert windowed is None or windowed.at[0] != seed.at[0]
+    assert outcome is None or outcome.pack is None or outcome.pack.at[0] != seed.at[0]
 
 
 def test_pack_window_reports_a_skip_through_on_skipped() -> None:
@@ -18123,6 +18199,40 @@ def test_regular_build_maps_cancelled_preparation_to_budget(
     assert result.routing.status is DetailedRouteStatus.BUDGET
 
 
+def test_regular_build_freezes_preparation_time_before_detailed_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, max(_box(strip)[1] for strip in strips))
+    now = [100.0]
+    prepared = cast(freeform._PreparedRoutingProblem, object())
+    routing = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 0, 0)
+
+    def prepare(*_args: object, **_kwargs: object) -> freeform._PreparedRoutingProblem:
+        now[0] += 2.0
+        return prepared
+
+    def build_prepared(*_args: object, **_kwargs: object) -> _BuildResult:
+        now[0] += 7.0
+        return _BuildResult(None, routing, None, ())
+
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(freeform, "_prepare_routing_problem", prepare)
+    monkeypatch.setattr(freeform, "_build_prepared", build_prepared)
+
+    result = _build(
+        spec,
+        strips,
+        pack,
+        power=False,
+        route=True,
+        policy=BandPolicy("portable"),
+    )
+
+    assert result.preparation_time_s == 2.0
+
+
 def test_post_feedback_replan_deadline_is_a_typed_preparation_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -18154,6 +18264,30 @@ def test_freeform_placement_records_route_backend() -> None:
         two_stage_spec(), time_budget_s=4.0
     )
     assert placement.stats["route_backend"] == route_kernel.selected_backend()
+    for key in (
+        "planning_time_s",
+        "pack_cp_wall_time_s",
+        "pack_cp_deterministic_time_s",
+        "pack_cp_solves",
+        "pack_window_solves",
+        "pack_window_distinct_submodels",
+        "pack_window_repeated_submodels",
+        "pack_window_repeated_submodel_seconds",
+        "preparation_time_s",
+        "detailed_route_time_s",
+        "compaction_time_s",
+        "finalization_time_s",
+        "validation_time_s",
+        "total_time_s",
+    ):
+        assert placement.stats[key] >= 0.0
+    assert placement.stats["pack_cp_last_status"] in {
+        "OPTIMAL",
+        "FEASIBLE",
+        "INFEASIBLE",
+        "MODEL_INVALID",
+        "UNKNOWN",
+    }
 
 
 def test_lay_out_raises_a_lane_that_needs_a_faster_belt() -> None:
@@ -20233,8 +20367,11 @@ def _sweep_over_a_stranded_first_candidate(
     heights: tuple[int, ...] = (20, 21),
     time_budget_s: float = 1.0,
     pack_width: int = 60,
-    pitch_requirements: Callable[..., tuple[ProjectionPitchRequirement, ...]] | None = None,
+    pitch_requirements: (
+        Callable[..., tuple[ProjectionPitchRequirement | None, ...]] | None
+    ) = None,
     replanned_strips: list[Strip] | None = None,
+    telemetry: dict[str, float | str] | None = None,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[str]]:
     """Drive `_sweep` over candidates whose routing strands a net exhaustively.
 
@@ -20382,8 +20519,100 @@ def _sweep_over_a_stranded_first_candidate(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=2,
-    )._sweep(spec, strips, time_budget_s, session=session)
+    )._sweep(spec, strips, time_budget_s, session=session, telemetry=telemetry)
     return result, packed, builds
+
+
+def test_sweep_charges_cancelled_compaction_to_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    telemetry: dict[str, float | str] = {}
+
+    def cancelled_compaction(*_args: object, **_kwargs: object) -> object:
+        now[0] += 1.25
+        raise finalize.ProjectionCancelled
+
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        finalize,
+        "compact_open_boundary_belts_certified",
+        cancelled_compaction,
+    )
+
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=OperatorSession(),
+        room_for_another=lambda *_args, **_kwargs: True,
+        wires=frozenset({(20, 0)}),
+        heights=(20,),
+        telemetry=telemetry,
+    )
+
+    assert result is None
+    assert telemetry["compaction_time_s"] == 1.25
+
+
+def test_sweep_charges_refused_finalization_to_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    telemetry: dict[str, float | str] = {}
+    finalizations = 0
+
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        finalize,
+        "compact_open_boundary_belts_certified",
+        lambda placement, *_args, **_kwargs: finalize.BoundaryCompactionResult(
+            placement,
+            None,
+        ),
+    )
+
+    def refuse_finalization(
+        _placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        nonlocal finalizations
+        finalizations += 1
+        now[0] += 2.5
+        raise finalize.ProjectionRefusal(
+            (
+                finalize.ProjectionFailure(
+                    check="test.projection",
+                    buildings=(),
+                    detail="refused after measured work",
+                    band=0,
+                ),
+            )
+        )
+
+    original_pitch_requirements = freeform._projection_pitch_requirements
+
+    def spend_refusal_handler_time(
+        placement: Placement,
+        strips: list[Strip],
+        failures: tuple[finalize.ProjectionFailure, ...],
+    ) -> tuple[ProjectionPitchRequirement | None, ...]:
+        result = original_pitch_requirements(placement, strips, failures)
+        now[0] += 7.0
+        return result
+
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=OperatorSession(),
+        room_for_another=lambda *_args, **_kwargs: False,
+        finalize_placement=refuse_finalization,
+        pitch_requirements=spend_refusal_handler_time,
+        wires=frozenset({(20, 0)}),
+        heights=(20,),
+        telemetry=telemetry,
+    )
+
+    assert result is None
+    assert telemetry["finalization_time_s"] == 2.5 * finalizations
 
 
 def test_the_sweep_repairs_a_window_when_a_full_resolve_is_unaffordable(

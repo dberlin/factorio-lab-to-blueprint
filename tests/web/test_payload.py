@@ -237,6 +237,10 @@ def test_a_refusal_keeps_structured_projection_records_inside_attempt_boundaries
             "sequence-pair",
             "no scheduled stage; exact projection refused",
             (first, second),
+            stats={
+                "process_wall_time_s": 4.5,
+                "pipeline_finalization_time_s": 0.75,
+            },
         ),
         LayoutAttemptFailure("b", "freeform", "unroutable"),
     )
@@ -250,6 +254,10 @@ def test_a_refusal_keeps_structured_projection_records_inside_attempt_boundaries
                 "candidate": "a",
                 "strategy": "sequence-pair",
                 "reason": "no scheduled stage; exact projection refused",
+                "stats": {
+                    "process_wall_time_s": 4.5,
+                    "pipeline_finalization_time_s": 0.75,
+                },
                 "projection_failures": [
                     {
                         "band": 160,
@@ -270,6 +278,7 @@ def test_a_refusal_keeps_structured_projection_records_inside_attempt_boundaries
                 "strategy": "freeform",
                 "reason": "unroutable",
                 "projection_failures": [],
+                "stats": {},
             },
         ],
     }

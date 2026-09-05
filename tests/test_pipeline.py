@@ -324,6 +324,8 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
     completed_layout: Placement,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    completed_layout.stats["planning_time_s"] = 0.125
+    completed_layout.stats["process_user_cpu_s"] = 2.5
     encode = codec.encode
     calls = 0
 
@@ -331,6 +333,7 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
         nonlocal calls
         calls += 1
         if calls == 1:
+            time.sleep(0.01)
             raise ValueError("invalid splitter port anchor")
         return encode(placement)
 
@@ -348,6 +351,12 @@ def test_blueprint_encoding_failure_does_not_abort_later_strategy(
     assert len(result.refused) == 1
     assert result.refused[0].strategy == "freeform"
     assert result.refused[0].reason == ("blueprint encoding failed: invalid splitter port anchor")
+    failure_stats = result.refused[0].stats
+    assert failure_stats["planning_time_s"] == 0.125
+    assert failure_stats["process_user_cpu_s"] == 2.5
+    assert failure_stats["pipeline_validation_time_s"] >= 0.0
+    assert failure_stats["pipeline_encoding_time_s"] >= 0.01
+    assert failure_stats["attempt_wall_s"] >= failure_stats["pipeline_encoding_time_s"]
 
 
 @pytest.mark.slow
@@ -720,6 +729,13 @@ def test_every_attempt_reports_its_wall_and_its_overshoot() -> None:
         assert stats["wall_overshoot_s"] == max(
             0.0, stats["attempt_wall_s"] - 5.0 - ATOMIC_COMPLETION_GRACE_S
         )
+        for key in (
+            "pipeline_compaction_time_s",
+            "pipeline_finalization_time_s",
+            "pipeline_validation_time_s",
+            "pipeline_encoding_time_s",
+        ):
+            assert stats[key] >= 0.0
 
 
 def _stub_needs_finalization(
@@ -885,6 +901,10 @@ def test_a_finalization_cancelled_by_the_attempt_deadline_is_reported_as_a_refus
     failure = exc_info.value.attempt_failures[0]
     assert failure.strategy == "freeform"
     assert "deadline" in failure.reason
+    assert failure.stats["pipeline_compaction_time_s"] == 0.0
+    assert failure.stats["pipeline_finalization_time_s"] == 10.0
+    assert failure.stats["pipeline_validation_time_s"] == 0.0
+    assert failure.stats["pipeline_encoding_time_s"] == 0.0
 
     refused_steps = [s for s in steps if s.phase == "refused"]
     assert len(refused_steps) == 1
@@ -1435,11 +1455,17 @@ def _one_win_one_refusal() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
             "completed",
             placement=_finished(2, 3),
         ),
-        strategy_race._StrategyRaceOutcome.refused(
-            "sequence-pair",
-            "no arrangement fit the band",
-            "no-proliferator",
-            STUB_RACE_BUDGET_S,
+        dataclasses.replace(
+            strategy_race._StrategyRaceOutcome.refused(
+                "sequence-pair",
+                "no arrangement fit the band",
+                "no-proliferator",
+                STUB_RACE_BUDGET_S,
+            ),
+            process_wall_time_s=4.5,
+            process_user_cpu_s=3.0,
+            process_system_cpu_s=0.25,
+            process_peak_rss_kib=123_456,
         ),
     )
 
@@ -1884,6 +1910,10 @@ def test_a_raced_build_reports_one_attempt_or_failure_per_outcome(
     assert [attempt.strategy for attempt in built.attempts] == ["freeform"]
     assert [failure.strategy for failure in built.refused] == ["sequence-pair"]
     assert built.refused[0].reason == "no arrangement fit the band"
+    assert built.refused[0].stats["process_wall_time_s"] == 4.5
+    assert built.refused[0].stats["process_user_cpu_s"] == 3.0
+    assert built.refused[0].stats["process_system_cpu_s"] == 0.25
+    assert built.refused[0].stats["process_peak_rss_kib"] == 123_456
     assert built.strategy == "freeform"
     assert built.placement.area == 6
     # One candidate x two strategies, counted and settled exactly as serially.

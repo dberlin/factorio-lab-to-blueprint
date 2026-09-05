@@ -215,6 +215,17 @@ class PlacementStats(TypedDict, total=False):
     alns_window_seconds: float
     alns_window_solves: float
     alns_window_unchanged: float
+    alns_window_distinct_submodels: float
+    alns_window_feasible: float
+    alns_window_infeasible: float
+    alns_window_last_best_bound: float
+    alns_window_last_objective: float
+    alns_window_last_status: str
+    alns_window_model_invalid: float
+    alns_window_optimal: float
+    alns_window_repeated_submodel_seconds: float
+    alns_window_repeated_submodels: float
+    alns_window_unknown: float
     anneal_stages: float
     archive_categories: list[str]
     archive_category: str
@@ -244,6 +255,7 @@ class PlacementStats(TypedDict, total=False):
     compact_seed_status: str
     compact_seed_wall_time_s: float
     compilation_time_s: float
+    compaction_time_s: float
     corridor_tiles: float
     decoded_candidates: float
     detailed_expansions: float
@@ -264,6 +276,7 @@ class PlacementStats(TypedDict, total=False):
     feedback_decays: float
     feedback_nets: float
     final_reserved: float
+    finalization_time_s: float
     gap_area: float
     global_expansions: float
     global_route_time_s: float
@@ -303,7 +316,32 @@ class PlacementStats(TypedDict, total=False):
     nets: float
     objective_mode: str
     pack_width: float
+    pack_cp_deterministic_time_s: float
+    pack_cp_feasible: float
+    pack_cp_infeasible: float
+    pack_cp_last_best_bound: float
+    pack_cp_last_objective: float
+    pack_cp_last_status: str
+    pack_cp_model_invalid: float
+    pack_cp_optimal: float
+    pack_cp_solves: float
+    pack_cp_unknown: float
+    pack_cp_wall_time_s: float
+    pack_time_s: float
+    pack_window_distinct_submodels: float
+    pack_window_feasible: float
+    pack_window_infeasible: float
+    pack_window_model_invalid: float
+    pack_window_optimal: float
+    pack_window_repeated_submodel_seconds: float
+    pack_window_repeated_submodels: float
+    pack_window_solves: float
+    pack_window_unknown: float
     pilers: float
+    pipeline_compaction_time_s: float
+    pipeline_encoding_time_s: float
+    pipeline_finalization_time_s: float
+    pipeline_validation_time_s: float
     placement_time_s: float
     planning_time_s: float
     pose_count: float
@@ -321,6 +359,10 @@ class PlacementStats(TypedDict, total=False):
     prepared_lower_bound_skips: float
     prepared_lower_bound_violations: float
     preparation_time_s: float
+    process_peak_rss_kib: int
+    process_system_cpu_s: float
+    process_user_cpu_s: float
+    process_wall_time_s: float
     quality_entries: float
     quality_exits: float
     quality_stages: float
@@ -433,6 +475,7 @@ class LayoutAttemptFailure:
     strategy: str | None
     reason: str
     projection_failures: tuple[ProjectionFailureRecord, ...] = ()
+    stats: PlacementStats = field(default_factory=PlacementStats)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -440,6 +483,9 @@ class LayoutAttemptFailure:
             "projection_failures",
             tuple(dict.fromkeys(self.projection_failures)),
         )
+        stats = PlacementStats()
+        stats.update(self.stats)
+        object.__setattr__(self, "stats", stats)
 
     def __str__(self) -> str:
         pair = "/".join(part for part in (self.strategy, self.candidate) if part)
