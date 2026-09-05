@@ -5859,6 +5859,9 @@ def _production_run(
                 rectangle_threshold_area=rectangle.threshold_area,
                 rectangle_threshold_belts=rectangle.threshold_belts,
                 rectangle_wall_time_s=rectangle.wall_time_s,
+                separator_cuts=obstacle.separator_cuts,
+                separator_overloads=obstacle.separator_overloads,
+                separator_wall_time_s=obstacle.separator_wall_time_s,
             ),
         )
 
@@ -6411,6 +6414,9 @@ class _PreparedLowerBoundStats(TypedDict):
     obstacle_bound_wall_time_s: float
     obstacle_bound_expansions: float
     obstacle_bound_violations: float
+    separator_bound_cuts: float
+    separator_bound_overloads: float
+    separator_bound_wall_time_s: float
 
 
 def _prepared_lower_bound_stats(
@@ -6497,6 +6503,15 @@ def _prepared_lower_bound_stats(
         ),
         "obstacle_bound_violations": float(
             sum(stage.obstacle_lower_bound_violation for stage in prepared)
+        ),
+        "separator_bound_cuts": float(
+            sum(bound.separator_cuts for bound in obstacle_bounds)
+        ),
+        "separator_bound_overloads": float(
+            sum(bound.separator_overloads for bound in obstacle_bounds)
+        ),
+        "separator_bound_wall_time_s": sum(
+            bound.separator_wall_time_s for bound in obstacle_bounds
         ),
     }
 
@@ -6587,6 +6602,9 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
         "rectangle_bound_extra_hits": bound_stats["rectangle_bound_extra_hits"],
         "rectangle_bound_wall_time_s": bound_stats["rectangle_bound_wall_time_s"],
         "rectangle_bound_violations": bound_stats["rectangle_bound_violations"],
+        "separator_bound_cuts": bound_stats["separator_bound_cuts"],
+        "separator_bound_overloads": bound_stats["separator_bound_overloads"],
+        "separator_bound_wall_time_s": bound_stats["separator_bound_wall_time_s"],
     }
 
 
@@ -6696,6 +6714,9 @@ def _with_observational_stats(
             "rectangle_bound_extra_hits": bound_stats["rectangle_bound_extra_hits"],
             "rectangle_bound_wall_time_s": bound_stats["rectangle_bound_wall_time_s"],
             "rectangle_bound_violations": bound_stats["rectangle_bound_violations"],
+            "separator_bound_cuts": bound_stats["separator_bound_cuts"],
+            "separator_bound_overloads": bound_stats["separator_bound_overloads"],
+            "separator_bound_wall_time_s": bound_stats["separator_bound_wall_time_s"],
             "best_overflow": float(
                 telemetry.best_overflow if telemetry.best_overflow is not None else -1
             ),

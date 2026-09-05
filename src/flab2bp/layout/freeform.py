@@ -8101,6 +8101,9 @@ class PreparedRoutingLowerBound:
     rectangle_threshold_area: int = 0
     rectangle_threshold_belts: int = 0
     rectangle_wall_time_s: float = 0.0
+    separator_cuts: int = 0
+    separator_overloads: int = 0
+    separator_wall_time_s: float = 0.0
 
 
 def _prepared_routing_lower_bound(
@@ -8212,6 +8215,9 @@ class _ObstacleAwareRoutingFloor:
     reachable: bool
     wall_time_s: float
     expansions: int
+    separator_cuts: int = 0
+    separator_overloads: int = 0
+    separator_wall_time_s: float = 0.0
 
 
 def _obstacle_aware_prepared_routing_floor(
@@ -8306,6 +8312,72 @@ def _obstacle_aware_prepared_routing_floor(
         for dx, dy in _STEPS
     )
     expansions = 0
+    separator_started = time.perf_counter()
+    canvas.routing_ports = frozenset(canvas.reserved.values())
+    separator_flags = _routing_flags(grid, routing_ports=canvas.routing_ports)
+    canvas.routing_ports = frozenset()
+    component_starts: dict[NetId, list[Cell]] = defaultdict(list)
+    component_goals: dict[NetId, list[Cell]] = defaultdict(list)
+    for net in prepared_nets:
+        root = find(net.net_id)
+        component_starts[root].extend(starts(net))
+        component_goals[root].extend(goals(net))
+    lo_x, lo_y, hi_x, hi_y = box
+    x_cuts = {(lo_x + hi_x) // 2} if lo_x < hi_x else set()
+    y_cuts = {(lo_y + hi_y) // 2} if lo_y < hi_y else set()
+    for (x, y, _level), _owner in problem.blocked:
+        if lo_x <= x - 1 < hi_x:
+            x_cuts.add(x - 1)
+        if lo_x <= x < hi_x:
+            x_cuts.add(x)
+        if lo_y <= y - 1 < hi_y:
+            y_cuts.add(y - 1)
+        if lo_y <= y < hi_y:
+            y_cuts.add(y)
+
+    def mandatory_crossings(axis: int, cut: int) -> int:
+        demand = 0
+        for root, source_cells in component_starts.items():
+            goal_cells = component_goals[root]
+            if not source_cells or not goal_cells:
+                continue
+            source_coordinates = tuple(cell[axis] for cell in source_cells)
+            goal_coordinates = tuple(cell[axis] for cell in goal_cells)
+            if (
+                max(source_coordinates) <= cut < min(goal_coordinates)
+                or max(goal_coordinates) <= cut < min(source_coordinates)
+            ):
+                demand += 1
+        return demand
+
+    overloads = 0
+    for cut in x_cuts:
+        left_capacity = sum(
+            separator_flags[grid.index((cut, y, level))]
+            for y in range(lo_y, hi_y + 1)
+            for level in range(LEVELS)
+        )
+        right_capacity = sum(
+            separator_flags[grid.index((cut + 1, y, level))]
+            for y in range(lo_y, hi_y + 1)
+            for level in range(LEVELS)
+        )
+        overloads += mandatory_crossings(0, cut) > min(left_capacity, right_capacity)
+    for cut in y_cuts:
+        bottom_capacity = sum(
+            separator_flags[grid.index((x, cut, level))]
+            for x in range(lo_x, hi_x + 1)
+            for level in range(LEVELS)
+        )
+        top_capacity = sum(
+            separator_flags[grid.index((x, cut + 1, level))]
+            for x in range(lo_x, hi_x + 1)
+            for level in range(LEVELS)
+        )
+        overloads += mandatory_crossings(1, cut) > min(bottom_capacity, top_capacity)
+    separator_cuts = len(x_cuts) + len(y_cuts)
+    separator_wall_time_s = time.perf_counter() - separator_started
+
 
     def shortest(net: _PreparedNet) -> int | None:
         nonlocal expansions
@@ -8402,6 +8474,9 @@ def _obstacle_aware_prepared_routing_floor(
                 False,
                 time.perf_counter() - started,
                 expansions,
+                separator_cuts,
+                overloads,
+                separator_wall_time_s,
             )
         root = find(net.net_id)
         component_floors[root] = max(component_floors.get(root, 0), floor)
@@ -8411,6 +8486,9 @@ def _obstacle_aware_prepared_routing_floor(
         True,
         time.perf_counter() - started,
         expansions,
+        separator_cuts,
+        overloads,
+        separator_wall_time_s,
     )
 
 @dataclass(frozen=True, slots=True)
