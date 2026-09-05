@@ -10642,7 +10642,12 @@ class TestPortAccessIsReservedForEveryRole:
         a = _Port(0, 0, 0, 0, 0)
         b = _Port(1, 4, 0, 4, 4)
         c = _Port(2, 8, 0, 8, 8)
-        _reserve_port_access(canvas, [_Net(src=a, dst=b, item="x"), _Net(src=b, dst=c, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory(
+                [_Net(src=a, dst=b, item="x"), _Net(src=b, dst=c, item="x")]
+            ).demands,
+        )
         held = {
             key: sum(1 for k in canvas.reserved.values() if k == key)
             for key in ((0, 0, 0), (4, 0, 0), (8, 0, 0))
@@ -10660,19 +10665,18 @@ class TestPortAccessIsReservedForEveryRole:
         sink = _Port(canvas.add(_belt(10, 0)), 10, 0, 10, 10)
         for cell in ((-1, 0), (0, -1), (0, 1)):
             canvas.add(_belt(*cell))
-        failed: set[Cell] = set()
-
-        missing = _reserve_port_access(
+        reservation = _reserve_port_access(
             canvas,
-            [
-                _Net(src=source, dst=middle, item="x"),
-                _Net(src=middle, dst=sink, item="x"),
-            ],
-            failed_ports=failed,
+            freeform._port_access_inventory(
+                [
+                    _Net(src=source, dst=middle, item="x"),
+                    _Net(src=middle, dst=sink, item="x"),
+                ]
+            ).demands,
         )
 
-        assert missing == 1
-        assert failed == {(0, 0, 0)}
+        assert len(reservation.missing) == 1
+        assert {demand.cell for demand in reservation.missing} == {(0, 0, 0)}
 
     def test_a_second_cell_never_takes_another_port_s_only_one(self) -> None:
         """Every port gets its first cell before any port gets its second.
@@ -10691,7 +10695,12 @@ class TestPortAccessIsReservedForEveryRole:
         q = _Port(0, 0, 0, 0, 0)
         p = _Port(1, -2, 0, -2, 0)
         far = _Port(2, 4, 0, 4, 4)
-        _reserve_port_access(canvas, [_Net(src=p, dst=q, item="x"), _Net(src=q, dst=far, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory(
+                [_Net(src=p, dst=q, item="x"), _Net(src=q, dst=far, item="x")]
+            ).demands,
+        )
         assert canvas.reserved.get((-1, 0, 0)) == (-2, 0, 0), (
             "the only cell that reaches p was taken by q's second claim: "
             f"{canvas.reserved.get((-1, 0, 0))}"
@@ -10725,7 +10734,12 @@ class TestPortAccessIsReservedForEveryRole:
         far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
         d = _Port(0, 0, 0, 0, 0)
         e = _Port(1, -1, -1, -1, -1)
-        _reserve_port_access(canvas, [_Net(src=e, dst=d, item="x"), _Net(src=d, dst=far, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory(
+                [_Net(src=e, dst=d, item="x"), _Net(src=d, dst=far, item="x")]
+            ).demands,
+        )
 
         held = {
             key: sorted(c for c, k in canvas.reserved.items() if k == key)
@@ -10757,7 +10771,10 @@ class TestPortAccessIsReservedForEveryRole:
         canvas.add(_belt(1, -1))
         far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
         port = _Port(0, 0, 0, 0, 0)
-        _reserve_port_access(canvas, [_Net(src=port, dst=far, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory([_Net(src=port, dst=far, item="x")]).demands,
+        )
 
         assert canvas.reserved.get((1, 0, 0)) == (0, 0, 0), (
             f"the port did not hold its access cell: {canvas.reserved}"
@@ -10778,7 +10795,10 @@ class TestPortAccessIsReservedForEveryRole:
         canvas.add(_belt(0, 0))
         far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
         port = _Port(0, 0, 0, 0, 0)
-        _reserve_port_access(canvas, [_Net(src=port, dst=far, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory([_Net(src=port, dst=far, item="x")]).demands,
+        )
 
         for_port = [cell for cell, key in canvas.reserved.items() if key == (0, 0, 0)]
         assert len(for_port) == 2, (
@@ -10786,8 +10806,12 @@ class TestPortAccessIsReservedForEveryRole:
         )
 
     def test_selected_corridors_never_share_an_exit_cell(self) -> None:
-        first = (0, 0, 0)
-        second = (2, 0, 0)
+        first = _access_demand(
+            (0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=1
+        )
+        second = _access_demand(
+            (2, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=2
+        )
         matched = freeform._match_access_corridors(
             (first, second),
             {
@@ -10797,10 +10821,9 @@ class TestPortAccessIsReservedForEveryRole:
                     ((3, 0, 0), (4, 0, 0)),
                 ),
             },
-            {first: 1, second: 1},
         )
 
-        assert set(matched) == {(first, 0), (second, 0)}
+        assert set(matched) == {first, second}
         occupied = {
             cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)
         }
@@ -10819,7 +10842,10 @@ class TestPortAccessIsReservedForEveryRole:
             item="x",
             net_id=NetId(0, 1, "x", NetRole.INTERNAL, 0),
         )
-        assert _reserve_port_access(canvas, [net]) == 0
+        assert _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory([net]).demands,
+        ).complete
         assert len(canvas.reserved) == 4
         monkeypatch.setattr(freeform, "_commit_paths", lambda *_args, **_kwargs: ())
 
@@ -10852,12 +10878,14 @@ class TestPortAccessIsReservedForEveryRole:
             ):
                 canvas.add(_belt(*cell))
 
-            missing = _reserve_port_access(
+            reservation = _reserve_port_access(
                 canvas,
-                [
-                    _Net(src=source, dst=first_sink, item="hydrogen"),
-                    _Net(src=blocker, dst=second_sink, item="hydrogen"),
-                ],
+                freeform._port_access_inventory(
+                    [
+                        _Net(src=source, dst=first_sink, item="hydrogen"),
+                        _Net(src=blocker, dst=second_sink, item="hydrogen"),
+                    ]
+                ).demands,
             )
             access = tuple(
                 sorted(cell for cell, owner in canvas.reserved.items() if owner == (0, 0, 0))
@@ -10875,7 +10903,7 @@ class TestPortAccessIsReservedForEveryRole:
                 and (canvas.free(candidate) or canvas.reserved.get(candidate) == (0, 0, 0))
                 for dx, dy in freeform._STEPS
             )
-            return missing, access, usable
+            return len(reservation.missing), access, usable
 
         first = replay()
         second = replay()
@@ -10900,17 +10928,16 @@ def test_a_middle_lane_head_in_twice_cannot_hold_its_second_corridor() -> None:
             canvas.add(_belt(column, row))
     far = _Port(canvas.add(_belt(8, 4)), 8, 4, 8, 8)
     middle = (0, 1, 0)
-    failed: set[tuple[int, int, int]] = set()
-
-    missing = _reserve_port_access(
+    reservation = _reserve_port_access(
         canvas,
-        [_Net(src=far, dst=head, item="hydrogen") for head in heads],
-        twice={middle},
-        failed_ports=failed,
+        freeform._port_access_inventory(
+            [_Net(src=far, dst=head, item="hydrogen") for head in heads],
+            boundary_inputs=(("hydrogen", heads[1], None),),
+        ).demands,
     )
 
-    assert missing == 1
-    assert failed == {middle}
+    assert len(reservation.missing) == 1
+    assert {demand.cell for demand in reservation.missing} == {middle}
 
 
 class TestProliferatorSupplyIsOneReachableTree:
@@ -19906,7 +19933,10 @@ def test_the_relaxed_run_never_re_reserves_a_served_nets_corridor(
     # the same fixture -- the live canvas has already been routed by the time
     # anything can look at it.
     plan_canvas, plan_nets, _plan_bounds = _served_corridor_stranded_fixture()
-    freeform._reserve_port_access(plan_canvas, plan_nets)
+    freeform._reserve_port_access(
+        plan_canvas,
+        freeform._port_access_inventory(plan_nets).demands,
+    )
     every_corridor = frozenset(plan_canvas.reserved)
     seen: list[tuple[frozenset[Cell], frozenset[Cell]]] = []
 
@@ -23013,8 +23043,8 @@ def test_self_consuming_requested_output_routes_from_late_tail() -> None:
     assert source.belt in inventory.late_output_belts
 
     canvas = _Canvas(limit=(0, 0, 8, 4))
-    source_index = canvas.add(_belt(1, 1))
-    tail_index = canvas.add(_belt(5, 1))
+    source_index = canvas.add(_belt(1, 1, item="product"))
+    tail_index = canvas.add(_belt(5, 1, item="product"))
     canvas.buildings[source_index] = _relink(canvas.buildings[source_index], output_obj=tail_index)
     output = _Net(
         _Port(source_index, 1, 1, 1, 1),
