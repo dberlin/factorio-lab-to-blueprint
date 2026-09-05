@@ -22799,6 +22799,13 @@ _BROKE7_SWAPPED_ORIGINS = (
     (4, 0),
     (3, 9),
 )
+_BROKE7_RECORDED_PACKS = (
+    (36, 54, ((4, 0), (4, 9), (4, 18), (4, 26), (33, 0), (33, 9), (32, 18)), True),
+    (45, 42, ((4, 17), (4, 26), (4, 9), (25, 26), (4, 35), (4, 0), (26, 35)), False),
+    (57, 40, ((4, 8), (4, 17), (4, 35), (4, 1), (4, 26), (4, 43), (24, 0)), True),
+    (28, 61, ((25, 9), (4, 18), (4, 1), (25, 18), (4, 9), (33, 0), (45, 18)), True),
+    (21, 82, _BROKE7_REFUSING_ORIGINS, True),
+)
 
 
 def _broke7_spec() -> BuildSpec:
@@ -22945,8 +22952,10 @@ def _corridor_scene(*, internal: bool = False) -> tuple[_Canvas, freeform.PortAc
     canvas = _Canvas(limit=(0, 0, 6, 6))
     port_cell = (3, 3, 0)
     port = canvas.add(_belt(3, 3))
-    for x, y in ((4, 2), (4, 4), (5, 2), (5, 4), (6, 3), (3, 2), (3, 4)):
+    walls = ((4, 2), (4, 4), (5, 2), (5, 4), (6, 3), (3, 2), (3, 4))
+    for x, y in walls:
         canvas.add(_belt(x, y))
+    canvas.keep_out.update((*walls, (3, 3)))
     kind = (
         freeform.PortAccessKind.INTERNAL_DEPARTURE
         if internal
@@ -23056,267 +23065,59 @@ def test_self_consuming_requested_output_routes_from_late_tail() -> None:
     assert late[0].source.belt == tail_index
 
 
-def test_broke7_boundary_access_distinguishes_equal_box_swap() -> None:
-    spec, strips, refusing, swapped = _broke7_fixture()
-    assert refusing.width == swapped.width
-    assert refusing.height == swapped.height
+def test_broke7_boundary_access_rematches_equal_box_pair() -> None:
+    spec, strips, formerly_refusing, swapped = _broke7_fixture()
+    assert formerly_refusing.width == swapped.width
+    assert formerly_refusing.height == swapped.height
     assert sum(width * height for width, height in map(_box, strips)) == 1359
-    assert _box_cells(strips, refusing) == _box_cells(strips, swapped)
+    assert _box_cells(strips, formerly_refusing) == _box_cells(strips, swapped)
 
-    rejected = _prepare_routing_problem(
-        spec, strips, refusing, policy=BandPolicy("portable"), power=False
+    first = _prepare_routing_problem(
+        spec, strips, formerly_refusing, policy=BandPolicy("portable"), power=False
     )
-    accepted = _prepare_routing_problem(
+    second = _prepare_routing_problem(
         spec, strips, swapped, policy=BandPolicy("portable"), power=False
     )
-    iron = next(
-        failure
-        for failure in rejected.preparation_failures
-        if failure.net_id.role is NetRole.EXTERNAL
-        and failure.net_id.item == "iron-ingot"
-        and failure.destination == (19, 10, 0)
+    assert not first.preparation_failures
+    assert not second.preparation_failures
+    assert any(
+        demand.kind is freeform.PortAccessKind.BOUNDARY_ARRIVAL
+        and demand.item == "iron-ingot"
+        and demand.cell == (19, 10, 0)
+        for demand in first.port_access_demands
     )
-    assert iron.kind is RouteFailureKind.STATIC_ACCESS
-    assert rejected.preparation_exhaustive
-    assert rejected.static_access_proof is not None
-    assert not accepted.preparation_failures
 
 
-def test_broke7_fixed_refusal_and_equal_box_swap_high_expansion_control() -> None:
-    spec, strips, refusing, swapped = _broke7_fixture()
-    rejected = _build(
+@pytest.mark.parametrize(("height", "width", "origins", "routes"), _BROKE7_RECORDED_PACKS)
+def test_broke7_recorded_pack_outcomes_after_boundary_role_repair(
+    height: int,
+    width: int,
+    origins: tuple[tuple[int, int], ...],
+    routes: bool,
+) -> None:
+    spec = _broke7_spec()
+    strips = plan_strips(spec)
+    pack = freeform._Pack(
+        at=dict(enumerate(origins)),
+        width=width,
+        height=height,
+        status="recorded-post-fix-control",
+    )
+    built = _build(
         spec,
         strips,
-        refusing,
+        pack,
         policy=BandPolicy("portable"),
         power=False,
         route=True,
         budget={"left": 50_000_000},
     )
-    routed = _build(
-        spec,
-        strips,
-        swapped,
-        policy=BandPolicy("portable"),
-        power=False,
-        route=True,
-        budget={"left": 50_000_000},
-    )
-    assert rejected.routing.status is DetailedRouteStatus.STRANDED
-    assert rejected.routing.exhaustive
-    assert routed.routing.status is DetailedRouteStatus.ROUTED
-
-
-def test_static_access_exact_no_good_reaches_pack_model() -> None:
-    strip = plan_strips(single_recipe_spec())[0]
-    strips = [replace(strip, group_key=f"static-access-{index}") for index in range(2)]
-    height = sum(_box(candidate)[1] for candidate in strips)
-    width_bound = sum(_box(candidate)[0] for candidate in strips)
-    baseline = _pack(
-        strips,
-        height=height,
-        width_bound=width_bound,
-        time_budget_s=0.5,
-        direct_candidates={},
-        workers=1,
-        deterministic=True,
-    )
-    assert baseline is not None
-    cut = freeform.ExactPackNoGood(
-        height=baseline.height,
-        outline=tuple(map(_box, strips)),
-        width=baseline.width,
-        origins=tuple(baseline.at[index] for index in range(len(strips))),
-        evidence=(finalize.ProjectionFailure("route.static_access", (), "proved", 0),),
-    )
-    retry = _pack(
-        strips,
-        height=height,
-        width_bound=width_bound,
-        time_budget_s=0.5,
-        direct_candidates={},
-        workers=1,
-        deterministic=True,
-        exact_pack_no_goods=(cut,),
-    )
-    assert retry is not None
-    assert tuple(retry.at[index] for index in range(len(strips))) != cut.origins
-
-
-def test_static_access_relation_no_good_requires_isolated_closed_cut() -> None:
-    spec, strips, refusing, _swapped = _broke7_fixture()
-    rejected = _build(
-        spec,
-        strips,
-        refusing,
-        policy=BandPolicy("portable"),
-        power=False,
-        route=True,
-    )
-    assert rejected.static_access_proof is not None
-    attempt = freeform.PackAttempt(
-        origins=tuple(refusing.at[index] for index in range(len(strips))),
-        compact_width=refusing.width,
-        height=refusing.height,
-        outline=tuple(map(_box, strips)),
-        routing=rejected.routing,
-        budget_stage=None,
-        static_access=rejected.routing.failures,
-        promised_direct=rejected.promised_direct,
-        realized_direct=rejected.realized_direct,
-        direct_candidates=freeform._direct_candidate_snapshot(strips, spec, enabled=True),
-        static_access_proof=rejected.static_access_proof,
-    )
-    cache: dict[object, freeform.ClusterRelationNoGood | None] = {}
-    relation = freeform._certify_static_access_relation(
-        attempt,
-        strips,
-        deadline=time.monotonic() + freeform.C_WINDOW_SECONDS,
-        cache=cache,
-    )
-    assert relation is not None
-    boundary_dependent = replace(
-        attempt,
-        static_access_proof=replace(
-            rejected.static_access_proof,
-            touches_boundary=True,
-        ),
-    )
-    assert (
-        freeform._certify_static_access_relation(
-            boundary_dependent,
-            strips,
-            deadline=time.monotonic() + freeform.C_WINDOW_SECONDS,
-            cache={},
+    if routes:
+        assert built.routing.status is DetailedRouteStatus.ROUTED
+    else:
+        assert built.routing.status is DetailedRouteStatus.STRANDED
+        assert not built.routing.exhaustive
+        assert all(
+            failure.kind is not RouteFailureKind.STATIC_ACCESS
+            for failure in built.routing.failures
         )
-        is None
-    )
-
-
-def test_static_access_relation_cut_allows_other_relative_placements() -> None:
-    spec, strips, refusing, swapped = _broke7_fixture()
-    rejected = _build(
-        spec, strips, refusing, policy=BandPolicy("portable"), power=False, route=True
-    )
-    attempt = freeform.PackAttempt(
-        origins=tuple(refusing.at[index] for index in range(len(strips))),
-        compact_width=refusing.width,
-        height=refusing.height,
-        outline=tuple(map(_box, strips)),
-        routing=rejected.routing,
-        budget_stage=None,
-        static_access=rejected.routing.failures,
-        promised_direct=rejected.promised_direct,
-        realized_direct=rejected.realized_direct,
-        direct_candidates=freeform._direct_candidate_snapshot(strips, spec, enabled=True),
-        static_access_proof=rejected.static_access_proof,
-    )
-    relation = freeform._certify_static_access_relation(
-        attempt,
-        strips,
-        deadline=time.monotonic() + freeform.C_WINDOW_SECONDS,
-        cache={},
-    )
-    assert relation is not None
-    model = freeform._pack_model(
-        strips,
-        height=swapped.height,
-        width_bound=swapped.width,
-        direct_candidates={},
-        fixed_at=swapped.at,
-        cluster_relation_no_goods=(relation,),
-    )
-    assert model is not None
-    solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = 1
-    assert solver.solve(model.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-
-
-class _FakeRecoveryClock:
-    def __init__(self, value: float = 100.0) -> None:
-        self.value = value
-
-    def __call__(self) -> float:
-        return self.value
-
-    def advance(self, seconds: float) -> None:
-        self.value += seconds
-
-
-def test_sweep_shares_one_second_between_certification_and_recovery(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = _FakeRecoveryClock()
-    monkeypatch.setattr(freeform.time, "monotonic", clock)
-    allowances: list[float] = []
-
-    def certify(_deadline: float) -> str:
-        clock.advance(0.4)
-        return "proved"
-
-    def solve(allowance: float, proof: str) -> str:
-        assert proof == "proved"
-        allowances.append(allowance)
-        clock.advance(allowance)
-        return "different-pack"
-
-    outcome = freeform._run_static_recovery_window(
-        hard_deadline=102.0,
-        completion_reserve_s=0.25,
-        certify=certify,
-        solve=solve,
-    )
-    assert outcome.value == "different-pack"
-    assert allowances == pytest.approx([0.6])
-    assert outcome.deadline == pytest.approx(101.0)
-    assert clock.value == pytest.approx(101.0)
-
-
-def test_sweep_max_certification_consumes_recovery_window(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clock = _FakeRecoveryClock()
-    monkeypatch.setattr(freeform.time, "monotonic", clock)
-
-    def certify(deadline: float) -> str:
-        clock.value = deadline
-        return "proved"
-
-    outcome = freeform._run_static_recovery_window(
-        hard_deadline=102.0,
-        completion_reserve_s=0.25,
-        certify=certify,
-        solve=lambda *_args: pytest.fail("an exhausted shared window launched a solve"),
-    )
-    assert outcome.value is None
-    assert outcome.deadline == pytest.approx(101.0)
-    assert clock.value == pytest.approx(101.0)
-
-
-def test_broke7_real_packer_recovers_under_window() -> None:
-    spec, strips, refusing, _swapped = _broke7_fixture()
-    rejected = _build(
-        spec, strips, refusing, policy=BandPolicy("portable"), power=False, route=True
-    )
-    recovered = freeform._recover_static_access_pack(
-        spec,
-        strips,
-        refusing,
-        rejected,
-        arrangement=1,
-        hard_deadline=time.monotonic() + 2.0,
-        completion_reserve_s=0.25,
-        direct_candidates=freeform._direct_net_candidates(strips, spec),
-        proof_cache={},
-    )
-    assert recovered.pack is not None
-    assert recovered.pack.at != refusing.at
-    routed = _build(
-        spec,
-        strips,
-        recovered.pack,
-        policy=BandPolicy("portable"),
-        power=False,
-        route=True,
-    )
-    assert routed.routing.status is DetailedRouteStatus.ROUTED
