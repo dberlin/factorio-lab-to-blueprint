@@ -62,6 +62,7 @@ from flab2bp.layout.freeform import (
     _dests,
     _direct_column_deltas,
     _direct_net_candidates,
+    _direct_origin_deltas,
     _DirectCandidate,
     _emit_strip,
     _greedy_pack,
@@ -234,6 +235,7 @@ def two_stage_spec() -> BuildSpec:
         belt_items_per_second=F(12),
         label="two-stage",
     )
+
 
 
 def plastic_spec() -> BuildSpec:
@@ -2087,7 +2089,7 @@ def test_uniform_unsprayed_lane_preserves_clean_domain() -> None:
     assert logical == strip == {"unsprayed"}
     assert coaters == 0
     assert nets == {"unsprayed"}
-    assert direct == 1
+    assert direct == 0
     assert not spec.lanes_requiring_split
 
 
@@ -2098,38 +2100,37 @@ def test_mixed_internal_spray_domains_remain_disjoint() -> None:
     assert logical == strip == {"unsprayed", "requires-spray"}
     assert coaters == 1
     assert nets == {"unsprayed", "requires-spray"}
-    assert direct == 1
+    assert direct == 0
     assert spec.lanes_requiring_split == {"iron-ingot"}
 
 
-def test_mixed_spray_domain_direct_candidate_is_clean_and_exact() -> None:
+def test_mixed_spray_domain_direct_candidate_requires_flow_safe_alignment() -> None:
     spec = spray_domain_spec(clean=True, sprayed=True)
     strips = plan_strips(spec, strip_len=6)
 
-    candidates = _direct_net_candidates(strips, spec)
-
-    assert list(candidates) == [(0, 1)]
-    candidate = candidates[0, 1]
     assert strips[0].recipe_id == "iron-ingot"
     assert strips[1].recipe_id == "circuit-board"
     assert strips[2].recipe_id == "gear"
-    assert (
-        candidate.item,
-        candidate.cargo_domain,
-        candidate.prod_row,
-        candidate.cons_row,
-        candidate.prod_span,
-        candidate.cons_span,
-        candidate.origin_deltas,
-    ) == (
-        "iron-ingot",
-        CargoDomain.UNSPRAYED,
-        4,
-        0,
-        9,
-        5,
-        tuple(range(-2, 8)),
-    )
+    assert _direct_net_candidates(strips, spec) == {}
+
+
+def test_direct_net_candidates_adapt_the_spec_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = list(_direct_flow_order_strips())
+    adapt = freeform._adapt
+    calls = 0
+
+    def counted(candidate: BuildSpec) -> dict[str, freeform._Group]:
+        nonlocal calls
+        calls += 1
+        return adapt(candidate)
+
+    monkeypatch.setattr(freeform, "_adapt", counted)
+
+    assert _direct_net_candidates(strips, spec)
+    assert calls == 1
 
 
 def test_direct_origin_deltas_memo_is_transparent() -> None:
@@ -2149,9 +2150,7 @@ def test_direct_origin_deltas_memo_is_transparent() -> None:
 
 def test_direct_origin_deltas_memo_serves_value_equal_strips() -> None:
     """Distinct-but-equal strips share one entry, for a filled and an empty answer."""
-    spec = spray_domain_spec(clean=True, sprayed=True)
-    strips = plan_strips(spec, strip_len=6)
-    source, destination = strips[0], strips[1]
+    source, destination = _direct_flow_order_strips()
     twin_source, twin_destination = replace(source), replace(destination)
     assert twin_source is not source and twin_destination is not destination
     lane = next(
@@ -2160,18 +2159,51 @@ def test_direct_origin_deltas_memo_serves_value_equal_strips() -> None:
         if item == "iron-ingot" and domain is CargoDomain.UNSPRAYED
     )
 
-    filled = freeform._direct_origin_deltas(source, destination, lane, "iron-ingot")
+    filled = freeform._direct_origin_deltas(
+        source,
+        destination,
+        lane,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
+    )
     assert filled
-    assert freeform._direct_origin_deltas(twin_source, twin_destination, lane, "iron-ingot") == (
-        filled
+    assert (
+        freeform._direct_origin_deltas(
+            twin_source,
+            twin_destination,
+            lane,
+            "iron-ingot",
+            source_rate=F(1),
+            required_rate=F(4),
+        )
+        == filled
     )
     assert len(freeform._DIRECT_ORIGIN_DELTAS_MEMO) == 1
 
     # An unplanned item has no input attachment plan, so the answer is the
     # empty tuple -- which the memo must store rather than treat as a miss.
-    assert freeform._direct_origin_deltas(source, destination, lane, "unplanned-item") == ()
     assert (
-        freeform._direct_origin_deltas(twin_source, twin_destination, lane, "unplanned-item") == ()
+        freeform._direct_origin_deltas(
+            source,
+            destination,
+            lane,
+            "unplanned-item",
+            source_rate=F(1),
+            required_rate=F(4),
+        )
+        == ()
+    )
+    assert (
+        freeform._direct_origin_deltas(
+            twin_source,
+            twin_destination,
+            lane,
+            "unplanned-item",
+            source_rate=F(1),
+            required_rate=F(4),
+        )
+        == ()
     )
     assert len(freeform._DIRECT_ORIGIN_DELTAS_MEMO) == 2
     freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
@@ -2264,7 +2296,7 @@ def test_direct_geometry_key_classifies_every_strip_field() -> None:
     # and `lane_of_input` are not fields and are filtered out) is inside the
     # same key.  A helper that starts reading an unclassified field would
     # otherwise serve the memo wrong cached answers in silence.
-    source, destination = strips[0], strips[1]
+    source, destination = _direct_flow_order_strips()
     lane = next(
         k
         for k, (item, _destination, domain) in enumerate(source.out_lanes)
@@ -2277,6 +2309,8 @@ def test_direct_geometry_key_classifies_every_strip_field() -> None:
         cast(Strip, cast(object, destination_recorder)),
         lane,
         "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
     )
     assert deltas
     strip_field_names = {field.name for field in dataclasses.fields(Strip)}
@@ -3102,6 +3136,312 @@ def test_direct_column_delta_work_is_linear_in_packed_bytes(
     assert CountedBytearray.writes <= (len(source) + len(destination) + extraction_reads)
 
 
+def _strip_with_attachment_column(strip: Strip, kind: str, column: int) -> Strip:
+    plans = []
+    probe = slots.probe_building(strip.item_id, strip.yaw)
+    for plan in strip.attachment_plan:
+        if plan.lane.kind != kind:
+            plans.append(plan)
+            continue
+        pose = slots.attachable_columns(probe, plan.lane_y)[column]
+        plans.append(
+            replace(
+                plan,
+                attachments=tuple(
+                    replace(
+                        attachment,
+                        column=column,
+                        cell=pose.cell,
+                        slot=pose.slot,
+                        span=pose.span,
+                    )
+                    for attachment in plan.attachments
+                ),
+            )
+        )
+    return replace(strip, attachment_plan=tuple(plans))
+
+
+def _direct_flow_order_strips() -> tuple[Strip, Strip]:
+    source, destination = plan_strips(two_stage_spec(), strip_len=6)
+    return (
+        _strip_with_attachment_column(source, "output", 0),
+        _strip_with_attachment_column(destination, "input", 2),
+    )
+
+
+def test_direct_origin_deltas_reject_columns_before_the_final_source_injection() -> None:
+    source, destination = _direct_flow_order_strips()
+
+    deltas = _direct_origin_deltas(
+        source,
+        destination,
+        0,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
+    )
+
+    assert 5 not in deltas, "source column 5 is before its final injection at column 9"
+
+
+def test_direct_origin_deltas_reject_columns_after_the_first_destination_pickup() -> None:
+    source, destination = _direct_flow_order_strips()
+
+    deltas = _direct_origin_deltas(
+        source,
+        destination,
+        0,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
+    )
+
+    assert 15 not in deltas, "the only destination columns at that offset follow a pickup"
+
+
+def test_direct_origin_deltas_keep_source_tail_to_destination_head_alignment() -> None:
+    source, destination = _direct_flow_order_strips()
+
+    assert (
+        _direct_origin_deltas(
+            source,
+            destination,
+            0,
+            "iron-ingot",
+            source_rate=F(1),
+            required_rate=F(4),
+        )
+        == (9, 10, 11)
+    )
+
+
+def test_direct_origin_deltas_admit_a_bridge_after_sufficient_partial_supply() -> None:
+    source, destination = _direct_flow_order_strips()
+
+    deltas = _direct_origin_deltas(
+        source,
+        destination,
+        0,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(2),
+    )
+
+    assert 5 in deltas, "two upstream producers satisfy the bridge without waiting for all four"
+
+
+def _direct_flow_order_canvas(
+    source_injection_column: int,
+    destination_pickup_column: int,
+) -> tuple[_Canvas, _Port, _Port, list[colliders.Box], DirectInsertId]:
+    belt_info = catalog.building(2001)
+    source_machine = PlacedBuilding(
+        item_id=2304,
+        model_index=catalog.building(2304).model_index,
+        x=source_injection_column - 1,
+        y=-3,
+        width=3,
+        height=3,
+        owner_strip=0,
+        recipe_id=1,
+    )
+    destination_machine = replace(
+        source_machine,
+        x=destination_pickup_column - 1,
+        y=3,
+        owner_strip=1,
+        recipe_id=2,
+    )
+    source_lane = [
+        PlacedBuilding(item_id=2001, model_index=belt_info.model_index, x=x, y=0)
+        for x in range(4, 7)
+    ]
+    destination_lane = [
+        PlacedBuilding(item_id=2001, model_index=belt_info.model_index, x=x, y=2)
+        for x in range(4, 7)
+    ]
+    source_belt = 2 + source_injection_column - 4
+    destination_belt = 5 + destination_pickup_column - 4
+    source_sorter = PlacedBuilding(
+        item_id=2011,
+        model_index=catalog.building(2011).model_index,
+        x=source_injection_column,
+        y=-1,
+        x2=source_injection_column,
+        y2=0,
+        z2=F(0),
+        input_obj=0,
+        output_obj=source_belt,
+    )
+    destination_sorter = PlacedBuilding(
+        item_id=2011,
+        model_index=catalog.building(2011).model_index,
+        x=destination_pickup_column,
+        y=2,
+        x2=destination_pickup_column,
+        y2=3,
+        z2=F(0),
+        input_obj=destination_belt,
+        output_obj=1,
+    )
+    canvas = _Canvas(
+        buildings=[
+            source_machine,
+            destination_machine,
+            *source_lane,
+            *destination_lane,
+            source_sorter,
+            destination_sorter,
+        ]
+    )
+    canvas.blocked = {
+        (building.x, building.y, 0): index
+        for index, building in enumerate(canvas.buildings)
+        if catalog.is_belt(building.item_id)
+    }
+    source = _Port(4, 4, 0, 4, 6, (2, 3, 4), 1)
+    destination = _Port(5, 4, 2, 4, 6, (5, 6, 7), 1)
+    direct = DirectInsertId(0, 1, "iron-ingot", CargoDomain.UNSPRAYED)
+    return canvas, source, destination, slots.sorter_seat_boxes(canvas.buildings), direct
+
+
+@pytest.mark.parametrize(
+    ("source_injection_column", "destination_pickup_column"),
+    ((6, 6), (4, 4)),
+)
+def test_bridge_refuses_emitted_lane_attachments_outside_flow_safe_order(
+    source_injection_column: int,
+    destination_pickup_column: int,
+) -> None:
+    canvas, source, destination, standing, direct = _direct_flow_order_canvas(
+        source_injection_column,
+        destination_pickup_column,
+    )
+
+    assert (
+        _bridge(
+            canvas,
+            source,
+            destination,
+            {"iron-ingot": F(1)},
+            "iron-ingot",
+            standing,
+            direct,
+            source_rate=F(1),
+            required_rate=F(1),
+        )
+        is None
+    )
+
+
+def test_bridge_emits_after_enough_upstream_supply_before_the_final_injection() -> None:
+    canvas, source, destination, _standing, direct = _direct_flow_order_canvas(4, 6)
+    second_machine = canvas.add(
+        replace(
+            canvas.buildings[0],
+            x=5,
+        ),
+        solid=True,
+    )
+    canvas.buildings.append(
+        replace(
+            canvas.buildings[8],
+            x=6,
+            x2=6,
+            input_obj=second_machine,
+            output_obj=4,
+        )
+    )
+    standing = slots.sorter_seat_boxes(canvas.buildings)
+
+    assert (
+        _bridge(
+            canvas,
+            source,
+            destination,
+            {"iron-ingot": F(1)},
+            "iron-ingot",
+            standing,
+            direct,
+            source_rate=F(1),
+            required_rate=F(1),
+        )
+        == direct
+    )
+    assert canvas.buildings[-1].x == 5
+
+
+def test_bridge_rejects_a_diagonal_even_when_both_endpoints_are_flow_safe() -> None:
+    canvas, source, destination, _standing, direct = _direct_flow_order_canvas(4, 6)
+    source = replace(source, x0=6)
+    standing = slots.sorter_seat_boxes(canvas.buildings)
+    before = len(canvas.buildings)
+
+    assert (
+        _bridge(
+            canvas,
+            source,
+            destination,
+            {"iron-ingot": F(1)},
+            "iron-ingot",
+            standing,
+            direct,
+            source_rate=F(1),
+            required_rate=F(1),
+        )
+        is None
+    )
+    assert len(canvas.buildings) == before
+
+
+def test_bridge_emits_a_source_tail_to_destination_head_alignment() -> None:
+    canvas, source, destination, standing, direct = _direct_flow_order_canvas(4, 6)
+
+    assert (
+        _bridge(
+            canvas,
+            source,
+            destination,
+            {"iron-ingot": F(1)},
+            "iron-ingot",
+            standing,
+            direct,
+            source_rate=F(1),
+            required_rate=F(1),
+        )
+        == direct
+    )
+    assert canvas.buildings[-1].x == 5
+
+
+def _forced_direct_pack(strips: list[Strip], spec: BuildSpec) -> freeform._Pack:
+    """Place one proved direct relation even when width outranks its reward."""
+    candidates = _direct_net_candidates(strips, spec)
+    ((source, destination), candidate) = next(iter(candidates.items()))
+    delta_x = candidate.origin_deltas[0]
+    delta_y = strips[source].height + 1
+    row_gap = delta_y + candidate.cons_row - candidate.prod_row
+    assert 1 <= row_gap <= catalog.SORTER_MAX_REACH
+    origins = {
+        source: (1, 0),
+        destination: (1 + delta_x, delta_y),
+    }
+    direct = DirectInsertId(
+        source,
+        destination,
+        candidate.item,
+        candidate.cargo_domain,
+    )
+    return freeform._Pack(
+        at=origins,
+        width=max(origins[index][0] + strip.width for index, strip in enumerate(strips)) + 1,
+        height=max(origins[index][1] + strip.height for index, strip in enumerate(strips)) + 1,
+        status="TEST",
+        direct=frozenset((direct,)),
+    )
+
+
 class TestDirectInsertion:
     """A direct insert replaces a routed belt net with a single sorter.
 
@@ -3113,26 +3453,20 @@ class TestDirectInsertion:
 
     @staticmethod
     def _stacked(spec: BuildSpec, *, direct: bool) -> tuple[Placement, object]:
-        """Pack at a height that forces stacking, then build.
-
-        Deliberately below `lay_out`, because the full height sweep is area-first
-        and stacking *costs* area here (the sweep at a 0.5 s budget lands a
-        smaller pack without the direct insert). Testing through the sweep would
-        therefore assert the mechanism is broken when it is merely outranked.
-        This exercises the mechanism itself.
-        """
-        strips = plan_strips(spec, strip_len=6)
-        cands = _direct_net_candidates(strips, spec) if direct else {}
-        height = sum(s.height + 1 for s in strips)
-        pack = _pack(
-            strips,
-            height=height,
-            width_bound=max(s.width + 1 for s in strips) * 2,
-            time_budget_s=0.5,
-            direct_candidates=cands,
-            workers=DETERMINISTIC_WORKERS,
-        )
-        assert pack is not None
+        """Build a forced safe bridge, or the ordinary no-bridge packing."""
+        strips = list(_direct_flow_order_strips())
+        if direct:
+            pack = _forced_direct_pack(strips, spec)
+        else:
+            pack = _pack(
+                strips,
+                height=sum(s.height + 1 for s in strips),
+                width_bound=max(s.width + 1 for s in strips) * 2,
+                time_budget_s=0.5,
+                direct_candidates={},
+                workers=DETERMINISTIC_WORKERS,
+            )
+            assert pack is not None
         result = _build(
             spec,
             strips,
@@ -3220,7 +3554,9 @@ class TestDirectInsertion:
             input_obj=1,
             output_obj=0,
         )
-        canvas = _Canvas(buildings=[machine, *lane, standing])
+        source_machine = replace(machine, y=-3, owner_strip=0, recipe_id=1)
+        lane[2] = replace(lane[2], input_obj=6)
+        canvas = _Canvas(buildings=[machine, *lane, standing, source_machine])
         canvas.blocked = {(b.x, b.y, 0): i + 1 for i, b in enumerate(lane)}
         src = _Port(3, 5, 0, 5, 6, (3, 4), 1)
         dst = _Port(1, 5, 2, 5, 6, (1, 2), 1)
@@ -3233,6 +3569,8 @@ class TestDirectInsertion:
             "iron-ingot",
             boxes,
             DirectInsertId(0, 1, "iron-ingot", CargoDomain.UNSPRAYED),
+            source_rate=F(1),
+            required_rate=F(1),
         )
         bridge = canvas.buildings[-1]
         assert catalog.is_sorter(bridge.item_id)
@@ -3302,14 +3640,15 @@ class TestDirectInsertion:
             if not catalog.is_sorter(b.item_id):
                 continue
             assert b.x2 is not None and b.y2 is not None
-            span = abs(b.x - b.x2) + abs(b.y - b.y2)
-            assert 1 <= span <= catalog.SORTER_MAX_REACH
+            dx, dy = abs(b.x - b.x2), abs(b.y - b.y2)
+            assert not (dx and dy), "DSP sorters are straight-line"
+            assert 1 <= max(dx, dy) <= catalog.SORTER_MAX_REACH
             assert b.z == (b.z2 or 0), "sorters never span altitudes"
 
 
 def test_promised_direct_candidates_have_an_occupied_collision_clear_alignment() -> None:
     spec = two_stage_spec()
-    candidates = _direct_net_candidates(plan_strips(spec, strip_len=6), spec)
+    candidates = _direct_net_candidates(list(_direct_flow_order_strips()), spec)
 
     assert candidates
     assert all(candidate.origin_deltas for candidate in candidates.values())
@@ -3319,17 +3658,8 @@ def test_unrealized_promised_direct_is_typed_evidence_not_a_restored_net(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = two_stage_spec()
-    strips = plan_strips(spec, strip_len=6)
-    candidates = _direct_net_candidates(strips, spec)
-    pack = _pack(
-        strips,
-        height=sum(strip.height + 1 for strip in strips),
-        width_bound=max(strip.width + 1 for strip in strips) * 2,
-        time_budget_s=0.5,
-        direct_candidates=candidates,
-        workers=DETERMINISTIC_WORKERS,
-    )
-    assert pack is not None and pack.direct
+    strips = list(_direct_flow_order_strips())
+    pack = _forced_direct_pack(strips, spec)
     monkeypatch.setattr(freeform, "_bridge", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         freeform,
@@ -3376,17 +3706,8 @@ def test_unrealized_promised_direct_is_typed_evidence_not_a_restored_net(
 
 def test_every_promised_direct_is_realized_direct() -> None:
     spec = two_stage_spec()
-    strips = plan_strips(spec, strip_len=6)
-    candidates = _direct_net_candidates(strips, spec)
-    pack = _pack(
-        strips,
-        height=sum(strip.height + 1 for strip in strips),
-        width_bound=max(strip.width + 1 for strip in strips) * 2,
-        time_budget_s=0.5,
-        direct_candidates=candidates,
-        workers=DETERMINISTIC_WORKERS,
-    )
-    assert pack is not None and pack.direct
+    strips = list(_direct_flow_order_strips())
+    pack = _forced_direct_pack(strips, spec)
 
     result = _build(
         spec,
@@ -3722,7 +4043,7 @@ def test_static_access_without_an_independent_relation_proof_is_evidence_only() 
 
 def test_static_access_structurally_impossible_direct_creates_only_local_no_good() -> None:
     spec = two_stage_spec()
-    strips = plan_strips(spec)
+    strips = list(_direct_flow_order_strips())
     (source, destination), candidate = next(iter(_direct_net_candidates(strips, spec).items()))
     direct = DirectInsertId(
         source,
@@ -3768,7 +4089,7 @@ def test_static_access_structurally_impossible_direct_creates_only_local_no_good
 
 def test_retained_direct_candidates_preserve_legal_relation_parity() -> None:
     spec = two_stage_spec()
-    strips = plan_strips(spec)
+    strips = list(_direct_flow_order_strips())
     (source, destination), candidate = next(iter(_direct_net_candidates(strips, spec).items()))
     direct = DirectInsertId(
         source,
@@ -3776,11 +4097,8 @@ def test_retained_direct_candidates_preserve_legal_relation_parity() -> None:
         candidate.item,
         candidate.cargo_domain,
     )
-    origins = [(index * 10, 0) for index in range(len(strips))]
-    origins[destination] = (
-        origins[source][0] + candidate.origin_deltas[0],
-        origins[source][1] + 1 + candidate.prod_row - candidate.cons_row,
-    )
+    pack = _forced_direct_pack(strips, spec)
+    origins = [pack.at[index] for index in range(len(strips))]
     attempt = _proof_attempt(
         _routing_failures(RouteFailureKind.STATIC_ACCESS),
         strips,
@@ -13022,14 +13340,19 @@ class TestAShardThatCannotFeedItself:
         )
         assert _join_shard_islands([*cut, (10, 11)], supply, demand, F(0)) == []
 
-    def test_what_the_player_belts_in_counts_on_every_island(self) -> None:
-        """`_route_external_inputs` runs an entry belt to EVERY consumer lane,
-        which is the credit `flow.conservation` gives.
-        """
-        supply, demand = {10: F(1), 20: F(1)}, {30: F(1), 31: F(3)}
+    def test_what_the_player_belts_in_is_one_global_allocation(self) -> None:
+        """The one external rate can cover either island's shortfall."""
+        supply, demand = {10: F(3), 20: F(1)}, {30: F(1), 31: F(3)}
         cut = [(10, 30), (20, 31)]
         assert _join_shard_islands(cut, supply, demand, F(0)) == [(10, 31)]
         assert _join_shard_islands(cut, supply, demand, F(2)) == []
+
+    def test_external_supply_is_not_credited_to_each_deficit_island(self) -> None:
+        pairs = [(10, 30), (20, 31), (40, 32)]
+        supply = {10: F(5, 2), 20: F(0), 40: F(0)}
+        demand = {30: F(1), 31: F(3, 2), 32: F(3, 2)}
+
+        assert _join_shard_islands(pairs, supply, demand, F(3, 2)) == [(10, 31)]
 
     def test_the_plan_really_does_starve_a_shard(self) -> None:
         """Verify the instrument: the fixture must contain the defect.
@@ -19222,6 +19545,42 @@ def _prepare_piler_strips(
     )
 
 
+def _two_output_piler_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            group(
+                "plasma-refining",
+                "chemical-plant",
+                1,
+                {"crude-oil": F(1)},
+                {"refined-oil": F(40), "hydrogen": F(100)},
+            ),
+            group(
+                "plastic",
+                "assembling-machine-2",
+                1,
+                {"refined-oil": F(40)},
+                {"plastic": F(1)},
+            ),
+            group(
+                "deuterium",
+                "miniature-particle-collider",
+                1,
+                {"hydrogen": F(100)},
+                {"deuterium": F(1)},
+            ),
+        ),
+        external_inputs={"crude-oil": F(1)},
+        outputs={"plastic": F(1), "deuterium": F(1)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=F(30),
+        belt_stack=4,
+        sorter_pick_stacks=(1, 1, 1, 4),
+        sorter_place_stacks=(1, 1, 1, 1),
+        piler_unlocked=True,
+    )
+
+
 def test_one_planned_piler_extends_its_producer_strip_and_box_by_three() -> None:
     spec = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
     strips = plan_strips(spec, strip_len=1)
@@ -19235,6 +19594,104 @@ def test_one_planned_piler_extends_its_producer_strip_and_box_by_three() -> None
     assert producer.tail_extension == 3
     assert _box(producer)[0] == _box(unextended)[0] + 3
     assert all(not strip.pilers for strip in strips if strip is not producer)
+
+
+def test_direct_candidate_uses_the_emitted_post_piler_tail() -> None:
+    spec = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
+    strips = plan_strips(spec, strip_len=1)
+    source_index, source = next(
+        (index, strip)
+        for index, strip in enumerate(strips)
+        if strip.recipe_id == "iron-ingot"
+    )
+    destination_index, destination = next(
+        (index, strip)
+        for index, strip in enumerate(strips)
+        if strip.recipe_id == "gear"
+    )
+    strips[destination_index] = _strip_with_attachment_column(destination, "input", 2)
+
+    canvas = _Canvas()
+    _inputs, outputs, _sorters, _nets = _emit_strip(
+        canvas,
+        source,
+        0,
+        0,
+        2003,
+        catalog.building(2003).model_index,
+        {},
+        owner_strip=source_index,
+    )
+    emitted_tail = next(iter(outputs.values()))
+    candidate = _direct_net_candidates(strips, spec)[source_index, destination_index]
+
+    assert emitted_tail.tiles == (emitted_tail.belt,)
+    assert emitted_tail.x == source.width + source.tail_extension
+    assert candidate.origin_deltas == (emitted_tail.x - 1, emitted_tail.x)
+
+
+def test_piled_direct_alignment_target_includes_the_emitted_tail() -> None:
+    spec = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
+    strips = plan_strips(spec, strip_len=1)
+    source = next(strip for strip in strips if strip.recipe_id == "iron-ingot")
+    destination_index, destination = next(
+        (index, strip)
+        for index, strip in enumerate(strips)
+        if strip.recipe_id == "gear"
+    )
+    strips[destination_index] = _strip_with_attachment_column(destination, "input", 2)
+
+    candidates = _direct_net_candidates(strips, spec)
+    (target,) = freeform_module._direct_alignment_targets(candidates)
+
+    assert target.producer_span == source.width + source.tail_extension + 1
+
+
+def test_each_piled_output_candidate_uses_its_own_emitted_tail() -> None:
+    spec = _two_output_piler_spec()
+    strips = plan_strips(spec, strip_len=1)
+    source_index, source = next(
+        (index, strip)
+        for index, strip in enumerate(strips)
+        if strip.recipe_id == "plasma-refining"
+    )
+    assert sorted(plan.count for plan in source.pilers) == [1, 2]
+    for index, strip in enumerate(strips):
+        if strip.recipe_id in {"plastic", "deuterium"}:
+            strips[index] = _strip_with_attachment_column(strip, "input", 2)
+
+    canvas = _Canvas()
+    _inputs, outputs, _sorters, _nets = _emit_strip(
+        canvas,
+        source,
+        0,
+        0,
+        2003,
+        catalog.building(2003).model_index,
+        {},
+        owner_strip=source_index,
+    )
+    emitted_tails = {
+        item: port for (item, _destination, _domain), port in outputs.items()
+    }
+    candidates = _direct_net_candidates(strips, spec)
+    candidate_by_item = {
+        candidate.item: (key, candidate)
+        for key, candidate in candidates.items()
+        if key[0] == source_index
+    }
+    targets = {
+        target.key: target
+        for target in freeform_module._direct_alignment_targets(candidates)
+    }
+
+    assert set(candidate_by_item) == {"refined-oil", "hydrogen"}
+    assert len({port.x for port in emitted_tails.values()}) == 2
+    for item, (key, candidate) in candidate_by_item.items():
+        emitted_tail = emitted_tails[item]
+        assert candidate.origin_deltas == (emitted_tail.x - 1, emitted_tail.x)
+        assert candidate.prod_span == emitted_tail.x + 1
+        assert targets[key].producer_span == emitted_tail.x + 1
 
 
 def test_belt_port_output_starts_unstacked_and_emits_one_piler() -> None:

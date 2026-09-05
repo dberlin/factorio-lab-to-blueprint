@@ -5119,43 +5119,17 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
     **Spec arithmetic.**  Production minus consumption over the whole block.
     Independent of any geometry, and cheap.
 
-    **Reachability balance, read off the PLACEMENT.**  Production must cover
-    consumption not merely in total but within every set of machines and lanes
-    an item can actually travel between.  This is the class the validator could
-    not see at all: a build whose geometry is impeccable, whose every lane is
-    sourced, whose every belt is under tier capacity, and which still
-    under-produces because a producer group's output was cut into islands that
-    do not serve their consumers.  See :func:`_lane_balance` for why it is a cut
-    argument rather than a per-lane one.
+    **Directed placement feasibility.**  Production and external input must be
+    able to reach machine demand through the placement's directed belt tiles,
+    junctions, sorters, and ports.  Run-level or undirected connectivity is not
+    enough: a pickup upstream of an injection is starved even when both touch
+    the same lane.  :func:`_lane_balance` solves the exact single-commodity
+    feasibility problem for each item without assigning invented equal shares
+    at splitters or fan-outs.
 
-    This was previously declined on the reasoning that external input lanes have
-    no sorter pushing onto them, so a per-junction balance could not be seeded
-    without guessing how a block's external rate divides across its entry lanes.
-    The cited counter-example does not survive checking.  Junction 1639 showed
-    downstream demand 12 against upstream supply 4 because the hand-built
-    ``magnetic_ring_spec`` runs 4 magnetic-coil machines at 1/s against 8
-    electric-motor plus 4 electromagnetic-turbine machines wanting 1/s each --
-    still visible in ``tests/layout/test_freeform.py``, where the spec clause
-    below reports ``magnetic-coil`` over-consumed by exactly 8/s along with
-    three more items on the same fixture.  ``magnetic-coil`` is not an external
-    input at all.  The reading was of a genuinely unbalanced fixture, not of a
-    correct build, and no seeding question was involved.
-
-    (The seeding is nonetheless soluble and :func:`_entry_items` does it, since
-    the placement clause needs to know which lanes the player fills.  What the
-    measurement changed was the shape of the check, not whether it could be
-    written.)
-
-    The placement clause STOPS when the spec clause fires.  When the recipe
-    balance itself is short, every island carrying the short item is short, and
-    the placement clause would restate one spec defect once per island --
-    eight findings on ``magnetic_ring_spec`` saying what one already said.
-    Routing is only a question worth asking once the arithmetic balances.
-
-    Measured across the twelve-URL bake-off corpus (both strategies, three
-    candidates each, 512 belt runs) the placement clause fires ten times, every
-    one of them on a build already refused by ``machine.inputs_supplied``, and
-    not once on a build that otherwise validates clean.
+    The placement clause stops when the spec clause fires.  Routing is only a
+    meaningful question once the recipe arithmetic balances; otherwise a
+    placement finding would merely restate the aggregate shortage.
     """
     assert ctx.spec is not None
     net: dict[str, Fraction] = defaultdict(Fraction)
@@ -5184,178 +5158,311 @@ def _conservation(ctx: Context) -> Iterable[Finding]:
     yield from _lane_balance(ctx)
 
 
-#: Union-find key: ``("g", flow-graph node)`` or ``("m", machine index)``.
-_Island = tuple[str, object]
+@dataclass(slots=True)
+class _FlowEdge:
+    to: int
+    reverse: int
+    capacity: int
 
 
-def _islands(ctx: Context, item: str, items: Mapping[int, str | None]) -> dict[_Island, _Island]:
-    """Union-find over everything ``item`` can physically move between.
+def _add_flow_edge(
+    graph: list[list[_FlowEdge]],
+    source: int,
+    destination: int,
+    capacity: int,
+) -> None:
+    if capacity <= 0:
+        return
+    forward = _FlowEdge(destination, len(graph[destination]), capacity)
+    backward = _FlowEdge(source, len(graph[source]), 0)
+    graph[source].append(forward)
+    graph[destination].append(backward)
 
-    Belts, junctions and transfer sorters connect lanes to lanes; a sorter
-    carrying ``item`` connects a machine to a lane, or to another machine when
-    the edge is direct-inserted.  What comes out is a partition into ISLANDS:
-    inside one, the item can get from any producer to any consumer, so nothing
-    a splitter or a machine's second output sorter does can starve anyone.
-    Between two, no path exists at all.
 
-    A sorter whose item cannot be resolved is treated as carrying EVERY item, so
-    it merges islands rather than separating them.  That direction is chosen
-    deliberately: merging can only hide a shortfall, and a check whose ERROR
-    depends on an item guess is not one this validator should be making.
-    """
-    parent: dict[_Island, _Island] = {}
+def _flow_rate_units(rate: Fraction, scale: int) -> int:
+    return rate.numerator * (scale // rate.denominator)
 
-    def find(k: _Island) -> _Island:
-        parent.setdefault(k, k)
-        while parent[k] != k:
-            parent[k] = parent[parent[k]]
-            k = parent[k]
-        return k
 
-    def union(a: _Island, b: _Island) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
+def _add_flow_link(
+    graph: list[list[_FlowEdge]],
+    predecessors: dict[int, set[int]],
+    source: int,
+    destination: int,
+    capacity: int,
+) -> None:
+    _add_flow_edge(graph, source, destination, capacity)
+    if capacity > 0:
+        predecessors[destination].add(source)
 
-    for node, nbrs in ctx.succ.items():
-        for m in nbrs:
-            union(("g", node), ("g", m))
-    for j, _ in ctx.of_kind(Kind.SPLITTER):
-        find(("g", (JUNCTION, j)))
-    for r in range(len(ctx.runs)):
-        find(("g", (RUN, r)))
 
-    bs = ctx.placement.buildings
-    for i, s in ctx.of_kind(Kind.SORTER):
-        moved = items.get(i)
-        if moved is not None and moved != item:
-            continue
-        ends: list[_Island] = []
-        for link in (s.input_obj, s.output_obj):
-            if link is None or not (0 <= link < len(bs)):
-                continue
-            if link in ctx.run_of:
-                ends.append(("g", (RUN, ctx.run_of[link])))
-            elif ctx.kinds[link] is Kind.MACHINE:
-                ends.append(("m", link))
-        if len(ends) == 2:
-            union(ends[0], ends[1])
-    # A belt DOCKED INTO A PORT joins a machine to a lane exactly as a sorter
-    # does, and it is the only join a Ray Receiver has. Leaving it out put every
-    # such machine in an island of its own, so its product read as reaching
-    # nothing and its consumers as fed by nothing.
-    for d in _port_docks(ctx):
-        if ctx.kinds[d.peer] is not Kind.MACHINE or d.belt not in ctx.run_of:
-            continue
-        moved = bs[d.belt].carries_item
-        if moved is not None and moved != item:
-            continue
-        union(("m", d.peer), ("g", (RUN, ctx.run_of[d.belt])))
-    for i, _ in ctx.of_kind(Kind.MACHINE):
-        find(("m", i))
-    return {k: find(k) for k in list(parent)}
+def _max_flow(graph: list[list[_FlowEdge]], source: int, sink: int) -> int:
+    """Exact integer max flow; each augmentation saturates a real rate edge."""
+    total = 0
+    while True:
+        parent_node = [-1] * len(graph)
+        parent_edge = [-1] * len(graph)
+        parent_node[source] = source
+        pending = deque((source,))
+        while pending and parent_node[sink] < 0:
+            node = pending.popleft()
+            for edge_index, edge in enumerate(graph[node]):
+                if edge.capacity <= 0 or parent_node[edge.to] >= 0:
+                    continue
+                parent_node[edge.to] = node
+                parent_edge[edge.to] = edge_index
+                pending.append(edge.to)
+                if edge.to == sink:
+                    break
+        if parent_node[sink] < 0:
+            return total
+
+        amount: int | None = None
+        node = sink
+        while node != source:
+            previous = parent_node[node]
+            edge = graph[previous][parent_edge[node]]
+            amount = edge.capacity if amount is None else min(amount, edge.capacity)
+            node = previous
+        assert amount is not None
+        node = sink
+        while node != source:
+            previous = parent_node[node]
+            edge = graph[previous][parent_edge[node]]
+            edge.capacity -= amount
+            graph[node][edge.reverse].capacity += amount
+            node = previous
+        total += amount
 
 
 def _lane_balance(ctx: Context) -> Iterable[Finding]:
-    """The placement half of ``flow.conservation``.
+    """Prove exact directed supply-to-demand feasibility for each supplied item.
 
-    A CUT argument, not a per-lane one, and the difference is the whole
-    soundness of the check.  Three separate things in this model divide a rate
-    evenly where the game does not: a splitter feeds whichever output has room,
-    a machine with two output sorters fills whichever lane is not backed up, and
-    a lane fed by two producers draws from whichever is not empty.  Every one of
-    those self-balances, so a per-lane verdict computed from an even split
-    invents shortfalls on builds that run perfectly.  Measured on the real
-    corpus, the per-lane version reported 15 lanes short across ``processor``
-    and ``super-magnetic-ring``, and every one of them was a machine draining to
-    two lanes off one fan-out.
+    Belt tiles remain distinct nodes, so a pickup before an injection cannot
+    consume that injection merely because both belong to one run.  Splitters,
+    native merges, fan-out sorters, and fan-in sorters are ordinary capacitated
+    edges: max flow lets game backpressure choose their allocation instead of
+    inventing equal shares.
 
-    What does NOT self-balance is a cut with no path across it.  So the claim
-    made here is the one backpressure cannot rescue: within each connected
-    ISLAND for an item -- everything that item can physically reach, machines
-    and lanes alike -- production plus what the player belts in must cover
-    consumption.  Under that shortfall the machines in the island starve at a
-    fixed ratio and no routing inside the block can help, which is why it is an
-    ERROR.
-
-    ``flow.lane_sourced`` is the degenerate case of this (supply exactly zero on
-    a lane); this generalises it to a rate, and to the whole island rather than
-    the single lane.
-
-    External inputs are credited in full to every island holding an entry lane
-    for that item, rather than divided across them.  The player decides how much
-    goes down each belt and can simply put more on one, so an island short only
-    of an external item is not a defect in the placement -- and the aggregate
-    version of that question is what the spec clause above already answers.
+    Physical edges are capped at total demand because their throughput belongs
+    to the separate belt and sorter capacity checks.  Machine producer and
+    consumer endpoints are distinct, including when one recipe both consumes
+    and produces the same item.  An unresolved sorter identity is admitted for
+    every item, preserving the validator's permissive policy for unknown cargo.
     """
     assert ctx.spec is not None
     items = _sorter_items(ctx)
+    run_items = _run_items(ctx, items)
     bs = ctx.placement.buildings
     makes: dict[int, Mapping[str, Fraction]] = {}
     needs: dict[int, Mapping[str, Fraction]] = {}
     for i, _ in ctx.of_kind(Kind.MACHINE):
-        g = ctx.group_for(i)
-        if g is None:
+        group = ctx.group_for(i)
+        if group is None:
             continue
-        makes[i] = g.outputs_per_machine
-        needs[i] = g.inputs_per_machine
+        makes[i] = group.outputs_per_machine
+        needs[i] = group.inputs_per_machine
+    supplied_items = {item for rates in makes.values() for item in rates}
+    supplied_items.update(ctx.spec.external_inputs)
     wanted_items = sorted(
-        {it for rates in needs.values() for it in rates}
-        & {it for rates in makes.values() for it in rates}
+        {item for rates in needs.values() for item in rates} & supplied_items
     )
-    entry = _entry_items(ctx)
+    physical_kinds = (Kind.BELT, Kind.SPLITTER, Kind.PILER)
+    building_count = len(bs)
+    source_node = 3 * building_count
+    external_node = source_node + 1
+    sink_node = source_node + 2
+    node_count = sink_node + 1
+
+    def producer_node(machine: int) -> int:
+        return building_count + machine
+
+    def consumer_node(machine: int) -> int:
+        return 2 * building_count + machine
+
     for item in wanted_items:
-        roots = _islands(ctx, item, items)
-        supply: dict[_Island, Fraction] = defaultdict(Fraction)
-        demand: dict[_Island, Fraction] = defaultdict(Fraction)
-        starving: dict[_Island, list[int]] = defaultdict(list)
-        belted_in: set[_Island] = set()
-        for i, rates in makes.items():
-            if item in rates:
-                supply[roots[("m", i)]] += rates[item]
-        for i, rates in needs.items():
-            if item in rates:
-                key = roots[("m", i)]
-                demand[key] += rates[item]
-                starving[key].append(i)
-        for r, carried in entry.items():
-            if item in carried:
-                belted_in.add(roots[("g", (RUN, r))])
-        external = ctx.spec.external_inputs.get(item, Fraction(0))
-        for key in sorted(demand, key=lambda k: str(k)):
-            have = supply[key] + (external if key in belted_in else Fraction(0))
-            want = demand[key]
-            if want <= have:
-                continue
-            hungry = sorted(starving[key])
-            if not have and len(hungry) == 1 and not supply[key]:
-                # A lone machine with nothing at all attached for this item is
-                # `machine.inputs_supplied`'s finding word for word, naming the
-                # same building.  Saying it twice does not make it truer.
-                continue
-            lanes = sorted(
-                r
-                for r in range(len(ctx.runs))
-                if roots.get(("g", (RUN, r))) == key
-                and any(bs[b].carries_item == item for b in ctx.runs[r].indices)
+        supply_rates = {
+            machine: rates[item] for machine, rates in makes.items() if item in rates
+        }
+        demand_rates = {
+            machine: rates[item] for machine, rates in needs.items() if item in rates
+        }
+        external_rate = ctx.spec.external_inputs.get(item, Fraction(0))
+        scale = math.lcm(
+            *(
+                rate.denominator
+                for rate in (*supply_rates.values(), *demand_rates.values(), external_rate)
+                if rate
             )
-            yield Finding(
-                "flow.conservation",
-                Severity.ERROR,
-                f"{len(hungry)} machine(s) consume {want} items/s of {item} but only "
-                f"{have} items/s of it is produced or belted in anywhere they can "
-                f"reach (lanes {lanes[:6] or 'none'}); short by {want - have} items/s "
-                f"and no routing inside the block can make it up",
-                tuple(hungry[:5]),
-                {
-                    "item": item,
-                    "demand": str(want),
-                    "supply": str(have),
-                    "shortfall": str(want - have),
-                    "starved": len(hungry),
-                    "lanes": lanes,
-                },
+        )
+
+        total_demand = sum(
+            _flow_rate_units(rate, scale) for rate in demand_rates.values()
+        )
+        if total_demand <= 0:
+            continue
+        graph: list[list[_FlowEdge]] = [[] for _ in range(node_count)]
+        predecessors: dict[int, set[int]] = defaultdict(set)
+        consumer_feeders: set[int] = set()
+
+
+        for index, belt in ctx.of_kind(Kind.BELT):
+            onward = belt.output_obj
+            if (
+                onward is not None
+                and 0 <= onward < building_count
+                and ctx.kinds[onward] in physical_kinds
+            ):
+                _add_flow_link(graph, predecessors, index, onward, total_demand)
+            upstream = belt.input_obj
+            if (
+                upstream is not None
+                and 0 <= upstream < building_count
+                and ctx.kinds[upstream] in (Kind.SPLITTER, Kind.PILER)
+            ):
+                _add_flow_link(graph, predecessors, upstream, index, total_demand)
+
+        for sorter_index, sorter in ctx.of_kind(Kind.SORTER):
+            moved = items.get(sorter_index)
+            if moved is not None and moved != item:
+                continue
+            source = sorter.input_obj
+            destination = sorter.output_obj
+            if (
+                source is None
+                or destination is None
+                or not 0 <= source < building_count
+                or not 0 <= destination < building_count
+            ):
+                continue
+            if ctx.kinds[source] is Kind.MACHINE:
+                flow_source = producer_node(source)
+            elif ctx.kinds[source] in physical_kinds:
+                flow_source = source
+            else:
+                continue
+            if ctx.kinds[destination] is Kind.MACHINE:
+                flow_destination = consumer_node(destination)
+                if flow_source < building_count:
+                    consumer_feeders.add(flow_source)
+            elif ctx.kinds[destination] in physical_kinds:
+                flow_destination = destination
+            else:
+                continue
+            _add_flow_link(
+                graph,
+                predecessors,
+                flow_source,
+                flow_destination,
+                total_demand,
             )
+
+        for dock in _port_docks(ctx):
+            if ctx.kinds[dock.peer] is not Kind.MACHINE:
+                continue
+            moved = bs[dock.belt].carries_item
+            if moved is not None and moved != item:
+                continue
+            if dock.draws:
+                _add_flow_link(
+                    graph,
+                    predecessors,
+                    producer_node(dock.peer),
+                    dock.belt,
+                    total_demand,
+                )
+            else:
+                _add_flow_link(
+                    graph,
+                    predecessors,
+                    dock.belt,
+                    consumer_node(dock.peer),
+                    total_demand,
+                )
+                consumer_feeders.add(dock.belt)
+
+        for machine, rate in supply_rates.items():
+            _add_flow_link(
+                graph,
+                predecessors,
+                source_node,
+                producer_node(machine),
+                _flow_rate_units(rate, scale),
+            )
+        for machine, rate in demand_rates.items():
+            _add_flow_link(
+                graph,
+                predecessors,
+                consumer_node(machine),
+                sink_node,
+                _flow_rate_units(rate, scale),
+            )
+
+        if external_rate > 0:
+            _add_flow_link(
+                graph,
+                predecessors,
+                source_node,
+                external_node,
+                _flow_rate_units(external_rate, scale),
+            )
+            for run_index, carried in _entry_items(ctx).items():
+                if item in carried:
+                    _add_flow_link(
+                        graph,
+                        predecessors,
+                        external_node,
+                        ctx.runs[run_index].head,
+                        total_demand,
+                    )
+
+        delivered = _max_flow(graph, source_node, sink_node)
+        if delivered >= total_demand:
+            continue
+        consumers = sorted(demand_rates)
+        if (
+            delivered == 0
+            and len(consumers) == 1
+            and not predecessors.get(consumer_node(consumers[0]))
+        ):
+            # ``machine.inputs_supplied`` already names this unattached machine.
+            continue
+
+        reaches_consumer = set(consumer_feeders)
+        pending = list(consumer_feeders)
+        while pending:
+            node = pending.pop()
+            for previous in predecessors.get(node, ()):
+                if previous in reaches_consumer:
+                    continue
+                reaches_consumer.add(previous)
+                pending.append(previous)
+        lanes = sorted(
+            run_index
+            for run_index, run in enumerate(ctx.runs)
+            if any(belt in reaches_consumer for belt in run.indices)
+            and (
+                item in run_items.get(run_index, set())
+                or any(bs[belt].carries_item == item for belt in run.indices)
+            )
+        )
+        want = Fraction(total_demand, scale)
+        have = Fraction(delivered, scale)
+        yield Finding(
+            "flow.conservation",
+            Severity.ERROR,
+            f"{len(consumers)} machine(s) consume {want} items/s of {item} but only "
+            f"{have} items/s of it can reach them in flow order "
+            f"(lanes {lanes[:6] or 'none'}); short by {want - have} items/s",
+            tuple(consumers[:5]),
+            {
+                "item": item,
+                "demand": str(want),
+                "supply": str(have),
+                "shortfall": str(want - have),
+                "consumers": len(consumers),
+                "lanes": lanes,
+            },
+        )
 
 
 def _belt_run_rate(ctx: Context, run: BeltRun) -> Fraction | None:

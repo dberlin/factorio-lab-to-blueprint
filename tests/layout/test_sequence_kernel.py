@@ -11,19 +11,17 @@ from typing import ClassVar, cast
 
 import pytest
 
-import flab2bp.layout.freeform as freeform_module
 import flab2bp.layout.sequence_kernel as sequence_kernel_module
 from flab2bp.bench.corpus import entry
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.url import parse_url
 from flab2bp.layout._sequence_kernel import decode_score
 from flab2bp.layout.freeform import (
-    Strip,
     _box,
     _candidate_heights,
     _direct_alignment_targets,
+    _direct_column_deltas,
     _direct_net_candidates,
-    _direct_origin_deltas,
     _greedy_pack,
     plan_strips,
 )
@@ -411,7 +409,7 @@ def test_backend_selection_falls_back_for_non_float_score_inputs() -> None:
     assert isinstance(build_sequence_kernel(problem, integer_history), PythonSequenceKernel)
 
 
-def test_direct_origin_deltas_use_compiled_kernel_with_exact_controls(
+def test_direct_insert_targets_use_compiled_kernel_with_exact_controls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     problem = PlacementProblem(
@@ -465,53 +463,6 @@ def test_direct_origin_deltas_use_compiled_kernel_with_exact_controls(
     assert compiled_calls == 2
 
 
-class _DirectOriginStripStub:
-    def __init__(self, width: int) -> None:
-        self.width = width
-        #: No realized pose, so ``_direct_geometry_key`` declines to memo this
-        #: strip.  That is what these cases need: they monkeypatch
-        #: ``_direct_clear_columns`` to return DIFFERENT columns per case while
-        #: the stubs' geometry is otherwise identical, so a cached answer from
-        #: an earlier case would be returned for a later one.
-        self.physical_variant: object | None = None
-
-    def _output_attachment_plan(self, _lane: int) -> object:
-        return object()
-
-    def _input_attachment_plan(self, _item: str) -> object:
-        return object()
-
-    def lane_of_input(self, _item: str) -> int:
-        return 0
-
-    def input_lane_tiles(self, _lane: int) -> int:
-        return self.width
-
-
-def _direct_origin_delta_result(
-    monkeypatch: pytest.MonkeyPatch,
-    source_columns: Iterable[int],
-    destination_columns: Iterable[int],
-) -> tuple[int, ...]:
-    source_values = tuple(source_columns)
-    destination_values = tuple(destination_columns)
-    source = _DirectOriginStripStub(len(source_values))
-    destination = _DirectOriginStripStub(len(destination_values))
-
-    def clear_columns(
-        strip: _DirectOriginStripStub,
-        _plan: object,
-        _span: int,
-    ) -> tuple[int, ...]:
-        return source_values if strip is source else destination_values
-
-    monkeypatch.setattr(freeform_module, "_direct_clear_columns", clear_columns)
-    return _direct_origin_deltas(
-        cast(Strip, cast(object, source)),
-        cast(Strip, cast(object, destination)),
-        0,
-        "item",
-    )
 
 
 def _cartesian_origin_delta_oracle(
@@ -540,16 +491,11 @@ def _cartesian_origin_delta_oracle(
         ((-2, -1, 0), ()),
     ],
 )
-def test_direct_origin_delta_interval_union_matches_cartesian_oracle(
-    monkeypatch: pytest.MonkeyPatch,
+def test_direct_column_deltas_match_cartesian_oracle(
     source_columns: tuple[int, ...],
     destination_columns: tuple[int, ...],
 ) -> None:
-    actual = _direct_origin_delta_result(
-        monkeypatch,
-        source_columns,
-        destination_columns,
-    )
+    actual = _direct_column_deltas(source_columns, destination_columns)
 
     assert actual == _cartesian_origin_delta_oracle(
         source_columns,
@@ -557,11 +503,8 @@ def test_direct_origin_delta_interval_union_matches_cartesian_oracle(
     )
 
 
-def test_direct_origin_delta_overlapping_intervals_include_negative_offsets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    actual = _direct_origin_delta_result(
-        monkeypatch,
+def test_direct_column_deltas_include_negative_offsets() -> None:
+    actual = _direct_column_deltas(
         (0, 1, 4, 5),
         (0, 1, 3, 4),
     )
@@ -569,9 +512,7 @@ def test_direct_origin_delta_overlapping_intervals_include_negative_offsets(
     assert actual == tuple(range(-4, 6))
 
 
-def test_direct_origin_delta_interval_union_matches_randomized_cartesian_oracle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_direct_column_deltas_match_randomized_cartesian_oracle() -> None:
     rng = random.Random(0xD1FF)
     domain = range(-9, 10)
 
@@ -579,10 +520,9 @@ def test_direct_origin_delta_interval_union_matches_randomized_cartesian_oracle(
         source_columns = frozenset(column for column in domain if rng.getrandbits(1))
         destination_columns = frozenset(column for column in domain if rng.getrandbits(1))
 
-        assert _direct_origin_delta_result(
-            monkeypatch,
-            source_columns,
-            destination_columns,
+        assert _direct_column_deltas(
+            tuple(sorted(source_columns)),
+            tuple(sorted(destination_columns)),
         ) == _cartesian_origin_delta_oracle(source_columns, destination_columns)
 
 
@@ -608,24 +548,19 @@ class _CountedOriginColumn(int):
     __hash__ = int.__hash__
 
 
-def _contiguous_origin_delta_operations(
-    monkeypatch: pytest.MonkeyPatch,
-    span: int,
-) -> int:
+def _contiguous_origin_delta_operations(span: int) -> int:
     columns = tuple(_CountedOriginColumn(column) for column in range(span))
     _CountedOriginColumn.operations = 0
 
-    actual = _direct_origin_delta_result(monkeypatch, columns, columns)
+    actual = _direct_column_deltas(columns, columns)
 
     assert actual == tuple(range(-(span - 1), span))
     return _CountedOriginColumn.operations
 
 
-def test_direct_origin_delta_interval_work_scales_with_spans_and_output(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    small_operations = _contiguous_origin_delta_operations(monkeypatch, 64)
-    large_operations = _contiguous_origin_delta_operations(monkeypatch, 128)
+def test_direct_column_delta_work_scales_with_spans_and_output() -> None:
+    small_operations = _contiguous_origin_delta_operations(64)
+    large_operations = _contiguous_origin_delta_operations(128)
 
     assert large_operations <= small_operations * 5 // 2
     assert large_operations <= 128 * 12
