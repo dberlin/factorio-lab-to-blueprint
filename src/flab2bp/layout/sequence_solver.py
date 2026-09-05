@@ -188,8 +188,29 @@ def _validate_sequence_islands(islands: int) -> None:
 
 
 _COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND = 32.0 / 375.0
-_COMPACT_SEED_WALL_SHARE = Fraction(1, 3)
+_COMPACT_SEED_WALL_SHARE = Fraction(1, 12)
+_COMPACT_SEED_WALL_FLOOR_S = 2.5
+_COMPACT_SEED_WALL_MAX_SHARE = Fraction(1, 3)
 _COMPACT_SEED_DIRECT_MIN_BUDGET_S = 30.0
+
+
+def _compact_seed_wall_ceiling(budget_s: float) -> float:
+    """Cap the one-worker compact-seed CP-SAT solve's wall clock.
+
+    The wall share only binds when the solve cannot reach its deterministic
+    cap (``_COMPACT_SEED_DETERMINISTIC_SECONDS_PER_BUDGET_SECOND``) -- exactly
+    the case where it produces nothing.  Hold it to a twelfth of the whole
+    budget, floored at ``_COMPACT_SEED_WALL_FLOOR_S`` seconds so small
+    budgets still reach ``feasible``, but never above the old
+    third-of-budget cap so a tiny budget never gets more than it used to.
+    """
+    share = budget_s * _COMPACT_SEED_WALL_SHARE.numerator / _COMPACT_SEED_WALL_SHARE.denominator
+    max_share = (
+        budget_s * _COMPACT_SEED_WALL_MAX_SHARE.numerator / _COMPACT_SEED_WALL_MAX_SHARE.denominator
+    )
+    return min(max_share, max(share, _COMPACT_SEED_WALL_FLOOR_S))
+
+
 #: Seconds of the compact-seed wall share below which the variant direct
 #: eligibility scan is not worth starting.  It is a triple nested loop over
 #: (baseline candidate x producer variant x consumer variant), each iteration a
@@ -5055,10 +5076,7 @@ def _production_run(
             compact_started = time.monotonic()
             compact_deadline = min(
                 deadline,
-                compact_started
-                + ceiling
-                * _COMPACT_SEED_WALL_SHARE.numerator
-                / _COMPACT_SEED_WALL_SHARE.denominator,
+                compact_started + _compact_seed_wall_ceiling(ceiling),
             )
             try:
 
@@ -5916,8 +5934,7 @@ def _production_run(
     seed_started = time.monotonic()
     seed_deadline = min(
         deadline,
-        seed_started
-        + ceiling * _COMPACT_SEED_WALL_SHARE.numerator / _COMPACT_SEED_WALL_SHARE.denominator,
+        seed_started + _compact_seed_wall_ceiling(ceiling),
     )
     if use_shared_pack and not deadline_reached():
         shared_started = time.monotonic()

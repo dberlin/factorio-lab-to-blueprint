@@ -5091,6 +5091,76 @@ def test_topology_beam_runs_for_its_role_or_a_failed_shared_seed(
     )
 
 
+def test_compact_seed_wall_ceiling_is_a_twelfth_with_a_floor_and_the_old_cap() -> None:
+    from flab2bp.layout.sequence_solver import _compact_seed_wall_ceiling
+
+    assert _compact_seed_wall_ceiling(30.0) == pytest.approx(2.5)
+    assert _compact_seed_wall_ceiling(60.0) == pytest.approx(5.0)
+    assert _compact_seed_wall_ceiling(10.0) == pytest.approx(2.5)
+    assert _compact_seed_wall_ceiling(6.0) == pytest.approx(2.0)
+    assert _compact_seed_wall_ceiling(0.0) == 0.0
+
+
+def test_production_compact_seed_wall_ceiling_is_a_twelfth_of_a_much_larger_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """At budget 30 the compact seed's wall ceiling must come from
+    `_compact_seed_wall_ceiling` (2.5s), not the old flat third-of-budget
+    share (10s) -- this is the L2 lever: freeing 7.5s of a 30s budget for
+    search downstream.  `_variant_direct_eligibility` is stubbed out because
+    at budget 30 it is otherwise eligible to run (`ceiling >=
+    _COMPACT_SEED_DIRECT_MIN_BUDGET_S`), which would make the real
+    `solve_compact_seed` call time (and thus this test's timing assertion)
+    depend on that scan's duration -- irrelevant to what this test checks.
+    """
+    captured: _CompactSeedCapture = {}
+
+    def capture_seed(
+        _problem: PlacementProblem,
+        *,
+        base_seed: int,
+        attempt: int,
+        config: CompactSeedConfig | None = None,
+        direct_eligibility: tuple[VariantDirectInsertTarget, ...] = (),
+        absolute_deadline: float | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> CompactSeedResult:
+        del base_seed, attempt, config, direct_eligibility, cancelled
+        captured["called_at"] = time.monotonic()
+        captured["absolute_deadline"] = absolute_deadline
+        return CompactSeedResult(
+            CompactSeedStatus.CANCELLED,
+            None,
+            CompactSeedDiagnostics(
+                solver_seed=0,
+                status_name="CANCELLED",
+                width_weight=1,
+                secondary_upper_bound=0,
+            ),
+        )
+
+    monkeypatch.setattr(sequence_solver_module, "solve_compact_seed", capture_seed)
+    monkeypatch.setattr(
+        sequence_solver_module,
+        "_variant_direct_eligibility",
+        lambda *args, **kwargs: (),
+    )
+    _production_run(
+        two_stage_spec(),
+        band_policy=BandPolicy("portable"),
+        time_budget_s=30.0,
+        power=False,
+        strip_len=6,
+        config=SequenceSolverConfig.test(),
+        compact_seed_attempt=0,
+    )
+
+    compact_deadline = captured["absolute_deadline"]
+    called_at = captured["called_at"]
+    assert isinstance(compact_deadline, float)
+    assert compact_deadline - called_at == pytest.approx(2.5, abs=0.05)
+
+
 def test_production_seed_has_its_own_wall_and_deterministic_caps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10449,9 +10519,10 @@ def test_the_eligibility_scan_is_bound_to_the_compact_share_not_the_whole_deadli
     """The predicate the call site passes must close over ``compact_deadline``.
 
     The attempt deadline here is 3000 s away while the compact seed's share of
-    a 30 s budget is ``30 * 1/3`` = 10 s, so a predicate built over the whole
-    deadline is still False 11 s in and the scan would keep running long past
-    the share it is supposed to fit inside.
+    a 30 s budget is `_compact_seed_wall_ceiling(30.0)` = 2.5 s (the floor,
+    since ``30 / 12`` = 2.5 is already at the floor), so a predicate built
+    over the whole deadline is still False 3 s in and the scan would keep
+    running long past the share it is supposed to fit inside.
     """
     captured: dict[str, Any] = {}
 
@@ -10479,9 +10550,9 @@ def test_the_eligibility_scan_is_bound_to_the_compact_share_not_the_whole_deadli
     entered = captured["entered"]
     assert reached is not None, "the scan must be given a cancel at all"
 
-    monkeypatch.setattr(time, "monotonic", lambda: entered + 11.0)
+    monkeypatch.setattr(time, "monotonic", lambda: entered + 3.0)
     assert reached() is True
-    monkeypatch.setattr(time, "monotonic", lambda: started + 9.0)
+    monkeypatch.setattr(time, "monotonic", lambda: started + 1.0)
     assert reached() is False
 
 
