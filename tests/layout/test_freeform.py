@@ -23200,6 +23200,86 @@ def test_validated_access_rematching_keeps_each_tie_break_solve_bounded(
     ]
 
 
+def test_tie_work_limit_unknown_uses_ranked_fallback_before_wall_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    demand = _access_demand(
+        (0, 0, 0),
+        freeform.PortAccessKind.BOUNDARY_ARRIVAL,
+        belt=1,
+    )
+    original_solve = cp_model.CpSolver.solve
+
+    def stop_at_tie_work_limit(
+        solver: cp_model.CpSolver,
+        model: cp_model.CpModel,
+    ) -> cp_model.CpSolverStatus:
+        if (
+            solver.parameters.max_deterministic_time
+            == freeform._ACCESS_TIE_DETERMINISTIC_WORK
+        ):
+            return cp_model.UNKNOWN
+        return original_solve(solver, model)
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", stop_at_tie_work_limit)
+    matched = freeform._match_access_corridors(
+        (demand,),
+        {demand: (((1, 0, 0), (2, 0, 0)),)},
+        deadline=time.monotonic() + 60.0,
+    )
+
+    assert set(matched) == {demand}
+
+
+def test_tie_work_limit_after_validation_cut_never_reuses_cut_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    demand = _access_demand(
+        (0, 0, 0),
+        freeform.PortAccessKind.BOUNDARY_ARRIVAL,
+        belt=1,
+    )
+    original_solve = cp_model.CpSolver.solve
+
+    def stop_each_tie_solve(
+        solver: cp_model.CpSolver,
+        model: cp_model.CpModel,
+    ) -> cp_model.CpSolverStatus:
+        if (
+            solver.parameters.max_deterministic_time
+            == freeform._ACCESS_TIE_DETERMINISTIC_WORK
+        ):
+            return cp_model.UNKNOWN
+        return original_solve(solver, model)
+
+    validations: list[tuple[freeform.PortAccessCorridor, ...]] = []
+
+    def reject_first_assignment(
+        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> Collection[freeform.PortAccessDemand] | None:
+        selected = tuple(assigned.values())
+        validations.append(selected)
+        if len(validations) == 1:
+            return (demand,)
+        assert selected != validations[0], "a cut assignment must never be validated again"
+        return None
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", stop_each_tie_solve)
+    matched = freeform._match_access_corridors(
+        (demand,),
+        {
+            demand: (
+                ((1, 0, 0), (2, 0, 0)),
+                ((0, 1, 0), (0, 2, 0)),
+            )
+        },
+        validate=reject_first_assignment,
+    )
+
+    assert set(matched) == {demand}
+    assert len(validations) == 2
+
+
 def test_true_no_complete_boundary_matching_is_exhaustive_static_access() -> None:
     canvas, demand = _corridor_scene()
     canvas.add(_belt(2, 3))
