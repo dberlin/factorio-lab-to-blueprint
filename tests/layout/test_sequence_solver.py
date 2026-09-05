@@ -971,6 +971,50 @@ def test_obstacle_bound_audit_records_an_extra_hit_without_skipping() -> None:
     assert not stage.obstacle_lower_bound_violation
 
 
+
+def test_rectangle_audit_records_an_additional_dominance_hit() -> None:
+    first = _placement(area=20, belt_tiles=4)
+    later = _placement(area=25, belt_tiles=8)
+    empty = PreparedRoutingLowerBound(0, 0, 0, 0)
+    rectangle = PreparedRoutingLowerBound(
+        0,
+        0,
+        0,
+        0,
+        rectangle_eligible=True,
+        rectangle_tested=3,
+        rectangle_proved_dominated=True,
+        rectangle_threshold_area=20,
+        rectangle_threshold_belts=4,
+    )
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), first),
+            DetailedStageResult(_routing(DetailedRouteStatus.ROUTED), later),
+        ),
+        exact_lower_bounds=((0, empty), (10, rectangle)),
+    )
+    solver = _solver(fake, heights=(40,))
+    decoded = DecodedPlacement(
+        x=(0,),
+        y=(0,),
+        width=1,
+        used_height=1,
+        x_windows=((0, 0),),
+        y_windows=((0, 0),),
+        gap_area=0,
+        variant_indices=(0,),
+    )
+
+    solver.close_exact_decoded(40, decoded, reason="first")
+    solver.close_exact_decoded(40, decoded, reason="rectangle-audit")
+
+    stage = solver._stage_stats[1]
+    assert not stage.lower_bound_dominated
+    assert not stage.obstacle_lower_bound_dominated
+    assert stage.rectangle_lower_bound_dominated
+    assert not stage.rectangle_lower_bound_violation
+
 def test_proof_dominated_prepared_skip_is_on_off_equivalent() -> None:
     first = _placement(area=20, belt_tiles=4)
     dominated = _placement(area=30, belt_tiles=8)
