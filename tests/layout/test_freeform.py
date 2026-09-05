@@ -22743,3 +22743,550 @@ def test_prepared_routing_bound_omits_direct_and_prelinked_route_demand() -> Non
     assert bound.component_count == 0
     assert bound.route_floor == 0
     assert bound.total == 0
+
+
+_BROKE7_URL = (
+    "https://factoriolab.github.io/dsp/list?"
+    "z=eJxNzrkOwjAQBNC.cTHV2lyVm7EQHSJIQFxCSAFJFCncFP52FCCJuzdazWhrywe0EVVbZtAigG59"
+    "juwHzzAW6Q.EqA9bTCVqm87XgcxgJp1fbffntN3.-xJ5F5n7KLy.H58OuaVq8qddweOIAjdwCW7"
+    "AFCwCS7gFXBLcWlVVY31gmIdE3a3WH6pCPHY_&v=11"
+)
+_BROKE7_REFUSING_ORIGINS = (
+    (58, 0),
+    (23, 9),
+    (29, 1),
+    (65, 9),
+    (44, 9),
+    (4, 0),
+    (3, 9),
+)
+_BROKE7_SWAPPED_ORIGINS = (
+    (58, 0),
+    (44, 9),
+    (29, 1),
+    (65, 9),
+    (23, 9),
+    (4, 0),
+    (3, 9),
+)
+
+
+def _broke7_spec() -> BuildSpec:
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
+
+    return next(
+        candidate
+        for candidate in build_candidates(
+            load_vendored(),
+            parse_url(_BROKE7_URL),
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+        ).candidates
+        if candidate.label == "all-products"
+    )
+
+
+def _broke7_fixture() -> tuple[BuildSpec, list[Strip], freeform._Pack, freeform._Pack]:
+    spec = _broke7_spec()
+    strips = plan_strips(spec)
+    assert [_box(strip) for strip in strips] == [
+        (25, 9),
+        (21, 9),
+        (29, 8),
+        (21, 7),
+        (21, 9),
+        (25, 9),
+        (19, 8),
+    ]
+    refusing = freeform._Pack(
+        at=dict(enumerate(_BROKE7_REFUSING_ORIGINS)),
+        width=82,
+        height=21,
+        status="fixed-refusing",
+    )
+    swapped = replace(
+        refusing,
+        at=dict(enumerate(_BROKE7_SWAPPED_ORIGINS)),
+        status="fixed-equal-box-swap",
+    )
+    return spec, strips, refusing, swapped
+
+
+def _box_cells(strips: Sequence[Strip], pack: freeform._Pack) -> frozenset[tuple[int, int]]:
+    return frozenset(
+        (x, y)
+        for index, strip in enumerate(strips)
+        for x in range(
+            pack.at[index][0] - strip.west_channel,
+            pack.at[index][0] - strip.west_channel + _box(strip)[0],
+        )
+        for y in range(pack.at[index][1], pack.at[index][1] + _box(strip)[1])
+    )
+
+
+def _access_demand(
+    cell: Cell,
+    kind: freeform.PortAccessKind,
+    *,
+    belt: int = 0,
+    strip_index: int | None = 0,
+) -> freeform.PortAccessDemand:
+    return freeform.PortAccessDemand(
+        cell=cell,
+        kind=kind,
+        item="ore",
+        belt=belt,
+        strip_index=strip_index,
+        columns=1,
+    )
+
+
+def test_prepare_holds_external_access_before_coater_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = freeform._place_coaters
+    observed: list[tuple[freeform.PortAccessCorridor, ...]] = []
+
+    def inspect_first_hold(
+        canvas: _Canvas,
+        *args: object,
+        **kwargs: object,
+    ) -> list[freeform.CoaterSupplyPort]:
+        observed.extend(canvas.port_corridors.values())
+        assert any(
+            corridor.kind is freeform.PortAccessKind.BOUNDARY_ARRIVAL
+            for corridors in canvas.port_corridors.values()
+            for corridor in corridors
+        ), "the pre-coater hold omitted every external-only boundary arrival"
+        return original(canvas, *args, **kwargs)
+
+    monkeypatch.setattr(freeform, "_place_coaters", inspect_first_hold)
+    spec = proliferated_spec()
+    strips = plan_strips(spec)
+    _prepare_routing_problem(
+        spec,
+        strips,
+        _greedy_pack(strips, _height_seed(strips)),
+        policy=BandPolicy("portable"),
+        power=False,
+    )
+    assert observed
+
+
+def test_boundary_port_physical_claim_counts() -> None:
+    source = _Port(0, 0, 0, 0, 0)
+    shared_source = _Port(1, 4, 0, 4, 4)
+    first_sink = _Port(2, 8, 0, 8, 8)
+    both_fed_sink = _Port(3, 12, 0, 12, 12)
+    early_output = _Port(4, 16, 0, 16, 16)
+    trunk_root = _Port(5, 20, 0, 20, 20)
+    nets = (
+        _Net(source, first_sink, "ore"),
+        _Net(shared_source, first_sink, "ore"),
+        _Net(shared_source, both_fed_sink, "ore"),
+        _Net(trunk_root, both_fed_sink, "ore"),
+    )
+    inventory = freeform._port_access_inventory(
+        nets,
+        boundary_inputs=(
+            ("pure-input", _Port(6, 24, 0, 24, 24), 6),
+            ("ore", both_fed_sink, 3),
+            ("ore", trunk_root, None),
+        ),
+        boundary_outputs=(("product", early_output), ("ore", shared_source)),
+        late_output_belts={shared_source.belt},
+        shared_boundary_root_belts={trunk_root.belt},
+        strip_of_belt={belt: belt for belt in range(7)},
+    )
+    counts = {
+        cell: tuple(sorted(demand.kind.value for demand in inventory.demands if demand.cell == cell))
+        for cell in {demand.cell for demand in inventory.demands}
+    }
+    assert counts[(24, 0, 0)] == ("boundary-arrival",)
+    assert counts[(16, 0, 0)] == ("early-boundary-departure",)
+    assert counts[(4, 0, 0)] == ("internal-departure",)
+    assert counts[(12, 0, 0)] == ("boundary-arrival", "internal-arrival")
+    assert counts[(20, 0, 0)] == ("boundary-arrival",)
+    assert shared_source.belt in inventory.late_output_belts
+
+
+def _corridor_scene(*, internal: bool = False) -> tuple[_Canvas, freeform.PortAccessDemand]:
+    canvas = _Canvas(limit=(0, 0, 6, 6))
+    port_cell = (3, 3, 0)
+    port = canvas.add(_belt(3, 3))
+    for x, y in ((4, 2), (4, 4), (5, 2), (5, 4), (6, 3), (3, 2), (3, 4)):
+        canvas.add(_belt(x, y))
+    kind = (
+        freeform.PortAccessKind.INTERNAL_DEPARTURE
+        if internal
+        else freeform.PortAccessKind.BOUNDARY_ARRIVAL
+    )
+    return canvas, _access_demand(port_cell, kind, belt=port)
+
+
+def test_boundary_access_rematches_away_from_unreachable_first_corridor() -> None:
+    canvas, demand = _corridor_scene()
+    reservation = freeform._reserve_port_access(
+        canvas,
+        (demand,),
+        boundary=((0, 3, 0),),
+    )
+    assert reservation.complete
+    corridor = dict(reservation.assigned)[demand]
+    assert corridor.access == (2, 3, 0)
+    assert not reservation.evidence
+
+
+def test_internal_only_enclosed_ports_are_not_boundary_filtered() -> None:
+    canvas, demand = _corridor_scene(internal=True)
+    reservation = freeform._reserve_port_access(
+        canvas,
+        (demand,),
+        boundary=((0, 3, 0),),
+    )
+    assert reservation.complete
+    assert dict(reservation.assigned)[demand].access == (4, 3, 0)
+    assert not reservation.evidence
+
+
+def test_two_reachable_boundary_claims_are_jointly_rematched() -> None:
+    first = _access_demand((0, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=1)
+    second = _access_demand((4, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=2)
+    shared = (2, 0, 0)
+    matched = freeform._match_access_corridors(
+        (first, second),
+        {
+            first: (((1, 0, 0), shared), ((0, 1, 0), (0, 2, 0))),
+            second: (((3, 0, 0), shared), ((4, 1, 0), (4, 2, 0))),
+        },
+    )
+    assert set(matched) == {first, second}
+    occupied = {
+        cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)
+    }
+    assert len(occupied) == 4
+
+
+def test_true_no_complete_boundary_matching_is_exhaustive_static_access() -> None:
+    canvas, demand = _corridor_scene()
+    canvas.add(_belt(2, 3))
+    reservation = freeform._reserve_port_access(
+        canvas,
+        (demand,),
+        boundary=((0, 3, 0),),
+    )
+    assert not reservation.complete
+    assert reservation.missing == (demand,)
+    assert reservation.evidence[0].exhaustive
+    assert reservation.evidence[0].reachable_options == 0
+
+
+def test_boundary_corner_claim_already_on_perimeter_remains_reachable() -> None:
+    canvas = _Canvas(limit=(0, 0, 4, 4))
+    belt = canvas.add(_belt(1, 1))
+    demand = _access_demand(
+        (1, 1, 0),
+        freeform.PortAccessKind.EARLY_BOUNDARY_DEPARTURE,
+        belt=belt,
+    )
+    reservation = freeform._reserve_port_access(
+        canvas,
+        (demand,),
+        boundary=((0, 1, 0), (1, 0, 0)),
+    )
+    assert reservation.complete
+
+
+def test_self_consuming_requested_output_routes_from_late_tail() -> None:
+    source = _Port(0, 1, 1, 1, 1)
+    destination = _Port(1, 4, 1, 4, 4)
+    inventory = freeform._port_access_inventory(
+        (_Net(source, destination, "product"),),
+        boundary_outputs=(("product", source),),
+        late_output_belts={source.belt},
+        strip_of_belt={0: 0, 1: 1},
+    )
+    assert tuple(
+        demand.kind for demand in inventory.demands if demand.cell == (1, 1, 0)
+    ) == (freeform.PortAccessKind.INTERNAL_DEPARTURE,)
+    assert source.belt in inventory.late_output_belts
+
+    canvas = _Canvas(limit=(0, 0, 8, 4))
+    source_index = canvas.add(_belt(1, 1))
+    tail_index = canvas.add(_belt(5, 1))
+    canvas.buildings[source_index] = _relink(canvas.buildings[source_index], output_obj=tail_index)
+    output = _Net(
+        _Port(source_index, 1, 1, 1, 1),
+        _Port(source_index, 1, 1, 1, 1),
+        "product",
+    )
+    late = freeform._output_tail_nets(canvas, (output,))
+    assert len(late) == 1
+    assert late[0].source.belt == tail_index
+
+
+def test_broke7_boundary_access_distinguishes_equal_box_swap() -> None:
+    spec, strips, refusing, swapped = _broke7_fixture()
+    assert refusing.width == swapped.width
+    assert refusing.height == swapped.height
+    assert sum(width * height for width, height in map(_box, strips)) == 1359
+    assert _box_cells(strips, refusing) == _box_cells(strips, swapped)
+
+    rejected = _prepare_routing_problem(
+        spec, strips, refusing, policy=BandPolicy("portable"), power=False
+    )
+    accepted = _prepare_routing_problem(
+        spec, strips, swapped, policy=BandPolicy("portable"), power=False
+    )
+    iron = next(
+        failure
+        for failure in rejected.preparation_failures
+        if failure.net_id.role is NetRole.EXTERNAL
+        and failure.net_id.item == "iron-ingot"
+        and failure.destination == (19, 10, 0)
+    )
+    assert iron.kind is RouteFailureKind.STATIC_ACCESS
+    assert rejected.preparation_exhaustive
+    assert rejected.static_access_proof is not None
+    assert not accepted.preparation_failures
+
+
+def test_broke7_fixed_refusal_and_equal_box_swap_high_expansion_control() -> None:
+    spec, strips, refusing, swapped = _broke7_fixture()
+    rejected = _build(
+        spec,
+        strips,
+        refusing,
+        policy=BandPolicy("portable"),
+        power=False,
+        route=True,
+        budget={"left": 50_000_000},
+    )
+    routed = _build(
+        spec,
+        strips,
+        swapped,
+        policy=BandPolicy("portable"),
+        power=False,
+        route=True,
+        budget={"left": 50_000_000},
+    )
+    assert rejected.routing.status is DetailedRouteStatus.STRANDED
+    assert rejected.routing.exhaustive
+    assert routed.routing.status is DetailedRouteStatus.ROUTED
+
+
+def test_static_access_exact_no_good_reaches_pack_model() -> None:
+    strip = plan_strips(single_recipe_spec())[0]
+    strips = [replace(strip, group_key=f"static-access-{index}") for index in range(2)]
+    height = sum(_box(candidate)[1] for candidate in strips)
+    width_bound = sum(_box(candidate)[0] for candidate in strips)
+    baseline = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=1,
+        deterministic=True,
+    )
+    assert baseline is not None
+    cut = freeform.ExactPackNoGood(
+        height=baseline.height,
+        outline=tuple(map(_box, strips)),
+        width=baseline.width,
+        origins=tuple(baseline.at[index] for index in range(len(strips))),
+        evidence=(finalize.ProjectionFailure("route.static_access", (), "proved", 0),),
+    )
+    retry = _pack(
+        strips,
+        height=height,
+        width_bound=width_bound,
+        time_budget_s=0.5,
+        direct_candidates={},
+        workers=1,
+        deterministic=True,
+        exact_pack_no_goods=(cut,),
+    )
+    assert retry is not None
+    assert tuple(retry.at[index] for index in range(len(strips))) != cut.origins
+
+
+def test_static_access_relation_no_good_requires_isolated_closed_cut() -> None:
+    spec, strips, refusing, _swapped = _broke7_fixture()
+    rejected = _build(
+        spec,
+        strips,
+        refusing,
+        policy=BandPolicy("portable"),
+        power=False,
+        route=True,
+    )
+    assert rejected.static_access_proof is not None
+    attempt = freeform.PackAttempt(
+        origins=tuple(refusing.at[index] for index in range(len(strips))),
+        compact_width=refusing.width,
+        height=refusing.height,
+        outline=tuple(map(_box, strips)),
+        routing=rejected.routing,
+        budget_stage=None,
+        static_access=rejected.routing.failures,
+        promised_direct=rejected.promised_direct,
+        realized_direct=rejected.realized_direct,
+        direct_candidates=freeform._direct_candidate_snapshot(strips, spec, enabled=True),
+        static_access_proof=rejected.static_access_proof,
+    )
+    cache: dict[object, freeform.ClusterRelationNoGood | None] = {}
+    relation = freeform._certify_static_access_relation(
+        attempt,
+        strips,
+        deadline=time.monotonic() + freeform.C_WINDOW_SECONDS,
+        cache=cache,
+    )
+    assert relation is not None
+    boundary_dependent = replace(
+        attempt,
+        static_access_proof=replace(
+            rejected.static_access_proof,
+            touches_boundary=True,
+        ),
+    )
+    assert (
+        freeform._certify_static_access_relation(
+            boundary_dependent,
+            strips,
+            deadline=time.monotonic() + freeform.C_WINDOW_SECONDS,
+            cache={},
+        )
+        is None
+    )
+
+
+def test_static_access_relation_cut_allows_other_relative_placements() -> None:
+    spec, strips, refusing, swapped = _broke7_fixture()
+    rejected = _build(
+        spec, strips, refusing, policy=BandPolicy("portable"), power=False, route=True
+    )
+    attempt = freeform.PackAttempt(
+        origins=tuple(refusing.at[index] for index in range(len(strips))),
+        compact_width=refusing.width,
+        height=refusing.height,
+        outline=tuple(map(_box, strips)),
+        routing=rejected.routing,
+        budget_stage=None,
+        static_access=rejected.routing.failures,
+        promised_direct=rejected.promised_direct,
+        realized_direct=rejected.realized_direct,
+        direct_candidates=freeform._direct_candidate_snapshot(strips, spec, enabled=True),
+        static_access_proof=rejected.static_access_proof,
+    )
+    relation = freeform._certify_static_access_relation(
+        attempt,
+        strips,
+        deadline=time.monotonic() + freeform.C_WINDOW_SECONDS,
+        cache={},
+    )
+    assert relation is not None
+    model = freeform._pack_model(
+        strips,
+        height=swapped.height,
+        width_bound=swapped.width,
+        direct_candidates={},
+        fixed_at=swapped.at,
+        cluster_relation_no_goods=(relation,),
+    )
+    assert model is not None
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 1
+    assert solver.solve(model.model) in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+
+
+class _FakeRecoveryClock:
+    def __init__(self, value: float = 100.0) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+def test_sweep_shares_one_second_between_certification_and_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _FakeRecoveryClock()
+    monkeypatch.setattr(freeform.time, "monotonic", clock)
+    allowances: list[float] = []
+
+    def certify(_deadline: float) -> str:
+        clock.advance(0.4)
+        return "proved"
+
+    def solve(allowance: float, proof: str) -> str:
+        assert proof == "proved"
+        allowances.append(allowance)
+        clock.advance(allowance)
+        return "different-pack"
+
+    outcome = freeform._run_static_recovery_window(
+        hard_deadline=102.0,
+        completion_reserve_s=0.25,
+        certify=certify,
+        solve=solve,
+    )
+    assert outcome.value == "different-pack"
+    assert allowances == pytest.approx([0.6])
+    assert outcome.deadline == pytest.approx(101.0)
+    assert clock.value == pytest.approx(101.0)
+
+
+def test_sweep_max_certification_consumes_recovery_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _FakeRecoveryClock()
+    monkeypatch.setattr(freeform.time, "monotonic", clock)
+
+    def certify(deadline: float) -> str:
+        clock.value = deadline
+        return "proved"
+
+    outcome = freeform._run_static_recovery_window(
+        hard_deadline=102.0,
+        completion_reserve_s=0.25,
+        certify=certify,
+        solve=lambda *_args: pytest.fail("an exhausted shared window launched a solve"),
+    )
+    assert outcome.value is None
+    assert outcome.deadline == pytest.approx(101.0)
+    assert clock.value == pytest.approx(101.0)
+
+
+def test_broke7_real_packer_recovers_under_window() -> None:
+    spec, strips, refusing, _swapped = _broke7_fixture()
+    rejected = _build(
+        spec, strips, refusing, policy=BandPolicy("portable"), power=False, route=True
+    )
+    recovered = freeform._recover_static_access_pack(
+        spec,
+        strips,
+        refusing,
+        rejected,
+        arrangement=1,
+        hard_deadline=time.monotonic() + 2.0,
+        completion_reserve_s=0.25,
+        direct_candidates=freeform._direct_net_candidates(strips, spec),
+        proof_cache={},
+    )
+    assert recovered.pack is not None
+    assert recovered.pack.at != refusing.at
+    routed = _build(
+        spec,
+        strips,
+        recovered.pack,
+        policy=BandPolicy("portable"),
+        power=False,
+        route=True,
+    )
+    assert routed.routing.status is DetailedRouteStatus.ROUTED
