@@ -17944,6 +17944,17 @@ def test_projected_coater_junction_bans_reuse_identical_exact_relations(
     overlaps = 0
     keepouts = 0
     boxes = (object(), object())
+    materialized: list[PlacedBuilding] = []
+    projected_splitters: list[colliders.Placed] = []
+    original_materialize = finalize.materialize_frame_building
+
+    def materialize(
+        building: PlacedBuilding,
+        **kwargs: object,
+    ) -> PlacedBuilding:
+        materialized.append(building)
+        return original_materialize(building, **kwargs)  # type: ignore[arg-type]
+
 
     def no_overlap(_left: object, _right: object) -> bool:
         nonlocal overlaps
@@ -17955,15 +17966,20 @@ def test_projected_coater_junction_bans_reuse_identical_exact_relations(
         keepouts += 1
         return boxes
 
+    def splitter_boxes(splitter: colliders.Placed, *_args: object) -> tuple[object, object]:
+        projected_splitters.append(splitter)
+        return boxes
+
+    monkeypatch.setattr(finalize, "materialize_frame_building", materialize)
     monkeypatch.setattr(
         finalize,
         "projected_coater_keepout_boxes",
         coater_boxes,
     )
-    monkeypatch.setattr(colliders, "target_boxes", lambda *_args: boxes)
+    monkeypatch.setattr(colliders, "target_boxes", splitter_boxes)
     monkeypatch.setattr(colliders, "obb_overlap", no_overlap)
 
-    freeform._projected_coater_junction_bans_by_frame(
+    bans = freeform._projected_coater_junction_bans_by_frame(
         ((0, coater), (1, coater)),
         (frame,),
         placement.bounds,
@@ -17973,6 +17989,64 @@ def test_projected_coater_junction_bans_reuse_identical_exact_relations(
 
     assert overlaps == 3 * LEVELS * len(boxes) ** 2
     assert keepouts == 1
+    assert bans == (frozenset(),)
+    assert materialized == [coater, coater]
+    assert projected_splitters
+
+
+def test_relative_rigid_frame_pose_matches_every_portable_frame_candidate() -> None:
+    bounds = (7, 11, 26, 30)
+    candidates = finalize._frame_candidates_for_extent(
+        20,
+        20,
+        BandPolicy("portable"),
+    )
+    assert candidates
+    assert {candidate.frame.rotated for candidate in candidates} == {False, True}
+    coater_info = catalog.building(catalog.SPRAY_COATER_ID)
+    coater = PlacedBuilding(
+        catalog.SPRAY_COATER_ID,
+        coater_info.model_index,
+        14,
+        19,
+        width=coater_info.width,
+        height=coater_info.height,
+    )
+    coater_pose = freeform._collision_pose(coater)
+    splitter_stacks = tuple(
+        freeform._splitter_stack_geometry(x, y, level)
+        for x, y, level in (
+            (7, 11, 0),
+            (18, 16, 1),
+            (26, 30, LEVELS - 1),
+        )
+    )
+
+    for candidate in candidates:
+        materialized_coater = freeform._collision_pose(
+            finalize.materialize_frame_building(
+                coater,
+                bounds=bounds,
+                candidate=candidate,
+            )
+        )
+        for splitter in itertools.chain.from_iterable(splitter_stacks):
+            expected = freeform._collision_pose(
+                finalize.materialize_frame_building(
+                    splitter,
+                    bounds=bounds,
+                    candidate=candidate,
+                )
+            )
+            assert (
+                freeform._relative_rigid_frame_pose(
+                    freeform._collision_pose(splitter),
+                    coater_pose,
+                    materialized_coater,
+                    rotated=candidate.frame.rotated,
+                )
+                == expected
+            )
 
 
 def test_projected_coater_junction_bans_cancel_inside_obb_product(
