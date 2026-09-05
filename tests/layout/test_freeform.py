@@ -18154,6 +18154,26 @@ def test_freeform_placement_records_route_backend() -> None:
         two_stage_spec(), time_budget_s=4.0
     )
     assert placement.stats["route_backend"] == route_kernel.selected_backend()
+    for key in (
+        "planning_time_s",
+        "pack_cp_wall_time_s",
+        "pack_cp_deterministic_time_s",
+        "pack_cp_solves",
+        "preparation_time_s",
+        "detailed_route_time_s",
+        "compaction_time_s",
+        "finalization_time_s",
+        "validation_time_s",
+        "total_time_s",
+    ):
+        assert placement.stats[key] >= 0.0
+    assert placement.stats["pack_cp_last_status"] in {
+        "OPTIMAL",
+        "FEASIBLE",
+        "INFEASIBLE",
+        "MODEL_INVALID",
+        "UNKNOWN",
+    }
 
 
 def test_lay_out_raises_a_lane_that_needs_a_faster_belt() -> None:

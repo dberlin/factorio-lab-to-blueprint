@@ -175,6 +175,14 @@ def _raced_result(
     admitting it as an ``Attempt`` would put a hole into the selection below.
     """
     if outcome.status == "completed" and outcome.placement is not None:
+        outcome.placement.stats.update(
+            {
+                "process_wall_time_s": outcome.process_wall_time_s,
+                "process_user_cpu_s": outcome.process_user_cpu_s,
+                "process_system_cpu_s": outcome.process_system_cpu_s,
+                "process_peak_rss_kib": float(outcome.process_peak_rss_kib),
+            }
+        )
         return outcome.placement
     return NoValidLayout(
         outcome.refusal_reason or f"{outcome.strategy} produced nothing",
@@ -836,6 +844,8 @@ def build(
                         )
                     )
                 continue
+            pipeline_compaction_time_s = 0.0
+            pipeline_finalization_time_s = 0.0
             placement = result
             # Candidate peers may finish later, and the previous arm's
             # settlement runs serially. Neither delay belongs to this attempt.
@@ -861,11 +871,14 @@ def build(
                 return time.monotonic() >= _deadline
 
             if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
+                phase_started = time.monotonic()
                 placement = finalize.compact_open_boundary_belts(
                     placement,
                     spec,
                     expect_power=True,
                 )
+                pipeline_compaction_time_s = time.monotonic() - phase_started
+                phase_started = time.monotonic()
                 try:
                     placement = finalize.finalize_placement(
                         placement,
@@ -936,6 +949,7 @@ def build(
                             )
                         )
                     continue
+                pipeline_finalization_time_s = time.monotonic() - phase_started
                 placement = replace(
                     placement,
                     completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
@@ -943,6 +957,7 @@ def build(
             # Pass the spec AND the id map. Without them the nine
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.
+            phase_started = time.monotonic()
             report = validate.validate(
                 placement,
                 spec,
@@ -951,6 +966,7 @@ def build(
                 max_belt_z=belt_rules.max_z,
                 belt_vertical_construction=belt_rules.vertical_construction,
             )
+            pipeline_validation_time_s = time.monotonic() - phase_started
             marked = markers.mark_external_belts(placement, spec)
             labelled = replace(
                 marked,
@@ -960,6 +976,7 @@ def build(
                     f"{spec.machine_count} machines, {placement.area} tiles"
                 ),
             )
+            phase_started = time.monotonic()
             try:
                 blueprint = codec.encode(labelled)
             except ValueError as exc:
@@ -983,6 +1000,15 @@ def build(
                         )
                     )
                 continue
+            pipeline_encoding_time_s = time.monotonic() - phase_started
+            labelled.stats.update(
+                {
+                    "pipeline_compaction_time_s": pipeline_compaction_time_s,
+                    "pipeline_finalization_time_s": pipeline_finalization_time_s,
+                    "pipeline_validation_time_s": pipeline_validation_time_s,
+                    "pipeline_encoding_time_s": pipeline_encoding_time_s,
+                }
+            )
             # Each raced arm is charged its shared race plus only its own
             # post-processing. Waiting for peer candidates or earlier arms to
             # settle is deliberately excluded.

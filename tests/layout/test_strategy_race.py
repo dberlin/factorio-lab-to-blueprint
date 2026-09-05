@@ -129,6 +129,29 @@ def test_outcomes_round_trip_through_pickle(outcome: _StrategyRaceOutcome) -> No
     assert pickle.loads(pickle.dumps(outcome)) == outcome
 
 
+def test_race_leg_records_its_own_process_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Completed:
+        def lay_out(self, *_args: object, **_kwargs: object) -> Placement:
+            return Placement(buildings=())
+
+    monkeypatch.setattr(strategy_race_module, "_build_layout", lambda *_a, **_kw: _Completed())
+    outcome = _run_race_leg(
+        replace(
+            _request(),
+            share=False,
+            soft_deadline=time.monotonic() + 30.0,
+        )
+    )
+
+    assert outcome.status == "completed"
+    assert outcome.process_wall_time_s >= 0.0
+    assert outcome.process_user_cpu_s >= 0.0
+    assert outcome.process_system_cpu_s >= 0.0
+    assert outcome.process_peak_rss_kib > 0
+
+
 def test_messages_round_trip_through_pickle() -> None:
     incumbent = IncumbentMessage("freeform", (480, 62))
     no_good = NoGoodMessage(
