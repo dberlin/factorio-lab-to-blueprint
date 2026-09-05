@@ -7531,9 +7531,17 @@ def test_pack_window_pins_one_worker_and_a_deterministic_work_bound(
         solver: cp_model.CpSolver,
         *args: object,
         **kwargs: object,
-    ) -> None:
+    ) -> freeform._PackSolveOutcome:
         seen.append(solver)
-        return None
+        return freeform._PackSolveOutcome(
+            pack=None,
+            status="UNKNOWN",
+            objective_value=None,
+            best_objective_bound=None,
+            wall_time_s=0.0,
+            deterministic_time_s=0.0,
+            model_fingerprint="test.capture",
+        )
 
     monkeypatch.setattr(freeform, "_pack_result", _capture)
     for budget, work in ((4.0, 0.25), (0.1, 0.5)):
@@ -20369,9 +20377,22 @@ def _only_a_window_charge_is_affordable(
     return candidate_s >= freeform.C_WINDOW_SECONDS
 
 
+def _window_solve_outcome(pack: freeform._Pack) -> freeform._PackSolveOutcome:
+    """Return the typed successful result produced by the real window solver."""
+    return freeform._PackSolveOutcome(
+        pack=pack,
+        status="OPTIMAL",
+        objective_value=float(pack.width),
+        best_objective_bound=float(pack.width),
+        wall_time_s=0.0,
+        deterministic_time_s=0.0,
+        model_fingerprint="test.window",
+    )
+
+
 def _recording_window_refusal(
     calls: list[object],
-) -> Callable[..., freeform._Pack | None]:
+) -> Callable[..., freeform._PackSolveOutcome | None]:
     """A `_pack_window` stub that records its keywords and repairs nothing.
 
     Written out rather than as `lambda *_a, **kw: calls.append(kw) or None`,
@@ -20379,7 +20400,7 @@ def _recording_window_refusal(
     `list.append` never had, which mypy reports.
     """
 
-    def refuse(*_args: object, **kwargs: object) -> freeform._Pack | None:
+    def refuse(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome | None:
         calls.append(kwargs)
         return None
 
@@ -20427,7 +20448,7 @@ def _sweep_over_a_stranded_first_candidate(
     *,
     session: OperatorSession,
     room_for_another: Callable[..., bool],
-    pack_window: Callable[..., freeform._Pack | None] | None = None,
+    pack_window: Callable[..., freeform._PackSolveOutcome | None] | None = None,
     destroy: Callable[..., frozenset[int]] | None = None,
     first_routing: DetailedRouteResult | None = None,
     repair_routing: DetailedRouteResult | None = None,
@@ -20534,13 +20555,15 @@ def _sweep_over_a_stranded_first_candidate(
             towers=(),
         )
 
-    def repair(*_args: object, **kwargs: object) -> freeform._Pack:
+    def repair(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: list(heights))
@@ -20703,14 +20726,16 @@ def test_the_sweep_repairs_a_window_when_a_full_resolve_is_unaffordable(
     session = OperatorSession()
     windows: list[dict[str, object]] = []
 
-    def recording(*_args: object, **kwargs: object) -> freeform._Pack:
+    def recording(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         windows.append(dict(kwargs))
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     result, packed, builds = _sweep_over_a_stranded_first_candidate(
@@ -20748,7 +20773,7 @@ def test_the_sweep_never_solves_the_same_window_twice(
     session = OperatorSession()
     keys: list[tuple[int, int, frozenset[int]]] = []
 
-    def recording(*_args: object, **kwargs: object) -> freeform._Pack:
+    def recording(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         window = kwargs["window"]
         assert isinstance(window, frozenset)
         key = (int(str(kwargs["height"])), int(str(kwargs["arrangement"])), window)
@@ -20756,10 +20781,12 @@ def test_the_sweep_never_solves_the_same_window_twice(
         keys.append(key)
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     result, packed, _builds = _sweep_over_a_stranded_first_candidate(
@@ -21000,16 +21027,18 @@ def test_the_freeform_window_counts_the_no_goods_its_model_declined(
     """
     session = OperatorSession()
 
-    def skipping(*_args: object, **kwargs: object) -> freeform._Pack:
+    def skipping(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         on_skipped = kwargs["on_skipped"]
         assert callable(on_skipped)
         on_skipped(2)
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
@@ -21109,14 +21138,16 @@ def test_a_repair_that_fails_again_settles_before_it_asks_for_another_window(
     log: list[str] = []
     session = _RecordingSession(log)
 
-    def solving(*_args: object, **kwargs: object) -> freeform._Pack:
+    def solving(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         log.append("solve")
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
@@ -21404,7 +21435,7 @@ def test_a_window_launches_at_a_width_the_band_scan_will_not_target(
         targets.append(kwargs["band_target_width"])
         return frozenset({0})
 
-    def refuse(*_args: object, **kwargs: object) -> freeform._Pack | None:
+    def refuse(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome | None:
         targets.append(kwargs["width_target"])
         return None
 
