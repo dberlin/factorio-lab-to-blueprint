@@ -11800,14 +11800,83 @@ def _committed_path_closes_cycle(
     indices: Sequence[int],
     splitter_successors: Mapping[int, Sequence[int]] | None = None,
 ) -> bool:
-    """Whether flow from any committed belt can return to that same belt."""
+    """Whether flow from any committed belt can return to that same belt.
+
+    A belt is on a loop iff it sits in a strongly connected component with
+    more than one member, or feeds itself.  One Tarjan pass over the part of
+    the belt graph reachable from ``indices`` answers that for every index at
+    once; the per-index walk it replaces re-traversed the same graph once per
+    committed cell (30k walks and 3.4M visits on ``universe-matrix``) and was
+    the largest single cost of ``_commit_paths``.  Edges are the same ones
+    ``_leads_back`` follows: a Splitter to each branch fed from it, a belt to
+    its ``output_obj``; anything else has no successors.
+    """
     if splitter_successors is None:
         splitter_successors = _splitter_successors(canvas)
-    return any(
-        (onward := canvas.buildings[index].output_obj) is not None
-        and _leads_back(canvas, onward, {index}, splitter_successors)
-        for index in indices
-    )
+    buildings = canvas.buildings
+    n = len(buildings)
+    wanted = {i for i in indices if 0 <= i < n}
+    if not wanted:
+        return False
+
+    def successors(i: int) -> tuple[int, ...]:
+        b = buildings[i]
+        if b.item_id == catalog.SPLITTER_ID:
+            return tuple(splitter_successors.get(i, ()))
+        if catalog.is_belt(b.item_id) and b.output_obj is not None:
+            return (b.output_obj,)
+        return ()
+
+    order = [-1] * n
+    low = [0] * n
+    on_stack = [False] * n
+    stack: list[int] = []
+    counter = 0
+    for root in wanted:
+        if order[root] != -1:
+            continue
+        order[root] = low[root] = counter
+        counter += 1
+        stack.append(root)
+        on_stack[root] = True
+        work = [(root, iter(successors(root)))]
+        while work:
+            v, it = work[-1]
+            descended = False
+            for w in it:
+                if not 0 <= w < n:
+                    continue
+                if order[w] == -1:
+                    order[w] = low[w] = counter
+                    counter += 1
+                    stack.append(w)
+                    on_stack[w] = True
+                    work.append((w, iter(successors(w))))
+                    descended = True
+                    break
+                if on_stack[w] and order[w] < low[v]:
+                    low[v] = order[w]
+            if descended:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                if low[v] < low[parent]:
+                    low[parent] = low[v]
+            if low[v] == order[v]:
+                component = []
+                while True:
+                    w = stack.pop()
+                    on_stack[w] = False
+                    component.append(w)
+                    if w == v:
+                        break
+                if len(component) > 1:
+                    if any(c in wanted for c in component):
+                        return True
+                elif component[0] in wanted and component[0] in successors(component[0]):
+                    return True
+    return False
 
 
 def _sink_for(
