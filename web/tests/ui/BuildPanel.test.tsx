@@ -618,6 +618,47 @@ test('the budget copy follows selected and pinned effective candidates', () => {
   expect(screen.getByText(/up to 30s of solving/)).toBeInTheDocument();
 });
 
+test('a long projected total warns instead of blocking the build', () => {
+  mount();
+  // Defaults: 3 candidates x 2 strategies x (15s budget + 6s grace) = 126s.
+  // Unremarkable, and a warning that is always on screen is one nobody reads.
+  expect(screen.queryByTestId('budget-warning')).not.toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText('Budget (s/layout)'), { target: { value: '45' } });
+  const warning = screen.getByTestId('budget-warning');
+  // BOTH numbers, or the multiplication that turned 45 into five minutes is
+  // invisible: 6 layouts x (45s + 6s) = 306s.
+  expect(warning).toHaveTextContent('306s');
+  expect(warning).toHaveTextContent('45s per layout');
+
+  // ...and it is a warning. The button still builds.
+  fireEvent.change(screen.getByLabelText('FactorioLab URL'), {
+    target: { value: 'https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11' },
+  });
+  expect(screen.getByRole('button', { name: 'Build' })).toBeEnabled();
+});
+
+test('the warning follows the projected TOTAL, not the per-layout budget', () => {
+  mount();
+  fireEvent.change(screen.getByLabelText('Budget (s/layout)'), { target: { value: '45' } });
+  expect(screen.getByTestId('budget-warning')).toBeInTheDocument();
+
+  // The same 45s budget over three serial layouts is 3 x (45 + 5) = 150s.
+  fireEvent.change(screen.getByLabelText('Strategy'), { target: { value: 'freeform' } });
+  expect(screen.queryByTestId('budget-warning')).not.toBeInTheDocument();
+});
+
+test('a budget far past the old 300s ceiling is submitted exactly as asked', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  mount();
+  fireEvent.change(screen.getByLabelText('Budget (s/layout)'), { target: { value: '1200' } });
+  build();
+
+  await waitFor(() => expect(calls).toHaveLength(1));
+  const body = JSON.parse(String(calls[0]?.init?.body)) as Record<string, unknown>;
+  expect(body.budget_s).toBe(1200);
+});
+
 test('the blueprint title is what the game will show, and it names the product', async () => {
   serving({
     status: 202,

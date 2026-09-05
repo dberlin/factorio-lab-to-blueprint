@@ -139,6 +139,14 @@ body {
   color: #8fa0b3;
   font-size: 11px;
 }
+/* A note you are not meant to skim past. `.note` is declared after `.warn` and
+   would otherwise win the colour on source order alone. */
+.note.warn {
+  color: #ffcc66;
+  /* It is an `<output>` — a live region, so a screen reader announces the new
+     arithmetic when the budget changes — and those are inline by default. */
+  display: block;
+}
 .row {
   display: flex;
   gap: 0.5rem;

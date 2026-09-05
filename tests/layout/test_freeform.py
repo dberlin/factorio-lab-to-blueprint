@@ -7542,9 +7542,17 @@ def test_pack_window_pins_one_worker_and_a_deterministic_work_bound(
         solver: cp_model.CpSolver,
         *args: object,
         **kwargs: object,
-    ) -> None:
+    ) -> freeform._PackSolveOutcome:
         seen.append(solver)
-        return None
+        return freeform._PackSolveOutcome(
+            pack=None,
+            status="UNKNOWN",
+            objective_value=None,
+            best_objective_bound=None,
+            wall_time_s=0.0,
+            deterministic_time_s=0.0,
+            model_fingerprint="test.capture",
+        )
 
     monkeypatch.setattr(freeform, "_pack_result", _capture)
     for budget, work in ((4.0, 0.25), (0.1, 0.5)):
@@ -10752,7 +10760,12 @@ class TestPortAccessIsReservedForEveryRole:
         a = _Port(0, 0, 0, 0, 0)
         b = _Port(1, 4, 0, 4, 4)
         c = _Port(2, 8, 0, 8, 8)
-        _reserve_port_access(canvas, [_Net(src=a, dst=b, item="x"), _Net(src=b, dst=c, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory(
+                [_Net(src=a, dst=b, item="x"), _Net(src=b, dst=c, item="x")]
+            ).demands,
+        )
         held = {
             key: sum(1 for k in canvas.reserved.values() if k == key)
             for key in ((0, 0, 0), (4, 0, 0), (8, 0, 0))
@@ -10770,19 +10783,18 @@ class TestPortAccessIsReservedForEveryRole:
         sink = _Port(canvas.add(_belt(10, 0)), 10, 0, 10, 10)
         for cell in ((-1, 0), (0, -1), (0, 1)):
             canvas.add(_belt(*cell))
-        failed: set[Cell] = set()
-
-        missing = _reserve_port_access(
+        reservation = _reserve_port_access(
             canvas,
-            [
-                _Net(src=source, dst=middle, item="x"),
-                _Net(src=middle, dst=sink, item="x"),
-            ],
-            failed_ports=failed,
+            freeform._port_access_inventory(
+                [
+                    _Net(src=source, dst=middle, item="x"),
+                    _Net(src=middle, dst=sink, item="x"),
+                ]
+            ).demands,
         )
 
-        assert missing == 1
-        assert failed == {(0, 0, 0)}
+        assert len(reservation.missing) == 1
+        assert {demand.cell for demand in reservation.missing} == {(0, 0, 0)}
 
     def test_a_second_cell_never_takes_another_port_s_only_one(self) -> None:
         """Every port gets its first cell before any port gets its second.
@@ -10801,7 +10813,12 @@ class TestPortAccessIsReservedForEveryRole:
         q = _Port(0, 0, 0, 0, 0)
         p = _Port(1, -2, 0, -2, 0)
         far = _Port(2, 4, 0, 4, 4)
-        _reserve_port_access(canvas, [_Net(src=p, dst=q, item="x"), _Net(src=q, dst=far, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory(
+                [_Net(src=p, dst=q, item="x"), _Net(src=q, dst=far, item="x")]
+            ).demands,
+        )
         assert canvas.reserved.get((-1, 0, 0)) == (-2, 0, 0), (
             "the only cell that reaches p was taken by q's second claim: "
             f"{canvas.reserved.get((-1, 0, 0))}"
@@ -10835,7 +10852,12 @@ class TestPortAccessIsReservedForEveryRole:
         far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
         d = _Port(0, 0, 0, 0, 0)
         e = _Port(1, -1, -1, -1, -1)
-        _reserve_port_access(canvas, [_Net(src=e, dst=d, item="x"), _Net(src=d, dst=far, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory(
+                [_Net(src=e, dst=d, item="x"), _Net(src=d, dst=far, item="x")]
+            ).demands,
+        )
 
         held = {
             key: sorted(c for c, k in canvas.reserved.items() if k == key)
@@ -10867,7 +10889,10 @@ class TestPortAccessIsReservedForEveryRole:
         canvas.add(_belt(1, -1))
         far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
         port = _Port(0, 0, 0, 0, 0)
-        _reserve_port_access(canvas, [_Net(src=port, dst=far, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory([_Net(src=port, dst=far, item="x")]).demands,
+        )
 
         assert canvas.reserved.get((1, 0, 0)) == (0, 0, 0), (
             f"the port did not hold its access cell: {canvas.reserved}"
@@ -10888,7 +10913,10 @@ class TestPortAccessIsReservedForEveryRole:
         canvas.add(_belt(0, 0))
         far = _Port(canvas.add(_belt(9, 0)), 9, 0, 9, 9)
         port = _Port(0, 0, 0, 0, 0)
-        _reserve_port_access(canvas, [_Net(src=port, dst=far, item="x")])
+        _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory([_Net(src=port, dst=far, item="x")]).demands,
+        )
 
         for_port = [cell for cell, key in canvas.reserved.items() if key == (0, 0, 0)]
         assert len(for_port) == 2, (
@@ -10896,8 +10924,12 @@ class TestPortAccessIsReservedForEveryRole:
         )
 
     def test_selected_corridors_never_share_an_exit_cell(self) -> None:
-        first = (0, 0, 0)
-        second = (2, 0, 0)
+        first = _access_demand(
+            (0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=1
+        )
+        second = _access_demand(
+            (2, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=2
+        )
         matched = freeform._match_access_corridors(
             (first, second),
             {
@@ -10907,10 +10939,9 @@ class TestPortAccessIsReservedForEveryRole:
                     ((3, 0, 0), (4, 0, 0)),
                 ),
             },
-            {first: 1, second: 1},
         )
 
-        assert set(matched) == {(first, 0), (second, 0)}
+        assert set(matched) == {first, second}
         occupied = {
             cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)
         }
@@ -10929,7 +10960,10 @@ class TestPortAccessIsReservedForEveryRole:
             item="x",
             net_id=NetId(0, 1, "x", NetRole.INTERNAL, 0),
         )
-        assert _reserve_port_access(canvas, [net]) == 0
+        assert _reserve_port_access(
+            canvas,
+            freeform._port_access_inventory([net]).demands,
+        ).complete
         assert len(canvas.reserved) == 4
         monkeypatch.setattr(freeform, "_commit_paths", lambda *_args, **_kwargs: ())
 
@@ -10962,12 +10996,14 @@ class TestPortAccessIsReservedForEveryRole:
             ):
                 canvas.add(_belt(*cell))
 
-            missing = _reserve_port_access(
+            reservation = _reserve_port_access(
                 canvas,
-                [
-                    _Net(src=source, dst=first_sink, item="hydrogen"),
-                    _Net(src=blocker, dst=second_sink, item="hydrogen"),
-                ],
+                freeform._port_access_inventory(
+                    [
+                        _Net(src=source, dst=first_sink, item="hydrogen"),
+                        _Net(src=blocker, dst=second_sink, item="hydrogen"),
+                    ]
+                ).demands,
             )
             access = tuple(
                 sorted(cell for cell, owner in canvas.reserved.items() if owner == (0, 0, 0))
@@ -10985,7 +11021,7 @@ class TestPortAccessIsReservedForEveryRole:
                 and (canvas.free(candidate) or canvas.reserved.get(candidate) == (0, 0, 0))
                 for dx, dy in freeform._STEPS
             )
-            return missing, access, usable
+            return len(reservation.missing), access, usable
 
         first = replay()
         second = replay()
@@ -11010,17 +11046,16 @@ def test_a_middle_lane_head_in_twice_cannot_hold_its_second_corridor() -> None:
             canvas.add(_belt(column, row))
     far = _Port(canvas.add(_belt(8, 4)), 8, 4, 8, 8)
     middle = (0, 1, 0)
-    failed: set[tuple[int, int, int]] = set()
-
-    missing = _reserve_port_access(
+    reservation = _reserve_port_access(
         canvas,
-        [_Net(src=far, dst=head, item="hydrogen") for head in heads],
-        twice={middle},
-        failed_ports=failed,
+        freeform._port_access_inventory(
+            [_Net(src=far, dst=head, item="hydrogen") for head in heads],
+            boundary_inputs=(("hydrogen", heads[1], None),),
+        ).demands,
     )
 
-    assert missing == 1
-    assert failed == {middle}
+    assert len(reservation.missing) == 1
+    assert {demand.cell for demand in reservation.missing} == {middle}
 
 
 class TestProliferatorSupplyIsOneReachableTree:
@@ -20045,7 +20080,10 @@ def test_the_relaxed_run_never_re_reserves_a_served_nets_corridor(
     # the same fixture -- the live canvas has already been routed by the time
     # anything can look at it.
     plan_canvas, plan_nets, _plan_bounds = _served_corridor_stranded_fixture()
-    freeform._reserve_port_access(plan_canvas, plan_nets)
+    freeform._reserve_port_access(
+        plan_canvas,
+        freeform._port_access_inventory(plan_nets).demands,
+    )
     every_corridor = frozenset(plan_canvas.reserved)
     seen: list[tuple[frozenset[Cell], frozenset[Cell]]] = []
 
@@ -20516,9 +20554,22 @@ def _only_a_window_charge_is_affordable(
     return candidate_s >= freeform.C_WINDOW_SECONDS
 
 
+def _window_solve_outcome(pack: freeform._Pack) -> freeform._PackSolveOutcome:
+    """Return the typed successful result produced by the real window solver."""
+    return freeform._PackSolveOutcome(
+        pack=pack,
+        status="OPTIMAL",
+        objective_value=float(pack.width),
+        best_objective_bound=float(pack.width),
+        wall_time_s=0.0,
+        deterministic_time_s=0.0,
+        model_fingerprint="test.window",
+    )
+
+
 def _recording_window_refusal(
     calls: list[object],
-) -> Callable[..., freeform._Pack | None]:
+) -> Callable[..., freeform._PackSolveOutcome | None]:
     """A `_pack_window` stub that records its keywords and repairs nothing.
 
     Written out rather than as `lambda *_a, **kw: calls.append(kw) or None`,
@@ -20526,7 +20577,7 @@ def _recording_window_refusal(
     `list.append` never had, which mypy reports.
     """
 
-    def refuse(*_args: object, **kwargs: object) -> freeform._Pack | None:
+    def refuse(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome | None:
         calls.append(kwargs)
         return None
 
@@ -20574,7 +20625,7 @@ def _sweep_over_a_stranded_first_candidate(
     *,
     session: OperatorSession,
     room_for_another: Callable[..., bool],
-    pack_window: Callable[..., freeform._Pack | None] | None = None,
+    pack_window: Callable[..., freeform._PackSolveOutcome | None] | None = None,
     destroy: Callable[..., frozenset[int]] | None = None,
     first_routing: DetailedRouteResult | None = None,
     repair_routing: DetailedRouteResult | None = None,
@@ -20681,13 +20732,15 @@ def _sweep_over_a_stranded_first_candidate(
             towers=(),
         )
 
-    def repair(*_args: object, **kwargs: object) -> freeform._Pack:
+    def repair(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: list(heights))
@@ -20850,14 +20903,16 @@ def test_the_sweep_repairs_a_window_when_a_full_resolve_is_unaffordable(
     session = OperatorSession()
     windows: list[dict[str, object]] = []
 
-    def recording(*_args: object, **kwargs: object) -> freeform._Pack:
+    def recording(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         windows.append(dict(kwargs))
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     result, packed, builds = _sweep_over_a_stranded_first_candidate(
@@ -20895,7 +20950,7 @@ def test_the_sweep_never_solves_the_same_window_twice(
     session = OperatorSession()
     keys: list[tuple[int, int, frozenset[int]]] = []
 
-    def recording(*_args: object, **kwargs: object) -> freeform._Pack:
+    def recording(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         window = kwargs["window"]
         assert isinstance(window, frozenset)
         key = (int(str(kwargs["height"])), int(str(kwargs["arrangement"])), window)
@@ -20903,10 +20958,12 @@ def test_the_sweep_never_solves_the_same_window_twice(
         keys.append(key)
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     result, packed, _builds = _sweep_over_a_stranded_first_candidate(
@@ -21147,16 +21204,18 @@ def test_the_freeform_window_counts_the_no_goods_its_model_declined(
     """
     session = OperatorSession()
 
-    def skipping(*_args: object, **kwargs: object) -> freeform._Pack:
+    def skipping(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         on_skipped = kwargs["on_skipped"]
         assert callable(on_skipped)
         on_skipped(2)
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
@@ -21256,14 +21315,16 @@ def test_a_repair_that_fails_again_settles_before_it_asks_for_another_window(
     log: list[str] = []
     session = _RecordingSession(log)
 
-    def solving(*_args: object, **kwargs: object) -> freeform._Pack:
+    def solving(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome:
         log.append("solve")
         seed = kwargs["seed"]
         assert isinstance(seed, freeform._Pack)
-        return replace(
-            seed,
-            at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
-            status="window",
+        return _window_solve_outcome(
+            replace(
+                seed,
+                at={index: (x + 3, y) for index, (x, y) in seed.at.items()},
+                status="window",
+            )
         )
 
     result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
@@ -21551,7 +21612,7 @@ def test_a_window_launches_at_a_width_the_band_scan_will_not_target(
         targets.append(kwargs["band_target_width"])
         return frozenset({0})
 
-    def refuse(*_args: object, **kwargs: object) -> freeform._Pack | None:
+    def refuse(*_args: object, **kwargs: object) -> freeform._PackSolveOutcome | None:
         targets.append(kwargs["width_target"])
         return None
 
@@ -22859,3 +22920,399 @@ def test_prepared_routing_bound_omits_direct_and_prelinked_route_demand() -> Non
     assert bound.component_count == 0
     assert bound.route_floor == 0
     assert bound.total == 0
+
+
+_BROKE7_URL = (
+    "https://factoriolab.github.io/dsp/list?"
+    "z=eJxNzrkOwjAQBNC.cTHV2lyVm7EQHSJIQFxCSAFJFCncFP52FCCJuzdazWhrywe0EVVbZtAigG59"
+    "juwHzzAW6Q.EqA9bTCVqm87XgcxgJp1fbffntN3.-xJ5F5n7KLy.H58OuaVq8qddweOIAjdwCW7"
+    "AFCwCS7gFXBLcWlVVY31gmIdE3a3WH6pCPHY_&v=11"
+)
+_BROKE7_REFUSING_ORIGINS = (
+    (58, 0),
+    (23, 9),
+    (29, 1),
+    (65, 9),
+    (44, 9),
+    (4, 0),
+    (3, 9),
+)
+_BROKE7_SWAPPED_ORIGINS = (
+    (58, 0),
+    (44, 9),
+    (29, 1),
+    (65, 9),
+    (23, 9),
+    (4, 0),
+    (3, 9),
+)
+_BROKE7_RECORDED_PACKS = (
+    (36, 54, ((4, 0), (4, 9), (4, 18), (4, 26), (33, 0), (33, 9), (32, 18)), True),
+    (45, 42, ((4, 17), (4, 26), (4, 9), (25, 26), (4, 35), (4, 0), (26, 35)), False),
+    (57, 40, ((4, 8), (4, 17), (4, 35), (4, 1), (4, 26), (4, 43), (24, 0)), True),
+    (28, 61, ((25, 9), (4, 18), (4, 1), (25, 18), (4, 9), (33, 0), (45, 18)), True),
+    (21, 82, _BROKE7_REFUSING_ORIGINS, True),
+)
+
+
+def _broke7_spec() -> BuildSpec:
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
+
+    return next(
+        candidate
+        for candidate in build_candidates(
+            load_vendored(),
+            parse_url(_BROKE7_URL),
+            candidate_policies=DEFAULT_CANDIDATE_POLICIES,
+        ).candidates
+        if candidate.label == "all-products"
+    )
+
+
+def _broke7_fixture() -> tuple[BuildSpec, list[Strip], freeform._Pack, freeform._Pack]:
+    spec = _broke7_spec()
+    strips = plan_strips(spec)
+    assert [_box(strip) for strip in strips] == [
+        (25, 9),
+        (21, 9),
+        (29, 8),
+        (21, 7),
+        (21, 9),
+        (25, 9),
+        (19, 8),
+    ]
+    refusing = freeform._Pack(
+        at=dict(enumerate(_BROKE7_REFUSING_ORIGINS)),
+        width=82,
+        height=21,
+        status="fixed-refusing",
+    )
+    swapped = replace(
+        refusing,
+        at=dict(enumerate(_BROKE7_SWAPPED_ORIGINS)),
+        status="fixed-equal-box-swap",
+    )
+    return spec, strips, refusing, swapped
+
+
+def _box_cells(strips: Sequence[Strip], pack: freeform._Pack) -> frozenset[tuple[int, int]]:
+    return frozenset(
+        (x, y)
+        for index, strip in enumerate(strips)
+        for x in range(
+            pack.at[index][0] - strip.west_channel,
+            pack.at[index][0] - strip.west_channel + _box(strip)[0],
+        )
+        for y in range(pack.at[index][1], pack.at[index][1] + _box(strip)[1])
+    )
+
+
+def _access_demand(
+    cell: Cell,
+    kind: freeform.PortAccessKind,
+    *,
+    belt: int = 0,
+    strip_index: int | None = 0,
+) -> freeform.PortAccessDemand:
+    return freeform.PortAccessDemand(
+        cell=cell,
+        kind=kind,
+        item="ore",
+        belt=belt,
+        strip_index=strip_index,
+        columns=1,
+    )
+
+
+def test_prepare_holds_external_access_before_coater_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = freeform._place_coaters
+    observed: list[tuple[freeform.PortAccessCorridor, ...]] = []
+
+    def inspect_first_hold(
+        canvas: _Canvas,
+        *args: object,
+        **kwargs: object,
+    ) -> list[freeform.CoaterSupplyPort]:
+        observed.extend(canvas.port_corridors.values())
+        assert any(
+            corridor.kind is freeform.PortAccessKind.BOUNDARY_ARRIVAL
+            for corridors in canvas.port_corridors.values()
+            for corridor in corridors
+        ), "the pre-coater hold omitted every external-only boundary arrival"
+        return original(canvas, *args, **kwargs)
+
+    monkeypatch.setattr(freeform, "_place_coaters", inspect_first_hold)
+    spec = proliferated_spec()
+    strips = plan_strips(spec)
+    _prepare_routing_problem(
+        spec,
+        strips,
+        _greedy_pack(strips, _height_seed(strips)),
+        policy=BandPolicy("portable"),
+        power=False,
+    )
+    assert observed
+
+
+def test_boundary_port_physical_claim_counts() -> None:
+    source = _Port(0, 0, 0, 0, 0)
+    shared_source = _Port(1, 4, 0, 4, 4)
+    first_sink = _Port(2, 8, 0, 8, 8)
+    both_fed_sink = _Port(3, 12, 0, 12, 12)
+    early_output = _Port(4, 16, 0, 16, 16)
+    trunk_root = _Port(5, 20, 0, 20, 20)
+    nets = (
+        _Net(source, first_sink, "ore"),
+        _Net(shared_source, first_sink, "ore"),
+        _Net(shared_source, both_fed_sink, "ore"),
+        _Net(trunk_root, both_fed_sink, "ore"),
+    )
+    inventory = freeform._port_access_inventory(
+        nets,
+        boundary_inputs=(
+            ("pure-input", _Port(6, 24, 0, 24, 24), 6),
+            ("ore", both_fed_sink, 3),
+            ("ore", trunk_root, None),
+        ),
+        boundary_outputs=(("product", early_output), ("ore", shared_source)),
+        late_output_belts={shared_source.belt},
+        shared_boundary_root_belts={trunk_root.belt},
+        strip_of_belt={belt: belt for belt in range(7)},
+    )
+    counts = {
+        cell: tuple(sorted(demand.kind.value for demand in inventory.demands if demand.cell == cell))
+        for cell in {demand.cell for demand in inventory.demands}
+    }
+    assert counts[(24, 0, 0)] == ("boundary-arrival",)
+    assert counts[(16, 0, 0)] == ("early-boundary-departure",)
+    assert counts[(4, 0, 0)] == ("internal-departure",)
+    assert counts[(12, 0, 0)] == ("boundary-arrival", "internal-arrival")
+    assert counts[(20, 0, 0)] == ("boundary-arrival",)
+    assert shared_source.belt in inventory.late_output_belts
+
+
+def _corridor_scene(*, internal: bool = False) -> tuple[_Canvas, freeform.PortAccessDemand]:
+    canvas = _Canvas(limit=(0, 0, 6, 6))
+    port_cell = (3, 3, 0)
+    port = canvas.add(_belt(3, 3))
+    walls = ((4, 2), (4, 4), (5, 2), (5, 4), (6, 3), (3, 2), (3, 4))
+    for x, y in walls:
+        canvas.add(_belt(x, y))
+    canvas.keep_out.update((*walls, (3, 3)))
+    kind = (
+        freeform.PortAccessKind.INTERNAL_DEPARTURE
+        if internal
+        else freeform.PortAccessKind.BOUNDARY_ARRIVAL
+    )
+    return canvas, _access_demand(port_cell, kind, belt=port)
+
+
+def test_boundary_access_rematches_away_from_unreachable_first_corridor() -> None:
+    canvas, demand = _corridor_scene()
+    reservation = freeform._reserve_port_access(
+        canvas,
+        (demand,),
+        boundary=((0, 3, 0),),
+    )
+    assert reservation.complete
+    corridor = dict(reservation.assigned)[demand]
+    assert corridor.access == (2, 3, 0)
+    assert not reservation.evidence
+
+
+def test_internal_only_enclosed_ports_are_not_boundary_filtered() -> None:
+    canvas, demand = _corridor_scene(internal=True)
+    reservation = freeform._reserve_port_access(
+        canvas,
+        (demand,),
+        boundary=((0, 3, 0),),
+    )
+    assert reservation.complete
+    assert dict(reservation.assigned)[demand].access == (4, 3, 0)
+    assert not reservation.evidence
+
+
+def test_two_reachable_boundary_claims_are_jointly_rematched() -> None:
+    first = _access_demand((0, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=1)
+    second = _access_demand((4, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL, belt=2)
+    shared = (2, 0, 0)
+    matched = freeform._match_access_corridors(
+        (first, second),
+        {
+            first: (((1, 0, 0), shared), ((0, 1, 0), (0, 2, 0))),
+            second: (((3, 0, 0), shared), ((4, 1, 0), (4, 2, 0))),
+        },
+    )
+    assert set(matched) == {first, second}
+    occupied = {
+        cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)
+    }
+    assert len(occupied) == 4
+
+
+def test_true_no_complete_boundary_matching_is_exhaustive_static_access() -> None:
+    canvas, demand = _corridor_scene()
+    canvas.add(_belt(2, 3))
+    reservation = freeform._reserve_port_access(
+        canvas,
+        (demand,),
+        boundary=((0, 3, 0),),
+    )
+    assert not reservation.complete
+    assert reservation.missing == (demand,)
+    assert reservation.evidence[0].exhaustive
+    assert reservation.evidence[0].reachable_options == 0
+
+
+def test_boundary_corner_claim_already_on_perimeter_remains_reachable() -> None:
+    canvas = _Canvas(limit=(0, 0, 4, 4))
+    belt = canvas.add(_belt(1, 1))
+    demand = _access_demand(
+        (1, 1, 0),
+        freeform.PortAccessKind.EARLY_BOUNDARY_DEPARTURE,
+        belt=belt,
+    )
+    reservation = freeform._reserve_port_access(
+        canvas,
+        (demand,),
+        boundary=((0, 1, 0), (1, 0, 0)),
+    )
+    assert reservation.complete
+
+
+def test_self_consuming_requested_output_routes_from_late_tail() -> None:
+    source = _Port(0, 1, 1, 1, 1)
+    destination = _Port(1, 4, 1, 4, 4)
+    inventory = freeform._port_access_inventory(
+        (_Net(source, destination, "product"),),
+        boundary_outputs=(("product", source),),
+        late_output_belts={source.belt},
+        strip_of_belt={0: 0, 1: 1},
+    )
+    assert tuple(
+        demand.kind for demand in inventory.demands if demand.cell == (1, 1, 0)
+    ) == (freeform.PortAccessKind.INTERNAL_DEPARTURE,)
+    assert source.belt in inventory.late_output_belts
+
+    canvas = _Canvas(limit=(0, 0, 8, 4))
+    source_index = canvas.add(_belt(1, 1, item="product"))
+    tail_index = canvas.add(_belt(5, 1, item="product"))
+    canvas.buildings[source_index] = _relink(canvas.buildings[source_index], output_obj=tail_index)
+    output = _Net(
+        _Port(source_index, 1, 1, 1, 1),
+        _Port(source_index, 1, 1, 1, 1),
+        "product",
+    )
+    late = freeform._output_tail_nets(canvas, (output,))
+    assert len(late) == 1
+    assert late[0].source.belt == tail_index
+
+
+def test_broke7_boundary_access_rematches_equal_box_pair() -> None:
+    spec, strips, formerly_refusing, swapped = _broke7_fixture()
+    assert formerly_refusing.width == swapped.width
+    assert formerly_refusing.height == swapped.height
+    assert sum(width * height for width, height in map(_box, strips)) == 1359
+    assert _box_cells(strips, formerly_refusing) == _box_cells(strips, swapped)
+
+    first = _prepare_routing_problem(
+        spec, strips, formerly_refusing, policy=BandPolicy("portable"), power=False
+    )
+    second = _prepare_routing_problem(
+        spec, strips, swapped, policy=BandPolicy("portable"), power=False
+    )
+    assert not first.preparation_failures
+    assert not second.preparation_failures
+    assert any(
+        demand.kind is freeform.PortAccessKind.BOUNDARY_ARRIVAL
+        and demand.item == "iron-ingot"
+        and demand.cell == (19, 10, 0)
+        for demand in first.port_access_demands
+    )
+
+
+@pytest.mark.parametrize(("height", "width", "origins", "routes"), _BROKE7_RECORDED_PACKS)
+def test_broke7_recorded_pack_outcomes_after_boundary_role_repair(
+    height: int,
+    width: int,
+    origins: tuple[tuple[int, int], ...],
+    routes: bool,
+) -> None:
+    spec = _broke7_spec()
+    strips = plan_strips(spec)
+    pack = freeform._Pack(
+        at=dict(enumerate(origins)),
+        width=width,
+        height=height,
+        status="recorded-post-fix-control",
+    )
+    built = _build(
+        spec,
+        strips,
+        pack,
+        policy=BandPolicy("portable"),
+        power=False,
+        route=True,
+        budget={"left": 50_000_000},
+    )
+    if routes:
+        assert built.routing.status is DetailedRouteStatus.ROUTED
+    else:
+        assert built.routing.status is DetailedRouteStatus.STRANDED
+        assert not built.routing.exhaustive
+        assert all(
+            failure.kind is not RouteFailureKind.STATIC_ACCESS
+            for failure in built.routing.failures
+        )
+
+
+def test_port_access_cancellation_inside_candidate_scan_restores_canvas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canvas, demand = _corridor_scene()
+    sentinel = (0, 0, 0)
+    old_corridor = freeform.PortAccessCorridor((0, 1, 0), (0, 2, 0))
+    canvas.reserved = {(0, 1, 0): sentinel, (0, 2, 0): sentinel}
+    canvas.port_corridors = {sentinel: (old_corridor,)}
+    stopped = False
+
+    def stop_after_search(*_args: object, **_kwargs: object) -> freeform._PathSearchResult:
+        nonlocal stopped
+        stopped = True
+        return freeform._PathSearchResult(((2, 3, 0),), None, (), 1)
+
+    monkeypatch.setattr(freeform, "_astar", stop_after_search)
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._reserve_port_access(
+            canvas,
+            (demand,),
+            boundary=((0, 3, 0),),
+            cancelled=lambda: stopped,
+        )
+
+    assert canvas.reserved == {(0, 1, 0): sentinel, (0, 2, 0): sentinel}
+    assert canvas.port_corridors == {sentinel: (old_corridor,)}
+
+
+def test_port_access_cancellation_before_matching_resolve_aborts() -> None:
+    first = _access_demand((0, 0, 0), freeform.PortAccessKind.BOUNDARY_ARRIVAL)
+    stopped = False
+
+    def stop_for_resolve(
+        _assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> tuple[freeform.PortAccessDemand, ...]:
+        nonlocal stopped
+        stopped = True
+        return (first,)
+
+    with pytest.raises(freeform._PreparationDeadline):
+        freeform._match_access_corridors(
+            (first,),
+            {first: (((1, 0, 0), (2, 0, 0)), ((0, 1, 0), (0, 2, 0)))},
+            validate=stop_for_resolve,
+            cancelled=lambda: stopped,
+        )

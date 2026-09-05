@@ -5147,52 +5147,26 @@ def _production_run(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in preparation_parameters.values()
             )
-            accepts_static_cache = (
-                "staged_static_cache" in preparation_parameters or accepts_preparation_keywords
+            preparation_kwargs: dict[str, object] = {
+                "power": power,
+                "policy": band_policy,
+                "ramped": not belt_vertical_construction,
+            }
+            if (
+                "staged_static_cache" in preparation_parameters
+                or accepts_preparation_keywords
+            ):
+                preparation_kwargs["staged_static_cache"] = staged_static_cache
+            if "cancelled" in preparation_parameters or accepts_preparation_keywords:
+                preparation_kwargs["cancelled"] = deadline_reached
+            if "deadline" in preparation_parameters or accepts_preparation_keywords:
+                preparation_kwargs["deadline"] = deadline
+            prepared = _prepare_routing_problem(
+                spec,
+                list(selected),
+                pack,
+                **preparation_kwargs,
             )
-            accepts_cancelled = (
-                "cancelled" in preparation_parameters or accepts_preparation_keywords
-            )
-            if accepts_static_cache and accepts_cancelled:
-                prepared = _prepare_routing_problem(
-                    spec,
-                    list(selected),
-                    pack,
-                    power=power,
-                    policy=band_policy,
-                    ramped=not belt_vertical_construction,
-                    staged_static_cache=staged_static_cache,
-                    cancelled=deadline_reached,
-                )
-            elif accepts_static_cache:
-                prepared = _prepare_routing_problem(
-                    spec,
-                    list(selected),
-                    pack,
-                    power=power,
-                    policy=band_policy,
-                    ramped=not belt_vertical_construction,
-                    staged_static_cache=staged_static_cache,
-                )
-            elif accepts_cancelled:
-                prepared = _prepare_routing_problem(
-                    spec,
-                    list(selected),
-                    pack,
-                    power=power,
-                    policy=band_policy,
-                    ramped=not belt_vertical_construction,
-                    cancelled=deadline_reached,
-                )
-            else:
-                prepared = _prepare_routing_problem(
-                    spec,
-                    list(selected),
-                    pack,
-                    power=power,
-                    policy=band_policy,
-                    ramped=not belt_vertical_construction,
-                )
         except _PreparationDeadline, finalize.ProjectionCancelled:
             return _ProductionCandidate(
                 height=height,
