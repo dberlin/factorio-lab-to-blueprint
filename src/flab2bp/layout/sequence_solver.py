@@ -4039,27 +4039,55 @@ def _is_running_narrowest(width: int, narrowest_width: int | None) -> bool:
     return narrowest_width is None or width <= narrowest_width
 
 
+#: ``(target, producer west channel, consumer west channel)`` -> refined target.
+#:
+#: The refinement is a pure function of exactly those three, and the annealer
+#: re-runs it for every target in every state while a move changes one or two
+#: strips.  Recomputing is not cheap: ``replace(DirectInsertTarget)`` re-runs
+#: :meth:`DirectInsertTarget.__post_init__`, whose three generator passes over
+#: ``origin_deltas`` were 5.8 s of 31 s under cProfile on ``gravity-matrix``*200.
+#: ``None`` records a target the offsets DROP, so a dropped target is not
+#: re-derived either.  Bounded like the freeform geometry memo: clearing on
+#: overflow costs recomputation and keeps the answer exact.
+_REFINED_TARGET_MEMO: dict[tuple[DirectInsertTarget, int, int], DirectInsertTarget | None] = {}
+_REFINED_TARGET_MEMO_LIMIT = 65536
+
+
 def _refinement_direct_targets(
     direct_targets: tuple[DirectInsertTarget, ...],
     strips: Sequence[Strip],
 ) -> tuple[DirectInsertTarget, ...]:
-    """Express physical strip spans relative to CP box origins."""
+    """Express physical strip spans relative to CP box origins.
+
+    Memoized on :data:`_REFINED_TARGET_MEMO`; ``DirectInsertTarget`` is a frozen
+    slots dataclass of ints and tuples, so the target itself is the key.
+    """
     adjusted: list[DirectInsertTarget] = []
     for target in direct_targets:
         producer_offset = strips[target.producer].west_channel
         consumer_offset = strips[target.consumer].west_channel
-        producer_span = target.producer_span + producer_offset - consumer_offset
-        consumer_span = target.consumer_span + consumer_offset - producer_offset
-        origin_shift = producer_offset - consumer_offset
-        if producer_span > 0 and consumer_span > 0:
-            adjusted.append(
+        memo_key = (target, producer_offset, consumer_offset)
+        if memo_key in _REFINED_TARGET_MEMO:
+            refined = _REFINED_TARGET_MEMO[memo_key]
+        else:
+            producer_span = target.producer_span + producer_offset - consumer_offset
+            consumer_span = target.consumer_span + consumer_offset - producer_offset
+            origin_shift = producer_offset - consumer_offset
+            refined = (
                 replace(
                     target,
                     producer_span=producer_span,
                     consumer_span=consumer_span,
                     origin_deltas=tuple(delta + origin_shift for delta in target.origin_deltas),
                 )
+                if producer_span > 0 and consumer_span > 0
+                else None
             )
+            if len(_REFINED_TARGET_MEMO) >= _REFINED_TARGET_MEMO_LIMIT:
+                _REFINED_TARGET_MEMO.clear()
+            _REFINED_TARGET_MEMO[memo_key] = refined
+        if refined is not None:
+            adjusted.append(refined)
     return tuple(adjusted)
 
 

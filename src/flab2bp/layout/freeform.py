@@ -2770,7 +2770,107 @@ def _direct_column_deltas(
     return tuple(delta_origin + degree for degree, pair_count in enumerate(present) if pair_count)
 
 
+#: ``(producer geometry, consumer geometry, lane, item)`` -> origin deltas.
+#:
+#: The sequence-pair annealer asks :func:`_direct_net_candidates` for these once
+#: per state, for every net (45k calls on ``gravity-matrix``*200), while a move
+#: changes one or two strips -- so nearly every ask repeats an earlier one, and
+#: the answer depends on nothing but the two strips' geometry.  Bounded so a
+#: long audit worker cannot grow it without limit; clearing on overflow costs
+#: recomputation and keeps the answer exact.
+_DIRECT_ORIGIN_DELTAS_MEMO: dict[tuple[object, ...], tuple[int, ...]] = {}
+_DIRECT_ORIGIN_DELTAS_MEMO_LIMIT = 65536
+
+
+def _direct_geometry_key(strip: Strip) -> tuple[object, ...] | None:
+    """Everything :func:`_direct_origin_deltas` reads off one strip.
+
+    THE FIELDS ARE THE READ SET, not the strip: two strips agreeing on all of
+    them cannot disagree about the deltas, and a field left out here is a wrong
+    cached answer.  Taken from ``_output_attachment_plan``, ``lane_of_input``,
+    ``_input_attachment_plan``, ``input_lane_tiles`` and
+    :func:`_direct_clear_columns`, plus the ``width`` this function passes:
+
+    * ``machines``, ``pw`` -- ``width``, the per-machine column stride in
+      :func:`_direct_clear_columns`, and ``input_lane_tiles``' last tap.
+    * ``ph`` -- ``band_rows``, hence ``first_row_below_band``.
+    * ``item_id``, ``yaw`` -- the probed building, its slot poses, its belt
+      docks, and ``takes_belt_ports``.
+    * ``cargo_domain`` -- the logical lane a flank-output plan synthesizes.
+    * ``in_above``, ``in_below`` -- ``lane_of_input``, the lane's side and
+      index, ``column_offset``, and ``machine_row``.
+    * ``out_lanes`` -- the south side's lane index, via ``column_offset``.
+    * ``lane_plan`` -- ``machine_row``.
+    * ``attachment_plan`` -- both attachment-plan lookups.
+    * ``flank_outputs`` -- the synthesized-plan branch, ``machine_row``, and
+      ``column_offset``.
+
+    Deliberately absent because nothing here reads them: ``group_key``,
+    ``recipe_id`` (error text only), ``model_index``, ``mw``, ``mh``,
+    ``box_height``, ``physical_variant`` (the gate below, but never read -- the
+    lane and attachment plans it produced are carried on the strip and are in
+    the key already), ``port_dock_plan`` (``input_lane_tiles`` probes the
+    building's docks, not the strip's plan), ``mode_params``, ``family_id``,
+    ``machine_start``, ``west_channel``, ``tail_extension`` and ``pilers``.
+    Every field kept is hashable -- strings, ints, floats, an enum, and frozen
+    dataclasses of those.
+
+    ``None`` means "do not memo": a strip without a realized pose belongs to a
+    compatibility family, and those are rare enough not to be worth a key.
+    """
+    if strip.physical_variant is None:
+        return None
+    return (
+        strip.machines,
+        strip.pw,
+        strip.ph,
+        strip.item_id,
+        strip.yaw,
+        strip.cargo_domain,
+        strip.in_above,
+        strip.in_below,
+        strip.out_lanes,
+        strip.lane_plan,
+        strip.attachment_plan,
+        strip.flank_outputs,
+    )
+
+
 def _direct_origin_deltas(
+    source: Strip,
+    destination: Strip,
+    source_lane: int,
+    item: str,
+) -> tuple[int, ...]:
+    """Consumer origin offsets with an occupied, sorter-clear shared column.
+
+    Memoized on :func:`_direct_geometry_key` because the annealer re-asks the
+    same question for every unmoved strip pair in every state.  An empty answer
+    is cached too -- it is the common one, and recomputing it costs the same
+    three attachment-plan scans as a non-empty one.
+    """
+    source_key = _direct_geometry_key(source)
+    destination_key = _direct_geometry_key(destination)
+    memo_key: tuple[object, ...] | None = (
+        None
+        if source_key is None or destination_key is None
+        else (source_key, destination_key, source_lane, item)
+    )
+    if memo_key is not None:
+        cached = _DIRECT_ORIGIN_DELTAS_MEMO.get(memo_key)
+        if cached is not None:
+            return cached
+
+    deltas = _direct_origin_deltas_uncached(source, destination, source_lane, item)
+
+    if memo_key is not None:
+        if len(_DIRECT_ORIGIN_DELTAS_MEMO) >= _DIRECT_ORIGIN_DELTAS_MEMO_LIMIT:
+            _DIRECT_ORIGIN_DELTAS_MEMO.clear()
+        _DIRECT_ORIGIN_DELTAS_MEMO[memo_key] = deltas
+    return deltas
+
+
+def _direct_origin_deltas_uncached(
     source: Strip,
     destination: Strip,
     source_lane: int,

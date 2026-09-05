@@ -4694,6 +4694,61 @@ def test_refinement_direct_targets_encode_strip_channel_offsets() -> None:
     )
 
 
+def test_refinement_direct_targets_memo_returns_equal_targets() -> None:
+    target = DirectInsertTarget(
+        key=(0, 1),
+        producer=0,
+        consumer=1,
+        producer_row=0,
+        consumer_row=0,
+        producer_span=6,
+        consumer_span=6,
+        origin_deltas=(-2, 0, 3),
+    )
+    strips = [SimpleNamespace(west_channel=2), SimpleNamespace(west_channel=1)]
+
+    sequence_solver_module._REFINED_TARGET_MEMO.clear()
+    first = sequence_solver_module._refinement_direct_targets((target,), strips)
+    assert (target, 2, 1) in sequence_solver_module._REFINED_TARGET_MEMO
+    second = sequence_solver_module._refinement_direct_targets((target,), strips)
+
+    assert (
+        first
+        == second
+        == (
+            DirectInsertTarget(
+                key=(0, 1),
+                producer=0,
+                consumer=1,
+                producer_row=0,
+                consumer_row=0,
+                producer_span=7,
+                consumer_span=5,
+                origin_deltas=(-1, 1, 4),
+            ),
+        )
+    )
+
+
+def test_refinement_direct_targets_memo_remembers_a_dropped_target() -> None:
+    target = DirectInsertTarget(
+        key=(0, 1),
+        producer=0,
+        consumer=1,
+        producer_row=0,
+        consumer_row=0,
+        producer_span=1,
+        consumer_span=6,
+        origin_deltas=(0,),
+    )
+    strips = [SimpleNamespace(west_channel=0), SimpleNamespace(west_channel=5)]
+
+    sequence_solver_module._REFINED_TARGET_MEMO.clear()
+
+    assert sequence_solver_module._refinement_direct_targets((target,), strips) == ()
+    assert sequence_solver_module._REFINED_TARGET_MEMO[(target, 0, 5)] is None
+
+
 def test_speculative_closure_allowance_reserves_half_for_fallback() -> None:
     speculative_candidates = 1 + 8 + 1
     allowance = sequence_solver_module._speculative_exact_allowance(

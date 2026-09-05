@@ -468,6 +468,12 @@ def test_direct_origin_deltas_use_compiled_kernel_with_exact_controls(
 class _DirectOriginStripStub:
     def __init__(self, width: int) -> None:
         self.width = width
+        #: No realized pose, so ``_direct_geometry_key`` declines to memo this
+        #: strip.  That is what these cases need: they monkeypatch
+        #: ``_direct_clear_columns`` to return DIFFERENT columns per case while
+        #: the stubs' geometry is otherwise identical, so a cached answer from
+        #: an earlier case would be returned for a later one.
+        self.physical_variant: object | None = None
 
     def _output_attachment_plan(self, _lane: int) -> object:
         return object()

@@ -2132,6 +2132,21 @@ def test_mixed_spray_domain_direct_candidate_is_clean_and_exact() -> None:
     )
 
 
+def test_direct_origin_deltas_memo_is_transparent() -> None:
+    spec = spray_domain_spec(clean=True, sprayed=True)
+    strips = plan_strips(spec, strip_len=6)
+
+    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+    first = _direct_net_candidates(strips, spec)
+    assert freeform._DIRECT_ORIGIN_DELTAS_MEMO or all(
+        strip.physical_variant is None for strip in strips
+    )
+    second = _direct_net_candidates([replace(strip) for strip in strips], spec)
+    assert first == second
+    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+    assert _direct_net_candidates(strips, spec) == first
+
+
 def test_requested_output_is_unsprayed_beside_proliferated_internal_lane() -> None:
     spec = spray_domain_spec(clean=False, sprayed=True, boundary=True)
 
