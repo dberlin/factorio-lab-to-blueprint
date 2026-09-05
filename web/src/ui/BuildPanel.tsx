@@ -16,8 +16,10 @@ import {
   DEFAULT_OPTIONS,
   type Job,
   ProliferatorTier,
+  projectSolve,
   RequestStrategy,
   runBuild,
+  WARN_TOTAL_SECONDS,
 } from '../api/build';
 import { useBlueprint } from '../state/BlueprintProvider';
 import { BuildReportPanel, ProjectionFailures, RefusalReport } from './BuildReport';
@@ -120,9 +122,7 @@ export function BuildPanel() {
     setCopyError(null);
     load(attempt.blueprint);
   };
-  const effectiveCandidateCount =
-    options.flow.trim() || options.fetch_flow ? 1 : options.candidate_policies.length;
-  const strategyCount = options.strategy === 'best' ? 2 : 1;
+  const projected = projectSolve(options);
 
   /**
    * The clipboard is a permission, not a guarantee: an insecure origin, a
@@ -259,6 +259,9 @@ export function BuildPanel() {
           )}
         </fieldset>
 
+        {/* No `max`: a budget is how long YOU want it to search, and the
+            server takes any positive finite number. A total that will take a
+            while is warned about below, never refused. */}
         <label htmlFor={budgetId}>Budget (s/layout)</label>
         <input
           id={budgetId}
@@ -338,12 +341,26 @@ export function BuildPanel() {
       </div>
 
       <p className="note">
-        Budget is per layout. <code>{options.strategy}</code> runs {strategyCount}{' '}
-        {strategyCount === 1 ? 'layout' : 'layouts'} per candidate, so {effectiveCandidateCount}{' '}
-        candidate{effectiveCandidateCount === 1 ? '' : 's'} × {strategyCount} strategies ×{' '}
-        {options.budget_s}s is up to {effectiveCandidateCount * strategyCount * options.budget_s}s
-        of solving, plus rates, validation and encoding on top.
+        Budget is per layout. <code>{options.strategy}</code> runs {projected.strategies}{' '}
+        {projected.strategies === 1 ? 'layout' : 'layouts'} per candidate, so {projected.candidates}{' '}
+        candidate{projected.candidates === 1 ? '' : 's'} × {projected.strategies} strategies ×{' '}
+        {options.budget_s}s is up to {projected.searchS}s of solving, plus rates, validation and
+        encoding on top.
       </p>
+
+      {/* The budget box has no ceiling — how long to search is your call, and
+          nothing here or on the server clamps it. But the number in that box is
+          per LAYOUT, and the default `best` request runs six of them, so a
+          budget that reads as "a minute" is really most of ten. Saying so is
+          the whole job here: the Build button stays enabled. */}
+      {projected.totalS > WARN_TOTAL_SECONDS && (
+        <output className="note warn" data-testid="budget-warning">
+          That is a long build: about {projected.totalS}s of solving in total — {projected.attempts}{' '}
+          layout{projected.attempts === 1 ? '' : 's'} × ({options.budget_s}s per layout +{' '}
+          {projected.graceS}s to finish each one) — past the {WARN_TOTAL_SECONDS}s mark. It will
+          still run, and one build runs at a time.
+        </output>
+      )}
 
       {busy && job && <Progress job={job} />}
 

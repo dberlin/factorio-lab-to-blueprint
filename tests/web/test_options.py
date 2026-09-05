@@ -1,4 +1,8 @@
-"""Every bound on a submitted build is a refusal, never a clamp."""
+"""Every bound on a submitted build is a refusal, never a clamp.
+
+The solver budget is the exception, and deliberately so: how long to search is
+the caller's call, so a long one is reported back as a warning and run.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ import pytest
 
 from flab2bp import pipeline
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
-from flab2bp.web.jobs import MAX_SOLVER_SECONDS, InvalidOptions, Options, parse_options
+from flab2bp.web.jobs import WARN_TOTAL_SECONDS, InvalidOptions, Options, parse_options
 from flab2bp.web.payload import JsonValue
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
@@ -189,28 +193,35 @@ def test_web_strategies_are_the_public_subset() -> None:
     assert parse_options({"url": URL, "strategy": "sequence-pair"}).strategy == "sequence-pair"
 
 
-def test_the_candidate_policy_ceiling_is_on_the_product_not_the_budget() -> None:
-    """The ceiling follows the selected policies and strategies actually run."""
-    best_budget = MAX_SOLVER_SECONDS / (
-        len(DEFAULT_CANDIDATE_POLICIES) * pipeline.PRODUCTION_STRATEGY_COUNT
-    )
-    at_the_edge = parse_options(
-        {
-            "url": URL,
-            "candidate_policies": [policy.value for policy in DEFAULT_CANDIDATE_POLICIES],
-            "budget_s": best_budget,
-        }
-    )
-    assert at_the_edge.solver_ceiling_s == pytest.approx(MAX_SOLVER_SECONDS)
+def test_a_long_budget_is_accepted_and_warned_about_rather_than_refused() -> None:
+    """How long to search is the caller's call, so it is never clamped."""
+    options = parse_options({"url": URL, "budget_s": 1200})
+    assert options.budget_s == 1200.0
+    assert options.warning is not None
+    # The warning has to show BOTH numbers, or the multiplication that turned
+    # 1200 into over an hour is invisible.
+    assert "1200s per layout" in options.warning
+    assert f"{options.projected_total_s:g}s" in options.warning
 
-    with pytest.raises(InvalidOptions, match="ceiling"):
-        parse_options(
-            {
-                "url": URL,
-                "candidate_policies": [policy.value for policy in DEFAULT_CANDIDATE_POLICIES],
-                "budget_s": best_budget + 1.0,
-            }
-        )
+
+def test_the_warning_is_on_the_projected_total_not_the_per_layout_budget() -> None:
+    """Six attempts of a 45s budget is over the mark; three of them are not."""
+    attempts = len(DEFAULT_CANDIDATE_POLICIES) * pipeline.PRODUCTION_STRATEGY_COUNT
+    over = parse_options({"url": URL, "budget_s": 45.0})
+    assert over.projected_total_s == pytest.approx(attempts * (45.0 + over.completion_grace_s))
+    assert over.projected_total_s > WARN_TOTAL_SECONDS
+    assert over.warning is not None
+
+    under = parse_options({"url": URL, "budget_s": 45.0, "strategy": "freeform"})
+    assert under.projected_total_s < WARN_TOTAL_SECONDS
+    assert under.warning is None
+
+
+def test_the_projected_total_charges_every_attempt_its_completion_grace() -> None:
+    """A budget is what the SEARCH gets; compaction and encoding run past it."""
+    best = parse_options({"url": URL, "budget_s": 10.0})
+    assert best.completion_grace_s > 0
+    assert best.projected_total_s > best.solver_ceiling_s
 
 
 def test_best_ceiling_follows_the_selected_candidate_policy_subset() -> None:
@@ -262,15 +273,16 @@ def test_pinned_flow_effective_candidate_count_and_ceiling_are_one(
     assert options.solver_ceiling_s == pipeline.PRODUCTION_STRATEGY_COUNT * 5.0
 
 
-def test_candidate_ceiling_error_reports_the_effective_pinned_count() -> None:
-    with pytest.raises(InvalidOptions, match=r"1 candidate\(s\)"):
-        parse_options(
-            {
-                "url": URL,
-                "fetch_flow": True,
-                "budget_s": MAX_SOLVER_SECONDS,
-            }
-        )
+def test_the_warning_reports_the_effective_pinned_count() -> None:
+    options = parse_options(
+        {
+            "url": URL,
+            "fetch_flow": True,
+            "budget_s": WARN_TOTAL_SECONDS,
+        }
+    )
+    assert options.warning is not None
+    assert "1 candidate(s)" in options.warning
 
 
 class TestFlowIsAnOptionNow:

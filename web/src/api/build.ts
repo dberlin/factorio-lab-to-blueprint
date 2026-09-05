@@ -240,6 +240,68 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   flow: '',
 };
 
+/** Active production strategies — `pipeline.PRODUCTION_STRATEGY_COUNT`. */
+const PRODUCTION_STRATEGY_COUNT = 2;
+
+/**
+ * What ONE layout attempt may spend on top of its search budget, in seconds.
+ *
+ * These mirror `RACE_COMPLETION_GRACE_S` (`layout/strategy_race.py`) and
+ * `ATOMIC_COMPLETION_GRACE_S` (`layout/base.py`). The budget bounds the SEARCH;
+ * compaction, projection, validation and encoding run after it inside the
+ * attempt's own hard wall, and that wall is budget + grace. `best` is submitted
+ * raced and carries the race's grace; an explicit strategy solves serially and
+ * carries the atomic one.
+ */
+const RACE_COMPLETION_GRACE_S = 6;
+const ATOMIC_COMPLETION_GRACE_S = 5;
+
+/**
+ * Past this projected TOTAL the panel says so out loud. It is a warning and not
+ * a bound — `WARN_TOTAL_SECONDS` in `web/jobs.py` is the same number and does
+ * the same thing. Nothing here or there clamps or refuses a budget: how long to
+ * search is the user's call.
+ */
+export const WARN_TOTAL_SECONDS = 300;
+
+/** What a request will actually cost, and the multipliers that got it there. */
+export interface ProjectedSolve {
+  /** Candidates after flow pinning: a pinned flow collapses the pool to one. */
+  candidates: number;
+  strategies: number;
+  /** Layout attempts: one per candidate per strategy. */
+  attempts: number;
+  /** Completion grace charged to each attempt. */
+  graceS: number;
+  /** Search budgets alone — the server's `solver_ceiling_s`. */
+  searchS: number;
+  /** Every attempt's budget PLUS the grace it may spend finishing. */
+  totalS: number;
+}
+
+/**
+ * The wall clock a request is asking for, before it is submitted.
+ *
+ * The number on the budget box is per LAYOUT, and a default `best` request runs
+ * six of them. Someone typing 60 into it is asking for six minutes, not one, so
+ * the panel does the multiplication rather than leaving it to be discovered.
+ */
+export function projectSolve(options: BuildOptions): ProjectedSolve {
+  const candidates =
+    options.flow.trim() || options.fetch_flow ? 1 : options.candidate_policies.length;
+  const strategies = options.strategy === 'best' ? PRODUCTION_STRATEGY_COUNT : 1;
+  const graceS = options.strategy === 'best' ? RACE_COMPLETION_GRACE_S : ATOMIC_COMPLETION_GRACE_S;
+  const attempts = candidates * strategies;
+  return {
+    candidates,
+    strategies,
+    attempts,
+    graceS,
+    searchS: attempts * options.budget_s,
+    totalS: attempts * (options.budget_s + graceS),
+  };
+}
+
 /** A job has settled when it will never change again. */
 export function isSettled(job: Job): boolean {
   return job.state === 'done' || job.state === 'refused' || job.state === 'error';
