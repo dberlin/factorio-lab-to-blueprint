@@ -8550,7 +8550,7 @@ def _route_all(
     planned_power_sites: Sequence[tuple[int, int]] | None = None,
     junction_frame_bans: Sequence[frozenset[Cell]] = (),
     *,
-    prioritize_source_families: bool = False,
+    prioritize_source_families: bool = True,
 ) -> DetailedRouteResult:
     """Route every net, negotiating congestion across iterations.
 
@@ -10417,9 +10417,9 @@ def _route_all(
         #: Fresh every round, because a wall only exists while the path that
         #: built it does; `history` is where the charge accumulates.
         blame: dict[Cell, float] = {}
-        # Keep each shared-source family contiguous. Compact callers can put
-        # junction-dependent families ahead of singleton trunks; ordinary
-        # packs retain established longest-first routing.
+        # Keep each shared-source family contiguous and route fanout families
+        # before singleton trunks. The first branch must retain a legal merge
+        # frontier for its siblings before an unrelated run consumes it.
         order = sorted(
             range(len(nets)),
             key=lambda i: (
@@ -11194,8 +11194,7 @@ def _match_access_corridors(
     model.minimize(
         sum(ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1))
     )
-    if validate is None:
-        solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
+    solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
     while True:
         status = solve_model()
         use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
@@ -16755,7 +16754,7 @@ def _build_prepared(
     route: bool,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
-    prioritize_source_families: bool = False,
+    prioritize_source_families: bool = True,
 ) -> _BuildResult:
     """Emit, route, and power one already-prepared immutable problem."""
     prelinked_routed = tuple(net.net_id for net in prepared.nets if net.prelinked) if route else ()
