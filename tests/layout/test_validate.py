@@ -4774,7 +4774,7 @@ def test_flow_conservation_fires_when_a_producer_cannot_reach_its_consumers() ->
         "demand": "2",
         "supply": "1",
         "shortfall": "1",
-        "starved": 2,
+        "consumers": 2,
         "lanes": [1],
     }
     assert set(f.buildings) == {15, 16}

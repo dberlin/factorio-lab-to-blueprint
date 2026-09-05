@@ -61,8 +61,8 @@ from flab2bp.layout.freeform import (
     _connect_short_cuts,
     _dests,
     _direct_column_deltas,
-    _direct_origin_deltas,
     _direct_net_candidates,
+    _direct_origin_deltas,
     _DirectCandidate,
     _emit_strip,
     _greedy_pack,
@@ -13175,14 +13175,19 @@ class TestAShardThatCannotFeedItself:
         )
         assert _join_shard_islands([*cut, (10, 11)], supply, demand, F(0)) == []
 
-    def test_what_the_player_belts_in_counts_on_every_island(self) -> None:
-        """`_route_external_inputs` runs an entry belt to EVERY consumer lane,
-        which is the credit `flow.conservation` gives.
-        """
-        supply, demand = {10: F(1), 20: F(1)}, {30: F(1), 31: F(3)}
+    def test_what_the_player_belts_in_is_one_global_allocation(self) -> None:
+        """The one external rate can cover either island's shortfall."""
+        supply, demand = {10: F(3), 20: F(1)}, {30: F(1), 31: F(3)}
         cut = [(10, 30), (20, 31)]
         assert _join_shard_islands(cut, supply, demand, F(0)) == [(10, 31)]
         assert _join_shard_islands(cut, supply, demand, F(2)) == []
+
+    def test_external_supply_is_not_credited_to_each_deficit_island(self) -> None:
+        pairs = [(10, 30), (20, 31), (40, 32)]
+        supply = {10: F(5, 2), 20: F(0), 40: F(0)}
+        demand = {30: F(1), 31: F(3, 2), 32: F(3, 2)}
+
+        assert _join_shard_islands(pairs, supply, demand, F(3, 2)) == [(10, 31)]
 
     def test_the_plan_really_does_starve_a_shard(self) -> None:
         """Verify the instrument: the fixture must contain the defect.

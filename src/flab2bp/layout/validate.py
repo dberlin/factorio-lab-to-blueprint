@@ -5418,11 +5418,11 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
         delivered = _max_flow(graph, source_node, sink_node)
         if delivered >= total_demand:
             continue
-        hungry = sorted(demand_rates)
+        consumers = sorted(demand_rates)
         if (
             delivered == 0
-            and len(hungry) == 1
-            and not predecessors.get(consumer_node(hungry[0]))
+            and len(consumers) == 1
+            and not predecessors.get(consumer_node(consumers[0]))
         ):
             # ``machine.inputs_supplied`` already names this unattached machine.
             continue
@@ -5450,16 +5450,16 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
         yield Finding(
             "flow.conservation",
             Severity.ERROR,
-            f"{len(hungry)} machine(s) consume {want} items/s of {item} but only "
+            f"{len(consumers)} machine(s) consume {want} items/s of {item} but only "
             f"{have} items/s of it can reach them in flow order "
             f"(lanes {lanes[:6] or 'none'}); short by {want - have} items/s",
-            tuple(hungry[:5]),
+            tuple(consumers[:5]),
             {
                 "item": item,
                 "demand": str(want),
                 "supply": str(have),
                 "shortfall": str(want - have),
-                "starved": len(hungry),
+                "consumers": len(consumers),
                 "lanes": lanes,
             },
         )

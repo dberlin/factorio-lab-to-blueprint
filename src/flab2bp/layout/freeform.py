@@ -3061,6 +3061,7 @@ def _direct_origin_deltas_uncached(
         for attachment in destination_plan.attachments
     )
     piled_tail_column = _piled_output_tail_column(source, source_lane)
+    source_columns: tuple[int, ...]
     if piled_tail_column is not None:
         # Emission replaces the original lane with one belt after the piler.
         source_columns = (piled_tail_column,)
@@ -15596,17 +15597,14 @@ def _join_shard_islands(
     each, thirty-six specs: it fires on ``universe-matrix`` alone, on all three
     of its candidates, and adds ONE net per item on two items.
 
-    Islands are chained in order of DESCENDING balance, so each edge runs from
-    the side with surplus to the side without.  ``_connect_short_cuts`` chains
-    in union-find root order instead, which is arbitrary; that is sound for the
-    validator, whose islands are undirected, but a belt is not.  Running the
-    surplus downhill is the arrangement that also works in game.
+    Joins always run from an island with remaining internal surplus to one
+    with remaining deficit.  Largest balances are paired first, with root order
+    as the deterministic tie-breaker, so the repair buys no avoidable edge.
 
     ``pairs`` are belt indices ``(producer lane, consumer lane)`` already
     linked, ``supply``/``demand`` are items/second per lane, and ``external``
-    is what the player belts in -- credited to every island holding a consumer
-    lane, because :func:`_route_external_inputs` runs an entry belt to every one
-    of them, which is the same credit ``flow.conservation`` gives.
+    is the one global rate the player belts in.  It may be allocated among all
+    entry lanes, but it is not independently available to every island.
     """
     parent: dict[int, int] = {}
 
@@ -15644,24 +15642,33 @@ def _join_shard_islands(
 
     balance = {
         r: sum((supply[b] for b in srcs[r]), Fraction(0))
-        + (external if sinks[r] else Fraction(0))
         - sum((demand[b] for b in sinks[r]), Fraction(0))
         for r in roots
     }
-    if all(v >= 0 for v in balance.values()):
+    deficits = {r: -value for r, value in balance.items() if value < 0}
+    remaining_deficit = sum(deficits.values(), Fraction(0))
+    if remaining_deficit <= external:
         return []
+    surpluses = {r: value for r, value in balance.items() if value > 0}
 
-    order = sorted(roots, key=lambda r: (-balance[r], r))
     extra: list[tuple[int, int]] = []
-    for a, b in zip(order, order[1:], strict=False):
-        if not srcs[a] or not sinks[b]:
-            continue
-        extra.append(
-            (
-                min(srcs[a], key=lambda t: (taps[t], t)),
-                min(sinks[b], key=lambda t: (taps[t], t)),
-            )
-        )
+    while remaining_deficit > external and surpluses and deficits:
+        source_root = min(surpluses, key=lambda r: (-surpluses[r], r))
+        sink_root = min(deficits, key=lambda r: (-deficits[r], r))
+        source_belt = min(srcs[source_root], key=lambda belt: (taps[belt], belt))
+        sink_belt = min(sinks[sink_root], key=lambda belt: (taps[belt], belt))
+        extra.append((source_belt, sink_belt))
+        taps[source_belt] += 1
+        taps[sink_belt] += 1
+
+        transferred = min(surpluses[source_root], deficits[sink_root])
+        surpluses[source_root] -= transferred
+        deficits[sink_root] -= transferred
+        remaining_deficit -= transferred
+        if surpluses[source_root] == 0:
+            del surpluses[source_root]
+        if deficits[sink_root] == 0:
+            del deficits[sink_root]
     return extra
 
 
