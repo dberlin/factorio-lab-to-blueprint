@@ -1010,6 +1010,28 @@ def test_any_box_overlap_matches_the_nested_loop() -> None:
         assert geometry_kernel._compiled_any_overlap(queries, targets) is expected
 
 
+def test_a_malformed_box_raises_instead_of_corrupting_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``Box`` with a short ``centre`` must raise, on every backend.
+
+    ``_unpack`` in the compiled kernel indexes ``centre[2]``, and with
+    ``boundscheck=False`` that used to read past the end of a 2-tuple instead
+    of raising -- undefined behaviour that segfaults rather than erroring.
+    The Python reference already raises ``IndexError``; the compiled kernel
+    must agree.
+    """
+    bad = colliders.Box(centre=(0.0, 0.0), half=(1.0, 1.0, 1.0), rot=(0.0, 0.0, 0.0, 1.0))
+    good = colliders.Box(centre=(0.0, 0.0, 0.0), half=(1.0, 1.0, 1.0), rot=(0.0, 0.0, 0.0, 1.0))
+
+    with pytest.raises(IndexError):
+        colliders.obb_overlap(bad, good)
+
+    monkeypatch.setattr(geometry_kernel, "_compiled_obb_overlap", None)
+    with pytest.raises(IndexError):
+        colliders.obb_overlap(bad, good)
+
+
 def test_forced_python_backend_disables_the_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(geometry_kernel, "_compiled_obb_overlap", None)
     monkeypatch.setattr(geometry_kernel, "_compiled_any_overlap", None)

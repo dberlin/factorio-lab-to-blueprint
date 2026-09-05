@@ -1,4 +1,4 @@
-# cython: language_level=3, boundscheck=False, wraparound=False, initializedcheck=False, cdivision=True
+# cython: language_level=3, wraparound=False, initializedcheck=False, cdivision=True
 """The oriented-box separating-axis test, compiled.
 
 A port of ``colliders._obb_overlap_python`` and its helpers ``_qrot``,
