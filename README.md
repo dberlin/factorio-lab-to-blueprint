@@ -1,16 +1,72 @@
 # flab2bp
 
 Turn a [FactorioLab](https://factoriolab.github.io/dsp) URL for Dyson Sphere Program into a
-dense, pasteable DSP blueprint.
+dense, pasteable DSP blueprint. The browser interface is the recommended way to use `flab2bp`:
+it runs the same solver as the CLI and renders the generated blueprint in 3D.
 
-## Requirements and setup
+## Recommended: web interface
+
+### Requirements and setup
 
 - Python 3.14 or newer
 - [uv](https://docs.astral.sh/uv/)
 - [Bun](https://bun.sh/) for the browser interface and TypeScript cross-validation
 
+The viewer's item names, icons, recipes, and building geometry are extracted from the game and
+are not stored in Git. Populate `web/public/assets/` once from a local Dyson Sphere Program
+installation, or copy an already-generated directory from another installation:
+
 ```bash
 uv sync
+cd web
+bun install --frozen-lockfile
+bun run extract-assets "/path/to/Dyson Sphere Program"
+cd ..
+uv run flab2bp-web
+```
+
+Open <http://127.0.0.1:8000>. Skip asset extraction when `web/public/assets/` is already
+populated. `flab2bp-web` builds the front end when necessary; pass `--build` to force a rebuild,
+`--no-build` to serve an existing build, or `--host` and `--port` to change the listener.
+
+Paste a FactorioLab URL, choose the strategy, candidate policies, and per-layout budget, then
+press **Build**. The page exposes the resulting blueprint for copying and renders it without a
+second tool.
+
+**A build is a job, not a request.** `--budget` is per layout and `best` lays out every
+candidate with both strategies, so a build can run for seconds to minutes. `POST /api/build`
+returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
+each candidate/strategy pair as it starts and settles. A submitted job may request at most 300
+seconds of solving; larger requests are refused rather than silently clamped.
+
+**A refusal is a result.** A spec that cannot be laid out reports why each strategy and
+candidate gave up. An invalid build withholds the blueprint and lists the validation errors,
+matching the CLI unless `--allow-invalid` is explicitly requested.
+
+Flow provenance is explicit. `--flow FILE` pins a FactorioLab CSV export; `--fetch-flow` is
+opt-in and drives installed Chromium to export FactorioLab's solved flow. Capture failure
+refuses the build instead of silently deriving a different recipe selection. Automatic fetch
+and pasted or uploaded CSV are mutually exclusive.
+
+For TypeScript development, `cd web && bun run dev` starts and supervises both the Python API
+on port 8000 and Rsbuild on port 3001. To use an API managed separately at a different origin,
+run the frontend from `web/` with:
+
+```bash
+FLAB2BP_API=http://127.0.0.1:9000 bun run dev:frontend
+```
+
+`web/README.md` documents remote access, external API configuration, asset extraction, and
+the individual web commands.
+
+`uv run scripts/web_smoke.py` drives the integrated server in a real browser and decodes the
+blueprint copied by the page. [docs/WEB_UI.md](docs/WEB_UI.md) documents the UI and API.
+
+## Alternative: command-line interface
+
+Use the CLI for scripting, automation, or direct access to advanced solver options:
+
+```bash
 uv run flab2bp 'https://factoriolab.github.io/dsp/flow?o=super-magnetic-ring*60&ibe=conveyor-belt-2&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&mps=proliferator-2-products&v=11'
 ```
 
@@ -120,52 +176,6 @@ run is the one failure nobody discovers until they are standing in front of it i
 
 DSP's blueprint checksum is a *variant* of MD5 — two altered init constants and eight altered
 round constants, not derivable from `sin()`. See `dsp/md5f.py`.
-
-## In a browser
-
-The browser interface runs the same solver and renders the generated blueprint in 3D.
-
-The viewer's item names, icons, recipes, and building geometry are extracted from the game and
-are not stored in Git. Populate `web/public/assets/` once from a local Dyson Sphere Program
-installation, or copy an already-generated directory from another installation:
-
-```bash
-cd web
-bun install --frozen-lockfile
-bun run extract-assets "/path/to/Dyson Sphere Program"
-cd ..
-uv run flab2bp-web
-```
-
-Open <http://127.0.0.1:8000>. Skip asset extraction when `web/public/assets/` is already
-populated. `flab2bp-web` builds the front end when necessary; pass `--build` to force a rebuild,
-`--no-build` to serve an existing build, or `--host` and `--port` to change the listener.
-
-Paste a FactorioLab URL, choose the strategy, candidate policies, and per-layout budget, then
-press **Build**. The page exposes the resulting blueprint for copying and renders it without a
-second tool.
-
-**A build is a job, not a request.** `--budget` is per layout and `best` lays out every
-candidate with both strategies, so a build can run for seconds to minutes. `POST /api/build`
-returns an id immediately and the page polls `GET /api/build/<id>`. `pipeline.build` reports
-each candidate/strategy pair as it starts and settles. A submitted job may request at most 300
-seconds of solving; larger requests are refused rather than silently clamped.
-
-**A refusal is a result.** A spec that cannot be laid out reports why each strategy and
-candidate gave up. An invalid build withholds the blueprint and lists the validation errors,
-matching the CLI unless `--allow-invalid` is explicitly requested.
-
-Flow provenance is explicit. `--flow FILE` pins a FactorioLab CSV export; `--fetch-flow` is
-opt-in and drives installed Chromium to export FactorioLab's solved flow. Capture failure
-refuses the build instead of silently deriving a different recipe selection. Automatic fetch
-and pasted or uploaded CSV are mutually exclusive.
-
-For TypeScript development, `cd web && bun run dev` starts and supervises both the Python API
-on port 8000 and Rsbuild on port 3001. `web/README.md` documents remote access, external API
-configuration, asset extraction, and the individual web commands.
-
-`uv run scripts/web_smoke.py` drives the integrated server in a real browser and decodes the
-blueprint copied by the page. [docs/WEB_UI.md](docs/WEB_UI.md) documents the UI and API.
 
 ## Development
 
