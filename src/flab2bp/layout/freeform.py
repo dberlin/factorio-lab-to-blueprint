@@ -6751,6 +6751,12 @@ def _altitude_profile(
     Which form each change takes is :func:`transition_form`'s decision, never
     this function's.
     """
+    profile = _altitude_profile_cached(tuple(path), ramped)
+    return None if profile is None else list(profile)
+
+
+@lru_cache(maxsize=16384)
+def _altitude_profile_cached(path: tuple[Cell, ...], ramped: bool) -> tuple[Fraction, ...] | None:
     levels = [lvl for _, _, lvl in path]
     if not ramped:
         # The slope limit is CONDITIONAL and this save is not under it, so a
@@ -6759,7 +6765,7 @@ def _altitude_profile(
         # the `TooSteep` test entirely, so a whole tile of height across one
         # tile of run is legal, and spending a second tile on it would cost
         # routability for nothing.
-        return [lvl * _LEVEL_HEIGHT for lvl in levels]
+        return tuple(lvl * _LEVEL_HEIGHT for lvl in levels)
     out: list[Fraction] = []
     for j, lvl in enumerate(levels):
         nxt = levels[j + 1] if j + 1 < len(levels) else lvl
@@ -6797,7 +6803,7 @@ def _altitude_profile(
             return None
         step = catalog.BELT_CLIMB_PER_TILE if nxt > lvl else -catalog.BELT_CLIMB_PER_TILE
         out.append(lvl * _LEVEL_HEIGHT + step)
-    return out
+    return tuple(out)
 
 
 def _legal_link(

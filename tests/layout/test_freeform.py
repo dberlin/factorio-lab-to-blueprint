@@ -10485,6 +10485,34 @@ class TestCommittedPathClosesCycle:
             ), (buildings, indices)
 
 
+class TestAltitudeProfileCache:
+    def test_ramped_profile_puts_the_half_level_on_the_via_cell(self) -> None:
+        path = [(0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1), (4, 0, 0)]
+        unit = freeform._LEVEL_HEIGHT
+        assert freeform._altitude_profile(path, ramped=True) == [
+            0 * unit,
+            0 * unit + catalog.BELT_CLIMB_PER_TILE,
+            1 * unit,
+            1 * unit - catalog.BELT_CLIMB_PER_TILE,
+            0 * unit,
+        ]
+
+    def test_consecutive_ramps_have_no_profile(self) -> None:
+        assert freeform._altitude_profile([(0, 0, 0), (1, 0, 1), (2, 0, 2)], ramped=True) is None
+
+    def test_unramped_profile_steps_whole_levels(self) -> None:
+        unit = freeform._LEVEL_HEIGHT
+        assert freeform._altitude_profile([(0, 0, 0), (1, 0, 1)], ramped=False) == [0, unit]
+
+    def test_callers_get_a_fresh_list_each_time(self) -> None:
+        path = ((0, 0, 0), (1, 0, 0), (2, 0, 1), (3, 0, 1))
+        first = freeform._altitude_profile(path, ramped=True)
+        second = freeform._altitude_profile(list(path), ramped=True)
+        assert first == second and first is not second
+        first.append(Fraction(99))
+        assert freeform._altitude_profile(path, ramped=True) == second
+
+
 @pytest.mark.parametrize(
     "item_id",
     (catalog.TESLA_TOWER_ID, catalog.SPRAY_COATER_ID),
