@@ -3569,7 +3569,12 @@ class _PackCpProfile:
     window_repeated_submodel_seconds: float = 0.0
     window_fingerprints: set[str] = field(default_factory=set)
 
-    def observe(self, solver: cp_model.CpSolver, status: cp_model.CpSolverStatus, wall_s: float) -> None:
+    def observe(
+        self,
+        solver: cp_model.CpSolver,
+        status: cp_model.CpSolverStatus,
+        wall_s: float,
+    ) -> None:
         name = solver.StatusName(status)
         self.wall_time_s += wall_s
         self.deterministic_time_s += solver.response_proto.deterministic_time
@@ -3578,6 +3583,9 @@ class _PackCpProfile:
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             self.last_objective = solver.ObjectiveValue()
             self.last_best_bound = solver.BestObjectiveBound()
+        else:
+            self.last_objective = math.nan
+            self.last_best_bound = math.nan
         if name == "OPTIMAL":
             self.optimal += 1
         elif name == "FEASIBLE":
@@ -16307,6 +16315,7 @@ def _build(
             budget_stage=_BuildBudgetStage.PREPARATION,
             preparation_time_s=time.monotonic() - preparation_started,
         )
+    preparation_time_s = time.monotonic() - preparation_started
     if cancelled is not None and cancelled():
         return _BuildResult(
             placement=None,
@@ -16320,7 +16329,7 @@ def _build(
             towers=(),
             budget_stage=_BuildBudgetStage.PREPARATION,
             stranded_ports=prepared.stranded_ports,
-            preparation_time_s=time.monotonic() - preparation_started,
+            preparation_time_s=preparation_time_s,
         )
     built = _build_prepared(
         spec,
@@ -16333,7 +16342,7 @@ def _build(
     )
     return replace(
         built,
-        preparation_time_s=time.monotonic() - preparation_started,
+        preparation_time_s=preparation_time_s,
     )
 
 
@@ -20158,13 +20167,14 @@ class FreeformLayout:
                     except finalize.ProjectionCancelled:
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
+                    finally:
+                        compaction_elapsed = time.monotonic() - compaction_started
+                        compaction_time_s += compaction_elapsed
+                        compaction_reserve_s = max(compaction_reserve_s, compaction_elapsed)
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
                     placement = compacted.placement
-                    compaction_elapsed = time.monotonic() - compaction_started
-                    compaction_time_s += compaction_elapsed
-                    compaction_reserve_s = max(compaction_reserve_s, compaction_elapsed)
                     finalize_started = time.monotonic()
                     try:
                         placement = finalize.finalize_placement(
@@ -20292,12 +20302,13 @@ class FreeformLayout:
                                 (height, arrangement, True),
                             )
                         continue
+                    finally:
+                        finalize_elapsed = time.monotonic() - finalize_started
+                        finalization_time_s += finalize_elapsed
+                        finalize_reserve_s = max(finalize_reserve_s, finalize_elapsed)
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
-                    finalize_elapsed = time.monotonic() - finalize_started
-                    finalization_time_s += finalize_elapsed
-                    finalize_reserve_s = max(finalize_reserve_s, finalize_elapsed)
                     certify_started = time.monotonic()
                     report = validate.certify(placement, spec, expect_power=True)
                     validation_time_s += time.monotonic() - certify_started
@@ -20387,6 +20398,7 @@ class FreeformLayout:
                     after=None,
                     routing_seconds=0.0,
                 )
+        cp_stats = (_PACK_CP_PROFILE.get() or _PackCpProfile()).stats()
         if telemetry is not None:
             telemetry["alns_choices"] = float(len(session.choices))
             telemetry["alns_applied"] = float(session.applied)
@@ -20414,7 +20426,7 @@ class FreeformLayout:
                     "compaction_time_s": compaction_time_s,
                     "finalization_time_s": finalization_time_s,
                     "validation_time_s": validation_time_s,
-                    **(_PACK_CP_PROFILE.get() or _PackCpProfile()).stats(),
+                    **cp_stats,
                 }
             )
         # `stats["route_backend"]` is stamped in `lay_out`, where none of these
@@ -20439,9 +20451,9 @@ class FreeformLayout:
                     "compaction_time_s": compaction_time_s,
                     "finalization_time_s": finalization_time_s,
                     "validation_time_s": validation_time_s,
-                    **(_PACK_CP_PROFILE.get() or _PackCpProfile()).stats(),
                 }
             )
+            best.stats.update(cast(PlacementStats, cp_stats))
         return best
 
 

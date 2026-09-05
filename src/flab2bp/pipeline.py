@@ -180,7 +180,7 @@ def _raced_result(
                 "process_wall_time_s": outcome.process_wall_time_s,
                 "process_user_cpu_s": outcome.process_user_cpu_s,
                 "process_system_cpu_s": outcome.process_system_cpu_s,
-                "process_peak_rss_kib": float(outcome.process_peak_rss_kib),
+                "process_peak_rss_kib": outcome.process_peak_rss_kib,
             }
         )
         return outcome.placement
@@ -872,12 +872,14 @@ def build(
 
             if placement.completion is not PlacementCompletion.COMPACTED_AND_FINALIZED:
                 phase_started = time.monotonic()
-                placement = finalize.compact_open_boundary_belts(
-                    placement,
-                    spec,
-                    expect_power=True,
-                )
-                pipeline_compaction_time_s = time.monotonic() - phase_started
+                try:
+                    placement = finalize.compact_open_boundary_belts(
+                        placement,
+                        spec,
+                        expect_power=True,
+                    )
+                finally:
+                    pipeline_compaction_time_s = time.monotonic() - phase_started
                 phase_started = time.monotonic()
                 try:
                     placement = finalize.finalize_placement(
@@ -949,7 +951,8 @@ def build(
                             )
                         )
                     continue
-                pipeline_finalization_time_s = time.monotonic() - phase_started
+                finally:
+                    pipeline_finalization_time_s = time.monotonic() - phase_started
                 placement = replace(
                     placement,
                     completion=PlacementCompletion.COMPACTED_AND_FINALIZED,

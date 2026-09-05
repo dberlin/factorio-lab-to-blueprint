@@ -7406,6 +7406,30 @@ def test_pack_window_distinguishes_infeasible_from_unknown() -> None:
     assert outcome.best_objective_bound is None
 
 
+def test_pack_cp_profile_clears_objective_values_for_an_unsolved_outcome() -> None:
+    profile = freeform._PackCpProfile()
+    feasible_model = cp_model.CpModel()
+    value = feasible_model.new_int_var(0, 1, "value")
+    feasible_model.maximize(value)
+    feasible_solver = cp_model.CpSolver()
+    feasible_status = feasible_solver.solve(feasible_model)
+    profile.observe(feasible_solver, feasible_status, 0.0)
+    assert profile.last_objective == 1.0
+    assert profile.last_best_bound == 1.0
+
+    infeasible_model = cp_model.CpModel()
+    impossible = infeasible_model.new_bool_var("impossible")
+    infeasible_model.add(impossible == 0)
+    infeasible_model.add(impossible == 1)
+    infeasible_solver = cp_model.CpSolver()
+    infeasible_status = infeasible_solver.solve(infeasible_model)
+    profile.observe(infeasible_solver, infeasible_status, 0.0)
+
+    assert profile.last_status == "INFEASIBLE"
+    assert math.isnan(profile.last_objective)
+    assert math.isnan(profile.last_best_bound)
+
+
 def test_pack_window_leaves_every_pinned_strip_where_it_was() -> None:
     strips, height, bound, candidates = _plastic_pack_inputs()
     seed = freeform._pack(
@@ -18177,6 +18201,40 @@ def test_regular_build_maps_cancelled_preparation_to_budget(
     assert result.routing.status is DetailedRouteStatus.BUDGET
 
 
+def test_regular_build_freezes_preparation_time_before_detailed_routing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = two_stage_spec()
+    strips = plan_strips(spec, strip_len=6)
+    pack = _greedy_pack(strips, max(_box(strip)[1] for strip in strips))
+    now = [100.0]
+    prepared = cast(freeform._PreparedRoutingProblem, object())
+    routing = DetailedRouteResult(DetailedRouteStatus.ROUTED, (), (), 0, 0)
+
+    def prepare(*_args: object, **_kwargs: object) -> freeform._PreparedRoutingProblem:
+        now[0] += 2.0
+        return prepared
+
+    def build_prepared(*_args: object, **_kwargs: object) -> _BuildResult:
+        now[0] += 7.0
+        return _BuildResult(None, routing, None, ())
+
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(freeform, "_prepare_routing_problem", prepare)
+    monkeypatch.setattr(freeform, "_build_prepared", build_prepared)
+
+    result = _build(
+        spec,
+        strips,
+        pack,
+        power=False,
+        route=True,
+        policy=BandPolicy("portable"),
+    )
+
+    assert result.preparation_time_s == 2.0
+
+
 def test_post_feedback_replan_deadline_is_a_typed_preparation_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -20313,6 +20371,7 @@ def _sweep_over_a_stranded_first_candidate(
     pack_width: int = 60,
     pitch_requirements: Callable[..., tuple[ProjectionPitchRequirement, ...]] | None = None,
     replanned_strips: list[Strip] | None = None,
+    telemetry: dict[str, float | str] | None = None,
 ) -> tuple[Placement | None, list[tuple[int, int]], list[str]]:
     """Drive `_sweep` over candidates whose routing strands a net exhaustively.
 
@@ -20460,8 +20519,88 @@ def _sweep_over_a_stranded_first_candidate(
     result = FreeformLayout(
         band_policy=BandPolicy("portable"),
         arrangements=2,
-    )._sweep(spec, strips, time_budget_s, session=session)
+    )._sweep(spec, strips, time_budget_s, session=session, telemetry=telemetry)
     return result, packed, builds
+
+
+def test_sweep_charges_cancelled_compaction_to_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    telemetry: dict[str, float | str] = {}
+
+    def cancelled_compaction(*_args: object, **_kwargs: object) -> object:
+        now[0] += 1.25
+        raise finalize.ProjectionCancelled
+
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        finalize,
+        "compact_open_boundary_belts_certified",
+        cancelled_compaction,
+    )
+
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=OperatorSession(),
+        room_for_another=lambda *_args, **_kwargs: True,
+        wires=frozenset({(20, 0)}),
+        heights=(20,),
+        telemetry=telemetry,
+    )
+
+    assert result is None
+    assert telemetry["compaction_time_s"] == 1.25
+
+
+def test_sweep_charges_refused_finalization_to_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    telemetry: dict[str, float | str] = {}
+    finalizations = 0
+
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        finalize,
+        "compact_open_boundary_belts_certified",
+        lambda placement, *_args, **_kwargs: finalize.BoundaryCompactionResult(
+            placement,
+            None,
+        ),
+    )
+
+    def refuse_finalization(
+        _placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        nonlocal finalizations
+        finalizations += 1
+        now[0] += 2.5
+        raise finalize.ProjectionRefusal(
+            (
+                finalize.ProjectionFailure(
+                    check="test.projection",
+                    buildings=(),
+                    detail="refused after measured work",
+                    band=0,
+                ),
+            )
+        )
+
+    result, _packed, _builds = _sweep_over_a_stranded_first_candidate(
+        monkeypatch,
+        session=OperatorSession(),
+        room_for_another=lambda *_args, **_kwargs: False,
+        finalize_placement=refuse_finalization,
+        wires=frozenset({(20, 0)}),
+        heights=(20,),
+        telemetry=telemetry,
+    )
+
+    assert result is None
+    assert telemetry["finalization_time_s"] == 2.5 * finalizations
 
 
 def test_the_sweep_repairs_a_window_when_a_full_resolve_is_unaffordable(
