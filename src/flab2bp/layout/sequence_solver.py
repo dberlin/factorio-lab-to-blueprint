@@ -78,6 +78,7 @@ from flab2bp.layout.freeform import (
     _routing_seed_clearance,
     _staged_static_clearance_keys,
     _staged_static_preclearance_proved,
+    _StagedStaticCache,
     _strip_geometry_signature,
     _Unpowerable,
     _Unseatable,
@@ -559,6 +560,9 @@ class DetailedStageResult:
 
     routing: DetailedRouteResult
     placement: Placement | None
+    # Routing telemetry may include diagnostic work outside the charged attempt.
+    # This ledger value is authoritative for every Sequence budget settlement.
+    charged_expansions: int
     projection_failures: tuple[finalize.ProjectionFailure, ...] = ()
     prepared_lower_bound: tuple[int, PreparedRoutingLowerBound] | None = None
     lower_bound_dominated: bool = False
@@ -1166,6 +1170,7 @@ class SequenceSolver[PreparedT]:
                         expansions=0,
                     ),
                     placement=None,
+                    charged_expansions=0,
                     prepared_lower_bound=declared,
                     lower_bound_dominated=True,
                     detailed_skip_reason="prepared-lower-bound",
@@ -1783,7 +1788,7 @@ class SequenceSolver[PreparedT]:
             allow_proof_skip=True,
         )
         self._finish_measured_completion(measured_detailed_started)
-        spent = detailed.routing.expansions
+        spent = detailed.charged_expansions
         _check_spend(spent, allowance)
         # `_complete_routing_stage` folds this very candidate's own failures
         # into `height_state.feedback` before it returns.  Capture the feedback
@@ -1951,7 +1956,7 @@ class SequenceSolver[PreparedT]:
             allow_proof_skip=True,
         )
         self._finish_measured_completion(measured_detailed_started)
-        spent = detailed.routing.expansions
+        spent = detailed.charged_expansions
         _check_spend(spent, allowance)
         self.budget.charge_detailed_discovery(height, spent)
         self._complete_routing_stage(
@@ -2256,7 +2261,7 @@ class SequenceSolver[PreparedT]:
             allow_proof_skip=True,
         )
         self._finish_measured_completion(measured_detailed_started)
-        spent = detailed.routing.expansions
+        spent = detailed.charged_expansions
         _check_spend(spent, allowance)
         return self._complete_routing_stage(
             height_state,
@@ -2413,8 +2418,8 @@ class SequenceSolver[PreparedT]:
             allow_proof_skip=True,
         )
         self._finish_measured_completion(measured_detailed_started)
-        _check_spend(detailed.routing.expansions, detailed_allowance)
-        spent += detailed.routing.expansions
+        _check_spend(detailed.charged_expansions, detailed_allowance)
+        spent += detailed.charged_expansions
         selected_source = selected.source
         if selected_source is None:
             raise ValueError("annealed global candidate must retain its restart source")
@@ -4531,6 +4536,12 @@ def _pose_stage_boundary_update(
     return None
 
 
+class _OptionalPreparationKwargs(TypedDict, total=False):
+    staged_static_cache: _StagedStaticCache
+    cancelled: Callable[[], bool]
+    deadline: float | None
+
+
 @dataclass(frozen=True, slots=True)
 class _ProductionCandidate:
     height: int
@@ -4675,6 +4686,7 @@ def _closed_detailed_result(
         ),
         placement=None,
         projection_failures=projection_failures,
+        charged_expansions=expansions,
     )
 
 
@@ -4707,13 +4719,17 @@ def _route_detailed_candidate(
             DetailedRouteStatus.UNPOWERABLE,
             expansions=expansions,
         )
+    spent = allowance - attempt_budget["left"]
+    _check_spend(spent, allowance)
+    routing = built.routing
     placement: Placement | None = None
-    if built.routing.status is DetailedRouteStatus.ROUTED:
+    if routing.status is DetailedRouteStatus.ROUTED:
         placement = built.placement
         assert placement is not None
     return DetailedStageResult(
-        routing=built.routing,
+        routing=routing,
         placement=placement,
+        charged_expansions=spent,
     )
 
 
@@ -5236,11 +5252,7 @@ def _production_run(
                 parameter.kind is inspect.Parameter.VAR_KEYWORD
                 for parameter in preparation_parameters.values()
             )
-            preparation_kwargs: dict[str, object] = {
-                "power": power,
-                "policy": band_policy,
-                "ramped": not belt_vertical_construction,
-            }
+            preparation_kwargs: _OptionalPreparationKwargs = {}
             if (
                 "staged_static_cache" in preparation_parameters
                 or accepts_preparation_keywords
@@ -5254,6 +5266,9 @@ def _production_run(
                 spec,
                 list(selected),
                 pack,
+                power=power,
+                policy=band_policy,
+                ramped=not belt_vertical_construction,
                 **preparation_kwargs,
             )
         except _PreparationDeadline, finalize.ProjectionCancelled:

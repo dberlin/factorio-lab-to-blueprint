@@ -60,8 +60,8 @@ rather than tidiness.
 
 from __future__ import annotations
 
-import heapq
 import hashlib
+import heapq
 import math
 import time
 from array import array
@@ -8840,7 +8840,7 @@ def _route_all(
     planned_power_sites: Sequence[tuple[int, int]] | None = None,
     junction_frame_bans: Sequence[frozenset[Cell]] = (),
     *,
-    prioritize_source_families: bool = False,
+    prioritize_source_families: bool = True,
 ) -> DetailedRouteResult:
     """Route every net, negotiating congestion across iterations.
 
@@ -10707,9 +10707,9 @@ def _route_all(
         #: Fresh every round, because a wall only exists while the path that
         #: built it does; `history` is where the charge accumulates.
         blame: dict[Cell, float] = {}
-        # Keep each shared-source family contiguous. Compact callers can put
-        # junction-dependent families ahead of singleton trunks; ordinary
-        # packs retain established longest-first routing.
+        # Keep each shared-source family contiguous and route fanout families
+        # before singleton trunks. The first branch must retain a legal merge
+        # frontier for its siblings before an unrelated run consumes it.
         order = sorted(
             range(len(nets)),
             key=lambda i: (
@@ -11412,9 +11412,13 @@ def _match_access_corridors(
     """Assign cell-disjoint corridors, giving every port its first claim first.
 
     Every solve carries a deterministic work cap, so the assignment does not
-    depend on how loaded the box is.  A tie-break that is cut short by its cap
-    keeps the rank-optimal assignment the rank solves already proved feasible
-    rather than raising the preparation deadline and discarding the candidate.
+    depend on how loaded the box is and only an exhausted wall-clock deadline
+    raises `_PreparationDeadline`.  A tie-break that is cut short by its cap
+    keeps a fallback assignment the solver already proved feasible rather than
+    discarding the candidate.  A validation cut invalidates that fallback, so
+    the next capped tie-break without an incumbent re-establishes one by
+    solving the cut model for feasibility alone, under the same cap the rank
+    solves use.  Rematching rounds are bounded by `_ACCESS_CUT_ROUNDS`.
     """
 
     def solve_model(work: float) -> cp_model.CpSolverStatus:
@@ -11484,23 +11488,46 @@ def _match_access_corridors(
     ordered_choices = tuple(choices)
     if not ordered_choices:
         return {}
-    ranked_values = {choice: solver.boolean_value(variable) for choice, variable in choices.items()}
+
+    def solution_values() -> dict[tuple[PortAccessDemand, Cell, Cell], bool]:
+        return {choice: solver.boolean_value(variable) for choice, variable in choices.items()}
+
+    ranked_values = solution_values()
+    fallback_values: dict[tuple[PortAccessDemand, Cell, Cell], bool] | None = ranked_values
     for choice, variable in choices.items():
         model.add_hint(variable, int(ranked_values[choice]))
-    model.minimize(
-        sum(ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1))
+    tie_objective = sum(
+        ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1)
     )
+    model.minimize(tie_objective)
     for _round in range(_ACCESS_CUT_ROUNDS):
         status = solve_model(_ACCESS_TIE_DETERMINISTIC_WORK)
-        use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-        if not use_polished:
-            if validate is not None and status == cp_model.INFEASIBLE:
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            selected_values = solution_values()
+        elif status == cp_model.INFEASIBLE:
+            if validate is not None or fallback_values is None:
                 return {}
-            selected_values = ranked_values
+            selected_values = fallback_values
+        elif fallback_values is not None:
+            selected_values = fallback_values
         else:
-            selected_values = {
-                choice: solver.boolean_value(variable) for choice, variable in choices.items()
-            }
+            # The bounded tie polish found no incumbent after a validation cut.
+            # Re-establish a model-valid fallback without the polish objective;
+            # the previous ranked solution is forbidden by the new cut.  The
+            # feasibility solve carries the rank cap, so no solve here runs
+            # unbounded; a cap that expires first leaves the candidate unmatched.
+            model.clear_objective()  # type: ignore[no-untyped-call]
+            try:
+                fallback_status = solve_model(_ACCESS_RANK_DETERMINISTIC_WORK)
+            finally:
+                model.minimize(tie_objective)
+            if fallback_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                return {}
+            fallback_values = solution_values()
+            model.clear_hints()  # type: ignore[no-untyped-call]
+            for choice, variable in choices.items():
+                model.add_hint(variable, int(fallback_values[choice]))
+            selected_values = fallback_values
         assigned: dict[PortAccessDemand, PortAccessCorridor] = {}
         selected_by_demand: dict[PortAccessDemand, cp_model.IntVar] = {}
         for choice in ordered_choices:
@@ -11520,6 +11547,7 @@ def _match_access_corridors(
         if not cut_variables:
             return {}
         model.add(sum(cut_variables) <= len(cut_variables) - 1)
+        fallback_values = None
     return {}
 
 
@@ -11719,7 +11747,11 @@ def _reserve_port_access(
             sorted(
                 assigned,
                 key=lambda corridor: (
-                    kind_order.get(corridor.kind, len(kind_order)),
+                    (
+                        kind_order[corridor.kind]
+                        if corridor.kind is not None
+                        else len(kind_order)
+                    ),
                     corridor.access,
                     corridor.exit,
                 ),
@@ -11729,7 +11761,9 @@ def _reserve_port_access(
     }
     missing = tuple(demand for demand in demands if demand not in assignments)
     return PortAccessReservation(
-        assigned=tuple((demand, assignments[demand]) for demand in demands if demand in assignments),
+        assigned=tuple(
+            (demand, assignments[demand]) for demand in demands if demand in assignments
+        ),
         missing=missing,
         evidence=tuple(
             PortAccessEvidence(
@@ -16159,7 +16193,7 @@ def _prepare_routing_problem(
         if net.src is not None and not net.prelinked
     }
     late_output_belts = frozenset(wanted_outputs) & internal_source_belts
-    provisional_boundary_inputs = [
+    provisional_boundary_inputs: list[tuple[str, _Port, int | None]] = [
         (carried[belt], port, strip_index)
         for belt, (port, strip_index) in wanted.items()
     ]
@@ -16549,7 +16583,11 @@ def _prepare_routing_problem(
         if demand.kind is PortAccessKind.EARLY_BOUNDARY_DEPARTURE:
             return prepared.net_id.role is NetRole.EXTERNAL_OUTPUT and source == demand.cell
         if demand.kind is PortAccessKind.INTERNAL_DEPARTURE:
-            return prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT) and source == demand.cell
+            return (
+                prepared.net_id.role
+                not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
+                and source == demand.cell
+            )
         return (
             demand.kind is PortAccessKind.INTERNAL_ARRIVAL
             and prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
@@ -17108,7 +17146,7 @@ def _build_prepared(
     route: bool,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
-    prioritize_source_families: bool = False,
+    prioritize_source_families: bool = True,
 ) -> _BuildResult:
     """Emit, route, and power one already-prepared immutable problem."""
     prelinked_routed = tuple(net.net_id for net in prepared.nets if net.prelinked) if route else ()
