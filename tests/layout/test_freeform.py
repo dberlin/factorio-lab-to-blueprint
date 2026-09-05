@@ -10395,6 +10395,85 @@ def _belt(x: int, y: int, *, item: str | None = None) -> PlacedBuilding:
     )
 
 
+def _linked_belt(x: int, output_obj: int | None) -> PlacedBuilding:
+    return PlacedBuilding(
+        item_id=2001, model_index=35, x=x, y=0, width=1, height=1, output_obj=output_obj
+    )
+
+
+def _splitter_at(x: int) -> PlacedBuilding:
+    return PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=38, x=x, y=0, width=2, height=2)
+
+
+class TestCommittedPathClosesCycle:
+    """`_committed_path_closes_cycle` answers "is any committed belt on a loop"."""
+
+    def _reference(self, canvas: _Canvas, indices: list[int]) -> bool:
+        successors = freeform._splitter_successors(canvas)
+        return any(
+            (onward := canvas.buildings[index].output_obj) is not None
+            and freeform._leads_back(canvas, onward, {index}, successors)
+            for index in indices
+        )
+
+    def test_a_straight_chain_is_not_a_cycle(self) -> None:
+        canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, None)])
+        assert freeform._committed_path_closes_cycle(canvas, [0, 1, 2]) is False
+
+    def test_a_chain_whose_tail_feeds_its_head_is_a_cycle(self) -> None:
+        canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, 0)])
+        assert freeform._committed_path_closes_cycle(canvas, [1]) is True
+
+    def test_a_cycle_elsewhere_does_not_condemn_a_belt_off_it(self) -> None:
+        # 0 -> 1 -> 2 -> 1 loops; belt 0 merely feeds the loop and is not on it.
+        canvas = _Canvas(buildings=[_linked_belt(0, 1), _linked_belt(1, 2), _linked_belt(2, 1)])
+        assert freeform._committed_path_closes_cycle(canvas, [0]) is False
+        assert freeform._committed_path_closes_cycle(canvas, [2]) is True
+
+    def test_a_self_loop_is_a_cycle(self) -> None:
+        canvas = _Canvas(buildings=[_linked_belt(0, 0)])
+        assert freeform._committed_path_closes_cycle(canvas, [0]) is True
+
+    def test_a_dangling_output_index_is_not_followed(self) -> None:
+        canvas = _Canvas(buildings=[_linked_belt(0, 7)])
+        assert freeform._committed_path_closes_cycle(canvas, [0]) is False
+
+    def test_splitter_branches_are_followed(self) -> None:
+        # belt 0 -> splitter 1 -> belts 2 and 3 (input_obj=1); belt 3 -> belt 0.
+        canvas = _Canvas(
+            buildings=[
+                _linked_belt(0, 1),
+                _splitter_at(1),
+                replace(_linked_belt(2, None), input_obj=1),
+                replace(_linked_belt(3, 0), input_obj=1),
+            ]
+        )
+        assert freeform._committed_path_closes_cycle(canvas, [0]) is True
+        assert freeform._committed_path_closes_cycle(canvas, [2]) is False
+
+    def test_agrees_with_the_per_index_walk_on_random_belt_graphs(self) -> None:
+        rng = random.Random(20260905)
+        for _trial in range(300):
+            n = rng.randint(1, 12)
+            buildings = []
+            for i in range(n):
+                if rng.random() < 0.15:
+                    buildings.append(_splitter_at(i))
+                else:
+                    out = rng.choice([None, *range(-1, n + 1)])
+                    buildings.append(_linked_belt(i, out))
+            for i, b in enumerate(buildings):
+                if catalog.is_belt(b.item_id) and rng.random() < 0.3:
+                    buildings[i] = replace(b, input_obj=rng.randrange(n))
+            canvas = _Canvas(buildings=buildings)
+            indices = [
+                i for i in range(n) if catalog.is_belt(buildings[i].item_id) and rng.random() < 0.6
+            ]
+            assert freeform._committed_path_closes_cycle(canvas, indices) == self._reference(
+                canvas, indices
+            ), (buildings, indices)
+
+
 @pytest.mark.parametrize(
     "item_id",
     (catalog.TESLA_TOWER_ID, catalog.SPRAY_COATER_ID),
