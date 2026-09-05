@@ -8089,6 +8089,11 @@ class PreparedRoutingLowerBound:
     route_floor: int
     component_count: int
     total: int
+    obstacle_route_floor: int = 0
+    obstacle_total: int = 0
+    obstacle_reachable: bool = True
+    obstacle_wall_time_s: float = 0.0
+    obstacle_expansions: int = 0
 
 
 def _prepared_routing_lower_bound(
@@ -8188,6 +8193,217 @@ def _prepared_routing_lower_bound(
         route_floor=route_total,
         component_count=len(component_floors),
         total=len(protected) + route_total,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ObstacleAwareRoutingFloor:
+    """Audit result for the immutable-obstacle routing relaxation."""
+
+    route_floor: int
+    component_count: int
+    reachable: bool
+    wall_time_s: float
+    expansions: int
+
+
+def _obstacle_aware_prepared_routing_floor(
+    problem: _PreparedRoutingProblem,
+) -> _ObstacleAwareRoutingFloor:
+    """Measure a candidate-local route floor without enabling production pruning.
+
+    The graph keeps this prepared problem's immutable occupancy, reservation
+    ownership, route bounds, levels, and two-tile ramp transitions.  It opens
+    every endpoint alternative in the net's transitive sharing component and
+    ignores routed belts and all inter-net conflicts.  Consequently its shortest
+    path is a lower bound only for this concrete prepared candidate.
+    """
+    started = time.perf_counter()
+    prepared_nets = tuple(
+        net
+        for net in (*problem.nets, *problem.external_output_nets)
+        if not net.prelinked
+    )
+    if not prepared_nets:
+        return _ObstacleAwareRoutingFloor(0, 0, True, time.perf_counter() - started, 0)
+
+    net_by_id = {net.net_id: net for net in prepared_nets}
+    parent = {net_id: net_id for net_id in net_by_id}
+
+    def find(net_id: NetId) -> NetId:
+        while parent[net_id] != net_id:
+            parent[net_id] = parent[parent[net_id]]
+            net_id = parent[net_id]
+        return net_id
+
+    def union(left: NetId, right: NetId) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for net in prepared_nets:
+        for sibling in (*net.src_group, *net.dst_group):
+            if sibling in net_by_id:
+                union(net.net_id, sibling)
+
+    def adjacent(port: _PreparedPort) -> tuple[Cell, ...]:
+        return tuple((port.x + dx, port.y + dy, port.z) for dx, dy in _STEPS)
+
+    def starts(net: _PreparedNet) -> tuple[Cell, ...]:
+        if net.net_id.role is NetRole.EXTERNAL:
+            return net.boundary_goals
+        return () if net.src is None else adjacent(net.src)
+
+    def goals(net: _PreparedNet) -> tuple[Cell, ...]:
+        if net.net_id.role is NetRole.EXTERNAL_OUTPUT:
+            return net.boundary_goals
+        return adjacent(net.dst)
+
+    all_endpoints = tuple(
+        cell
+        for net in prepared_nets
+        for cell in (*starts(net), *goals(net))
+    )
+    canvas = _Canvas(
+        ramped=problem.ramped,
+        sorter_tiers=problem.sorter_tiers,
+        sorter_stacks=problem.sorter_stacks,
+        lane_stacks=problem.lane_stacks,
+        buildings=list(problem.building_templates),
+        blocked=dict(problem.blocked),
+        world_taken=set(problem.world_taken),
+        solid=set(problem.solid),
+        reserved=dict(problem.reserved),
+        routing_ports=frozenset(),
+        port_corridors=dict(problem.port_corridors),
+        limit=problem.limit,
+        keep_out=set(problem.keep_out),
+        belt_ban={cell: set(levels) for cell, levels in problem.belt_ban},
+        guard=set(problem.guard),
+        junction_ban=set(problem.junction_ban),
+        junction_geometry_prepared=True,
+    )
+    box = _route_box(canvas, problem.route_bounds)
+    grid = _make_grid(
+        canvas,
+        box,
+        _span_for(box, all_endpoints, ()),
+        {},
+    )
+    moves = tuple(
+        (
+            dx * grid.xstep + dy * LEVELS,
+            2 * (dx * grid.xstep + dy * LEVELS),
+        )
+        for dx, dy in _STEPS
+    )
+    expansions = 0
+
+    def shortest(net: _PreparedNet) -> int | None:
+        nonlocal expansions
+        source_ids = (net.net_id, *net.src_group)
+        destination_ids = (net.net_id, *net.dst_group)
+        legal_starts = tuple(
+            cell
+            for net_id in source_ids
+            if (sibling := net_by_id.get(net_id)) is not None
+            for cell in starts(sibling)
+        )
+        legal_goals = tuple(
+            cell
+            for net_id in destination_ids
+            if (sibling := net_by_id.get(net_id)) is not None
+            for cell in goals(sibling)
+        )
+        port_keys = {
+            (port.x, port.y, port.z)
+            for net_id in (*source_ids, *destination_ids)
+            if (sibling := net_by_id.get(net_id)) is not None
+            for port in (sibling.src, sibling.dst)
+            if port is not None
+        }
+        canvas.routing_ports = frozenset(port_keys)
+        flags = _routing_flags(grid, routing_ports=canvas.routing_ports)
+        span_x0, span_y0, span_x1, span_y1 = grid.span
+
+        def in_span(cell: Cell) -> bool:
+            return (
+                span_x0 <= cell[0] <= span_x1
+                and span_y0 <= cell[1] <= span_y1
+                and 0 <= cell[2] < LEVELS
+            )
+
+        start_indices = tuple(
+            grid.index(cell)
+            for cell in legal_starts
+            if in_span(cell) and canvas.free(cell)
+        )
+        goal_indices = {
+            grid.index(cell)
+            for cell in legal_goals
+            if in_span(cell) and canvas.free(cell)
+        }
+        canvas.routing_ports = frozenset()
+        if not start_indices or not goal_indices:
+            return None
+
+        best = [math.inf] * (2 * grid.size)
+        queue: list[tuple[int, int, bool]] = []
+        for index in start_indices:
+            best[2 * index] = 1
+            heapq.heappush(queue, (1, index, False))
+        while queue:
+            distance, current, previous_was_ramp = heapq.heappop(queue)
+            state_index = 2 * current + int(previous_was_ramp)
+            if distance != best[state_index]:
+                continue
+            expansions += 1
+            if current in goal_indices:
+                return distance
+            level = current % LEVELS
+            for one, two in moves:
+                adjacent_index = current + one
+                if not flags[adjacent_index]:
+                    continue
+                next_distance = distance + 1
+                next_state = 2 * adjacent_index
+                if next_distance < best[next_state]:
+                    best[next_state] = next_distance
+                    heapq.heappush(queue, (next_distance, adjacent_index, False))
+                if previous_was_ramp:
+                    continue
+                run = current + two
+                for level_step, _toll in _RAMPS[level]:
+                    top = run + level_step
+                    if not flags[top]:
+                        continue
+                    ramp_distance = distance + 2
+                    ramp_state = 2 * top + 1
+                    if ramp_distance < best[ramp_state]:
+                        best[ramp_state] = ramp_distance
+                        heapq.heappush(queue, (ramp_distance, top, True))
+        return None
+
+    component_floors: dict[NetId, int] = {}
+    for net in prepared_nets:
+        floor = shortest(net)
+        if floor is None:
+            return _ObstacleAwareRoutingFloor(
+                sum(component_floors.values()),
+                len({find(candidate.net_id) for candidate in prepared_nets}),
+                False,
+                time.perf_counter() - started,
+                expansions,
+            )
+        root = find(net.net_id)
+        component_floors[root] = max(component_floors.get(root, 0), floor)
+    return _ObstacleAwareRoutingFloor(
+        sum(component_floors.values()),
+        len(component_floors),
+        True,
+        time.perf_counter() - started,
+        expansions,
     )
 
 

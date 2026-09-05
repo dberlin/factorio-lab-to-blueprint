@@ -22268,10 +22268,13 @@ def _prepared_bound_problem(
     nets: tuple[_PreparedNet, ...] = (),
     external_output_nets: tuple[_PreparedNet, ...] = (),
     realized_direct: frozenset[DirectInsertId] = frozenset(),
+    blocked: tuple[tuple[Cell, int], ...] = (),
+    route_bounds: tuple[int, int, int, int] = (0, 0, 0, 0),
+    limit: tuple[int, int, int, int] | None = None,
 ) -> _PreparedRoutingProblem:
     return _PreparedRoutingProblem(
         building_templates=buildings,
-        blocked=(),
+        blocked=blocked,
         solid=frozenset(),
         reserved=(),
         port_corridors=(),
@@ -22279,8 +22282,8 @@ def _prepared_bound_problem(
         guard=frozenset(),
         nets=nets,
         core=(0, 0, 0, 0),
-        route_bounds=(0, 0, 0, 0),
-        limit=None,
+        route_bounds=route_bounds,
+        limit=limit,
         power_sites=(),
         sorters=0,
         coaters=0,
@@ -22487,3 +22490,45 @@ def test_prepared_routing_bound_omits_direct_and_prelinked_route_demand() -> Non
     assert bound.component_count == 0
     assert bound.route_floor == 0
     assert bound.total == 0
+
+
+def test_obstacle_aware_prepared_floor_counts_a_static_detour() -> None:
+    net = _prepared_bound_net(0, (0, 1), (4, 1))
+    wall = tuple(
+        ((2, y, level), 0)
+        for y in (0, 1)
+        for level in range(freeform_module.LEVELS)
+    )
+    problem = _prepared_bound_problem(
+        nets=(net,),
+        blocked=wall,
+        route_bounds=(0, 0, 4, 2),
+        limit=(0, 0, 4, 2),
+    )
+
+    baseline = freeform_module._prepared_routing_lower_bound(problem)
+    audited = freeform_module._obstacle_aware_prepared_routing_floor(problem)
+
+    assert baseline.route_floor == 3
+    assert audited.reachable
+    assert audited.route_floor == 5
+    assert audited.route_floor > baseline.route_floor
+
+
+def test_obstacle_aware_prepared_floor_proves_static_disconnection() -> None:
+    net = _prepared_bound_net(0, (0, 1), (4, 1))
+    wall = tuple(
+        ((2, y, level), 0)
+        for y in range(3)
+        for level in range(freeform_module.LEVELS)
+    )
+    audited = freeform_module._obstacle_aware_prepared_routing_floor(
+        _prepared_bound_problem(
+            nets=(net,),
+            blocked=wall,
+            route_bounds=(0, 0, 4, 2),
+            limit=(0, 0, 4, 2),
+        )
+    )
+
+    assert not audited.reachable
