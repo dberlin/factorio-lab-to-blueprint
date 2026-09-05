@@ -23083,7 +23083,11 @@ def test_boundary_port_physical_claim_counts() -> None:
         strip_of_belt={belt: belt for belt in range(7)},
     )
     counts = {
-        cell: tuple(sorted(demand.kind.value for demand in inventory.demands if demand.cell == cell))
+        cell: tuple(
+            sorted(
+                demand.kind.value for demand in inventory.demands if demand.cell == cell
+            )
+        )
         for cell in {demand.cell for demand in inventory.demands}
     }
     assert counts[(24, 0, 0)] == ("boundary-arrival",)
