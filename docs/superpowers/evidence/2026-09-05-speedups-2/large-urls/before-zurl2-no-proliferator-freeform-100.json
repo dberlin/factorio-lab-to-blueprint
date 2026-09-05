@@ -1,0 +1,33 @@
+{
+ "area": null,
+ "astar_s": 0.0,
+ "budget_s": 100.0,
+ "cprofile": false,
+ "expansions": 0,
+ "groups": 32,
+ "hits": 0,
+ "machines": 868,
+ "misses": 0,
+ "passes": 0,
+ "phases": {
+  "plan_strips": {
+   "n": 2,
+   "s": 0.030120893847197294
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.2948806290514767
+  }
+ },
+ "policy": "no-proliferator",
+ "prepare_calls_s": [],
+ "rate": 60,
+ "rounds": 0,
+ "route_all_s": 0.0,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "zurl2",
+ "verdict": "REFUSED: no pack of 50 strips was ever produced at any candidate height; 2 candidate heights were skipped as over-band; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 0.8177755419164896
+}

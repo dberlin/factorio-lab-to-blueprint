@@ -1,0 +1,100 @@
+{
+ "area": null,
+ "astar_s": 6.163630942814052,
+ "budget_s": 100.0,
+ "cprofile": false,
+ "expansions": 15258610,
+ "groups": 33,
+ "hits": 1453,
+ "machines": 449,
+ "misses": 22,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1475,
+   "s": 6.163630942814052
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.17516316915862262
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 2.369516283972189
+  },
+  "commit_paths": {
+   "n": 4,
+   "s": 5.063343862770125
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.21061110286973417
+  },
+  "last_mile": {
+   "n": 1,
+   "s": 0.008296001935377717
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.2312699023168534
+  },
+  "merge_frontier": {
+   "n": 773,
+   "s": 4.270456003258005
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 3.5576511539984494
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.22175120515748858
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 1.8173608141951263
+  },
+  "prepare": {
+   "n": 6,
+   "s": 16.866877224994823
+  },
+  "refresh_history": {
+   "n": 61,
+   "s": 0.007428071228787303
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 6.930070297094062
+  },
+  "route_all": {
+   "n": 2,
+   "s": 11.389999202918261
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.22907440946437418
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.22754832403734326
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  2.1612708480097353,
+  2.043102272087708,
+  1.9290400738827884,
+  1.884448534809053,
+  4.409787801094353,
+  4.439227695111185
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 11.389999202918261,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 31.467063901014626
+}

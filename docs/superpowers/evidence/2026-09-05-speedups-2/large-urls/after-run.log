@@ -1,0 +1,49 @@
+START belt3 all-products freeform 100
+START belt3 all-products freeform 60
+DONE  belt3 all-products freeform 60 exit=0
+DONE  belt3 all-products freeform 100 exit=0
+START belt3 all-products sequence-pair 60
+START belt3 all-products sequence-pair 100
+DONE  belt3 all-products sequence-pair 60 exit=0
+DONE  belt3 all-products sequence-pair 100 exit=0
+START belt3 no-proliferator freeform 60
+START belt3 no-proliferator freeform 100
+DONE  belt3 no-proliferator freeform 60 exit=0
+DONE  belt3 no-proliferator freeform 100 exit=0
+START belt3 no-proliferator sequence-pair 60
+START belt3 no-proliferator sequence-pair 100
+DONE  belt3 no-proliferator sequence-pair 60 exit=0
+DONE  belt3 no-proliferator sequence-pair 100 exit=0
+START zurl2 all-products freeform 60
+START zurl2 all-products freeform 100
+DONE  zurl2 all-products freeform 60 exit=0
+DONE  zurl2 all-products freeform 100 exit=0
+START zurl2 all-products sequence-pair 60
+START zurl2 all-products sequence-pair 100
+DONE  zurl2 all-products sequence-pair 60 exit=0
+DONE  zurl2 all-products sequence-pair 100 exit=0
+START zurl2 no-proliferator freeform 60
+START zurl2 no-proliferator freeform 100
+DONE  zurl2 no-proliferator freeform 60 exit=0
+DONE  zurl2 no-proliferator freeform 100 exit=0
+START zurl2 no-proliferator sequence-pair 60
+START zurl2 no-proliferator sequence-pair 100
+DONE  zurl2 no-proliferator sequence-pair 60 exit=0
+DONE  zurl2 no-proliferator sequence-pair 100 exit=0
+START mall all-products freeform 60
+START mall all-products freeform 100
+DONE  mall all-products freeform 60 exit=0
+DONE  mall all-products freeform 100 exit=0
+START mall all-products sequence-pair 60
+START mall all-products sequence-pair 100
+DONE  mall all-products sequence-pair 60 exit=0
+DONE  mall all-products sequence-pair 100 exit=0
+START mall no-proliferator freeform 60
+START mall no-proliferator freeform 100
+DONE  mall no-proliferator freeform 100 exit=0
+DONE  mall no-proliferator freeform 60 exit=0
+START mall no-proliferator sequence-pair 60
+START mall no-proliferator sequence-pair 100
+DONE  mall no-proliferator sequence-pair 60 exit=0
+DONE  mall no-proliferator sequence-pair 100 exit=0
+ALL DONE

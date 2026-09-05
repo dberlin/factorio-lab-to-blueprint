@@ -1,0 +1,2 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"target": "zurl2", "rate": 60, "machines": 868, "strategy": "freeform", "verdict": "REFUSED: no pack of 50 strips was ever produced at any candidate height; 2 candidate heights were skipped as over-band; the sweep stopped after 3 draws that produced no new packing", "wall_s": 0.5117165381088853, "route_all_s": 0.0, "astar_s": 0.0}

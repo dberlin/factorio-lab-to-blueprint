@@ -1,0 +1,83 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+72 cells, 8 at a time, 16 CP-SAT workers each, cap 900s
+  . [  1/72]    13s freeform  stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     11.7s  <-- 12s
+  . [  2/72]    17s freeform  stress   quantum-chip/output-products power=1 budget=30s      CLEAN     15.5s  <-- 15s
+  . [  3/72]    27s freeform  stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     25.7s  <-- 26s
+  . [  4/72]    28s sequence-pair stress   quantum-chip/all-products power=1 budget=30s         CLEAN     27.0s  <-- 27s
+  . [  5/72]    30s freeform  stress   quantum-chip/all-products power=1 budget=30s         CLEAN     28.5s  <-- 29s
+  . [  6/72]    31s sequence-pair stress   quantum-chip/output-products power=1 budget=30s      CLEAN     29.4s  <-- 29s
+  . [  7/72]    31s freeform  stress   universe-matrix/all-products power=1 budget=30s      CLEAN     29.8s  <-- 30s
+  . [  8/72]    32s sequence-pair stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     30.2s  <-- 30s
+  . [  9/72]    33s freeform  large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN      3.6s
+  . [ 10/72]    39s freeform  large    casimir-crystal/output-products power=1 budget=30s   CLEAN      7.6s
+  . [ 11/72]    40s freeform  large    casimir-crystal/all-products power=1 budget=30s      CLEAN      8.7s
+  . [ 12/72]    41s freeform  stress   universe-matrix/output-products power=1 budget=30s   CLEAN     27.6s  <-- 28s
+  . [ 13/72]    46s sequence-pair stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     29.5s  <-- 29s
+  . [ 14/72]    51s freeform  large    information-matrix/no-proliferator power=1 budget=30s CLEAN     11.3s  <-- 11s
+  . [ 15/72]    56s sequence-pair stress   universe-matrix/all-products power=1 budget=30s      CLEAN     28.9s  <-- 29s
+  . [ 16/72]    57s sequence-pair stress   universe-matrix/output-products power=1 budget=30s   CLEAN     28.7s  <-- 29s
+  . [ 17/72]    62s sequence-pair large    casimir-crystal/all-products power=1 budget=30s      CLEAN     28.9s  <-- 29s
+  . [ 18/72]    63s sequence-pair large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN     31.0s  <-- 31s
+  . [ 19/72]    66s freeform  mid      processor/no-proliferator power=1 budget=30s         CLEAN      3.5s
+  . [ 20/72]    68s freeform  large    information-matrix/all-products power=1 budget=30s   CLEAN     27.4s  <-- 27s
+  . [ 21/72]    69s sequence-pair large    casimir-crystal/output-products power=1 budget=30s   CLEAN     30.1s  <-- 30s
+  . [ 22/72]    70s freeform  large    information-matrix/output-products power=1 budget=30s CLEAN     23.3s  <-- 23s
+  . [ 23/72]    72s freeform  mid      processor/all-products power=1 budget=30s            CLEAN      9.4s
+  . [ 24/72]    73s freeform  mid      processor/output-products power=1 budget=30s         CLEAN      7.3s
+  . [ 25/72]    73s freeform  mid      energy-matrix/no-proliferator power=1 budget=30s     CLEAN      1.4s
+  . [ 26/72]    75s freeform  mid      energy-matrix/output-products power=1 budget=30s     CLEAN      2.1s
+  . [ 27/72]    76s freeform  mid      energy-matrix/all-products power=1 budget=30s        CLEAN      2.4s
+  . [ 28/72]    80s sequence-pair large    information-matrix/no-proliferator power=1 budget=30s CLEAN     29.7s  <-- 30s
+  . [ 29/72]    82s sequence-pair large    information-matrix/all-products power=1 budget=30s   CLEAN     26.4s  <-- 26s
+  . [ 30/72]    84s sequence-pair large    information-matrix/output-products power=1 budget=30s CLEAN     27.0s  <-- 27s
+  . [ 31/72]    98s sequence-pair mid      processor/all-products power=1 budget=30s            CLEAN     28.6s  <-- 29s
+  . [ 32/72]    99s sequence-pair mid      processor/no-proliferator power=1 budget=30s         CLEAN     31.1s  <-- 31s
+  . [ 33/72]   101s sequence-pair mid      processor/output-products power=1 budget=30s         CLEAN     31.0s  <-- 31s
+  . [ 34/72]   106s sequence-pair mid      energy-matrix/all-products power=1 budget=30s        CLEAN     30.6s  <-- 31s
+  . [ 35/72]   107s sequence-pair mid      energy-matrix/no-proliferator power=1 budget=30s     CLEAN     31.6s  <-- 32s
+  . [ 36/72]   108s freeform  small    graphene/no-proliferator power=1 budget=30s          CLEAN      1.2s
+  . [ 37/72]   110s freeform  small    graphene/all-products power=1 budget=30s             CLEAN      2.2s
+  . [ 38/72]   111s freeform  mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     28.7s  <-- 29s
+  . [ 39/72]   112s sequence-pair mid      energy-matrix/output-products power=1 budget=30s     CLEAN     31.1s  <-- 31s
+  . [ 40/72]   112s freeform  small    graphene/output-products power=1 budget=30s          CLEAN      2.0s
+  . [ 41/72]   114s freeform  mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     29.8s  <-- 30s
+  . [ 42/72]   116s freeform  small    electromagnetic-matrix/no-proliferator power=1 budget=30s CLEAN      2.1s
+  . [ 43/72]   125s freeform  mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     27.9s  <-- 28s
+  . [ 44/72]   129s freeform  small    electromagnetic-matrix/output-products power=1 budget=30s CLEAN      3.1s
+  . [ 45/72]   130s sequence-pair mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     30.7s  <-- 31s
+  . [ 46/72]   131s sequence-pair mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     30.2s  <-- 30s
+  . [ 47/72]   131s freeform  small    electromagnetic-matrix/all-products power=1 budget=30s CLEAN     15.1s  <-- 15s
+  . [ 48/72]   133s freeform  small    plastic/no-proliferator power=1 budget=30s           CLEAN      2.1s
+  . [ 49/72]   134s sequence-pair mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     28.2s  <-- 28s
+  . [ 50/72]   140s freeform  small    plastic/output-products power=1 budget=30s           CLEAN      5.5s
+  . [ 51/72]   140s sequence-pair small    graphene/no-proliferator power=1 budget=30s          CLEAN     28.9s  <-- 29s
+  . [ 52/72]   140s freeform  small    plastic/all-products power=1 budget=30s              CLEAN      6.8s
+  . [ 53/72]   143s sequence-pair small    graphene/all-products power=1 budget=30s             CLEAN     31.1s  <-- 31s
+  . [ 54/72]   143s freeform  trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN      0.3s
+  . [ 55/72]   143s sequence-pair small    graphene/output-products power=1 budget=30s          CLEAN     30.9s  <-- 31s
+  . [ 56/72]   144s freeform  trivial  iron-ingot/all-products power=1 budget=30s           CLEAN      0.8s
+  . [ 57/72]   144s freeform  trivial  iron-ingot/output-products power=1 budget=30s        CLEAN      0.9s
+  . [ 58/72]   154s sequence-pair trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN     10.3s  <-- 10s
+  . [ 59/72]   159s sequence-pair small    electromagnetic-matrix/all-products power=1 budget=30s CLEAN     29.1s  <-- 29s
+  . [ 60/72]   159s freeform  trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN      0.5s
+  . [ 61/72]   160s sequence-pair small    electromagnetic-matrix/no-proliferator power=1 budget=30s CLEAN     31.1s  <-- 31s
+  . [ 62/72]   161s sequence-pair small    electromagnetic-matrix/output-products power=1 budget=30s CLEAN     30.1s  <-- 30s
+  . [ 63/72]   162s freeform  trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN      1.9s
+  . [ 64/72]   162s freeform  trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN      2.5s
+  . [ 65/72]   167s sequence-pair trivial  iron-ingot/all-products power=1 budget=30s           CLEAN     22.7s  <-- 23s
+  . [ 66/72]   170s sequence-pair small    plastic/all-products power=1 budget=30s              CLEAN     29.5s  <-- 29s
+  . [ 67/72]   170s sequence-pair small    plastic/output-products power=1 budget=30s           CLEAN     30.0s  <-- 30s
+  . [ 68/72]   171s sequence-pair small    plastic/no-proliferator power=1 budget=30s           CLEAN     31.0s  <-- 31s
+  . [ 69/72]   176s sequence-pair trivial  iron-ingot/output-products power=1 budget=30s        CLEAN     21.9s  <-- 22s
+  . [ 70/72]   182s sequence-pair trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN     21.0s  <-- 21s
+  . [ 71/72]   192s sequence-pair trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN     30.4s  <-- 30s
+  . [ 72/72]   192s sequence-pair trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN     30.3s  <-- 30s
+
+=== freeform: 36/36 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 30s freeform universe-matrix/all-products power=1 budget=30s, 30s freeform super-magnetic-ring/all-products power=1 budget=30s, 29s freeform super-magnetic-ring/no-proliferator power=1 budget=30s, 29s freeform quantum-chip/all-products power=1 budget=30s, 28s freeform super-magnetic-ring/output-products power=1 budget=30s
+
+=== sequence-pair: 36/36 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s sequence-pair energy-matrix/no-proliferator power=1 budget=30s, 31s sequence-pair processor/no-proliferator power=1 budget=30s, 31s sequence-pair graphene/all-products power=1 budget=30s, 31s sequence-pair energy-matrix/output-products power=1 budget=30s, 31s sequence-pair electromagnetic-matrix/no-proliferator power=1 budget=30s
+
+192s wall, 72/72 cells
+17 cells completed after their own requested search deadline; the largest completion tail was 1.6s. Emission, detailed routing already in flight, and validation finish atomically.

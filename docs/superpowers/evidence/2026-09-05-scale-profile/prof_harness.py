@@ -45,9 +45,19 @@ def main() -> int:
     ap.add_argument("--policy", type=CandidatePolicy, default=CandidatePolicy.NO_PROLIFERATOR)
     ap.add_argument("--budget", type=float, default=30.0)
     ap.add_argument("--workers", type=int, default=8)
+    #: ``route_profile._strategy`` builds ``SequencePairLayout`` with no island
+    #: argument, so it always measures the one-island shape -- which stopped
+    #: being what production runs once ``pipeline.resolve_sequence_islands``
+    #: began returning ``DEFAULT_SEQUENCE_ISLANDS``.  Omitted, this flag leaves
+    #: the harness exactly as it was, so earlier profiles stay reproducible;
+    #: pass it to profile the shape `scripts/audit.py` and `pipeline.build`
+    #: actually run.  Freeform has no islands and rejects the flag.
+    ap.add_argument("--islands", type=int, default=None)
     ap.add_argument("--cprofile", action="store_true")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    if args.islands is not None and args.strategy != "sequence-pair":
+        ap.error("--islands is a sequence-pair setting")
 
     url = args.url or make_url(args.target, args.rate)
     spec = build_candidates(
@@ -64,9 +74,16 @@ def main() -> int:
     try:
         if prof is not None:
             prof.enable()
-        placement = rp._strategy(args.strategy)(workers=args.workers).lay_out(
-            spec, time_budget_s=args.budget
-        )
+        if args.islands is None:
+            strategy = rp._strategy(args.strategy)(workers=args.workers)
+        else:
+            from flab2bp.layout.sequence_solver import SequencePairLayout
+
+            strategy = SequencePairLayout(
+                band_policy=rp.BandPolicy("portable"),
+                islands=args.islands,
+            )
+        placement = strategy.lay_out(spec, time_budget_s=args.budget)
     except NoValidLayout as exc:
         verdict = f"REFUSED: {exc.reason}"
     finally:
@@ -82,6 +99,7 @@ def main() -> int:
         "machines": n_mach,
         "groups": len(spec.groups),
         "strategy": args.strategy,
+        "islands": args.islands,
         "policy": str(args.policy),
         "budget_s": args.budget,
         "cprofile": bool(prof),

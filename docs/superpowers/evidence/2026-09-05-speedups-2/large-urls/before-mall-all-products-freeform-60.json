@@ -1,0 +1,100 @@
+{
+ "area": null,
+ "astar_s": 6.565835603512824,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 15258610,
+ "groups": 33,
+ "hits": 1453,
+ "machines": 449,
+ "misses": 22,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1475,
+   "s": 6.565835603512824
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.18264946527779102
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 2.3760643280111253
+  },
+  "commit_paths": {
+   "n": 4,
+   "s": 5.242494500940666
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.2065346611198038
+  },
+  "last_mile": {
+   "n": 1,
+   "s": 0.008455623872578144
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.22458271915093064
+  },
+  "merge_frontier": {
+   "n": 773,
+   "s": 4.35258623235859
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 3.8170122967567295
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.3307645458262414
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 2.0242982851341367
+  },
+  "prepare": {
+   "n": 6,
+   "s": 18.056629680097103
+  },
+  "refresh_history": {
+   "n": 61,
+   "s": 0.006048280280083418
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 7.379610903095454
+  },
+  "route_all": {
+   "n": 2,
+   "s": 11.649413849925622
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.3340671118348837
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.318715482018888
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  2.4968906410504133,
+  2.099683547159657,
+  1.9881961881183088,
+  1.9857121820095927,
+  4.60547558683902,
+  4.880671534920111
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 11.649413849925622,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 33.23386105406098
+}

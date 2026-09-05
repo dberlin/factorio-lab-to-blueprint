@@ -1,0 +1,103 @@
+{
+ "area": null,
+ "astar_s": 4.726377873215824,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 14249643,
+ "groups": 32,
+ "hits": 1391,
+ "machines": 436,
+ "misses": 206,
+ "passes": 3,
+ "phases": {
+  "astar": {
+   "n": 1597,
+   "s": 4.726377873215824
+  },
+  "build_landmarks": {
+   "n": 3,
+   "s": 0.3023248922545463
+  },
+  "coater_frame_bans": {
+   "n": 5,
+   "s": 5.271430897293612
+  },
+  "commit_paths": {
+   "n": 6,
+   "s": 4.275269981240854
+  },
+  "junction_ban": {
+   "n": 5,
+   "s": 0.4673944206442684
+  },
+  "last_mile": {
+   "n": 1,
+   "s": 0.0035473040770739317
+  },
+  "make_grid": {
+   "n": 73,
+   "s": 0.3375960367266089
+  },
+  "merge_frontier": {
+   "n": 891,
+   "s": 1.4149927329272032
+  },
+  "place_coaters": {
+   "n": 5,
+   "s": 2.8978864420205355
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.3142726661171764
+  },
+  "power_plan": {
+   "n": 5,
+   "s": 4.674157302826643
+  },
+  "prepare": {
+   "n": 5,
+   "s": 20.11140497191809
+  },
+  "refresh_history": {
+   "n": 84,
+   "s": 0.0004893164150416851
+  },
+  "relaxed_search": {
+   "n": 474,
+   "s": 0.7356878314167261
+  },
+  "reserve_port_access": {
+   "n": 10,
+   "s": 5.032190465833992
+  },
+  "route_all": {
+   "n": 3,
+   "s": 7.076390841975808
+  },
+  "static_risks": {
+   "n": 637,
+   "s": 1.2474580379202962
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.31293658912181854
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  3.69262434495613,
+  4.559605672955513,
+  3.715927676996216,
+  4.596164064947516,
+  3.5470832120627165
+ ],
+ "rate": 60,
+ "rounds": 3,
+ "route_all_s": 7.076390841975808,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "sequence-pair",
+ "target": "zurl2",
+ "verdict": "REFUSED: deadline exhausted before finding an exact layout",
+ "wall_s": 39.8876733710058
+}

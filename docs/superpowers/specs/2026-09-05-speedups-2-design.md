@@ -1,5 +1,19 @@
 # Speedups round 2: ranked levers for the next major throughput gain
 
+**Status (2026-09-05): §2's first batch — L2 then L1 — is implemented and
+GATED.**  `6efd447` (compact seed to a twelfth of the budget, 2.5 s floor),
+`300116c` (four islands by default with the race completion grace) and
+`c3d7229` (race parallelism kept, island deadlines clamped under the parent).
+Three paired 30 s corpus rounds against master `a232f0a`: **zero regressions,
+INVALID 0, CRASH 0, max `wall_overshoot_s` 0.000 s**, and
+`sequence-pair universe-matrix/all-products` — REFUSED on master in all three
+rounds — clears in two of three.  Sequence-pair area **-8.0 %** on the gate
+corpus (the design's -13.6 % was four large cells; 16 of 36 corpus cells are
+byte-identical), freeform unchanged.  §2's fourth gate item, peak RSS per
+cell, is UNMET: nothing writes an RSS key for the non-raced sequence-pair arm.
+Gate record: `docs/superpowers/evidence/2026-09-05-speedups-2/gate.md`.
+L3 (second batch) is next and unstarted.
+
 Evidence: `docs/superpowers/evidence/2026-09-05-speedups-2/README.md`
 (measurements, cProfile dumps, core traces, two prototypes).  Baseline is
 master `a232f0a` with the `2026-09-05-scale-levers` work already merged.

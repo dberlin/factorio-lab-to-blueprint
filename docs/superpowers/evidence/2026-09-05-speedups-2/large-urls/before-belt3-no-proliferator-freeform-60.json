@@ -1,0 +1,96 @@
+{
+ "area": null,
+ "astar_s": 15.602686901111156,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 29519272,
+ "groups": 13,
+ "hits": 2017,
+ "machines": 537,
+ "misses": 891,
+ "passes": 14,
+ "phases": {
+  "astar": {
+   "n": 2908,
+   "s": 15.602686901111156
+  },
+  "build_landmarks": {
+   "n": 14,
+   "s": 0.8827490638941526
+  },
+  "commit_paths": {
+   "n": 24,
+   "s": 3.575255688279867
+  },
+  "junction_ban": {
+   "n": 14,
+   "s": 0.5187219756189734
+  },
+  "last_mile": {
+   "n": 1,
+   "s": 0.02022009901702404
+  },
+  "make_grid": {
+   "n": 37,
+   "s": 0.1797597489785403
+  },
+  "merge_frontier": {
+   "n": 2793,
+   "s": 2.216759830247611
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.013399901101365685
+  },
+  "power_plan": {
+   "n": 14,
+   "s": 9.072101624915376
+  },
+  "prepare": {
+   "n": 14,
+   "s": 17.596918932627887
+  },
+  "refresh_history": {
+   "n": 57,
+   "s": 0.016717284452170134
+  },
+  "reserve_port_access": {
+   "n": 28,
+   "s": 3.565946002723649
+  },
+  "route_all": {
+   "n": 14,
+   "s": 20.413470614235848
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.18757845903746784
+  }
+ },
+ "policy": "no-proliferator",
+ "prepare_calls_s": [
+  1.9591511150356382,
+  1.1417974149808288,
+  1.1764616798609495,
+  1.3737372760660946,
+  1.316402664873749,
+  1.098281404003501,
+  1.1239745968487114,
+  1.1359054681379348,
+  1.2835517469793558,
+  1.2344068309757859,
+  1.1305473679676652,
+  1.168077799025923,
+  1.1542072088923305,
+  1.3004163589794189
+ ],
+ "rate": 60,
+ "rounds": 19,
+ "route_all_s": 20.413470614235848,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "belt3",
+ "verdict": "REFUSED: no packing of 26 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing",
+ "wall_s": 39.876188148977235
+}
