@@ -72,6 +72,7 @@ from flab2bp.layout.freeform import (
     _prepare_routing_problem,
     _prepared_candidate_area_lower_bound,
     _obstacle_aware_prepared_routing_floor,
+    _incumbent_rectangle_feasibility_audit,
     _prepared_routing_lower_bound,
     _PreparedRoutingProblem,
     _projection_no_good,
@@ -565,6 +566,7 @@ class DetailedStageResult:
     lower_bound_dominated: bool = False
     detailed_skip_reason: str | None = None
     obstacle_lower_bound_dominated: bool = False
+    rectangle_lower_bound_dominated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -831,6 +833,8 @@ class StageObservation:
     detailed_skip_reason: str | None
     obstacle_lower_bound_dominated: bool = False
     obstacle_lower_bound_violation: bool = False
+    rectangle_lower_bound_dominated: bool = False
+    rectangle_lower_bound_violation: bool = False
 
     @property
     def energy(self) -> SearchEnergy:
@@ -1169,6 +1173,9 @@ class SequenceSolver[PreparedT]:
             and self._incumbent is not None
             and self._incumbent.exact_key <= obstacle_lower_key
         )
+        rectangle_dominated = bool(
+            declared is not None and declared[1].rectangle_proved_dominated
+        )
         if dominated and self.prune_dominated_prepared and allow_proof_skip:
             return (
                 DetailedStageResult(
@@ -1184,6 +1191,7 @@ class SequenceSolver[PreparedT]:
                     lower_bound_dominated=True,
                     detailed_skip_reason="prepared-lower-bound",
                     obstacle_lower_bound_dominated=obstacle_dominated,
+                    rectangle_lower_bound_dominated=rectangle_dominated,
                 ),
                 0.0,
             )
@@ -1196,6 +1204,7 @@ class SequenceSolver[PreparedT]:
                 prepared_lower_bound=declared,
                 lower_bound_dominated=dominated,
                 obstacle_lower_bound_dominated=obstacle_dominated,
+                rectangle_lower_bound_dominated=rectangle_dominated,
             ),
             elapsed,
         )
@@ -3043,6 +3052,17 @@ class SequenceSolver[PreparedT]:
                     < (
                         detailed.prepared_lower_bound[0],
                         detailed.prepared_lower_bound[1].obstacle_total,
+                    )
+                ),
+                rectangle_lower_bound_dominated=detailed.rectangle_lower_bound_dominated,
+                rectangle_lower_bound_violation=(
+                    exact_key is not None
+                    and detailed.prepared_lower_bound is not None
+                    and detailed.prepared_lower_bound[1].rectangle_proved_dominated
+                    and exact_key
+                    < (
+                        detailed.prepared_lower_bound[1].rectangle_threshold_area,
+                        detailed.prepared_lower_bound[1].rectangle_threshold_belts,
                     )
                 ),
                 detailed_skip_reason=detailed.detailed_skip_reason,
@@ -5803,6 +5823,8 @@ def _production_run(
         except ValueError:
             return width
 
+    solver_ref: list[SequenceSolver[_ProductionCandidate]] = []
+
     def exact_lower_bound(
         candidate: _ProductionCandidate,
     ) -> tuple[int, PreparedRoutingLowerBound] | None:
@@ -5810,6 +5832,17 @@ def _production_run(
             return None
         baseline = _prepared_routing_lower_bound(candidate.prepared)
         obstacle = _obstacle_aware_prepared_routing_floor(candidate.prepared)
+        incumbent_key = (
+            solver_ref[0]._incumbent.exact_key
+            if solver_ref and solver_ref[0]._incumbent is not None
+            else None
+        )
+        rectangle = _incumbent_rectangle_feasibility_audit(
+            candidate.prepared,
+            incumbent_key,
+            baseline_total=baseline.total,
+            obstacle_total=baseline.protected_template_belts + obstacle.route_floor,
+        )
         return (
             _prepared_candidate_area_lower_bound(candidate.prepared),
             replace(
@@ -5819,6 +5852,13 @@ def _production_run(
                 obstacle_reachable=obstacle.reachable,
                 obstacle_wall_time_s=obstacle.wall_time_s,
                 obstacle_expansions=obstacle.expansions,
+                rectangle_eligible=rectangle.eligible,
+                rectangle_tested=rectangle.tested,
+                rectangle_feasible=rectangle.feasible,
+                rectangle_proved_dominated=rectangle.proved_dominated,
+                rectangle_threshold_area=rectangle.threshold_area,
+                rectangle_threshold_belts=rectangle.threshold_belts,
+                rectangle_wall_time_s=rectangle.wall_time_s,
             ),
         )
 
@@ -5868,6 +5908,7 @@ def _production_run(
         ),
         publish_incumbent=publish_incumbent,
     )
+    solver_ref.append(solver)
     seed_started = time.monotonic()
     seed_deadline = min(
         deadline,
@@ -6358,6 +6399,12 @@ class _PreparedLowerBoundStats(TypedDict):
     obstacle_bound_reachable: float
     obstacle_bound_disconnected: float
     obstacle_bound_floor_gain: float
+    rectangle_bound_eligible: float
+    rectangle_bound_tested: float
+    rectangle_bound_feasible: float
+    rectangle_bound_extra_hits: float
+    rectangle_bound_wall_time_s: float
+    rectangle_bound_violations: float
     obstacle_bound_extra_hits: float
     obstacle_bound_hit_time_s: float
     obstacle_bound_hit_time_share: float
@@ -6383,6 +6430,13 @@ def _prepared_lower_bound_stats(
         stage
         for stage in prepared
         if stage.obstacle_lower_bound_dominated and not stage.lower_bound_dominated
+    )
+    rectangle_hits = tuple(
+        stage
+        for stage in prepared
+        if stage.rectangle_lower_bound_dominated
+        and not stage.lower_bound_dominated
+        and not stage.obstacle_lower_bound_dominated
     )
     obstacle_hit_seconds = sum(stage.detailed_route_time_s for stage in obstacle_hits)
     obstacle_bounds = tuple(
@@ -6424,6 +6478,22 @@ def _prepared_lower_bound_stats(
         ),
         "obstacle_bound_expansions": float(
             sum(bound.obstacle_expansions for bound in obstacle_bounds)
+        ),
+        "rectangle_bound_eligible": float(
+            sum(bound.rectangle_eligible for bound in obstacle_bounds)
+        ),
+        "rectangle_bound_tested": float(
+            sum(bound.rectangle_tested for bound in obstacle_bounds)
+        ),
+        "rectangle_bound_feasible": float(
+            sum(bound.rectangle_feasible for bound in obstacle_bounds)
+        ),
+        "rectangle_bound_extra_hits": float(len(rectangle_hits)),
+        "rectangle_bound_wall_time_s": sum(
+            bound.rectangle_wall_time_s for bound in obstacle_bounds
+        ),
+        "rectangle_bound_violations": float(
+            sum(stage.rectangle_lower_bound_violation for stage in prepared)
         ),
         "obstacle_bound_violations": float(
             sum(stage.obstacle_lower_bound_violation for stage in prepared)
@@ -6511,6 +6581,12 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
         "obstacle_bound_wall_time_s": bound_stats["obstacle_bound_wall_time_s"],
         "obstacle_bound_expansions": bound_stats["obstacle_bound_expansions"],
         "obstacle_bound_violations": bound_stats["obstacle_bound_violations"],
+        "rectangle_bound_eligible": bound_stats["rectangle_bound_eligible"],
+        "rectangle_bound_tested": bound_stats["rectangle_bound_tested"],
+        "rectangle_bound_feasible": bound_stats["rectangle_bound_feasible"],
+        "rectangle_bound_extra_hits": bound_stats["rectangle_bound_extra_hits"],
+        "rectangle_bound_wall_time_s": bound_stats["rectangle_bound_wall_time_s"],
+        "rectangle_bound_violations": bound_stats["rectangle_bound_violations"],
     }
 
 
@@ -6614,6 +6690,12 @@ def _with_observational_stats(
             "obstacle_bound_wall_time_s": bound_stats["obstacle_bound_wall_time_s"],
             "obstacle_bound_expansions": bound_stats["obstacle_bound_expansions"],
             "obstacle_bound_violations": bound_stats["obstacle_bound_violations"],
+            "rectangle_bound_eligible": bound_stats["rectangle_bound_eligible"],
+            "rectangle_bound_tested": bound_stats["rectangle_bound_tested"],
+            "rectangle_bound_feasible": bound_stats["rectangle_bound_feasible"],
+            "rectangle_bound_extra_hits": bound_stats["rectangle_bound_extra_hits"],
+            "rectangle_bound_wall_time_s": bound_stats["rectangle_bound_wall_time_s"],
+            "rectangle_bound_violations": bound_stats["rectangle_bound_violations"],
             "best_overflow": float(
                 telemetry.best_overflow if telemetry.best_overflow is not None else -1
             ),
