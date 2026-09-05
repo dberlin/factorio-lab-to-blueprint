@@ -19424,6 +19424,23 @@ def test_direct_candidate_uses_the_emitted_post_piler_tail() -> None:
     assert candidate.origin_deltas == (emitted_tail.x - 1, emitted_tail.x)
 
 
+def test_piled_direct_alignment_target_includes_the_emitted_tail() -> None:
+    spec = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
+    strips = plan_strips(spec, strip_len=1)
+    source = next(strip for strip in strips if strip.recipe_id == "iron-ingot")
+    destination_index, destination = next(
+        (index, strip)
+        for index, strip in enumerate(strips)
+        if strip.recipe_id == "gear"
+    )
+    strips[destination_index] = _strip_with_attachment_column(destination, "input", 2)
+
+    candidates = _direct_net_candidates(strips, spec)
+    (target,) = freeform_module._direct_alignment_targets(candidates)
+
+    assert target.producer_span == source.width + source.tail_extension + 1
+
+
 def test_belt_port_output_starts_unstacked_and_emits_one_piler() -> None:
     base = ray_receiver_spec()
     producer_group, sink_group = base.groups

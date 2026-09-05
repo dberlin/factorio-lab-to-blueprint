@@ -3127,7 +3127,11 @@ def _direct_net_candidates(
             item=item,
             prod_row=src.row_of_output(k),
             cons_row=dst.row_of_input(item),
-            prod_span=src.width,
+            prod_span=(
+                src.width + src.tail_extension + 1
+                if _piler_plan_for_output(src, k) is not None
+                else src.width
+            ),
             cons_span=dst.input_lane_tiles(dst.lane_of_input(item)),
             cargo_domain=CargoDomain.UNSPRAYED,
             origin_deltas=origin_deltas,
