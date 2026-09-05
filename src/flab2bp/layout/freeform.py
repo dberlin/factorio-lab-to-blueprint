@@ -8550,7 +8550,7 @@ def _route_all(
     planned_power_sites: Sequence[tuple[int, int]] | None = None,
     junction_frame_bans: Sequence[frozenset[Cell]] = (),
     *,
-    prioritize_source_families: bool = False,
+    prioritize_source_families: bool = True,
 ) -> DetailedRouteResult:
     """Route every net, negotiating congestion across iterations.
 
@@ -10417,9 +10417,9 @@ def _route_all(
         #: Fresh every round, because a wall only exists while the path that
         #: built it does; `history` is where the charge accumulates.
         blame: dict[Cell, float] = {}
-        # Keep each shared-source family contiguous. Compact callers can put
-        # junction-dependent families ahead of singleton trunks; ordinary
-        # packs retain established longest-first routing.
+        # Keep each shared-source family contiguous and route fanout families
+        # before singleton trunks. The first branch must retain a legal merge
+        # frontier for its siblings before an unrelated run consumes it.
         order = sorted(
             range(len(nets)),
             key=lambda i: (
@@ -11120,7 +11120,7 @@ def _match_access_corridors(
     deadline: float | None = None,
 ) -> dict[PortAccessDemand, PortAccessCorridor]:
     """Assign cell-disjoint corridors, giving every port its first claim first."""
-    def solve_model() -> cp_model.CpSolverStatus:
+    def solve_model(*, work_limited: bool = False) -> cp_model.CpSolverStatus:
         if (cancelled is not None and cancelled()) or _expired(deadline):
             raise _PreparationDeadline
         if deadline is not None:
@@ -11131,7 +11131,7 @@ def _match_access_corridors(
         status = solver.solve(model)
         if (cancelled is not None and cancelled()) or _expired(deadline):
             raise _PreparationDeadline
-        if deadline is not None and status == cp_model.UNKNOWN:
+        if deadline is not None and status == cp_model.UNKNOWN and not work_limited:
             raise _PreparationDeadline
         return status
 
@@ -11188,25 +11188,52 @@ def _match_access_corridors(
     ordered_choices = tuple(choices)
     if not ordered_choices:
         return {}
-    ranked_values = {choice: solver.boolean_value(variable) for choice, variable in choices.items()}
-    for choice, variable in choices.items():
-        model.add_hint(variable, int(ranked_values[choice]))
-    model.minimize(
-        sum(ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1))
+
+    def solution_values() -> dict[tuple[PortAccessDemand, Cell, Cell], bool]:
+        return {
+            choice: solver.boolean_value(variable) for choice, variable in choices.items()
+        }
+
+    fallback_values: dict[tuple[PortAccessDemand, Cell, Cell], bool] | None = (
+        solution_values()
     )
-    if validate is None:
-        solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
+    for choice, variable in choices.items():
+        model.add_hint(variable, int(fallback_values[choice]))
+    tie_objective = sum(
+        ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1)
+    )
+    model.minimize(tie_objective)
+    solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
     while True:
-        status = solve_model()
-        use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-        if not use_polished:
-            if validate is not None and status == cp_model.INFEASIBLE:
+        status = solve_model(work_limited=True)
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            selected_values = solution_values()
+        elif status == cp_model.INFEASIBLE:
+            if validate is not None or fallback_values is None:
                 return {}
-            selected_values = ranked_values
+            selected_values = fallback_values
+        elif fallback_values is not None:
+            selected_values = fallback_values
         else:
-            selected_values = {
-                choice: solver.boolean_value(variable) for choice, variable in choices.items()
-            }
+            # The bounded tie polish found no incumbent after a validation cut.
+            # Re-establish a model-valid fallback without the polish objective;
+            # the previous ranked solution is forbidden by the new cut.
+            model.clear_objective()
+            solver.parameters.max_deterministic_time = math.inf
+            try:
+                fallback_status = solve_model()
+            finally:
+                model.minimize(tie_objective)
+                solver.parameters.max_deterministic_time = (
+                    _ACCESS_TIE_DETERMINISTIC_WORK
+                )
+            if fallback_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+                return {}
+            fallback_values = solution_values()
+            model.clear_hints()
+            for choice, variable in choices.items():
+                model.add_hint(variable, int(fallback_values[choice]))
+            selected_values = fallback_values
         assigned: dict[PortAccessDemand, PortAccessCorridor] = {}
         selected_by_demand: dict[PortAccessDemand, cp_model.IntVar] = {}
         for choice in ordered_choices:
@@ -11226,6 +11253,7 @@ def _match_access_corridors(
         if not cut_variables:
             return {}
         model.add(sum(cut_variables) <= len(cut_variables) - 1)
+        fallback_values = None
 
 
 def _reserve_port_access(
@@ -16755,7 +16783,7 @@ def _build_prepared(
     route: bool,
     deadline: float | None = None,
     budget: dict[str, int] | None = None,
-    prioritize_source_families: bool = False,
+    prioritize_source_families: bool = True,
 ) -> _BuildResult:
     """Emit, route, and power one already-prepared immutable problem."""
     prelinked_routed = tuple(net.net_id for net in prepared.nets if net.prelinked) if route else ()
