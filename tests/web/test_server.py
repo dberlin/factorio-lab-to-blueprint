@@ -190,6 +190,7 @@ def test_a_refusal_comes_back_200_not_500(start: Callable[..., Client]) -> None:
                 "strategy": None,
                 "reason": "freeform/a: too tall",
                 "projection_failures": [],
+                "stats": {},
             }
         ],
     }

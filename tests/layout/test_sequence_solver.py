@@ -3378,16 +3378,48 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
 ) -> None:
     caches: list[object] = []
     checks: list[bool] = []
+    deadlines: list[float] = []
 
     def cancelled_prepare(
         *_args: object,
         staged_static_cache: object,
         cancelled: Callable[[], bool],
+        deadline: float,
         **_kwargs: object,
     ) -> Never:
         caches.append(staged_static_cache)
         checks.append(cancelled())
-        raise freeform_module._PreparationDeadline
+        deadlines.append(deadline)
+        demand = freeform_module.PortAccessDemand(
+            cell=(0, 0, 0),
+            kind=freeform_module.PortAccessKind.BOUNDARY_ARRIVAL,
+            item="ore",
+            belt=0,
+            strip_index=0,
+            columns=1,
+        )
+        original_monotonic = freeform_module.time.monotonic
+
+        def expire_during_resolve(
+            _assigned: Mapping[
+                freeform_module.PortAccessDemand,
+                freeform_module.PortAccessCorridor,
+            ],
+        ) -> tuple[freeform_module.PortAccessDemand, ...]:
+            monkeypatch.setattr(freeform_module.time, "monotonic", lambda: deadline)
+            return (demand,)
+
+        try:
+            freeform_module._match_access_corridors(
+                (demand,),
+                {demand: (((1, 0, 0), (2, 0, 0)), ((0, 1, 0), (0, 2, 0)))},
+                validate=expire_during_resolve,
+                cancelled=cancelled,
+                deadline=deadline,
+            )
+        finally:
+            monkeypatch.setattr(freeform_module.time, "monotonic", original_monotonic)
+        raise AssertionError("deadline expiry did not abort access rematching")
 
     monkeypatch.setattr(
         sequence_solver_module,
@@ -3417,6 +3449,8 @@ def test_production_exact_preparation_propagates_deadline_and_reuses_only_pure_c
     assert checks == [False, False]
     assert len(caches) == 2
     assert caches[0] is caches[1]
+    assert len(deadlines) == 2
+    assert all(deadline > time.monotonic() for deadline in deadlines)
 
 
 def test_production_exact_preparation_reuses_realized_direct_insert(
