@@ -11472,6 +11472,35 @@ class TestOneLaneCanServeSeveralDestinations:
         with pytest.raises(ValueError, match="over the"):
             _merge_lanes(shard, 3, demand, F(12))
 
+    def test_a_merged_lane_is_judged_by_what_the_shard_supplies(self) -> None:
+        """Two consumers drawing 18/s and 15/s of hydrogen from a producer that
+        emits 1.5/s share one lane: the bus feeds the rest.  Without a supply
+        figure the old draw-based verdict stands, so callers that do not know
+        their supply plan exactly as before."""
+        shard = [
+            ("hydrogen", "casimir-crystal#1", CargoDomain.UNSPRAYED),
+            ("hydrogen", "deuterium#6", CargoDomain.UNSPRAYED),
+            ("antimatter", "universe-matrix#37", CargoDomain.UNSPRAYED),
+        ]
+        demand = {
+            ("hydrogen", "casimir-crystal#1", CargoDomain.UNSPRAYED): F(18),
+            ("hydrogen", "deuterium#6", CargoDomain.UNSPRAYED): F(15),
+            ("antimatter", "universe-matrix#37", CargoDomain.UNSPRAYED): F(1),
+        }
+        lanes = _merge_lanes(
+            shard,
+            2,
+            demand,
+            F(30),
+            supply={"hydrogen": F(3, 2), "antimatter": F(1)},
+        )
+        hydrogen = [dest for item, dest, _domain in lanes if item == "hydrogen"]
+        assert hydrogen == ["casimir-crystal#1|deuterium#6"]
+        with pytest.raises(ValueError, match=r"33.*over the 30"):
+            _merge_lanes(shard, 2, demand, F(30))
+        with pytest.raises(ValueError, match=r"33.*over the 30"):
+            _merge_lanes(shard, 2, demand, F(30), supply={"hydrogen": F(60)})
+
     def test_a_one_machine_producer_plans_and_serves_every_consumer(self) -> None:
         spec = one_machine_fan_out_spec(4)
         strips = plan_strips(spec, strip_len=6)

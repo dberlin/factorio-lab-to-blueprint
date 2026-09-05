@@ -1749,6 +1749,8 @@ def _merge_lanes(
     demand: Mapping[_CargoSink, Fraction],
     capacity: Fraction,
     stacks: Mapping[str, int] | None = None,
+    *,
+    supply: Mapping[str, Fraction] | None = None,
 ) -> list[_CargoSink]:
     """Fold a shard's destinations onto at most ``reach`` output lanes.
 
@@ -1776,6 +1778,13 @@ def _merge_lanes(
     Lanes are handed out one per product first (a shard must drain every
     product, or its machines back up on the one it cannot) and the spares go to
     whichever product has the most destinations per lane so far.
+
+    ``supply`` is items/s of each product the shard's own machines emit.  A lane
+    cannot carry more than its producer puts on it, whatever its consumers draw
+    -- a both-fed item's consumers are served mostly by the bus -- so the
+    over-capacity verdict is taken on ``min(draw, supply)``.  Draw still decides
+    which destinations share a lane.  Without ``supply`` the verdict is the
+    draw, exactly as before.
     """
     if len(shard) <= reach:
         return list(shard)
@@ -1829,10 +1838,13 @@ def _merge_lanes(
         for b, group in enumerate(bins):
             if not group:
                 continue
-            if loads[b] > lane_capacity:
+            carried = loads[b]
+            if supply is not None and item in supply and supply[item] < carried:
+                carried = supply[item]
+            if carried > lane_capacity:
                 raise ValueError(
                     f"{item}: destinations {sorted(group)} have to share one "
-                    f"output lane carrying {loads[b]} items/s, over the "
+                    f"output lane carrying {carried} items/s, over the "
                     f"{lane_capacity}/s the belt sustains"
                 )
             out.append((item, DEST_SEP.join(sorted(group)), cargo_domain))
