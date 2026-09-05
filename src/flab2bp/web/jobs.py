@@ -31,7 +31,13 @@ from urllib.parse import urlsplit
 
 from flab2bp import pipeline
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
-from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout, PlacementStats
+from flab2bp.layout.base import (
+    ATOMIC_COMPLETION_GRACE_S,
+    LayoutAttemptFailure,
+    NoValidLayout,
+    PlacementStats,
+)
+from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
@@ -39,10 +45,12 @@ from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, r
 State = Literal["queued", "running", "done", "refused", "error"]
 WebStrategyName = Literal["best", "freeform", "sequence-pair"]
 
-#: The most solver time one submitted job may ask for, in seconds.  This is a
-#: ceiling on ``effective candidates * strategies * budget``, because that
-#: product is what actually runs.
-MAX_SOLVER_SECONDS = 300.0
+#: The projected total, in seconds, past which a submitted job says out loud
+#: that it will take a while.  This is a WARNING and not a bound: how long to
+#: search is the caller's call, and a build that was asked for is run.  It is
+#: compared against ``effective candidates * strategies * (budget + grace)``,
+#: because that product is what actually runs.
+WARN_TOTAL_SECONDS = 300.0
 
 #: Jobs kept after they finish, so a poll that arrives late still finds its
 #: answer.  Oldest finished job is evicted first.
@@ -88,8 +96,55 @@ class Options:
         time against this so "still working" has a scale, not so it can promise
         an exact finish time.
         """
+        return self.attempt_count * self.budget_s
+
+    @property
+    def attempt_count(self) -> int:
+        """Layout attempts this job runs: one per candidate per strategy."""
         per_spec = pipeline.PRODUCTION_STRATEGY_COUNT if self.strategy == "best" else 1
-        return self.effective_candidate_count * per_spec * self.budget_s
+        return self.effective_candidate_count * per_spec
+
+    @property
+    def completion_grace_s(self) -> float:
+        """What one attempt gets on top of its search budget, in seconds.
+
+        The budget bounds the SEARCH.  Compaction, projection, validation and
+        encoding run after it inside the attempt's own hard wall, and that wall
+        is budget + grace -- see ``pipeline``'s ``attempt_deadline``.  ``best``
+        is submitted raced, so it carries the race's grace; an explicit
+        strategy solves serially and carries the atomic one.
+        """
+        return RACE_COMPLETION_GRACE_S if self.strategy == "best" else ATOMIC_COMPLETION_GRACE_S
+
+    @property
+    def projected_total_s(self) -> float:
+        """An upper bound on the WHOLE job's solving, in seconds.
+
+        ``solver_ceiling_s`` counts search budgets alone; this adds the
+        completion grace every attempt may also spend, which is what makes the
+        difference between "15s" and most of an hour once the candidate and
+        strategy multipliers land on it.  Rates, encoding and queueing are
+        still on top: it is a scale for the wait, not a finish time.
+        """
+        return self.attempt_count * (self.budget_s + self.completion_grace_s)
+
+    @property
+    def warning(self) -> str | None:
+        """What is worth saying out loud about this request, if anything.
+
+        A long budget is not an error -- nothing is clamped and nothing is
+        refused -- but the multiplication that turns a per-layout number into
+        the job's wall clock is easy to miss, so it is spelled out.
+        """
+        if self.projected_total_s <= WARN_TOTAL_SECONDS:
+            return None
+        return (
+            f"{self.effective_candidate_count} candidate(s) x {self.strategy} at "
+            f"{self.budget_s:g}s per layout is up to {self.projected_total_s:g}s of "
+            f"solving -- {self.attempt_count} layout(s) x ({self.budget_s:g}s budget + "
+            f"{self.completion_grace_s:g}s completion grace) -- over the "
+            f"{WARN_TOTAL_SECONDS:g}s mark. It will still run."
+        )
 
 
 class InvalidOptions(ValueError):
@@ -128,6 +183,11 @@ def parse_options(raw: JsonValue) -> Options:
     Every bound here is a refusal rather than a clamp.  Silently rounding a
     budget of 9999 down to something servable would run a different build from
     the one that was asked for and report it as the one that was asked for.
+
+    The budget itself has no upper bound for that same reason: how long to
+    search is the caller's call.  It must be a positive finite number, and a
+    projected total over :data:`WARN_TOTAL_SECONDS` comes back as
+    :attr:`Options.warning` -- carried on the job, never raised.
     """
     if not isinstance(raw, dict):
         raise InvalidOptions("expected a JSON object")
@@ -235,7 +295,7 @@ def parse_options(raw: JsonValue) -> Options:
     if fetch_flow:
         _validate_web_fetch_url(url.strip())
 
-    options = Options(
+    return Options(
         url=url.strip(),
         strategy=web_strategy,
         band=band,
@@ -247,14 +307,6 @@ def parse_options(raw: JsonValue) -> Options:
         flow=flow.strip(),
         fetch_flow=fetch_flow,
     )
-    if options.solver_ceiling_s > MAX_SOLVER_SECONDS:
-        raise InvalidOptions(
-            f"{options.effective_candidate_count} candidate(s) x {options.strategy} at "
-            f"{options.budget_s:g}s is up to {options.solver_ceiling_s:g}s of solving, "
-            f"over the {MAX_SOLVER_SECONDS:g}s ceiling. Lower the budget, choose fewer "
-            f"candidate policies, or pick an explicit strategy."
-        )
-    return options
 
 
 @dataclass
@@ -425,6 +477,11 @@ class Builder:
                 # A ceiling on solver time, not a promise of a finish time --
                 # see Options.solver_ceiling_s.
                 "solver_ceiling_s": job.options.solver_ceiling_s,
+                # A long budget is honoured, not clamped, so the only honest
+                # thing left to do is say what it will cost. `null` when the
+                # projected total is unremarkable -- a warning that is always
+                # present is one nobody reads.
+                "warning": job.options.warning,
                 "options": {
                     "url": job.options.url,
                     "strategy": job.options.strategy,

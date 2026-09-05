@@ -213,6 +213,30 @@ def test_sequence_pair_is_accepted_with_exact_wire_spelling(
     assert _object(body, "options")["strategy"] == "sequence-pair"
 
 
+def test_a_long_budget_is_submitted_with_a_warning_rather_than_refused(
+    start: Callable[..., Client],
+) -> None:
+    """The wire says "this will take a while", not "no"."""
+
+    def not_layout(_options: Options, _progress: pipeline.ProgressSink) -> pipeline.Build:
+        raise ValueError("layout is not part of this submission-boundary test")
+
+    client = start(not_layout)
+    status, body = client.post("/api/build", {"url": URL, "budget_s": 1200})
+    assert status == 202
+    assert _object(body, "options")["budget_s"] == 1200
+    assert "1200s per layout" in _string(body, "warning")
+
+
+def test_a_short_budget_carries_no_warning(start: Callable[..., Client]) -> None:
+    def not_layout(_options: Options, _progress: pipeline.ProgressSink) -> pipeline.Build:
+        raise ValueError("layout is not part of this submission-boundary test")
+
+    client = start(not_layout)
+    _, body = client.post("/api/build", {"url": URL, "budget_s": 2, "strategy": "freeform"})
+    assert body["warning"] is None
+
+
 def test_unknown_strategy_is_rejected_before_submission(start: Callable[..., Client]) -> None:
     status, body = start().failing_json(
         "/api/build", {"url": URL, "strategy": "unknown"}, method="POST"
