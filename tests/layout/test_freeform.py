@@ -14756,7 +14756,7 @@ class TestDetailedRoutingDiagnostics:
             "branch's merge frontier before its sibling could use it"
         )
 
-    def test_requested_fanout_priority_routes_families_before_long_singletons(
+    def test_shared_source_families_route_before_long_singletons(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         canvas = _Canvas()
@@ -14815,13 +14815,12 @@ class TestDetailedRoutingDiagnostics:
             2001,
             35,
             bounds,
-            prioritize_source_families=True,
         )
 
         assert result.status is DetailedRouteStatus.ROUTED
         assert seen[:2] == ["family", "family"], (
-            "a compact caller's junction-dependent fanout family must claim "
-            "its merge frontier before a longer singleton consumes it"
+            "a junction-dependent fanout family must claim its merge frontier "
+            "before a longer singleton consumes it"
         )
 
 
@@ -23152,6 +23151,53 @@ def test_two_reachable_boundary_claims_are_jointly_rematched() -> None:
         cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)
     }
     assert len(occupied) == 4
+
+
+def test_validated_access_rematching_keeps_each_tie_break_solve_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    demand = _access_demand(
+        (0, 0, 0),
+        freeform.PortAccessKind.BOUNDARY_ARRIVAL,
+        belt=1,
+    )
+    original_solve = cp_model.CpSolver.solve
+    deterministic_limits: list[float] = []
+
+    def record_limit(
+        solver: cp_model.CpSolver,
+        model: cp_model.CpModel,
+    ) -> cp_model.CpSolverStatus:
+        status = original_solve(solver, model)
+        deterministic_limits.append(solver.parameters.max_deterministic_time)
+        return status
+
+    validations: list[tuple[freeform.PortAccessCorridor, ...]] = []
+
+    def reject_first(
+        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> Collection[freeform.PortAccessDemand] | None:
+        validations.append(tuple(assigned.values()))
+        return (demand,) if len(validations) == 1 else None
+
+    monkeypatch.setattr(cp_model.CpSolver, "solve", record_limit)
+    matched = freeform._match_access_corridors(
+        (demand,),
+        {
+            demand: (
+                ((1, 0, 0), (2, 0, 0)),
+                ((0, 1, 0), (0, 2, 0)),
+            )
+        },
+        validate=reject_first,
+    )
+
+    assert matched
+    assert len(validations) == 2
+    assert deterministic_limits[-2:] == [
+        freeform._ACCESS_TIE_DETERMINISTIC_WORK,
+        freeform._ACCESS_TIE_DETERMINISTIC_WORK,
+    ]
 
 
 def test_true_no_complete_boundary_matching_is_exhaustive_static_access() -> None:
