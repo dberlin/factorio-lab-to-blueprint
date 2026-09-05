@@ -37,6 +37,9 @@ def make_url(target: str, rate: int, belt: str = "conveyor-belt-3", rank: str = 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("target")
+    ap.add_argument(
+        "--url", default=None, help="profile this FactorioLab URL instead of target/rate"
+    )
     ap.add_argument("--rate", type=int, default=60)
     ap.add_argument("--strategy", default="freeform")
     ap.add_argument("--policy", type=CandidatePolicy, default=CandidatePolicy.NO_PROLIFERATOR)
@@ -46,7 +49,7 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    url = make_url(args.target, args.rate)
+    url = args.url or make_url(args.target, args.rate)
     spec = build_candidates(
         load_vendored(), parse_url(url), candidate_policies=(args.policy,)
     ).candidates[0]
@@ -65,7 +68,7 @@ def main() -> int:
             spec, time_budget_s=args.budget
         )
     except NoValidLayout as exc:
-        verdict = f"REFUSED: {exc.reason[:120]}"
+        verdict = f"REFUSED: {exc.reason}"
     finally:
         if prof is not None:
             prof.disable()
