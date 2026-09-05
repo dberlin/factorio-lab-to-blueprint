@@ -109,6 +109,87 @@ def _rated_spec(rate: Fraction, *, count: int = 8, capacity: Fraction = Fraction
     )
 
 
+def _both_fed_hydrogen_spec() -> BuildSpec:
+    """`universe-matrix*90` in miniature: hydrogen is belted in AND produced.
+
+    Group ORDER is load-bearing -- `freeform._adapt` keys a group
+    ``f"{recipe_id}#{index}"`` -- so `casimir-crystal` sits at index 1 and
+    `deuterium` at index 2, and those are the destination keys the shared
+    hydrogen lane carries.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="mass-energy-storage",
+                machine_item_id="miniature-particle-collider",
+                count=2,
+                inputs_per_machine={"critical-photon": Fraction(3, 4)},
+                outputs_per_machine={
+                    "hydrogen": Fraction(3, 4),
+                    "antimatter": Fraction(3, 4),
+                },
+            ),
+            MachineGroup(
+                recipe_id="casimir-crystal",
+                machine_item_id="assembling-machine-1",
+                count=4,
+                inputs_per_machine={"hydrogen": Fraction(9, 2)},
+                outputs_per_machine={"casimir-crystal": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="deuterium",
+                machine_item_id="miniature-particle-collider",
+                count=4,
+                inputs_per_machine={"hydrogen": Fraction(15, 4)},
+                outputs_per_machine={"deuterium": Fraction(1, 2)},
+            ),
+            MachineGroup(
+                recipe_id="energy-matrix",
+                machine_item_id="assembling-machine-1",
+                count=1,
+                inputs_per_machine={"hydrogen": Fraction(3)},
+                outputs_per_machine={"energy-matrix": Fraction(1)},
+            ),
+        ),
+        external_inputs={
+            "hydrogen": Fraction(33),
+            "critical-photon": Fraction(3, 2),
+        },
+        outputs={
+            "antimatter": Fraction(3, 2),
+            "casimir-crystal": Fraction(4),
+            "deuterium": Fraction(2),
+            "energy-matrix": Fraction(1),
+        },
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=Fraction(30),
+    )
+
+
+def test_a_both_fed_product_whose_consumers_draw_more_than_a_belt_still_plans() -> None:
+    """mass-energy-storage: 2 machines emit 0.75/s hydrogen each into three
+    consumers whose combined draw (18 + 15 + 3 = 36/s) is served mostly by a
+    33/s bus entry.  The producer's shared hydrogen lane carries 1.5/s and
+    must plan; before 2026-09-05 it was refused for "carrying" 33/s.
+
+    The hydrogen ledger is deliberately left 1.5/s short of the draw (33 on the
+    bus plus 1.5 produced against 36 consumed): `BuildSpec` checks that every
+    consumed item is SUPPLIED by something, not that the rates balance, and
+    rounding the bus entry up to 34.5 would hide the very number -- 33 -- the
+    old verdict quoted.
+    """
+    spec = _both_fed_hydrogen_spec()
+    families = generate_strip_families(spec)
+    mes = [family for family in families if family.recipe_id == "mass-energy-storage"]
+    assert mes, [family.recipe_id for family in families]
+    hydrogen_lanes = [
+        lane for family in mes for lane in family.output_lanes if lane.items == ("hydrogen",)
+    ]
+    assert hydrogen_lanes
+    destinations = {key for lane in hydrogen_lanes for key in lane.destination_group_keys}
+    assert {"casimir-crystal#1", "deuterium#2"} <= destinations
+
+
 def test_machine_cap_is_the_floor_of_capacity_over_the_largest_single_item_rate() -> None:
     (family,) = generate_strip_families(_rated_spec(Fraction(4)))
     assert family.machine_cap == 7  # floor(30 / 4)

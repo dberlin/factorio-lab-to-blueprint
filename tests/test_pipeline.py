@@ -1028,12 +1028,9 @@ def test_universe_matrix_at_90_per_minute_never_crashes_strip_planning() -> None
         parse_url(UNIVERSE_MATRIX_90_URL),
         candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
     ).candidates[0]
-    try:
-        families = generate_strip_families(spec)
-    except NoValidLayout as refusal:
-        assert "cannot be planned into strips" in refusal.reason
-    else:
-        assert len(families) >= 40
+    families = generate_strip_families(spec)
+    mes = [family for family in families if family.recipe_id == "mass-energy-storage"]
+    assert len(families) >= 40 and len(mes) == 2
 
 
 def _with_belt(

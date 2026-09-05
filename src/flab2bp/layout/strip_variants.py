@@ -1310,8 +1310,17 @@ def _logical_strip_plans(
                         item: spec.planning_stack(item, external=False)
                         for item, _destination, _cargo_domain in shard
                     },
+                    # What this shard's OWN machines emit.  The demand above is
+                    # the consumers' whole draw, which for a both-fed item is
+                    # served mostly by the bus; a lane can only carry what its
+                    # producer puts on it, so that is what the capacity verdict
+                    # is taken on.
+                    supply={
+                        item: per_shard[shard_index] * group.outputs.get(item, Fraction(0))
+                        for item, _destination, _cargo_domain in shard
+                    },
                 )
-                for shard in shards
+                for shard_index, shard in enumerate(shards)
             ]
         except ValueError as exc:
             raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
