@@ -8027,7 +8027,10 @@ class _PreparedRoutingProblem:
     junction_frame_bans: tuple[frozenset[Cell], ...] = ()
     preparation_failures: tuple[NetFailure, ...] = ()
     stranded_ports: tuple[StrandedPort, ...] = ()
+    preparation_exhaustive: bool = False
     external_output_nets: tuple[_PreparedNet, ...] = ()
+    port_access_demands: tuple[PortAccessDemand, ...] = ()
+    late_output_net_ids: frozenset[NetId] = frozenset()
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
     sorter_stacks: _SorterStacks = _NO_SORTER_STACKS
     lane_stacks: _LaneStacks = _NO_LANE_STACKS
@@ -8821,7 +8824,8 @@ def _route_all(
             last_mile=_last_mile_report(),
         )
 
-    _reserve_port_access(canvas, nets)
+    if not canvas.port_corridors:
+        _reserve_port_access(canvas, _port_access_inventory(nets).demands)
 
     # ONE flattening of the canvas for the whole pass, kept current instead of
     # rebuilt.
@@ -9060,7 +9064,16 @@ def _route_all(
             if token in retired_roles:
                 continue
             endpoint_cells = path[:2] if source else path[-2:]
-            retired = _retire_port_corridor(canvas, key, endpoint_cells)
+            retired = _retire_port_corridor(
+                canvas,
+                key,
+                endpoint_cells,
+                (
+                    PortAccessKind.INTERNAL_DEPARTURE
+                    if source
+                    else PortAccessKind.INTERNAL_ARRIVAL
+                ),
+            )
             if retired is None:
                 continue
             retired_roles[token] = retired
@@ -10882,12 +10895,135 @@ def _route_all(
     )
 
 
+class PortAccessKind(Enum):
+    """One physical use of the free cells beside a lane head."""
+
+    INTERNAL_ARRIVAL = "internal-arrival"
+    INTERNAL_DEPARTURE = "internal-departure"
+    BOUNDARY_ARRIVAL = "boundary-arrival"
+    EARLY_BOUNDARY_DEPARTURE = "early-boundary-departure"
+
+    @property
+    def reaches_boundary(self) -> bool:
+        return self in {
+            PortAccessKind.BOUNDARY_ARRIVAL,
+            PortAccessKind.EARLY_BOUNDARY_DEPARTURE,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PortAccessDemand:
+    """One cell-disjoint physical approach claim at a lane head."""
+
+    cell: Cell
+    kind: PortAccessKind
+    item: str
+    belt: int
+    strip_index: int | None
+    columns: int
+
+    def __post_init__(self) -> None:
+        if self.columns <= 0:
+            raise ValueError("port access demand requires a positive lane width")
+
+
+@dataclass(frozen=True, slots=True)
+class PortAccessInventory:
+    """Authoritative physical claims plus late-output routing metadata."""
+
+    demands: tuple[PortAccessDemand, ...]
+    late_output_belts: frozenset[int] = frozenset()
+
+
+def _port_access_inventory(
+    nets: Sequence[_Net],
+    *,
+    boundary_inputs: Sequence[tuple[str, _Port, int | None]] = (),
+    boundary_outputs: Sequence[tuple[str, _Port]] = (),
+    late_output_belts: Collection[int] = (),
+    shared_boundary_root_belts: Collection[int] = (),
+    strip_of_belt: Mapping[int, int] = MappingProxyType({}),
+) -> PortAccessInventory:
+    """Collapse representational nets into their distinct physical approaches."""
+
+    late = frozenset(late_output_belts)
+    shared_roots = frozenset(shared_boundary_root_belts)
+    demands: dict[tuple[Cell, PortAccessKind], PortAccessDemand] = {}
+
+    def add(port: _Port, item: str, kind: PortAccessKind, strip_index: int | None = None) -> None:
+        cell = (port.x, port.y, port.z)
+        demand = PortAccessDemand(
+            cell=cell,
+            kind=kind,
+            item=item,
+            belt=port.belt,
+            strip_index=strip_of_belt.get(port.belt, strip_index),
+            columns=max(1, len(port.columns())),
+        )
+        demands.setdefault((cell, kind), demand)
+
+    for net in nets:
+        if net.prelinked:
+            continue
+        if net.src is not None and net.src.belt not in shared_roots:
+            add(net.src, net.item, PortAccessKind.INTERNAL_DEPARTURE)
+        add(net.dst, net.item, PortAccessKind.INTERNAL_ARRIVAL)
+    for item, port, strip_index in boundary_inputs:
+        add(port, item, PortAccessKind.BOUNDARY_ARRIVAL, strip_index)
+    for item, port in boundary_outputs:
+        if port.belt not in late:
+            add(port, item, PortAccessKind.EARLY_BOUNDARY_DEPARTURE)
+
+    kind_order = {kind: ordinal for ordinal, kind in enumerate(PortAccessKind)}
+    return PortAccessInventory(
+        demands=tuple(
+            sorted(
+                demands.values(),
+                key=lambda demand: (
+                    demand.columns,
+                    demand.cell,
+                    kind_order[demand.kind],
+                    demand.belt,
+                ),
+            )
+        ),
+        late_output_belts=late,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PortAccessEvidence:
+    """Complete candidate-enumeration evidence for one unmatched claim."""
+
+    demand: PortAccessDemand
+    held: int
+    wanted: int
+    local_options: int
+    reachable_options: int
+    exhaustive: bool
+    frontier: tuple[Cell, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PortAccessReservation:
+    """The committed result of one joint corridor assignment."""
+
+    assigned: tuple[tuple[PortAccessDemand, PortAccessCorridor], ...]
+    missing: tuple[PortAccessDemand, ...]
+    evidence: tuple[PortAccessEvidence, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing
+
+
 @dataclass(frozen=True, slots=True)
 class PortAccessCorridor:
     """Two cells reserved atomically for one port approach."""
 
     access: Cell
     exit: Cell
+    kind: PortAccessKind | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -10910,14 +11046,18 @@ def _retire_port_corridor(
     canvas: _Canvas,
     key: Cell,
     endpoint_cells: Collection[Cell],
+    kind: PortAccessKind | None = None,
 ) -> PortAccessCorridor | None:
     """Release one served role's corridor, preferring the path it used."""
     corridors = canvas.port_corridors.get(key, ())
-    if not corridors:
+    eligible = tuple(
+        corridor for corridor in corridors if kind is None or corridor.kind in (None, kind)
+    )
+    if not eligible:
         return None
     endpoint_set = set(endpoint_cells)
     selected = min(
-        corridors,
+        eligible,
         key=lambda corridor: (
             not bool(endpoint_set & {corridor.access, corridor.exit}),
             corridor.access,
@@ -10948,46 +11088,81 @@ def _restore_port_corridor(
 
 
 def _match_access_corridors(
-    order: Sequence[Cell],
-    corridors: Mapping[Cell, Sequence[tuple[Cell, Cell]]],
-    wants: Mapping[Cell, int],
-) -> dict[tuple[Cell, int], PortAccessCorridor]:
-    """Assign complete, cell-disjoint access corridors in claim priority order."""
+    demands: Sequence[PortAccessDemand],
+    corridors: Mapping[PortAccessDemand, Sequence[tuple[Cell, Cell]]],
+    *,
+    validate: (
+        Callable[
+            [Mapping[PortAccessDemand, PortAccessCorridor]],
+            Collection[PortAccessDemand] | None,
+        ]
+        | None
+    ) = None,
+    cancelled: Callable[[], bool] | None = None,
+    deadline: float | None = None,
+) -> dict[PortAccessDemand, PortAccessCorridor]:
+    """Assign cell-disjoint corridors, giving every port its first claim first."""
+    def solve_model() -> cp_model.CpSolverStatus:
+        if (cancelled is not None and cancelled()) or _expired(deadline):
+            raise _PreparationDeadline
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _PreparationDeadline
+            solver.parameters.max_time_in_seconds = remaining
+        status = solver.solve(model)
+        if (cancelled is not None and cancelled()) or _expired(deadline):
+            raise _PreparationDeadline
+        if deadline is not None and status == cp_model.UNKNOWN:
+            raise _PreparationDeadline
+        return status
 
-    claims = [
-        (key, rank)
-        for rank in range(max(wants.values(), default=0))
-        for key in order
-        if wants[key] > rank
+    by_port: dict[Cell, list[PortAccessDemand]] = defaultdict(list)
+    widths: dict[Cell, int] = {}
+    kind_order = {kind: ordinal for ordinal, kind in enumerate(PortAccessKind)}
+    for demand in demands:
+        by_port[demand.cell].append(demand)
+        widths[demand.cell] = max(widths.get(demand.cell, 0), demand.columns)
+    ports = sorted(by_port, key=lambda cell: (widths[cell], cell))
+    for claims in by_port.values():
+        claims.sort(key=lambda demand: (kind_order[demand.kind], demand.belt))
+    ranked_claims = [
+        (demand, rank)
+        for rank in range(max((len(by_port[cell]) for cell in ports), default=0))
+        for cell in ports
+        for demand in by_port[cell][rank : rank + 1]
     ]
+
     model = cp_model.CpModel()
-    choices: dict[tuple[Cell, int, Cell, Cell], cp_model.IntVar] = {}
-    by_claim: dict[tuple[Cell, int], list[cp_model.IntVar]] = defaultdict(list)
+    choices: dict[tuple[PortAccessDemand, Cell, Cell], cp_model.IntVar] = {}
+    by_claim: dict[PortAccessDemand, list[cp_model.IntVar]] = defaultdict(list)
     by_rank: dict[int, list[cp_model.IntVar]] = defaultdict(list)
     by_cell: dict[Cell, list[cp_model.IntVar]] = defaultdict(list)
-    for key, rank in claims:
-        for access, exit_cell in corridors[key]:
-            variable = model.new_bool_var(f"corridor_{key}_{rank}_{access}_{exit_cell}")
-            choices[key, rank, access, exit_cell] = variable
-            by_claim[key, rank].append(variable)
+    for demand, rank in ranked_claims:
+        for access, exit_cell in corridors.get(demand, ()):
+            variable = model.new_bool_var(
+                f"corridor_{demand.cell}_{demand.kind.value}_{access}_{exit_cell}"
+            )
+            choices[demand, access, exit_cell] = variable
+            by_claim[demand].append(variable)
             by_rank[rank].append(variable)
             by_cell[access].append(variable)
             by_cell[exit_cell].append(variable)
 
-    for claim in claims:
-        model.add(sum(by_claim[claim]) <= 1)
+    for demand, _rank in ranked_claims:
+        model.add(sum(by_claim[demand]) <= 1)
     for variables in by_cell.values():
         model.add(sum(variables) <= 1)
 
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
-    for rank in range(max(wants.values(), default=0)):
+    for rank in range(max((rank for _demand, rank in ranked_claims), default=-1) + 1):
         rank_vars = by_rank[rank]
         if not rank_vars:
             continue
         model.maximize(sum(rank_vars))
-        status = solver.solve(model)
+        status = solve_model()
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             return {}
         model.add(sum(rank_vars) == round(solver.objective_value))
@@ -11001,163 +11176,233 @@ def _match_access_corridors(
     model.minimize(
         sum(ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1))
     )
-    solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
-    status = solver.solve(model)
-    use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-
-    assigned: dict[tuple[Cell, int], PortAccessCorridor] = {}
-    for choice in ordered_choices:
-        selected = solver.boolean_value(choices[choice]) if use_polished else ranked_values[choice]
-        if not selected:
-            continue
-        key, rank, access, exit_cell = choice
-        assigned[key, rank] = PortAccessCorridor(access, exit_cell)
-    return assigned
+    if validate is None:
+        solver.parameters.max_deterministic_time = _ACCESS_TIE_DETERMINISTIC_WORK
+    while True:
+        status = solve_model()
+        use_polished = status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
+        if not use_polished:
+            if validate is not None and status == cp_model.INFEASIBLE:
+                return {}
+            selected_values = ranked_values
+        else:
+            selected_values = {
+                choice: solver.boolean_value(variable) for choice, variable in choices.items()
+            }
+        assigned: dict[PortAccessDemand, PortAccessCorridor] = {}
+        selected_by_demand: dict[PortAccessDemand, cp_model.IntVar] = {}
+        for choice in ordered_choices:
+            if not selected_values[choice]:
+                continue
+            demand, access, exit_cell = choice
+            assigned[demand] = PortAccessCorridor(access, exit_cell, demand.kind)
+            selected_by_demand[demand] = choices[choice]
+        witness = None if validate is None else validate(assigned)
+        if (cancelled is not None and cancelled()) or _expired(deadline):
+            raise _PreparationDeadline
+        if validate is None or witness is None:
+            return assigned
+        cut_variables = [
+            selected_by_demand[demand] for demand in witness if demand in selected_by_demand
+        ]
+        if not cut_variables:
+            return {}
+        model.add(sum(cut_variables) <= len(cut_variables) - 1)
 
 
 def _reserve_port_access(
     canvas: _Canvas,
-    nets: list[_Net],
+    demands: Sequence[PortAccessDemand],
     *,
-    twice: Collection[tuple[int, int, int]] = (),
-    failed_ports: set[Cell] | None = None,
-    demands: dict[Cell, tuple[int, int, int]] | None = None,
-) -> int:
-    """Hold a complete two-cell corridor next to every port role.
+    boundary: Sequence[Cell] | None = None,
+    bounds: tuple[int, int, int, int] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    deadline: float | None = None,
+) -> PortAccessReservation:
+    """Enumerate and jointly hold one complete corridor per physical claim.
 
-    Returns the number of ports that could not retain any usable access
-    corridor. An access cell without its selected onward witness is
-    inaccessible, just like a port with no free neighbour.
-
-    ``demands`` collects ``(held, wants, options)`` for every port that came up
-    short, so a caller can say WHY without re-deriving the geometry.
-
-    Reservations are per PORT, not per net: several nets can share one lane end
-    (a lane feeding two consumers), and they can share its access cell too,
-    because they all leave from the same tile.  Reserving per net would hand the
-    second net a different cell it does not need and take it away from someone
-    who does.
-
-    A port that both RECEIVES and SENDS gets two cells without being asked for.
-    A coater's drop belt is one: the proliferator chain arrives at it from the
-    previous coater and leaves it for the next, so one access cell cannot serve
-    both -- whichever net routed first took it and built on it, and the other
-    found the drop walled in.  It did not fail loudly, because the router will
-    settle for merging into a sibling net's path; the belts that came out of
-    that merge carried proliferator PAST the drop instead of INTO it, leaving a
-    coater mounted on a belt nothing fills.  The drop then reads as an entry
-    lane the player must fill, buried inside the block -- which is exactly what
-    ``flow.external_entry_reachable`` was reporting.
-
-    ``twice`` names ports that need one MORE approach on top of that: an input
-    lane fed from BOTH the boundary and from a producer inside the block.  The
-    external run and the internal net are two independent claims on the same lane
-    head and they cannot share a cell, so both are staked.
-
-    The lane need not be MIXED, and this docstring used to say it was.  Every
-    port that has ever failed this demand carried ONE item (R4 §1.2:
-    ``lane=('hydrogen',)``, ten distinct ports across three cells and five
-    heights, all ``wants=2 held=1``).  Narrowing the predicate to mixed lanes was
-    tried (R4 §6, E1) and the same ports failed again at ROUTE time with
-    ``dynamic-access`` and ZERO expansions -- the external run had taken the one
-    corridor and laid a belt on it, and the internal net was handed an empty goal
-    set.  The demand is real; the answer is to seat such an ingredient on a lane
-    head that has two free sides (``strip_variants._seat_both_fed_outermost``).
-
-    Ports are served shortest-lane-first within a round, which is arbitrary and
-    deliberately so: what decides whether a port gets an access cell at all is
-    the ROUND, not the position in it, and every port has taken its first before
-    any port asks for a second.
+    The final pass filters only true boundary claims through a static ground
+    component. Reservations are cleared before enumeration, so provisional
+    choices cannot veto an alternate candidate; nothing is committed until the
+    joint matcher has selected every compatible corridor.
     """
+
+    if (cancelled is not None and cancelled()) or _expired(deadline):
+        raise _PreparationDeadline
+    saved_reserved = dict(canvas.reserved)
+    saved_corridors = dict(canvas.port_corridors)
     canvas.reserved.clear()
     canvas.port_corridors.clear()
-    ports: dict[tuple[int, int, int], int] = {}
-    roles: dict[tuple[int, int, int], set[str]] = defaultdict(set)
-    for net in nets:
-        for role, port in (("src", net.src), ("dst", net.dst)):
-            if port is None:
-                continue
-            key = (port.x, port.y, port.z)
-            ports[key] = max(ports.get(key, 0), len(port.columns()))
-            roles[key].add(role)
-            # A port's access is in the port's OWN plane. A coater drop sits one
-            # level up, and looking for its free neighbour at level 0 finds the
-            # lane belts underneath it and calls the port boxed in.
 
-    order = sorted(ports, key=lambda k: (ports[k], k))
-    wants = {k: len(roles[k]) + (1 if k in twice else 0) for k in order}
-    held: dict[tuple[int, int, int], int] = defaultdict(int)
+    def check_cancelled() -> None:
+        if not ((cancelled is not None and cancelled()) or _expired(deadline)):
+            return
+        canvas.reserved.clear()
+        canvas.reserved.update(saved_reserved)
+        canvas.port_corridors.clear()
+        canvas.port_corridors.update(saved_corridors)
+        raise _PreparationDeadline
 
-    # EVERY port gets its first cell before any port gets its second, AND the
-    # ports that can only be served one way are served -- which taking the first
-    # free neighbour cannot promise, because it never gives a cell back.
-    #
-    # This used to be two nested loops: rounds outside so no port took a second
-    # cell before every port had a first, and inside them "the first neighbour
-    # `canvas.free` still likes".  The rounds are right and are kept.  The inner
-    # grab is not: it is first-come-first-served over a bipartite graph, so a
-    # port with two ways out can take the cell that is another port's ONLY way
-    # out, and nothing ever revisits that.
-    #
-    # Measured, and it is the whole of a refusal rather than a tidiness point.
-    # `universe-matrix/max-proliferation` at h=115 packs a coater drop at
-    # (66,8): a machine south, its own coater west, and exactly two free
-    # neighbours, (67,8) and (66,7).  It is mid-chain, so it both receives and
-    # sends and wants two.  Port (65,7) sorts earlier, has other options, and
-    # takes (66,7); the drop gets one cell, the hop arriving takes it, and the
-    # hop LEAVING is handed an empty start set.  A* returns `None` having
-    # expanded zero nodes, which no amount of rip-up can price -- a search that
-    # expands nothing registers no conflict -- so net 89 stranded in all seven
-    # rounds of three runs and was the ONLY failure on the pack.
-    #
-    # The assignment is joint over `(access, exit)` corridors. An access-only
-    # maximum matching can consume another selected access as the first port's
-    # sole exit; that is the zero-onward replay retained beside this code.
-    # Rank-wise CP-SAT objectives preserve the old first-claim-before-second
-    # priority, while a one-worker final solve fixes deterministic tie-breaking.
-    options = {
-        key: tuple(
+    bounds = bounds or canvas.limit
+    local_options: dict[PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
+    reachable_options: dict[PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
+    exhaustive: dict[PortAccessDemand, bool] = {}
+    frontiers: dict[PortAccessDemand, set[Cell]] = defaultdict(set)
+    boundary_set = set(boundary or ())
+
+    for demand in demands:
+        check_cancelled()
+        key = demand.cell
+        access_cells = tuple(
             cell
             for cell in ((key[0] + dx, key[1] + dy, key[2]) for dx, dy in _STEPS)
             if canvas.free(cell)
         )
-        for key in order
-    }
-    corridors = {
-        key: tuple(
+        options = tuple(
             (access, exit_cell)
-            for access in options[key]
-            for exit_cell in ((access[0] + dx, access[1] + dy, access[2]) for dx, dy in _STEPS)
+            for access in access_cells
+            for exit_cell in (
+                (access[0] + dx, access[1] + dy, access[2]) for dx, dy in _STEPS
+            )
             if exit_cell != key and canvas.free(exit_cell)
         )
-        for key in order
-    }
-    assignments = _match_access_corridors(
-        order,
-        corridors,
-        wants,
-    )
+        local_options[demand] = options
+        if boundary is None or not demand.kind.reaches_boundary:
+            reachable_options[demand] = options
+            exhaustive[demand] = boundary is not None
+            continue
+        if bounds is None:
+            reachable_options[demand] = options
+            exhaustive[demand] = False
+            continue
+        candidates: list[tuple[Cell, Cell]] = []
+        complete = True
+        for access, exit_cell in options:
+            result = _astar(
+                canvas,
+                [exit_cell],
+                boundary_set,
+                {},
+                0.0,
+                bounds,
+                deadline=deadline,
+            )
+            check_cancelled()
+            if result.path is not None:
+                candidates.append((access, exit_cell))
+            elif result.kind is RouteFailureKind.SEALED_POCKET:
+                frontiers[demand].update(result.wall)
+            else:
+                complete = False
+                candidates.append((access, exit_cell))
+        reachable_options[demand] = tuple(candidates)
+        exhaustive[demand] = complete
+
+    def assignment_boundary_cut(
+        assigned: Mapping[PortAccessDemand, PortAccessCorridor],
+    ) -> Collection[PortAccessDemand] | None:
+        if boundary is None or bounds is None:
+            return None
+        selected_cells: dict[Cell, PortAccessDemand] = {
+            cell: owner
+            for owner, selected in assigned.items()
+            for cell in (selected.access, selected.exit)
+        }
+        ordered_owners = tuple(assigned)
+        owner_index = {owner: index for index, owner in enumerate(ordered_owners)}
+        owner_by_index = dict(enumerate(ordered_owners))
+        cell_owner_index = {
+            cell: owner_index[owner] for cell, owner in selected_cells.items()
+        }
+        for demand, corridor in assigned.items():
+            if not demand.kind.reaches_boundary:
+                continue
+            forbidden = {
+                cell
+                for cell, owner in selected_cells.items()
+                if owner != demand
+            }
+            result = _astar(
+                canvas,
+                [corridor.exit],
+                boundary_set,
+                {},
+                0.0,
+                bounds,
+                deadline=deadline,
+                forbidden=forbidden,
+                blocking_owners={
+                    cell: owner_index[owner]
+                    for cell, owner in selected_cells.items()
+                    if owner != demand
+                },
+            )
+            check_cancelled()
+            if result.path is not None or result.kind is RouteFailureKind.BUDGET:
+                continue
+            frontiers[demand].update(result.wall)
+            blocking_demands = {
+                owner_by_index[index]
+                for cell in result.wall
+                for index in (
+                    cell_owner_index.get(cell),
+                )
+                if index is not None
+            }
+            return (demand, *sorted(blocking_demands, key=lambda blocked: blocked.cell))
+        return None
+
+    try:
+        assignments = _match_access_corridors(
+            demands,
+            reachable_options,
+            validate=assignment_boundary_cut if boundary is not None else None,
+            cancelled=cancelled,
+            deadline=deadline,
+        )
+    except _PreparationDeadline:
+        canvas.reserved.clear()
+        canvas.reserved.update(saved_reserved)
+        canvas.port_corridors.clear()
+        canvas.port_corridors.update(saved_corridors)
+        raise
+    check_cancelled()
     assigned_by_port: dict[Cell, list[PortAccessCorridor]] = defaultdict(list)
-    for (key, _rank), corridor in assignments.items():
-        canvas.reserved[corridor.access] = key
-        canvas.reserved[corridor.exit] = key
-        assigned_by_port[key].append(corridor)
-        held[key] += 1
+    for demand, corridor in assignments.items():
+        canvas.reserved[corridor.access] = demand.cell
+        canvas.reserved[corridor.exit] = demand.cell
+        assigned_by_port[demand.cell].append(corridor)
+    kind_order = {kind: ordinal for ordinal, kind in enumerate(PortAccessKind)}
     canvas.port_corridors = {
         key: tuple(
             sorted(
                 assigned,
-                key=lambda corridor: (corridor.access, corridor.exit),
+                key=lambda corridor: (
+                    kind_order.get(corridor.kind, len(kind_order)),
+                    corridor.access,
+                    corridor.exit,
+                ),
             )
         )
         for key, assigned in assigned_by_port.items()
     }
-    missing = {key for key in order if held[key] < wants[key]}
-    if failed_ports is not None:
-        failed_ports.update(missing)
-    if demands is not None:
-        demands.update((key, (held[key], wants[key], len(options.get(key, ())))) for key in missing)
-    return len(missing)
+    missing = tuple(demand for demand in demands if demand not in assignments)
+    return PortAccessReservation(
+        assigned=tuple((demand, assignments[demand]) for demand in demands if demand in assignments),
+        missing=missing,
+        evidence=tuple(
+            PortAccessEvidence(
+                demand=demand,
+                held=0,
+                wanted=1,
+                local_options=len(local_options[demand]),
+                reachable_options=len(reachable_options[demand]),
+                exhaustive=exhaustive[demand],
+                frontier=tuple(sorted(frontiers[demand])),
+            )
+            for demand in missing
+        ),
+    )
 
 
 def _commit_paths(
@@ -12422,7 +12667,16 @@ def _route_boundary_nets(
             # blocking the straight path and seals the port behind its own
             # claim. Leave any other corridor held for the opposite role.
             port_key = (port.x, port.y, port.z)
-            retired = _retire_port_corridor(canvas, port_key, ())
+            retired = _retire_port_corridor(
+                canvas,
+                port_key,
+                (),
+                (
+                    PortAccessKind.EARLY_BOUNDARY_DEPARTURE
+                    if outward
+                    else PortAccessKind.BOUNDARY_ARRIVAL
+                ),
+            )
             if retired is None:
                 mine = next(
                     (cell for cell, key in canvas.reserved.items() if key == port_key),
@@ -15100,6 +15354,7 @@ def _prepare_routing_problem(
     _reserve_ports: bool = True,
     staged_static_cache: _StagedStaticCache | None = None,
     cancelled: Callable[[], bool] | None = None,
+    deadline: float | None = None,
 ) -> _PreparedRoutingProblem:
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
@@ -15427,6 +15682,27 @@ def _prepare_routing_problem(
     )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
+    requested_outputs = set(spec.outputs) | set(spec.surplus_outputs)
+    wanted_outputs: dict[int, tuple[str, _Port]] = {}
+    for (
+        _group_key,
+        output_item,
+        destination,
+        cargo_domain,
+    ), output_ports in out_ports.items():
+        output_destinations = _dests(destination)
+        if output_item not in requested_outputs or (destination and "" not in output_destinations):
+            continue
+        boundary_plan = merge_plans.get((output_item, "", cargo_domain))
+        for output_port in output_ports:
+            if boundary_plan is not None and output_port.belt not in boundary_output_belts:
+                continue
+            wanted_outputs.setdefault(
+                output_port.belt,
+                (output_item, output_port),
+            )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
 
     # Hold one cell beside every port BEFORE anything else can take it.
     #
@@ -15437,90 +15713,92 @@ def _prepare_routing_problem(
     # expanded nothing, and no amount of rip-up can negotiate for a cell that is
     # occupied by a building rather than contested by another path.
     #
-    unreachable_ports: set[Cell] = set()
+    internal_source_belts = {
+        net.source.belt
+        for net in (*nets, *piler_nets)
+        if net.src is not None and not net.prelinked
+    }
+    late_output_belts = frozenset(wanted_outputs) & internal_source_belts
+    provisional_boundary_inputs = [
+        (carried[belt], port, strip_index)
+        for belt, (port, strip_index) in wanted.items()
+    ]
+    provisional_boundary_inputs.extend(
+        (item, port, strip_of_belt.get(port.belt))
+        for item, _cargo_domain, ports in shared_external_groups
+        for port in ports
+    )
+    port_access_inventory = _port_access_inventory(
+        (*nets, *piler_nets),
+        boundary_inputs=tuple(provisional_boundary_inputs),
+        boundary_outputs=tuple(wanted_outputs.values()),
+        late_output_belts=late_output_belts,
+        strip_of_belt=strip_of_belt,
+    )
     stranded_ports: list[StrandedPort] = []
+    access_reservation = PortAccessReservation((), (), ())
 
-    # Measured across the trivial+small+mid corpus, before this: every boxed-in
-    # port on the refusing candidates had a coater drop or an external belt on
-    # its one open side, and the boxed-in count equalled the failure count
-    # exactly. `_route_all` re-derives these once every path is laid, so this is
-    # a claim staked early rather than a second source of truth.
-    def hold_ports() -> None:
-        # A lane fed from the boundary AND from a producer inside the block has
-        # two feeds to accept, not one, so it needs two ways in.  Note this is a
-        # property of the ITEM, not of the lane's cardinality: a single-item lane
-        # is in this set whenever that item is both external and made internally.
-        net_ports = {(p.x, p.y, p.z) for n in nets for p in (n.src, n.dst) if p is not None}
-        shared_feed = {
-            (port.x, port.y, port.z) for port, _strip_index in wanted.values()
-        } & net_ports
-        unreachable_ports.clear()
-        stranded_ports.clear()
-        demands: dict[Cell, tuple[int, int, int]] = {}
-        _reserve_port_access(
+    def hold_ports(
+        inventory: PortAccessInventory,
+        *,
+        boundary_cells: Sequence[Cell] | None = None,
+        routing_bounds: tuple[int, int, int, int] | None = None,
+    ) -> PortAccessReservation:
+        reservation = _reserve_port_access(
             canvas,
-            nets,
-            twice=shared_feed,
-            failed_ports=unreachable_ports,
-            demands=demands,
+            inventory.demands,
+            boundary=boundary_cells,
+            bounds=routing_bounds,
+            cancelled=cancelled,
+            deadline=deadline,
         )
-        owner: dict[
-            Cell,
-            tuple[str, str, StripInstanceId, str],
-        ] = {}
-        for strip_index, ports in enumerate(strip_in_ports):
-            strip = strips[strip_index]
-            family_id = strip.family_id or StripFamilyId(strip.group_key, 0)
-            instance_id = StripInstanceId(
-                family_id,
-                strip.machine_start,
-                strip.machines,
-            )
-            input_plans = strip.attachment_plan
-            for item, port in ports.items():
-                lane_id = next(
-                    (
-                        plan.lane.lane_id
-                        for plan in input_plans
-                        if plan.lane.kind == "input" and item in plan.lane.items
-                    ),
-                    "",
+        stranded_ports.clear()
+        for evidence in reservation.evidence:
+            demand = evidence.demand
+            strip_index = demand.strip_index
+            if strip_index is None or not 0 <= strip_index < len(strips):
+                strip_label = "?"
+                instance_id = StripInstanceId(StripFamilyId("?", 0), 0, 1)
+            else:
+                strip = strips[strip_index]
+                strip_label = strip.sid
+                family_id = strip.family_id or StripFamilyId(strip.group_key, 0)
+                instance_id = StripInstanceId(
+                    family_id,
+                    strip.machine_start,
+                    strip.machines,
                 )
-                if not lane_id:
-                    lane = strip.lane_of_input(item)
-                    if lane in strip.in_above:
-                        lane_id = f"input:south:{strip.in_above.index(lane)}"
-                    else:
-                        lane_id = f"input:north:{len(strip.out_lanes) + strip.in_below.index(lane)}"
-                owner[port.x, port.y, port.z] = (
-                    item,
-                    strip.sid,
-                    instance_id,
-                    lane_id,
-                )
-        unknown_owner = (
-            "?",
-            "?",
-            StripInstanceId(StripFamilyId("?", 0), 0, 1),
-            "?",
-        )
-        for cell in sorted(unreachable_ports):
-            item, strip_label, instance_id, lane_id = owner.get(cell, unknown_owner)
+            lane_id = "?"
+            if strip_index is not None and 0 <= strip_index < len(strip_in_ports):
+                strip = strips[strip_index]
+                for item, port in strip_in_ports[strip_index].items():
+                    if port.belt != demand.belt:
+                        continue
+                    lane_id = next(
+                        (
+                            plan.lane.lane_id
+                            for plan in strip.attachment_plan
+                            if plan.lane.kind == "input" and item in plan.lane.items
+                        ),
+                        "?",
+                    )
+                    break
             stranded_ports.append(
                 StrandedPort(
-                    cell=cell,
-                    item=item,
+                    cell=demand.cell,
+                    item=demand.item,
                     strip_label=strip_label,
                     instance_id=instance_id,
                     lane_id=lane_id,
-                    held=demands[cell][0],
-                    wants=demands[cell][1],
-                    options=demands[cell][2],
+                    held=evidence.held,
+                    wants=evidence.wanted,
+                    options=evidence.local_options,
                 )
             )
+        return reservation
 
     if _reserve_ports:
-        hold_ports()
+        access_reservation = hold_ports(port_access_inventory)
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -15636,39 +15914,6 @@ def _prepare_routing_problem(
         carried[port.belt] = item
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-    # Again, now that every port exists -- strip lanes, coater drops,
-    # proliferator trunks, and shared external-input trunks alike.
-    if _reserve_ports:
-        hold_ports()
-    if cancelled is not None and cancelled():
-        raise _PreparationDeadline
-    nets.extend(piler_nets)
-    net_roles.extend([NetRole.INTERNAL] * len(piler_nets))
-
-    # The stack-aware sharing plan has reduced ``wanted`` to unshared roots;
-    # shared groups already have one zero-predecessor perimeter trunk each.
-
-    requested_outputs = set(spec.outputs) | set(spec.surplus_outputs)
-    wanted_outputs: dict[int, tuple[str, _Port]] = {}
-    for (
-        _group_key,
-        output_item,
-        destination,
-        cargo_domain,
-    ), output_ports in out_ports.items():
-        output_destinations = _dests(destination)
-        if output_item not in requested_outputs or (destination and "" not in output_destinations):
-            continue
-        boundary_plan = merge_plans.get((output_item, "", cargo_domain))
-        for output_port in output_ports:
-            if boundary_plan is not None and output_port.belt not in boundary_output_belts:
-                continue
-            wanted_outputs.setdefault(
-                output_port.belt,
-                (output_item, output_port),
-            )
-    if cancelled is not None and cancelled():
-        raise _PreparationDeadline
     min_x, min_y, max_x, max_y = _grow(core, _ENTRY_RING - 1)
     boundary = tuple(
         cell
@@ -15680,6 +15925,38 @@ def _prepare_routing_problem(
     )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
+
+    nets.extend(piler_nets)
+    net_roles.extend([NetRole.INTERNAL] * len(piler_nets))
+    shared_boundary_root_belts = frozenset(port.belt for _item, port in shared_external_roots)
+    port_access_inventory = _port_access_inventory(
+        nets,
+        boundary_inputs=tuple(
+            (carried[belt], port, strip_index)
+            for belt, (port, strip_index) in wanted.items()
+        ),
+        boundary_outputs=tuple(wanted_outputs.values()),
+        late_output_belts=late_output_belts,
+        shared_boundary_root_belts=shared_boundary_root_belts,
+        strip_of_belt=strip_of_belt,
+    )
+    # Again, now that every port exists -- strip lanes, coater drops,
+    # proliferator trunks, and shared external-input trunks alike.
+    if _reserve_ports:
+        access_reservation = hold_ports(
+            port_access_inventory,
+            boundary_cells=boundary,
+            routing_bounds=capacity,
+        )
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
+
+    # The stack-aware sharing plan has reduced ``wanted`` to unshared roots;
+    # shared groups already have one zero-predecessor perimeter trunk each.
+
+    # ``boundary`` was frozen before the final access rematch so both
+    # preparation and the boundary router prove reachability to the same cells.
 
     tagged_nets = list(zip(nets, net_roles, strict=True))
     tagged_nets.extend(
@@ -15715,6 +15992,7 @@ def _prepare_routing_problem(
     ] = defaultdict(int)
     prepared_nets: list[_PreparedNet] = []
     prepared_output_nets: list[_PreparedNet] = []
+    late_output_net_ids: set[NetId] = set()
     for net, role in tagged_nets:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -15761,6 +16039,8 @@ def _prepare_routing_problem(
         )
         if role is NetRole.EXTERNAL_OUTPUT:
             prepared_output_nets.append(prepared)
+            if net.source.belt in port_access_inventory.late_output_belts:
+                late_output_net_ids.add(net_id)
         else:
             prepared_nets.append(prepared)
     if cancelled is not None and cancelled():
@@ -15820,23 +16100,36 @@ def _prepare_routing_problem(
             ),
         )
 
+    def matches_demand(prepared: _PreparedNet, demand: PortAccessDemand) -> bool:
+        source, destination = prepared_endpoints(prepared)
+        if prepared.net_id.item != demand.item:
+            return False
+        if demand.kind is PortAccessKind.BOUNDARY_ARRIVAL:
+            return prepared.net_id.role is NetRole.EXTERNAL and destination == demand.cell
+        if demand.kind is PortAccessKind.EARLY_BOUNDARY_DEPARTURE:
+            return prepared.net_id.role is NetRole.EXTERNAL_OUTPUT and source == demand.cell
+        if demand.kind is PortAccessKind.INTERNAL_DEPARTURE:
+            return prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT) and source == demand.cell
+        return (
+            demand.kind is PortAccessKind.INTERNAL_ARRIVAL
+            and prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
+            and destination == demand.cell
+        )
+
     preparation_failures = tuple(
-        static_access_failure(net, failed)
-        for net in all_prepared_nets
-        for failed in (
+        static_access_failure(prepared, demand.cell)
+        for demand in access_reservation.missing
+        for prepared in (
             next(
                 (
-                    cell
-                    for cell in (
-                        ((net.src.x, net.src.y, net.src.z) if net.src is not None else None),
-                        (net.dst.x, net.dst.y, net.dst.z),
-                    )
-                    if cell is not None and cell in unreachable_ports
+                    candidate
+                    for candidate in all_prepared_nets
+                    if matches_demand(candidate, demand)
                 ),
                 None,
             ),
         )
-        if failed is not None
+        if prepared is not None
     )
     preparation_failures += tuple(
         NetFailure(
@@ -15996,6 +16289,8 @@ def _prepare_routing_problem(
         guard=frozenset(canvas.guard),
         nets=grouped_nets,
         external_output_nets=tuple(prepared_output_nets),
+        port_access_demands=port_access_inventory.demands,
+        late_output_net_ids=frozenset(late_output_net_ids),
         core=core,
         route_bounds=route_bounds,
         limit=canvas.limit,
@@ -16013,6 +16308,11 @@ def _prepare_routing_problem(
         world_taken=frozenset(canvas.world_taken),
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())
+        ),
+        preparation_exhaustive=(
+            bool(access_reservation.missing)
+            and not (promised_direct - realized_direct)
+            and all(evidence.exhaustive for evidence in access_reservation.evidence)
         ),
         junction_ban=junction_ban,
         junction_frame_bans=junction_frame_bans,
@@ -16312,6 +16612,7 @@ def _build(
             ramped=ramped,
             staged_static_cache=staged_static_cache,
             cancelled=cancelled,
+            deadline=deadline,
         )
     except _PreparationDeadline, finalize.ProjectionCancelled:
         return _BuildResult(
@@ -16388,14 +16689,15 @@ def _build_prepared(
         for net in workspace.nets
         if net.net_id is not None and net.net_id.role is not NetRole.EXTERNAL
     ]
-    internal_source_belts = {net.source.belt for net in route_nets if net.src is not None}
     early_output_nets = [
         net
         for net in workspace.external_output_nets
-        if net.source.belt not in internal_source_belts
+        if net.net_id not in prepared.late_output_net_ids
     ]
     late_output_nets = [
-        net for net in workspace.external_output_nets if net.source.belt in internal_source_belts
+        net
+        for net in workspace.external_output_nets
+        if net.net_id in prepared.late_output_net_ids
     ]
 
     empty_routing = DetailedRouteResult(
@@ -16514,11 +16816,14 @@ def _build_prepared(
             + late_output_routing.expansions
         ),
         exhaustive=(
-            not prepared.preparation_failures
-            and external_routing.exhaustive
-            and early_output_routing.exhaustive
-            and internal_routing.exhaustive
-            and late_output_routing.exhaustive
+            prepared.preparation_exhaustive
+            if prepared.preparation_failures
+            else (
+                external_routing.exhaustive
+                and early_output_routing.exhaustive
+                and internal_routing.exhaustive
+                and late_output_routing.exhaustive
+            )
         ),
         last_mile=combine_last_mile_reports(
             (
