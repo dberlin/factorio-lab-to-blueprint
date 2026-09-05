@@ -2484,11 +2484,16 @@ class TestPlanStrips:
         face carries the product; the ceiling moved from six connections to
         seven, it did not go away.  If a change makes seven pass, it has relaxed
         ``game.slot_occupancy`` rather than used another face.
+
+        2026-09-05: the refusal comes back as ``NoValidLayout`` rather than a
+        raw ``ValueError`` -- ``generate_strip_families`` is the refusal
+        boundary now, and this families-less ``plan_strips`` call falls back
+        to it internally.
         """
         strips = plan_strips(self._many_input_spec(6), strip_len=6)
         assert strips[0].flank_outputs, "six must seat by flanking, not by doubling up"
         assert len(strips[0].in_lanes) == 6
-        with pytest.raises(ValueError, match="insert pose"):
+        with pytest.raises(NoValidLayout, match="insert pose"):
             plan_strips(self._many_input_spec(7), strip_len=6)
 
     def test_a_flanked_output_claims_no_column_on_the_south_face(self) -> None:
@@ -2506,8 +2511,14 @@ class TestPlanStrips:
         assert s.column_offset(s.in_below[0]) == 0
 
     def test_a_recipe_needing_more_lanes_than_two_sides_carry_is_rejected(self) -> None:
-        """Truncating an ingredient would paste cleanly and then stall."""
-        with pytest.raises(ValueError, match="cannot be seated"):
+        """Truncating an ingredient would paste cleanly and then stall.
+
+        2026-09-05: the refusal comes back as ``NoValidLayout`` rather than a
+        raw ``ValueError`` -- ``generate_strip_families`` is the refusal
+        boundary now, and this families-less ``plan_strips`` call falls back
+        to it internally.
+        """
+        with pytest.raises(NoValidLayout, match="cannot be seated"):
             plan_strips(self._many_input_spec(13), strip_len=6)
 
 
