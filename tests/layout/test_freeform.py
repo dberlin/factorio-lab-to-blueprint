@@ -11862,41 +11862,8 @@ class TestPowerClaimsItsGroundBeforeRouting:
         )
 
     def test_power_peer_broad_phase_retains_periodic_seam_failure(self) -> None:
-        tower = catalog.building(catalog.TESLA_TOWER_ID)
-        band = next(candidate for candidate in planet.bands() if candidate.area_segments == 8)
-        projection = planet.Projection(
-            band,
-            band.grid_lo,
-            colliders.PLANET_SEGMENT,
-            colliders.PLANET_RADIUS,
-        )
-
-        def node(
-            index: int,
-            x: int,
-        ) -> tuple[int, PlacedBuilding, rules.PowerNode]:
-            return (
-                index,
-                PlacedBuilding(
-                    item_id=catalog.TESLA_TOWER_ID,
-                    model_index=tower.model_index,
-                    x=x,
-                    y=0,
-                    width=tower.width,
-                    height=tower.height,
-                ),
-                tower.power_node,
-            )
-
-        candidate = node(0, 0)
-        contexts = (
-            (
-                band.columns,
-                projection.rotated,
-                freeform._minimum_projection_grid_scale((band,)),
-            ),
-        )
-        seam_peer = node(1, band.columns - 1)
+        _band, projection = _seam_band_projection()
+        candidate, seam_peer, contexts = _two_power_nodes()
         seam_failure = finalize.projected_power_failure(
             (candidate, seam_peer),
             projection,
@@ -11909,7 +11876,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         )
 
         for index, x in enumerate((1, 2, 3, 20, 37, 38, 39), 2):
-            peer = node(index, x)
+            peer = _power_node_at(index, x)
             exact_failure = finalize.projected_power_failure(
                 (candidate, peer),
                 projection,
@@ -12419,6 +12386,80 @@ class TestPowerClaimsItsGroundBeforeRouting:
         ).lay_out(proliferated_spec(), time_budget_s=1.0)
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
+
+
+def _power_node_at(index: int, x: int) -> tuple[int, PlacedBuilding, rules.PowerNode]:
+    """A Tesla tower power node standing at ``x`` on row zero."""
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    return (
+        index,
+        PlacedBuilding(
+            item_id=catalog.TESLA_TOWER_ID,
+            model_index=tower.model_index,
+            x=x,
+            y=0,
+            width=tower.width,
+            height=tower.height,
+        ),
+        tower.power_node,
+    )
+
+
+def _seam_band_projection() -> tuple[planet.Band, planet.Projection]:
+    """The eight-segment band and its projection, where the seam wraps."""
+    band = next(candidate for candidate in planet.bands() if candidate.area_segments == 8)
+    return band, planet.Projection(
+        band,
+        band.grid_lo,
+        colliders.PLANET_SEGMENT,
+        colliders.PLANET_RADIUS,
+    )
+
+
+def _two_power_nodes() -> tuple[
+    tuple[int, PlacedBuilding, rules.PowerNode],
+    tuple[int, PlacedBuilding, rules.PowerNode],
+    tuple[tuple[int, bool, float], ...],
+]:
+    """A candidate, a seam-crossing peer, and the projection contexts for both."""
+    band, projection = _seam_band_projection()
+    contexts = (
+        (
+            band.columns,
+            projection.rotated,
+            freeform._minimum_projection_grid_scale((band,)),
+        ),
+    )
+    return _power_node_at(0, 0), _power_node_at(1, band.columns - 1), contexts
+
+
+class TestPowerPlanIsExact:
+    """The power plan's caches must not move a single tower."""
+
+    def test_peer_possible_accepts_precomputed_centres(self) -> None:
+        candidate, peer, contexts = _two_power_nodes()
+
+        def centre(b: PlacedBuilding) -> tuple[float, float, float]:
+            return codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height)
+
+        assert freeform._projected_power_peer_possible(
+            candidate,
+            peer,
+            contexts,
+            candidate_centre=centre(candidate[1]),
+            peer_centre=centre(peer[1]),
+        ) == freeform._projected_power_peer_possible(candidate, peer, contexts)
+
+    def test_blocked_column_shortcut_matches_the_per_level_probe(self) -> None:
+        canvas = _Canvas(limit=(0, 0, 9, 9))
+        canvas.blocked[(2, 3, 1)] = 0  # blocked only at level 1
+        canvas.blocked[(4, 4, 0)] = 0
+        blocked_columns = {(x, y) for (x, y, _level) in canvas.blocked}
+        for x in range(10):
+            for y in range(10):
+                assert ((x, y) in blocked_columns) == any(
+                    (x, y, level) in canvas.blocked for level in range(freeform.LEVELS)
+                )
 
 
 def _lane(machines: int) -> _Port:
@@ -18450,8 +18491,12 @@ def test_power_plan_cancels_inside_proposal_projection_node_scan(
         _contexts: Sequence[tuple[int, bool, float]],
         *,
         cancelled: Callable[[], bool] | None = None,
+        candidate_centre: tuple[float, float, float] | None = None,
+        peer_centre: tuple[float, float, float] | None = None,
     ) -> bool:
         assert cancelled is not None
+        assert candidate_centre is not None
+        assert peer_centre is not None
         return True
 
     monkeypatch.setattr(

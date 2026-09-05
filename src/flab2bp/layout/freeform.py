@@ -13169,26 +13169,35 @@ def _projected_power_peer_possible(
     projection_contexts: Sequence[tuple[int, bool, float]],
     *,
     cancelled: Callable[[], bool] | None = None,
+    candidate_centre: tuple[float, float, float] | None = None,
+    peer_centre: tuple[float, float, float] | None = None,
 ) -> bool:
-    """Whether curvature could bring this node pair inside either paste gate."""
+    """Whether curvature could bring this node pair inside either paste gate.
+
+    ``candidate_centre`` and ``peer_centre`` are pure caches of the local
+    offset each side would be given here; a caller that already holds one
+    passes it so the same node's centre is not recomputed once per pairing.
+    """
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
     _candidate_index, candidate_building, candidate_node = candidate
     _peer_index, peer_building, peer_node = peer
-    candidate_centre = codec.tile_to_local_offset(
-        candidate_building.x,
-        candidate_building.y,
-        candidate_building.z,
-        candidate_building.width,
-        candidate_building.height,
-    )
-    peer_centre = codec.tile_to_local_offset(
-        peer_building.x,
-        peer_building.y,
-        peer_building.z,
-        peer_building.width,
-        peer_building.height,
-    )
+    if candidate_centre is None:
+        candidate_centre = codec.tile_to_local_offset(
+            candidate_building.x,
+            candidate_building.y,
+            candidate_building.z,
+            candidate_building.width,
+            candidate_building.height,
+        )
+    if peer_centre is None:
+        peer_centre = codec.tile_to_local_offset(
+            peer_building.x,
+            peer_building.y,
+            peer_building.z,
+            peer_building.width,
+            peer_building.height,
+        )
     delta_x = abs(candidate_centre[0] - peer_centre[0])
     delta_y = abs(candidate_centre[1] - peer_centre[1])
     vertical = (candidate_centre[2] - peer_centre[2]) * 4.0 / 3.0
@@ -14488,6 +14497,11 @@ def _power_plan(
     pad = link + reach + 1
     shape = (width + 2 * pad, height + 2 * pad)
 
+    # A column is out if ANY level of it is blocked, so the level walk below
+    # asked `canvas.blocked` up to LEVELS times per tile.  The set of blocked
+    # columns answers the same question once, for the whole fill.
+    blocked_columns = {(bx, by) for (bx, by, _level) in canvas.blocked}
+
     free = np.zeros(shape, dtype=bool)
     for x in range(min_x, max_x + 1):
         if cancelled is not None and cancelled():
@@ -14499,7 +14513,7 @@ def _power_plan(
                 continue
             if not canvas.free((x, y, 0)) or (x, y) in canvas.solid:
                 continue
-            if any((x, y, lvl) in canvas.blocked for lvl in range(LEVELS)):
+            if (x, y) in blocked_columns:
                 continue
             free[x - min_x + pad, y - min_y + pad] = True
 
@@ -14594,6 +14608,11 @@ def _power_plan(
     # and `free` knows only that their own tiles are taken.  Their spacing is
     # keyed on their own flags, so a node on a wider tier keeps its own distance.
     power_nodes: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
+    # Kept in lockstep with `power_nodes`: the local offset of each node's
+    # building, which the broad-phase peer gate below would otherwise recompute
+    # once per candidate per peer.  `zip(..., strict=True)` makes a missed
+    # append fail loudly instead of silently pairing the wrong centre.
+    peer_centres: list[tuple[float, float, float]] = []
     for index, b in enumerate(canvas.buildings):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -14604,6 +14623,7 @@ def _power_plan(
         if not peer.is_power_node:
             continue
         power_nodes.append((index, b, peer))
+        peer_centres.append(codec.tile_to_local_offset(b.x, b.y, b.z, b.width, b.height))
         cx = b.x + b.width // 2 - min_x + pad
         cy = b.y + b.height // 2 - min_y + pad
         for dx, dy, dz in rules.power_node_keepout_offsets(peer, tower.power_node):
@@ -14822,14 +14842,23 @@ def _power_plan(
             ),
             tower.power_node,
         )
+        candidate_centre = codec.tile_to_local_offset(
+            candidate[1].x,
+            candidate[1].y,
+            candidate[1].z,
+            candidate[1].width,
+            candidate[1].height,
+        )
         projected_power_peers = tuple(
             peer
-            for peer in power_nodes
+            for peer, peer_centre in zip(power_nodes, peer_centres, strict=True)
             if _projected_power_peer_possible(
                 candidate,
                 peer,
                 power_projection_contexts,
                 cancelled=cancelled,
+                candidate_centre=candidate_centre,
+                peer_centre=peer_centre,
             )
         )
         candidate_failure: finalize.ProjectionFailure | None = None
@@ -14907,6 +14936,7 @@ def _power_plan(
             continue
         sites.append(site)
         power_nodes.append(candidate)
+        peer_centres.append(candidate_centre)
         cleanup_bounds = candidate_bounds
         cleanup_prefix = candidate_cleanup
 
