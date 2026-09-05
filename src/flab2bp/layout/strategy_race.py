@@ -74,8 +74,10 @@ RACE_STRATEGIES: tuple[RaceStrategyName, ...] = ("freeform", "sequence-pair")
 #: box load and the spawn figure kept as context are in
 #: ``docs/superpowers/evidence/2026-09-02-phase-d-portfolio/race-grace.md``.
 #:
-#: It is deliberately NOT ``sequence_islands._ISLAND_COMPLETION_GRACE_S``, which
-#: is 90.0: a grace that large is a second budget.
+#: ``sequence_islands`` now imports THIS constant for its own pool.  It used to
+#: keep a bespoke ``_ISLAND_COMPLETION_GRACE_S = 90.0``, which was never a grace
+#: -- a 30 s island run could sit until 120 s -- and the two pools have the same
+#: shape and therefore the same measured tail, so there is one number.
 RACE_COMPLETION_GRACE_S = 6.0
 
 #: Messages a direction may hold before publishing starts dropping.  A dropped

@@ -20,9 +20,8 @@ from flab2bp.layout.sequence_solver import (
     _serial_compact_seed_attempt,
     _with_observational_stats,
 )
+from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.spec import BuildSpec
-
-_ISLAND_COMPLETION_GRACE_S = 90.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,10 +108,19 @@ def _sequence_island_deadlines(
     *,
     started: float,
 ) -> tuple[float, float, float]:
-    """Return requested search time, child deadline, and bounded completion deadline."""
+    """Return requested search time, child deadline, and bounded completion deadline.
+
+    The completion grace is ``strategy_race.RACE_COMPLETION_GRACE_S``, and it is
+    the SAME grace for the same reason: the tail an island pool has to cover is
+    a child holding a finished ``Placement`` while the pool pickles it back
+    through the result queue, which ``scripts/spawn_cost.py`` timed on exactly
+    this pool shape.  It used to be a bespoke 90.0, which is not a grace at all
+    but a second budget three times the size of the first -- a 30 s island run
+    could sit until 120 s.
+    """
     ceiling = time_budget_s
     search_deadline = started + ceiling
-    completion_grace = _ISLAND_COMPLETION_GRACE_S if ceiling > 0 else 0.0
+    completion_grace = RACE_COMPLETION_GRACE_S if ceiling > 0 else 0.0
     return ceiling, search_deadline, search_deadline + completion_grace
 
 

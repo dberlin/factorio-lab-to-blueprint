@@ -359,6 +359,11 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
     ``--fetch-flow`` is admitted only for the strict FactorioLab HTTPS
     allowlist, and request-stage CDP interception aborts a forbidden main-frame
     document redirect before Chromium accesses it.
+
+    ``sequence_islands`` is deliberately NOT passed: the web UI has no control
+    for it, so it takes ``pipeline.resolve_sequence_islands``' default like any
+    other caller that has no opinion.  Passing 1 here would be the one line
+    that quietly kept the browser on a single core.
     """
     return pipeline.build(
         options.url,

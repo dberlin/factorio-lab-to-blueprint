@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 import pickle
 import time
@@ -31,6 +32,7 @@ from flab2bp.layout.sequence_islands import (
 )
 from flab2bp.layout.sequence_pair import PlacementProblem, derive_stage_seed
 from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
+from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import two_stage_spec
 
@@ -439,7 +441,9 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
         SequenceSolverConfig().seed
     }
     assert pickle.loads(pickle.dumps(executor.requests[1])) == executor.requests[1]
-    assert observed_waits == [91.0]
+    # started 100.0, budget 2.0, second tick 101.0: the parent waits to the soft
+    # deadline (102.0) plus the race grace, less the second it has already spent.
+    assert observed_waits == [1.0 + RACE_COMPLETION_GRACE_S]
     assert executor.kwargs["mp_context"].get_start_method() == "spawn"
     assert executor.kwargs["max_tasks_per_child"] == 1
     assert placement.stats["islands_requested"] == 3.0
@@ -447,7 +451,7 @@ def test_child_soft_deadline_leaves_parent_time_to_collect_result(
     assert placement.stats["islands_refused"] == 0.0
     assert placement.stats["winner_island_id"] == 0
     assert placement.stats["winner_island_seed"] == SequenceSolverConfig().seed
-    assert placement.stats["island_result_reserve_s"] == 90.0
+    assert placement.stats["island_result_reserve_s"] == RACE_COMPLETION_GRACE_S
     assert executor.shutdown_calls[-1] == (True, False)
 
 
@@ -560,8 +564,8 @@ def test_island_child_asks_its_solver_to_continue_for_feasibility(
     ("time_budget_s", "ceiling", "soft_deadline", "hard_deadline"),
     (
         (0.0, 0.0, 100.0, 100.0),
-        (0.01, 0.01, 100.01, 190.01),
-        (30.0, 30.0, 130.0, 220.0),
+        (0.01, 0.01, 100.01, 100.01 + RACE_COMPLETION_GRACE_S),
+        (30.0, 30.0, 130.0, 130.0 + RACE_COMPLETION_GRACE_S),
     ),
 )
 def test_deadline_split_preserves_the_parent_ceiling(
@@ -626,3 +630,47 @@ def test_two_real_spawned_islands_are_unseeded_then_seeded_and_both_valid() -> N
     assert observational_stats["compact_seed_closure_status"] == "routed"
     assert observational_stats["compact_seed_closure_backend"] == "cython"
     assert island1.stats["compact_seed_closure_exact"] == 1.0
+
+
+def test_one_island_keeps_the_serial_seed_exactly() -> None:
+    # Exactness contract: a 1-island run must be bit-identical to the serial
+    # run, and that rests entirely on island zero keeping the serial seed.
+    for seed in (0, 1, 9_007_199_254_740_993):
+        assert _sequence_island_seeds(seed, 1) == (seed,)
+        assert _sequence_island_seeds(seed, 8)[0] == seed
+
+
+def test_the_island_completion_grace_is_the_race_grace() -> None:
+    # `_ISLAND_COMPLETION_GRACE_S = 90.0` was a second budget, not a grace.
+    # The island runner now waits exactly as long past the deadline as the
+    # strategy race does, and the old constant must be gone rather than
+    # merely unused.
+    assert not hasattr(islands_module, "_ISLAND_COMPLETION_GRACE_S")
+    _, soft, hard = _sequence_island_deadlines(30.0, started=100.0)
+    assert hard - soft == RACE_COMPLETION_GRACE_S
+
+
+def test_real_islands_return_within_the_race_grace_not_a_second_budget() -> None:
+    # Spawns for real: the parent must give up `ceiling + RACE_COMPLETION_GRACE_S`
+    # past the deadline, plus whatever the spawn itself costs -- never 90 s.
+    spec = two_stage_spec()
+    config = replace(SequenceSolverConfig.test(), seed=9_007_199_254_740_993)
+    started = time.monotonic()
+    # Either shape is a pass: what is under test is WHEN the parent gives up,
+    # not whether two children with a millisecond of budget found a layout.
+    with contextlib.suppress(NoValidLayout):
+        islands_module.run_sequence_islands(
+            spec,
+            time_budget_s=0.001,
+            band_policy=BandPolicy("portable"),
+            belt_vertical_construction=True,
+            strip_len=6,
+            config=config,
+            compact_seed_config=CompactSeedConfig(max_deterministic_time=0.01),
+            islands=2,
+        )
+    elapsed = time.monotonic() - started
+    #: 20 s of spawn slack: two children each pay ~1 s of import, and this box
+    #: is shared.  The point of the bound is that it is nowhere near 90.
+    assert elapsed < 0.001 + RACE_COMPLETION_GRACE_S + 20.0
+    assert elapsed < 90.0

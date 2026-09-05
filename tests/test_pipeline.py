@@ -741,6 +741,12 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     # `DID NOT RAISE NoValidLayout`. That failure is the test working. Lower
     # the budget until the refusal is reliable again (and re-measure the
     # ceiling), rather than relaxing the assertion.
+    #
+    # `sequence_islands=1` is load-bearing, not tidiness: the default resolves
+    # to four SPAWNED children, and a counter monkeypatched into this process
+    # can never see a `_PreparationDeadline` raised in one of them. One island
+    # is the in-process path this test exists to guard, and it is the path a
+    # `--sequence-islands 1` build still takes.
     budget = 1.5
     with pytest.raises(NoValidLayout, match="deadline exhausted"):
         pipeline.build(
@@ -748,6 +754,7 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
             strategy="sequence-pair",
             candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
             time_budget_s=budget,
+            sequence_islands=1,
         )
 
     assert time.monotonic() - started < budget + 2.5
@@ -1580,6 +1587,12 @@ def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
         time_budget_s=STUB_RACE_BUDGET_S,
         race=True,
         candidate_parallelism=2,
+        # 32, not the 16-worker default: four islands are now the default, and
+        # the allocator will not admit a batch whose candidate shares cannot
+        # each fund them -- at 16 that is one candidate at a time, which is what
+        # `test_default_islands_collapse_candidate_racing...` pins. This test is
+        # about the concurrency mechanism, so it buys the budget that funds it.
+        workers=32,
         on_progress=steps.append,
     )
 
@@ -1652,6 +1665,9 @@ def test_candidate_batch_settles_before_the_next_batch_starts(
         time_budget_s=STUB_RACE_BUDGET_S,
         race=True,
         candidate_parallelism=2,
+        # See the note in the concurrency test above: four default islands do
+        # not fit two candidate shares of a 16-worker budget.
+        workers=32,
         on_progress=steps.append,
     )
 
@@ -2165,6 +2181,69 @@ def test_racing_rejects_sequence_islands_outside_the_serial_range_before_work(
             race=True,
             sequence_islands=99,
         )
+
+
+@pytest.mark.parametrize(
+    ("strategy", "worker_budget", "requested", "expected"),
+    [
+        ("best", 16, None, 4),
+        ("sequence-pair", 16, None, 4),
+        ("sequence-pair", 2, None, 1),  # race_worker_split(2)[1] is the cap
+        ("freeform", 16, None, 1),
+        ("sequence-pair", 16, 2, 2),  # an explicit request is honoured
+        ("sequence-pair", 16, 1, 1),
+    ],
+)
+def test_resolve_sequence_islands(
+    strategy: pipeline.StrategyName,
+    worker_budget: int,
+    requested: int | None,
+    expected: int,
+) -> None:
+    assert pipeline.resolve_sequence_islands(strategy, worker_budget, requested) == expected
+
+
+def test_the_default_island_count_is_four() -> None:
+    assert pipeline.DEFAULT_SEQUENCE_ISLANDS == 4
+
+
+@pytest.mark.parametrize(
+    ("worker_budget", "islands", "parallelism"),
+    ((16, 4, 1), (32, 4, 2), (64, 4, 3)),
+)
+def test_default_islands_collapse_candidate_racing_at_the_default_worker_budget(
+    worker_budget: int,
+    islands: int,
+    parallelism: int,
+) -> None:
+    """Islands take priority over candidate racing, and that COSTS wall.
+
+    `_candidate_race_parallelism` admits only a batch whose every candidate
+    share funds Freeform plus every island, and the default 16-worker budget
+    funds exactly one such share.  So a raced `best` build at the default
+    budget now settles its candidates ONE at a time rather than three, trading
+    up to three budgets of wall for the 13.6 % smaller layouts islands buy.
+    That precedence is the pre-existing contract -- "an unfunded two-strategy
+    race falls back to serial" -- but four islands is what makes it bind, so it
+    is pinned here rather than discovered in a gate.
+    """
+    assert pipeline.resolve_sequence_islands("best", worker_budget, None) == islands
+    assert (
+        pipeline._candidate_race_parallelism(
+            worker_budget,
+            3,
+            3,
+            islands,
+        )
+        == parallelism
+    )
+
+
+def test_resolve_sequence_islands_is_capped_by_the_available_cpus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline, "_available_cpu_count", lambda: 2)
+    assert pipeline.resolve_sequence_islands("best", 16, None) == 2
 
 
 def test_sequence_islands_cannot_exceed_the_aggregate_worker_budget() -> None:

@@ -103,6 +103,7 @@ from flab2bp.layout.strategy_race import (  # noqa: E402
     RACE_COMPLETION_GRACE_S,
     RacingLayout,
 )
+from flab2bp.pipeline import resolve_sequence_islands  # noqa: E402
 from flab2bp.rates import (  # noqa: E402
     DEFAULT_CANDIDATE_POLICIES,
     CandidatePolicy,
@@ -123,14 +124,21 @@ _STRATEGIES: dict[str, _StrategyFactory] = {
         workers=workers,
         belt_vertical_construction=vertical,
     ),
-    "sequence-pair": lambda _workers, vertical, _max_belt_z: SequencePairLayout(
+    #: Islands, at the same count production runs, so the gate MEASURES the
+    #: default rather than a shape no user gets.  `resolve_sequence_islands`
+    #: bounds them by this cell's own CP-SAT worker share, so a wide `--jobs`
+    #: run -- which gives each cell fewer workers -- narrows the islands with it
+    #: instead of oversubscribing the box N times over.
+    "sequence-pair": lambda workers, vertical, _max_belt_z: SequencePairLayout(
         band_policy=BandPolicy("portable"),
         belt_vertical_construction=vertical,
+        islands=resolve_sequence_islands("sequence-pair", workers, None),
     ),
     "best": lambda workers, vertical, max_belt_z: RacingLayout(
         BandPolicy("portable"),
         workers=workers,
         belt_vertical_construction=vertical,
+        sequence_islands=resolve_sequence_islands("best", workers, None),
         max_belt_z=max_belt_z,
     ),
 }
@@ -211,7 +219,9 @@ class Result:
     #: Wall of the ATTEMPT -- the solve plus the compaction, projection and
     #: validation charged to nobody else -- and how far past ``budget + grace``
     #: it ran, clamped at zero, where ``grace`` is
-    #: ``strategy_race.RACE_COMPLETION_GRACE_S`` for a ``best`` cell (a raced
+    #: ``strategy_race.RACE_COMPLETION_GRACE_S`` for any cell that runs a child
+    #: pool -- ``best``, and ``sequence-pair`` once its islands resolve above
+    #: one, since the island runner now takes that same grace -- (a raced
     #: attempt runs under the race's own completion contract, not the serial
     #: one) and ``base.ATOMIC_COMPLETION_GRACE_S`` for every other strategy --
     #: the same two contracts ``pipeline`` honours on ``PlacementStats``.  The
@@ -324,13 +334,22 @@ def run_cell(job: Job) -> Result:
     #: expires and are charged to nobody.  `t0` also covers building the spec,
     #: which is not the layout's cost.
     attempt_started = time.monotonic()
-    #: A raced `best` cell runs under the race's own completion contract, not
-    #: the serial one: `RacingLayout` gives its children until
-    #: RACE_COMPLETION_GRACE_S (6.0) past the shared deadline, a full second
-    #: more than the ATOMIC_COMPLETION_GRACE_S (5.0) a lone strategy gets.
-    #: Judging every strategy by the serial grace would over-report a clean
-    #: `best` cell's overshoot by up to that second.
-    grace = RACE_COMPLETION_GRACE_S if job.strategy == "best" else ATOMIC_COMPLETION_GRACE_S
+    #: A cell that runs a CHILD POOL runs under the pool's completion contract,
+    #: not the serial one: both `RacingLayout` and the island runner give their
+    #: children until RACE_COMPLETION_GRACE_S (6.0) past the shared deadline, a
+    #: full second more than the ATOMIC_COMPLETION_GRACE_S (5.0) a lone
+    #: in-process strategy gets.  Judging those by the serial grace would
+    #: over-report a clean cell's overshoot by up to that second.  A
+    #: `sequence-pair` cell resolved to one island has no pool and stays atomic.
+    grace = (
+        RACE_COMPLETION_GRACE_S
+        if job.strategy == "best"
+        or (
+            job.strategy == "sequence-pair"
+            and resolve_sequence_islands("sequence-pair", job.workers, None) > 1
+        )
+        else ATOMIC_COMPLETION_GRACE_S
+    )
     try:
         if job.arrangements is not None and job.strategy == "freeform":
             strategy = FreeformLayout(

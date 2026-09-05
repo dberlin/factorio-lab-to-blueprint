@@ -79,6 +79,19 @@ PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
 #: workstation run them unbounded.
 DEFAULT_WORKER_BUDGET_CAP = 16
 
+#: Complete sequence-pair solves run in parallel, with derived seeds, when the
+#: caller does not say otherwise.
+#:
+#: MEASURED, not guessed.  ``docs/superpowers/specs/2026-09-05-speedups-2-design.md``
+#: §L1 ran the same four cells at the same 30 s budget on 1, 4 and 8 islands:
+#: mean area fell 13.6 % at four and 13.5 % at eight, and no cell got worse.
+#: The win is diversification rather than throughput -- on qc180 the winning
+#: island took a ``compact_seed_attempt`` branch the serial run, which always
+#: takes attempt 0, cannot reach.  Four rather than eight because eight bought
+#: nothing measurable and because ``race_worker_split(16)[1] == 4`` caps the
+#: raced sequence-pair arm at four anyway, so the cap costs nothing.
+DEFAULT_SEQUENCE_ISLANDS = 4
+
 
 def _available_cpu_count() -> int:
     """Return the CPU set this process may actually schedule on."""
@@ -86,6 +99,39 @@ def _available_cpu_count() -> int:
         return max(1, len(os.sched_getaffinity(0)))
     except (AttributeError, OSError):
         return max(1, os.process_cpu_count() or 1)
+
+
+def resolve_sequence_islands(
+    strategy: StrategyName,
+    worker_budget: int,
+    requested: int | None,
+) -> int:
+    """Return the island count a build should run.
+
+    ``requested`` is honoured verbatim -- whether it is legal for ``strategy``
+    is ``build``'s question, asked before this one, so that an illegal request
+    is refused rather than silently resolved into something else.
+
+    Otherwise: islands only exist inside the sequence-pair backend, so every
+    other strategy gets one, and ``sequence-pair`` and ``best`` get
+    :data:`DEFAULT_SEQUENCE_ISLANDS` bounded by what the box can actually fund.
+    The two bounds are the raced sequence-pair arm's share of the worker budget
+    (``best`` runs its islands INSIDE that arm, and asking for more than it was
+    allocated makes ``_candidate_race_parallelism`` refuse to race at all) and
+    the CPUs this process may schedule on (each island is a whole process).
+    """
+    if requested is not None:
+        return requested
+    if strategy not in ("sequence-pair", "best"):
+        return 1
+    return max(
+        1,
+        min(
+            DEFAULT_SEQUENCE_ISLANDS,
+            strategy_race.race_worker_split(worker_budget)[1],
+            _available_cpu_count(),
+        ),
+    )
 
 
 def _worker_allocations(
@@ -500,7 +546,11 @@ def build(
     #: worker allocator reserves enough of each candidate's share for every
     #: island. If even a single two-strategy race cannot fund them, strategies
     #: run serially instead.
-    sequence_islands: int = 1,
+    #:
+    #: ``None`` -- the default -- means :func:`resolve_sequence_islands`
+    #: decides, which is ``DEFAULT_SEQUENCE_ISLANDS`` bounded by the box for
+    #: ``sequence-pair`` and ``best`` and 1 for anything else.
+    sequence_islands: int | None = None,
     dataset: Dataset | None = None,
     name: str = "",
     flow: Path | None = None,
@@ -548,12 +598,16 @@ def build(
     are standing in front of it in game.
     """
     policy = BandPolicy.parse(band)
-    _validate_sequence_islands(sequence_islands)
-    # Islands now live INSIDE the sequence-pair racer, so `best` may ask for
-    # them: the raced sequence-pair child constructs its own SequencePairLayout
-    # with this island count. `freeform` still may not -- it has no islands.
-    if sequence_islands != 1 and strategy not in ("sequence-pair", "best"):
-        raise ValueError("sequence islands require --strategy sequence-pair or best")
+    # An EXPLICIT request is judged before it is resolved, so an illegal one is
+    # refused rather than quietly replaced by the default.
+    if sequence_islands is not None:
+        _validate_sequence_islands(sequence_islands)
+        # Islands now live INSIDE the sequence-pair racer, so `best` may ask for
+        # them: the raced sequence-pair child constructs its own
+        # SequencePairLayout with this island count. `freeform` still may not --
+        # it has no islands.
+        if sequence_islands != 1 and strategy not in ("sequence-pair", "best"):
+            raise ValueError("sequence islands require --strategy sequence-pair or best")
     if workers is not None and (type(workers) is not int or workers < 1):
         raise ValueError("workers must be a positive integer")
     worker_budget = (
@@ -561,7 +615,8 @@ def build(
         if workers is not None
         else min(_available_cpu_count(), DEFAULT_WORKER_BUDGET_CAP)
     )
-    if strategy in ("sequence-pair", "best") and sequence_islands > worker_budget:
+    islands = resolve_sequence_islands(strategy, worker_budget, sequence_islands)
+    if strategy in ("sequence-pair", "best") and islands > worker_budget:
         raise ValueError("sequence islands cannot exceed worker budget")
     if candidate_parallelism is not None and (
         type(candidate_parallelism) is not int or candidate_parallelism < 1
@@ -717,7 +772,7 @@ def build(
             worker_budget,
             len(spec_set.candidates),
             requested_parallelism,
-            sequence_islands,
+            islands,
         )
     resolved_candidate_parallelism = max(1, strategy_race_parallelism)
 
@@ -750,7 +805,7 @@ def build(
         layout = _new_layout(
             sname,
             belt_vertical_construction=belt_rules.vertical_construction,
-            sequence_islands=sequence_islands,
+            sequence_islands=islands,
             band_policy=policy,
             workers=worker_budget,
         )
@@ -791,7 +846,7 @@ def build(
             belt_vertical_construction=belt_rules.vertical_construction,
             max_belt_z=belt_rules.max_z,
             workers=candidate_workers,
-            sequence_islands=sequence_islands,
+            sequence_islands=islands,
             share=share,
         )
         return race_started, time.monotonic(), outcomes

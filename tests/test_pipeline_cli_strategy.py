@@ -181,7 +181,7 @@ def test_cli_rejects_invalid_candidate_policy_selections(
     assert diagnostic in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(("affinity", "expected"), ((3, 3), (64, 8)))
+@pytest.mark.parametrize(("affinity", "expected"), ((3, 1), (64, 4)))
 def test_cli_sequence_pair_uses_affinity_capped_auto_islands(
     monkeypatch: pytest.MonkeyPatch,
     affinity: int,
@@ -514,12 +514,12 @@ def test_sequence_islands_are_legal_with_best_and_reach_the_pipeline(
     assert received["sequence_islands"] == 4
 
 
-def test_best_without_the_flag_still_runs_one_island(
+def test_best_without_the_flag_runs_the_default_islands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # `best` is the DEFAULT strategy, so the affinity-capped auto default must
-    # stay exclusive to explicit sequence-pair: defaulting it here would change
-    # every plain `flab2bp <url>` build.
+    # `best` is the DEFAULT strategy, and islands are now ON by default there
+    # too: four islands measured 13.6 % smaller layouts at the same budget, and
+    # `race_worker_split(16)[1] == 4` funds exactly that many.
     received: dict[str, object] = {}
 
     def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
@@ -535,6 +535,53 @@ def test_best_without_the_flag_still_runs_one_island(
     monkeypatch.setattr(cli, "_available_cpu_count", lambda: 64)
 
     assert cli.main(["iron-ingot", "--strategy", "best"]) == 0
+
+    assert received["sequence_islands"] == 4
+
+
+def test_cli_default_strategy_runs_the_default_islands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A plain `flab2bp <url>` -- no `--strategy`, no `--sequence-islands` -- is
+    # the build the default has to reach for this lever to be worth anything.
+    received: dict[str, object] = {}
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+    monkeypatch.setattr(cli, "_available_cpu_count", lambda: 64)
+
+    assert cli.main(["iron-ingot"]) == 0
+
+    assert received["sequence_islands"] == 4
+
+
+def test_cli_honours_an_explicit_workers_budget_when_resolving_islands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `--workers 2` funds one sequence-pair worker, so it must fund one island.
+    received: dict[str, object] = {}
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.update(kwargs)
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+    monkeypatch.setattr(cli, "_available_cpu_count", lambda: 64)
+
+    assert cli.main(["iron-ingot", "--workers", "2"]) == 0
 
     assert received["sequence_islands"] == 1
 

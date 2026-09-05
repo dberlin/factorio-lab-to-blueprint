@@ -343,13 +343,22 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--sequence-islands must be from 1 to 16")
     if args.workers is not None and args.workers < 1:
         ap.error("--workers must be a positive integer")
-    # The affinity-capped default stays exclusive to EXPLICIT sequence-pair:
-    # `best` is the default strategy, so defaulting islands here would silently
-    # re-shape every plain `flab2bp <url>` build.  An explicit N still travels.
-    sequence_islands = (
-        args.sequence_islands or min(8, _available_cpu_count())
-        if args.strategy == "sequence-pair"
-        else args.sequence_islands or 1
+    # Islands are ON by default for both `sequence-pair` and `best`, which is
+    # every plain `flab2bp <url>` build: four islands measured 13.6 % smaller
+    # layouts at the same budget (design doc L1).  The CLI does not keep its own
+    # rule for how many -- `pipeline.resolve_sequence_islands` is the one place
+    # that knows the bounds -- but it does resolve here rather than passing
+    # `None` through, so `--verbose` and every test can see the number that was
+    # actually chosen.
+    worker_budget = (
+        args.workers
+        if args.workers is not None
+        else min(_available_cpu_count(), pipeline.DEFAULT_WORKER_BUDGET_CAP)
+    )
+    sequence_islands = pipeline.resolve_sequence_islands(
+        args.strategy,
+        worker_budget,
+        args.sequence_islands,
     )
 
     try:
