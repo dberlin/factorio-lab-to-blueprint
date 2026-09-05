@@ -107,6 +107,7 @@ def _sequence_island_deadlines(
     time_budget_s: float,
     *,
     started: float,
+    absolute_deadline: float | None = None,
 ) -> tuple[float, float, float]:
     """Return requested search time, child deadline, and bounded completion deadline.
 
@@ -117,9 +118,25 @@ def _sequence_island_deadlines(
     this pool shape.  It used to be a bespoke 90.0, which is not a grace at all
     but a second budget three times the size of the first -- a 30 s island run
     could sit until 120 s.
+
+    ``absolute_deadline`` is a wall SOMEONE ELSE started -- the strategy race's,
+    when these islands are running inside a raced sequence-pair child.  Without
+    it this pool started a fresh clock after spawn, so its own soft deadline
+    landed one spawn-cost PAST the parent's and its hard deadline past the
+    parent's kill time: the parent killed the arm the moment the islands used any
+    of their grace at all, which is what the first islands smoke saw as a refused
+    island.  Clamping the soft deadline keeps the whole nested structure inside
+    the allowance the parent already granted.
+
+    The ceiling is NOT clamped with it.  It is the budget that was ASKED for --
+    what a refusal reports, and what decides whether a grace is owed at all --
+    and deriving it from a nearly expired parent deadline would silently drop
+    the grace to zero exactly when the pool most needs it to collect a result.
     """
     ceiling = time_budget_s
     search_deadline = started + ceiling
+    if absolute_deadline is not None:
+        search_deadline = min(search_deadline, absolute_deadline)
     completion_grace = RACE_COMPLETION_GRACE_S if ceiling > 0 else 0.0
     return ceiling, search_deadline, search_deadline + completion_grace
 
@@ -262,11 +279,17 @@ def run_sequence_islands(
     config: SequenceSolverConfig,
     compact_seed_config: CompactSeedConfig,
     islands: int,
+    absolute_deadline: float | None = None,
 ) -> Placement:
-    """Run complete production solves in fresh spawned children and merge them."""
+    """Run complete production solves in fresh spawned children and merge them.
+
+    ``absolute_deadline`` is the wall of a parent that spawned THIS process --
+    a racing child's, in practice.  See :func:`_sequence_island_deadlines`.
+    """
     ceiling, soft_deadline, hard_deadline = _sequence_island_deadlines(
         time_budget_s,
         started=time.monotonic(),
+        absolute_deadline=absolute_deadline,
     )
     seeds = _sequence_island_seeds(config.seed, islands)
     serial_attempt = _serial_compact_seed_attempt(

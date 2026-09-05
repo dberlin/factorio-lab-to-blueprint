@@ -9,7 +9,6 @@ diagnostics go to stderr.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -168,14 +167,6 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
                 f"{a.candidate:<20}{a.strategy:<10}{a.area:>8}{len(a.report.errors):>8}",
                 file=out,
             )
-
-
-def _available_cpu_count() -> int:
-    """Return the CPU set this process may actually schedule on."""
-    try:
-        return max(1, len(os.sched_getaffinity(0)))
-    except AttributeError, OSError:
-        return max(1, os.process_cpu_count() or 1)
 
 
 def _band_selection(value: str) -> str:
@@ -345,21 +336,16 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--workers must be a positive integer")
     # Islands are ON by default for both `sequence-pair` and `best`, which is
     # every plain `flab2bp <url>` build: four islands measured 13.6 % smaller
-    # layouts at the same budget (design doc L1).  The CLI does not keep its own
-    # rule for how many -- `pipeline.resolve_sequence_islands` is the one place
-    # that knows the bounds -- but it does resolve here rather than passing
-    # `None` through, so `--verbose` and every test can see the number that was
-    # actually chosen.
-    worker_budget = (
-        args.workers
-        if args.workers is not None
-        else min(_available_cpu_count(), pipeline.DEFAULT_WORKER_BUDGET_CAP)
-    )
-    sequence_islands = pipeline.resolve_sequence_islands(
-        args.strategy,
-        worker_budget,
-        args.sequence_islands,
-    )
+    # layouts at the same budget (design doc L1).  The count is deliberately NOT
+    # resolved here.  `None` means "you decide", and only `pipeline.build` can:
+    # a raced build resolves islands per candidate, from the worker share that
+    # candidate's batch actually gave it, and the batch width is not known until
+    # the candidates are.  Resolving eagerly here would hand `build` a number
+    # that looks like an EXPLICIT request -- which travels verbatim, by design --
+    # and every raced candidate would then get the whole build's island count
+    # instead of its own share's.  Measured: four islands per candidate on a
+    # five-worker share, where two is what the share funds.
+    sequence_islands = args.sequence_islands
 
     try:
         build = pipeline.build(

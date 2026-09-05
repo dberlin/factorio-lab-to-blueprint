@@ -6317,9 +6317,10 @@ class SequencePairLayout:
         child so it does not start a fresh budget spawn-cost seconds late.  It
         goes straight into :func:`_production_run`, which already prefers it over
         ``started + ceiling`` and already derives the stage-admission span from
-        it.  The ``islands > 1`` branch keeps its own arithmetic: islands inside
-        a raced child are bounded by that child's own budget, and
-        ``run_sequence_islands`` takes no absolute deadline.
+        it.  The ``islands > 1`` branch gets it too, and must: an island pool
+        that started a fresh clock after spawn set its own hard deadline PAST the
+        parent's kill time, so the parent killed this arm whenever the islands
+        used any of their completion grace.
         """
         if time_budget_s <= 0:
             raise NoValidLayout(
@@ -6367,6 +6368,7 @@ class SequencePairLayout:
                 config=self.config,
                 compact_seed_config=self.compact_seed_config,
                 islands=self.islands,
+                absolute_deadline=absolute_deadline,
             )
         else:
             run = _production_run(

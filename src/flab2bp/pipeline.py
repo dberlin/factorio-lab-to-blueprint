@@ -116,9 +116,15 @@ def resolve_sequence_islands(
     other strategy gets one, and ``sequence-pair`` and ``best`` get
     :data:`DEFAULT_SEQUENCE_ISLANDS` bounded by what the box can actually fund.
     The two bounds are the raced sequence-pair arm's share of the worker budget
-    (``best`` runs its islands INSIDE that arm, and asking for more than it was
-    allocated makes ``_candidate_race_parallelism`` refuse to race at all) and
-    the CPUs this process may schedule on (each island is a whole process).
+    (``best`` runs its islands INSIDE that arm) and the CPUs this process may
+    schedule on (each island is a whole process).
+
+    ``worker_budget`` is therefore whatever budget the islands will actually be
+    spent out of: the WHOLE build budget for a serial strategy, and ONE
+    CANDIDATE'S share for a raced one, resolved per candidate after the batch
+    width is chosen.  A three-candidate raced build on the default 16 workers
+    gives each candidate 5 or 6, which funds one island each; the same build
+    with a single candidate gives it all 16 and four islands.
     """
     if requested is not None:
         return requested
@@ -132,6 +138,22 @@ def resolve_sequence_islands(
             _available_cpu_count(),
         ),
     )
+
+
+def _serial_completion_grace(strategy: ExplicitStrategyName, islands: int) -> float:
+    """Return the completion grace one SERIAL attempt's settlement runs under.
+
+    ``build`` turns this into a hard ``attempt_deadline`` for compaction,
+    finalization, validation and encoding.  A lone in-process strategy gets the
+    atomic grace, as it always has -- but a sequence-pair arm running islands is
+    not in-process: it is a spawn pool that may legitimately hand its answer back
+    at ``budget + RACE_COMPLETION_GRACE_S``, and judging it by the shorter atomic
+    grace would expire the settlement of a placement that arrived exactly when it
+    was allowed to.  Same rule, and the same reason, as ``scripts/audit.py``'s.
+    """
+    if strategy == "sequence-pair" and islands > 1:
+        return strategy_race.RACE_COMPLETION_GRACE_S
+    return ATOMIC_COMPLETION_GRACE_S
 
 
 def _worker_allocations(
@@ -149,15 +171,24 @@ def _candidate_race_parallelism(
     total_workers: int,
     candidate_count: int,
     requested_parallelism: int,
-    sequence_islands: int,
 ) -> int:
-    """Return the widest candidate batch whose nested races fit the budget."""
+    """Return the widest candidate batch whose nested races fit the budget.
+
+    Islands are deliberately NOT a precondition here.  They used to be -- the
+    batch had to be narrow enough that every candidate's share could reserve one
+    CP-SAT worker per island -- and with four islands on by default that made the
+    default 16-worker budget admit exactly ONE candidate at a time, turning a
+    three-candidate raced build from one budget of wall into three.  The batch is
+    chosen first, on the same rule it used before islands existed, and each
+    candidate's islands are then resolved FROM the share it was actually given
+    (``resolve_sequence_islands`` on ``candidate_workers``).  So a wide batch
+    narrows the islands rather than the islands narrowing the batch.
+    """
     widest = min(candidate_count, requested_parallelism)
     for parallelism in range(widest, 0, -1):
         allocations = _worker_allocations(total_workers, parallelism)
         if all(
             candidate_workers >= PRODUCTION_STRATEGY_COUNT
-            and strategy_race.race_worker_split(candidate_workers)[1] >= sequence_islands
             for candidate_workers in allocations
         ):
             return parallelism
@@ -542,10 +573,10 @@ def build(
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
     #: Legal with ``best`` as well as ``sequence-pair``, because islands live
-    #: inside the raced sequence-pair arm. Under ``race=True`` the aggregate
-    #: worker allocator reserves enough of each candidate's share for every
-    #: island. If even a single two-strategy race cannot fund them, strategies
-    #: run serially instead.
+    #: inside the raced sequence-pair arm. Under ``race=True`` the candidate
+    #: batch width is chosen FIRST and each candidate's islands are then
+    #: resolved from the share that width gave it, so islands never narrow the
+    #: batch. An explicit count travels verbatim to every candidate.
     #:
     #: ``None`` -- the default -- means :func:`resolve_sequence_islands`
     #: decides, which is ``DEFAULT_SEQUENCE_ISLANDS`` bounded by the box for
@@ -573,7 +604,8 @@ def build(
     #: and reserve the SequencePair arm's island processes.
     workers: int | None = None,
     #: Candidate races to run at once. ``None`` admits the widest batch whose
-    #: candidate shares fund Freeform plus every requested SequencePair island.
+    #: candidate shares each fund a two-strategy race; islands are then resolved
+    #: per candidate from that share rather than constraining the batch.
     #: An unfunded two-strategy race falls back to serial strategies.
     candidate_parallelism: int | None = None,
     #: Race the two strategies for ONE budget instead of running them serially
@@ -772,7 +804,6 @@ def build(
             worker_budget,
             len(spec_set.candidates),
             requested_parallelism,
-            islands,
         )
     resolved_candidate_parallelism = max(1, strategy_race_parallelism)
 
@@ -832,12 +863,21 @@ def build(
                 first_index + offset,
                 attempt_started,
                 None,
-                ATOMIC_COMPLETION_GRACE_S,
+                _serial_completion_grace(sname, islands),
                 result,
             )
 
     def _run_race(candidate: BuildSpec, candidate_workers: int) -> _CandidateRace:
-        """Run one candidate's strategy race and retain its actual wall."""
+        """Run one candidate's strategy race and retain its actual wall.
+
+        The islands are resolved from THIS candidate's share, not from the whole
+        build budget: the batch width was chosen first, so what is left to decide
+        is how many islands that width leaves affordable. An explicit request
+        still travels verbatim -- ``resolve_sequence_islands`` returns it
+        unchanged -- which is the one case where the arithmetic here can ask for
+        more processes than the share nominally funds, because the caller said
+        so.
+        """
         race_started = time.monotonic()
         outcomes = strategy_race.run_strategy_race(
             candidate,
@@ -846,7 +886,11 @@ def build(
             belt_vertical_construction=belt_rules.vertical_construction,
             max_belt_z=belt_rules.max_z,
             workers=candidate_workers,
-            sequence_islands=islands,
+            sequence_islands=resolve_sequence_islands(
+                strategy,
+                candidate_workers,
+                sequence_islands,
+            ),
             share=share,
         )
         return race_started, time.monotonic(), outcomes

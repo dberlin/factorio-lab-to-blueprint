@@ -650,9 +650,18 @@ def test_the_island_completion_grace_is_the_race_grace() -> None:
     assert hard - soft == RACE_COMPLETION_GRACE_S
 
 
-def test_real_islands_return_within_the_race_grace_not_a_second_budget() -> None:
-    # Spawns for real: the parent must give up `ceiling + RACE_COMPLETION_GRACE_S`
-    # past the deadline, plus whatever the spawn itself costs -- never 90 s.
+def test_a_real_island_pool_spawns_and_returns_promptly_at_a_tiny_ceiling() -> None:
+    """A SPAWN SMOKE, not the grace regression guard.
+
+    It proves the real pool starts, settles and tears down without hanging, and
+    it would catch a runner that waited out a second budget.  It does NOT
+    discriminate 6.0 from 90.0: at a 0.001 s ceiling the children refuse almost
+    immediately, so `wait` returns long before either grace could expire.  The
+    grace itself is guarded by
+    `test_deadline_split_preserves_the_parent_ceiling`'s table and by
+    `test_child_soft_deadline_leaves_parent_time_to_collect_result`'s
+    `observed_waits` assertion, both of which read the constant directly.
+    """
     spec = two_stage_spec()
     config = replace(SequenceSolverConfig.test(), seed=9_007_199_254_740_993)
     started = time.monotonic()
@@ -674,3 +683,85 @@ def test_real_islands_return_within_the_race_grace_not_a_second_budget() -> None
     #: is shared.  The point of the bound is that it is nowhere near 90.
     assert elapsed < 0.001 + RACE_COMPLETION_GRACE_S + 20.0
     assert elapsed < 90.0
+
+
+def test_a_parent_deadline_clamps_the_island_soft_and_hard_deadlines() -> None:
+    """Islands inside a raced child must not outlive the parent's allowance.
+
+    The pool starts its clock AFTER spawn, so `started + ceiling` lands one
+    spawn-cost past the deadline the race parent is holding everyone to -- and
+    the hard deadline lands past the parent's kill time, so the parent killed
+    the sequence-pair arm the moment the islands used any of their grace.
+    """
+    parent_soft = 128.0
+    ceiling, soft, hard = _sequence_island_deadlines(
+        30.0,
+        started=100.0,  # spawn cost: the child started 2 s into the parent's 30
+        absolute_deadline=parent_soft,
+    )
+    #: The ceiling is what was ASKED for, not what is left -- it is what a
+    #: refusal reports, and what decides whether a grace is owed at all.
+    assert ceiling == 30.0
+    assert soft == parent_soft
+    assert hard == parent_soft + RACE_COMPLETION_GRACE_S
+
+    # A parent deadline that is not the binding one changes nothing.
+    assert _sequence_island_deadlines(
+        30.0,
+        started=100.0,
+        absolute_deadline=1_000.0,
+    ) == (30.0, 130.0, 130.0 + RACE_COMPLETION_GRACE_S)
+
+
+def test_the_island_runner_passes_the_parent_deadline_to_its_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`SequencePairLayout.lay_out` must hand `absolute_deadline` down.
+
+    Without this wiring the clamp above is unreachable from a raced child, which
+    is the only place it matters.
+    """
+    _PendingExecutor.instances.clear()
+    monkeypatch.setattr(islands_module, "ProcessPoolExecutor", _PendingExecutor)
+    ticks = iter((100.0, 101.0))
+    monkeypatch.setattr(
+        "flab2bp.layout.sequence_islands.time.monotonic",
+        lambda: next(ticks),
+    )
+    observed_waits: list[float | None] = []
+
+    def complete_at_soft_deadline(
+        futures: list[Future[_SequenceIslandOutcome]],
+        *,
+        timeout: float | None,
+    ) -> tuple[set[Future[_SequenceIslandOutcome]], set[Future[_SequenceIslandOutcome]]]:
+        observed_waits.append(timeout)
+        executor = _PendingExecutor.instances[-1]
+        for future, request in zip(futures, executor.requests, strict=True):
+            future.set_result(
+                _SequenceIslandOutcome.completed(
+                    request.island_id,
+                    request.seed,
+                    _placement(area=20 + request.island_id, belt_tiles=4),
+                )
+            )
+        return set(futures), set()
+
+    monkeypatch.setattr(islands_module, "wait", complete_at_soft_deadline)
+
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"),
+        islands=2,
+        compact_seed_config=CompactSeedConfig(max_deterministic_time=0.125),
+    ).lay_out(
+        two_stage_spec(),
+        time_budget_s=30.0,
+        # The race parent's wall: 1.5 s before this pool's own `started + 30`.
+        absolute_deadline=128.5,
+    )
+
+    executor = _PendingExecutor.instances[-1]
+    assert {request.soft_deadline for request in executor.requests} == {128.5}
+    # 128.5 + grace, less the one second the parent clock already spent.
+    assert observed_waits == [128.5 + RACE_COMPLETION_GRACE_S - 101.0]
+    assert placement.stats["island_result_reserve_s"] == RACE_COMPLETION_GRACE_S

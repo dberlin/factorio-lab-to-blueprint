@@ -897,6 +897,48 @@ def test_finalize_placement_receives_a_cancelled_predicate_over_the_attempt_dead
     assert cancelled() is True
 
 
+@pytest.mark.parametrize(
+    ("islands", "grace"),
+    (
+        (1, ATOMIC_COMPLETION_GRACE_S),
+        (4, strategy_race.RACE_COMPLETION_GRACE_S),
+    ),
+)
+def test_a_serial_sequence_pair_attempt_gets_the_grace_its_islands_run_under(
+    monkeypatch: pytest.MonkeyPatch,
+    islands: int,
+    grace: float,
+) -> None:
+    """A spawn pool may hand its answer back one race grace past the budget.
+
+    The serial path used to charge every attempt the ATOMIC grace, so a
+    multi-island sequence-pair attempt that returned exactly when it was allowed
+    to would then have its compaction, finalization, validation and encoding
+    expired by a deadline a full second too early.  One island keeps the atomic
+    grace: there is no pool, so there is no pool tail to cover.
+    """
+    capture: dict[str, object] = {}
+    now = _stub_needs_finalization(monkeypatch, advance_s=0.0, capture=capture)
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="sequence-pair",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=3.0,
+        sequence_islands=islands,
+        # Explicit, so the island count is legal on a small-core runner too.
+        workers=16,
+    )
+
+    cancelled = capture["cancelled"]
+    assert callable(cancelled)
+    deadline = 1000.0 + 3.0 + grace
+    now[0] = deadline - 0.001
+    assert cancelled() is False
+    now[0] = deadline
+    assert cancelled() is True
+
+
 def test_a_finalization_cancelled_by_the_attempt_deadline_is_reported_as_a_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1587,12 +1629,6 @@ def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
         time_budget_s=STUB_RACE_BUDGET_S,
         race=True,
         candidate_parallelism=2,
-        # 32, not the 16-worker default: four islands are now the default, and
-        # the allocator will not admit a batch whose candidate shares cannot
-        # each fund them -- at 16 that is one candidate at a time, which is what
-        # `test_default_islands_collapse_candidate_racing...` pins. This test is
-        # about the concurrency mechanism, so it buys the budget that funds it.
-        workers=32,
         on_progress=steps.append,
     )
 
@@ -1665,9 +1701,6 @@ def test_candidate_batch_settles_before_the_next_batch_starts(
         time_budget_s=STUB_RACE_BUDGET_S,
         race=True,
         candidate_parallelism=2,
-        # See the note in the concurrency test above: four default islands do
-        # not fit two candidate shares of a 16-worker budget.
-        workers=32,
         on_progress=steps.append,
     )
 
@@ -1816,7 +1849,11 @@ def test_candidate_concurrency_uses_one_shared_rate_frontier(
         (8, 1, {"no-proliferator": 3, "all-products": 3, "output-products": 2}),
         (16, 1, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
         (64, 1, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
-        (16, 3, {"no-proliferator": 16, "all-products": 16, "output-products": 16}),
+        # An explicit island count no longer changes the split. It used to: the
+        # allocator reserved a CP-SAT worker per island, so three islands
+        # collapsed the batch to one candidate holding all 16. The batch is now
+        # chosen before the islands are, so this is the (16, 1) split exactly.
+        (16, 3, {"no-proliferator": 6, "all-products": 5, "output-products": 5}),
     ],
 )
 def test_raced_build_defaults_to_a_shared_sixteen_cpu_budget(
@@ -1883,7 +1920,13 @@ def test_raced_build_defaults_to_a_shared_sixteen_cpu_budget(
 
 @pytest.mark.parametrize(
     ("workers", "sequence_islands"),
-    [(1, 1), (16, 5)],
+    # Only ONE thing can leave a race unfunded now: a worker budget too small to
+    # give each of the two strategies a CP-SAT worker. `(16, 5)` used to belong
+    # here -- five islands could not be reserved out of a 16-worker share -- and
+    # no longer does, because islands are resolved after the batch rather than
+    # gating it. `test_an_explicit_island_count_no_longer_unfunds_a_race` pins
+    # that reversal.
+    [(1, 1)],
 )
 def test_unfunded_strategy_race_falls_back_to_serial_strategies(
     monkeypatch: pytest.MonkeyPatch,
@@ -1908,6 +1951,61 @@ def test_unfunded_strategy_race_falls_back_to_serial_strategies(
         race=True,
     )
 
+    assert [attempt.strategy for attempt in built.attempts] == [
+        "freeform",
+        "sequence-pair",
+    ]
+
+
+def test_an_explicit_island_count_no_longer_unfunds_a_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Five islands out of 16 workers used to force the serial fallback.
+
+    The allocator reserved a CP-SAT worker per island, so asking for more
+    islands than the sequence-pair share held cancelled the race outright. Now
+    the race runs and the explicit count travels to it: the caller asked for
+    five processes and gets five.
+    """
+    raced: dict[str, object] = {}
+
+    def record(
+        spec: BuildSpec, **kwargs: object
+    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+        del spec
+        raced.update(kwargs)
+        return (
+            strategy_race._StrategyRaceOutcome(
+                "freeform",
+                "completed",
+                placement=_finished(2, 3),
+            ),
+            strategy_race._StrategyRaceOutcome(
+                "sequence-pair",
+                "completed",
+                placement=_finished(3, 3),
+            ),
+        )
+
+    monkeypatch.setattr(strategy_race, "run_strategy_race", record)
+    monkeypatch.setattr(
+        validate,
+        "validate",
+        lambda *_args, **_kwargs: validate.Report(findings=()),
+    )
+
+    built = pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        workers=16,
+        sequence_islands=5,
+        race=True,
+    )
+
+    assert raced["sequence_islands"] == 5
+    assert raced["workers"] == 16
     assert [attempt.strategy for attempt in built.attempts] == [
         "freeform",
         "sequence-pair",
@@ -2208,35 +2306,48 @@ def test_the_default_island_count_is_four() -> None:
 
 
 @pytest.mark.parametrize(
-    ("worker_budget", "islands", "parallelism"),
-    ((16, 4, 1), (32, 4, 2), (64, 4, 3)),
+    ("worker_budget", "candidate_count", "parallelism", "shares", "islands_each"),
+    (
+        (16, 3, 3, (6, 5, 5), 2),
+        (16, 1, 1, (16,), 4),
+    ),
 )
-def test_default_islands_collapse_candidate_racing_at_the_default_worker_budget(
+def test_raced_islands_come_from_the_candidate_share_and_never_narrow_the_batch(
     worker_budget: int,
-    islands: int,
+    candidate_count: int,
     parallelism: int,
+    shares: tuple[int, ...],
+    islands_each: int,
 ) -> None:
-    """Islands take priority over candidate racing, and that COSTS wall.
+    """Batch width first, islands second -- never the other way round.
 
-    `_candidate_race_parallelism` admits only a batch whose every candidate
-    share funds Freeform plus every island, and the default 16-worker budget
-    funds exactly one such share.  So a raced `best` build at the default
-    budget now settles its candidates ONE at a time rather than three, trading
-    up to three budgets of wall for the 13.6 % smaller layouts islands buy.
-    That precedence is the pre-existing contract -- "an unfunded two-strategy
-    race falls back to serial" -- but four islands is what makes it bind, so it
-    is pinned here rather than discovered in a gate.
+    Islands used to be a PRECONDITION on the batch: every candidate share had to
+    reserve a CP-SAT worker per island, so four default islands made the default
+    16-worker budget admit one candidate at a time and turned a three-candidate
+    raced build from one budget of wall into three.  Now the batch is chosen on
+    the rule it used before islands existed, and each candidate's islands are
+    resolved from the share that batch gave it.
     """
-    assert pipeline.resolve_sequence_islands("best", worker_budget, None) == islands
     assert (
         pipeline._candidate_race_parallelism(
             worker_budget,
-            3,
-            3,
-            islands,
+            candidate_count,
+            candidate_count,
         )
         == parallelism
     )
+    allocations = pipeline._worker_allocations(worker_budget, parallelism)
+    assert allocations == shares
+    assert [
+        pipeline.resolve_sequence_islands("best", share, None) for share in allocations
+    ] == [islands_each] * parallelism
+
+
+def test_an_explicit_island_count_still_reaches_every_raced_candidate() -> None:
+    # The per-candidate resolution must not quietly shrink what the caller asked
+    # for: `resolve_sequence_islands` returns an explicit request verbatim, at
+    # any share.
+    assert pipeline.resolve_sequence_islands("best", 5, 8) == 8
 
 
 def test_resolve_sequence_islands_is_capped_by_the_available_cpus(

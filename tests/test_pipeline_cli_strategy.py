@@ -24,7 +24,9 @@ class _BuildKwargs(TypedDict, total=False):
     band: BandSelection
     candidate_policies: tuple[CandidatePolicy, ...]
     time_budget_s: float
-    sequence_islands: int
+    #: `None` when the user did not pass `--sequence-islands`, which is the
+    #: signal that `pipeline.build` should resolve the count itself.
+    sequence_islands: int | None
     dataset: Dataset | None
     name: str
     flow: Path | None
@@ -181,12 +183,30 @@ def test_cli_rejects_invalid_candidate_policy_selections(
     assert diagnostic in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(("affinity", "expected"), ((3, 1), (64, 4)))
-def test_cli_sequence_pair_uses_affinity_capped_auto_islands(
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ["iron-ingot"],
+        ["iron-ingot", "--strategy", "best"],
+        ["iron-ingot", "--strategy", "sequence-pair"],
+        ["iron-ingot", "--strategy", "freeform"],
+        ["iron-ingot", "--strategy", "best", "--workers", "2"],
+    ),
+)
+def test_cli_forwards_no_island_request_so_the_pipeline_resolves_per_context(
     monkeypatch: pytest.MonkeyPatch,
-    affinity: int,
-    expected: int,
+    argv: list[str],
 ) -> None:
+    """Without `--sequence-islands`, the CLI must say NOTHING about islands.
+
+    It used to resolve the count itself and pass a number. That number is
+    indistinguishable from an explicit `--sequence-islands N`, which travels
+    verbatim -- so a raced build gave every candidate the WHOLE build's island
+    count instead of the count its own worker share funds (measured: four on a
+    five-worker share, where two is what it funds). Only `pipeline.build` knows
+    the candidate batch, so only it can resolve. What the resolver then decides
+    is `test_resolve_sequence_islands`' business, not the CLI's.
+    """
     received: dict[str, object] = {}
 
     def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
@@ -199,10 +219,9 @@ def test_cli_sequence_pair_uses_affinity_capped_auto_islands(
 
     monkeypatch.setattr(pipeline, "build", fake_build)
     monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
-    monkeypatch.setattr(cli, "_available_cpu_count", lambda: affinity)
 
-    assert cli.main(["iron-ingot", "--strategy", "sequence-pair"]) == 0
-    assert received["sequence_islands"] == expected
+    assert cli.main(argv) == 0
+    assert received["sequence_islands"] is None
 
 
 def test_cli_sequence_island_override_accepts_sixteen(
@@ -512,78 +531,6 @@ def test_sequence_islands_are_legal_with_best_and_reach_the_pipeline(
     assert cli.main(["iron-ingot", "--strategy", "best", "--sequence-islands", "4"]) == 0
 
     assert received["sequence_islands"] == 4
-
-
-def test_best_without_the_flag_runs_the_default_islands(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # `best` is the DEFAULT strategy, and islands are now ON by default there
-    # too: four islands measured 13.6 % smaller layouts at the same budget, and
-    # `race_worker_split(16)[1] == 4` funds exactly that many.
-    received: dict[str, object] = {}
-
-    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
-        del url
-        received.update(kwargs)
-        return SimpleNamespace(
-            blueprint="BLUEPRINT",
-            report=SimpleNamespace(errors=()),
-        )
-
-    monkeypatch.setattr(pipeline, "build", fake_build)
-    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
-    monkeypatch.setattr(cli, "_available_cpu_count", lambda: 64)
-
-    assert cli.main(["iron-ingot", "--strategy", "best"]) == 0
-
-    assert received["sequence_islands"] == 4
-
-
-def test_cli_default_strategy_runs_the_default_islands(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A plain `flab2bp <url>` -- no `--strategy`, no `--sequence-islands` -- is
-    # the build the default has to reach for this lever to be worth anything.
-    received: dict[str, object] = {}
-
-    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
-        del url
-        received.update(kwargs)
-        return SimpleNamespace(
-            blueprint="BLUEPRINT",
-            report=SimpleNamespace(errors=()),
-        )
-
-    monkeypatch.setattr(pipeline, "build", fake_build)
-    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
-    monkeypatch.setattr(cli, "_available_cpu_count", lambda: 64)
-
-    assert cli.main(["iron-ingot"]) == 0
-
-    assert received["sequence_islands"] == 4
-
-
-def test_cli_honours_an_explicit_workers_budget_when_resolving_islands(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # `--workers 2` funds one sequence-pair worker, so it must fund one island.
-    received: dict[str, object] = {}
-
-    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
-        del url
-        received.update(kwargs)
-        return SimpleNamespace(
-            blueprint="BLUEPRINT",
-            report=SimpleNamespace(errors=()),
-        )
-
-    monkeypatch.setattr(pipeline, "build", fake_build)
-    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
-    monkeypatch.setattr(cli, "_available_cpu_count", lambda: 64)
-
-    assert cli.main(["iron-ingot", "--workers", "2"]) == 0
-
-    assert received["sequence_islands"] == 1
 
 
 @pytest.mark.parametrize("workers", (0, -1))
