@@ -56,7 +56,7 @@ from flab2bp.rates.candidates import (
     CandidatePolicy,
     _build_candidates_canonical,
 )
-from flab2bp.rates.solve import InfeasibleError, supplied_rates
+from flab2bp.rates.solve import InfeasibleError, UnsupportedObjectiveError, supplied_rates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
 ExplicitStrategyName = Literal["freeform", "sequence-pair"]
@@ -636,7 +636,7 @@ def build(
             candidate_policies=candidate_policies,
             flow=selection,
         )
-    except (FlowProvenanceError, InfeasibleError) as exc:
+    except (FlowProvenanceError, InfeasibleError, UnsupportedObjectiveError) as exc:
         raise SpecInfeasible(str(exc)) from exc
 
     # With a flow pinned, a candidate that belts in something FactorioLab's own

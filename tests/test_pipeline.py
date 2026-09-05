@@ -681,6 +681,25 @@ def test_a_target_with_no_buildable_recipe_is_refused_not_raised_bare(
     assert "Traceback" not in str(exc_info.value)
 
 
+#: An Output objective (type 0) the URL also declares as an Input (type 1) at a
+#: higher rate: netting the supply against the request leaves nothing to build,
+#: which ``rates.solve`` refuses as an ``UnsupportedObjectiveError``.
+FULLY_SUPPLIED_URL = (
+    "https://factoriolab.github.io/dsp/list?o=copper-ingot*2000*0*0&o=copper-ingot*3000*0*1&v=11"
+)
+
+
+def test_a_fully_supplied_request_is_refused_with_its_reason() -> None:
+    """The rate model's own refusals must reach the caller as a REFUSED spec.
+
+    ``UnsupportedObjectiveError`` is raised before any layout runs; without the
+    boundary translation it would surface as "build failed unexpectedly".
+    """
+    with pytest.raises(NoValidLayout, match="already supplies") as exc_info:
+        pipeline.build(FULLY_SUPPLIED_URL, strategy="freeform", time_budget_s=1.0)
+    assert "copper-ingot" in str(exc_info.value)
+
+
 @pytest.mark.slow
 def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     monkeypatch: pytest.MonkeyPatch,
