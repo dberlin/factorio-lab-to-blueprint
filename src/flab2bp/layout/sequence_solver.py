@@ -71,7 +71,6 @@ from flab2bp.layout.freeform import (
     _PreparationDeadline,
     _prepare_routing_problem,
     _prepared_candidate_area_lower_bound,
-    _obstacle_aware_prepared_routing_floor,
     _prepared_routing_lower_bound,
     _PreparedRoutingProblem,
     _projection_no_good,
@@ -564,7 +563,6 @@ class DetailedStageResult:
     prepared_lower_bound: tuple[int, PreparedRoutingLowerBound] | None = None
     lower_bound_dominated: bool = False
     detailed_skip_reason: str | None = None
-    obstacle_lower_bound_dominated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -829,8 +827,6 @@ class StageObservation:
     lower_bound_dominated: bool
     lower_bound_violation: bool
     detailed_skip_reason: str | None
-    obstacle_lower_bound_dominated: bool = False
-    obstacle_lower_bound_violation: bool = False
 
     @property
     def energy(self) -> SearchEnergy:
@@ -1159,16 +1155,6 @@ class SequenceSolver[PreparedT]:
             and self._incumbent is not None
             and self._incumbent.exact_key <= lower_key
         )
-        obstacle_lower_key = (
-            None
-            if declared is None or not declared[1].obstacle_reachable
-            else (declared[0], declared[1].obstacle_total)
-        )
-        obstacle_dominated = (
-            obstacle_lower_key is not None
-            and self._incumbent is not None
-            and self._incumbent.exact_key <= obstacle_lower_key
-        )
         if dominated and self.prune_dominated_prepared and allow_proof_skip:
             return (
                 DetailedStageResult(
@@ -1183,7 +1169,6 @@ class SequenceSolver[PreparedT]:
                     prepared_lower_bound=declared,
                     lower_bound_dominated=True,
                     detailed_skip_reason="prepared-lower-bound",
-                    obstacle_lower_bound_dominated=obstacle_dominated,
                 ),
                 0.0,
             )
@@ -1195,7 +1180,6 @@ class SequenceSolver[PreparedT]:
                 detailed,
                 prepared_lower_bound=declared,
                 lower_bound_dominated=dominated,
-                obstacle_lower_bound_dominated=obstacle_dominated,
             ),
             elapsed,
         )
@@ -3034,17 +3018,6 @@ class SequenceSolver[PreparedT]:
                     )
                 ),
                 lower_bound_dominated=detailed.lower_bound_dominated,
-                obstacle_lower_bound_dominated=detailed.obstacle_lower_bound_dominated,
-                obstacle_lower_bound_violation=(
-                    exact_key is not None
-                    and detailed.prepared_lower_bound is not None
-                    and detailed.prepared_lower_bound[1].obstacle_reachable
-                    and exact_key
-                    < (
-                        detailed.prepared_lower_bound[0],
-                        detailed.prepared_lower_bound[1].obstacle_total,
-                    )
-                ),
                 detailed_skip_reason=detailed.detailed_skip_reason,
                 lower_bound_violation=(
                     exact_key is not None
@@ -5808,18 +5781,9 @@ def _production_run(
     ) -> tuple[int, PreparedRoutingLowerBound] | None:
         if candidate.prepared is None:
             return None
-        baseline = _prepared_routing_lower_bound(candidate.prepared)
-        obstacle = _obstacle_aware_prepared_routing_floor(candidate.prepared)
         return (
             _prepared_candidate_area_lower_bound(candidate.prepared),
-            replace(
-                baseline,
-                obstacle_route_floor=obstacle.route_floor,
-                obstacle_total=baseline.protected_template_belts + obstacle.route_floor,
-                obstacle_reachable=obstacle.reachable,
-                obstacle_wall_time_s=obstacle.wall_time_s,
-                obstacle_expansions=obstacle.expansions,
-            ),
+            _prepared_routing_lower_bound(candidate.prepared),
         )
 
     solver = SequenceSolver(
@@ -6354,16 +6318,6 @@ class _PreparedLowerBoundStats(TypedDict):
     prepared_lower_bound_hit_time_s: float
     prepared_lower_bound_hit_time_share: float
     prepared_lower_bound_violations: float
-    obstacle_bound_candidates: float
-    obstacle_bound_reachable: float
-    obstacle_bound_disconnected: float
-    obstacle_bound_floor_gain: float
-    obstacle_bound_extra_hits: float
-    obstacle_bound_hit_time_s: float
-    obstacle_bound_hit_time_share: float
-    obstacle_bound_wall_time_s: float
-    obstacle_bound_expansions: float
-    obstacle_bound_violations: float
 
 
 def _prepared_lower_bound_stats(
@@ -6379,17 +6333,6 @@ def _prepared_lower_bound_stats(
         if stage.detailed_skip_reason == "prepared-lower-bound"
     )
     hit_seconds = sum(stage.detailed_route_time_s for stage in hits)
-    obstacle_hits = tuple(
-        stage
-        for stage in prepared
-        if stage.obstacle_lower_bound_dominated and not stage.lower_bound_dominated
-    )
-    obstacle_hit_seconds = sum(stage.detailed_route_time_s for stage in obstacle_hits)
-    obstacle_bounds = tuple(
-        stage.prepared_lower_bound
-        for stage in prepared
-        if stage.prepared_lower_bound is not None
-    )
     return {
         "prepared_lower_bound_candidates": float(len(prepared)),
         "prepared_lower_bound_hits": float(len(hits)),
@@ -6400,33 +6343,6 @@ def _prepared_lower_bound_stats(
         ),
         "prepared_lower_bound_violations": float(
             sum(stage.lower_bound_violation for stage in prepared)
-        ),
-        "obstacle_bound_candidates": float(len(obstacle_bounds)),
-        "obstacle_bound_reachable": float(
-            sum(bound.obstacle_reachable for bound in obstacle_bounds)
-        ),
-        "obstacle_bound_disconnected": float(
-            sum(not bound.obstacle_reachable for bound in obstacle_bounds)
-        ),
-        "obstacle_bound_floor_gain": float(
-            sum(
-                max(0, bound.obstacle_route_floor - bound.route_floor)
-                for bound in obstacle_bounds
-            )
-        ),
-        "obstacle_bound_extra_hits": float(len(obstacle_hits)),
-        "obstacle_bound_hit_time_s": obstacle_hit_seconds,
-        "obstacle_bound_hit_time_share": (
-            obstacle_hit_seconds / detailed_seconds if detailed_seconds > 0.0 else 0.0
-        ),
-        "obstacle_bound_wall_time_s": sum(
-            bound.obstacle_wall_time_s for bound in obstacle_bounds
-        ),
-        "obstacle_bound_expansions": float(
-            sum(bound.obstacle_expansions for bound in obstacle_bounds)
-        ),
-        "obstacle_bound_violations": float(
-            sum(stage.obstacle_lower_bound_violation for stage in prepared)
         ),
     }
 
@@ -6501,16 +6417,6 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
             "prepared_lower_bound_hit_time_share"
         ],
         "prepared_lower_bound_violations": bound_stats["prepared_lower_bound_violations"],
-        "obstacle_bound_candidates": bound_stats["obstacle_bound_candidates"],
-        "obstacle_bound_reachable": bound_stats["obstacle_bound_reachable"],
-        "obstacle_bound_disconnected": bound_stats["obstacle_bound_disconnected"],
-        "obstacle_bound_floor_gain": bound_stats["obstacle_bound_floor_gain"],
-        "obstacle_bound_extra_hits": bound_stats["obstacle_bound_extra_hits"],
-        "obstacle_bound_hit_time_s": bound_stats["obstacle_bound_hit_time_s"],
-        "obstacle_bound_hit_time_share": bound_stats["obstacle_bound_hit_time_share"],
-        "obstacle_bound_wall_time_s": bound_stats["obstacle_bound_wall_time_s"],
-        "obstacle_bound_expansions": bound_stats["obstacle_bound_expansions"],
-        "obstacle_bound_violations": bound_stats["obstacle_bound_violations"],
     }
 
 
@@ -6602,18 +6508,6 @@ def _with_observational_stats(
             "prepared_lower_bound_violations": bound_stats[
                 "prepared_lower_bound_violations"
             ],
-            "obstacle_bound_candidates": bound_stats["obstacle_bound_candidates"],
-            "obstacle_bound_reachable": bound_stats["obstacle_bound_reachable"],
-            "obstacle_bound_disconnected": bound_stats["obstacle_bound_disconnected"],
-            "obstacle_bound_floor_gain": bound_stats["obstacle_bound_floor_gain"],
-            "obstacle_bound_extra_hits": bound_stats["obstacle_bound_extra_hits"],
-            "obstacle_bound_hit_time_s": bound_stats["obstacle_bound_hit_time_s"],
-            "obstacle_bound_hit_time_share": bound_stats[
-                "obstacle_bound_hit_time_share"
-            ],
-            "obstacle_bound_wall_time_s": bound_stats["obstacle_bound_wall_time_s"],
-            "obstacle_bound_expansions": bound_stats["obstacle_bound_expansions"],
-            "obstacle_bound_violations": bound_stats["obstacle_bound_violations"],
             "best_overflow": float(
                 telemetry.best_overflow if telemetry.best_overflow is not None else -1
             ),
