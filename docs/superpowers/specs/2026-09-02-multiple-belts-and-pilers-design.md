@@ -230,6 +230,31 @@ except for a single machine over the ceiling, which is the refusal rule 3
 keeps. `_merge_lanes`'s other refusal, distinct cargo lanes exceeding the
 sorter reach, is a geometry refusal the cap does not touch and stays.
 
+Status 2026-09-05: the unreachability claim in the paragraph above did not
+hold, because the cap and `_merge_lanes` were measuring two different
+quantities. `_machine_cap` bounds what a strip *supplies*
+(`count x outputs_per_machine[item]`) and is applied at
+`generate_strip_families` and the partition seams; `_merge_lanes` runs earlier,
+on the unpartitioned shard, and summed what the destinations *draw*
+(`_sink_demand` returns `dest.count x dest.inputs[item]` for an internal
+destination, the consumer's whole intake, with nothing multiplying the
+producer's output rate by its machine count). For a both-fed item -- one the
+bus already supplies and a small internal group also produces -- the draw is
+unbounded by the producer, so no supply cap can make the over-capacity
+`ValueError` unreachable. `universe-matrix*90` hit exactly that:
+`mass-energy-storage` supplies 1.5/s of hydrogen while its two internal
+destinations draw 33/s, and the check refused a 30/s lane on the 33/s figure,
+crashing both strategies out of `strip_variants._logical_strip_plans`.
+Commit `86691c5` on the `scale-levers` branch fixes it: `_merge_lanes` takes
+`supply=` (items/s each product the shard's machines actually emit) and judges
+a merged lane on `min(draw, supply)`, with `_logical_strip_plans` passing
+`{item: per_shard[i] * group.outputs[item]}` per shard. Draw stays the
+bin-packing weight that decides which destinations share a lane; only the
+verdict changed. With a supply-based verdict the §4.1 claim above is true as
+written -- `_machine_cap` and `_merge_lanes` now bound the same quantity.
+Diagnosis and gate: `docs/superpowers/specs/2026-09-05-scale-levers-design.md`
+§2 and `docs/superpowers/evidence/2026-09-05-scale-levers/gate.md`.
+
 ### 4.2 Why runs stay bounded end to end
 
 The router builds one net per source lane and destination lane, merges several

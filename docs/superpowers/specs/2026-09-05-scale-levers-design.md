@@ -1,6 +1,6 @@
 # Scale levers: profile-driven throughput fixes and the output-lane capacity defect
 
-**Date:** 2026-09-05. **Base:** master `a1afec5`. **Status:** design approved by the user in session ("productionize and merge your SCC work ... implement the other parts of the plan and merge to master"); plan at `docs/superpowers/plans/2026-09-05-scale-levers.md`.
+**Date:** 2026-09-05. **Base:** master `a1afec5`. **Status:** implemented and gated. Branch head `19f95a6` (`scale-levers`, master `d81c4d9` merged). The §4 gate **PASSES** against the `d81c4d9` baseline: three 30 s audit rounds on each tree, 71 CLEAN / 1 REFUSED on both sides in all three rounds, zero cells differing in status, INVALID 0, CRASH 0, geometric-mean area ratio 0.9993-1.0012 inside the 1.013 noise band. The one refusal (`sequence-pair universe-matrix / all-products`) refuses identically on the `d81c4d9` baseline and comes from master's `prioritize_source_families` flip, not this branch. `universe-matrix*90` and `*120` now lay out under both strategies instead of crashing (§2 closed). §4's phase thresholds are met per candidate attempt (`commit_paths` 0.11-0.32 s/call, `power_plan` 0.40-0.87 s/call) but not as per-run totals, which §1's own premise makes unattainable: a cheaper phase buys more attempts inside the 30 s budget rather than an earlier finish. Evidence and the full tables: `docs/superpowers/evidence/2026-09-05-scale-levers/gate.md`. Plan at `docs/superpowers/plans/2026-09-05-scale-levers.md`.
 
 ## 1. Where the evidence comes from
 

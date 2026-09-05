@@ -158,3 +158,39 @@ then 4 as the next Cython kernel.  1-3 together are roughly 8 s of a 24-27 s
 freeform attempt on universe-matrix, which is more candidate heights inside
 the same 30 s budget; whether that converts refusals is the corpus gate's
 question, not this profile's.
+
+## After (scale-levers, `19f95a6`)
+
+Same harness, same 30 s budget, same cells, re-run 2026-09-05 once every lever
+had landed (`profile-after.jsonl` in
+`../2026-09-05-scale-levers/`). Two differences from the before table above,
+and both matter when reading it: this run took the cells **two at a time at
+most**, where the before table ran eight in parallel; and the box was at load
+21.0 rather than 5.9 (`../2026-09-05-scale-levers/profile-after-load.txt`).
+Per-call figures are the honest comparison; per-run totals stay near the
+budget by construction, because a cheaper phase buys more candidate attempts
+inside the same 30 s rather than an earlier finish.
+
+| cell | wall | route_all | commit_paths | astar | merge_frontier | prepare | power_plan | last_mile | finalize | validate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| um60 freeform | 24.7 | 6.6 | 3.2 | 3.0 | 1.8 | 7.2 | 3.6 | 0 | 3.5 | 3.7 |
+| gm200 freeform | 27.3 | 8.3 | 2.9 | 5.5 | 2.0 | 8.7 | 4.4 | 0 | 3.7 | 4.1 |
+| qc180 freeform | 23.5 | 9.4 | 3.1 | 5.2 | 1.6 | 5.0 | 2.8 | 0 | 4.0 | 2.5 |
+| um60 sequence-pair | 25.3 | 4.3 | 2.1 | 2.5 | 1.0 | 7.1 | 3.2 | 0.1 | 0.7 | 0.7 |
+| gm200 sequence-pair | 26.0 | 1.8 | 1.4 | 1.2 | 0.2 | 5.5 | 2.7 | 0 | 1.7 | 1.4 |
+| qc180 sequence-pair | 24.1 | 1.7 | 0.8 | 1.5 | 0.6 | 4.9 | 1.7 | 0 | 0.4 | 0.5 |
+
+Per call, freeform: `commit_paths` 0.69 -> 0.32 s (um60), 0.60 -> 0.27 s
+(gm200), 0.18 -> 0.11 s (qc180); `power_plan` 0.89 -> 0.72, 1.11 -> 0.87,
+0.42 -> 0.40 s; `finalize` on qc180 1.77 -> 0.66 s, which is the 8.9 s
+outlier above closing under the Cython oriented-box kernel.
+
+The two cells that could not be profiled at all before now lay out under both
+strategies, which is the output-lane defect (section above, design §2) closed:
+`universe-matrix*90` (331 machines) freeform 23.7 s / area 54168 and
+sequence-pair 27.0 s / 26319; `universe-matrix*120` (439 machines) freeform
+25.9 s / 80442 and sequence-pair 24.0 s / 43676. No crash, no refusal.
+
+Full three-round corpus gate, both baselines, the mall URL before/after and
+the verdict against the design's §4:
+`../2026-09-05-scale-levers/gate.md`.

@@ -1,0 +1,29 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+baseline : docs/superpowers/evidence/2026-09-05-scale-levers/baseline-round2.jsonl  (72 cells)
+candidate: docs/superpowers/evidence/2026-09-05-scale-levers/candidate-round2.jsonl  (72 cells)
+commits  : baseline 789625f  candidate 19f95a6
+
+status counts
+  status      baseline  candidate
+  CLEAN             69         71
+  REFUSED            3          1
+
+CLEAN in baseline, not CLEAN in candidate: 0
+
+not CLEAN in baseline, CLEAN in candidate: 2
+  freeform universe-matrix [1/all-products]: REFUSED ->  the 30s deadline passed with no completed packing of 42 strips; 1 pack exhausted the deadline during exact preparation, before a net set existed to route. This is a REFUSAL and not a verdict on the sp
+  freeform universe-matrix [2/output-products]: REFUSED ->  the 30s deadline passed with no completed packing of 43 strips; 8 packs were routed in that time and the best of them still left 1 nets unrouted (worst 1), so a longer clock alone would not have wired
+
+INVALID/CRASH rows in candidate: 0
+INVALID/CRASH rows in baseline: 0
+
+cells CLEAN in both: 69
+geometric-mean area ratio (candidate/baseline): 0.99863
+cells whose area moved at all: 4
+  0.8387  freeform universe-matrix [0/no-proliferator]  31898 -> 26752
+  1.1053  freeform electromagnetic-matrix [0/no-proliferator]  551 -> 609
+  0.9647  freeform plastic [1/all-products]  850 -> 820
+  1.0172  freeform super-magnetic-ring [0/no-proliferator]  2146 -> 2183
+
+p95 build wall: baseline 30.44 s  candidate 29.48 s
+total build wall: baseline 1000.9 s  candidate 951.6 s

@@ -1,0 +1,26 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+baseline : docs/superpowers/evidence/2026-09-05-scale-levers/baseline-d81c4d9-round1.jsonl  (72 cells)
+candidate: docs/superpowers/evidence/2026-09-05-scale-levers/candidate-round1.jsonl  (72 cells)
+commits  : baseline d81c4d9  candidate 19f95a6
+
+status counts
+  status      baseline  candidate
+  CLEAN             71         71
+  REFUSED            1          1
+
+CLEAN in baseline, not CLEAN in candidate: 0
+
+not CLEAN in baseline, CLEAN in candidate: 0
+
+INVALID/CRASH rows in candidate: 0
+INVALID/CRASH rows in baseline: 0
+
+cells CLEAN in both: 71
+geometric-mean area ratio (candidate/baseline): 0.99928
+cells whose area moved at all: 3
+  0.9500  freeform super-magnetic-ring [0/no-proliferator]  2220 -> 2109
+  0.9961  freeform quantum-chip [1/all-products]  3840 -> 3825
+  1.0039  freeform super-magnetic-ring [2/output-products]  2044 -> 2052
+
+p95 build wall: baseline 29.14 s  candidate 29.08 s
+total build wall: baseline 972.1 s  candidate 946.0 s
