@@ -14,7 +14,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-ROOT = Path("/home/dannyb/sources/factorio-lab-to-blueprint")
+ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
