@@ -1,0 +1,87 @@
+{
+ "area": null,
+ "astar_s": 2.810344049241394,
+ "budget_s": 30.0,
+ "cprofile": false,
+ "expansions": 7018860,
+ "groups": 38,
+ "hits": 839,
+ "machines": 439,
+ "misses": 65,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 904,
+   "s": 2.810344049241394
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.15800063987262547
+  },
+  "commit_paths": {
+   "n": 4,
+   "s": 1.3568683532066643
+  },
+  "junction_ban": {
+   "n": 5,
+   "s": 0.5247721720952541
+  },
+  "make_grid": {
+   "n": 37,
+   "s": 0.23056756844744086
+  },
+  "merge_frontier": {
+   "n": 318,
+   "s": 0.8286873663309962
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.02274255594238639
+  },
+  "power_plan": {
+   "n": 5,
+   "s": 5.035118920961395
+  },
+  "prepare": {
+   "n": 5,
+   "s": 9.910010293126106
+  },
+  "refresh_history": {
+   "n": 47,
+   "s": 4.8928894102573395e-05
+  },
+  "relaxed_search": {
+   "n": 383,
+   "s": 0.30137482774443924
+  },
+  "reserve_port_access": {
+   "n": 10,
+   "s": 2.791787346592173
+  },
+  "route_all": {
+   "n": 2,
+   "s": 2.889875889988616
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.3307711579836905
+  }
+ },
+ "policy": "no-proliferator",
+ "prepare_calls_s": [
+  2.02196022705175,
+  1.9282400840893388,
+  1.875076079973951,
+  1.8951176519040018,
+  2.189616250107065
+ ],
+ "rate": 120,
+ "rounds": 2,
+ "route_all_s": 2.889875889988616,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "sequence-pair",
+ "target": "universe-matrix",
+ "verdict": "REFUSED: deadline exhausted before finding an exact layout",
+ "wall_s": 19.04690358391963
+}

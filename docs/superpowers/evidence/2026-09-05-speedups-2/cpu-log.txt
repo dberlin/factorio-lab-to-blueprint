@@ -1,0 +1,31 @@
+== um60/sequence-pair 17:08:19 load average: 5.38, 6.00, 5.69
+== um60/freeform 17:08:19 load average: 5.38, 6.00, 5.69
+[1m[33mwarning[1m[39m[33m[0mwarning[1m[39m:[0m[0m[1m :[1m[0m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead [0m[1m
+`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"wall_s": 27.11, "cpu_s": 0.01, "mean_cores_over_wall": 0.0, "mean_cores_when_busy": 1.33, "peak_cores": 9.41, "peak_threads": 68, "peak_procs": 2}
+{"wall_s": 27.11, "cpu_s": 0.01, "mean_cores_over_wall": 0.0, "mean_cores_when_busy": 1.3, "peak_cores": 8.83, "peak_threads": 67, "peak_procs": 2}
+== qc180/sequence-pair 17:08:46 load average: 7.07, 6.34, 5.82
+== qc180/freeform 17:08:46 load average: 7.07, 6.34, 5.82
+[1m[33mwarning[39m[0m[1m[1m:[33m[0mwarning [39m[1m[0m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[1m[0m:
+[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"wall_s": 25.1, "cpu_s": 0.01, "mean_cores_over_wall": 0.0, "mean_cores_when_busy": 1.35, "peak_cores": 9.3, "peak_threads": 67, "peak_procs": 2}
+{"wall_s": 27.12, "cpu_s": 0.02, "mean_cores_over_wall": 0.0, "mean_cores_when_busy": 1.32, "peak_cores": 9.15, "peak_threads": 67, "peak_procs": 2}
+== gm200/freeform 17:09:13 load average: 6.44, 6.24, 5.80
+== gm200/sequence-pair 17:09:13 load average: 6.44, 6.24, 5.80
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"wall_s": 25.06, "cpu_s": 0.02, "mean_cores_over_wall": 0.0, "mean_cores_when_busy": 1.35, "peak_cores": 9.36, "peak_threads": 67, "peak_procs": 2}
+{"wall_s": 30.12, "cpu_s": 0.01, "mean_cores_over_wall": 0.0, "mean_cores_when_busy": 1.28, "peak_cores": 9.05, "peak_threads": 67, "peak_procs": 2}
+== um120/sequence-pair 17:09:44 load average: 6.61, 6.30, 5.83
+== um120/freeform 17:09:44 load average: 6.61, 6.30, 5.83
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"wall_s": 27.1, "cpu_s": 0.01, "mean_cores_over_wall": 0.0, "mean_cores_when_busy": 1.32, "peak_cores": 9.32, "peak_threads": 68, "peak_procs": 2}
+{"wall_s": 28.12, "cpu_s": 0.01, "mean_cores_over_wall": 0.0, "mean_cores_when_busy": 1.31, "peak_cores": 9.2, "peak_threads": 67, "peak_procs": 2}
+== mall/freeform 17:10:12 load average: 6.39, 6.27, 5.84
+== mall/sequence-pair 17:10:12 load average: 6.39, 6.27, 5.84
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"wall_s": 34.15, "cpu_s": 41.32, "mean_cores_over_wall": 1.21, "mean_cores_when_busy": 1.25, "peak_cores": 9.17, "peak_threads": 67, "peak_procs": 2}
+{"wall_s": 75.33, "cpu_s": 81.98, "mean_cores_over_wall": 1.09, "mean_cores_when_busy": 1.11, "peak_cores": 8.65, "peak_threads": 67, "peak_procs": 2}
+DONE cpu 17:11:27

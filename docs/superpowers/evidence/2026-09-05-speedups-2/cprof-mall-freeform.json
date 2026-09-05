@@ -1,0 +1,100 @@
+{
+ "area": null,
+ "astar_s": 7.948085790267214,
+ "budget_s": 100.0,
+ "cprofile": true,
+ "expansions": 15258610,
+ "groups": 33,
+ "hits": 1453,
+ "machines": 449,
+ "misses": 22,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1475,
+   "s": 7.948085790267214
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.2970182169228792
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 5.428948311135173
+  },
+  "commit_paths": {
+   "n": 4,
+   "s": 11.55309779313393
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.7183657600544393
+  },
+  "last_mile": {
+   "n": 1,
+   "s": 0.023491722997277975
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.23615288198925555
+  },
+  "merge_frontier": {
+   "n": 773,
+   "s": 8.651784050511196
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 13.376085182884708
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.9823393111582845
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 3.769123359117657
+  },
+  "prepare": {
+   "n": 6,
+   "s": 37.59247232996859
+  },
+  "refresh_history": {
+   "n": 61,
+   "s": 0.006506150588393211
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 8.887824191944674
+  },
+  "route_all": {
+   "n": 2,
+   "s": 22.91402227594517
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.9879329758696258
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 1.1107692739460617
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  4.527198238996789,
+  4.24317847401835,
+  4.1716637047939,
+  4.090334129054099,
+  9.827554824063554,
+  10.732542959041893
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 22.91402227594517,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 67.8487554709427
+}

@@ -1,0 +1,186 @@
+{
+ "cmd": [
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2/docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py",
+  "quantum-chip",
+  "--rate",
+  "180",
+  "--strategy",
+  "sequence-pair",
+  "--budget",
+  "30",
+  "--out",
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2/docs/superpowers/evidence/2026-09-05-speedups-2/cpu-qc180-sequence-pair.run"
+ ],
+ "cpu_s": 0.02,
+ "mean_cores_over_wall": 0.0,
+ "mean_cores_when_busy": 1.32,
+ "peak_cores": 9.15,
+ "peak_procs": 2,
+ "peak_threads": 67,
+ "samples": [
+  {
+   "cores": 9.15,
+   "procs": 2,
+   "t": 1.0,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 2.0,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 3.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 4.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 5.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 6.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 7.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 8.03,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 9.03,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 10.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 11.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 12.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 13.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 14.06,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 15.06,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 16.06,
+   "threads": 66
+  },
+  {
+   "cores": 0.99,
+   "procs": 2,
+   "t": 17.07,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 18.07,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 19.08,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 20.08,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 21.09,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 22.09,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 23.1,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 24.1,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 25.11,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 26.11,
+   "threads": 66
+  },
+  {
+   "cores": -34.09,
+   "procs": 1,
+   "t": 27.12,
+   "threads": 1
+  }
+ ],
+ "stdout": "{\"target\": \"quantum-chip\", \"rate\": 180, \"machines\": 252, \"strategy\": \"sequence-pair\", \"verdict\": \"OK\", \"wall_s\": 24.409043627092615, \"route_all_s\": 1.701541286893189, \"astar_s\": 1.49533323594369}\n",
+ "wall_s": 27.12
+}

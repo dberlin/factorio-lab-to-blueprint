@@ -1,0 +1,13 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"cell": "um60", "islands": 1, "verdict": "OK", "wall_s": 25.250292714918032, "subprocess_wall_s": 27.14, "area": 17654.0}
+{"cell": "um60", "islands": 4, "verdict": "OK", "wall_s": 27.680352235911414, "subprocess_wall_s": 29.0, "area": 17654.0}
+{"cell": "um60", "islands": 8, "verdict": "OK", "wall_s": 29.248840991873294, "subprocess_wall_s": 30.56, "area": 17654.0}
+{"cell": "qc180", "islands": 1, "verdict": "OK", "wall_s": 27.32716733799316, "subprocess_wall_s": 28.9, "area": 21384.0}
+{"cell": "qc180", "islands": 4, "verdict": "OK", "wall_s": 27.60127135599032, "subprocess_wall_s": 29.14, "area": 12608.0}
+{"cell": "qc180", "islands": 8, "verdict": "OK", "wall_s": 27.59187413798645, "subprocess_wall_s": 29.18, "area": 12152.0}
+{"cell": "gm200", "islands": 1, "verdict": "OK", "wall_s": 25.977430856088176, "subprocess_wall_s": 27.74, "area": 22140.0}
+{"cell": "gm200", "islands": 4, "verdict": "OK", "wall_s": 27.72682499885559, "subprocess_wall_s": 29.01, "area": 21402.0}
+{"cell": "gm200", "islands": 8, "verdict": "OK", "wall_s": 28.0273713208735, "subprocess_wall_s": 29.67, "area": 22140.0}
+{"cell": "um120", "islands": 1, "verdict": "OK", "wall_s": 23.94268009485677, "subprocess_wall_s": 25.38, "area": 43676.0}
+{"cell": "um120", "islands": 4, "verdict": "OK", "wall_s": 26.934058021986857, "subprocess_wall_s": 28.38, "area": 39312.0}
+{"cell": "um120", "islands": 8, "verdict": "OK", "wall_s": 26.885404866188765, "subprocess_wall_s": 28.32, "area": 38916.0}

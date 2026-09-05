@@ -1,0 +1,100 @@
+{
+ "area": null,
+ "astar_s": 6.241890726145357,
+ "budget_s": 100.0,
+ "cprofile": false,
+ "expansions": 15258610,
+ "groups": 33,
+ "hits": 1453,
+ "machines": 449,
+ "misses": 22,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1475,
+   "s": 6.241890726145357
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.17857239302247763
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 2.323800681857392
+  },
+  "commit_paths": {
+   "n": 4,
+   "s": 5.156223982805386
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.20380734093487263
+  },
+  "last_mile": {
+   "n": 1,
+   "s": 0.009475711965933442
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.2274349865037948
+  },
+  "merge_frontier": {
+   "n": 773,
+   "s": 4.273716867202893
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 3.545936981914565
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.22512938175350428
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 1.8728464480955154
+  },
+  "prepare": {
+   "n": 6,
+   "s": 16.906006992328912
+  },
+  "refresh_history": {
+   "n": 61,
+   "s": 0.007487015100196004
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 6.970897097606212
+  },
+  "route_all": {
+   "n": 2,
+   "s": 11.500377692980692
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.23011074890382588
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.21861898805946112
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  2.031910628080368,
+  2.044119101949036,
+  1.950498285004869,
+  1.9667310491204262,
+  4.435304506216198,
+  4.477443421958014
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 11.500377692980692,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 31.661241977941245
+}

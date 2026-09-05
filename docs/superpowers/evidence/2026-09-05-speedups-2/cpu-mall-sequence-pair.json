@@ -1,0 +1,478 @@
+{
+ "cmd": [
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2/docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py",
+  "mall",
+  "--rate",
+  "60",
+  "--strategy",
+  "sequence-pair",
+  "--budget",
+  "100",
+  "--out",
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2/docs/superpowers/evidence/2026-09-05-speedups-2/cpu-mall-sequence-pair.run",
+  "--policy",
+  "all-products",
+  "--url",
+  "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11"
+ ],
+ "cpu_s": 81.98,
+ "mean_cores_over_wall": 1.09,
+ "mean_cores_when_busy": 1.11,
+ "peak_cores": 8.65,
+ "peak_procs": 2,
+ "peak_threads": 67,
+ "samples": [
+  {
+   "cores": 8.65,
+   "procs": 2,
+   "t": 1.0,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 2.0,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 3.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 4.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 5.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 6.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 7.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 8.03,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 9.03,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 10.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 11.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 12.05,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 13.05,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 14.06,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 15.06,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 16.07,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 17.07,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 18.07,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 19.07,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 20.08,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 21.08,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 22.08,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 23.09,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 24.09,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 25.1,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 26.1,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 27.1,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 28.11,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 29.11,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 30.12,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 31.12,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 32.13,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 33.13,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 34.14,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 35.14,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 36.15,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 37.15,
+   "threads": 66
+  },
+  {
+   "cores": 0.99,
+   "procs": 2,
+   "t": 38.15,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 39.16,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 40.16,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 41.17,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 42.17,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 43.18,
+   "threads": 66
+  },
+  {
+   "cores": 0.99,
+   "procs": 2,
+   "t": 44.18,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 45.19,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 46.19,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 47.2,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 48.2,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 49.21,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 50.21,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 51.22,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 52.22,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 53.23,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 54.23,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 55.24,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 56.24,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 57.25,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 58.25,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 59.26,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 60.26,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 61.27,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 62.27,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 63.28,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 64.28,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 65.29,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 66.29,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 67.29,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 68.3,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 69.3,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 70.31,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 71.31,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 72.32,
+   "threads": 66
+  },
+  {
+   "cores": 0.99,
+   "procs": 2,
+   "t": 73.32,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 74.33,
+   "threads": 66
+  },
+  {
+   "cores": 0.0,
+   "procs": 1,
+   "t": 75.33,
+   "threads": 1
+  }
+ ],
+ "stdout": "{\"target\": \"mall\", \"rate\": 60, \"machines\": 449, \"strategy\": \"sequence-pair\", \"verdict\": \"REFUSED: deadline exhausted before finding an exact layout\", \"wall_s\": 72.40903006400913, \"route_all_s\": 12.982481826096773, \"astar_s\": 8.536123770987615}\n",
+ "wall_s": 75.33
+}

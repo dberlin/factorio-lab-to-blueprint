@@ -1,0 +1,174 @@
+{
+ "cmd": [
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2/docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py",
+  "gravity-matrix",
+  "--rate",
+  "200",
+  "--strategy",
+  "freeform",
+  "--budget",
+  "30",
+  "--out",
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2/docs/superpowers/evidence/2026-09-05-speedups-2/cpu-gm200-freeform.run"
+ ],
+ "cpu_s": 0.02,
+ "mean_cores_over_wall": 0.0,
+ "mean_cores_when_busy": 1.35,
+ "peak_cores": 9.36,
+ "peak_procs": 2,
+ "peak_threads": 67,
+ "samples": [
+  {
+   "cores": 9.36,
+   "procs": 2,
+   "t": 1.0,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 2.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 3.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 4.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 5.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 6.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 7.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 8.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 9.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 10.03,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 11.03,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 12.03,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 13.03,
+   "threads": 66
+  },
+  {
+   "cores": 0.99,
+   "procs": 2,
+   "t": 14.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 15.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 16.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 17.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 18.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 19.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 20.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 21.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 22.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 23.06,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 24.06,
+   "threads": 66
+  },
+  {
+   "cores": -32.34,
+   "procs": 1,
+   "t": 25.06,
+   "threads": 1
+  }
+ ],
+ "stdout": "{\"target\": \"gravity-matrix\", \"rate\": 200, \"machines\": 349, \"strategy\": \"freeform\", \"verdict\": \"OK\", \"wall_s\": 23.097533611115068, \"route_all_s\": 7.6373182544484735, \"astar_s\": 4.767555783269927}\n",
+ "wall_s": 25.06
+}

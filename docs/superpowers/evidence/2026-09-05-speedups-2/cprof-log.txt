@@ -1,0 +1,31 @@
+== um60/freeform cprof 17:21:45 load average: 4.76, 7.17, 6.95
+== um60/sequence-pair cprof 17:21:45 load average: 4.76, 7.17, 6.95
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"target": "universe-matrix", "rate": 60, "machines": 224, "strategy": "freeform", "verdict": "OK", "wall_s": 20.728095196187496, "route_all_s": 5.432195314206183, "astar_s": 1.9561277807224542}
+{"target": "universe-matrix", "rate": 60, "machines": 224, "strategy": "sequence-pair", "verdict": "REFUSED: deadline exhausted before finding an exact layout", "wall_s": 23.511426978977397, "route_all_s": 6.034451758954674, "astar_s": 2.283210414927453}
+== qc180/freeform cprof 17:22:11 load average: 6.01, 7.28, 7.00
+== qc180/sequence-pair cprof 17:22:11 load average: 6.01, 7.28, 7.00
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"target": "quantum-chip", "rate": 180, "machines": 252, "strategy": "freeform", "verdict": "OK", "wall_s": 26.694755021017045, "route_all_s": 5.795766772236675, "astar_s": 2.6694107237271965}
+{"target": "quantum-chip", "rate": 180, "machines": 252, "strategy": "sequence-pair", "verdict": "OK", "wall_s": 29.27730366704054, "route_all_s": 1.597826253855601, "astar_s": 1.04810510459356}
+== gm200/sequence-pair cprof 17:22:42 load average: 7.21, 7.42, 7.05
+== gm200/freeform cprof 17:22:42 load average: 7.21, 7.42, 7.05
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"target": "gravity-matrix", "rate": 200, "machines": 349, "strategy": "sequence-pair", "verdict": "OK", "wall_s": 25.6893286712002, "route_all_s": 1.2853894149884582, "astar_s": 0.4472247736994177}
+{"target": "gravity-matrix", "rate": 200, "machines": 349, "strategy": "freeform", "verdict": "OK", "wall_s": 31.10570898791775, "route_all_s": 6.263124322053045, "astar_s": 2.961381280561909}
+== um120/sequence-pair cprof 17:23:14 load average: 6.51, 7.23, 7.00
+== um120/freeform cprof 17:23:14 load average: 6.51, 7.23, 7.00
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"target": "universe-matrix", "rate": 120, "machines": 439, "strategy": "freeform", "verdict": "OK", "wall_s": 19.252850487129763, "route_all_s": 4.110745101934299, "astar_s": 2.0582531853578985}
+{"target": "universe-matrix", "rate": 120, "machines": 439, "strategy": "sequence-pair", "verdict": "REFUSED: deadline exhausted before finding an exact layout", "wall_s": 27.46090733096935, "route_all_s": 6.948958417866379, "astar_s": 2.741733171744272}
+== mall/sequence-pair cprof 17:23:43 load average: 6.22, 7.08, 6.96
+== mall/freeform cprof 17:23:43 load average: 6.22, 7.08, 6.96
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"target": "mall", "rate": 60, "machines": 449, "strategy": "freeform", "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing", "wall_s": 67.8487554709427, "route_all_s": 22.91402227594517, "astar_s": 7.948085790267214}
+{"target": "mall", "rate": 60, "machines": 449, "strategy": "sequence-pair", "verdict": "REFUSED: deadline exhausted before finding an exact layout", "wall_s": 84.69510260690004, "route_all_s": 17.53996623889543, "astar_s": 4.5550111760385334}
+DONE cprof 17:25:10

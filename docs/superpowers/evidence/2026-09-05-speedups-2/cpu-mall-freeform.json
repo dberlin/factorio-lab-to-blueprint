@@ -1,0 +1,232 @@
+{
+ "cmd": [
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2/docs/superpowers/evidence/2026-09-05-scale-profile/prof_harness.py",
+  "mall",
+  "--rate",
+  "60",
+  "--strategy",
+  "freeform",
+  "--budget",
+  "100",
+  "--out",
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2/docs/superpowers/evidence/2026-09-05-speedups-2/cpu-mall-freeform.run",
+  "--policy",
+  "all-products",
+  "--url",
+  "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11"
+ ],
+ "cpu_s": 41.32,
+ "mean_cores_over_wall": 1.21,
+ "mean_cores_when_busy": 1.25,
+ "peak_cores": 9.17,
+ "peak_procs": 2,
+ "peak_threads": 67,
+ "samples": [
+  {
+   "cores": 9.17,
+   "procs": 2,
+   "t": 1.0,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 2.0,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 3.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 4.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 5.01,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 6.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 7.02,
+   "threads": 67
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 8.03,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 9.03,
+   "threads": 67
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 10.03,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 11.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 12.04,
+   "threads": 66
+  },
+  {
+   "cores": 1.02,
+   "procs": 2,
+   "t": 13.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 14.05,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 15.06,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 16.06,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 17.07,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 18.07,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 19.08,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 20.08,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 21.09,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 22.09,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 23.1,
+   "threads": 66
+  },
+  {
+   "cores": 0.99,
+   "procs": 2,
+   "t": 24.1,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 25.1,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 26.11,
+   "threads": 66
+  },
+  {
+   "cores": 0.99,
+   "procs": 2,
+   "t": 27.11,
+   "threads": 66
+  },
+  {
+   "cores": 1.02,
+   "procs": 2,
+   "t": 28.12,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 29.12,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 30.13,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 31.13,
+   "threads": 66
+  },
+  {
+   "cores": 1.01,
+   "procs": 2,
+   "t": 32.14,
+   "threads": 66
+  },
+  {
+   "cores": 1.0,
+   "procs": 2,
+   "t": 33.14,
+   "threads": 66
+  },
+  {
+   "cores": 0.0,
+   "procs": 1,
+   "t": 34.15,
+   "threads": 1
+  }
+ ],
+ "stdout": "trips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing\", \"wall_s\": 32.25041852006689, \"route_all_s\": 11.477858032798395, \"astar_s\": 6.5988564875442535}\n",
+ "wall_s": 34.15
+}
