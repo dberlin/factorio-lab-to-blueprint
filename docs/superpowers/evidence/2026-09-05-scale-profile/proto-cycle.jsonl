@@ -1,0 +1,4 @@
+{"target": "gravity-matrix", "rate": 200, "strategy": "freeform", "verdict": "OK", "wall_s": 26.8, "commit_paths_s": 6.57, "commit_calls": 10, "cycle_check": {"calls": 468, "orig_s": 3.701, "proto_s": 0.111, "mismatch": 0, "true": 0}}
+{"target": "quantum-chip", "rate": 180, "strategy": "freeform", "verdict": "OK", "wall_s": 29.52, "commit_paths_s": 3.98, "commit_calls": 20, "cycle_check": {"calls": 399, "orig_s": 1.789, "proto_s": 0.07, "mismatch": 0, "true": 0}}
+{"target": "universe-matrix", "rate": 60, "strategy": "freeform", "verdict": "OK", "wall_s": 29.13, "commit_paths_s": 7.15, "commit_calls": 10, "cycle_check": {"calls": 678, "orig_s": 3.61, "proto_s": 0.15, "mismatch": 0, "true": 0}}
+{"target": "universe-matrix", "rate": 60, "strategy": "sequence-pair", "verdict": "OK", "wall_s": 25.44, "commit_paths_s": 3.85, "commit_calls": 8, "cycle_check": {"calls": 464, "orig_s": 1.745, "proto_s": 0.078, "mismatch": 0, "true": 0}}
