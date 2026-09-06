@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from fractions import Fraction
 
 import pytest
 
@@ -19,8 +20,9 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement, PlacementCompletion
 from flab2bp.layout.hierarchy import compose as compose_mod
 from flab2bp.layout.hierarchy import strategy
+from flab2bp.layout.hierarchy.partition import Unit
 from flab2bp.layout.hierarchy.strategy import HierarchicalLayout, ShapeKey
-from flab2bp.spec import BuildSpec
+from flab2bp.spec import BuildSpec, MachineGroup
 
 
 def _layout() -> HierarchicalLayout:
@@ -166,20 +168,42 @@ def shape_key_from_spec(spec: BuildSpec) -> ShapeKey:
     Not part of the production interface: `_solve_block`'s job carries a
     `BuildSpec`, not the `Unit` list `strategy.shape_key` takes, so a test
     spying on `_solve_block` derives the same key from the spec's own groups
-    instead.  Aggregated by recipe id, same as `shape_key`, so the two agree
-    on the same block even if a spec ever carried more than one group per
-    recipe.
+    instead.  ONE `(recipe_id, count)` pair per group -- NOT aggregated by
+    recipe id -- so the two agree on the same block: `sub_spec` builds
+    exactly one `MachineGroup` per input `Unit` (`partition.sub_spec`'s
+    `groups` tuple), so a spec's groups and the block's units are in
+    one-to-one correspondence.
     """
-    counts: dict[str, int] = {}
-    for group in spec.groups:
-        counts[group.recipe_id] = counts.get(group.recipe_id, 0) + group.count
-    return tuple(sorted(counts.items()))
+    return tuple(sorted((group.recipe_id, group.count) for group in spec.groups))
 
 
-def test_a_refused_shape_is_not_re_solved_at_the_same_budget(
+def test_shape_key_does_not_conflate_different_group_shapes() -> None:
+    """Two blocks `sub_spec` treats as different questions must hash different.
+
+    `[Unit(iron, 1), Unit(iron, 2)]` builds a TWO-`MachineGroup` sub-spec;
+    `[Unit(iron, 3)]` builds a ONE-`MachineGroup` sub-spec with the combined
+    count.  Aggregating `shape_key` by recipe id would hash these equal and
+    let the second silently receive a `Placement` solved for the first --
+    the exact hazard `ShapeKey`'s own comment explains.  `partition.coalesce`
+    happens to prevent `split_block` from ever producing the first shape
+    today, but `shape_key` must not depend on that.
+    """
+    group = MachineGroup(
+        recipe_id="iron-ingot",
+        machine_item_id="arc-smelter",
+        count=1,
+        inputs_per_machine={"iron-ore": Fraction(1)},
+        outputs_per_machine={"iron-ingot": Fraction(1)},
+    )
+    split = [Unit(1, group, 1), Unit(2, group, 2)]
+    combined = [Unit(3, group, 3)]
+    assert strategy.shape_key(split) != strategy.shape_key(combined)
+
+
+def test_a_refused_shape_is_not_re_solved_at_a_budget_the_memo_already_covers(
     chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A `(shape, arm)` already answered -- refused or not -- is asked once.
+    """A `(shape, arm)` refused at budget B is never asked again at `<= B`.
 
     Forcing the two-machine ingot block to refuse drives the same re-cut as
     `test_a_block_that_refuses_is_re_cut_before_the_whole_spec_refuses`:
@@ -187,18 +211,31 @@ def test_a_refused_shape_is_not_re_solved_at_the_same_budget(
     one-machine children of the IDENTICAL shape.  Both land in the same
     round, so this also exercises the same-round half of the no-good design,
     not only the across-round half its name suggests.
+
+    Scoped to exactly what `_ShapeNoGood` promises -- NOT "no `(shape, arm)`
+    is ever solved twice".  The memo is keyed on the HIGHEST budget refused
+    at (`remembers`'s `seen >= budget_s`), because more wall time never makes
+    a placer do worse, so a LATER round asking at a HIGHER budget is a
+    legitimate re-ask, not a bug: `chain_spec`'s own budget sequence happens
+    not to rise, but a partition change that shrinks `waves` between rounds
+    could, and a same-shape re-solve there would be correct, not a defect
+    this test should flag.
     """
-    calls: list[tuple[ShapeKey, str, float]] = []
+    calls: list[tuple[ShapeKey, str, float, bool]] = []
     real = strategy._solve_block
 
     def spy(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
-        calls.append((shape_key_from_spec(args[0]), args[1], args[2]))
+        arm, budget = args[1], args[2]
         if len(args[0].groups) == 1 and args[0].machine_count == 2:
-            return (
-                {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+            result: tuple[dict[str, object], Placement | None] = (
+                {"strategy": arm, "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
                 None,
             )
-        return real(args)
+        else:
+            result = real(args)
+        refused = str(result[0].get("verdict", "")).startswith("REFUSED:")
+        calls.append((shape_key_from_spec(args[0]), arm, budget, refused))
+        return result
 
     monkeypatch.setattr(strategy, "_solve_block", spy)
     layout = HierarchicalLayout(
@@ -209,20 +246,40 @@ def test_a_refused_shape_is_not_re_solved_at_the_same_budget(
     )
     layout._executor_factory = ThreadPoolExecutor
     placement = layout.lay_out(chain_spec, time_budget_s=40.0)
-    keys = [(k, arm) for k, arm, _ in calls]
-    assert len(keys) == len(set(keys)), "a (shape, arm) was solved twice"
-    assert placement.stats["nogood_skips"] >= 0
+
+    worst_refused_at: dict[tuple[ShapeKey, str], float] = {}
+    for key, arm, budget, refused in calls:
+        seen = worst_refused_at.get((key, arm))
+        assert seen is None or budget > seen, (
+            f"{key} on {arm} was re-solved at budget {budget}, but the memo already saw it "
+            f"refused at {seen}"
+        )
+        if refused:
+            worst_refused_at[(key, arm)] = max(seen or 0.0, budget)
+    # The halve split's two identical-shape children force at least one
+    # same-round share (see the docstring above), so this is provable here,
+    # not just non-negative -- Controller Ruling R12.
+    assert placement.stats["nogood_skips"] > 0
 
 
 def test_the_memo_forgets_across_lay_out_calls(chain_spec: BuildSpec) -> None:
-    """The no-good memo lives on the `lay_out` call, not the instance."""
+    """The no-good memo lives on the `lay_out` call, not the instance.
+
+    In-process executor and a modest budget: this only needs one `lay_out`
+    call to finish and asserts a single `hasattr`, so a real spawned pool and
+    this project's default 30 s budget would only add wall a load flake
+    could burn through the 120 s per-test timeout on a box that is never
+    idle. 20 s is the smallest that still clears `BLOCK_BUDGET_MIN_S` after
+    `settlement_reserve_s` for this two-block, two-arm round at `width=2`.
+    """
     layout = HierarchicalLayout(
         belt_vertical_construction=True,
         band_policy=BandPolicy.parse("portable"),
         workers=8,
         strip_cap=2,
     )
-    layout.lay_out(chain_spec, time_budget_s=30.0)
+    layout._executor_factory = ThreadPoolExecutor
+    layout.lay_out(chain_spec, time_budget_s=20.0)
     assert not hasattr(layout, "_nogood")
 
 

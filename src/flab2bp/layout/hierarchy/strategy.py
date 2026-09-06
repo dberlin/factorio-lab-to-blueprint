@@ -326,34 +326,37 @@ def _solve_block(args: _BlockJob) -> tuple[dict[str, object], Placement | None]:
     )
 
 
-#: A block's shape: sorted `(recipe_id, total machine count)` pairs, summed
-#: across every `Unit` of that recipe.  Deliberately NOT keyed on `uid`,
-#: `MachineGroup` identity or block position -- `_solve_block`'s outcome is a
-#: pure function of `sub_spec(spec, units, index)`, and `sub_spec` (see its
-#: docstring) computes external inputs/outputs by aggregating each unit's own
-#: produced/consumed rates, never from who a block is wired to.  Two blocks
-#: with the same shape therefore ask the placer the identical question, and
-#: `split_block`'s "halve" attempt on a single-recipe block routinely
-#: produces exactly that pair (a refused two-machine smelter block splits
-#: into two one-machine ones).  Recipe count alone is also what the module
-#: docstring's "six machines refused, three plus three placed" is about: it
-#: is the coarsest key that still tracks what makes the placers say yes or
-#: no.
+#: A block's shape: sorted `(recipe_id, machine count)` pairs, ONE PER
+#: `Unit` -- never aggregated by recipe id.  Deliberately NOT keyed on
+#: `uid`, `MachineGroup` identity or block position -- `split_block`'s
+#: "halve" attempt on a single-recipe block routinely produces two children
+#: of the identical shape (a refused two-machine smelter block splits into
+#: two one-machine ones), and those ask a placer the identical question, so
+#: this key lets `_solve_round` recognise that.  Recipe count is also what
+#: the module docstring's "six machines refused, three plus three placed"
+#: is about: it is the coarsest key that still tracks what makes the
+#: placers say yes or no.
+#:
+#: AGGREGATING by recipe id would be wrong, not just coarser: a block
+#: `[Unit(iron, 1), Unit(iron, 2)]` and a block `[Unit(iron, 3)]` would hash
+#: equal, but `sub_spec` builds a TWO-`MachineGroup` spec for the first and
+#: a ONE-`MachineGroup` spec for the second -- genuinely different
+#: questions, and the second would silently receive the first's placement.
+#: `partition.coalesce` merges same-recipe `Unit`s into one today, so this
+#: never arises from `split_block`'s own output, but that invariant lives in
+#: a different module with nothing here pinning it, so the key does not
+#: lean on it.
 ShapeKey = tuple[tuple[str, int], ...]
 
 
 def shape_key(units: list[Unit]) -> ShapeKey:
-    """The shape `units` presents to a placer: recipe multiset, machine counts.
+    """The shape `units` presents to a placer: one `(recipe, count)` per `Unit`.
 
-    Aggregated by recipe id rather than listed per `Unit`, so a block that
-    happens to carry more than one `Unit` of the same recipe (never produced
-    by `split_block` today, but not forbidden by `Unit` itself) still hashes
-    the same as one that carries a single `Unit` of the combined count.
+    NOT aggregated by recipe id -- see `ShapeKey`'s own comment for why that
+    would manufacture a collision between two blocks `sub_spec` treats as
+    different questions.
     """
-    counts: dict[str, int] = {}
-    for unit in units:
-        counts[unit.recipe] = counts.get(unit.recipe, 0) + unit.count
-    return tuple(sorted(counts.items()))
+    return tuple(sorted((unit.recipe, unit.count) for unit in units))
 
 
 @dataclass
@@ -689,10 +692,15 @@ class HierarchicalLayout:
         That reuse is safe because nothing downstream mutates a ``Placement``
         in place -- the composer only ever reads one through
         ``dataclasses.replace`` (see ``tests/layout/hierarchy/conftest.py``'s
-        ``two_solved_blocks`` docstring) -- and it is correct because
-        ``sub_spec`` (see its own docstring) is a pure function of a block's
-        own units, never of who it is wired to, so two same-shaped blocks are
-        asking the identical question. ``nogood`` additionally skips a
+        ``two_solved_blocks`` docstring) -- and it is correct because two
+        same-shaped blocks' ``sub_spec``s (see its own docstring) differ
+        ONLY in a diagnostic ``label`` (``partition.sub_spec``'s sole use of
+        its own ``index`` argument), which reaches nothing but refusal text
+        and ``Placement.description`` -- itself overwritten outright by the
+        composer.  A refusal verdict recorded against a shared shape may
+        therefore NAME A SIBLING BLOCK'S INDEX rather than the one it is
+        attached to; that is a cosmetic cost this sharing accepts, not a
+        correctness one. ``nogood`` additionally skips a
         ``(shape, arm)`` a PRIOR round already saw refused at this budget or
         higher, without even building its sub-spec. Returns how many
         ``(block, arm)`` pairs this round did NOT hand to a placer -- a
