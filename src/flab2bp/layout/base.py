@@ -413,8 +413,6 @@ class PlacementStats(TypedDict, total=False):
     stages: float
     starved_taps: float
     strips: float
-    #: Hierarchical strategy: strips in the widest block.
-    strips_max: float
     target_height: float
     termination: str
     termination_cause: str

@@ -81,8 +81,11 @@ plan proposed and each is spelled out separately below:
   ``(shape, arm)`` a prior round already saw refused at this budget or
   higher, without building its sub-spec. ``_next_cut`` skips a cut whose
   every child is remembered refused for every arm, trying the next attempt
-  instead. ``stats["nogood_skips"]`` counts every ``(block, arm)`` pair this
-  spared.
+  instead. ``stats["nogood_skips"]`` counts TWO different savings in one
+  number: the ``(block, arm)`` pairs a SAME-ROUND duplicate shape answered
+  without a job of its own, plus the ones a CROSS-ROUND memo hit skipped.
+  A refusal is remembered at the wall the job actually received rather than
+  at the nominal budget -- see :meth:`_solve_round`.
 * The pool is SPAWNED (``multiprocessing.get_context("spawn")``), like
   ``strategy_race``'s, and built ONCE per :meth:`HierarchicalLayout.lay_out`
   call rather than once per round (v2 Task 3): every round of one build shares
@@ -91,8 +94,10 @@ plan proposed and each is spelled out separately below:
   round, and a re-cut's extra round does not pay it again.
 
 The same list, with the gate measurements behind it, is
-``docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md``,
-"As-shipped strategy constants".
+``docs/superpowers/evidence/2026-09-07-hierarchical-v2/gate.md`` -- whose §8
+explicitly SUPERSEDES v1's, so it is the current one.  v1's
+``docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md`` is kept as the
+historical record the constants above were first measured against.
 """
 
 from __future__ import annotations
@@ -127,7 +132,6 @@ from flab2bp.layout.hierarchy.partition import (
     derive_cuts,
     initial_partition,
     split_block,
-    strip_count,
     sub_spec,
 )
 from flab2bp.layout.sequence_solver import SequencePairLayout
@@ -178,11 +182,14 @@ DEFAULT_GAP = 2
 #: it is the divisor the pool width is derived from.
 _BLOCK_WORKERS = 4
 #: Ceiling on the pool itself, independent of how wide the box's affinity set
-#: is.  Each pool worker already holds a whole placer (``_BLOCK_WORKERS`` CP-SAT
-#: threads of its own), so a box wider than this would spawn dozens of
-#: CP-SAT-holding processes for builds that rarely have that many blocks to
-#: offer them; the cap costs nothing when a round has fewer jobs than this to
-#: give out; ``_pool_width`` still floors the box's own affinity set below it.
+#: is.  What it bounds is the PROCESS COUNT AND PEAK MEMORY OF A WIDE ROUND:
+#: ``ProcessPoolExecutor`` spawns per submit, so the pool width only becomes
+#: real processes once a round actually has that many jobs to give out -- an
+#: 80-block, 2-arm round on a 512-core box would otherwise hold 128 spawned
+#: interpreters, each carrying a whole placer with ``_BLOCK_WORKERS`` CP-SAT
+#: threads and its own copy of the spec.  The cap therefore costs nothing when
+#: a round has fewer jobs than this to give out; ``_pool_width`` still floors
+#: the box's own affinity set below it.
 _POOL_CAP = 32
 
 BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
@@ -633,6 +640,16 @@ class HierarchicalLayout:
                 + "; ".join(f"{f.check}: {f.message}" for f in report.errors[:3])
             )
 
+        # NO `strips_max` HERE.  It was a diagnostic -- strips in the widest
+        # block -- and v2 Task 2 made `partition.strip_count` call
+        # `freeform.plan_strips`, the real packer, so recomputing it once per
+        # block on the SUCCESS path spent real wall AFTER the deadline check
+        # and after certification, inflating the reported wall past `--budget`
+        # for a number nothing reads back.  The counts are not reachable from
+        # here either: `initial_partition` strip-counts the blocks it examines,
+        # but `coalesce` then merges them (a merged block's count is not the
+        # sum) and `_recut`'s children were never counted at all, so a
+        # faithful `strips_max` over the FINAL blocks could only be recomputed.
         placement.stats.update(
             {
                 "blocks": float(len(blocks)),
@@ -641,7 +658,6 @@ class HierarchicalLayout:
                 "cut_lanes": float(len(allocation.flows)),
                 "resplits": float(resplits),
                 "nogood_skips": float(nogood_skips),
-                "strips_max": float(max((strip_count(spec, block) for block in blocks), default=0)),
             }
         )
         return replace(placement, completion=PlacementCompletion.COMPACTED_AND_FINALIZED)
@@ -778,7 +794,28 @@ class HierarchicalLayout:
             # remembering either as a no-good would hide a pool or placer bug
             # behind "this shape is already known to be impossible."
             if str(record.get("verdict", "")).startswith("REFUSED:"):
-                nogood.record(job_key[0], job_key[1], block_budget)
+                # AT THE WALL THE JOB REALLY GOT, NOT THE ROUND'S NOMINAL
+                # BUDGET.  `_solve_block` clips its own deadline to
+                # `min(parent_deadline, started + budget_s)`, so a job in a
+                # later wave can be handed a clock with nearly nothing left on
+                # it and refuse instantly with "deadline exhausted" (its own
+                # docstring records that happening).  `_ShapeNoGood`'s
+                # soundness argument is that a placer given MORE wall never
+                # does worse, so a refusal at a higher budget answers a round
+                # asking for less -- and a clipped job breaks exactly that
+                # premise: recording it at `block_budget` would claim the shape
+                # was tried with wall it never received, skip it for the rest
+                # of the build, and spend `_next_cut`'s re-cut attempts on cuts
+                # whose children were never really offered to a placer.
+                # `wall_s` is what the job actually spent; the `min` clamps a
+                # job that OVERRAN its share back to the budget a round would
+                # have to offer to re-ask, so the memo never remembers a
+                # refusal at a budget no round ever handed out.  The default
+                # keeps a record without a `wall_s` (the refusal shape a test
+                # double hands back) at the nominal budget.
+                wall = record.get("wall_s")
+                spent = float(wall) if isinstance(wall, int | float) else block_budget
+                nogood.record(job_key[0], job_key[1], min(block_budget, spent))
             outcome_by_key[job_key] = result
 
         for slot, index in enumerate(todo):

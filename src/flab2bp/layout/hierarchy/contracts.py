@@ -194,10 +194,11 @@ def boundary_lanes(
     ``zurl2/all-products`` hydrogen refusal (``hydrogen: block 0 supply
     exhausted; block 7 entry lane 1042 short by 4319/1875 items/s``), reached
     only after every block placed.  :func:`allocate_cuts` is what now stands
-    between these heads and :func:`assign_lanes`: it leaves a block's remainder
-    to the player instead of demanding the internal tails cover it too, exactly
-    when the parent's ``external_inputs`` already promises the item from
-    outside.
+    between these heads and :func:`assign_lanes`: it leaves a block's WHOLE
+    demand for that item to the player -- not a remainder of it; a (block,
+    item) is wired entirely or not at all -- instead of demanding the internal
+    tails cover it too, exactly when the parent's ``external_inputs`` already
+    promises the item from outside.
     """
     buildings = placement.buildings
     sorter_fed = {
@@ -312,19 +313,22 @@ def allocate_cuts(
     tails: dict[int, list[LaneEnd]],
     heads: dict[int, list[LaneEnd]],
 ) -> CutAllocation:
-    """Wire what the internal supply covers; leave a both-fed remainder to the
-    player instead of demanding the tails stretch to cover it too.
+    """Wire what the internal supply covers; leave a both-fed block's whole
+    demand to the player instead of demanding the tails stretch to cover it.
 
     Per item, ``S`` is the total internal supply -- the tails of every block
     the cuts name as a producer.  Consumer blocks are visited IN BLOCK-INDEX
     ORDER and served WHOLE OR NOT AT ALL: a block is served only while what is
-    left of ``S`` still covers its whole deficit ``D_b``, so a shortfall always
-    lands on the last blocks in the order rather than on whichever one a less
-    careful pass happened to reach first.  A block that cannot be served is
-    handed to the player -- its heads are simply never offered to
-    :func:`assign_lanes` -- exactly when ``item`` is one the parent spec already
-    belts in (``spec.external_inputs``).  Otherwise nothing supplies that head
-    at all, and that is a genuine :class:`ContractError`.
+    left of ``S`` still covers its whole deficit ``D_b``.  That makes which
+    blocks get served DETERMINISTIC AND ORDER-STABLE rather than dependent on
+    whichever one a less careful pass happened to reach first -- but it is
+    FIRST-FIT, not a suffix rule: the pass does not stop at the first block it
+    cannot serve, so a later SMALL block is still served out of what a skipped
+    earlier LARGE one left behind.  A block that cannot be served is handed to
+    the player -- its heads are simply never offered to :func:`assign_lanes` --
+    exactly when ``item`` is one the parent spec already belts in
+    (``spec.external_inputs``).  Otherwise nothing supplies that head at all,
+    and that is a genuine :class:`ContractError`.
     """
     by_item: dict[str, list[Cut]] = defaultdict(list)
     for cut in cuts:
@@ -343,6 +347,23 @@ def allocate_cuts(
         for block in consumer_blocks:
             block_heads = [h for h in heads.get(block, ()) if h.item == item]
             deficit = sum((h.rate for h in block_heads), Fraction(0))
+            # THE THRESHOLD IS MEASURED AGAINST AN OVERSTATED DEMAND, KNOWINGLY.
+            # `boundary_lanes` rates a head at the block's WHOLE deficit (see
+            # its docstring), and for an item the PARENT also belts in, part of
+            # that share arrives from outside rather than from any cut --
+            # `derive_cuts` knows the difference and sizes each cut at
+            # `min(surplus, deficit)`.  So `deficit` here can exceed what the
+            # cuts actually owe this block, and a block short of 100/s with 1/s
+            # belted in by the parent and 99/s available internally is handed
+            # ENTIRELY to the player while the producer's 99/s tail dead-ends.
+            # The alternative would be to compare `remaining` against what
+            # `derive_cuts` sized for this (src, dst) pair instead of against
+            # the head sum.  It is deliberately NOT taken here: the plan
+            # mandates whole-or-nothing per (block, item), so this is not a
+            # contract violation but a coarser threshold, and changing it
+            # changes WHICH builds become player-fed -- with no measurement on
+            # this branch that could validate the change, the gate having seen
+            # exactly one player-fed pair.  Controller Ruling R16.
             if remaining >= deficit:
                 remaining -= deficit
                 served_heads[block].extend(block_heads)

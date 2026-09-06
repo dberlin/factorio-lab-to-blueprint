@@ -9,7 +9,7 @@ import pytest
 from flab2bp.dsp import catalog
 from flab2bp.layout import junction, slots
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
-from flab2bp.layout.freeform import PortAccessEvidence, PortAccessReservation
+from flab2bp.layout.freeform import PortAccessEvidence, PortAccessKind, PortAccessReservation
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import (
@@ -225,39 +225,68 @@ def test_pack_with_access_widens_the_gap_until_every_port_has_a_corridor(
 
     assert packed.gap == compose.GAP_LADDER[1]
     assert packed.reservation.complete
+    # The committed reservation is STAKED ON the committed canvas -- that is
+    # `PackedCanvas`'s own contract and the reason `compose` routes on this
+    # canvas rather than reserving again.  A refactor that detached the
+    # verdict from the canvas it was staked on would leave this empty.
+    assert packed.canvas.port_corridors, "the committed reservation must be staked on the canvas"
 
 
-def test_pack_with_access_passes_the_outer_ring_as_the_boundary(
+def test_pack_with_access_passes_the_outer_ring_only_when_a_demand_can_use_it(
     two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
 ):
-    """Without a boundary the reservation never asks whether a corridor LEADS anywhere.
+    """The rim goes with the question exactly when a demand could be probed at it.
 
-    `_reserve_port_access` only runs its reachability probe for demands whose
-    kind reaches the boundary, and only when it was given one; handed
-    `boundary=None` it accepts every free cell pair beside a lane head as an
-    option. The outer ring of `canvas.limit` is the composition's own open
-    ground, so it is the honest goal set -- a corridor that cannot reach it is
-    walled in by the packing itself.
+    `_reserve_port_access` runs its reachability probe -- "does this corridor
+    LEAD anywhere?" -- only for demands whose kind `reaches_boundary`, and
+    every demand `compose` builds out of its nets is an `INTERNAL_DEPARTURE`
+    or an `INTERNAL_ARRIVAL`, neither of which is.  Passing the rim anyway
+    would be pure cost on a clock the gate shows binding: a `_Grid` over the
+    whole route box per ladder rung, and a validate callback re-run on every
+    candidate assignment, both for a probe that never runs.  So compose
+    withholds it -- and hands over the rim of `canvas.limit`, unchanged, the
+    moment a demand appears that CAN be probed against it (the v2 gate's §6
+    lever 1, "give the composer real boundary ports").
     """
     left, right, flows, spec, ramped = two_solved_blocks
-    captured: dict[str, object] = {}
+    captured: list[object] = []
+    limits: list[object] = []
     real = compose._reserve_port_access
 
     def spy(canvas, demands, **kw):
-        captured["boundary"] = set(kw["boundary"])
-        captured["limit"] = canvas.limit
+        captured.append(kw["boundary"])
+        limits.append(canvas.limit)
         return real(canvas, demands, **kw)
 
     monkeypatch.setattr(compose, "_reserve_port_access", spy)
     compose.pack_with_access([left, right], flows, spec, ramped=ramped, deadline=None, margin=8)
+    assert captured and all(boundary is None for boundary in captured), (
+        "no demand compose builds reaches the boundary, so the rim is pure cost"
+    )
 
-    boundary = captured["boundary"]
-    assert isinstance(boundary, set)
-    limit = captured["limit"]
+    real_inventory = compose._port_access_inventory
+
+    def with_a_boundary_demand(nets, **kw):
+        inventory = real_inventory(nets, **kw)
+        head, *rest = inventory.demands
+        return replace(
+            inventory,
+            demands=(replace(head, kind=PortAccessKind.BOUNDARY_ARRIVAL), *rest),
+        )
+
+    captured.clear()
+    limits.clear()
+    monkeypatch.setattr(compose, "_port_access_inventory", with_a_boundary_demand)
+    compose.pack_with_access([left, right], flows, spec, ramped=ramped, deadline=None, margin=8)
+
+    boundary = captured[0]
+    assert boundary is not None, "a boundary-reaching demand must be given the rim to reach"
+    ring = set(boundary)
+    limit = limits[0]
     assert isinstance(limit, tuple)
     x0, y0, x1, y1 = limit
-    assert (x0, y0, 0) in boundary and (x1, y1, 0) in boundary
-    assert all(x in (x0, x1) or y in (y0, y1) for x, y, _ in boundary)
+    assert (x0, y0, 0) in ring and (x1, y1, 0) in ring
+    assert all(x in (x0, x1) or y in (y0, y1) for x, y, _ in ring)
 
 
 def test_the_gap_ladder_leaves_the_router_a_live_clock(
@@ -273,30 +302,55 @@ def test_the_gap_ladder_leaves_the_router_a_live_clock(
 
     The reservation is the real one; only its own clock is neutralised (it is
     called with `deadline=None`), so what is measured is the LADDER's bound and
-    not the reservation's own deadline check. The burn is what a mall-sized
-    reservation costs in miniature.
+    not the reservation's own deadline check.
+
+    THE LADDER'S CLOCK IS A FAKE ONE, advanced by a fixed burn per rung instead
+    of slept through.  What is under test is the ARITHMETIC of the bound --
+    when the ladder stops and how much of the window it leaves behind -- and a
+    real sleep on a box that is never idle would make a scheduling hiccup, not
+    a broken bound, the thing this test reports.  The reservation itself still
+    runs for real on the real clock; only `compose`'s own reading of the time
+    is scripted.  The assertion is relative to `LADDER_WALL_SHARE` for the same
+    reason: it is the guarantee, not a number that happens to hold today.
     """
     left, right, flows, spec, ramped = two_solved_blocks
     real = compose._reserve_port_access
     rungs: list[int] = []
+    window_s = 2.0
     burn_s = 0.2
+
+    class _LadderClock:
+        """`compose`'s view of the time, advanced only by a rung's own cost."""
+
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = _LadderClock()
 
     def slow_and_incomplete(canvas, demands, **kw):
         rungs.append(len(rungs))
         reservation = real(canvas, demands, **{**kw, "deadline": None, "cancelled": None})
-        time.sleep(burn_s)
+        clock.now += burn_s
         return replace(reservation, missing=demands[:1], assigned=reservation.assigned[1:])
 
+    monkeypatch.setattr(compose, "time", clock)
     monkeypatch.setattr(compose, "_reserve_port_access", slow_and_incomplete)
-    deadline = time.monotonic() + 2.0
+    deadline = clock.monotonic() + window_s
     packed = compose.pack_with_access(
         [left, right], flows, spec, ramped=ramped, deadline=deadline, margin=8
     )
-    left_over = deadline - time.monotonic()
+    left_over = deadline - clock.monotonic()
 
     assert not packed.reservation.complete, "the scripted rungs must all come back incomplete"
     assert len(rungs) < len(compose.GAP_LADDER), "the ladder must stop before spending every rung"
-    assert left_over > 0.0, "the router must be handed a clock it can still route on"
+    # Everything but the ladder's own share, less the one rung it may overshoot
+    # by: a rung is only checked BEFORE it runs, so the one that crosses the
+    # share still finishes.
+    assert left_over >= window_s * (1.0 - compose.LADDER_WALL_SHARE) - burn_s, (
+        "the router must be handed the wall the ladder was never allowed to spend"
+    )
 
 
 def test_pack_with_access_starts_the_ladder_at_the_gap_it_was_given(

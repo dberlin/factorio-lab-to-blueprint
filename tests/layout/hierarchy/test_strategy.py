@@ -20,8 +20,8 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement, PlacementCompletion
 from flab2bp.layout.hierarchy import compose as compose_mod
 from flab2bp.layout.hierarchy import strategy
-from flab2bp.layout.hierarchy.partition import Unit
-from flab2bp.layout.hierarchy.strategy import HierarchicalLayout, ShapeKey
+from flab2bp.layout.hierarchy.partition import Unit, initial_partition
+from flab2bp.layout.hierarchy.strategy import HierarchicalLayout, ShapeKey, _Entry
 from flab2bp.spec import BuildSpec, MachineGroup
 
 
@@ -260,6 +260,241 @@ def test_a_refused_shape_is_not_re_solved_at_a_budget_the_memo_already_covers(
     # same-round share (see the docstring above), so this is provable here,
     # not just non-negative -- Controller Ruling R12.
     assert placement.stats["nogood_skips"] > 0
+
+
+class _InlinePool:
+    """An `Executor.map` that runs the jobs right here, in this process.
+
+    `_solve_round` only ever asks its pool for `map`, and a test that patches
+    `strategy._solve_block` needs the patch to be in the process that runs it.
+    `ThreadPoolExecutor` would do as much but would also hide the ORDER the
+    round submits its jobs in, which is what the no-good assertions read.
+    """
+
+    def map(self, fn: object, jobs: object) -> list[object]:
+        assert callable(fn)
+        return [fn(job) for job in jobs]  # type: ignore[union-attr]
+
+
+def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job whose wall was clipped to nothing has not answered for its shape.
+
+    `_solve_block` computes `min(parent_deadline, started + budget_s)` at job
+    start, so a job in a later wave can be handed a clock with nearly nothing
+    on it and refuse instantly with "deadline exhausted" -- its own docstring
+    records a pool two wide doing exactly that to four of six jobs.
+    `_ShapeNoGood` is only sound because a placer given MORE wall never does
+    worse; remembering such a refusal at the round's NOMINAL budget claims the
+    shape was tried with wall it never got, and then skips it for the rest of
+    the build.  That is the one way this backend can refuse a build that would
+    otherwise have placed.
+    """
+    spec = chain_spec
+    entries = [_Entry(list(block)) for block in initial_partition(spec, strip_cap=2).blocks]
+    offered: list[int] = []
+
+    def clipped(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        offered.append(args[0].machine_count)
+        return (
+            {
+                "strategy": args[1],
+                "verdict": "REFUSED: deadline exhausted",
+                "ok": False,
+                "wall_s": 0.05,
+            },
+            None,
+        )
+
+    monkeypatch.setattr(strategy, "_solve_block", clipped)
+    layout = _layout()
+    nogood = strategy._ShapeNoGood()
+    todo = list(range(len(entries)))
+    round_args = dict(
+        pool=_InlinePool(),
+        block_budget=20.0,
+        deadline=time.monotonic() + 600.0,
+        nogood=nogood,
+    )
+    layout._solve_round(spec, entries, todo, **round_args)  # type: ignore[arg-type]
+    assert offered, "the first round must have offered every block to a placer"
+
+    shape = strategy.shape_key(entries[0].units)
+    assert nogood.remembers(shape, "freeform", 0.05), (
+        "the refusal is still evidence about the wall the job actually got"
+    )
+    assert not nogood.remembers(shape, "freeform", 20.0), (
+        "a 0.05s refusal says nothing about what the shape does with 20s"
+    )
+
+    offered.clear()
+    layout._solve_round(spec, entries, todo, **round_args)  # type: ignore[arg-type]
+    assert offered, "a round asking at the full budget must still offer the shape"
+
+
+def test_a_cut_whose_every_child_is_a_known_no_good_is_spent_without_a_solve() -> None:
+    """`_next_cut` pays for a hopeless cut out of the attempt counter, not a round.
+
+    A cut every one of whose children is already remembered refused, for every
+    arm, at this budget or higher would cost a whole solve round to rediscover
+    exactly the refusal an earlier round already paid for.  The skip is not
+    free -- it spends one of `MAX_RESPLIT_ATTEMPTS`, and can drive a block to
+    "out of re-cut attempts" without a placer being asked -- so what it must
+    not do is fire on a cut some arm has never answered for.
+    """
+    ingot = MachineGroup(
+        recipe_id="iron-ingot",
+        machine_item_id="arc-smelter",
+        count=1,
+        inputs_per_machine={"iron-ore": Fraction(1)},
+        outputs_per_machine={"iron-ingot": Fraction(1)},
+    )
+    arms = ("freeform", "sequence-pair")
+    halves: ShapeKey = (("iron-ingot", 3),)
+
+    every_arm = strategy._ShapeNoGood()
+    for arm in arms:
+        every_arm.record(halves, arm, 10.0)
+    entry = _Entry([Unit(0, ingot, 6)])
+    children = strategy._next_cut(entry, nogood=every_arm, arms=arms, budget_s=10.0)
+    assert children is not None
+    # Attempt 0 halves six machines into 3 + 3 -- both remembered -- so what
+    # comes back is attempt 1's thirds, and BOTH attempts are spent.
+    assert sorted(sum(u.count for u in child) for child in children) == [2, 2, 2]
+    assert entry.attempts == 2
+
+    one_arm = strategy._ShapeNoGood()
+    one_arm.record(halves, "freeform", 10.0)
+    unanswered = _Entry([Unit(0, ingot, 6)])
+    children = strategy._next_cut(unanswered, nogood=one_arm, arms=arms, budget_s=10.0)
+    assert children is not None
+    assert sorted(sum(u.count for u in child) for child in children) == [3, 3]
+    assert unanswered.attempts == 1
+
+    at_a_lower_budget = strategy._ShapeNoGood()
+    for arm in arms:
+        at_a_lower_budget.record(halves, arm, 5.0)
+    richer = _Entry([Unit(0, ingot, 6)])
+    children = strategy._next_cut(richer, nogood=at_a_lower_budget, arms=arms, budget_s=10.0)
+    assert children is not None
+    assert sorted(sum(u.count for u in child) for child in children) == [3, 3]
+    assert richer.attempts == 1
+
+
+def _starved_chain_spec() -> BuildSpec:
+    """A chain whose internal supply cannot cover both consumers.
+
+    Three smelters make 3 ingot/s; two gear machines and two magnet machines
+    want 4/s between them, and the missing 1/s is what the parent belts in
+    (`external_inputs["iron-ingot"]`).  At `strip_cap=1` that partitions into
+    one producer block and two single-recipe consumer blocks of 2/s each, so
+    `allocate_cuts` serves the first WHOLE and cannot serve the second -- one
+    player-fed `(block, item)` pair, which is the only shape of build that
+    reaches `composed_spec`'s `player_fed` arithmetic at all.
+    """
+    groups = (
+        MachineGroup(
+            recipe_id="iron-ingot",
+            machine_item_id="arc-smelter",
+            count=3,
+            inputs_per_machine={"iron-ore": Fraction(1)},
+            outputs_per_machine={"iron-ingot": Fraction(1)},
+        ),
+        MachineGroup(
+            recipe_id="gear",
+            machine_item_id="assembling-machine-1",
+            count=2,
+            inputs_per_machine={"iron-ingot": Fraction(1)},
+            outputs_per_machine={"gear": Fraction(1)},
+        ),
+        MachineGroup(
+            recipe_id="magnet",
+            machine_item_id="assembling-machine-1",
+            count=2,
+            inputs_per_machine={"iron-ingot": Fraction(1)},
+            outputs_per_machine={"magnet": Fraction(1)},
+        ),
+    )
+    return BuildSpec(
+        groups=groups,
+        external_inputs={"iron-ore": Fraction(3), "iron-ingot": Fraction(1)},
+        outputs={"gear": Fraction(2), "magnet": Fraction(2)},
+        surplus_outputs={},
+        belt_item_id="conveyor-belt-1",
+        belt_items_per_second=Fraction(6),
+        belt_upgrades=(),
+        sorter_item_ids=("sorter-1", "sorter-2", "sorter-3"),
+        belt_stack=1,
+        sorter_pick_stacks=(1, 1, 1),
+        sorter_place_stacks=(1, 1, 1),
+        piler_unlocked=False,
+        label="starved-chain",
+    )
+
+
+def test_a_player_fed_block_is_declared_to_the_validator_and_certifies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole player-fed path, end to end, with the declared rate pinned.
+
+    `allocate_cuts` leaves one (block, item) entirely to the player, its entry
+    heads are never offered to `assign_lanes`, `composed_spec` declares the
+    deficit those unwired heads carry, and `validate.certify` has to accept the
+    result -- which it can only do if `validate._entry_items` classifies that
+    unwired head as an EXTERNAL ENTRY run, since `_lane_balance` injects
+    `external_inputs` into no other kind of run and `flow.external_entry_points`
+    demands a reachable entry for every declared external item.  Nothing else
+    on this branch executes that line: every gate cell refused at or before the
+    router.
+
+    THE DECLARED RATE IS PINNED EXACTLY, not bounded.  It is the whole build's
+    own make/take deficit (1/s, which is also what the parent belts in) PLUS
+    the player-fed block's whole deficit (2/s).  The 3/s that makes is one more
+    than the 2/s the unwired heads physically want, and that one is the
+    whole-or-nothing rule's stranded remainder: the producer's third ingot per
+    second has no consumer left to be wired to.  Over-declaring is the safe
+    direction -- both `flow.conservation` clauses convict only on a SHORTFALL
+    -- but it is arithmetic, and an inequality would not have noticed a factor
+    in it.  Under-declaring is NOT safe, and that is what makes this an
+    integration test rather than an arithmetic one: dropping the player-fed
+    term convicts `flow.conservation` with "4 machine(s) consume 4 items/s of
+    iron-ingot but only 3 items/s ... can reach them", because only 2/s of the
+    production can reach a consumer at all.
+    """
+    spec = _starved_chain_spec()
+    seen: dict[str, object] = {}
+    real_allocate = strategy.allocate_cuts
+    real_composed = strategy.composed_spec
+
+    def spy_allocate(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        allocation = real_allocate(*args, **kwargs)  # type: ignore[arg-type]
+        seen["player_fed"] = allocation.player_fed
+        return allocation
+
+    def spy_composed(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        built = real_composed(*args, **kwargs)  # type: ignore[arg-type]
+        seen["built"] = built
+        return built
+
+    monkeypatch.setattr(strategy, "allocate_cuts", spy_allocate)
+    monkeypatch.setattr(strategy, "composed_spec", spy_composed)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=1,
+        block_strategy="freeform",
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    placement = layout.lay_out(spec, time_budget_s=40.0)
+
+    assert seen["player_fed"] == frozenset({(2, "iron-ingot")})
+    built = seen["built"]
+    assert isinstance(built, BuildSpec)
+    assert built.external_inputs["iron-ingot"] == Fraction(3)
+    report = validate.certify(placement, built, expect_power=True)
+    assert report.ok, "; ".join(f"{f.check}: {f.message}" for f in report.errors[:5])
 
 
 def test_the_memo_forgets_across_lay_out_calls(chain_spec: BuildSpec) -> None:

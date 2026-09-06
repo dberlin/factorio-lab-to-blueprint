@@ -638,9 +638,11 @@ def pack_with_access(
     """Pack at widening gaps until every port has a corridor, and commit that one.
 
     THE GAP IS A SEARCHED QUANTITY, not a constant.  Every rung of
-    :data:`GAP_LADDER` at or above ``gap`` is packed, and the reservation --
-    given the canvas rim as its boundary -- is asked whether every lane head can
-    still reach open ground.  The first rung it answers yes for is committed.
+    :data:`GAP_LADDER` at or above ``gap`` is packed, and the reservation is
+    asked whether every lane head can still be given a corridor of its own.
+    The first rung it answers yes for is committed.  The canvas rim goes with
+    the question only when some demand's kind could actually be probed against
+    it -- see the comment at the call.
 
     Stake every port's approach before any path commits, the way
     `_prepare_routing_problem` does.  A boundary lane's end tile has at most
@@ -690,11 +692,29 @@ def pack_with_access(
         packing = _pack_at(placements, flows, spec, gap=rung, ramped=ramped, margin=margin)
         bounds = packing.canvas.limit
         assert bounds is not None  # canvas_for always sets it
+        demands = _port_access_inventory(packing.nets).demands
+        # THE BOUNDARY IS PASSED ONLY WHEN SOME DEMAND COULD USE IT.  Every
+        # demand `_port_access_inventory` builds from `_Packing.nets` is an
+        # `INTERNAL_DEPARTURE` or an `INTERNAL_ARRIVAL` (compose has no
+        # boundary ports of its own), and both answer `reaches_boundary` False
+        # -- so the reachability probe is skipped for every one of them and no
+        # demand can ever be moved into `missing` by it.  Handing
+        # `_reserve_port_access` a boundary anyway is pure cost on a clock the
+        # gate shows binding (BUDGET-class refusals on titanium-glass and
+        # zurl2): it builds a `_Grid` over the whole route box PER LADDER RUNG
+        # for probes that never run, and installs an `assignment_boundary_cut`
+        # validate callback that `_match_access_corridors` re-invokes on every
+        # candidate assignment only to `continue` past every demand and return
+        # `None`.  The `any` is kept rather than the argument deleted so that
+        # the day compose's demands become boundary-aware -- the v2 gate's §6
+        # lever 1, "give the composer real boundary ports" -- the probe and its
+        # shared grid light up again on their own.
+        boundary = _outer_ring(bounds) if any(d.kind.reaches_boundary for d in demands) else None
         try:
             reservation = _reserve_port_access(
                 packing.canvas,
-                _port_access_inventory(packing.nets).demands,
-                boundary=_outer_ring(bounds),
+                demands,
+                boundary=boundary,
                 bounds=bounds,
                 # `partial` rather than a lambda: `rung_deadline` is a loop
                 # variable, and a closure over it would read whichever rung ran
