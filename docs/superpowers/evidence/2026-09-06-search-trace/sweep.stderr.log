@@ -1,0 +1,15 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+purity: um60  uptime: 18:04:11 up 21 days, 23:50, 11 users,  load average: 2.07, 2.92, 5.25
+  um60: Rule P PASS
+purity: qc180  uptime: 18:13:48 up 21 days, 23:59, 11 users,  load average: 7.03, 5.69, 5.32
+  qc180: Rule P PASS
+purity: belt3  uptime: 18:22:17 up 22 days, 8 min, 11 users,  load average: 3.42, 3.94, 4.52
+  belt3: Rule P PASS
+purity report -> /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/search-viz/docs/superpowers/evidence/2026-09-06-search-trace/purity-2026-09-06T220411+0000.md
+wall: um60 (5 trials)  uptime: 18:28:27 up 22 days, 14 min, 11 users,  load average: 3.04, 3.20, 3.97
+  um60: Rule W NOT SEPARATED  median_off=74.439s median_on=71.582s ratio=0.9616
+wall: qc180 (5 trials)  uptime: 18:40:47 up 22 days, 26 min, 10 users,  load average: 20.55, 15.39, 9.72
+  qc180: Rule W PASS  median_off=182.193s median_on=181.992s ratio=0.9989
+wall: belt3 (5 trials)  uptime: 19:11:15 up 22 days, 57 min, 10 users,  load average: 10.14, 9.01, 9.35
+  belt3: Rule W PASS  median_off=62.765s median_on=62.076s ratio=0.9890
+wall report -> /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/search-viz/docs/superpowers/evidence/2026-09-06-search-trace/wall-2026-09-06T220411+0000.md
