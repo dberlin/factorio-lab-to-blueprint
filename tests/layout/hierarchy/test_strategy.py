@@ -170,7 +170,16 @@ def test_a_dead_pool_is_a_refusal_not_a_crash(chain_spec: BuildSpec) -> None:
         def map(self, fn: object, jobs: object) -> object:
             raise BrokenProcessPool("a worker process died abruptly")
 
-    layout = _layout()
+    # One arm, so every re-cut round the dead pool provokes is still funded and
+    # the refusal that lands is the one carrying the pool's verdict rather than
+    # an unfunded-round one.
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+        block_strategy="freeform",
+    )
     layout._executor_factory = _DeadPool  # type: ignore[assignment]
     with pytest.raises(NoValidLayout, match="BrokenProcessPool"):
         layout.lay_out(chain_spec, time_budget_s=30.0)
@@ -208,22 +217,29 @@ def test_a_deadline_spent_by_composition_refuses_before_finalization(
     """
     real = compose_mod.compose
 
+    class _SkewedClock:
+        """`time`, plus a skew the composition applies on its way out.
+
+        A composition that really ran the clock out would have to SLEEP the
+        whole settlement reserve, which buys nothing the skew does not: what is
+        under test is the guard's reading of the clock, not the sleeping.  The
+        skew is applied only after the block rounds are finished, so nothing but
+        the guard and its neighbours ever see it.
+        """
+
+        skew = 0.0
+
+        def monotonic(self) -> float:
+            return time.monotonic() + self.skew
+
+    clock = _SkewedClock()
+
     def stall(*args: object, **kwargs: object) -> compose_mod.ComposeResult:
         result = real(*args, **kwargs)  # type: ignore[arg-type]
-        deadline = kwargs["deadline"]
-        assert isinstance(deadline, float)
-        while time.monotonic() < deadline:
-            time.sleep(0.05)
+        clock.skew = 1_000_000.0
         return result
 
+    monkeypatch.setattr(strategy, "time", clock)
     monkeypatch.setattr(strategy.compose_mod, "compose", stall)
-    # One arm, so the round is a single wave and a short budget still funds it.
-    layout = HierarchicalLayout(
-        belt_vertical_construction=True,
-        band_policy=BandPolicy.parse("portable"),
-        workers=8,
-        strip_cap=2,
-        block_strategy="freeform",
-    )
     with pytest.raises(NoValidLayout, match="deadline exhausted before finalization"):
-        layout.lay_out(chain_spec, time_budget_s=12.0)
+        _layout().lay_out(chain_spec, time_budget_s=30.0)

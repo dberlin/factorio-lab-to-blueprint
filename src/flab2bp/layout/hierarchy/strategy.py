@@ -20,11 +20,12 @@ scope where mypy and the import graph can both see it.
 HOW THE BUDGET IS DIVIDED.  A round's jobs are ``blocks x arms``, run
 ``_pool_width()`` at a time, so the round takes ``ceil(jobs / width)`` WAVES and
 one block's wall is the round's remaining wall divided by the waves, clamped to
-``[BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S]``.  ``FINALIZE_RESERVE_S`` comes off
-the top, because composing, compacting, finalizing and certifying happen after
-the last block and have no budget of their own.  A round whose share falls under
-the floor is not started: it would only spend the settlement's wall on solves
-that cannot finish.  The per-job wall is combined with the parent's deadline
+``[BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S]``.
+:func:`settlement_reserve_s` comes off the top, because composing, ROUTING EVERY
+CUT LANE, compacting, finalizing and certifying happen after the last block and
+have no budget of their own.  A round whose share falls under the floor is not
+started: it would only spend the settlement's wall on solves that cannot
+finish.  The per-job wall is combined with the parent's deadline
 inside :func:`_solve_block`, at job start -- see its docstring for why the
 parent cannot do it.
 
@@ -88,10 +89,19 @@ from flab2bp.spec import BuildSpec
 #: cannot reach an exact layout only spends the wall the settlement needs.
 BLOCK_BUDGET_MIN_S = 5.0
 BLOCK_BUDGET_MAX_S = 20.0
-#: Wall held back from the block solves for composing, compacting, finalizing
-#: and certifying.  Withheld rather than hoped for: those steps run AFTER the
-#: last block and have no budget of their own.
-FINALIZE_RESERVE_S = 5.0
+#: Bounds and share of :func:`settlement_reserve_s`.
+#:
+#: The reserve was a flat 5 s while composition was still unreachable, and that
+#: was measured wrong the moment it became reachable: on belt3 the blocks all
+#: placed, composed and built their ports, and then the ROUTER -- which spends
+#: this reserve, and is by far the most expensive thing in it -- refused
+#: essentially every one of ~100 cut lanes on ``BUDGET``.  Wiring the block
+#: interface is not a rounding error at the end of the build, it is a second
+#: routing problem the size of the interface, so the reserve scales with the
+#: budget instead of being a constant.
+SETTLEMENT_RESERVE_MIN_S = 10.0
+SETTLEMENT_RESERVE_MAX_S = 40.0
+SETTLEMENT_RESERVE_SHARE = 0.4
 #: ``partition.split_block`` varies WHERE it cuts by attempt, and offers four
 #: distinct cuts (0..3).  Counted PER BLOCK: a child created by a re-cut has
 #: never been cut itself, so it starts at attempt 0 rather than inheriting its
@@ -121,6 +131,22 @@ _BlockJob = tuple[BuildSpec, str, float, bool, int, float | None]
 #: a test that patches :func:`_solve_block` can run it in a thread, where the
 #: patch actually exists.
 ExecutorFactory = Callable[[int], Executor]
+
+
+def settlement_reserve_s(time_budget_s: float) -> float:
+    """Wall held back from the block solves for everything that follows them.
+
+    Composition, the router that wires every cut lane, the boundary-belt
+    compaction, the finalization and the certification all happen after the last
+    block and have no budget of their own, so it is withheld rather than hoped
+    for.  Computed from the budget the caller named -- including when a parent
+    handed down a deadline, because what the settlement costs tracks the size of
+    the build, not who started the clock.
+    """
+    return min(
+        SETTLEMENT_RESERVE_MAX_S,
+        max(SETTLEMENT_RESERVE_MIN_S, SETTLEMENT_RESERVE_SHARE * time_budget_s),
+    )
 
 
 def _spawn_pool(max_workers: int) -> Executor:
@@ -275,6 +301,7 @@ class HierarchicalLayout:
         # parent handed down a deadline: a refusal that quoted the nominal
         # budget would name a number nobody spent.
         refuse = _refuser(spec, max(0.0, deadline - started_at))
+        reserve = settlement_reserve_s(time_budget_s)
 
         partition = initial_partition(spec, strip_cap=self.strip_cap)
         entries = [_Entry(list(block)) for block in partition.blocks]
@@ -291,7 +318,7 @@ class HierarchicalLayout:
                 break
             jobs = len(todo) * len(self._arms())
             waves = math.ceil(jobs / self._pool_width())
-            remaining = deadline - time.monotonic() - FINALIZE_RESERVE_S
+            remaining = deadline - time.monotonic() - reserve
             share = remaining / waves
             if share < BLOCK_BUDGET_MIN_S:
                 raise refuse(
@@ -346,6 +373,9 @@ class HierarchicalLayout:
                 spec,
                 gap=DEFAULT_GAP,
                 ramped=self.ramped,
+                # The PARENT's wall, not the reserve. The reserve is what the
+                # block rounds were made to leave behind for the router; it is
+                # not a second, tighter ceiling to then judge the router by.
                 deadline=deadline,
             )
         except ContractError as exc:
@@ -362,7 +392,7 @@ class HierarchicalLayout:
         built = composed_spec(spec, blocks)
         # The settlement below is the only stretch with no budget of its own:
         # `assign_sorter_slots` takes no `cancelled` and `certify` is atomic. It
-        # is entered only with wall left to enter it with; `FINALIZE_RESERVE_S`
+        # is entered only with wall left to enter it with; `settlement_reserve_s`
         # is what the rounds above held back so that is normally true.
         if time.monotonic() >= deadline:
             raise refuse("deadline exhausted before finalization")
