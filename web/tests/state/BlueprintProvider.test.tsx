@@ -1,9 +1,14 @@
 import { readFileSync } from 'node:fs';
-import { expect, test } from '@rstest/core';
-import { act, render, screen } from '@testing-library/react';
+import { afterEach, expect, test } from '@rstest/core';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import type { TraceFrame } from '../../src/api/trace';
 import type { Blueprint } from '../../src/format/types';
 import { buildCatalog } from '../../src/model/catalog';
 import { BlueprintProvider, useBlueprint } from '../../src/state/BlueprintProvider';
+import { TracePanel } from '../../src/ui/TracePanel';
+import { restoreFetch, serving } from '../support/build';
+
+afterEach(restoreFetch);
 
 /** A hand-built snapshot, the same shape `traceFrameToBlueprint` produces --
     never parsed from a string, so a test can prove `loadSnapshot` never
@@ -43,6 +48,33 @@ const SNAPSHOT: Blueprint = {
     },
   ],
   buildings: [],
+};
+
+/** A hand-built trace frame, for the overlay-state tests below -- never
+    polled, so a test can prove `setTraceFrame` and `load`'s clearing of it
+    are wired without a network round trip. */
+const A_TRACE_FRAME: TraceFrame = {
+  seq: 1,
+  t: 0.5,
+  strategy: 'freeform',
+  candidate: 'all-products',
+  phase: 'incumbent',
+  height: 34,
+  arrangement: 2,
+  restart: null,
+  stage: null,
+  island: null,
+  round: null,
+  block: null,
+  area: 12,
+  belt_tiles: 2,
+  incumbent: true,
+  reason: null,
+  bounds: [0, 0, 3, 3],
+  truncated: false,
+  stranded: [],
+  no_goods: [[3, 7]],
+  buildings: [[2001, 35, 0, 0, 0, 0, 61, 0, 1, -1]],
 };
 
 const catalog = buildCatalog({
@@ -193,4 +225,52 @@ test('a real load after a snapshot clears snapshotLabel back to null', () => {
   expect(api.snapshotLabel).toBeNull();
   expect(api.blueprint).not.toBe(SNAPSHOT);
   expect(api.blueprint?.buildings.length).toBe(36);
+});
+
+test('traceFrame and traceShow start with sane defaults', () => {
+  renderProvider();
+  expect(api.traceFrame).toBeNull();
+  // Both layers on: an operator who has never touched the toggles should see
+  // everything a trace can show, not a quietly-hidden layer.
+  expect(api.traceShow).toEqual({ stranded: true, noGoods: true });
+});
+
+test('setTraceFrame and setTraceShow update state directly', () => {
+  renderProvider();
+  act(() => api.setTraceFrame(A_TRACE_FRAME));
+  expect(api.traceFrame).toBe(A_TRACE_FRAME);
+
+  act(() => api.setTraceShow({ stranded: false, noGoods: true }));
+  expect(api.traceShow).toEqual({ stranded: false, noGoods: true });
+});
+
+test('a real load clears a stale traceFrame -- what stops an old search overlay surviving into a real result', () => {
+  renderProvider();
+  act(() => api.setTraceFrame(A_TRACE_FRAME));
+  expect(api.traceFrame).not.toBeNull();
+
+  const text = readFileSync(
+    'tests/fixtures/factory-quick-start-step-1-minimum-blue-cube-automation.txt',
+    'utf8',
+  );
+  act(() => api.load(text));
+
+  expect(api.traceFrame).toBeNull();
+});
+
+test("TracePanel's tailing effect feeds the newest polled frame into the real provider's traceFrame", async () => {
+  serving({ body: { frames: [A_TRACE_FRAME], next: 1, dropped: 0, complete: true } });
+
+  render(
+    <BlueprintProvider catalog={catalog}>
+      <Probe />
+      <TracePanel jobId="abc123" active={true} />
+    </BlueprintProvider>,
+  );
+
+  // Not the mocked `useBlueprint` `TracePanel.test.tsx` uses -- this is the
+  // real provider, so a passing assertion here is coverage of the actual
+  // wiring between the poll loop and `setTraceFrame`, not of a stand-in.
+  await waitFor(() => expect(api.traceFrame).not.toBeNull());
+  expect(api.traceFrame?.no_goods).toEqual([[3, 7]]);
 });

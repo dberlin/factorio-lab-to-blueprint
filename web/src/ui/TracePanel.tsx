@@ -110,7 +110,11 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
             data-testid="trace-show-no-goods"
             onChange={(event) => setTraceShow({ ...traceShow, noGoods: event.target.checked })}
           />
-          No-goods
+          {/* Visible without hovering, per review round 1 IMPORTANT 1: the
+              canvas box this toggle draws is an index-based placeholder, not
+              a to-scale footprint -- this label is the in-UI signal that
+              stops it being read as real geometry. */}
+          No-goods (approximate — index-based, not to scale)
         </label>
       </div>
       {/* This caption, and only this caption, ever names what is on the
@@ -139,6 +143,16 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
         <div>
           <dt>Belt tiles</dt>
           <dd>{newest.belt_tiles ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>No-goods</dt>
+          {/* Text, not geometry: unambiguous even where the canvas box is
+              only an approximate placeholder (review round 1 IMPORTANT 1). */}
+          <dd data-testid="trace-no-goods">
+            {newest.no_goods.length === 0
+              ? '—'
+              : newest.no_goods.map((strips) => `[${strips.join(', ')}]`).join(', ')}
+          </dd>
         </div>
       </dl>
     </section>

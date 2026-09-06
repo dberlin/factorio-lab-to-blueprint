@@ -117,6 +117,13 @@ export function TraceOverlay({ frame, show }: { frame: TraceFrame | null; show: 
         </lineSegments>
       )}
       {cellCount > 0 && (
+        // Wireframe, never a solid tint (review round 1, IMPORTANT 1): the
+        // box's position and extent are an index-based placeholder, not the
+        // strip's real footprint (see STRIP_PITCH above), and a solid fill
+        // reads with the same visual grammar as real geometry. A hollow box
+        // reads as "something is marked here", not "this is the shape of it".
+        // The panel's "No-goods" toggle label and metadata list carry the
+        // words this shape cannot.
         <instancedMesh
           key={cellCount}
           ref={meshRef}
@@ -124,7 +131,13 @@ export function TraceOverlay({ frame, show }: { frame: TraceFrame | null; show: 
           raycast={() => null}
         >
           <boxGeometry args={[1, 1, 1]} />
-          <meshBasicMaterial color="#ffaa00" transparent opacity={0.35} depthWrite={false} />
+          <meshBasicMaterial
+            color="#ffaa00"
+            wireframe
+            transparent
+            opacity={0.85}
+            depthWrite={false}
+          />
         </instancedMesh>
       )}
     </>
