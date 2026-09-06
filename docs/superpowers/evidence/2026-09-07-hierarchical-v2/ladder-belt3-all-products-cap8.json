@@ -1,0 +1,34 @@
+{
+ "area": null,
+ "budget_s": 60.0,
+ "cap": 8,
+ "policy": "all-products",
+ "rungs": [
+  {
+   "assigned": 110,
+   "complete": false,
+   "gap": 2,
+   "judged": true,
+   "missing": 1,
+   "missing_detail": [
+    "energetic-graphite@belt6249:internal-arrival"
+   ]
+  },
+  {
+   "assigned": 111,
+   "complete": true,
+   "gap": 4,
+   "judged": true,
+   "missing": 0,
+   "missing_detail": []
+  }
+ ],
+ "unrouted": {
+  "DYNAMIC_ACCESS": 7,
+  "SEALED_POCKET": 1
+ },
+ "url": "belt3",
+ "verdict": "REFUSED: unrouted cut(s): electric-motor: block 10 -> block 12: DYNAMIC_ACCESS; electric-motor: block 10 -> block 12: DYNAMIC_ACCESS; electromagnetic-turbine: block 12 -> block 13: DYNAMIC_ACCESS; energetic-graphite: block 7 -> block 13: DYNAMIC_ACCESS; gear: block 5 -> block 10: DYNAMIC_ACCESS; gear: block 5 -> block 10: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 11: SEALED_POCKET; magnet: bloc",
+ "verdict_full": "REFUSED: unrouted cut(s): electric-motor: block 10 -> block 12: DYNAMIC_ACCESS; electric-motor: block 10 -> block 12: DYNAMIC_ACCESS; electromagnetic-turbine: block 12 -> block 13: DYNAMIC_ACCESS; energetic-graphite: block 7 -> block 13: DYNAMIC_ACCESS; gear: block 5 -> block 10: DYNAMIC_ACCESS; gear: block 5 -> block 10: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 11: SEALED_POCKET; magnet: block 0 -> block 9: DYNAMIC_ACCESS",
+ "wall_s": 22.7
+}

@@ -131,13 +131,16 @@ place every block, wire every cut and reach the router, where v1 had one.
 - **PARTLY** A gap ladder for the composition (`GAP_LADDER = (2, 4, 6, 8, 12,
   16)` under `LADDER_WALL_SHARE`, with `_reserve_port_access` over the outer
   ring as its oracle) — design §4 E's reservation, done as a searched gap rather
-  than a physical bus lane (`hierarchy/compose.py`). **The mechanism exists and
-  is structurally INERT as specified**, which is the v2 gate's headline finding:
+  than a physical bus lane (`hierarchy/compose.py`). **The BOUNDARY half of its
+  oracle is structurally unreachable**, which is the v2 gate's headline finding:
   `compose` passes no boundary lanes, so every demand is internal, every
   internal demand has `reaches_boundary == False`, and both the reachability
-  probe and the joint matcher's boundary validator skip it — the oracle can
-  never answer "no". Measured: five composing cells, 31-168 port demands, rung 0
-  and `missing = 0` every time. gate.md §6 lever 1.
+  probe and the joint matcher's boundary validator skip it — the only thing the
+  ladder can ever reject a rung over is a LOCAL doorstep claim. Measured: five
+  composing cells, 31-168 port demands, rung 0 committed with `missing = 0`
+  every time; the one firing in the whole gate is at strip cap 8, where rung 0
+  missed one `internal-arrival` demand of 111, gap 4 satisfied it, and the
+  router still refused 8 cut lanes. gate.md §3.4 and §6 lever 1.
 - **DONE** A within-build no-good keyed on block shape (`_ShapeNoGood`,
   `stats["nogood_skips"]`), the first of v1 §7's three adaptive memories. Live
   but verdict-neutral: 36 skips on `mall/all-products`, 8 / 4 / 2 elsewhere,

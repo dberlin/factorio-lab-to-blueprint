@@ -58,18 +58,19 @@ has no best-known area.
 | wall within budget + race grace | ≤ 60 + 6.0 s | 22.8-63.2 s in-process; the largest, zurl2 at 63.2 s, is inside 66.0 s | PASS |
 | default guard unchanged | identical CLEAN counts, identical freeform areas, seq-pair geomean ±0.11 % | CLEAN counts **72 = 72, identical**; 3 freeform cells and 3 sequence-pair cells moved, **every one of them demonstrably run-to-run noise present on BOTH trees** (§5), and no line of code either audited arm executes differs between the trees | **FAIL as literally declared**, PASS in substance — see §5 |
 
-**The clause the gate fails on is coverage: 0 of 8 cells build.** Six of the
-eight areas are not merely over budget, they do not exist. The three
-area clauses are therefore *not demonstrated* rather than violated — the same
-distinction v1's gate had to draw.
+**The clause the gate fails on is coverage: 0 of 8 cells build.** No cell
+emitted a blueprint, so no area exists to compare: the three area clauses are
+*not demonstrated* rather than violated — the same distinction v1's gate had to
+draw, and it cuts both ways, because a cell that never composes cannot
+demonstrate zero unrouted cuts either.
 
 ### What did change, and it is not nothing
 
 v1 refused **5 of 5** cells and only ONE of them ever reached composition
 (`zurl2/all-products` r2, which then died in `contracts.assign_lanes`). v2
 refuses 8 of 8, but **5 of the 8 cells now place every block, wire every cut
-and reach the router**, and the two that do not are the malls plus belt3 at
-15 s. The failure has moved from "the blocks were never attempted" to "the
+and reach the router**, and the three that do not are the two malls and belt3
+at 15 s. The failure has moved from "the blocks were never attempted" to "the
 router cannot wire the cut lanes on the ground the composer left". That is
 exactly the wall the v1 gate's §6 lever 1 named, and §6 below says why the
 lever this branch shipped for it cannot move it.
@@ -209,7 +210,7 @@ Compare v1's own probe at the same URL and cap: **3 blocks / 7 cuts / 7 strips /
 counts what `freeform.plan_strips` packs, the 129-machine block is 24 packed
 strips rather than 7 logical ones, and the cap bites where it never used to.
 
-### 3.2 What the cap does to a real build (60 s, workers None, one round)
+### 3.2 What the cap does to a real build (60 s, workers None, one build per cap)
 
 | cap | wall | stage | gap chosen | port demands | `missing` | unrouted cut lanes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -228,13 +229,52 @@ Two honest observations that a future sweep should start from, neither of which
 is a decision this gate is entitled to make:
 
 * cap **8** produces the fewest unrouted lanes (8, against 28 at the shipped
-  cap) and is the fastest to its verdict (22.3 s) — and it is the ONLY cap in
-  the sweep whose ladder left rung 0: it committed **gap 4**. That is a
-  16-block partition of the same URL, so it is also the cap where a corridor
-  lever would have the most ground to work with. It is one run, on one policy.
+  cap) and is the fastest to its verdict (22.3 s) — and it is **the only
+  measurement in this whole directory in which the gap ladder actually fires**:
+  it committed gap 4, not rung 0. §3.4 takes that apart, because it is the one
+  observation that constrains lever 1. That is a 16-block partition of the same
+  URL, so it is also the cap where a corridor lever would have the most ground
+  to work with. It is one run, on one policy.
 * cap **24** is the funding cliff again: 7 blocks x 2 arms is a single wave, and
   the round is still refused with `-0.0 s` left, because a 129-machine block
   eats the whole round before the re-cut can be funded.
+
+### 3.4 The one time the ladder fires: cap 8, rung by rung
+
+`sweep_strip_cap.py` and `run_cell.py` both wrap `pack_with_access` and so see
+only the rung it COMMITS. A committed gap of 4 with a complete reservation can
+only mean rung 0 was judged and rejected, and this gate is not entitled to
+report a rejected rung it never saw. `ladder_probe.py` therefore wraps one level
+lower — `compose._pack_at` for each rung's gap and `compose._reserve_port_access`
+for that rung's verdict — and re-ran the cap-8 cell
+(`ladder-belt3-all-products-cap8.{json,log}`, `ladder-probe-load.txt`, 22.7 s,
+the same 8 unrouted cuts as the sweep row):
+
+| rung | gap | assigned | missing | complete |
+| --- | --- | --- | --- | --- |
+| 0 | 2 | 110 | **1** — `energetic-graphite @ belt 6249`, kind `internal-arrival` | **no** |
+| 1 | 4 | 111 | 0 | yes |
+
+Three things follow, and they are the empirical constraint on §6 lever 1:
+
+1. **The ladder is not dead code.** It fires, it widens, and the wider rung is
+   genuinely complete. Task 4's machinery works.
+2. **It fired on a demand R11 predicts it can only judge LOCALLY.** The one
+   missing demand is an `internal-arrival` — `reaches_boundary == False` — so
+   what rejected rung 0 was the joint matcher failing to find a cell-disjoint
+   (access, exit) pair for that lane head, NOT the boundary reachability probe,
+   which skips internal demands entirely. R11's mechanism is confirmed by the
+   one case that could have refuted it.
+3. **And it did not help.** Gap 4 satisfied every port and the router still
+   refused 8 cut lanes (`DYNAMIC_ACCESS` 7, `SEALED_POCKET` 1). A canvas on
+   which every port has a private doorstep is still a canvas on which the trunks
+   cannot share ground.
+
+The frequency matters as much as the mechanism: **one rejection, of one demand,
+out of 111, in one run, at a cap that is not the default.** At the shipped cap
+12 and at cap 16, and on all five composing CLI cells across two rounds (31 to
+168 demands each), rung 0 was judged and found COMPLETE — that is the returned
+rung, so it is a direct observation, not an inference.
 
 ## 4. Where the strategy dies, and where this gate agrees or disagrees with each task
 
@@ -282,13 +322,16 @@ Per-task, with each implementer's own measurement cited as theirs:
   that measurement exactly**, in the sweep at cap 12 and in both CLI rounds:
   102 demands, gap 2, `missing` 0, `COMMIT_LINK` 10 / `DYNAMIC_ACCESS` 10 /
   `SEALED_POCKET` 8. **And it generalises it**: across all five composing cells,
-  spanning 31 to 168 port demands and four URLs, the ladder committed **rung 0
-  (gap 2) every single time with `missing` 0 and `reservation.complete` true.**
-  The one place a rung above 0 was ever committed in this whole gate is the cap-8
-  sweep row (gap 4) — and there the reservation was ALSO complete at that rung,
-  i.e. the gap came from the packer's own floor, not from the ladder rejecting
-  rung 0. **The ladder has never once rejected a rung in any measurement in this
-  directory.** §6 lever 1 says why that is structural.
+  spanning 31 to 168 port demands and four URLs, in both rounds, the ladder
+  committed **rung 0 (gap 2) every single time with `missing` 0 and
+  `reservation.complete` true.** The single exception in this entire directory
+  is the cap-8 sweep row, and §3.4 takes it apart rung by rung: rung 0 missed
+  exactly ONE demand of 111 and rung 1 (gap 4) was complete. So the ladder is
+  not dead code — it fires, correctly, once — but at a rate of one rejected
+  demand in one non-default configuration, and the rejection was a LOCAL
+  matching failure on an `internal-arrival` demand, which is exactly what R11
+  predicts is the only thing this oracle can ever reject. §6 lever 1 is about
+  what it structurally cannot.
 * **Task 5 (`_ShapeNoGood`)** shipped `stats["nogood_skips"]`. **This gate finds
   the lever live but verdict-neutral.** It fires on 4 of 8 cells in round 2 —
   `mall/all-products` **36** skips, `mall/no-proliferator` 8, belt3
@@ -359,9 +402,10 @@ candidate in both rounds and moved 31898 -> **39312** on the BASELINE. The
 instability is not on the candidate's side of the comparison.
 
 **The structural argument, which is decisive and which v1 could not make.**
-`git diff --no-ext-diff 826c9e3e..bf8b1f40 -- src/` touches six files:
-`layout/hierarchy/{compose,contracts,partition,strategy}.py`, plus two
-one-line-effect edits outside that package —
+`git diff --no-ext-diff 826c9e3e..bf8b1f40 -- src/` touches six files. Four are
+`layout/hierarchy/{compose,contracts,partition,strategy}.py`, a package neither
+audited arm imports. The other two are edits outside it, and both are inert for
+`freeform` and `sequence-pair` —
 
 * `layout/base.py`: adds the key `nogood_skips: float` to the
   `PlacementStats` TypedDict. A TypedDict key has no runtime behaviour.
@@ -389,12 +433,14 @@ whose instability is on the BASELINE side).
 
 ## 6. The next three levers, from the measurement
 
-### Lever 1 (headline): make the port-access oracle BOUNDARY-AWARE for internal demands. The gap ladder is structurally inert as specified.
+### Lever 1 (headline): make the port-access oracle BOUNDARY-AWARE for internal demands. As specified, the ladder can only ever judge a doorstep.
 
 This is the single most valuable finding in this evidence, and it is a finding
-about the code, not about belt3. Controller ruling R11 established the
-mechanism; **every file:line below was re-verified against `bf8b1f40` before
-being printed here**:
+about the code, not about belt3. To state it precisely: the ladder is not inert
+as code — §3.4 shows it firing — but the BOUNDARY half of its oracle is
+structurally unreachable, so the only question it can ever answer "no" to is a
+local one. Controller ruling R11 established the mechanism; **every file:line
+below was re-verified against `bf8b1f40` before being printed here**:
 
 > `compose` calls `_port_access_inventory(packing.nets)` with no
 > `boundary_inputs` / `boundary_outputs` (`hierarchy/compose.py:696`; the
@@ -411,17 +457,25 @@ being printed here**:
 
 What the ladder actually tests is the LOCAL claim "does every lane head have a
 cell-disjoint free (access, exit) pair after joint matching", which at gap 2
-with an 8-tile margin is essentially always satisfiable.
+with an 8-tile margin is essentially always satisfiable — measured here: every
+demand satisfied on every default-cap cell, and 110 of 111 at cap 8.
 
 **The measurement now says the same thing across the whole gate, not just on
 belt3.** Five composing cells, four URLs, 31 to 168 port demands, two rounds
-each, plus four sweep rows: `reservation.complete` was **true on every single
-one**, `missing` was **0 on every single one**, and the committed rung was
-**rung 0 in every case but one** — and that one (cap 8, gap 4) was complete at
-its rung too, so the gap came from the packer's floor rather than from the
-ladder rejecting anything. `GAP_LADDER`'s five upper rungs and
-`LADDER_WALL_SHARE` have never been exercised by any measurement in this
-directory.
+each, plus the cap-12/16/24 sweep rows: the committed rung was **rung 0 (gap 2)
+with `missing` 0 and `reservation.complete` true, every time**.
+
+The one exception, and it is the exception that proves the mechanism: at strip
+cap 8 the ladder DID fire (§3.4). Rung 0 missed exactly **one** demand of 111 —
+`energetic-graphite @ belt 6249`, kind **`internal-arrival`**, i.e. a demand
+whose `reaches_boundary` is False — so what rejected the rung was the joint
+matcher failing a LOCAL cell-disjointness claim, not the boundary probe, which
+never ran on it. Rung 1 (gap 4) was complete, **and the router still refused 8
+cut lanes on it**. That is the sharpest possible statement of the problem: the
+one time the oracle spoke, it spoke about a doorstep, the ladder paid for a
+wider canvas to buy that doorstep, and the trunks still could not share ground.
+`GAP_LADDER`'s four upper rungs (6, 8, 12, 16) and the `LADDER_WALL_SHARE`
+budget that funds them have never been exercised by any measurement here.
 
 Meanwhile the residual refusals are `COMMIT_LINK`, `SEALED_POCKET` and
 `DYNAMIC_ACCESS` — shared-ground contention among trunks after the reservation
@@ -436,11 +490,12 @@ ADMITS: give `_port_access_inventory` the composed canvas's real boundary
 lanes, or admit internal demands into the reachability probe when a boundary is
 supplied. The machinery — the corridor enumeration, the joint matcher, the
 `assignment_boundary_cut` A\* validator, the ladder that spends the verdict —
-already exists and is already wired; it is simply never asked a question it can
-answer no to. **Cheaper, and it is the prerequisite for knowing whether the
-corridor is even needed**: until the oracle can say "this rung does not work",
-no wider rung will ever be tried, and the ladder that Task 4 built cannot pay
-for itself.
+already exists and is already wired; it is simply never asked the question that
+would make it say no. **Cheaper, and it is the prerequisite for knowing whether
+the corridor is even needed**: until the oracle can reject a rung for the reason
+that actually refuses the build — trunks sharing ground — a wider rung is tried
+only on the rare local miss and buys nothing (§3.4), and the ladder that Task 4
+built cannot pay for itself.
 
 ### Lever 2: fund the re-cut rounds, and bound the block growth
 
@@ -450,8 +505,8 @@ mall STILL refuses with 22 and 45 blocks never placed, because
 keeps growing (19 seed -> 22 unattempted; 24 -> 45), and `MAX_RESPLIT_ATTEMPTS`
 is counted per block with no global round bound (§7). v1 ranked this second and
 Task 3 moved the pool half of it; the remaining half is the wave divisor and
-the unbounded growth. Two of the eight cells fail here and no other lever can
-reach them, because they never compose.
+the unbounded growth. **Three** of the eight cells fail here — both malls and
+belt3 at 15 s — and no other lever can reach them, because they never compose.
 
 ### Lever 3: give the router shared ground to work in, i.e. v1's bus corridor
 
@@ -474,7 +529,8 @@ and 2 on the belt3 policies, 0 elsewhere, and no change to any verdict. The
 other two are still open, and this gate sharpens the evidence for both.
 
 * **A cross-build solved-block cache.** The evidence is stronger than v1's.
-  Across the sixteen CLI runs in §2 and the four sweep builds in §3, the same
+  Across the sixteen CLI runs in §2 and the five sweep and probe builds in §3,
+  the same
   one-recipe blocks (`gear`, `electric-motor`, `iron-ingot`, `magnet`,
   `copper-ingot`, `steel`) were solved from scratch every time — the refusal
   texts name them by recipe, and `mall/no-proliferator` alone lists nine
@@ -549,6 +605,8 @@ Two consequences of the shipped shape, unchanged from v1 and not defects:
   and their `-load.txt`
 * `sweep_strip_cap.py`; `sweep-belt3-all-products.{json,log}`,
   `sweep-belt3-all-products-load.txt`
+* `ladder_probe.py`; `ladder-belt3-all-products-cap8.{json,log}`,
+  `ladder-probe-load.txt` (§3.4, the rung-by-rung re-run of the cap-8 cell)
 * `probe-belt3-all-products.json` (the cap sweep's partition probe) and
   `probe-{belt3,zurl2,mall,titanium-glass}-{all-products,no-proliferator}.json`
   (cap 12, the shipped default, for the §2.1 seed-block column)
