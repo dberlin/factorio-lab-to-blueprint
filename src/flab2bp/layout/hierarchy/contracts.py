@@ -107,6 +107,19 @@ def boundary_lanes(
     a tail with no belt successor, so both marker functions return it. A
     boundary output tail is one no sorter draws from; a boundary entry head is
     one no sorter feeds.
+
+    A HEAD IS RATED AT THE BLOCK'S WHOLE DEFICIT, WHICH OVERSTATES WHAT THE CUTS
+    OWE IT.  ``sub.external_inputs[item]`` is everything the block is short of,
+    and for an item that is ALSO in the PARENT's ``external_inputs`` part of
+    that share is belted in by the player at the parent level rather than by any
+    cut.  ``partition.derive_cuts`` knows the difference -- it sizes each cut at
+    ``min(surplus, deficit)`` -- but the heads rated here do not, so
+    :func:`assign_lanes` asks the internal tails to cover the player's share too
+    and raises :class:`ContractError` when they cannot.  That is the
+    ``zurl2/all-products`` hydrogen refusal (``hydrogen: block 0 supply
+    exhausted; block 7 entry lane 1042 short by 4319/1875 items/s``), reached
+    only after every block placed.  Fixed in v2, not here: see lever 3 of
+    ``docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md`` §6.
     """
     buildings = placement.buildings
     sorter_fed = {

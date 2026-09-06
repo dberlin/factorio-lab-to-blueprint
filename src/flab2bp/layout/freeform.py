@@ -15537,6 +15537,21 @@ def _power_plan(
         # The static-collision check below has always narrowed to exactly this
         # rectangle. The power-node check now does too, from the same bounds.
         #
+        # "NARROWING" HOLDS ONLY WHEN `canvas.limit` IS SET.  The per-candidate
+        # envelope below is `_projection_envelope(candidate_bounds,
+        # canvas.limit or candidate_bounds, ...)`, and `projections` was taken
+        # as `_projection_envelope(cleanup_inner, canvas.limit or occupied,
+        # ...)`. With a limit the two share that outer box and the candidate's
+        # inner rectangle only grew, so the candidate set is a SUBSET of
+        # `projections`. Production always has one: `_prepare_routing_problem`
+        # assigns `canvas.limit = capacity` (~16740) before it plans power.
+        # With `limit=None` -- which only a caller that builds its own canvas
+        # reaches, such as the `_power_plan` tests -- the outer box collapses to
+        # the inner one on both sides, so the candidate envelope is the
+        # projections of the SINGLE rectangle `candidate_bounds` and is not a
+        # subset of `projections` at all: `candidate_bounds` can extend past
+        # `occupied`, and the extents in between are never enumerated.
+        #
         # A linkless tower already inside the certified rectangle cannot change
         # cleanup survivors. Extending any side can revive a linked belt that
         # the old boundary pruned, including one that expands the orthogonal

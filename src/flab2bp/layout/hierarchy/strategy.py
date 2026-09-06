@@ -42,6 +42,27 @@ landed, and ``game.power_too_close`` is the usual way that shows up.  So the
 composed placement is compacted, finalized and certified here, from scratch,
 and a :class:`finalize.ProjectionRefusal` is a refusal with the projection
 named -- never a crash and never a handback.
+
+THE CONSTANTS AS SHIPPED, in one place, because they differ from the ones the
+plan proposed and each is spelled out separately below:
+
+* ``settlement_reserve_s(budget) = min(40, max(10, 0.4 * budget))`` -- a share
+  of the budget, not the plan's flat 5 s.
+* ``_pool_width() = max(1, (workers or 16) // 4)``, and each child is
+  constructed with ``_BLOCK_WORKERS = 4`` CP-SAT search workers.
+* Per round, ``block_budget = clamp(remaining / waves, 5, 20)`` seconds
+  (``BLOCK_BUDGET_MIN_S``/``BLOCK_BUDGET_MAX_S``), where ``remaining`` is the
+  parent's wall less the settlement reserve.
+* The per-JOB deadline is ``min(parent_deadline, job_start + block_budget)``,
+  computed inside :func:`_solve_block` at job start rather than by the round.
+* ``MAX_RESPLIT_ATTEMPTS = 4`` is counted PER BLOCK, not as a global round
+  bound: a child created by a re-cut starts at attempt 0.
+* The pools are SPAWNED (``multiprocessing.get_context("spawn")``), like
+  ``strategy_race``'s.
+
+The same list, with the gate measurements behind it, is
+``docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md``,
+"As-shipped strategy constants".
 """
 
 from __future__ import annotations
@@ -351,14 +372,27 @@ class HierarchicalLayout:
         assert len(solved) == len(entries)
 
         # WIRING AND COMPOSITION, UNDER A CRASH GUARD.  `lay_out` promises a
-        # valid `Placement` or a `NoValidLayout`, and the three calls below read
-        # geometry this strategy assembled out of independently solved blocks --
-        # shapes no single block ever showed its own placer. A composer that
-        # raises on one of them is the same kind of event as a placer crashing
-        # inside a block, and it is handled the same way: a refusal that names
-        # it, never an abort that loses the whole build. The body is kept to
-        # exactly those three calls so a defect in this module's own code is
-        # still a traceback.
+        # valid `Placement` or a `NoValidLayout`, and the guarded body below
+        # reads geometry this strategy assembled out of independently solved
+        # blocks -- shapes no single block ever showed its own placer.
+        #
+        # WHAT IS GUARDED, exactly: the per-block loop (`sub_spec` and
+        # `boundary_lanes` for every entry), then `assign_lanes`, then
+        # `compose`. `ContractError` out of `assign_lanes` is a refusal naming
+        # the lane contract; ANY OTHER exception out of any of them -- including
+        # a bug in `partition`, `contracts` or `compose` themselves -- becomes
+        # the refusal `composition crashed: <type>: <message>`.
+        #
+        # That is deliberate and it is the right trade for a STRATEGY.  A
+        # refusal names the build, keeps the other candidates in a race alive
+        # and is recorded as evidence; a traceback out of `lay_out` breaks the
+        # contract every caller relies on and loses the whole build over a
+        # defect in one composed shape. The cost is that such a defect surfaces
+        # as a refusal line rather than a stack, which is why the message
+        # carries the exception type and text verbatim.
+        #
+        # The body is kept to exactly those calls, so a defect in the rest of
+        # this module -- the settlement below included -- is still a traceback.
         started = time.monotonic()
         try:
             tails: dict[int, list[LaneEnd]] = {}

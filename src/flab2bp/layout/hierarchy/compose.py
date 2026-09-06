@@ -350,7 +350,13 @@ def canvas_for(
 
 
 def _lane(buildings: list[PlacedBuilding], index: int) -> tuple[int, ...]:
-    """Every belt index of the run containing ``index``, west to east."""
+    """The maximal contiguous x-run at ``index``'s own row, west to east.
+
+    NOT the whole belt run reached through ``output_obj``: that run also takes
+    in the north-south sorter drop columns spliced into it, and it can leave the
+    row and come back.  What comes back here is one east-west segment -- the one
+    ``index``'s own tile stands in -- and the reason is in the body.
+    """
     prev = {b.output_obj: i for i, b in enumerate(buildings) if b.output_obj is not None}
     head = index
     while head in prev and catalog.is_belt(buildings[prev[head]].item_id):
