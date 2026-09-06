@@ -45,14 +45,33 @@ Framing that binds all of them: coverage and bounded time first, area within a
    only against the bridged lane's own attachments) is unfixed; patch in the
    README. Block libraries should not assume direct insertion for density.
 
-## Running now
-
-6. **Pressure-driven place and route** (`exp-pressure`): corridor width by lane
-   pressure on the packer side, net order by cut pressure on the router side,
-   each behind a default-off switch, measured on the freeform cells and the
-   large URLs.
+6. **Pressure-driven place and route** (`exp-pressure`, gate in
+   `exp-pressure-gate/`). Corridor width by lane pressure: dead (reserved rows
+   move the height sweep, area moves both ways, belt tiles never track the rows
+   bought; it did move belt3 no-proliferator from a routing refusal to a
+   belt-capacity validator refusal, 42-45/s on a 30/s tier). Net order by cut
+   pressure: bimodal. Large reproducible wins (belt3 route_all -36 %, mall
+   -44 %, quantum-chip[2] -48 %, zero area change) but about four cells
+   genuinely slower by 18-90 % and a bit-identical +6.4 % area regression on
+   sequence-pair information-matrix/output-products (the switch also reorders
+   sequence-pair nets via `_build_prepared`). Three-round gate: 0 regressions,
+   INVALID 0, CRASH 0, overshoot 0, freeform area +0.1 %, but the corpus
+   route_all clause FAILED (0.96 / 0.98 / 1.11; the same-arm control moves
+   +16.7 %, so the metric cannot resolve it on cells under 0.5 s). Default not
+   flipped; both switches live only on branch `exp-pressure` (commit 3fc11be5);
+   master carries the evidence. Next step if revived: a cut-pressure threshold
+   predicate deciding WHEN to apply the order, then re-gate. Also found:
+   `audit.py` emits no `route_all_s` (only `prof_harness` installs the tally),
+   so the gate used `detailed_route_time_s`.
 
 ## Backlog (not started)
+
+### From experiment 6
+- Cut-pressure threshold predicate for the net order (apply only above a lane
+  pressure / strip count floor); scope it to freeform or gate sequence-pair
+  separately.
+- Emit `route_all_s` and rip-up rounds from `audit.py` rows so routing time is
+  gateable without the harness.
 
 ### From the hierarchical prototype (a production version must solve first)
 - Lane-contract block interfaces: a cut item's out-lanes and in-lanes must match
