@@ -850,13 +850,28 @@ def build(
 
         The loop below branches on the RESULT rather than catching, so one shape
         handles a raced pair and a serial one.
+
+        ``hierarchical`` gets the caller's raw ``workers`` (explicit count, or
+        ``None``), never ``worker_budget``.  ``_new_layout``'s own ``workers``
+        parameter is documented as "CP-SAT search workers for the one backend
+        that has a multi-threaded solve" -- ``worker_budget``'s 16-CPU cap
+        exists for THAT, the freeform arm inside a race sharing one process.
+        ``HierarchicalLayout`` spends the same argument on a different
+        quantity: how many whole block placers (each its own process, each
+        holding its OWN CP-SAT workers) may run at once, and it is never part
+        of a race (``hierarchical`` is absent from ``PRODUCTION_STRATEGIES``
+        and ``strategy_race_parallelism`` is only ever set under
+        ``strategy == "best"``), so nothing here divides it with a competing
+        arm the way the cap's own rationale assumes.  Passing ``None`` through
+        lets ``HierarchicalLayout._pool_width`` size its pool from the box's
+        real affinity set instead of a cap sized for a different backend.
         """
         layout = _new_layout(
             sname,
             belt_vertical_construction=belt_rules.vertical_construction,
             sequence_islands=islands,
             band_policy=policy,
-            workers=worker_budget,
+            workers=workers if sname == "hierarchical" else worker_budget,
         )
         try:
             return layout.lay_out(candidate, time_budget_s=time_budget_s)

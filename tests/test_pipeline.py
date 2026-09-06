@@ -2423,6 +2423,90 @@ def test_workers_reaches_the_freeform_layout_it_configures() -> None:
     assert default_layout.workers == DEFAULT_SEARCH_WORKERS
 
 
+def _install_new_layout_spy(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, object]]:
+    """Record every ``(strategy, workers)`` `_new_layout` is actually called with.
+
+    A stub, not the real backend: what is under test is which ``workers``
+    value `build`'s internal ``_solve_one`` hands to `_new_layout`, not a
+    placer's own search, so the stub returns a finished placement instantly
+    and `validate.validate` is patched to pass it, exactly the pattern
+    `test_the_serial_path_settles_each_pair_before_starting_the_next` uses.
+    """
+    calls: list[tuple[str, object]] = []
+
+    class _Stub:
+        def lay_out(self, _spec: object, *, time_budget_s: float) -> Placement:
+            del time_budget_s
+            return _finished(2, 2)
+
+    def spy(strategy: str, **kwargs: object) -> _Stub:
+        calls.append((strategy, kwargs.get("workers")))
+        return _Stub()
+
+    monkeypatch.setattr(pipeline, "_new_layout", spy)
+    monkeypatch.setattr(validate, "validate", lambda *_a, **_k: validate.Report(findings=()))
+    return calls
+
+
+def test_hierarchical_backend_gets_the_callers_raw_workers_not_the_capped_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`DEFAULT_WORKER_BUDGET_CAP` is sized for a multi-threaded CP-SAT solve
+    sharing a race, not for how many whole block placers `HierarchicalLayout`
+    may run at once, so with no ``--workers`` the hierarchical backend must
+    see `None` -- letting `HierarchicalLayout._pool_width` size its pool from
+    the box's real affinity set -- never the 16-capped `worker_budget`.
+    """
+    calls = _install_new_layout_spy(monkeypatch)
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="hierarchical",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+    )
+    assert calls == [("hierarchical", None)]
+
+
+def test_an_explicit_workers_count_reaches_the_hierarchical_backend_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit ``--workers`` still travels to the hierarchical backend --
+    only the *fallback* (16-capped `worker_budget`) is what changed, not an
+    explicit request, which was never capped for any backend."""
+    calls = _install_new_layout_spy(monkeypatch)
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="hierarchical",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+        workers=5,
+    )
+    assert calls == [("hierarchical", 5)]
+
+
+def test_the_default_arms_still_get_the_capped_worker_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The byte-identical-default guard: `best` (freeform and sequence-pair)
+    must keep receiving `worker_budget`, capped, exactly as before -- only the
+    hierarchical backend's own argument changed.  `_available_cpu_count` is
+    pinned so the expected cap is a fixed number rather than this box's own
+    affinity set.
+    """
+    calls = _install_new_layout_spy(monkeypatch)
+    monkeypatch.setattr(pipeline, "_available_cpu_count", lambda: 4)
+
+    pipeline.build(
+        SMALL_URL,
+        strategy="best",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=STUB_RACE_BUDGET_S,
+    )
+    assert calls == [("freeform", 4), ("sequence-pair", 4)]
+
+
 def test_a_terminated_or_crashed_arm_is_a_failure_and_never_an_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
