@@ -14,6 +14,7 @@ import {
   type BuildOptions,
   BuildRequestError,
   DEFAULT_OPTIONS,
+  isSettled,
   type Job,
   ProliferatorTier,
   projectSolve,
@@ -23,6 +24,7 @@ import {
 } from '../api/build';
 import { useBlueprint } from '../state/BlueprintProvider';
 import { BuildReportPanel, ProjectionFailures, RefusalReport } from './BuildReport';
+import { TracePanel } from './TracePanel';
 
 export function BuildPanel() {
   const { load, markStale } = useBlueprint();
@@ -229,6 +231,15 @@ export function BuildPanel() {
           <option value="3">Mk.III</option>
         </select>
 
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={options.trace}
+            onChange={(event) => set('trace', event.target.checked)}
+          />
+          Trace search (freeform, live)
+        </label>
+
         <fieldset className="candidate-policies checkbox">
           <legend>Candidate policies</legend>
           {DEFAULT_OPTIONS.candidate_policies.map((policy) => (
@@ -363,6 +374,8 @@ export function BuildPanel() {
       )}
 
       {busy && job && <Progress job={job} />}
+
+      {job && options.trace && <TracePanel jobId={job.id} active={!isSettled(job)} />}
 
       {requestError && (
         <p role="alert" className="error">

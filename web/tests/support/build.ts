@@ -163,6 +163,7 @@ export function aJob(overrides: Partial<Job> = {}): Job {
     state: 'done',
     elapsed_s: 1.2,
     solver_ceiling_s: 6,
+    options: { trace: false },
     progress: null,
     settled: [],
     result: aResult(),
