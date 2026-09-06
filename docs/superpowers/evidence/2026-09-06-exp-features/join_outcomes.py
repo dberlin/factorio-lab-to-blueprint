@@ -49,6 +49,51 @@ FEATURES: tuple[str, ...] = (
     "proliferator_consumers",
     "proliferator_span",
     "proliferator_spread",
+    # -- experiment 5 -----------------------------------------------------
+    "max_live_range",
+    "sum_live_range",
+    "items_live_range_ge3",
+    "max_pressure",
+    "max_lane_pressure",
+    "sum_pressure",
+    "lane_pressure_per_strip",
+    "max_pressure_no_spray",
+    "max_lane_pressure_no_spray",
+    "proliferator_live_range",
+)
+
+#: The pair sweep is O(features^2 x thresholds^2 x points), so it runs over a
+#: curated shortlist rather than all 28 columns.  These are the candidates any
+#: dispatch key would actually be built from -- one per mechanism.
+PAIR_FEATURES: tuple[str, ...] = (
+    "machines",
+    "strips",
+    "distinct_items",
+    "coaters",
+    "items_above_one_belt",
+    "chain_depth",
+    "max_spread",
+    "max_live_range",
+    "max_pressure",
+    "max_lane_pressure",
+    "lane_pressure_per_strip",
+)
+
+#: The head-to-head set experiment 5 asks about: the new features against the
+#: three that won experiment 1, reported side by side in every table.
+HEADLINE: tuple[str, ...] = (
+    "strips",
+    "distinct_items",
+    "items_above_one_belt",
+    "max_spread",
+    "max_live_range",
+    "sum_live_range",
+    "items_live_range_ge3",
+    "max_pressure",
+    "max_lane_pressure",
+    "lane_pressure_per_strip",
+    "max_pressure_no_spray",
+    "max_lane_pressure_no_spray",
 )
 
 
@@ -330,8 +375,8 @@ def _pair_table(points: Sequence[dict[str, Any]], *, title: str, top: int = 8) -
     labels = [p["refused_all_rounds"] for p in points]
     positives = sum(labels)
     scored: list[tuple[float, str, float, str, float, float, float, int, int]] = []
-    for i, a in enumerate(FEATURES):
-        for b in FEATURES[i + 1 :]:
+    for i, a in enumerate(PAIR_FEATURES):
+        for b in PAIR_FEATURES[i + 1 :]:
             for ta in _nontrivial_thresholds(points, a):
                 for tb in _nontrivial_thresholds(points, b):
                     tp = fp = 0
@@ -433,6 +478,29 @@ def _who_wins(points: Sequence[dict[str, Any]]) -> list[str]:
             cells.append(f"{statistics.fmean(group):.3f} (n={len(group)})" if group else "-")
         lines.append(f"{size_label:<18}{cells[0]:>16}{cells[1]:>16}")
     lines.append("")
+
+    # Same question asked of the experiment-5 features: does either kind of
+    # pressure pick the arm any better than coating does?
+    lines.append("MEAN ff/sp AREA RATIO by pressure tercile (freeform wins below 1.00)")
+    lines.append("")
+    for name in ("max_lane_pressure", "lane_pressure_per_strip", "max_live_range"):
+        values = sorted(float(r[name]) for r in rows)
+        lo = values[len(values) // 3]
+        hi = values[2 * len(values) // 3]
+        cells = []
+        for label, low, high in (
+            (f"< {lo:g}", -math.inf, lo),
+            (f"{lo:g}..{hi:g}", lo, hi),
+            (f">= {hi:g}", hi, math.inf),
+        ):
+            group = [math.exp(r["log_area_ratio"]) for r in rows if low <= float(r[name]) < high]
+            cells.append(
+                f"{label}: {statistics.fmean(group):.3f} (n={len(group)})"
+                if group
+                else f"{label}: -"
+            )
+        lines.append(f"{name:<26}" + "   ".join(cells))
+    lines.append("")
     return lines
 
 
@@ -490,6 +558,168 @@ def _large_detail(points: Sequence[dict[str, Any]]) -> list[str]:
             f"{p['strips']:>7}{p['items_above_one_belt']:>11}{p['max_spread']:>7}"
             f"{p['chain_depth']:>6}{p['median_wall_s']:>7.1f}"
         )
+    lines.append("")
+    return lines
+
+
+def _headline_table(
+    points: Sequence[dict[str, Any]],
+    *,
+    corpus: Sequence[dict[str, Any]],
+    large: Sequence[dict[str, Any]],
+) -> list[str]:
+    """Experiment 5's one table: every headline feature on every question.
+
+    Reading a dozen separate ranked lists to answer "does pressure beat strips"
+    is how a comparison gets fudged, so all four columns sit side by side and
+    the answer is a column scan.
+    """
+    freeform = [p for p in corpus if p["strategy"] == "freeform"]
+    labels = [p["refused_all_rounds"] for p in points]
+    positives = sum(labels)
+
+    def best_f1(rows: Sequence[dict[str, Any]], name: str) -> tuple[float, float, float, float]:
+        ys = [p["refused_all_rounds"] for p in rows]
+        pos = sum(ys)
+        best = (0.0, 0.0, 0.0, 0.0)
+        if pos == 0:
+            return best
+        for t in _nontrivial_thresholds(rows, name):
+            tp = sum(1 for p, y in zip(rows, ys, strict=True) if float(p[name]) >= t and y)
+            fp = sum(1 for p, y in zip(rows, ys, strict=True) if float(p[name]) >= t and not y)
+            if tp == 0:
+                continue
+            precision, recall = tp / (tp + fp), tp / pos
+            f1 = 2 * precision * recall / (precision + recall)
+            if f1 > best[0]:
+                best = (f1, t, precision, recall)
+        return best
+
+    lines = [
+        "EXPERIMENT 5 HEAD TO HEAD",
+        "",
+        f"wall/area: Spearman on the freeform corpus arm (n={len(freeform)}); the",
+        "sequence-pair arm is budget-bound and carries no signal.  Refusal: best",
+        f"threshold by F1 over all {len(points)} points ({positives} positive), and over the",
+        f"{len(large)} large-URL arms alone.",
+        "",
+        f"{'feature':<28}{'rho wall':>9}{'rho area':>9}{'all F1':>8}{'(t)':>8}"
+        f"{'P':>6}{'R':>6}{'lg F1':>7}{'(t)':>7}{'vals':>6}",
+    ]
+    for name in HEADLINE:
+        rho_wall = _spearman(
+            [float(p[name]) for p in freeform],
+            [float(p["median_wall_s"]) for p in freeform],
+        )
+        rho_area = _spearman(
+            [float(p[name]) for p in freeform if p["median_area"] is not None],
+            [float(p["median_area"]) for p in freeform if p["median_area"] is not None],
+        )
+        f1_all, t_all, precision, recall = best_f1(points, name)
+        f1_lg, t_lg, _, _ = best_f1(large, name)
+        distinct = len({float(p[name]) for p in points})
+        wall_cell = "-" if rho_wall is None else f"{rho_wall:+.3f}"
+        area_cell = "-" if rho_area is None else f"{rho_area:+.3f}"
+        lines.append(
+            f"{name:<28}"
+            f"{wall_cell:>9}"
+            f"{area_cell:>9}"
+            f"{f1_all:>8.2f}{t_all:>8.4g}{precision:>6.2f}{recall:>6.2f}"
+            f"{f1_lg:>7.2f}{t_lg:>7.4g}{distinct:>6}"
+        )
+    lines.append("")
+    return lines
+
+
+def _equivalence_table(points: Sequence[dict[str, Any]]) -> list[str]:
+    """Are the new features just re-orderings of the old ones on this data?
+
+    Two questions, and only the second is the interesting one.  ``|rho| = 1``
+    means one feature is a monotone relabelling of another -- literally the
+    same ranking, so it can add nothing any threshold rule could use.  A low
+    distinct-value count means a feature cannot separate much regardless of how
+    well it correlates: a column with 5 values across 84 points has at most 4
+    usable thresholds.
+    """
+    lines = [
+        "MONOTONE EQUIVALENCE AMONG THE HEADLINE FEATURES",
+        "",
+        f"distinct values across the {len(points)} points:",
+    ]
+    for name in HEADLINE:
+        values = sorted({float(p[name]) for p in points})
+        shown = ", ".join(f"{v:g}" for v in values[:10])
+        more = "" if len(values) <= 10 else f", ... (+{len(values) - 10})"
+        lines.append(f"  {name:<28}{len(values):>4}   [{shown}{more}]")
+    lines.append("")
+
+    lines.append("pairwise Spearman (|rho| = 1.000 means one is a relabelling of the other):")
+    lines.append("")
+    width = 9
+    lines.append(" " * 28 + "".join(f"{name[:8]:>{width}}" for name in HEADLINE))
+    identical: list[tuple[str, str]] = []
+    for a in HEADLINE:
+        cells = []
+        for b in HEADLINE:
+            rho = _spearman([float(p[a]) for p in points], [float(p[b]) for p in points])
+            cells.append("-" if rho is None else f"{rho:+.3f}")
+            if rho is not None and a < b and abs(rho) > 0.9995:
+                identical.append((a, b))
+        lines.append(f"{a:<28}" + "".join(f"{c:>{width}}" for c in cells))
+    lines.append("")
+    if identical:
+        lines.append("Monotone-equivalent pairs on this corpus:")
+        for a, b in identical:
+            lines.append(f"  {a} == {b}")
+    else:
+        lines.append("No pair is monotone-equivalent.")
+    lines.append("")
+    return lines
+
+
+def _live_contrast(features: dict[tuple[str, str], dict[str, Any]]) -> list[str]:
+    """4(c) again, in the experiment-5 numbers."""
+    wanted = (
+        "copper-ingot-2000",
+        "copper-ingot-12000",
+        "information-matrix-120",
+        "universe-matrix",
+    )
+    cols = (
+        "machines",
+        "strips",
+        "chain_depth",
+        "max_spread",
+        "max_live_range",
+        "sum_live_range",
+        "items_live_range_ge3",
+        "max_pressure",
+        "max_lane_pressure",
+        "lane_pressure_per_strip",
+        "proliferator_live_range",
+    )
+    lines = ["COPPER INGOT vs GREEN CUBE, IN LIVE-RANGE NUMBERS", ""]
+    lines.append(f"{'spec':<40}" + "".join(f"{c[:13]:>15}" for c in cols))
+    for url_id in wanted:
+        for policy in ("no-proliferator", "all-products"):
+            row = features.get((url_id, policy))
+            if row is None:
+                continue
+            label = f"{url_id}/{policy}"
+            lines.append(f"{label:<40}" + "".join(f"{row[c]:>15}" for c in cols))
+    lines.append("")
+    lines.append("longest live ranges, and the cut where pressure peaks:")
+    for url_id in wanted:
+        row = features.get((url_id, "no-proliferator"))
+        if row is None:
+            continue
+        top = ", ".join(f"{item}={rng}" for item, rng in row["top_live_range"])
+        lines.append(f"  {url_id:<26} {top}")
+        profile = ", ".join(
+            f"cut{cut}: {items} items / {lanes} lanes"
+            for cut, items, lanes in row["pressure_profile"]
+        )
+        lines.append(f"  {'':<26} {profile or '(no cuts: depth 0)'}")
     lines.append("")
     return lines
 
@@ -634,6 +864,9 @@ def main() -> int:
 
     report += _who_wins(points)
     report += _contrast_table(features)
+    report += _headline_table(points, corpus=corpus, large=large)
+    report += _equivalence_table(points)
+    report += _live_contrast(features)
 
     (_HERE / "analysis.txt").write_text("\n".join(report) + "\n")
     print("\n".join(report))
