@@ -32,10 +32,10 @@ export const BAND_OPTIONS = BandDimension.array()
 export const BandSelection = z.enum(['portable', ...BAND_OPTIONS.map(({ value }) => value)]);
 
 /** Strategies accepted on every build request. */
-export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair']);
+export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair', 'hierarchical']);
 
 /** Strategies the server may report for an actual layout attempt or result. */
-export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair']);
+export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair', 'hierarchical']);
 
 export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
 

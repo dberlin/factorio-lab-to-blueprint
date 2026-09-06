@@ -194,6 +194,9 @@ export function BuildPanel() {
           <option value="best">best (freeform + sequence-pair, smallest valid wins)</option>
           <option value="freeform">freeform</option>
           <option value="sequence-pair">sequence-pair</option>
+          <option value="hierarchical">
+            hierarchical (explicit only: block decomposition, experimental)
+          </option>
         </select>
 
         <label htmlFor={bandId}>Latitude band</label>
