@@ -9,6 +9,7 @@ diagnostics go to stderr.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import time
@@ -440,8 +441,15 @@ def main(argv: list[str] | None = None) -> int:
         # any other exception propagating out of `pipeline.build` -- closes
         # the file, so a raised build still leaves a complete, readable trace
         # instead of one truncated by a buffered write that never flushed.
+        # `close()` itself is guarded: an OS-level flush failure here (disk
+        # filled during the build, permission revoked, an NFS hiccup) would
+        # otherwise raise AFTER a build that already succeeded, discarding a
+        # finished blueprint over a debugging artefact -- exactly what R3
+        # ("a view must never kill a build") forbids. A trace file with a
+        # silently truncated tail is the correct trade.
         if trace_file is not None:
-            trace_file.close()
+            with contextlib.suppress(OSError):
+                trace_file.close()
 
     if build.report.errors and not args.allow_invalid:
         print(

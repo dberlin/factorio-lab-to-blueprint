@@ -16,6 +16,7 @@ import pytest
 from flab2bp import cli, pipeline
 from flab2bp.layout.observe import SearchEvent, SearchPhase
 from flab2bp.rates.candidates import CandidatePolicy
+from flab2bp.web.trace import frame_json
 
 #: The reported deuteron-fuel-rod URL (see ``tests/test_pipeline.py``'s
 #: ``DEUTERON_URL`` for the fuller story). At the researched Mk.III belt tier
@@ -164,3 +165,89 @@ def test_main_writes_one_json_object_per_search_event_per_line(
     assert row["phase"] == "incumbent"
     assert row["strategy"] == "freeform"
     assert "blueprint" not in row  # N1: not even the CLI's own copy is pasteable.
+
+
+def test_trace_jsonl_line_matches_frame_json_for_the_same_event(
+    deuteron_build: pipeline.Build,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pins design §7.4's "one observer, one frame schema, two transports":
+    the CLI's JSONL line and ``web.trace.frame_json``'s own projection of the
+    identical event must be equal as parsed objects, not merely share a few
+    fields. Both transports call ``frame_json`` directly -- this asserts there
+    is no CLI-side post-processing layered on top of it, by feeding the CLI's
+    own emitted ``seq``/``t`` straight back into a direct ``frame_json`` call
+    on the SAME event object and comparing the two dicts for equality. The
+    next task's overhead gate captures frames through ``--trace-jsonl``; if
+    the two transports ever drift, this is what catches it.
+    """
+    event = SearchEvent(
+        strategy="freeform",
+        candidate="c",
+        phase=SearchPhase.INCUMBENT,
+        incumbent=True,
+    )
+
+    def fake_build(*_args: object, **kwargs: object) -> pipeline.Build:
+        observer = kwargs["search_observer"]
+        assert observer is not None
+        observer.note(event)
+        return deuteron_build
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    trace_path = tmp_path / "trace.jsonl"
+    exit_code = cli.main(["https://example/x", "--trace-jsonl", str(trace_path)])
+    assert exit_code == 0
+
+    row = json.loads(trace_path.read_text().splitlines()[0])
+    assert row == frame_json(row["seq"], row["t"], event)
+
+
+def test_a_failing_close_does_not_change_mains_exit_code(
+    deuteron_build: pipeline.Build,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """R3: a debugging view must never kill a build. The trace file's own
+    ``close()`` can raise (disk filled during the build, permission revoked,
+    an NFS hiccup) AFTER the build has already succeeded -- that failure must
+    not propagate out of ``main`` and turn a finished blueprint into a crash.
+    """
+    trace_path = tmp_path / "trace.jsonl"
+    real_open = Path.open
+
+    def flaky_open(self: Path, *args: object, **kwargs: object) -> object:
+        handle = real_open(self, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        # Only the CLI's own write-mode open on the trace path is wrapped:
+        # `main` itself later reads this same file back (`read_text`, below)
+        # through the unpatched, real read-mode open, so a plain `close()`
+        # keeps working for everything except the one write handle `main`
+        # closes in its `finally`.
+        if self != trace_path or mode != "w":
+            return handle
+
+        class _RaisingClose:
+            def write(self, data: str) -> int:
+                return handle.write(data)
+
+            def close(self) -> None:
+                handle.close()
+                raise OSError("disk full")
+
+        return _RaisingClose()
+
+    monkeypatch.setattr(Path, "open", flaky_open)
+
+    def fake_build(*_args: object, **kwargs: object) -> pipeline.Build:
+        observer = kwargs["search_observer"]
+        assert observer is not None
+        observer.note(SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT))
+        return deuteron_build
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    exit_code = cli.main(["https://example/x", "--trace-jsonl", str(trace_path)])
+
+    assert exit_code == 0
+    assert trace_path.read_text().splitlines()  # the write before the failed close survived
