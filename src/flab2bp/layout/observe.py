@@ -131,14 +131,20 @@ def stranded_endpoints(result: object) -> tuple[tuple[int, int, int, int], ...]:
     Typed ``object`` and read defensively for one reason only: this runs on a
     debugging path, and a shape change in ``DetailedRouteResult`` must degrade
     the picture, never the build (observe.SampledObserver's R3 in the caller is
-    the second net, not an excuse to skip this one).
+    the second net, not an excuse to skip this one).  This function is called
+    while a ``SearchEvent(...)`` argument list is being evaluated -- BEFORE
+    ``SampledObserver.note`` is ever entered -- so ``note``'s own ``except``
+    does not cover it, and it must never raise on its own.
     """
-    failures = getattr(result, "failures", ())
-    pairs: list[tuple[int, int, int, int]] = []
-    for failure in failures:
-        source = getattr(failure, "source", None)
-        destination = getattr(failure, "destination", None)
-        if source is None or destination is None:
-            continue
-        pairs.append((int(source[0]), int(source[1]), int(destination[0]), int(destination[1])))
-    return tuple(pairs)
+    try:
+        failures = getattr(result, "failures", ())
+        pairs: list[tuple[int, int, int, int]] = []
+        for failure in failures:
+            source = getattr(failure, "source", None)
+            destination = getattr(failure, "destination", None)
+            if source is None or destination is None:
+                continue
+            pairs.append((int(source[0]), int(source[1]), int(destination[0]), int(destination[1])))
+        return tuple(pairs)
+    except Exception:  # noqa: BLE001 -- degrade the picture, never the build.
+        return ()

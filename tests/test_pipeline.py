@@ -2702,7 +2702,7 @@ def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch: pytest.MonkeyP
     assert not hydrogen
 
 
-class _RecordingObserver:
+class _NullObserver:
     """Enough of ``SearchObserver`` for identity checks: no events recorded."""
 
     def due(self, phase: object, /) -> bool:
@@ -2712,6 +2712,7 @@ class _RecordingObserver:
         pass
 
 
+@pytest.mark.slow
 def test_build_threads_the_search_observer_to_the_serial_strategy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2723,6 +2724,6 @@ def test_build_threads_the_search_observer_to_the_serial_strategy(
         return real(*args, **kwargs)
 
     monkeypatch.setattr(pipeline, "_new_layout", spy)
-    observer = _RecordingObserver()
+    observer = _NullObserver()
     pipeline.build(SMALL_URL, strategy="freeform", time_budget_s=2.0, search_observer=observer)
     assert seen["observer"] is observer

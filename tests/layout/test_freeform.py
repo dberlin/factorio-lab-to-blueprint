@@ -25036,7 +25036,7 @@ class _RecordingObserver:
 def test_freeform_reports_an_incumbent_to_its_observer(small_spec: BuildSpec) -> None:
     observer = _RecordingObserver()
     layout = FreeformLayout(band_policy=BandPolicy.parse("portable"), observer=observer)
-    placement = layout.lay_out(small_spec, time_budget_s=5.0)
+    placement = layout.lay_out(small_spec, time_budget_s=0.5)
 
     incumbents = [e for e in observer.events if e.phase is SearchPhase.INCUMBENT]
     assert incumbents, "a completed freeform sweep has at least one incumbent"
@@ -25049,12 +25049,26 @@ def test_freeform_reports_an_incumbent_to_its_observer(small_spec: BuildSpec) ->
     assert last.placement is not None
 
 
-def test_freeform_without_an_observer_is_unchanged(small_spec: BuildSpec) -> None:
+def test_freeform_with_an_attached_observer_does_not_perturb_the_result(
+    small_spec: BuildSpec,
+) -> None:
+    """Rule P: an observer is read-only.  Attaching one -- and having it actually
+    record events -- must not change what the sweep returns.
+
+    The prior version of this test compared a default-constructed
+    ``FreeformLayout`` against one explicitly passed ``observer=None``: both are
+    the None path, so it asserted a default equals its own default and never
+    exercised an attached observer at all.  This version would fail if an
+    observer call perturbed ``best_key``, read ``FeedbackState``, or otherwise
+    changed which candidate the sweep certifies as its incumbent.
+    """
     band = BandPolicy.parse("portable")
-    a = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS).lay_out(
-        small_spec, time_budget_s=5.0
+    a = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None).lay_out(
+        small_spec, time_budget_s=0.5
     )
-    b = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None).lay_out(
-        small_spec, time_budget_s=5.0
+    observer = _RecordingObserver()
+    b = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=observer).lay_out(
+        small_spec, time_budget_s=0.5
     )
     assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])
+    assert observer.events, "an attached observer must actually receive events"

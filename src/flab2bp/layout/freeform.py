@@ -21407,6 +21407,19 @@ class FreeformLayout:
                         continue
                     if result.routing.status is not DetailedRouteStatus.ROUTED:
                         retain_attempt()
+                        if self.observer is not None and self.observer.due(SearchPhase.REFUSED):
+                            self.observer.note(
+                                SearchEvent(
+                                    strategy="freeform",
+                                    candidate=spec.label,
+                                    phase=SearchPhase.REFUSED,
+                                    placement=None,
+                                    height=height,
+                                    arrangement=arrangement,
+                                    reason=f"routing {result.routing.status}",
+                                    stranded=stranded_endpoints(result.routing),
+                                )
+                            )
                         continue
                     assert result.promised_direct == result.realized_direct, (
                         "a routed pack may not retain an unrealized rewarded direct insert"
@@ -21422,7 +21435,7 @@ class FreeformLayout:
                                 placement=placement,
                                 height=height,
                                 arrangement=arrangement,
-                                area=placement.area,
+                                area=placement.area if placement.frame is not None else None,
                             )
                         )
                     # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
@@ -21617,15 +21630,6 @@ class FreeformLayout:
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
-                    # Area, then belt count. Two packs of equal area are not equally
-                    # good: the one with fewer belt tiles is fewer buildings to paste,
-                    # and a direct insert shows up here as exactly that. Without the
-                    # second key, ties fell to whichever height the sweep tried first,
-                    # which silently discarded direct-inserted packs.
-                    #
-                    # Read BEFORE certification, and `replace` below only rewrites
-                    # `completion`, so neither term can move between here and the
-                    # comparison that uses it.
                     if self.observer is not None and self.observer.due(SearchPhase.ROUTED):
                         self.observer.note(
                             SearchEvent(
@@ -21635,11 +21639,20 @@ class FreeformLayout:
                                 placement=placement,
                                 height=height,
                                 arrangement=arrangement,
-                                area=placement.area,
+                                area=placement.area if placement.frame is not None else None,
                                 belt_tiles=int(placement.stats.get("belt_tiles", 0)),
                                 stranded=stranded_endpoints(result.routing),
                             )
                         )
+                    # Area, then belt count. Two packs of equal area are not equally
+                    # good: the one with fewer belt tiles is fewer buildings to paste,
+                    # and a direct insert shows up here as exactly that. Without the
+                    # second key, ties fell to whichever height the sweep tried first,
+                    # which silently discarded direct-inserted packs.
+                    #
+                    # Read BEFORE certification, and `replace` below only rewrites
+                    # `completion`, so neither term can move between here and the
+                    # comparison that uses it.
                     key = (placement.area, float(placement.stats["belt_tiles"]))
                     # L4: certifying a candidate that cannot displace the incumbent
                     # buys nothing -- it is not returnable at any report -- and
@@ -21667,20 +21680,6 @@ class FreeformLayout:
                         continue
                     certify_started = time.monotonic()
                     report = validate.certify(placement, spec, expect_power=True)
-                    if self.observer is not None and self.observer.due(SearchPhase.CERTIFIED):
-                        self.observer.note(
-                            SearchEvent(
-                                strategy="freeform",
-                                candidate=spec.label,
-                                phase=SearchPhase.CERTIFIED,
-                                placement=placement,
-                                height=height,
-                                arrangement=arrangement,
-                                area=placement.area,
-                                belt_tiles=int(placement.stats.get("belt_tiles", 0)),
-                                reason=None if not report.errors else report.errors[0].message,
-                            )
-                        )
                     validation_time_s += time.monotonic() - certify_started
                     if (
                         inbound_choice is not None
@@ -21696,12 +21695,26 @@ class FreeformLayout:
                         validation_reserve_s,
                         time.monotonic() - certify_started,
                     )
+                    if self.observer is not None and self.observer.due(SearchPhase.CERTIFIED):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.CERTIFIED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                area=placement.area if placement.frame is not None else None,
+                                belt_tiles=int(placement.stats.get("belt_tiles", 0)),
+                                reason=None if not report.errors else report.errors[0].message,
+                            )
+                        )
                     if report.errors and rejected is not None:
                         for finding in report.errors:
                             _retain_refusal(rejected, finding)
                     if (
-                        report.errors
-                        and self.observer is not None
+                        self.observer is not None
+                        and report.errors
                         and self.observer.due(SearchPhase.REFUSED)
                     ):
                         self.observer.note(
@@ -21748,7 +21761,7 @@ class FreeformLayout:
                                     placement=placement,
                                     height=height,
                                     arrangement=arrangement,
-                                    area=placement.area,
+                                    area=placement.area if placement.frame is not None else None,
                                     belt_tiles=int(placement.stats.get("belt_tiles", 0)),
                                     incumbent=True,
                                 )
