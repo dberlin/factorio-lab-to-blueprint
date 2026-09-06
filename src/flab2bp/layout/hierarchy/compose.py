@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import slots
+from flab2bp.layout import junction, slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.freeform import (
     CoaterSupplyPort,
@@ -216,6 +216,15 @@ def _translate(placement: Placement, base: int, ox: int, oy: int) -> list[Placed
 _BELT_INTEGRATED = frozenset({catalog.SPLITTER_ID, catalog.PILER_ID})
 
 
+def _belt_id_for(spec: BuildSpec) -> int:
+    """The spec's belt as a catalog id, defaulting the way freeform does."""
+    return catalog.get_item_id(spec.belt_item_id) or 2001
+
+
+def _belt_model_for(spec: BuildSpec) -> int:
+    return catalog.building(_belt_id_for(spec)).model_index
+
+
 def _coater_belt_ban(canvas: _Canvas, index: int, belt_model: int) -> None:
     """Price one composed Coater's collider the way ``_place_coaters`` does.
 
@@ -276,7 +285,9 @@ def canvas_for(
       ``_place_power`` ~15705), so ``_crossing_ban_levels`` writes the band
       from the ground to their collider's top into ``blocked``;
     * belts, Splitters and Pilers are ``solid=False``, holding only their own
-      level;
+      level -- but a Splitter ALSO stakes ``canvas.guard`` with its collider
+      cross (``_place_junctions`` ~13269), which ``_Canvas.free`` treats as a
+      hard wall; a Piler stakes none, and freeform stakes none for it either;
     * SORTERS are appended with NO lattice reservation at all, exactly as
       ``_emit_sorter`` (~7170) does -- every collision sweep skips them, and
       banning their band here would cost the router paths the game allows;
@@ -303,11 +314,22 @@ def canvas_for(
             canvas.buildings.append(b)
         elif catalog.is_belt(b.item_id) or b.item_id in _BELT_INTEGRATED:
             canvas.add(b)
+            if b.item_id == catalog.SPLITTER_ID:
+                # `_place_junctions` (~13269) stakes this beside every
+                # `canvas.add`, and `_Canvas.free` treats `guard` as a hard
+                # wall.  A Splitter reports no occupied tile -- `add` marks
+                # nothing for it -- so without the guard a cut route runs
+                # straight through its 2.38-unit collider cross.  Every member
+                # of a stack stands on the host belt's own tile, which is why
+                # freeform passes the belt's `(x, y)` with each member's own
+                # `z`, model and yaw; here each composed member IS that member.
+                canvas.guard.update(
+                    junction.keepout_cells(b.x, b.y, int(b.z), model_index=b.model_index, yaw=b.yaw)
+                )
         else:
             canvas.add(b, solid=True)
     if coaters:
-        belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
-        belt_model = catalog.building(belt_id).model_index
+        belt_model = _belt_model_for(spec)
         for index in coaters:
             _coater_belt_ban(canvas, index, belt_model)
         # Every drop is exempt from every overlapping Coater ban: it is a
@@ -452,8 +474,8 @@ def compose(
     # registers no congestion for the negotiation to price.
     _reserve_port_access(canvas, _port_access_inventory(nets).demands, bounds=bounds)
 
-    belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
-    belt_model = catalog.building(belt_id).model_index
+    belt_id = _belt_id_for(spec)
+    belt_model = _belt_model_for(spec)
     result = _route_all(canvas, nets, belt_id, belt_model, bounds, deadline=deadline)
 
     failures = [

@@ -1,11 +1,12 @@
 import re
 import time
 from fractions import Fraction
+from typing import NamedTuple
 
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import slots
+from flab2bp.layout import junction, slots
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
@@ -39,31 +40,50 @@ def test_pack_blocks_never_exceeds_160_rows_when_a_legal_shape_exists():
     assert min(width, height) <= 160
 
 
-def _coater_canvas() -> tuple[list[PlacedBuilding], int, int, tuple[int, int, int]]:
-    """A hand-built composed block: a lane, a Coater on it, a sorter, a machine."""
-    spec = chain_spec()
-    belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
-    belt_model = catalog.building(belt_id).model_index
-    coater = PlacedBuilding(
+class MixedBlock(NamedTuple):
+    """A hand-built composed block holding one of every registration kind."""
+
+    buildings: list[PlacedBuilding]
+    sorter: PlacedBuilding
+    splitter: PlacedBuilding
+    machine: PlacedBuilding
+    coaters: list[PlacedBuilding]
+    drops: list[tuple[int, int, int]]
+
+
+def _coater(x: int, y: int) -> PlacedBuilding:
+    return PlacedBuilding(
         item_id=catalog.SPRAY_COATER_ID,
         model_index=catalog.building(catalog.SPRAY_COATER_ID).model_index,
-        x=3,
-        y=0,
+        x=x,
+        y=y,
         z=Fraction(0),
         width=1,
         height=1,
         yaw=Facing.EAST.value,
     )
-    drop = slots.addon_supply_cell(
+
+
+def _drop_of(coater: PlacedBuilding) -> tuple[int, int, int]:
+    return slots.addon_supply_cell(
         catalog.SPRAY_COATER_ID, x=coater.x, y=coater.y, z=coater.z, yaw=coater.yaw, area=1
     )
-    approach = (2 * drop[0] - coater.x, 2 * drop[1] - coater.y)
-    # The host lane on the ground, plus the Coater's supply pair at the drop's
+
+
+def _mixed_block(*, coater_seats: tuple[int, ...]) -> MixedBlock:
+    """A lane with a Splitter on it, ``coater_seats`` Coaters, a sorter, a machine."""
+    spec = chain_spec()
+    belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
+    belt_model = catalog.building(belt_id).model_index
+    coaters = [_coater(x, 0) for x in coater_seats]
+    drops = [_drop_of(c) for c in coaters]
+    # The host lane on the ground, plus each Coater's supply pair at the drop's
     # own altitude -- which is a level up, not a tile across.
-    cells = [(x, 0, Fraction(0)) for x in range(7)] + [
-        (drop[0], drop[1], Fraction(drop[2])),
-        (approach[0], approach[1], Fraction(drop[2])),
-    ]
+    cells = [(x, 0, Fraction(0)) for x in range(8)]
+    for coater, drop in zip(coaters, drops, strict=True):
+        approach = (2 * drop[0] - coater.x, 2 * drop[1] - coater.y)
+        cells.append((drop[0], drop[1], Fraction(drop[2])))
+        cells.append((approach[0], approach[1], Fraction(drop[2])))
     buildings = [
         PlacedBuilding(
             item_id=belt_id,
@@ -75,66 +95,102 @@ def _coater_canvas() -> tuple[list[PlacedBuilding], int, int, tuple[int, int, in
             height=1,
             carries_item="iron-ingot",
         )
-        for x, y, z in cells
+        for x, y, z in dict.fromkeys(cells)
     ]
-    sorter_index = len(buildings)
-    buildings.append(
-        PlacedBuilding(
-            item_id=catalog.SORTER_TIERS[0],
-            model_index=catalog.building(catalog.SORTER_TIERS[0]).model_index,
-            x=2,
-            y=4,
-            width=1,
-            height=1,
-        )
+    splitter = junction.make_splitter(6, 0, Fraction(0))
+    buildings.append(splitter)
+    sorter = PlacedBuilding(
+        item_id=catalog.SORTER_TIERS[0],
+        model_index=catalog.building(catalog.SORTER_TIERS[0]).model_index,
+        x=2,
+        y=4,
+        width=1,
+        height=1,
     )
+    buildings.append(sorter)
     machine_id = catalog.get_item_id("arc-smelter")
     assert machine_id is not None
-    machine = catalog.building(machine_id)
-    machine_index = len(buildings)
-    buildings.append(
-        PlacedBuilding(
-            item_id=machine_id,
-            model_index=machine.model_index,
-            x=8,
-            y=6,
-            width=machine.width,
-            height=machine.height,
-            recipe_id=1,
-        )
+    catalog_machine = catalog.building(machine_id)
+    machine = PlacedBuilding(
+        item_id=machine_id,
+        model_index=catalog_machine.model_index,
+        x=8,
+        y=6,
+        width=catalog_machine.width,
+        height=catalog_machine.height,
+        recipe_id=1,
     )
-    buildings.append(coater)
-    return buildings, sorter_index, machine_index, drop
+    buildings.append(machine)
+    buildings.extend(coaters)
+    return MixedBlock(buildings, sorter, splitter, machine, coaters, drops)
 
 
 def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
-    """Kind by kind, and the Coater's belt ban is the one the game enforces.
+    """Kind by kind, because the differences are what the game enforces.
 
     A composed canvas that marks a sorter solid costs the router paths the game
-    allows, and one that never prices a Coater's collider lets it lay a level-1
-    belt beside the Coater that the game refuses on paste.
+    allows; one that leaves a Splitter unguarded lets a cut route run through a
+    collider cross that reports no occupied tile; one that never prices a
+    Coater's collider lets the router lay a level-1 belt beside it that the game
+    refuses on paste.
     """
-    buildings, sorter_index, machine_index, drop = _coater_canvas()
-    canvas = compose.canvas_for(chain_spec(), buildings, ramped=False, margin=4)
+    block = _mixed_block(coater_seats=(3,))
+    canvas = compose.canvas_for(chain_spec(), block.buildings, ramped=False, margin=4)
 
     # Index order is the composed list's own: every `_Port` indexes into it.
-    assert canvas.buildings == buildings
+    assert canvas.buildings == block.buildings
 
-    sorter = buildings[sorter_index]
-    assert (sorter.x, sorter.y) not in canvas.solid
-    assert not any(key[:2] == (sorter.x, sorter.y) for key in canvas.blocked)
+    assert (block.sorter.x, block.sorter.y) not in canvas.solid
+    assert not any(key[:2] == (block.sorter.x, block.sorter.y) for key in canvas.blocked)
 
-    machine = buildings[machine_index]
-    assert (machine.x, machine.y) in canvas.solid
-    assert any(key[:2] == (machine.x, machine.y) for key in canvas.blocked)
+    assert (block.machine.x, block.machine.y) in canvas.solid
+    assert any(key[:2] == (block.machine.x, block.machine.y) for key in canvas.blocked)
 
-    coater = buildings[-1]
+    splitter = block.splitter
+    keepout = set(
+        junction.keepout_cells(
+            splitter.x,
+            splitter.y,
+            int(splitter.z),
+            model_index=splitter.model_index,
+            yaw=splitter.yaw,
+        )
+    )
+    assert keepout, "the fixture's Splitter must deny some cell"
+    assert keepout <= canvas.guard
+    assert (splitter.x, splitter.y) not in canvas.solid
+
+    coater = block.coaters[0]
     assert canvas.belt_ban, "a composed Coater must price its own collider"
     banned = set(canvas.belt_ban)
     assert any(abs(x - coater.x) <= 2 and abs(y - coater.y) <= 2 for x, y in banned)
     assert all(levels and min(levels) >= 1 for levels in canvas.belt_ban.values())
-    # The drop is a required positional addon connection and is exempt.
-    assert (drop[0], drop[1]) not in canvas.belt_ban
+
+
+def test_a_coater_drop_is_exempt_from_another_coaters_ban():
+    """Two Coaters one tile apart: A's ban covers B's drop, and the drop wins.
+
+    Not a seating the placer would produce -- with the real 3x1 Coater collider
+    the only tile a Coater bans is its own host tile, so one ban reaches another
+    Coater's drop exactly when they stand adjacent. It is nevertheless the case
+    `_place_coaters` sweeps for after staging every Coater ("every drop is
+    exempt from every OVERLAPPING Coater ban"), and without that sweep the
+    router is denied a cell the game requires a belt on.
+    """
+    alone = _mixed_block(coater_seats=(3,))
+    with_peer = _mixed_block(coater_seats=(3, 4))
+    peer_drop = with_peer.drops[1][:2]
+    assert peer_drop == (3, 0), "the fixture's second Coater must drop onto the first"
+
+    banned_alone = compose.canvas_for(
+        chain_spec(), alone.buildings, ramped=False, margin=4
+    ).belt_ban
+    banned_both = compose.canvas_for(
+        chain_spec(), with_peer.buildings, ramped=False, margin=4
+    ).belt_ban
+
+    assert peer_drop in banned_alone, "the first Coater must ban that cell on its own"
+    assert peer_drop not in banned_both
 
 
 def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: TwoSolvedBlocks):
