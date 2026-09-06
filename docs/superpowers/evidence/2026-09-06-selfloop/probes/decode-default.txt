@@ -1,0 +1,270 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+== bp-default.txt: 2105 buildings, hash_valid=True
+short_desc: AMM 5/min, AM3 5/min +2 more (output products)
+description: flab2bp sequence-pair layout, output-products candidate, 36 machines, 2652 tiles
+
+== census ==
+   1893  conveyor-belt-2
+    140  sorter-1
+     28  assembling-machine-2
+     16  tesla-tower
+     12  sorter-2
+      6  splitter
+      4  oil-refinery
+      3  chemical-plant
+      2  spray-coater
+      1  arc-smelter
+
+== 64 belt runs ==
+  run   0:  11 belts (57.0,25.0) -> (67.0,25.0) items=['(no filter)'] TERMINATES
+  run   1:  70 belts (21.0,30.0) -> (61.0,3.0) items=['(no filter)'] TERMINATES
+  run   2:  49 belts (27.0,11.0) -> (3.0,23.0) items=['(no filter)'] TERMINATES
+  run   3:  21 belts (27.0,12.0) -> (29.0,0.0) items=['(no filter)'] TERMINATES
+  run   4:  13 belts (15.0,29.0) -> (21.0,23.0) items=['(no filter)'] TERMINATES
+  run   5:  80 belts (9.0,30.0) -> (55.0,3.0) items=['(no filter)'] TERMINATES
+  run   6:   9 belts (55.0,9.0) -> (55.0,11.0) items=['(no filter)'] TERMINATES
+  run   7:  43 belts (33.0,10.0) -> (63.0,20.0) items=['(no filter)', 'frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] TERMINATES
+  run   8:  37 belts (33.0,11.0) -> (62.0,4.0) items=['(no filter)'] TERMINATES
+  run   9:  72 belts (61.0,18.0) -> (9.0,23.0) items=['(no filter)'] TERMINATES
+  run  10:  53 belts (3.0,11.0) -> (24.2,24.0) items=['(no filter)'] -> splitter#2062
+  run  11:  64 belts (3.0,12.0) -> (56.0,4.0) items=['(no filter)'] TERMINATES
+  run  12:  27 belts (9.0,12.0) -> (28.0,5.0) items=['(no filter)'] TERMINATES
+  run  13:  80 belts (53.0,35.0) -> (26.0,5.0) items=['(no filter)'] -> run 12
+  run  14:   7 belts (61.0,10.0) -> (67.0,10.0) items=['(no filter)'] TERMINATES
+  run  15:  33 belts (27.0,34.0) -> (50.0,25.2) items=['(no filter)'] -> splitter#2072
+  run  16:  40 belts (33.0,19.0) -> (63.0,26.0) items=['(no filter)', 'quantum-chip', 'titanium-alloy'] TERMINATES
+  run  17:  41 belts (33.0,20.0) -> (29.0,6.0) items=['(no filter)'] TERMINATES
+  run  18:  10 belts (44.0,19.0) -> (50.0,18.0) items=['(no filter)'] -> run 16
+  run  19:  70 belts (44.0,20.0) -> (4.0,31.0) items=['(no filter)'] TERMINATES
+  run  20:  12 belts (3.0,30.0) -> (6.0,38.0) items=['(no filter)'] TERMINATES
+  run  21:  12 belts (15.0,35.0) -> (22.0,31.0) items=['(no filter)'] TERMINATES
+  run  22:   8 belts (55.0,18.0) -> (55.0,19.0) items=['(no filter)'] -> run 7
+  run  23:  59 belts (3.0,19.0) -> (45.0,27.0) items=['(no filter)', 'energetic-graphite'] TERMINATES
+  run  24:  62 belts (3.0,20.0) -> (56.0,12.0) items=['(no filter)', 'energetic-graphite'] TERMINATES
+  run  25: 107 belts (3.0,21.0) -> (26.0,0.0) items=['(no filter)', 'hydrogen'] TERMINATES
+  run  26:  21 belts (0.0,0.0) -> (0.0,19.8) items=[] -> splitter#2065
+  run  27:  18 belts (67.0,20.0) -> (52.0,20.0) items=[] -> run 7
+  run  28:  13 belts (52.0,38.0) -> (53.0,27.0) items=[] -> run 16
+  run  29:  17 belts (20.0,38.0) -> (22.0,24.0) items=['(no filter)'] TERMINATES
+  run  30:   5 belts (27.0,0.0) -> (27.0,4.0) items=['(no filter)'] TERMINATES
+  run  31:  17 belts (14.0,38.0) -> (15.0,23.0) items=['(no filter)'] TERMINATES
+  run  32:  19 belts (12.0,38.0) -> (16.0,24.0) items=['(no filter)'] TERMINATES
+  run  33:  15 belts (0.0,28.0) -> (10.0,24.0) items=['(no filter)'] TERMINATES
+  run  34:  20 belts (33.0,0.0) -> (49.0,3.0) items=['(no filter)'] TERMINATES
+  run  35:  23 belts (32.0,0.0) -> (50.0,4.0) items=['(no filter)'] TERMINATES
+  run  36:  26 belts (31.0,0.0) -> (51.0,5.0) items=['(no filter)'] TERMINATES
+  run  37:   7 belts (67.0,13.0) -> (61.0,13.0) items=['(no filter)'] TERMINATES
+  run  38:   7 belts (2.0,0.0) -> (3.0,5.0) items=['(no filter)'] TERMINATES
+  run  39:  10 belts (1.0,0.0) -> (4.0,6.0) items=['(no filter)'] TERMINATES
+  run  40:  18 belts (9.0,0.0) -> (21.0,5.0) items=['(no filter)'] TERMINATES
+  run  41:  21 belts (8.0,0.0) -> (22.0,6.0) items=['(no filter)'] TERMINATES
+  run  42:  21 belts (51.0,38.0) -> (61.0,28.0) items=['(no filter)'] TERMINATES
+  run  43:  22 belts (50.0,38.0) -> (62.0,29.0) items=['(no filter)'] TERMINATES
+  run  44:   9 belts (60.0,0.0) -> (63.0,5.0) items=['(no filter)'] TERMINATES
+  run  45:   9 belts (67.0,12.0) -> (62.0,11.0) items=['(no filter)'] TERMINATES
+  run  46:  31 belts (26.0,38.0) -> (46.0,28.0) items=['(no filter)'] TERMINATES
+  run  47:  21 belts (30.0,0.0) -> (37.0,13.0) items=['(no filter)'] TERMINATES
+  run  48:  23 belts (34.0,0.0) -> (38.0,14.0) items=['(no filter)'] TERMINATES
+  run  49:  22 belts (40.0,0.0) -> (48.0,13.0) items=['(no filter)'] TERMINATES
+  run  50:  26 belts (48.0,0.0) -> (49.0,14.0) items=['(no filter)'] TERMINATES
+  run  51:  12 belts (0.0,31.0) -> (4.0,24.0) items=['(no filter)'] TERMINATES
+  run  52:  16 belts (0.0,29.0) -> (5.0,25.0) items=['(no filter)'] TERMINATES
+  run  53:  10 belts (13.0,38.0) -> (15.0,31.0) items=['(no filter)'] TERMINATES
+  run  54:  17 belts (54.0,0.0) -> (57.0,13.0) items=['(no filter)'] TERMINATES
+  run  55:  43 belts (4.0,0.0) -> (27.0,15.0) items=['(no filter)'] TERMINATES
+  run  56:   9 belts (24.0,24.2) -> (23.0,25.0) items=['(no filter)'] TERMINATES
+  run  57:  23 belts (23.8,24.0) -> (11.0,25.0) items=['(no filter)'] TERMINATES
+  run  58:   7 belts (0.0,20.2) -> (0.0,25.8) items=[] -> splitter#2068
+  run  59:  60 belts (0.2,20.0) -> (53.0,20.0) items=[] TERMINATES
+  run  60:   2 belts (0.0,26.2) -> (0.0,27.0) items=[] TERMINATES
+  run  61:  64 belts (0.2,26.0) -> (53.0,26.0) items=[] TERMINATES
+  run  62:  76 belts (50.0,24.8) -> (23.0,7.0) items=['(no filter)'] TERMINATES
+  run  63:  23 belts (50.2,25.0) -> (63.0,30.0) items=['(no filter)'] TERMINATES
+
+== machines and their sorters ==
+  assembling-machine-2#115 at (56.0,6.0) recipe=electromagnetic-turbine in_sorters=2 out_sorters=1
+      from run 5: ['(no filter)']
+      from run 11: ['(no filter)']
+      out -> run 6: (no filter)
+  assembling-machine-2#213 at (34.0,7.0) recipe=frame-material in_sorters=3 out_sorters=2
+      from run 34: ['(no filter)']
+      from run 35: ['(no filter)']
+      from run 36: ['(no filter)']
+      out -> run 7: (no filter)
+      out -> run 8: (no filter)
+  assembling-machine-2#214 at (38.0,7.0) recipe=frame-material in_sorters=3 out_sorters=2
+      from run 34: ['(no filter)']
+      from run 35: ['(no filter)']
+      from run 36: ['(no filter)']
+      out -> run 7: (no filter)
+      out -> run 8: (no filter)
+  assembling-machine-2#215 at (42.0,7.0) recipe=frame-material in_sorters=3 out_sorters=2
+      from run 34: ['(no filter)']
+      from run 35: ['(no filter)']
+      from run 36: ['(no filter)']
+      out -> run 7: (no filter)
+      out -> run 8: (no filter)
+  assembling-machine-2#216 at (46.0,7.0) recipe=frame-material in_sorters=3 out_sorters=2
+      from run 34: ['(no filter)']
+      from run 35: ['(no filter)']
+      from run 36: ['(no filter)']
+      out -> run 7: (no filter)
+      out -> run 8: (no filter)
+  assembling-machine-2#217 at (50.0,7.0) recipe=frame-material in_sorters=3 out_sorters=2
+      from run 34: ['(no filter)']
+      from run 35: ['(no filter)']
+      from run 36: ['(no filter)']
+      out -> run 7: (no filter)
+      out -> run 8: (no filter)
+  assembling-machine-2#414 at (62.0,7.0) recipe=plane-smelter in_sorters=4 out_sorters=1
+      from run 1: ['(no filter)']
+      from run 8: ['(no filter)']
+      from run 44: ['(no filter)']
+      from run 45: ['(no filter)']
+      out -> run 14: (no filter)
+  assembling-machine-2#262 at (4.0,8.0) recipe=magnetic-coil in_sorters=2 out_sorters=2
+      from run 38: ['(no filter)']
+      from run 39: ['(no filter)']
+      out -> run 10: (no filter)
+      out -> run 11: (no filter)
+  assembling-machine-2#76 at (28.0,8.0) recipe=assembling-machine-3 in_sorters=3 out_sorters=2
+      from run 12: ['(no filter)']
+      from run 17: ['(no filter)']
+      from run 30: ['(no filter)']
+      out -> run 2: (no filter)
+      out -> run 3: (no filter)
+  assembling-machine-2#325 at (10.0,9.0) recipe=particle-broadband in_sorters=3 out_sorters=1
+      from run 40: ['(no filter)']
+      from run 41: ['(no filter)']
+      from run 62: ['(no filter)']
+      out -> run 12: (no filter)
+  assembling-machine-2#326 at (14.0,9.0) recipe=particle-broadband in_sorters=3 out_sorters=1
+      from run 40: ['(no filter)']
+      from run 41: ['(no filter)']
+      from run 62: ['(no filter)']
+      out -> run 12: (no filter)
+  assembling-machine-2#327 at (18.0,9.0) recipe=particle-broadband in_sorters=3 out_sorters=1
+      from run 40: ['(no filter)']
+      from run 41: ['(no filter)']
+      from run 62: ['(no filter)']
+      out -> run 12: (no filter)
+  assembling-machine-2#328 at (22.0,9.0) recipe=particle-broadband in_sorters=3 out_sorters=1
+      from run 40: ['(no filter)']
+      from run 41: ['(no filter)']
+      from run 62: ['(no filter)']
+      out -> run 12: (no filter)
+  assembling-machine-2#604 at (56.0,15.0) recipe=super-magnetic-ring in_sorters=3 out_sorters=1
+      from run 6: ['(no filter)']
+      from run 24: ['(no filter)']
+      from run 54: ['(no filter)']
+      out -> run 22: (no filter)
+  assembling-machine-2#248 at (62.0,15.0) recipe=gear in_sorters=1 out_sorters=1
+      from run 37: ['(no filter)']
+      out -> run 9: (no filter)
+  assembling-machine-2#522 at (34.0,16.0) recipe=quantum-chip in_sorters=2 out_sorters=2
+      from run 47: ['(no filter)']
+      from run 48: ['(no filter)']
+      out -> run 16: (no filter)
+      out -> run 17: (no filter)
+  assembling-machine-2#523 at (38.0,16.0) recipe=quantum-chip in_sorters=2 out_sorters=2
+      from run 47: ['(no filter)']
+      from run 48: ['(no filter)']
+      out -> run 16: (no filter)
+      out -> run 17: (no filter)
+  assembling-machine-2#559 at (45.0,16.0) recipe=quantum-chip in_sorters=2 out_sorters=2
+      from run 49: ['(no filter)']
+      from run 50: ['(no filter)']
+      out -> run 18: (no filter)
+      out -> run 19: (no filter)
+  assembling-machine-2#560 at (49.0,16.0) recipe=quantum-chip in_sorters=2 out_sorters=2
+      from run 49: ['(no filter)']
+      from run 50: ['(no filter)']
+      out -> run 18: (no filter)
+      out -> run 19: (no filter)
+  oil-refinery#742 at (6.0,17.0) recipe=x-ray-cracking in_sorters=2 out_sorters=3
+      from run 25: ['(no filter)']
+      from run 55: ['(no filter)']
+      out -> run 23: energetic-graphite
+      out -> run 24: energetic-graphite
+      out -> run 25: hydrogen
+  oil-refinery#743 at (13.0,17.0) recipe=x-ray-cracking in_sorters=2 out_sorters=3
+      from run 25: ['(no filter)']
+      from run 55: ['(no filter)']
+      out -> run 23: energetic-graphite
+      out -> run 24: energetic-graphite
+      out -> run 25: hydrogen
+  oil-refinery#744 at (20.0,17.0) recipe=x-ray-cracking in_sorters=2 out_sorters=3
+      from run 25: ['(no filter)']
+      from run 55: ['(no filter)']
+      out -> run 23: energetic-graphite
+      out -> run 24: energetic-graphite
+      out -> run 25: hydrogen
+  oil-refinery#745 at (27.0,17.0) recipe=x-ray-cracking in_sorters=2 out_sorters=3
+      from run 25: ['(no filter)']
+      from run 55: ['(no filter)']
+      out -> run 23: energetic-graphite
+      out -> run 24: energetic-graphite
+      out -> run 25: hydrogen
+  assembling-machine-2#30 at (58.0,22.0) recipe=advanced-mining-machine in_sorters=5 out_sorters=1  <<< SHARED-INPUT-RUN
+      from run 7: ['frame-material', 'optical-grating-crystal', 'super-magnetic-ring']
+      from run 16: ['quantum-chip', 'titanium-alloy']
+      out -> run 0: (no filter)
+  assembling-machine-2#31 at (62.0,22.0) recipe=advanced-mining-machine in_sorters=5 out_sorters=1  <<< SHARED-INPUT-RUN
+      from run 7: ['frame-material', 'optical-grating-crystal', 'super-magnetic-ring']
+      from run 16: ['quantum-chip', 'titanium-alloy']
+      out -> run 0: (no filter)
+  assembling-machine-2#89 at (16.0,26.0) recipe=circuit-board in_sorters=2 out_sorters=1
+      from run 31: ['(no filter)']
+      from run 32: ['(no filter)']
+      out -> run 4: (no filter)
+  assembling-machine-2#581 at (4.0,27.0) recipe=re-composing-assembler in_sorters=4 out_sorters=1
+      from run 2: ['(no filter)']
+      from run 19: ['(no filter)']
+      from run 51: ['(no filter)']
+      from run 52: ['(no filter)']
+      out -> run 20: (no filter)
+  assembling-machine-2#103 at (10.0,27.0) recipe=electric-motor in_sorters=3 out_sorters=1
+      from run 9: ['(no filter)']
+      from run 33: ['(no filter)']
+      from run 57: ['(no filter)']
+      out -> run 5: (no filter)
+  assembling-machine-2#56 at (22.0,27.0) recipe=arc-smelter in_sorters=4 out_sorters=1
+      from run 4: ['(no filter)']
+      from run 21: ['(no filter)']
+      from run 29: ['(no filter)']
+      from run 56: ['(no filter)']
+      out -> run 1: (no filter)
+  chemical-plant#483 at (30.0,31.0) recipe=plastic in_sorters=2 out_sorters=1
+      from run 23: ['(no filter)']
+      from run 46: ['(no filter)']
+      out -> run 15: (no filter)
+  chemical-plant#484 at (38.0,31.0) recipe=plastic in_sorters=2 out_sorters=1
+      from run 23: ['(no filter)']
+      from run 46: ['(no filter)']
+      out -> run 15: (no filter)
+  chemical-plant#485 at (46.0,31.0) recipe=plastic in_sorters=2 out_sorters=1
+      from run 23: ['(no filter)']
+      from run 46: ['(no filter)']
+      out -> run 15: (no filter)
+  assembling-machine-2#387 at (54.0,32.0) recipe=particle-broadband in_sorters=3 out_sorters=1
+      from run 42: ['(no filter)']
+      from run 43: ['(no filter)']
+      from run 63: ['(no filter)']
+      out -> run 13: (no filter)
+  assembling-machine-2#388 at (58.0,32.0) recipe=particle-broadband in_sorters=3 out_sorters=1
+      from run 42: ['(no filter)']
+      from run 43: ['(no filter)']
+      from run 63: ['(no filter)']
+      out -> run 13: (no filter)
+  assembling-machine-2#389 at (62.0,32.0) recipe=particle-broadband in_sorters=3 out_sorters=1
+      from run 42: ['(no filter)']
+      from run 43: ['(no filter)']
+      from run 63: ['(no filter)']
+      out -> run 13: (no filter)
+  arc-smelter#591 at (16.0,33.0) recipe=stone-brick in_sorters=1 out_sorters=1
+      from run 53: ['(no filter)']
+      out -> run 21: (no filter)
+
+== spray coaters ==
+  coater#768 at (54.0,20.0) in_obj=-1(run None) out_obj=-1(run None)
+  coater#771 at (54.0,26.0) in_obj=-1(run None) out_obj=-1(run None)
