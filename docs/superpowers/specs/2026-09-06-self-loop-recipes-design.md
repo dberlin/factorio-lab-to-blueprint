@@ -395,6 +395,18 @@ def _prime_note(spec: BuildSpec, placement: Placement) -> str: ...
 
 ### 5.3a Pass-through taps are Pile Sorters (user ruling, 2026-09-06)
 
+> **STATUS 2026-09-06 20:50 UTC: PENDING an in-game test.** The user is
+> hand-feeding hydrogen into the loop for longer to see whether the taps
+> self-regulate once the machine buffers fill. Until they report, this
+> section and plan Task 8b are NOT to be executed. The mechanism below is
+> inferred from one short observation; the swing arithmetic with input
+> buffers predicts a Mk.I two tiles out should keep up, so the observation
+> may be start-up transient, or a moving-belt pickup effect the rate model
+> does not know. Outcomes: (a) it self-regulates: drop 5.3a and Task 8b,
+> the prime alone is the fix; (b) it starves at steady state: keep the rule,
+> scoped per open question 4; (c) it starves only while the loop is thin:
+> raise `seed_items` rather than the tier.
+
 Observed in game on the reported URL: the loop closes, but each refinery's
 hydrogen input sorter **grabs only a few of the hydrogen going past** and the
 machines starve anyway. The rate model did not see it: `catalog.SORTER_RATE_AT_1`

@@ -947,6 +947,9 @@ slow layout test is near it, run `tests/layout` on its own.
 
 ## Task 8b: Pile Sorters on every pass-through tap
 
+> **PENDING the user's in-game test (spec §5.3a status note). Skip this task
+> and gate check 5 until the spec's status line says otherwise.**
+
 **Files:**
 - Modify: `tests/layout/test_validate.py`
 - Modify: `tests/layout/test_freeform.py`
