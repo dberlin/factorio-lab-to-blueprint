@@ -237,6 +237,10 @@ class PlacementStats(TypedDict, total=False):
     belt_upgrade_tiers: list[str]
     best_overflow: float
     best_stranded: float
+    #: Hierarchical strategy: composed blocks, and the wall its parallel
+    #: block solves cost (a wall, not a CPU sum -- the blocks run concurrently).
+    block_wall_s: float
+    blocks: float
     boundary_belts_removed: float
     boundary_cleanup_time_s: float
     box_area: float
@@ -257,8 +261,12 @@ class PlacementStats(TypedDict, total=False):
     compact_seed_status: str
     compact_seed_wall_time_s: float
     compilation_time_s: float
+    #: Hierarchical strategy: packing the blocks and routing every cut.
+    compose_wall_s: float
     compaction_time_s: float
     corridor_tiles: float
+    #: Hierarchical strategy: lane flows wired between blocks.
+    cut_lanes: float
     decoded_candidates: float
     detailed_expansions: float
     detailed_route_time_s: float
@@ -373,6 +381,8 @@ class PlacementStats(TypedDict, total=False):
     relation_no_goods_repeated: float
     relation_no_goods_unique: float
     repair_iterations: float
+    #: Hierarchical strategy: rounds in which a refusing block was re-cut.
+    resplits: float
     restarts: float
     riser_columns: float
     risers: float
@@ -399,6 +409,8 @@ class PlacementStats(TypedDict, total=False):
     stages: float
     starved_taps: float
     strips: float
+    #: Hierarchical strategy: strips in the widest block.
+    strips_max: float
     target_height: float
     termination: str
     termination_cause: str
