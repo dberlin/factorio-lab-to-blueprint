@@ -342,7 +342,50 @@ motivates each. None is implemented; none was measured.
   because today the feedback signal it would adapt on ("the round was not
   funded") is produced by the cap being *small*, not by the blocks being hard.
 
-## 8. Files
+## 8. As-shipped strategy constants (differ from the plan)
+
+Recorded here because the numbers above were measured against **these**, not
+against the ones the plan proposed. `src/flab2bp/layout/hierarchy/strategy.py`'s
+module docstring carries the same list next to the code.
+
+| What | As shipped | Where |
+| --- | --- | --- |
+| Settlement reserve | `settlement_reserve_s(budget) = min(40, max(10, 0.4 * budget))` | `settlement_reserve_s`, `SETTLEMENT_RESERVE_{MIN,MAX}_S`, `SETTLEMENT_RESERVE_SHARE` |
+| Pool width | `_pool_width() = max(1, (workers or 16) // 4)` | `_pool_width`, `_BLOCK_WORKERS`, `_WORKER_BUDGET_DEFAULT` |
+| Child search workers | 4 CP-SAT workers per block solve | `_BLOCK_WORKERS`, passed to `_block_layout` |
+| Per-round block budget | `block_budget = clamp(remaining / waves, 5, 20)` s, `remaining` = parent wall less the reserve, `waves = ceil(blocks * arms / pool width)` | `lay_out`, `BLOCK_BUDGET_{MIN,MAX}_S` |
+| Per-job deadline | `min(parent_deadline, job_start + block_budget)`, computed **in the worker at job start** | `_solve_block` |
+| Re-cut attempts | `MAX_RESPLIT_ATTEMPTS = 4`, counted **per block**; there is no global round bound | `_recut`, `MAX_RESPLIT_ATTEMPTS` |
+| Process context | `spawn`, like `strategy_race`'s | `_spawn_pool` |
+
+Three of these are load-bearing for the readings above:
+
+* The reserve was a flat 5 s in the plan. §2's belt3 refusals are the reason it
+  is a share instead: the blocks placed, composed, built their ports, and the
+  ROUTER then refused essentially every cut lane on `BUDGET`. Wiring the block
+  interface is a second routing problem the size of the interface.
+* The pool width formula is exactly what lever 2 (§6) is about: `(16) // 4 = 4`
+  on a 128-core box, so the mall's 18 blocks x 2 arms is 9 waves and
+  `35.9 / 9 = 4.0 s` falls under the 5 s floor — the cell refuses in 0.1 s
+  having attempted nothing.
+* Re-cut attempts being **per block** is why the mall arrives at the re-cut
+  round with 27-28 blocks (§3.3) rather than stopping after four rounds.
+
+Two consequences of the shipped shape are worth stating plainly, because they
+are not defects to be filed:
+
+* A build can **overshoot `--budget`**. The settlement — composition, the router
+  over every cut lane, compaction, finalization and a certify that takes no
+  `cancelled` — is entered on the strategy's deadline rather than bounded by it.
+  `pipeline._serial_completion_grace` therefore gives `hierarchical` the spawn
+  pool grace (`strategy_race.RACE_COMPLETION_GRACE_S`), not the atomic one, and
+  the CLI `--strategy` help and the web build panel both say so.
+* A defect inside the wiring and composition step surfaces as the refusal
+  `composition crashed: <type>: <message>` rather than as a traceback. That
+  guard covers exactly the per-block `sub_spec`/`boundary_lanes` loop,
+  `assign_lanes` and `compose`; everything else in the strategy still raises.
+
+## 9. Files
 
 * `gate.md` (this file), `judge.py` (copied from `../2026-09-06-speedups-2-batch3/`)
 * `run_large.sh`, `large-{belt3,zurl2,mall}-{policy}-r{1,2}.{log,stdout.txt,-load.txt}`
