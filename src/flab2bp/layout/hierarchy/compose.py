@@ -26,6 +26,7 @@ from __future__ import annotations
 import bisect
 import time
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import NamedTuple
 
 from flab2bp.dsp import catalog
@@ -82,6 +83,22 @@ MIN_GAP = 2
 #: wide already pushes a mall-sized packing past :data:`BAND_MAX_ROWS`, and a
 #: composition that cannot be pasted is not an answer.
 GAP_LADDER = (2, 4, 6, 8, 12, 16)
+
+#: The share of the wall left on entry that rungs BEYOND THE FIRST may spend.
+#:
+#: The first rung is not speculative -- it is the composition that would have
+#: been committed before there was a ladder -- so it runs on the caller's own
+#: clock, exactly as it did.  Every further rung is a bet, and a bet has to be
+#: funded out of something.  Handed the whole clock the ladder can pay for six
+#: packs, six canvases and six reservations, hand ``_route_all`` a deadline that
+#: has already passed, and refuse under ``BUDGET`` on cuts the first rung would
+#: have wired -- a wider canvas nobody has the wall left to route on is not an
+#: improvement, it is a regression wearing one's clothes.
+#:
+#: The majority stays with the router because the router is the stage that
+#: actually produces belts; the ladder only decides which ground it produces
+#: them on.
+LADDER_WALL_SHARE = 0.4
 
 
 @dataclass
@@ -632,16 +649,19 @@ def pack_with_access(
     an empty start set -- a search that expands nothing and so registers no
     congestion for the negotiation to price.
 
-    UNDER THE SAME CLOCK AS THE ROUTE.  The reservation enumerates every
-    candidate corridor of every demand and then solves a JOINT MATCHING over
-    them, so its cost grows with the interface rather than being a fixed
-    preamble; a ladder multiplies that by its rungs.  So the clock is checked
-    between rungs and handed to every reservation, and the ladder stops the
-    moment it runs out:
+    UNDER A BOUNDED SHARE OF THE ROUTE'S CLOCK.  The reservation enumerates
+    every candidate corridor of every demand and then solves a JOINT MATCHING
+    over them, so its cost grows with the interface rather than being a fixed
+    preamble; a ladder multiplies that by its rungs.  The FIRST rung is what a
+    ladderless composer would have done and runs on ``deadline`` itself; every
+    rung after it is speculative and is funded out of :data:`LADDER_WALL_SHARE`
+    of the wall left on entry, so that ``_route_all`` is never handed a clock
+    the search for a wider canvas has already spent.  The ladder stops the
+    moment that share runs out:
 
     * with a rung already judged, the best one in hand is returned -- it is a
-      real packing with a real verdict, and spending the caller's remaining
-      wall to find a wider one it can no longer route on helps nobody;
+      real packing with a real verdict, and spending the router's wall to find
+      a wider canvas nobody can then route on helps nobody;
     * with NO rung judged, :class:`_PackingDeadline` carries the packing out to
       the caller, which owes its own caller a refusal naming every cut.
 
@@ -653,10 +673,20 @@ def pack_with_access(
     # `pack_blocks` clamps to MIN_GAP, so no rung can collide even if a caller
     # asks for a floor below it.
     rungs = tuple(rung for rung in GAP_LADDER if rung >= gap) or (max(gap, MIN_GAP),)
+    entered = time.monotonic()
+    ladder_deadline = (
+        None if deadline is None else entered + (deadline - entered) * LADDER_WALL_SHARE
+    )
     best: PackedCanvas | None = None
-    for rung in rungs:
-        if best is not None and _spent(deadline):
+    for position, rung in enumerate(rungs):
+        # The FIRST rung is unconditional and runs on the caller's own clock:
+        # it is what a ladderless composer would have done, and a caller that
+        # entered with a spent clock is still owed a packing to name its cuts
+        # from.  Only the rungs after it are bet on `LADDER_WALL_SHARE`.
+        first = position == 0
+        if not first and _spent(ladder_deadline):
             break
+        rung_deadline = deadline if first else ladder_deadline
         packing = _pack_at(placements, flows, spec, gap=rung, ramped=ramped, margin=margin)
         bounds = packing.canvas.limit
         assert bounds is not None  # canvas_for always sets it
@@ -666,8 +696,11 @@ def pack_with_access(
                 _port_access_inventory(packing.nets).demands,
                 boundary=_outer_ring(bounds),
                 bounds=bounds,
-                cancelled=lambda: _spent(deadline),
-                deadline=deadline,
+                # `partial` rather than a lambda: `rung_deadline` is a loop
+                # variable, and a closure over it would read whichever rung ran
+                # last rather than the one that asked.
+                cancelled=partial(_spent, rung_deadline),
+                deadline=rung_deadline,
             )
         except _PreparationDeadline:
             if best is None:
@@ -793,6 +826,7 @@ def compose(
 __all__ = [
     "BAND_MAX_ROWS",
     "GAP_LADDER",
+    "LADDER_WALL_SHARE",
     "BlockPlaced",
     "ComposeResult",
     "PackedCanvas",

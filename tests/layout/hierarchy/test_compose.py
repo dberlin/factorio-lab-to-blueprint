@@ -260,6 +260,84 @@ def test_pack_with_access_passes_the_outer_ring_as_the_boundary(
     assert all(x in (x0, x1) or y in (y0, y1) for x, y, _ in boundary)
 
 
+def test_the_gap_ladder_leaves_the_router_a_live_clock(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """The rungs are speculative; the wall belongs to the stage that lays belts.
+
+    Every rung here comes back incomplete, which is the case the ladder exists
+    for and the worst case for its cost: a ladder handed the whole clock walks
+    all of `GAP_LADDER`, paying a pack, a canvas and a reservation each time,
+    and then leaves `_route_all` a deadline that has already passed -- refusing
+    under BUDGET on cuts the FIRST rung would have wired.
+
+    The reservation is the real one; only its own clock is neutralised (it is
+    called with `deadline=None`), so what is measured is the LADDER's bound and
+    not the reservation's own deadline check. The burn is what a mall-sized
+    reservation costs in miniature.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    real = compose._reserve_port_access
+    rungs: list[int] = []
+    burn_s = 0.2
+
+    def slow_and_incomplete(canvas, demands, **kw):
+        rungs.append(len(rungs))
+        reservation = real(canvas, demands, **{**kw, "deadline": None, "cancelled": None})
+        time.sleep(burn_s)
+        return replace(reservation, missing=demands[:1], assigned=reservation.assigned[1:])
+
+    monkeypatch.setattr(compose, "_reserve_port_access", slow_and_incomplete)
+    deadline = time.monotonic() + 2.0
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=deadline, margin=8
+    )
+    left_over = deadline - time.monotonic()
+
+    assert not packed.reservation.complete, "the scripted rungs must all come back incomplete"
+    assert len(rungs) < len(compose.GAP_LADDER), "the ladder must stop before spending every rung"
+    assert left_over > 0.0, "the router must be handed a clock it can still route on"
+
+
+def test_pack_with_access_starts_the_ladder_at_the_gap_it_was_given(
+    two_solved_blocks: TwoSolvedBlocks,
+):
+    """``gap`` is the ladder's FLOOR: rungs below it are never packed.
+
+    Without the floor -- with the ladder simply walking `GAP_LADDER` -- this
+    fixture's ports obtain corridors at rung 0 and the committed gap would be 2.
+    A caller that knows two blocks cannot be laid closer than 8 has to be
+    believed.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8, gap=8
+    )
+    assert packed.gap >= 8
+
+
+def test_a_floor_above_every_rung_is_itself_the_only_rung(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """A ladder must always try once, so an unreachable floor becomes the rung."""
+    left, right, flows, spec, ramped = two_solved_blocks
+    real = compose._reserve_port_access
+    rungs: list[int] = []
+
+    def counted(canvas, demands, **kw):
+        rungs.append(len(rungs))
+        return real(canvas, demands, **kw)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", counted)
+    floor = max(compose.GAP_LADDER) + 4
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8, gap=floor
+    )
+
+    assert packed.gap == floor
+    assert len(rungs) == 1
+
+
 def test_compose_still_routes_both_cuts_on_the_chain(two_solved_blocks: TwoSolvedBlocks):
     """The ladder, floored at today's gap, does not change today's outcome.
 
