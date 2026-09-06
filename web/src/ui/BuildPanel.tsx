@@ -195,7 +195,8 @@ export function BuildPanel() {
           <option value="freeform">freeform</option>
           <option value="sequence-pair">sequence-pair</option>
           <option value="hierarchical">
-            hierarchical (explicit only: block decomposition, experimental)
+            hierarchical (explicit only: block decomposition, experimental; may overshoot the budget
+            by its settlement phase)
           </option>
         </select>
 

@@ -155,8 +155,20 @@ def _serial_completion_grace(strategy: ExplicitStrategyName, islands: int) -> fl
     at ``budget + RACE_COMPLETION_GRACE_S``, and judging it by the shorter atomic
     grace would expire the settlement of a placement that arrived exactly when it
     was allowed to.  Same rule, and the same reason, as ``scripts/audit.py``'s.
+
+    The hierarchical strategy is the other non-atomic one, for the same reason
+    and independently of ``islands``: every one of its block rounds is a
+    ``ProcessPoolExecutor`` spawn pool (``hierarchy.strategy._spawn_pool``), and
+    the settlement it runs afterwards -- composition, the router over every cut
+    lane, compaction, finalization and a CERTIFY THAT TAKES NO ``cancelled`` --
+    is entered on the strategy's own deadline rather than bounded by it.  It can
+    therefore hand its answer back late by construction, which is exactly the
+    tail ``RACE_COMPLETION_GRACE_S`` exists to allow; the atomic grace would
+    expire the settlement of a build that behaved as designed.
     """
     if strategy == "sequence-pair" and islands > 1:
+        return strategy_race.RACE_COMPLETION_GRACE_S
+    if strategy == "hierarchical":
         return strategy_race.RACE_COMPLETION_GRACE_S
     return ATOMIC_COMPLETION_GRACE_S
 

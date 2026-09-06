@@ -9,6 +9,7 @@ import pytest
 
 from flab2bp import cli, pipeline
 from flab2bp.lab.schema import Dataset
+from flab2bp.layout import strategy_race
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy, BandSelection
 from flab2bp.layout.base import (
     AreaFrame,
@@ -579,5 +580,40 @@ def test_the_cli_offers_hierarchical_and_says_it_is_explicit_only(
 ) -> None:
     with pytest.raises(SystemExit):
         cli.main(["--help"])
-    help_text = capsys.readouterr().out
+    help_text = " ".join(capsys.readouterr().out.split())
     assert "hierarchical" in help_text
+    # The settlement runs past the budget by construction, so the option that
+    # offers the strategy is where a caller is told before choosing it.
+    assert "may overshoot --budget by its settlement phase" in help_text
+
+
+def test_hierarchical_gets_the_spawn_pool_completion_grace() -> None:
+    """Not the atomic grace: the strategy is a spawn pool plus an uncancelled certify.
+
+    Every block round is a ``ProcessPoolExecutor``, and the settlement after the
+    last block -- composition, the router over every cut lane, compaction,
+    finalization, certification -- is entered on the deadline rather than
+    bounded by it. Judging that by ``ATOMIC_COMPLETION_GRACE_S`` expires the
+    settlement of a build that behaved exactly as designed, which is the same
+    reason the raced sequence-pair arm gets the longer grace.
+
+    Islands are irrelevant here (the strategy runs its own children), so both
+    island counts answer the same; and the OTHER strategies are unchanged.
+    """
+    assert (
+        pipeline._serial_completion_grace("hierarchical", 1)
+        == strategy_race.RACE_COMPLETION_GRACE_S
+    )
+    assert (
+        pipeline._serial_completion_grace("hierarchical", 4)
+        == strategy_race.RACE_COMPLETION_GRACE_S
+    )
+    assert pipeline._serial_completion_grace("freeform", 1) == pipeline.ATOMIC_COMPLETION_GRACE_S
+    assert pipeline._serial_completion_grace("freeform", 4) == pipeline.ATOMIC_COMPLETION_GRACE_S
+    assert (
+        pipeline._serial_completion_grace("sequence-pair", 1) == pipeline.ATOMIC_COMPLETION_GRACE_S
+    )
+    assert (
+        pipeline._serial_completion_grace("sequence-pair", 4)
+        == strategy_race.RACE_COMPLETION_GRACE_S
+    )
