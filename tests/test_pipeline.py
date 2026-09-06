@@ -1585,6 +1585,47 @@ def _one_win_one_refusal() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
     )
 
 
+def test_an_untraced_raced_result_never_carries_trace_dropped_in_its_stats() -> None:
+    """Fix round 2, Important 1: with trace off, a raced build's stats dict
+    must be byte-identical to what it was before tracing existed at all --
+    `web/payload.py` and `scripts/audit.py` both serialize it verbatim, so an
+    unconditional `trace_dropped: 0` would perturb both.
+    """
+    completed = strategy_race._StrategyRaceOutcome(
+        "freeform", "completed", placement=_finished(2, 3)
+    )
+    result = pipeline._raced_result(completed, "spec", 10.0)
+    assert isinstance(result, Placement)
+    assert "trace_dropped" not in result.stats
+
+    refused = strategy_race._StrategyRaceOutcome.refused(
+        "sequence-pair", "no arrangement fit the band", "spec", 10.0
+    )
+    refusal = pipeline._raced_result(refused, "spec", 10.0)
+    assert isinstance(refusal, NoValidLayout)
+    assert "trace_dropped" not in refusal.stats
+
+
+def test_a_traced_and_dropped_raced_result_carries_trace_dropped_in_its_stats() -> None:
+    completed = dataclasses.replace(
+        strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(2, 3)),
+        trace_dropped=3,
+    )
+    result = pipeline._raced_result(completed, "spec", 10.0)
+    assert isinstance(result, Placement)
+    assert result.stats["trace_dropped"] == 3
+
+    refused = dataclasses.replace(
+        strategy_race._StrategyRaceOutcome.refused(
+            "sequence-pair", "no arrangement fit the band", "spec", 10.0
+        ),
+        trace_dropped=7,
+    )
+    refusal = pipeline._raced_result(refused, "spec", 10.0)
+    assert isinstance(refusal, NoValidLayout)
+    assert refusal.stats["trace_dropped"] == 7
+
+
 def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

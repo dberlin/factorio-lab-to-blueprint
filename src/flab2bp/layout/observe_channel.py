@@ -87,6 +87,14 @@ def drain_trace(q: MessageQueue) -> tuple[SearchEvent, ...]:
             item = q.get_nowait()
         except queue.Empty:
             break
+        except OSError, ValueError:
+            # A closed or broken queue (fix round 2, Minor 4): reachable on
+            # the wedged-thread path in `TraceCollector.stop()`, where
+            # `close()` runs while the daemon thread that calls this is still
+            # mid-read. The whole point of this channel is that a debugging
+            # view never disturbs a build -- yield whatever was already
+            # collected and stop, rather than propagate.
+            break
         if isinstance(item, SearchEvent):
             taken.append(item)
     return tuple(taken)

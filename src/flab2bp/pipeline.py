@@ -261,22 +261,38 @@ def _raced_result(
                 "process_user_cpu_s": outcome.process_user_cpu_s,
                 "process_system_cpu_s": outcome.process_system_cpu_s,
                 "process_peak_rss_kib": outcome.process_peak_rss_kib,
-                "trace_dropped": outcome.trace_dropped,
             }
         )
+        # Stamped only when non-zero (fix round 2, Important 1): `total=False`
+        # makes the key's ABSENCE, not a `0`, what "no drop" looked like before
+        # tracing existed, and `web/payload.py`/`scripts/audit.py` both
+        # serialize this whole dict verbatim. An unconditional `0` would make
+        # a trace-OFF raced build's stats byte-different from today's, which
+        # is exactly the guarantee this branch's constraints forbid breaking.
+        # `_sum_trace_dropped`'s own `.get("trace_dropped", 0)` already treats
+        # omission as zero, so leaving it out here is safe by construction.
+        if outcome.trace_dropped:
+            outcome.placement.stats["trace_dropped"] = outcome.trace_dropped
         return outcome.placement
+    #: `dict[str, float]`, not `PlacementStats`: `NoValidLayout.stats` takes a
+    #: plain `Mapping[str, float | str] | None`, and a `PlacementStats`
+    #: TypedDict (whose OTHER fields include `int` and `list[str]`) is not
+    #: structurally one, even though every value actually placed here is a
+    #: float.
+    stats: dict[str, float] = {
+        "process_wall_time_s": outcome.process_wall_time_s,
+        "process_user_cpu_s": outcome.process_user_cpu_s,
+        "process_system_cpu_s": outcome.process_system_cpu_s,
+        "process_peak_rss_kib": outcome.process_peak_rss_kib,
+    }
+    if outcome.trace_dropped:
+        stats["trace_dropped"] = outcome.trace_dropped
     return NoValidLayout(
         outcome.refusal_reason or f"{outcome.strategy} produced nothing",
         spec_label=spec_label,
         budget_s=budget_s,
         projection_failures=outcome.refusal_projection_failures,
-        stats={
-            "process_wall_time_s": outcome.process_wall_time_s,
-            "process_user_cpu_s": outcome.process_user_cpu_s,
-            "process_system_cpu_s": outcome.process_system_cpu_s,
-            "process_peak_rss_kib": outcome.process_peak_rss_kib,
-            "trace_dropped": outcome.trace_dropped,
-        },
+        stats=stats,
     )
 
 

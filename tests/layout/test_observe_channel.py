@@ -50,6 +50,34 @@ def test_drain_ignores_anything_that_is_not_a_search_event() -> None:
     assert len(drain_trace(q)) == 1
 
 
+def test_drain_yields_what_it_has_and_stops_on_a_closed_or_broken_queue() -> None:
+    """Fix round 2, Minor 4: reachable on the wedged-thread path in
+    `TraceCollector.stop()`, where `close()` can run while the daemon thread
+    that calls `drain_trace` is still mid-read -- a real `multiprocessing.
+    Queue` raises `OSError`/`ValueError` from `get_nowait()` once closed. A
+    debugging view must never disturb a build, so this must not propagate.
+    """
+
+    first, second = _event(), _event()
+
+    class _ClosedAfterTwo:
+        def __init__(self) -> None:
+            self._events = [first, second]
+
+        def get_nowait(self) -> object:
+            if self._events:
+                return self._events.pop(0)
+            raise ValueError("is closed")
+
+    assert drain_trace(_ClosedAfterTwo()) == (first, second)
+
+    class _AlwaysBroken:
+        def get_nowait(self) -> object:
+            raise OSError("handle is closed")
+
+    assert drain_trace(_AlwaysBroken()) == ()
+
+
 def test_install_and_read_back_the_module_global() -> None:
     q: queue.Queue[object] = queue.Queue()
     install_trace_channel(q)

@@ -672,9 +672,10 @@ class RaceSubmit(Protocol):
 
     A ``Protocol`` with a defaulted third parameter, not a two-argument
     ``Callable``: every pre-tracing seam in the test suite supplies exactly two
-    arguments, and ``run_strategy_race`` calls a seam with three ONLY when a
-    trace queue was actually given, so a seam that never expected one is never
-    asked for it.
+    arguments, and the third is defaulted so those seams still work.
+    ``run_strategy_race`` itself calls unconditionally with all three (fix
+    round 2, M2): the defaulted parameter is what makes that correct, not a
+    caller-side branch on whether a trace queue was given.
     """
 
     def __call__(

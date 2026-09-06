@@ -2307,12 +2307,24 @@ def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
         for outcome in outcomes:
             assert outcome.status == "completed"
 
+        # `get_nowait` (inside `drain_trace`) can legitimately race a
+        # `multiprocessing.Queue`'s feeder thread on a loaded box: an event
+        # `put_nowait`'d moments ago may not have reached the pipe yet, so a
+        # SINGLE empty batch is not proof nothing more is coming (fix round 2,
+        # Important 2). Stopping on the FIRST empty batch turned this
+        # assertion's `==` into a flaky one; two CONSECUTIVE empty batches, or
+        # a deadline, is what "nothing more is coming" actually requires.
         events: list[SearchEvent] = []
-        for _ in range(8):
+        consecutive_empty = 0
+        deadline = time.monotonic() + 5.0
+        while consecutive_empty < 2 and time.monotonic() < deadline:
             batch = drain_trace(trace_queue)
-            if not batch:
-                break
-            events.extend(batch)
+            if batch:
+                events.extend(batch)
+                consecutive_empty = 0
+            else:
+                consecutive_empty += 1
+                time.sleep(0.05)
         # Two arms, one time axis: the UI's side-by-side view depends on the
         # strategy travelling on every event rather than being inferred, and
         # every event travelling this whole path proves it made it out of a
