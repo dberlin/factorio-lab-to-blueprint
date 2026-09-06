@@ -1,0 +1,29 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+18 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 900s
+  . [  1/18]    14s freeform  large    information-matrix/no-proliferator power=1 budget=30s CLEAN     12.7s  <-- 13s
+  . [  2/18]    28s freeform  large    information-matrix/output-products power=1 budget=30s CLEAN     27.3s  <-- 27s
+  . [  3/18]    29s freeform  large    information-matrix/all-products power=1 budget=30s   CLEAN     27.4s  <-- 27s
+  . [  4/18]    29s sequence-pair large    information-matrix/all-products power=1 budget=30s   CLEAN     27.7s  <-- 28s
+  . [  5/18]    30s freeform  mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     29.0s  <-- 29s
+  . [  6/18]    30s sequence-pair large    information-matrix/output-products power=1 budget=30s CLEAN     29.2s  <-- 29s
+  . [  7/18]    30s freeform  mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     29.3s  <-- 29s
+  . [  8/18]    31s sequence-pair large    information-matrix/no-proliferator power=1 budget=30s CLEAN     29.6s  <-- 30s
+  . [  9/18]    31s freeform  trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN      0.6s
+  . [ 10/18]    32s freeform  trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN      1.7s
+  . [ 11/18]    35s freeform  trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN      4.4s
+  . [ 12/18]    41s freeform  mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     27.5s  <-- 27s
+  . [ 13/18]    51s sequence-pair trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN     20.5s  <-- 21s
+  . [ 14/18]    58s sequence-pair mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     29.5s  <-- 29s
+  . [ 15/18]    58s sequence-pair mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     29.4s  <-- 29s
+  . [ 16/18]    58s sequence-pair mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     29.8s  <-- 30s
+  . [ 17/18]    61s sequence-pair trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN     30.3s  <-- 30s
+  . [ 18/18]    62s sequence-pair trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN     29.8s  <-- 30s
+
+=== freeform: 9/9 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 29s freeform super-magnetic-ring/no-proliferator power=1 budget=30s, 29s freeform super-magnetic-ring/all-products power=1 budget=30s, 27s freeform super-magnetic-ring/output-products power=1 budget=30s, 27s freeform information-matrix/all-products power=1 budget=30s, 27s freeform information-matrix/output-products power=1 budget=30s
+
+=== sequence-pair: 9/9 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 30s sequence-pair magnetic-coil/all-products power=1 budget=30s, 30s sequence-pair magnetic-coil/output-products power=1 budget=30s, 30s sequence-pair super-magnetic-ring/no-proliferator power=1 budget=30s, 30s sequence-pair information-matrix/no-proliferator power=1 budget=30s, 29s sequence-pair super-magnetic-ring/all-products power=1 budget=30s
+
+62s wall, 18/18 cells
+1 cells completed after their own requested search deadline; the largest completion tail was 0.3s. Emission, detailed routing already in flight, and validation finish atomically.

@@ -1,0 +1,37 @@
+{
+ "groups": 13,
+ "machines": 537,
+ "policy": "no-proliferator",
+ "probe": false,
+ "rows": [
+  {
+   "area": null,
+   "budget_s": 120.0,
+   "cap": 4,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {
+    "DYNAMIC_ACCESS": 15
+   },
+   "url": "belt3",
+   "verdict": "REFUSED: unrouted cut(s): electromagnetic-turbine: block 7 -> block 6: DYNAMIC_ACCESS; energetic-graphite: block 1 -> block 6: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAM",
+   "verdict_full": "REFUSED: unrouted cut(s): electromagnetic-turbine: block 7 -> block 6: DYNAMIC_ACCESS; energetic-graphite: block 1 -> block 6: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnetic-coil: block 6 -> block 7: DYNAMIC_ACCESS; magnetic-coil: block 6 -> block 8: DYNAMIC_ACCESS",
+   "wall_s": 50.8
+  },
+  {
+   "area": null,
+   "budget_s": 120.0,
+   "cap": 6,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {
+    "DYNAMIC_ACCESS": 15
+   },
+   "url": "belt3",
+   "verdict": "REFUSED: unrouted cut(s): electromagnetic-turbine: block 6 -> block 7: DYNAMIC_ACCESS; energetic-graphite: block 1 -> block 7: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAM",
+   "verdict_full": "REFUSED: unrouted cut(s): electromagnetic-turbine: block 6 -> block 7: DYNAMIC_ACCESS; energetic-graphite: block 1 -> block 7: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 6: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: DYNAMIC_ACCESS",
+   "wall_s": 74.1
+  }
+ ],
+ "url": "belt3"
+}

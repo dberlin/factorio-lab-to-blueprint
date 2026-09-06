@@ -1,0 +1,69 @@
+{
+ "groups": 13,
+ "machines": 537,
+ "policy": "no-proliferator",
+ "probe": false,
+ "rows": [
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 4,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {
+    "DYNAMIC_ACCESS": 15
+   },
+   "url": "belt3",
+   "verdict": "REFUSED: unrouted cut(s): electromagnetic-turbine: block 7 -> block 6: DYNAMIC_ACCESS; energetic-graphite: block 1 -> block 6: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAM",
+   "verdict_full": "REFUSED: unrouted cut(s): electromagnetic-turbine: block 7 -> block 6: DYNAMIC_ACCESS; energetic-graphite: block 1 -> block 6: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnet: block 2 -> block 6: DYNAMIC_ACCESS; magnetic-coil: block 6 -> block 7: DYNAMIC_ACCESS; magnetic-coil: block 6 -> block 8: DYNAMIC_ACCESS",
+   "wall_s": 42.2
+  },
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 6,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {
+    "BUDGET": 11,
+    "COMMIT_LINK": 14,
+    "DYNAMIC_ACCESS": 18,
+    "SEALED_POCKET": 7
+   },
+   "url": "belt3",
+   "verdict": "REFUSED: unrouted cut(s): electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: SEALED_POCKET; electric-motor: block 8 -> block 6: SEALED_POCKET; electromagnetic-turbine: block 6 -> block 7: SEALED_POCKET; electromagnetic-turbine: block 6 -> block 7: SEALED_POCKET; energetic-graphite: block 1 -> block 7: COMMIT_LINK; energetic-graphite: block 1 -> block 7: SEALED_POCKET; energetic-graphite: block 1 -> block",
+   "verdict_full": "REFUSED: unrouted cut(s): electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: SEALED_POCKET; electric-motor: block 8 -> block 6: SEALED_POCKET; electromagnetic-turbine: block 6 -> block 7: SEALED_POCKET; electromagnetic-turbine: block 6 -> block 7: SEALED_POCKET; energetic-graphite: block 1 -> block 7: COMMIT_LINK; energetic-graphite: block 1 -> block 7: SEALED_POCKET; energetic-graphite: block 1 -> block 7: COMMIT_LINK; iron-ingot: block 4 -> block 8: SEALED_POCKET; iron-ingot: block 4 -> block 8: SEALED_POCKET; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: COMMIT_LINK; magnet: block 3 -> block 7: BUDGET; magnet: block 3 -> block 7: BUDGET; magnet: block 3 -> block 7: COMMIT_LINK; magnet: block 3 -> block 7: COMMIT_LINK; magnet: block 3 -> block 7: COMMIT_LINK; magnet: block 3 -> block 7: BUDGET; magnetic-coil: block 7 -> block 8: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: COMMIT_LINK; magnetic-coil: block 7 -> block 8: BUDGET; magnetic-coil: block 7 -> block 8: BUDGET; magnetic-coil: block 7 -> block 8: COMMIT_LINK; magnetic-coil: block 7 -> block 8: BUDGET",
+   "wall_s": 61.1
+  },
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 8,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {
+    "BUDGET": 15,
+    "COMMIT_LINK": 12,
+    "DYNAMIC_ACCESS": 17,
+    "SEALED_POCKET": 6
+   },
+   "url": "belt3",
+   "verdict": "REFUSED: unrouted cut(s): electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: SEALED_POCKET; electric-motor: block 8 -> block 6: SEALED_POCKET; electromagnetic-turbine: block 6 -> block 7: SEALED_POCKET; electromagnetic-turbine: block 6 -> block 7: SEALED_POCKET; energetic-graphite: block 1 -> block 7: COMMIT_LINK; energetic-graphite: block 1 -> block 7: BUDGET; energetic-graphite: block 1 -> block 7: COM",
+   "verdict_full": "REFUSED: unrouted cut(s): electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: DYNAMIC_ACCESS; electric-motor: block 8 -> block 6: SEALED_POCKET; electric-motor: block 8 -> block 6: SEALED_POCKET; electromagnetic-turbine: block 6 -> block 7: SEALED_POCKET; electromagnetic-turbine: block 6 -> block 7: SEALED_POCKET; energetic-graphite: block 1 -> block 7: COMMIT_LINK; energetic-graphite: block 1 -> block 7: BUDGET; energetic-graphite: block 1 -> block 7: COMMIT_LINK; iron-ingot: block 4 -> block 8: SEALED_POCKET; iron-ingot: block 4 -> block 8: SEALED_POCKET; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: COMMIT_LINK; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: BUDGET; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 8: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: BUDGET; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: BUDGET; magnet: block 3 -> block 7: DYNAMIC_ACCESS; magnet: block 3 -> block 7: COMMIT_LINK; magnet: block 3 -> block 7: BUDGET; magnet: block 3 -> block 7: BUDGET; magnet: block 3 -> block 7: COMMIT_LINK; magnet: block 3 -> block 7: COMMIT_LINK; magnet: block 3 -> block 7: COMMIT_LINK; magnet: block 3 -> block 7: BUDGET; magnetic-coil: block 7 -> block 8: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: COMMIT_LINK; magnetic-coil: block 7 -> block 8: BUDGET; magnetic-coil: block 7 -> block 8: BUDGET; magnetic-coil: block 7 -> block 8: COMMIT_LINK; magnetic-coil: block 7 -> block 8: BUDGET",
+   "wall_s": 61.9
+  },
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 12,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {},
+   "url": "belt3",
+   "verdict": "REFUSED: 6 block(s) never placed, 5.1s left over 3 wave(s) is under the 5s a block solve is given at all: block 2 (iron-ingot): not attempted; block 3 (copper-ingot): not attempted; block 4 (magnet): not attempted; block 5 (conveyor-belt-1, conveyor-belt-2, electric-motor, gear): not attempted; block 6 (electromagnetic-turbine): not attempted; block 7 (magnet, magnetic-coil, super-magnetic-ring): not attempted",
+   "verdict_full": "REFUSED: 6 block(s) never placed, 5.1s left over 3 wave(s) is under the 5s a block solve is given at all: block 2 (iron-ingot): not attempted; block 3 (copper-ingot): not attempted; block 4 (magnet): not attempted; block 5 (conveyor-belt-1, conveyor-belt-2, electric-motor, gear): not attempted; block 6 (electromagnetic-turbine): not attempted; block 7 (magnet, magnetic-coil, super-magnetic-ring): not attempted",
+   "wall_s": 30.9
+  }
+ ],
+ "url": "belt3"
+}

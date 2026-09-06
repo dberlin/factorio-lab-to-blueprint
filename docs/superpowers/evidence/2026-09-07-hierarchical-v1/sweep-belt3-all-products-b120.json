@@ -1,0 +1,39 @@
+{
+ "groups": 13,
+ "machines": 280,
+ "policy": "all-products",
+ "probe": false,
+ "rows": [
+  {
+   "area": null,
+   "budget_s": 120.0,
+   "cap": 4,
+   "policy": "all-products",
+   "stats": {},
+   "unrouted": {
+    "COMMIT_LINK": 3,
+    "DYNAMIC_ACCESS": 9,
+    "SEALED_POCKET": 3
+   },
+   "url": "belt3",
+   "verdict": "REFUSED: unrouted cut(s): gear: block 5 -> block 8: SEALED_POCKET; iron-ingot: block 1 -> block 10: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 10: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 9: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 9: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 9: SEALED_POCKET; iron-ingot: block 1 -> block 5: DYNAMIC_ACCESS; magnet: block 0 -> block 7: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: SEALED_POCKET; magnet",
+   "verdict_full": "REFUSED: unrouted cut(s): gear: block 5 -> block 8: SEALED_POCKET; iron-ingot: block 1 -> block 10: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 10: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 9: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 9: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 9: SEALED_POCKET; iron-ingot: block 1 -> block 5: DYNAMIC_ACCESS; magnet: block 0 -> block 7: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: SEALED_POCKET; magnetic-coil: block 7 -> block 8: COMMIT_LINK; magnetic-coil: block 7 -> block 9: COMMIT_LINK; magnetic-coil: block 7 -> block 9: COMMIT_LINK",
+   "wall_s": 57.9
+  },
+  {
+   "area": null,
+   "budget_s": 120.0,
+   "cap": 6,
+   "policy": "all-products",
+   "stats": {},
+   "unrouted": {
+    "DYNAMIC_ACCESS": 8
+   },
+   "url": "belt3",
+   "verdict": "REFUSED: unrouted cut(s): electric-motor: block 3 -> block 2: DYNAMIC_ACCESS; electric-motor: block 3 -> block 2: DYNAMIC_ACCESS; electric-motor: block 3 -> block 2: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 3: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 3: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 3: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 3: DYNAMIC_ACCESS; magnet: block 0 -> block 2: DYNAMIC_ACCESS",
+   "verdict_full": "REFUSED: unrouted cut(s): electric-motor: block 3 -> block 2: DYNAMIC_ACCESS; electric-motor: block 3 -> block 2: DYNAMIC_ACCESS; electric-motor: block 3 -> block 2: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 3: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 3: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 3: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 3: DYNAMIC_ACCESS; magnet: block 0 -> block 2: DYNAMIC_ACCESS",
+   "wall_s": 45.3
+  }
+ ],
+ "url": "belt3"
+}

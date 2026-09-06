@@ -1,0 +1,57 @@
+{
+ "groups": 33,
+ "machines": 935,
+ "policy": "no-proliferator",
+ "probe": false,
+ "rows": [
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 4,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {},
+   "url": "mall",
+   "verdict": "REFUSED: 21 block(s) never placed, 35.9s left over 11 wave(s) is under the 5s a block solve is given at all: block 0 (titanium-ingot): not attempted; block 1 (magnet): not attempted; block 2 (iron-ingot): not attempted; block 3 (gear): not attempted; block 4 (high-purity-silicon): not attempted; block 5 (graphene-advanced): not attempted; block 6 (carbon-nanotube, frame-material, steel, titanium-alloy): not attempted; block 7 (glass): not attempted; block 8 (energetic-graphite): not attempted; block 9 (copper-ingot): not attempted; block 10 (microcrystalline-component): not attempted; block 11",
+   "verdict_full": "REFUSED: 21 block(s) never placed, 35.9s left over 11 wave(s) is under the 5s a block solve is given at all: block 0 (titanium-ingot): not attempted; block 1 (magnet): not attempted; block 2 (iron-ingot): not attempted; block 3 (gear): not attempted; block 4 (high-purity-silicon): not attempted; block 5 (graphene-advanced): not attempted; block 6 (carbon-nanotube, frame-material, steel, titanium-alloy): not attempted; block 7 (glass): not attempted; block 8 (energetic-graphite): not attempted; block 9 (copper-ingot): not attempted; block 10 (microcrystalline-component): not attempted; block 11 (conveyor-belt-3, miniature-particle-collider, ray-receiver, sorter-4): not attempted; block 12 (magnetic-coil, plasma-exciter): not attempted; block 13 (electric-motor): not attempted; block 14 (conveyor-belt-1, conveyor-belt-2, electromagnetic-turbine): not attempted; block 15 (super-magnetic-ring): not attempted; block 16 (circuit-board, sorter-1, sorter-2): not attempted; block 17 (photon-combiner, prism): not attempted; block 18 (sorter-3): not attempted; block 19 (processor): not attempted; block 20 (logistics-distributor): not attempted",
+   "wall_s": 0.1
+  },
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 6,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {},
+   "url": "mall",
+   "verdict": "REFUSED: 17 block(s) never placed, 35.9s left over 9 wave(s) is under the 5s a block solve is given at all: block 0 (titanium-ingot): not attempted; block 1 (magnet): not attempted; block 2 (iron-ingot): not attempted; block 3 (high-purity-silicon): not attempted; block 4 (graphene-advanced): not attempted; block 5 (carbon-nanotube, frame-material, steel, titanium-alloy): not attempted; block 6 (glass): not attempted; block 7 (energetic-graphite): not attempted; block 8 (copper-ingot): not attempted; block 9 (microcrystalline-component): not attempted; block 10 (conveyor-belt-3, miniature-part",
+   "verdict_full": "REFUSED: 17 block(s) never placed, 35.9s left over 9 wave(s) is under the 5s a block solve is given at all: block 0 (titanium-ingot): not attempted; block 1 (magnet): not attempted; block 2 (iron-ingot): not attempted; block 3 (high-purity-silicon): not attempted; block 4 (graphene-advanced): not attempted; block 5 (carbon-nanotube, frame-material, steel, titanium-alloy): not attempted; block 6 (glass): not attempted; block 7 (energetic-graphite): not attempted; block 8 (copper-ingot): not attempted; block 9 (microcrystalline-component): not attempted; block 10 (conveyor-belt-3, miniature-particle-collider, ray-receiver, sorter-4): not attempted; block 11 (electric-motor, gear, magnetic-coil, plasma-exciter): not attempted; block 12 (conveyor-belt-1, conveyor-belt-2, electromagnetic-turbine): not attempted; block 13 (super-magnetic-ring): not attempted; block 14 (circuit-board, processor, sorter-1, sorter-2, sorter-3): not attempted; block 15 (photon-combiner, prism): not attempted; block 16 (logistics-distributor): not attempted",
+   "wall_s": 0.1
+  },
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 8,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {},
+   "url": "mall",
+   "verdict": "REFUSED: 14 block(s) never placed, 9.4s left over 7 wave(s) is under the 5s a block solve is given at all: block 1 (microcrystalline-component): not attempted; block 2 (microcrystalline-component): not attempted; block 3 (microcrystalline-component): not attempted; block 5 (gear): not attempted; block 7 (electric-motor): not attempted; block 8 (circuit-board, sorter-1, sorter-2): not attempted; block 9 (processor): not attempted; block 11 (magnetic-coil, plasma-exciter): not attempted; block 12 (electromagnetic-turbine): not attempted; block 13 (electromagnetic-turbine): not attempted; block 1",
+   "verdict_full": "REFUSED: 14 block(s) never placed, 9.4s left over 7 wave(s) is under the 5s a block solve is given at all: block 1 (microcrystalline-component): not attempted; block 2 (microcrystalline-component): not attempted; block 3 (microcrystalline-component): not attempted; block 5 (gear): not attempted; block 7 (electric-motor): not attempted; block 8 (circuit-board, sorter-1, sorter-2): not attempted; block 9 (processor): not attempted; block 11 (magnetic-coil, plasma-exciter): not attempted; block 12 (electromagnetic-turbine): not attempted; block 13 (electromagnetic-turbine): not attempted; block 14 (conveyor-belt-1, conveyor-belt-2): not attempted; block 15 (super-magnetic-ring): not attempted; block 16 (super-magnetic-ring): not attempted; block 17 (sorter-3): not attempted",
+   "wall_s": 26.6
+  },
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 12,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {},
+   "url": "mall",
+   "verdict": "REFUSED: 14 block(s) never placed, 10.7s left over 7 wave(s) is under the 5s a block solve is given at all: block 1 (steel, titanium-alloy): not attempted; block 2 (carbon-nanotube, frame-material): not attempted; block 3 (gear): not attempted; block 4 (microcrystalline-component): not attempted; block 6 (electric-motor): not attempted; block 7 (magnetic-coil, plasma-exciter): not attempted; block 8 (electromagnetic-turbine): not attempted; block 9 (electromagnetic-turbine): not attempted; block 10 (conveyor-belt-1, conveyor-belt-2): not attempted; block 11 (super-magnetic-ring): not attempted",
+   "verdict_full": "REFUSED: 14 block(s) never placed, 10.7s left over 7 wave(s) is under the 5s a block solve is given at all: block 1 (steel, titanium-alloy): not attempted; block 2 (carbon-nanotube, frame-material): not attempted; block 3 (gear): not attempted; block 4 (microcrystalline-component): not attempted; block 6 (electric-motor): not attempted; block 7 (magnetic-coil, plasma-exciter): not attempted; block 8 (electromagnetic-turbine): not attempted; block 9 (electromagnetic-turbine): not attempted; block 10 (conveyor-belt-1, conveyor-belt-2): not attempted; block 11 (super-magnetic-ring): not attempted; block 12 (super-magnetic-ring): not attempted; block 13 (circuit-board, processor, sorter-1, sorter-2, sorter-3): not attempted; block 14 (logistics-distributor): not attempted; block 15 (photon-combiner, prism): not attempted",
+   "wall_s": 25.3
+  }
+ ],
+ "url": "mall"
+}
