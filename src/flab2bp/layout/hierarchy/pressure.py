@@ -42,6 +42,20 @@ def lanes_for(spec: BuildSpec, item: str, rate: Fraction, *, external: bool) -> 
     return max(1, math.ceil(rate / capacity))
 
 
+def _crossing_lanes(spec: BuildSpec, item: str, rate: Fraction) -> int:
+    """Lanes for an item crossing a cut, shared by every call site below.
+
+    Always ``external=False``: a cut item is produced inside the parent spec
+    and the crossing lane leaves on its producer's sorter, so it is judged at
+    the PLACE stack whatever the bus also carries -- not the stack an item of
+    the same name gets where it is *also* belted into the whole spec (a
+    both-fed item such as universe-matrix's hydrogen, see
+    ``BuildSpec.planning_stack``). Same reason ``_output_logical_lanes`` in
+    ``strip_variants.py`` passes ``external=False`` for output lanes.
+    """
+    return lanes_for(spec, item, rate, external=False)
+
+
 def cut_pressure(
     spec: BuildSpec, blocks: list[list[Unit]]
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
@@ -81,9 +95,7 @@ def cut_pressure(
                 "from": src,
                 "to": dst,
                 "item_pressure": len(items),
-                "lane_pressure": sum(
-                    lanes_for(spec, i, r, external=False) for i, r in items.items()
-                ),
+                "lane_pressure": sum(_crossing_lanes(spec, i, r) for i, r in items.items()),
                 "items": {i: str(r) for i, r in sorted(items.items())},
             }
         )
@@ -92,7 +104,7 @@ def cut_pressure(
     # consuming block, because that is how many lanes the geometry has to build.
     total_items = sum(len(wants) for wants in deficit.values())
     total_lanes = sum(
-        lanes_for(spec, item, want, external=False)
+        _crossing_lanes(spec, item, want)
         for item, wants in deficit.items()
         for want in wants.values()
     )
@@ -163,9 +175,7 @@ def depth_profile(spec: BuildSpec) -> list[dict[str, object]]:
                 "recipes_below": sum(1 for r in depth.values() if r <= d),
                 "machines_below": sum(g.count for g in spec.groups if depth[g.recipe_id] <= d),
                 "item_pressure": len(crossing),
-                "lane_pressure": sum(
-                    lanes_for(spec, i, r, external=False) for i, r in crossing.items()
-                ),
+                "lane_pressure": sum(_crossing_lanes(spec, i, r) for i, r in crossing.items()),
                 "items": sorted(crossing),
             }
         )
