@@ -279,6 +279,17 @@ Preserve M3 (`_merge_lanes` / `_merge_frontier` sharing one lane between
 consumers of the SAME item) untouched — it is one item per lane and is
 load-bearing on 12 of 36 corpus cells.
 
+**User note, 2026-09-06 20:20 UTC (binding on the executor):** the reported
+blueprint *did* merge the three items onto one belt ahead of the coater, and
+it still failed in game, because nothing controls the interleaving: whichever
+item the machines are not short of fills the belt and the others starve. The
+only mixed belt that can work is one whose items are filtered back apart by
+splitters with port filters set, *and* whose interleaving is provably
+starvation-free. Neither is attempted here and neither is worth attempting;
+chosen mixing is given up outright, not made cleverer. This also bears on
+open question 1: a Matrix Lab's forced three-items-per-lane has the same
+uncontrolled interleaving, so "keep forced mixing" keeps that failure mode.
+
 ### F2 — a Spray Coater rides exactly one belt run
 
 A coater is a belt addon that rides one belt. Two runs merging on a tile its
@@ -382,10 +393,69 @@ description=(
 def _prime_note(spec: BuildSpec, placement: Placement) -> str: ...
 ```
 
-### 5.4 Validation — three new checks
+### 5.3a Pass-through taps are Pile Sorters (user ruling, 2026-09-06)
+
+Observed in game on the reported URL: the loop closes, but each refinery's
+hydrogen input sorter **grabs only a few of the hydrogen going past** and the
+machines starve anyway. The rate model did not see it: `catalog.SORTER_RATE_AT_1`
+is the swing rate with cargo always waiting in the pickup cell, which is the
+state of a belt that has backed up against its last consumer. The loop lane
+never backs up, because its tail carries the surplus off the block, so every
+item that passes while the sorter is mid-swing is gone. A one-cargo-per-swing
+sorter on a moving belt takes a fraction of what it needs, however fast its
+tier. The user's ruling: **if a tap is meant to take its full share off a
+moving lane it must be a Pile Sorter**, which grabs several cargos per swing.
+
+The lane shape is not the recipe's; it is "internal taps, then a tail that
+leaves the block". The strip planner builds exactly that lane for any item in
+`spec.surplus_outputs` that also has internal destinations
+(`strip_variants.py:1316-1319`), and the self-loop item is one such item: its
+`surplus_outputs` entry is what runs to the edge. So the rule is stated over
+the lane, with no per-recipe case:
+
+```python
+# src/flab2bp/layout/freeform.py — one predicate, computed once per canvas
+def _pass_through_items(spec: BuildSpec) -> frozenset[str]:
+    """Items whose consumer lane also carries surplus off the block.
+
+    Such a lane never backs up, so a tap on it must be a Pile Sorter.
+    """
+    consumed = {item for g in spec.groups for item in g.inputs_per_machine}
+    return frozenset(item for item in spec.surplus_outputs if item in consumed)
+```
+
+At the two consumer-side `_pick_sorter` call sites (`freeform.py:7179` and
+`freeform.py:17971`) a tap whose lane item is in `canvas.pass_through_items`
+is picked with `tiers=` restricted to the Pile Sorter (`catalog` id 2014,
+`sorter-4`). When the save has not researched it, the picker's existing
+fastest-allowed fallback emits the fastest tier the save has and the
+validator refuses the placement, exactly as `flow.sorter_capacity` does today
+for a rate no tier carries; the refusal names the research.
+
+```python
+@check("flow.pass_through_pile_fed", needs_spec=True, needs_groups=True)
+def _pass_through_pile_fed(ctx: Context) -> Iterable[Finding]:
+    """A tap on a lane whose tail leaves the block is a Pile Sorter.
+
+    ERROR per input sorter that picks a pass-through item with any other tier.
+    ``flow.sorter_capacity`` cannot see this: its rate table assumes a
+    backed-up belt, and a pass-through lane is never backed up.
+    """
+```
+
+Output sorters, taps on lanes that dead-end at their last consumer, and lanes
+whose only off-block flow is an `outputs` entry with no internal consumer are
+untouched.
+
+### 5.4 Validation — four new checks
 
 ```python
 # src/flab2bp/layout/validate.py
+
+@check("flow.pass_through_pile_fed", needs_spec=True, needs_groups=True)
+def _pass_through_pile_fed(ctx: Context) -> Iterable[Finding]:
+    """A tap on a lane whose tail leaves the block is a Pile Sorter (§5.3a)."""
+
 
 @check("flow.self_loop_primed", needs_spec=True, needs_groups=True)
 def _self_loop_primed(ctx: Context) -> Iterable[Finding]:
@@ -501,10 +571,19 @@ shaped `{item: {"seed_items": int, "recipe": str, "machines": int}}`.
    optional.
 5. **A future dataset adds a third self-loop recipe with `net <= 0`.** T3 pins
    that path to the external-input arithmetic rather than to a seed.
+6. **Saves without the Pile Sorter refuse every pass-through lane.** §5.3a
+   makes the Pile Sorter mandatory on such taps, so a save that has not
+   researched it cannot build a self-loop block, or any block with a
+   surplus-exporting internal lane, until it does. The refusal names the
+   research; the alternative (a slower tier that starves in game) is the defect
+   this rule exists to remove.
+7. **Corpus effect of the pass-through rule.** Every cell whose spec has a
+   surplus item with internal consumers gains Pile Sorters on those taps and,
+   on a save without them, refuses. The gate counts both; the ruling stands.
 
 ---
 
-## 8. Open questions for the user (three)
+## 8. Open questions for the user (four)
 
 1. **Forced mixing.** The ban on mixed input lanes cannot be total without
    making `universe-matrix` refuse: a Matrix Lab offers three insert columns
@@ -525,3 +604,8 @@ shaped `{item: {"seed_items": int, "recipe": str, "machines": int}}`.
    would let the player prime it anywhere and would make the surplus tail
    unnecessary. Should that rule gain a narrow exemption for a declared
    self-loop lane, or stay absolute?
+4. **Scope of the Pile Sorter rule.** Your ruling was about the hydrogen loop's
+   taps. The same never-backs-up lane is built for *any* surplus item with
+   internal consumers (`strip_variants.py:1316-1319`), so this design applies
+   the rule to every such lane rather than to self-loop items only. Apply it
+   to every pass-through lane, or narrow it to self-loop lanes?
