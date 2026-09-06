@@ -1,0 +1,75 @@
+{
+ "area": null,
+ "astar_s": 10.027326257433742,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 24757230,
+ "groups": 33,
+ "hits": 2100,
+ "islands": null,
+ "machines": 449,
+ "misses": 0,
+ "passes": 0,
+ "phases": {
+  "astar": {
+   "n": 2100,
+   "s": 10.027326257433742
+  },
+  "make_grid": {
+   "n": 12,
+   "s": 0.055168972350656986
+  },
+  "place_coaters": {
+   "n": 12,
+   "s": 7.057444809004664
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.23118100501596928
+  },
+  "prepare": {
+   "n": 12,
+   "s": 26.051099818898365
+  },
+  "refresh_history": {
+   "n": 12,
+   "s": 1.3584038242697716e-05
+  },
+  "reserve_port_access": {
+   "n": 24,
+   "s": 15.194034662563354
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.23600355675444007
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.21474418393336236
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  2.021769099170342,
+  2.0273301280103624,
+  1.9707542429678142,
+  2.015113168163225,
+  2.7143176938407123,
+  2.1956407548859715,
+  2.4012216459959745,
+  2.3903807380702347,
+  1.7780190638732165,
+  2.036266525974497,
+  2.176965572871268,
+  2.3233211850747466
+ ],
+ "rate": 60,
+ "rounds": 0,
+ "route_all_s": 0.0,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no pack was ever routed: 3 lane heads could not obtain the belt approaches they need (proliferator-3 into ? at (266, 2, 0) (wants 1, held 0, 0 free side(s)), magnet into magnet#16 at (214, 58, 0) (wants 1, held 0, 2 free side(s)), proliferator-3 into super-magnetic-ring#30 at (215, 41, 1) (wants 1, held 0, 0 free side(s))); this is a PORT-SEATING defect independent of the packing -- the failure count varied by candidate height",
+ "wall_s": 29.810635691974312
+}

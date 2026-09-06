@@ -1,0 +1,110 @@
+{
+ "area": null,
+ "astar_s": 4.985417011426762,
+ "budget_s": 30.0,
+ "cprofile": false,
+ "expansions": 9352728,
+ "groups": 15,
+ "hits": 3057,
+ "islands": null,
+ "machines": 76,
+ "misses": 489,
+ "passes": 15,
+ "phases": {
+  "astar": {
+   "n": 3546,
+   "s": 4.985417011426762
+  },
+  "build_landmarks": {
+   "n": 15,
+   "s": 0.11270389403216541
+  },
+  "coater_frame_bans": {
+   "n": 15,
+   "s": 1.9404905317351222
+  },
+  "commit_paths": {
+   "n": 75,
+   "s": 3.366738387849182
+  },
+  "junction_ban": {
+   "n": 15,
+   "s": 0.1797258253209293
+  },
+  "last_mile": {
+   "n": 30,
+   "s": 0.005161646055057645
+  },
+  "make_grid": {
+   "n": 156,
+   "s": 0.10821845149621367
+  },
+  "merge_frontier": {
+   "n": 4485,
+   "s": 0.8068665135651827
+  },
+  "place_coaters": {
+   "n": 15,
+   "s": 0.4161462199408561
+  },
+  "plan_strips": {
+   "n": 1,
+   "s": 0.04740258399397135
+  },
+  "power_plan": {
+   "n": 15,
+   "s": 2.2313842566218227
+  },
+  "prepare": {
+   "n": 15,
+   "s": 6.833762678783387
+  },
+  "refresh_history": {
+   "n": 216,
+   "s": 0.016132781514897943
+  },
+  "reserve_port_access": {
+   "n": 30,
+   "s": 1.0619456926360726
+  },
+  "route_all": {
+   "n": 15,
+   "s": 9.224228599807248
+  },
+  "static_risks": {
+   "n": 2,
+   "s": 0.06071055494248867
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.14736475213430822
+  }
+ },
+ "policy": "output-products",
+ "prepare_calls_s": [
+  0.6643049558624625,
+  0.636404023040086,
+  0.5393820810131729,
+  0.43152443901635706,
+  0.46281729079782963,
+  0.4005965259857476,
+  0.4805169671308249,
+  0.3625686769373715,
+  0.4914460340514779,
+  0.36961713805794716,
+  0.4249361839611083,
+  0.44604536797851324,
+  0.40330585301853716,
+  0.36106022796593606,
+  0.359236913966015
+ ],
+ "rate": 60,
+ "rounds": 60,
+ "route_all_s": 9.224228599807248,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "quantum-chip",
+ "verdict": "REFUSED: no packing of 19 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing",
+ "wall_s": 18.37600738997571
+}

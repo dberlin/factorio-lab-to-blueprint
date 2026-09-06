@@ -1,0 +1,78 @@
+{
+ "area": null,
+ "astar_s": 3.2675548787228763,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 11714619,
+ "groups": 15,
+ "hits": 2223,
+ "islands": null,
+ "machines": 131,
+ "misses": 12,
+ "passes": 0,
+ "phases": {
+  "astar": {
+   "n": 2235,
+   "s": 3.2675548787228763
+  },
+  "make_grid": {
+   "n": 15,
+   "s": 0.02058140793815255
+  },
+  "place_coaters": {
+   "n": 15,
+   "s": 2.830468142637983
+  },
+  "plan_strips": {
+   "n": 1,
+   "s": 0.11881563207134604
+  },
+  "prepare": {
+   "n": 15,
+   "s": 14.512444691499695
+  },
+  "refresh_history": {
+   "n": 15,
+   "s": 1.4644581824541092e-05
+  },
+  "reserve_port_access": {
+   "n": 30,
+   "s": 10.46641875198111
+  },
+  "static_risks": {
+   "n": 3,
+   "s": 0.14883243897929788
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.14161200495436788
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  0.902477489085868,
+  0.7947126899380237,
+  0.8751887511461973,
+  0.8077277461998165,
+  1.1665546670556068,
+  1.0933530831243843,
+  1.0441188749391586,
+  0.9660573748406023,
+  1.0991246360354125,
+  0.9844804720487446,
+  0.8042442689184099,
+  0.8016832659486681,
+  1.0986327121499926,
+  1.026540317106992,
+  1.047548342961818
+ ],
+ "rate": 180,
+ "rounds": 0,
+ "route_all_s": 0.0,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "quantum-chip",
+ "verdict": "REFUSED: no pack was ever routed: 1 lane head could not obtain the belt approaches they need (proliferator-3 into ? at (95, 2, 0) (wants 1, held 0, 0 free side(s))); this is a PORT-SEATING defect independent of the packing -- every candidate height produced the same 1 failures",
+ "wall_s": 16.750931640155613
+}

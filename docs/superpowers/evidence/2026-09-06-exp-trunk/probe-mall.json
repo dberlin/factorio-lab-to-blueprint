@@ -1,0 +1,97 @@
+{
+ "area": null,
+ "astar_s": 7.764377813087776,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 16475067,
+ "groups": 33,
+ "hits": 1492,
+ "islands": null,
+ "machines": 449,
+ "misses": 35,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1527,
+   "s": 7.764377813087776
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.23201114288531244
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 3.0280227980110794
+  },
+  "commit_paths": {
+   "n": 10,
+   "s": 13.345314012374729
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.21405964414589107
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.2686717030592263
+  },
+  "merge_frontier": {
+   "n": 883,
+   "s": 4.519586763344705
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 4.233798042172566
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.3328522390220314
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 2.079707755940035
+  },
+  "prepare": {
+   "n": 6,
+   "s": 19.790231852326542
+  },
+  "refresh_history": {
+   "n": 60,
+   "s": 0.006287010619416833
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 7.7647401005961
+  },
+  "route_all": {
+   "n": 2,
+   "s": 20.847992309136316
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.3184028659015894
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.32724353088997304
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  2.104997436981648,
+  2.9205821291543543,
+  2.4141222201287746,
+  2.017582881031558,
+  4.456426647957414,
+  5.876520537072793
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 20.847992309136316,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 44.408904688898474
+}

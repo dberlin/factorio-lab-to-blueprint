@@ -1,0 +1,45 @@
+=== round 1 arm off 2026-09-05T23:38:34-04:00  23:38:34 up 21 days,  5:24, 13 users,  load average: 6.17, 7.15, 9.79
+um60/off/1 exit 0
+um120/off/1 exit 0
+qc180/off/1 exit 0
+mall/off/1 exit 0
+zurl2/off/1 exit 0
+um60sp/off/1 exit 0
+qc180sp/off/1 exit 0
+um120sp/off/1 exit 0
+mallsp/off/1 exit 0
+zurl2sp/off/1 exit 0
+=== round 1 arm on 2026-09-05T23:42:51-04:00  23:42:51 up 21 days,  5:28, 12 users,  load average: 9.35, 8.61, 9.72
+um60/on/1 exit 0
+qc180/on/1 exit 0
+um120/on/1 exit 0
+mall/on/1 exit 0
+zurl2/on/1 exit 0
+um60sp/on/1 exit 0
+um120sp/on/1 exit 0
+qc180sp/on/1 exit 0
+mallsp/on/1 exit 0
+zurl2sp/on/1 exit 0
+=== round 2 arm off 2026-09-05T23:46:57-04:00  23:46:57 up 21 days,  5:33, 12 users,  load average: 7.70, 8.20, 9.26
+um60/off/2 exit 0
+um120/off/2 exit 0
+qc180/off/2 exit 0
+mall/off/2 exit 0
+zurl2/off/2 exit 0
+um60sp/off/2 exit 0
+um120sp/off/2 exit 0
+qc180sp/off/2 exit 0
+mallsp/off/2 exit 0
+zurl2sp/off/2 exit 0
+=== round 2 arm on 2026-09-05T23:51:11-04:00  23:51:11 up 21 days,  5:37, 12 users,  load average: 10.44, 10.53, 10.00
+um60/on/2 exit 0
+qc180/on/2 exit 0
+um120/on/2 exit 0
+mall/on/2 exit 0
+zurl2/on/2 exit 0
+um60sp/on/2 exit 0
+um120sp/on/2 exit 0
+mallsp/on/2 exit 0
+qc180sp/on/2 exit 0
+zurl2sp/on/2 exit 0
+large-done  23:55:19 up 21 days,  5:41, 12 users,  load average: 10.04, 10.07, 9.88

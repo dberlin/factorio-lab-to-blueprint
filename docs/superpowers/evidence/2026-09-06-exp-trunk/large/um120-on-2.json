@@ -1,0 +1,96 @@
+{
+ "area": null,
+ "astar_s": 7.058625555597246,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 12227602,
+ "groups": 38,
+ "hits": 1214,
+ "islands": null,
+ "machines": 439,
+ "misses": 6,
+ "passes": 5,
+ "phases": {
+  "astar": {
+   "n": 1220,
+   "s": 7.058625555597246
+  },
+  "build_landmarks": {
+   "n": 5,
+   "s": 0.7187853597570211
+  },
+  "commit_paths": {
+   "n": 10,
+   "s": 5.907674115383998
+  },
+  "finalize": {
+   "n": 3,
+   "s": 3.6943300787825137
+  },
+  "junction_ban": {
+   "n": 5,
+   "s": 0.4334696128498763
+  },
+  "last_mile": {
+   "n": 4,
+   "s": 0.025530542014166713
+  },
+  "make_grid": {
+   "n": 78,
+   "s": 0.4963816034141928
+  },
+  "merge_frontier": {
+   "n": 827,
+   "s": 1.7813434773124754
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.021721466910094023
+  },
+  "power_plan": {
+   "n": 5,
+   "s": 7.579209632705897
+  },
+  "prepare": {
+   "n": 5,
+   "s": 13.803603010019287
+  },
+  "refresh_history": {
+   "n": 84,
+   "s": 0.001553316367790103
+  },
+  "reserve_port_access": {
+   "n": 10,
+   "s": 4.189219197258353
+  },
+  "route_all": {
+   "n": 5,
+   "s": 11.56107257748954
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.32140237698331475
+  },
+  "validate": {
+   "n": 3,
+   "s": 16.7978184458334
+  }
+ },
+ "policy": "no-proliferator",
+ "prepare_calls_s": [
+  3.1141653759405017,
+  2.710710512008518,
+  2.9544513639993966,
+  2.8047229750081897,
+  2.2195527830626816
+ ],
+ "rate": 120,
+ "rounds": 5,
+ "route_all_s": 11.56107257748954,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "universe-matrix",
+ "verdict": "REFUSED: every packing that wired was rejected by our own validator (flow.belt_capacity; findings: flow.belt_capacity (8296, 8297, 8298, 8299): belt run 177 must carry 32 items/s but its tier sustains only 30 ({'run': 177, 'required': '32', 'capacity': '30', 'stack': 1, 'per_item': {'copper-ingot': '32'}})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; 1 candidate heights were skipped as over-band",
+ "wall_s": 49.708185822935775
+}

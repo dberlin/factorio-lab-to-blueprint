@@ -1,0 +1,78 @@
+{
+ "area": null,
+ "astar_s": 13.755779724335298,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 35603841,
+ "groups": 32,
+ "hits": 3246,
+ "islands": null,
+ "machines": 436,
+ "misses": 0,
+ "passes": 0,
+ "phases": {
+  "astar": {
+   "n": 3246,
+   "s": 13.755779724335298
+  },
+  "make_grid": {
+   "n": 15,
+   "s": 0.06695211003534496
+  },
+  "place_coaters": {
+   "n": 15,
+   "s": 7.91016259836033
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.2053781079594046
+  },
+  "prepare": {
+   "n": 15,
+   "s": 32.050814943155274
+  },
+  "refresh_history": {
+   "n": 15,
+   "s": 1.7635058611631393e-05
+  },
+  "reserve_port_access": {
+   "n": 30,
+   "s": 19.86583412787877
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.21663667960092425
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.191083813784644
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  1.9477051000576466,
+  1.9129600871820003,
+  2.0423583700321615,
+  1.961598525987938,
+  2.234280222095549,
+  2.15377658396028,
+  2.5110796669032425,
+  2.429065778851509,
+  2.35854605701752,
+  2.2798190519679338,
+  1.601747517939657,
+  1.8752438330557197,
+  2.067403111141175,
+  2.434667394962162,
+  2.2405636420007795
+ ],
+ "rate": 60,
+ "rounds": 0,
+ "route_all_s": 0.0,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "zurl2",
+ "verdict": "REFUSED: no pack was ever routed: 2 lane heads could not obtain the belt approaches they need (proliferator-3 into ? at (265, 26, 0) (wants 1, held 0, 0 free side(s)), proliferator-3 into titanium-alloy#28 at (329, 11, 1) (wants 1, held 0, 0 free side(s))); this is a PORT-SEATING defect independent of the packing -- the failure count varied by candidate height",
+ "wall_s": 35.86553733306937
+}

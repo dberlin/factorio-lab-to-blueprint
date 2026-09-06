@@ -1,0 +1,97 @@
+{
+ "area": null,
+ "astar_s": 7.263369958847761,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 16475067,
+ "groups": 33,
+ "hits": 1492,
+ "islands": null,
+ "machines": 449,
+ "misses": 35,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1527,
+   "s": 7.263369958847761
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.18395968433469534
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 2.372398925246671
+  },
+  "commit_paths": {
+   "n": 10,
+   "s": 12.45807496458292
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.20384755916893482
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.22057445463724434
+  },
+  "merge_frontier": {
+   "n": 883,
+   "s": 4.102990566054359
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 3.8855351887177676
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.2197355527896434
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 1.9382739490829408
+  },
+  "prepare": {
+   "n": 6,
+   "s": 17.92681698850356
+  },
+  "refresh_history": {
+   "n": 60,
+   "s": 0.00658911163918674
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 7.259684017160907
+  },
+  "route_all": {
+   "n": 2,
+   "s": 19.31704135821201
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.22355699492618442
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.21658392297104
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  2.004355822922662,
+  2.524023433914408,
+  1.9924053088761866,
+  2.0549819169100374,
+  4.460951220942661,
+  4.890099284937605
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 19.31704135821201,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 40.432874251157045
+}
