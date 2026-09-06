@@ -1,5 +1,6 @@
 import re
 import time
+from dataclasses import replace
 from fractions import Fraction
 from typing import NamedTuple
 
@@ -192,6 +193,85 @@ def test_a_coater_drop_is_exempt_from_another_coaters_ban():
 
     assert peer_drop in banned_alone, "the first Coater must ban that cell on its own"
     assert peer_drop not in banned_both
+
+
+def test_pack_with_access_widens_the_gap_until_every_port_has_a_corridor(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """A packing whose ports have nowhere to run is not committed, it is widened.
+
+    The fixture's own ports all obtain corridors at the narrowest gap, so the
+    walled-in packing is scripted rather than built: the first reservation is
+    the REAL one with one demand moved into `missing`, which is exactly the
+    verdict a block packed too tightly against its neighbour produces. What is
+    under test is that the composer answers that verdict by re-packing at the
+    next rung instead of committing a canvas the router has to refuse on.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    seen: list[int] = []
+    real = compose._reserve_port_access
+
+    def scripted(canvas, demands, **kw):
+        seen.append(kw["bounds"][2] - kw["bounds"][0])
+        reservation = real(canvas, demands, **kw)
+        if len(seen) == 1:  # first gap: pretend one port is walled in
+            return replace(reservation, missing=demands[:1], assigned=reservation.assigned[1:])
+        return reservation
+
+    monkeypatch.setattr(compose, "_reserve_port_access", scripted)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert packed.gap == compose.GAP_LADDER[1]
+    assert packed.reservation.complete
+
+
+def test_pack_with_access_passes_the_outer_ring_as_the_boundary(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """Without a boundary the reservation never asks whether a corridor LEADS anywhere.
+
+    `_reserve_port_access` only runs its reachability probe for demands whose
+    kind reaches the boundary, and only when it was given one; handed
+    `boundary=None` it accepts every free cell pair beside a lane head as an
+    option. The outer ring of `canvas.limit` is the composition's own open
+    ground, so it is the honest goal set -- a corridor that cannot reach it is
+    walled in by the packing itself.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    captured: dict[str, object] = {}
+    real = compose._reserve_port_access
+
+    def spy(canvas, demands, **kw):
+        captured["boundary"] = set(kw["boundary"])
+        captured["limit"] = canvas.limit
+        return real(canvas, demands, **kw)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", spy)
+    compose.pack_with_access([left, right], flows, spec, ramped=ramped, deadline=None, margin=8)
+
+    boundary = captured["boundary"]
+    assert isinstance(boundary, set)
+    limit = captured["limit"]
+    assert isinstance(limit, tuple)
+    x0, y0, x1, y1 = limit
+    assert (x0, y0, 0) in boundary and (x1, y1, 0) in boundary
+    assert all(x in (x0, x1) or y in (y0, y1) for x, y, _ in boundary)
+
+
+def test_compose_still_routes_both_cuts_on_the_chain(two_solved_blocks: TwoSolvedBlocks):
+    """The ladder, floored at today's gap, does not change today's outcome.
+
+    `compose` no longer packs at the gap it was handed -- it hands that gap to
+    :func:`pack_with_access` as the ladder's FLOOR and commits whichever rung
+    first gives every port a corridor. This is the regression guard on that
+    change: the chain composed at `gap=2` before, and must still.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    result = compose.compose([left, right], flows, spec, gap=2, ramped=ramped, deadline=None)
+    assert result.failures == ()
+    assert result.routed == len(flows)
 
 
 def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: TwoSolvedBlocks):
