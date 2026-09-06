@@ -3439,6 +3439,59 @@ def test_parent_deadline_after_proxy_closure_is_not_proxy_cancellation() -> None
     assert fake.detailed_allowances == [75]
 
 
+def _direct_flow_two_stage_spec() -> BuildSpec:
+    """One producer, one consumer, whose direct bridge is both LEGAL and CHEAPEST.
+
+    ``two_stage_spec`` stopped being a direct-insert fixture at 8bba914
+    ("Enforce directional cargo flow"), which made a candidate require two
+    things the old rule ignored:
+
+    * the bridge must land STRICTLY WEST of the consumer's first pickup, since
+      cargo dropped east of a pickup never reaches the machine picking up
+      there.  ``two_stage_spec``'s consumer takes a single ingredient, so its
+      sorter is seated at the westmost reachable column and its first pickup is
+      local column 0 -- no legal landing column exists at all.  The bridged
+      item here shares its consumer with ``graphene``, which sorts ahead of it
+      and pushes it one column east, exactly as the eligible
+      ``titanium-ingot``/``carbon-nanotube`` pair does in the URL corpus.
+    * the bridge must draw STRICTLY EAST of the last source injection it
+      depends on.  A consumer that eats a whole multi-machine producer
+      therefore has to sit a producer-width east of it, and width outranks the
+      direct reward, so ``_pack`` would never choose the bridge.  One machine
+      per group makes the last injection the first column, which leaves
+      ``origin_deltas`` spanning zero: the bridged packing is also the
+      narrowest one, so the packer and the production run realize it.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="titanium-ingot",
+                machine_item_id="arc-smelter",
+                count=1,
+                proliferator_mode=ProliferatorMode.NONE,
+                inputs_per_machine={"titanium-ore": Fraction(1)},
+                outputs_per_machine={"titanium-ingot": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="carbon-nanotube",
+                machine_item_id="chemical-plant",
+                count=1,
+                proliferator_mode=ProliferatorMode.NONE,
+                inputs_per_machine={
+                    "titanium-ingot": Fraction(1),
+                    "graphene": Fraction(1),
+                },
+                outputs_per_machine={"carbon-nanotube": Fraction(1)},
+            ),
+        ),
+        external_inputs={"titanium-ore": Fraction(1), "graphene": Fraction(1)},
+        outputs={"carbon-nanotube": Fraction(1)},
+        belt_item_id="conveyor-belt-2",
+        belt_items_per_second=Fraction(12),
+        label="two-stage-direct-flow",
+    )
+
+
 def _direct_pack_adapter_scene() -> tuple[
     BuildSpec,
     list[freeform_module.Strip],
@@ -3446,7 +3499,7 @@ def _direct_pack_adapter_scene() -> tuple[
     freeform_module._Pack,
     PlacementProblem,
 ]:
-    spec = two_stage_spec()
+    spec = _direct_flow_two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     candidates = freeform_module._direct_net_candidates(strips, spec)
     height = sum(strip.height + 1 for strip in strips)
@@ -3798,7 +3851,7 @@ def test_production_exact_preparation_reuses_realized_direct_insert(
         capture_prepare,
     )
     run = _production_run(
-        two_stage_spec(),
+        _direct_flow_two_stage_spec(),
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3853,9 +3906,9 @@ _WindowAdapter = Callable[
 ]
 
 
-def _window_adapter_run(deadline: float) -> _ProductionRun:
+def _window_adapter_run(deadline: float, spec: BuildSpec | None = None) -> _ProductionRun:
     return _production_run(
-        two_stage_spec(),
+        spec if spec is not None else two_stage_spec(),
         band_policy=BandPolicy("portable"),
         time_budget_s=2.0,
         power=False,
@@ -3957,8 +4010,8 @@ def test_the_window_adapter_solves_under_the_deadline_margin_budget(
     pinned by the refusal test below, which drives the clock instead of reading
     it.
     """
-    spec = two_stage_spec()
-    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S)
+    spec = _direct_flow_two_stage_spec()
+    run = _window_adapter_run(time.monotonic() + _WINDOW_DEADLINE_MARGIN_S, spec)
     adapter, problem, planned_state, _planned = _window_adapter_pieces(run)
     state = _reselected_state(run, problem, planned_state, spec)
     decoded = decode_state(problem, state)
@@ -5491,7 +5544,7 @@ def _two_stage_variant_problem() -> tuple[
     list[freeform_module.Strip],
     PlacementProblem,
 ]:
-    spec = two_stage_spec()
+    spec = _direct_flow_two_stage_spec()
     strips = plan_strips(spec, strip_len=6)
     instance_ids, variant_tables = _variant_search_inputs(
         spec,
@@ -5525,6 +5578,14 @@ def _three_stage_spec() -> BuildSpec:
     contributed) is indistinguishable from the correct ``return ()``. A third
     stage gives ``_selected_direct_targets`` two candidates -- (0, 1) and
     (1, 2) -- so that distinction becomes observable.
+
+    Both consumers take a second, externally supplied ``copper-ingot`` for the
+    reason ``_direct_flow_two_stage_spec`` documents: since 8bba914 ("Enforce
+    directional cargo flow") a bridge must land strictly west of the consumer's
+    first pickup, and a lone ingredient is seated at the westmost reachable
+    column, leaving nowhere legal to land.  ``copper-ingot`` sorts ahead of both
+    ``iron-ingot`` and ``gear`` on its lane, so each bridged item moves one
+    column east and column 0 stays clear.
     """
     return BuildSpec(
         groups=(
@@ -5541,7 +5602,10 @@ def _three_stage_spec() -> BuildSpec:
                 machine_item_id="assembling-machine-2",
                 count=4,
                 proliferator_mode=ProliferatorMode.NONE,
-                inputs_per_machine={"iron-ingot": Fraction(1)},
+                inputs_per_machine={
+                    "iron-ingot": Fraction(1),
+                    "copper-ingot": Fraction(1),
+                },
                 outputs_per_machine={"gear": Fraction(1)},
             ),
             MachineGroup(
@@ -5549,11 +5613,14 @@ def _three_stage_spec() -> BuildSpec:
                 machine_item_id="assembling-machine-2",
                 count=4,
                 proliferator_mode=ProliferatorMode.NONE,
-                inputs_per_machine={"gear": Fraction(1)},
+                inputs_per_machine={
+                    "gear": Fraction(1),
+                    "copper-ingot": Fraction(1),
+                },
                 outputs_per_machine={"electric-motor": Fraction(1)},
             ),
         ),
-        external_inputs={"iron-ore": Fraction(4)},
+        external_inputs={"iron-ore": Fraction(4), "copper-ingot": Fraction(8)},
         outputs={"electric-motor": Fraction(4)},
         belt_item_id="conveyor-belt-2",
         belt_items_per_second=Fraction(12),
@@ -8255,7 +8322,7 @@ def test_first_topology_candidate_reuses_only_a_width_admissible_hint() -> None:
 def test_sequence_backend_returns_only_certified_powered_placements(
     belt_vertical_construction: bool,
 ) -> None:
-    spec = two_stage_spec()
+    spec = _direct_flow_two_stage_spec()
     placement = SequencePairLayout(
         band_policy=BandPolicy("portable"),
         belt_vertical_construction=belt_vertical_construction,
