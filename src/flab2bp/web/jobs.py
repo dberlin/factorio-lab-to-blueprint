@@ -459,14 +459,17 @@ class Builder:
                     job.settled.append(step)
 
         collector: TraceCollector | None = None
-        if job.options.trace:
-            collector = TraceCollector(TraceRing(), started_at=time.monotonic())
-            collector.start()
-            with job._lock:
-                job.trace = collector
-
         try:
             try:
+                # Constructed and started inside the try: if `collector.start()`
+                # ever raises (e.g. thread exhaustion), the job must still reach
+                # a terminal state rather than getting stuck in "running"
+                # forever with `_run` propagating past its own caller.
+                if job.options.trace:
+                    collector = TraceCollector(TraceRing(), started_at=time.monotonic())
+                    collector.start()
+                    with job._lock:
+                        job.trace = collector
                 build = self._solve(
                     job.options, note, None if collector is None else collector.observer
                 )

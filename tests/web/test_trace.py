@@ -1,3 +1,4 @@
+import threading
 import time
 from fractions import Fraction
 
@@ -98,18 +99,50 @@ def test_frame_json_decimates_and_flags_an_oversized_placement() -> None:
 
 
 def test_ring_since_is_an_exclusive_cursor_and_reports_the_next_one() -> None:
+    """``next`` is the highest ``seq`` actually returned -- not that plus one --
+
+    so that feeding it straight back as ``from`` (unchanged) is a correct,
+    idempotent continuation.  When nothing is new, ``next`` is the caller's
+    cursor, unchanged, rather than jumping past frames it never saw.
+    """
     ring = TraceRing()
     for seq in range(5):
         ring.append({"seq": seq, "buildings": []})
     frames, nxt = ring.since(-1, limit=3)
     assert [f["seq"] for f in frames] == [0, 1, 2]
-    assert nxt == 3
-    frames, nxt = ring.since(2, limit=3)
+    assert nxt == 2
+    frames, nxt = ring.since(nxt, limit=3)
     assert [f["seq"] for f in frames] == [3, 4]
-    assert nxt == 5
-    frames, nxt = ring.since(4, limit=3)
+    assert nxt == 4
+    frames, nxt = ring.since(nxt, limit=3)
     assert frames == []
-    assert nxt == 5
+    assert nxt == 4
+
+
+def test_ring_walk_delivers_every_frame_exactly_once_via_next_as_from() -> None:
+    """The point of the cursor fix: repeatedly feeding ``next`` back as ``from``
+
+    must never skip or repeat a frame.  Under the old ``+ 1`` semantics this
+    fails -- the first page's ``next`` (3, one past the last delivered seq)
+    would be fed back as ``from=3``, and ``since`` filters on ``seq > cursor``,
+    so seq 3 itself is silently skipped.
+    """
+    ring = TraceRing()
+    for seq in range(11):
+        ring.append({"seq": seq, "buildings": []})
+
+    delivered: list[int] = []
+    cursor = -1
+    stalls = 0
+    while len(delivered) < 11:
+        frames, nxt = ring.since(cursor, limit=3)
+        if not frames:
+            stalls += 1
+            assert stalls < 100, "the walk made no progress"
+            continue
+        delivered.extend(int(f["seq"]) for f in frames)
+        cursor = nxt
+    assert delivered == list(range(11))
 
 
 def test_ring_evicts_oldest_on_the_frame_bound_and_counts_it() -> None:
@@ -133,6 +166,47 @@ def test_ring_evicts_oldest_on_the_byte_bound_and_counts_it() -> None:
     assert ring.dropped == 17
 
 
+def test_ring_append_and_since_from_different_threads_never_raise() -> None:
+    """``append`` (the trace daemon) and ``since`` (an HTTP handler) run on
+
+    different threads for real. Without a lock, ``since`` iterating
+    ``self._frames`` while ``append`` mutates it is exactly
+    ``RuntimeError: deque mutated during iteration`` -- a poll landing mid-drain
+    would 500. Hammer both concurrently and require no exception and a
+    coherent (non-corrupt) result throughout.
+    """
+    ring = TraceRing(max_frames=50, max_bytes=1 << 30)
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            for seq in range(2000):
+                ring.append({"seq": seq, "buildings": []})
+        except BaseException as exc:  # noqa: BLE001 -- captured for the assertion
+            errors.append(exc)
+        finally:
+            stop.set()
+
+    def reader() -> None:
+        try:
+            while not stop.is_set():
+                frames, nxt = ring.since(-1, limit=10)
+                seqs = [int(f["seq"]) for f in frames]
+                assert seqs == sorted(seqs), "a torn read returned frames out of order"
+                assert nxt == (seqs[-1] if seqs else -1)
+        except BaseException as exc:  # noqa: BLE001 -- captured for the assertion
+            errors.append(exc)
+
+    writer_thread = threading.Thread(target=writer)
+    reader_thread = threading.Thread(target=reader)
+    reader_thread.start()
+    writer_thread.start()
+    writer_thread.join(timeout=10.0)
+    reader_thread.join(timeout=10.0)
+    assert not errors, errors
+
+
 def test_collector_projects_on_its_own_thread_and_pages_by_cursor() -> None:
     collector = TraceCollector(TraceRing(), started_at=time.monotonic())
     collector.start()
@@ -150,8 +224,8 @@ def test_collector_projects_on_its_own_thread_and_pages_by_cursor() -> None:
 
     frames, nxt = collector.ring.since(-1, limit=2)
     assert [f["seq"] for f in frames] == [0, 1]
-    assert nxt == 2
-    frames, nxt = collector.ring.since(nxt - 1, limit=2)
+    assert nxt == 1
+    frames, nxt = collector.ring.since(nxt, limit=2)
     assert [f["seq"] for f in frames] == [2]
 
 

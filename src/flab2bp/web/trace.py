@@ -119,6 +119,13 @@ class TraceRing:
     _frames: deque[tuple[Json, int]] = field(default_factory=deque, init=False)
     _bytes: int = field(default=0, init=False)
     _dropped: int = field(default=0, init=False)
+    #: ``append`` runs on the collector's daemon thread; ``since`` runs on an
+    #: HTTP handler thread.  Without this, a poll landing mid-append iterates
+    #: the deque while it is being mutated -- CPython raises
+    #: ``RuntimeError: deque mutated during iteration`` -- and a trace poll
+    #: would occasionally 500.  The critical section is just the deque copy /
+    #: mutation; ``frame_json`` and all projection happen well outside it.
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     @property
     def dropped(self) -> int:
@@ -127,33 +134,33 @@ class TraceRing:
     def append(self, frame: Json) -> None:
         rows = frame.get("buildings")
         size = (len(rows) if isinstance(rows, list) else 0) * _ROW_BYTES + 512
-        self._frames.append((frame, size))
-        self._bytes += size
-        while len(self._frames) > self.max_frames or (
-            self._bytes > self.max_bytes and len(self._frames) > 1
-        ):
-            _evicted, evicted_size = self._frames.popleft()
-            self._bytes -= evicted_size
-            self._dropped += 1
+        with self._lock:
+            self._frames.append((frame, size))
+            self._bytes += size
+            while len(self._frames) > self.max_frames or (
+                self._bytes > self.max_bytes and len(self._frames) > 1
+            ):
+                _evicted, evicted_size = self._frames.popleft()
+                self._bytes -= evicted_size
+                self._dropped += 1
 
     def since(self, cursor: int, *, limit: int = TRACE_PAGE_FRAMES) -> tuple[list[Json], int]:
         """Frames with ``seq > cursor``, and the cursor to pass back next time.
 
-        The cursor is EXCLUSIVE and the returned one is the highest seq held
-        plus one, so a caller that asks again with it gets nothing until
-        something new arrives -- and a caller whose cursor has aged out of the
-        ring gets the oldest retained frame rather than an error.
+        The cursor is EXCLUSIVE.  ``next`` is the highest ``seq`` actually
+        returned in this page -- NOT that plus one -- so ``?from=<next>`` is a
+        correct, idempotent continuation: feeding it back asks for
+        ``seq > next``, which is exactly "everything after what was just
+        delivered."  When nothing is new, ``next`` is the caller's cursor,
+        unchanged, rather than jumping ahead of frames the caller never saw.
         """
-        held = [frame for frame, _size in self._frames]
+        with self._lock:
+            held = [frame for frame, _size in self._frames]
         fresh = [frame for frame in held if int(cast(int, frame["seq"])) > cursor]
         page = fresh[:limit]
-        if held:  # noqa: SIM108
-            nxt = int(cast(int, held[-1]["seq"])) + 1
-        else:
-            nxt = cursor + 1
-        if page:
-            nxt = int(cast(int, page[-1]["seq"])) + 1
-        return page, nxt
+        if not page:
+            return [], cursor
+        return page, int(cast(int, page[-1]["seq"]))
 
 
 TRACE_DRAIN_INTERVAL_S: Final = 0.1
@@ -223,4 +230,10 @@ class TraceCollector:
         thread = self._thread
         if thread is not None:
             thread.join(timeout=2.0)
-        self.drain_once()
+        # Only drain here if the daemon thread is gone: `frame_json` reads and
+        # then increments `self._seq`, and if the join above timed out (a
+        # wedged thread), that thread could still be mid-drain -- draining
+        # again concurrently from this thread would race on `_seq` and could
+        # emit two frames with the same seq, or lose an increment.
+        if thread is None or not thread.is_alive():
+            self.drain_once()
