@@ -26,6 +26,8 @@ from __future__ import annotations
 import bisect
 import time
 from dataclasses import dataclass, replace
+from functools import partial
+from typing import NamedTuple
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import junction, slots
@@ -33,6 +35,7 @@ from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.freeform import (
     CoaterSupplyPort,
     PortAccessEvidence,
+    PortAccessReservation,
     _Canvas,
     _collision_pose,
     _lane_stacks_for,
@@ -48,7 +51,7 @@ from flab2bp.layout.freeform import (
     _StagedCoater,
 )
 from flab2bp.layout.hierarchy.contracts import LaneFlow
-from flab2bp.layout.route_feedback import DetailedRouteStatus, NetId, NetRole
+from flab2bp.layout.route_feedback import Cell, DetailedRouteStatus, NetId, NetRole
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
 
@@ -61,6 +64,41 @@ BAND_MAX_ROWS = 160
 #: a Splitter's reaches beyond its 2x2 footprint, so blocks laid flush against
 #: each other convict on contact alone.
 MIN_GAP = 2
+
+#: The gaps a packing may be tried at, narrowest first.
+#:
+#: A block solved on its own owns every tile of its own box, so the ONLY ground
+#: an inter-block cut can run on is the gap the packing left between the boxes.
+#: At :data:`MIN_GAP` that ground is two tiles wide and already carries the
+#: neighbours' belt colliders, which is why the v1 gate measured the router
+#: refusing 8-50 lanes on belt3 dominated by ``DYNAMIC_ACCESS`` -- and why
+#: DOUBLING the routing budget to 120 s did not change the class.  A router that
+#: refuses the same way with twice the wall is not short of time; it is being
+#: handed a canvas with nowhere to run, and the fix is more ground rather than
+#: more clock.
+#:
+#: The rungs double and then step, because the cost of a rung is a whole
+#: re-pack plus a whole reservation: a fine ladder would spend the composition's
+#: budget proving that 3 is as hopeless as 2.  16 is the top because a gap that
+#: wide already pushes a mall-sized packing past :data:`BAND_MAX_ROWS`, and a
+#: composition that cannot be pasted is not an answer.
+GAP_LADDER = (2, 4, 6, 8, 12, 16)
+
+#: The share of the wall left on entry that rungs BEYOND THE FIRST may spend.
+#:
+#: The first rung is not speculative -- it is the composition that would have
+#: been committed before there was a ladder -- so it runs on the caller's own
+#: clock, exactly as it did.  Every further rung is a bet, and a bet has to be
+#: funded out of something.  Handed the whole clock the ladder can pay for six
+#: packs, six canvases and six reservations, hand ``_route_all`` a deadline that
+#: has already passed, and refuse under ``BUDGET`` on cuts the first rung would
+#: have wired -- a wider canvas nobody has the wall left to route on is not an
+#: improvement, it is a regression wearing one's clothes.
+#:
+#: The majority stays with the router because the router is the stage that
+#: actually produces belts; the ladder only decides which ground it produces
+#: them on.
+LADDER_WALL_SHARE = 0.4
 
 
 @dataclass
@@ -90,6 +128,54 @@ class ComposeResult:
     #: quietly dropped -- an unwired entry lane is a block that starves, and the
     #: validator convicts it several errors later with no way back to the cause.
     failures: tuple[str, ...]
+
+
+class _Packing(NamedTuple):
+    """One gap's committed geometry, before any reservation has judged it.
+
+    A tuple rather than a dataclass so that a judged rung is spelled
+    ``PackedCanvas(*packing, reservation=..., gap=...)``: these are
+    :class:`PackedCanvas`'s own leading four fields in its own order, and
+    keeping the two shapes in step is what stops a verdict being attached to a
+    different packing than the one it judged.
+    """
+
+    buildings: list[PlacedBuilding]
+    blocks: list[BlockPlaced]
+    canvas: _Canvas
+    nets: list[_Net]
+
+
+@dataclass(frozen=True)
+class PackedCanvas:
+    """A packing, and the corridor verdict that let it be committed.
+
+    ``reservation`` is STAKED ON ``canvas``: ``_reserve_port_access`` writes its
+    assignments into ``canvas.reserved`` and ``canvas.port_corridors`` before it
+    returns, so a caller routes on this canvas and must not reserve again.  The
+    corollary is that a rejected rung cannot be un-staked and is simply thrown
+    away, canvas and all -- which is why each rung packs from scratch.
+    """
+
+    buildings: list[PlacedBuilding]
+    blocks: list[BlockPlaced]
+    canvas: _Canvas
+    nets: list[_Net]
+    reservation: PortAccessReservation
+    gap: int
+
+
+class _PackingDeadline(Exception):
+    """The clock ran out before any rung of the ladder returned a verdict.
+
+    Carries the packing it died on, because the caller still owes its own
+    caller a REFUSAL THAT NAMES EVERY CUT -- and the net list it has to name
+    them from only exists inside the rung that was being judged.
+    """
+
+    def __init__(self, packing: _Packing) -> None:
+        super().__init__("no gap could be judged before the deadline")
+        self.packing = packing
 
 
 def _normalize(placement: Placement) -> tuple[Placement, int, int]:
@@ -461,21 +547,44 @@ def _corridor_evidence(evidence: PortAccessEvidence | None) -> str:
     return f"held={evidence.held} wants={evidence.wanted} options={evidence.local_options}"
 
 
-def compose(
+def _spent(deadline: float | None) -> bool:
+    """Whether ``deadline`` has already passed; ``None`` never has."""
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def _outer_ring(bounds: tuple[int, int, int, int]) -> list[Cell]:
+    """Every ground cell on the rim of ``bounds``, as the reservation's boundary.
+
+    This is the composition's answer to "where does a corridor LEAD?".  Inside a
+    freeform block the boundary is the strip field's own rim, and a port that
+    cannot reach it is a port whose belt can never be joined; here the rim of
+    ``canvas.limit`` is the open ground outside every packed box, so a lane head
+    that cannot reach it is walled in by the packing and by nothing else.
+
+    Ground level only.  ``canvas.limit`` bounds x and y and says nothing about
+    altitude, and a ramp up to a raised rim cell is a corridor the packing did
+    not actually provide -- claiming it would let a walled-in port pass.
+    """
+    x0, y0, x1, y1 = bounds
+    ring: list[Cell] = [(x, y, 0) for x in range(x0, x1 + 1) for y in (y0, y1)]
+    ring.extend((x, y, 0) for y in range(y0 + 1, y1) for x in (x0, x1))
+    return ring
+
+
+def _pack_at(
     placements: list[Placement],
     flows: list[LaneFlow],
     spec: BuildSpec,
     *,
     gap: int,
     ramped: bool,
-    deadline: float | None,
-    _limit_margin: int = 8,
-) -> ComposeResult:
-    """Pack the solved blocks side by side and wire every ``LaneFlow`` between them.
+    margin: int,
+) -> _Packing:
+    """Lay the blocks out at one ``gap`` and build the router's view of them.
 
-    ``_limit_margin`` is how much free ground outside the packed boxes the
-    router may use; it exists so a test can wall the composition in at 0 and
-    see the router NAME the cut it cannot make.
+    Every rung of the ladder starts here, from the original placements, because
+    a packing cannot be widened in place: the offsets, the canvas and every
+    ``_Net``'s port tiles are all derived from the gap.
     """
     normalized = [_normalize(p) for p in placements]
     offsets, _width, _height = pack_blocks([(w, h) for _, w, h in normalized], gap)
@@ -487,9 +596,7 @@ def compose(
         buildings.extend(_translate(placement, base, ox, oy))
         blocks.append(BlockPlaced(i, placement, base, (ox, oy), w, h))
 
-    canvas = canvas_for(spec, buildings, ramped=ramped, margin=_limit_margin)
-    bounds = canvas.limit
-    assert bounds is not None  # canvas_for always sets it
+    canvas = canvas_for(spec, buildings, ramped=ramped, margin=margin)
 
     nets: list[_Net] = []
     for ordinal, flow in enumerate(flows):
@@ -515,44 +622,183 @@ def compose(
                 ),
             )
         )
+    return _Packing(buildings, blocks, canvas, nets)
 
-    # Stake every port's approach before any path commits, the way
-    # `_prepare_routing_problem` does.  A boundary lane's end tile has at most
-    # three free neighbours and often one; without the reservation an earlier
-    # net's path takes the last one and every later net using that port is
-    # handed an empty start set -- a search that expands nothing and so
-    # registers no congestion for the negotiation to price.
-    #
-    # UNDER THE SAME CLOCK AS THE ROUTE.  The reservation enumerates every
-    # candidate corridor of every demand and then solves a JOINT MATCHING over
-    # them, so its cost grows with the interface rather than being a fixed
-    # preamble -- run unbounded, a composition handed a spent deadline burns
-    # wall the caller no longer has.  `_reserve_port_access` takes both a
-    # `cancelled` predicate and a `deadline`, puts back the reservations and
-    # corridors it cleared, and raises `_PreparationDeadline`;
-    # `_prepare_routing_problem` lets that unwind to whoever owns the budget.
-    # Here the caller wants a REFUSAL, so it is caught and every cut is reported
-    # unwired under the router's own budget word.
+
+def pack_with_access(
+    placements: list[Placement],
+    flows: list[LaneFlow],
+    spec: BuildSpec,
+    *,
+    ramped: bool,
+    deadline: float | None,
+    margin: int,
+    gap: int = MIN_GAP,
+) -> PackedCanvas:
+    """Pack at widening gaps until every port has a corridor, and commit that one.
+
+    THE GAP IS A SEARCHED QUANTITY, not a constant.  Every rung of
+    :data:`GAP_LADDER` at or above ``gap`` is packed, and the reservation is
+    asked whether every lane head can still be given a corridor of its own.
+    The first rung it answers yes for is committed.  The canvas rim goes with
+    the question only when some demand's kind could actually be probed against
+    it -- see the comment at the call.
+
+    Stake every port's approach before any path commits, the way
+    `_prepare_routing_problem` does.  A boundary lane's end tile has at most
+    three free neighbours and often one; without the reservation an earlier
+    net's path takes the last one and every later net using that port is handed
+    an empty start set -- a search that expands nothing and so registers no
+    congestion for the negotiation to price.
+
+    UNDER A BOUNDED SHARE OF THE ROUTE'S CLOCK.  The reservation enumerates
+    every candidate corridor of every demand and then solves a JOINT MATCHING
+    over them, so its cost grows with the interface rather than being a fixed
+    preamble; a ladder multiplies that by its rungs.  The FIRST rung is what a
+    ladderless composer would have done and runs on ``deadline`` itself; every
+    rung after it is speculative and is funded out of :data:`LADDER_WALL_SHARE`
+    of the wall left on entry, so that ``_route_all`` is never handed a clock
+    the search for a wider canvas has already spent.  The ladder stops the
+    moment that share runs out:
+
+    * with a rung already judged, the best one in hand is returned -- it is a
+      real packing with a real verdict, and spending the router's wall to find
+      a wider canvas nobody can then route on helps nobody;
+    * with NO rung judged, :class:`_PackingDeadline` carries the packing out to
+      the caller, which owes its own caller a refusal naming every cut.
+
+    ``gap`` is a FLOOR, not the gap: a caller that knows two blocks cannot be
+    laid closer than 8 passes 8 and the ladder starts there.  When the floor is
+    above every rung the floor itself is the only rung, since a ladder must
+    always try at least once.
+    """
+    # `pack_blocks` clamps to MIN_GAP, so no rung can collide even if a caller
+    # asks for a floor below it.
+    rungs = tuple(rung for rung in GAP_LADDER if rung >= gap) or (max(gap, MIN_GAP),)
+    entered = time.monotonic()
+    ladder_deadline = (
+        None if deadline is None else entered + (deadline - entered) * LADDER_WALL_SHARE
+    )
+    best: PackedCanvas | None = None
+    for position, rung in enumerate(rungs):
+        # The FIRST rung is unconditional and runs on the caller's own clock:
+        # it is what a ladderless composer would have done, and a caller that
+        # entered with a spent clock is still owed a packing to name its cuts
+        # from.  Only the rungs after it are bet on `LADDER_WALL_SHARE`.
+        first = position == 0
+        if not first and _spent(ladder_deadline):
+            break
+        rung_deadline = deadline if first else ladder_deadline
+        packing = _pack_at(placements, flows, spec, gap=rung, ramped=ramped, margin=margin)
+        bounds = packing.canvas.limit
+        assert bounds is not None  # canvas_for always sets it
+        demands = _port_access_inventory(packing.nets).demands
+        # THE BOUNDARY IS PASSED ONLY WHEN SOME DEMAND COULD USE IT.  Every
+        # demand `_port_access_inventory` builds from `_Packing.nets` is an
+        # `INTERNAL_DEPARTURE` or an `INTERNAL_ARRIVAL` (compose has no
+        # boundary ports of its own), and both answer `reaches_boundary` False
+        # -- so the reachability probe is skipped for every one of them and no
+        # demand can ever be moved into `missing` by it.  Handing
+        # `_reserve_port_access` a boundary anyway is pure cost on a clock the
+        # gate shows binding (BUDGET-class refusals on titanium-glass and
+        # zurl2): it builds a `_Grid` over the whole route box PER LADDER RUNG
+        # for probes that never run, and installs an `assignment_boundary_cut`
+        # validate callback that `_match_access_corridors` re-invokes on every
+        # candidate assignment only to `continue` past every demand and return
+        # `None`.  The `any` is kept rather than the argument deleted so that
+        # the day compose's demands become boundary-aware -- the v2 gate's §6
+        # lever 1, "give the composer real boundary ports" -- the probe and its
+        # shared grid light up again on their own.
+        boundary = _outer_ring(bounds) if any(d.kind.reaches_boundary for d in demands) else None
+        try:
+            reservation = _reserve_port_access(
+                packing.canvas,
+                demands,
+                boundary=boundary,
+                bounds=bounds,
+                # `partial` rather than a lambda: `rung_deadline` is a loop
+                # variable, and a closure over it would read whichever rung ran
+                # last rather than the one that asked.
+                cancelled=partial(_spent, rung_deadline),
+                deadline=rung_deadline,
+            )
+        except _PreparationDeadline:
+            if best is None:
+                raise _PackingDeadline(packing) from None
+            break
+        candidate = PackedCanvas(*packing, reservation=reservation, gap=rung)
+        if reservation.complete:
+            return candidate
+        # STRICTLY fewer, so the NARROWEST of the equally-bad rungs wins: a
+        # wider packing that serves no more ports is pure area, and area is what
+        # `BAND_MAX_ROWS` refuses a paste over.
+        if best is None or len(reservation.missing) < len(best.reservation.missing):
+            best = candidate
+    assert best is not None  # `rungs` is never empty, so the first rung ran
+    return best
+
+
+def _budget_refusal(packing: _Packing) -> ComposeResult:
+    """Every cut of ``packing`` reported unwired under the router's budget word.
+
+    `_reserve_port_access` puts back the reservations and corridors it cleared
+    and raises `_PreparationDeadline`; `_prepare_routing_problem` lets that
+    unwind to whoever owns the budget.  Here the caller wants a REFUSAL, so the
+    cuts are named instead -- an unwired entry lane the composer swallowed is a
+    block that starves, convicted many stages later with no way back.
+    """
+    return ComposeResult(
+        Placement(
+            buildings=tuple(packing.canvas.buildings), description="hierarchical composition"
+        ),
+        packing.blocks,
+        0,
+        tuple(
+            f"{net.item}: block {net.net_id.source_strip} -> "
+            f"block {net.net_id.destination_strip}: {DetailedRouteStatus.BUDGET.name}"
+            for net in packing.nets
+            if net.net_id is not None
+        ),
+    )
+
+
+def compose(
+    placements: list[Placement],
+    flows: list[LaneFlow],
+    spec: BuildSpec,
+    *,
+    gap: int,
+    ramped: bool,
+    deadline: float | None,
+    _limit_margin: int = 8,
+) -> ComposeResult:
+    """Pack the solved blocks side by side and wire every ``LaneFlow`` between them.
+
+    ``gap`` is the FLOOR of :func:`pack_with_access`'s ladder, not the gap the
+    packing gets: the composition commits whichever rung first gives every port
+    a corridor out to open ground.  ``_limit_margin`` is how much free ground
+    outside the packed boxes the router may use; it exists so a test can wall
+    the composition in at 0 and see the router NAME the cut it cannot make.
+    """
     try:
-        reservation = _reserve_port_access(
-            canvas,
-            _port_access_inventory(nets).demands,
-            bounds=bounds,
-            cancelled=lambda: deadline is not None and time.monotonic() >= deadline,
+        packed = pack_with_access(
+            placements,
+            flows,
+            spec,
+            ramped=ramped,
             deadline=deadline,
+            margin=_limit_margin,
+            gap=gap,
         )
-    except _PreparationDeadline:
-        return ComposeResult(
-            Placement(buildings=tuple(canvas.buildings), description="hierarchical composition"),
-            blocks,
-            0,
-            tuple(
-                f"{net.item}: block {net.net_id.source_strip} -> "
-                f"block {net.net_id.destination_strip}: {DetailedRouteStatus.BUDGET.name}"
-                for net in nets
-                if net.net_id is not None
-            ),
-        )
+    except _PackingDeadline as expired:
+        return _budget_refusal(expired.packing)
+
+    canvas = packed.canvas
+    blocks = packed.blocks
+    nets = packed.nets
+    reservation = packed.reservation
+    bounds = canvas.limit
+    assert bounds is not None  # canvas_for always sets it
 
     # A PORT THE MATCHER COULD NOT SERVE IS A REPORTED CUT, not a discarded
     # verdict.  `_prepare_routing_problem` turns the same evidence into
@@ -597,4 +843,15 @@ def compose(
     )
 
 
-__all__ = ["BAND_MAX_ROWS", "BlockPlaced", "ComposeResult", "canvas_for", "compose", "pack_blocks"]
+__all__ = [
+    "BAND_MAX_ROWS",
+    "GAP_LADDER",
+    "LADDER_WALL_SHARE",
+    "BlockPlaced",
+    "ComposeResult",
+    "PackedCanvas",
+    "canvas_for",
+    "compose",
+    "pack_blocks",
+    "pack_with_access",
+]

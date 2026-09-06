@@ -4,9 +4,16 @@ import pytest
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
-from flab2bp.layout.hierarchy.contracts import ContractError, LaneEnd, assign_lanes, boundary_lanes
+from flab2bp.layout.hierarchy.contracts import (
+    ContractError,
+    LaneEnd,
+    allocate_cuts,
+    assign_lanes,
+    boundary_lanes,
+)
 from flab2bp.layout.hierarchy.partition import Cut
 from flab2bp.spec import BuildSpec
+from tests.layout.hierarchy.test_pressure import _chain, _chain_with_external
 
 BELT = next(iter(catalog.BELT_IDS))
 SORTER = next(iter(catalog.SORTER_IDS))
@@ -71,6 +78,34 @@ def test_two_cuts_for_one_item_pool_supply_and_demand():
     assert all(f.dst.block in {2, 3} for f in flows)
     assert sum(f.rate for f in flows if f.dst.building == 20) == 7
     assert sum(f.rate for f in flows if f.dst.building == 21) == 3
+
+
+def test_a_both_fed_item_leaves_the_unserved_block_to_the_player():
+    spec = _chain_with_external("ingot")  # ingot both produced inside and in external_inputs
+    cuts = [Cut("ingot", 0, 1, Fraction(2)), Cut("ingot", 0, 2, Fraction(2))]
+    tails = {0: [_end(0, 10, "ingot", 2)]}
+    heads = {1: [_end(1, 20, "ingot", 2)], 2: [_end(2, 30, "ingot", 2)]}
+    got = allocate_cuts(spec, cuts, tails, heads)
+    assert [(f.src.building, f.dst.building, f.rate) for f in got.flows] == [(10, 20, Fraction(2))]
+    assert got.player_fed == {(2, "ingot")}
+
+
+def test_an_internal_item_short_of_supply_is_a_contract_error():
+    spec = _chain()  # ingot NOT in external_inputs
+    cuts = [Cut("ingot", 0, 1, Fraction(2)), Cut("ingot", 0, 2, Fraction(2))]
+    tails = {0: [_end(0, 10, "ingot", 2)]}
+    heads = {1: [_end(1, 20, "ingot", 2)], 2: [_end(2, 30, "ingot", 2)]}
+    with pytest.raises(ContractError, match=r"ingot.*block 2.*does not belt it in"):
+        allocate_cuts(spec, cuts, tails, heads)
+
+
+def test_a_block_is_wired_entirely_or_not_at_all():
+    spec = _chain_with_external("ingot")
+    cuts = [Cut("ingot", 0, 1, Fraction(3))]
+    tails = {0: [_end(0, 10, "ingot", 3)]}
+    heads = {1: [_end(1, 20, "ingot", 2), _end(1, 21, "ingot", 2)]}  # wants 4, has 3
+    got = allocate_cuts(spec, cuts, tails, heads)
+    assert got.flows == [] and got.player_fed == {(1, "ingot")}
 
 
 def _boundary_spec() -> BuildSpec:

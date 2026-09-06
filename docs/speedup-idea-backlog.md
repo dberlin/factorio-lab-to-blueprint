@@ -101,16 +101,69 @@ runs, not that it produces a blueprint on a large URL.
   Corpus effect measured: no cell regressed; `sequence-pair
   magnetic-coil/output-products` is reproducibly 4.3 % smaller (299 -> 286).
 
-Still open, and now with measurements behind them (gate.md §6):
+### From hierarchical v2
+
+Branch `hierarchical-v2`, gated in
+`docs/superpowers/evidence/2026-09-07-hierarchical-v2/gate.md` — also a **FAIL**
+(0 of 8 large cells build), but the failure MOVED: five of the eight cells now
+place every block, wire every cut and reach the router, where v1 had one.
+
+- **DONE** Per-(block, item) cut allocation: a consumer block that cannot be
+  fully served is left to the player when the parent spec belts the item in,
+  else `ContractError`; a (block, item) is wired entirely or not at all
+  (`hierarchy/contracts.py`). This closes v1's byproduct lane-contract item:
+  `zurl2/all-products` used to refuse on `lane contract: hydrogen`, and now
+  reaches the router with `block 16 : hydrogen` player-fed. **No `ContractError`
+  occurs anywhere in the v2 gate.**
+- **DONE** `partition.strip_count` counts what `freeform.plan_strips` actually
+  packs rather than logical strip plans, so the cap is calibrated against the
+  right quantity (v1 gate §6's "cheaper than all three" item). Effect: belt3's
+  seed partition at cap 12 goes 3 blocks -> 9, the malls 2-3 -> 19 and 24.
+- **PARTLY** Round funding: the hierarchical backend now receives the caller's
+  raw `--workers` (or `None`) instead of a 16-capped race budget, the pool is
+  `min(32, cpus // 4)` rather than `(workers or 16) // 4`, and the settlement
+  reserve floor is 5 s rather than 10 s (`hierarchy/strategy.py`,
+  `pipeline.py`). Effect: titanium-glass at `--budget 15` went from attempting
+  NOTHING to placing and composing all six blocks. **Still open** on the malls,
+  which refuse with 22 and 45 blocks never placed: the round's wall is still
+  divided by WAVES and the re-cut loop still grows the block count without a
+  global bound (gate.md §6 lever 2).
+- **PARTLY** A gap ladder for the composition (`GAP_LADDER = (2, 4, 6, 8, 12,
+  16)` under `LADDER_WALL_SHARE`, with `_reserve_port_access` over the outer
+  ring as its oracle) — design §4 E's reservation, done as a searched gap rather
+  than a physical bus lane (`hierarchy/compose.py`). **The BOUNDARY half of its
+  oracle is structurally unreachable**, which is the v2 gate's headline finding:
+  `compose` passes no boundary lanes, so every demand is internal, every
+  internal demand has `reaches_boundary == False`, and both the reachability
+  probe and the joint matcher's boundary validator skip it — the only thing the
+  ladder can ever reject a rung over is a LOCAL doorstep claim. Measured: five
+  composing cells, 31-168 port demands, rung 0 committed with `missing = 0`
+  every time; the one firing in the whole gate is at strip cap 8, where rung 0
+  missed one `internal-arrival` demand of 111, gap 4 satisfied it, and the
+  router still refused 8 cut lanes. gate.md §3.4 and §6 lever 1.
+- **DONE** A within-build no-good keyed on block shape (`_ShapeNoGood`,
+  `stats["nogood_skips"]`), the first of v1 §7's three adaptive memories. Live
+  but verdict-neutral: 36 skips on `mall/all-products`, 8 / 4 / 2 elsewhere,
+  no cell's verdict, failure class or block count changed.
+
+Still open, and now with measurements behind them (v2 gate.md §6-§7):
+- **Make the port-access oracle boundary-aware for internal demands** — the
+  cheapest unexplored lever, and the prerequisite for knowing whether a bus
+  corridor is even needed, since until the oracle can reject a rung no wider gap
+  is ever tried. v2 gate.md §6 lever 1 carries the file:line mechanism.
 - A bus corridor reserved BEFORE block placement, rather than routing cuts on
-  whatever ground the packing left — design §4 E specifies it and v1 does not do
-  it; `DYNAMIC_ACCESS` on the cut lanes is the direct evidence.
-- Round funding that does not divide a round's wall by WAVES, so a finer
-  partition stops being self-defeating (a 4-strip cap refuses the mall in 0.1 s
-  without attempting one solve).
-- Adaptive memory for the block solver: a within-build no-good keyed on block
-  shape, a cross-build solved-block cache, and a strip cap that moves with
-  outcomes. gate.md §7 records the evidence motivating each.
+  whatever ground the packing left — design §4 E specifies it. Evidence:
+  28 / 15 / 9 / 4 / 3 unrouted cuts across the five composing cells, all
+  `COMMIT_LINK` / `SEALED_POCKET` / `DYNAMIC_ACCESS` contention, while the
+  reservation reports every port satisfied.
+- Round funding that does not divide a round's wall by WAVES, and a global
+  bound on re-cut growth, so a finer partition stops being self-defeating (the
+  malls refuse with 22 and 45 blocks never placed even at a 32-wide pool).
+- The other two adaptive memories: a cross-build solved-block cache (now much
+  more valuable — the finer partitions are 6-29 mostly single-recipe blocks, and
+  one mall refusal names nine consecutive `magnet` blocks) and a strip cap that
+  moves with outcomes (cap 8 gives belt3 8 unrouted lanes against the shipped
+  cap 12's 28). v2 gate.md §7 records the evidence for each.
 
 ### Orchestrator and dispatch
 - Anytime dispatch of strategy, budget and islands from the feature vector:

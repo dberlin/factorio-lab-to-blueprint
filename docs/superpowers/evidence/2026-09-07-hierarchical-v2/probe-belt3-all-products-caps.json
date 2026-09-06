@@ -1,0 +1,360 @@
+{
+ "groups": 13,
+ "machines": 280,
+ "policy": "all-products",
+ "probe": true,
+ "rows": [
+  {
+   "block_detail": [
+    {
+     "machines": 20,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 20,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 21,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 28,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 28,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 20,
+     "recipes": [
+      "gear"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 5,
+     "recipes": [
+      "graphene-advanced"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 8,
+     "recipes": [
+      "energetic-graphite"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 15,
+     "recipes": [
+      "copper-ingot"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 18,
+     "recipes": [
+      "magnetic-coil"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 20,
+     "recipes": [
+      "electric-motor"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 20,
+     "recipes": [
+      "electric-motor"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 25,
+     "recipes": [
+      "electromagnetic-turbine"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 15,
+     "recipes": [
+      "super-magnetic-ring"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 11,
+     "recipes": [
+      "conveyor-belt-1",
+      "conveyor-belt-2"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 6,
+     "recipes": [
+      "conveyor-belt-3"
+     ],
+     "strips": 1
+    }
+   ],
+   "blocks": 16,
+   "cap": 8,
+   "cuts": 29,
+   "machines_max": 28,
+   "partition_wall_s": 0.322,
+   "policy": "all-products",
+   "strips_max": 5,
+   "url": "belt3"
+  },
+  {
+   "block_detail": [
+    {
+     "machines": 61,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 11
+    },
+    {
+     "machines": 56,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 10
+    },
+    {
+     "machines": 5,
+     "recipes": [
+      "graphene-advanced"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 8,
+     "recipes": [
+      "energetic-graphite"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 15,
+     "recipes": [
+      "copper-ingot"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 6,
+     "recipes": [
+      "conveyor-belt-3"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 58,
+     "recipes": [
+      "electromagnetic-turbine",
+      "magnetic-coil",
+      "super-magnetic-ring"
+     ],
+     "strips": 11
+    },
+    {
+     "machines": 60,
+     "recipes": [
+      "electric-motor",
+      "gear"
+     ],
+     "strips": 11
+    },
+    {
+     "machines": 11,
+     "recipes": [
+      "conveyor-belt-1",
+      "conveyor-belt-2"
+     ],
+     "strips": 2
+    }
+   ],
+   "blocks": 9,
+   "cap": 12,
+   "cuts": 12,
+   "machines_max": 61,
+   "partition_wall_s": 0.079,
+   "policy": "all-products",
+   "strips_max": 11,
+   "url": "belt3"
+  },
+  {
+   "block_detail": [
+    {
+     "machines": 61,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 11
+    },
+    {
+     "machines": 56,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 10
+    },
+    {
+     "machines": 5,
+     "recipes": [
+      "graphene-advanced"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 8,
+     "recipes": [
+      "energetic-graphite"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 15,
+     "recipes": [
+      "copper-ingot"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 6,
+     "recipes": [
+      "conveyor-belt-3"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 58,
+     "recipes": [
+      "electromagnetic-turbine",
+      "magnetic-coil",
+      "super-magnetic-ring"
+     ],
+     "strips": 11
+    },
+    {
+     "machines": 60,
+     "recipes": [
+      "electric-motor",
+      "gear"
+     ],
+     "strips": 11
+    },
+    {
+     "machines": 11,
+     "recipes": [
+      "conveyor-belt-1",
+      "conveyor-belt-2"
+     ],
+     "strips": 2
+    }
+   ],
+   "blocks": 9,
+   "cap": 16,
+   "cuts": 12,
+   "machines_max": 61,
+   "partition_wall_s": 0.083,
+   "policy": "all-products",
+   "strips_max": 11,
+   "url": "belt3"
+  },
+  {
+   "block_detail": [
+    {
+     "machines": 61,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 11
+    },
+    {
+     "machines": 56,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 10
+    },
+    {
+     "machines": 5,
+     "recipes": [
+      "graphene-advanced"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 8,
+     "recipes": [
+      "energetic-graphite"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 15,
+     "recipes": [
+      "copper-ingot"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 129,
+     "recipes": [
+      "conveyor-belt-1",
+      "conveyor-belt-2",
+      "electric-motor",
+      "electromagnetic-turbine",
+      "gear",
+      "magnetic-coil",
+      "super-magnetic-ring"
+     ],
+     "strips": 24
+    },
+    {
+     "machines": 6,
+     "recipes": [
+      "conveyor-belt-3"
+     ],
+     "strips": 1
+    }
+   ],
+   "blocks": 7,
+   "cap": 24,
+   "cuts": 7,
+   "machines_max": 129,
+   "partition_wall_s": 0.066,
+   "policy": "all-products",
+   "strips_max": 24,
+   "url": "belt3"
+  }
+ ],
+ "url": "belt3",
+ "workers": null
+}

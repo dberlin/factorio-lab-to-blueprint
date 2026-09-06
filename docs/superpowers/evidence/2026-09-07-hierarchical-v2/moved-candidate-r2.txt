@@ -1,0 +1,29 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+18 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 900s
+  . [  1/18]     6s freeform  large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN      4.8s
+  . [  2/18]    11s freeform  large    casimir-crystal/all-products power=1 budget=30s      CLEAN      9.7s
+  . [  3/18]    16s freeform  large    casimir-crystal/output-products power=1 budget=30s   CLEAN      9.9s
+  . [  4/18]    30s freeform  stress   universe-matrix/output-products power=1 budget=30s   CLEAN     28.4s  <-- 28s
+  . [  5/18]    32s freeform  stress   universe-matrix/all-products power=1 budget=30s      CLEAN     30.2s  <-- 30s
+  . [  6/18]    32s sequence-pair stress   universe-matrix/output-products power=1 budget=30s   CLEAN     30.4s  <-- 30s
+  . [  7/18]    32s sequence-pair stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     30.5s  <-- 31s
+  . [  8/18]    33s freeform  stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     31.7s  <-- 32s
+  . [  9/18]    34s sequence-pair stress   universe-matrix/all-products power=1 budget=30s      CLEAN     32.9s  <-- 33s
+  . [ 10/18]    42s sequence-pair large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN     31.0s  <-- 31s
+  . [ 11/18]    46s sequence-pair large    casimir-crystal/all-products power=1 budget=30s      CLEAN     29.5s  <-- 29s
+  . [ 12/18]    60s sequence-pair large    casimir-crystal/output-products power=1 budget=30s   CLEAN     29.9s  <-- 30s
+  . [ 13/18]    60s freeform  mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     28.3s  <-- 28s
+  . [ 14/18]    61s freeform  mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     29.1s  <-- 29s
+  . [ 15/18]    61s freeform  mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     29.4s  <-- 29s
+  . [ 16/18]    62s sequence-pair mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     29.2s  <-- 29s
+  . [ 17/18]    63s sequence-pair mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     28.3s  <-- 28s
+  . [ 18/18]    71s sequence-pair mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     29.2s  <-- 29s
+
+=== freeform: 9/9 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s freeform universe-matrix/no-proliferator power=1 budget=30s, 30s freeform universe-matrix/all-products power=1 budget=30s, 29s freeform super-magnetic-ring/no-proliferator power=1 budget=30s, 29s freeform super-magnetic-ring/output-products power=1 budget=30s, 28s freeform universe-matrix/output-products power=1 budget=30s
+
+=== sequence-pair: 9/9 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 33s sequence-pair universe-matrix/all-products power=1 budget=30s, 31s sequence-pair casimir-crystal/no-proliferator power=1 budget=30s, 31s sequence-pair universe-matrix/no-proliferator power=1 budget=30s, 30s sequence-pair universe-matrix/output-products power=1 budget=30s, 30s sequence-pair casimir-crystal/output-products power=1 budget=30s
+
+71s wall, 18/18 cells
+6 cells completed after their own requested search deadline; the largest completion tail was 2.9s. Emission, detailed routing already in flight, and validation finish atomically.

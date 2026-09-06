@@ -1,0 +1,156 @@
+{
+ "groups": 32,
+ "machines": 436,
+ "policy": "all-products",
+ "probe": true,
+ "rows": [
+  {
+   "block_detail": [
+    {
+     "machines": 15,
+     "recipes": [
+      "titanium-ingot"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 1,
+     "recipes": [
+      "stone-brick"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 71,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 12
+    },
+    {
+     "machines": 70,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 12
+    },
+    {
+     "machines": 22,
+     "recipes": [
+      "gear"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 6,
+     "recipes": [
+      "high-purity-silicon"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 12,
+     "recipes": [
+      "graphene-advanced"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 37,
+     "recipes": [
+      "carbon-nanotube",
+      "frame-material",
+      "steel",
+      "titanium-alloy"
+     ],
+     "strips": 8
+    },
+    {
+     "machines": 3,
+     "recipes": [
+      "glass"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 10,
+     "recipes": [
+      "energetic-graphite"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 18,
+     "recipes": [
+      "copper-ingot"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 9,
+     "recipes": [
+      "advanced-mining-machine",
+      "conveyor-belt-3"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 18,
+     "recipes": [
+      "super-magnetic-ring"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 50,
+     "recipes": [
+      "electromagnetic-turbine",
+      "magnetic-coil"
+     ],
+     "strips": 9
+    },
+    {
+     "machines": 46,
+     "recipes": [
+      "electric-motor"
+     ],
+     "strips": 8
+    },
+    {
+     "machines": 11,
+     "recipes": [
+      "conveyor-belt-1",
+      "conveyor-belt-2"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 37,
+     "recipes": [
+      "arc-smelter",
+      "casimir-crystal",
+      "circuit-board",
+      "microcrystalline-component",
+      "plane-filter",
+      "plane-smelter",
+      "processor",
+      "quantum-chip",
+      "titanium-crystal",
+      "titanium-glass"
+     ],
+     "strips": 12
+    }
+   ],
+   "blocks": 17,
+   "cap": 12,
+   "cuts": 33,
+   "machines_max": 71,
+   "partition_wall_s": 0.865,
+   "policy": "all-products",
+   "strips_max": 12,
+   "url": "zurl2"
+  }
+ ],
+ "url": "zurl2",
+ "workers": null
+}

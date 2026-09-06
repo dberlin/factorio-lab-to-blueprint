@@ -381,6 +381,10 @@ class PlacementStats(TypedDict, total=False):
     relation_no_goods_repeated: float
     relation_no_goods_unique: float
     repair_iterations: float
+    #: Hierarchical strategy: block solves skipped because a `(shape, arm)`
+    #: was already remembered refused this build, or already answered by an
+    #: identically-shaped block earlier in the same round.
+    nogood_skips: float
     #: Hierarchical strategy: rounds in which a refusing block was re-cut.
     resplits: float
     restarts: float
@@ -409,8 +413,6 @@ class PlacementStats(TypedDict, total=False):
     stages: float
     starved_taps: float
     strips: float
-    #: Hierarchical strategy: strips in the widest block.
-    strips_max: float
     target_height: float
     termination: str
     termination_cause: str

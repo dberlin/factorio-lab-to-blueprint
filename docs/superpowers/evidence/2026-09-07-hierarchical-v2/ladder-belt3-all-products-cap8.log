@@ -1,0 +1,34 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{
+ "url": "belt3",
+ "policy": "all-products",
+ "cap": 8,
+ "budget_s": 60.0,
+ "wall_s": 22.7,
+ "area": null,
+ "verdict": "REFUSED: unrouted cut(s): electric-motor: block 10 -> block 12: DYNAMIC_ACCESS; electric-motor: block 10 -> block 12: DYNAMIC_ACCESS; electromagnetic-turbine: block 12 -> block 13: DYNAMIC_ACCESS; energetic-graphite: block 7 -> block 13: DYNAMIC_ACCESS; gear: block 5 -> block 10: DYNAMIC_ACCESS; gear: block 5 -> block 10: DYNAMIC_ACCESS; iron-ingot: block 4 -> block 11: SEALED_POCKET; magnet: bloc",
+ "unrouted": {
+  "DYNAMIC_ACCESS": 7,
+  "SEALED_POCKET": 1
+ },
+ "rungs": [
+  {
+   "gap": 2,
+   "judged": true,
+   "complete": false,
+   "assigned": 110,
+   "missing": 1,
+   "missing_detail": [
+    "energetic-graphite@belt6249:internal-arrival"
+   ]
+  },
+  {
+   "gap": 4,
+   "judged": true,
+   "complete": true,
+   "assigned": 111,
+   "missing": 0,
+   "missing_detail": []
+  }
+ ]
+}
