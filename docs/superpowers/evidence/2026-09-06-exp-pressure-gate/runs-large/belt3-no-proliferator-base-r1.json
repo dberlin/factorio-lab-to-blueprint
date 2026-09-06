@@ -1,0 +1,98 @@
+{
+ "area": null,
+ "astar_s": 14.007279759272933,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 29832116,
+ "groups": 13,
+ "hits": 2118,
+ "islands": null,
+ "machines": 537,
+ "misses": 953,
+ "passes": 15,
+ "phases": {
+  "astar": {
+   "n": 3071,
+   "s": 14.007279759272933
+  },
+  "build_landmarks": {
+   "n": 15,
+   "s": 0.902862953953445
+  },
+  "commit_paths": {
+   "n": 25,
+   "s": 3.3400281434878707
+  },
+  "junction_ban": {
+   "n": 15,
+   "s": 0.4042064242530614
+  },
+  "last_mile": {
+   "n": 1,
+   "s": 0.017597306985408068
+  },
+  "make_grid": {
+   "n": 39,
+   "s": 0.1694974135607481
+  },
+  "merge_frontier": {
+   "n": 2895,
+   "s": 1.9408894125372171
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.013303262181580067
+  },
+  "power_plan": {
+   "n": 15,
+   "s": 8.92278938437812
+  },
+  "prepare": {
+   "n": 15,
+   "s": 17.51874107355252
+  },
+  "refresh_history": {
+   "n": 60,
+   "s": 0.016766367480158806
+  },
+  "reserve_port_access": {
+   "n": 30,
+   "s": 3.556366558885202
+  },
+  "route_all": {
+   "n": 15,
+   "s": 18.125821919646114
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.18765786802396178
+  }
+ },
+ "policy": "no-proliferator",
+ "prepare_calls_s": [
+  1.7490074990782887,
+  1.0697056378703564,
+  1.0746648048516363,
+  1.317833918845281,
+  1.1546152320224792,
+  1.0330842840485275,
+  1.0511531219817698,
+  1.1168846180662513,
+  1.2281472508329898,
+  1.115426863078028,
+  1.0448419710155576,
+  1.0397984830196947,
+  1.116546481847763,
+  1.2364670720417053,
+  1.1705638349521905
+ ],
+ "rate": 60,
+ "rounds": 20,
+ "route_all_s": 18.125821919646114,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "belt3",
+ "verdict": "REFUSED: no packing of 26 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing",
+ "wall_s": 37.74943155609071
+}

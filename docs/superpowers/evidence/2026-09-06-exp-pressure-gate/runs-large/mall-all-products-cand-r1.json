@@ -1,0 +1,101 @@
+{
+ "area": null,
+ "astar_s": 6.459768580272794,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 15506402,
+ "groups": 33,
+ "hits": 1445,
+ "islands": null,
+ "machines": 449,
+ "misses": 23,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1468,
+   "s": 6.459768580272794
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.17889141920022666
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 2.4007137317676097
+  },
+  "commit_paths": {
+   "n": 4,
+   "s": 4.991485595703125
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.19842013786546886
+  },
+  "last_mile": {
+   "n": 2,
+   "s": 0.02183760586194694
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.22361132828518748
+  },
+  "merge_frontier": {
+   "n": 760,
+   "s": 3.323460422921926
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 3.4548085029236972
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.21723889699205756
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 1.8196070690173656
+  },
+  "prepare": {
+   "n": 6,
+   "s": 16.729612674331293
+  },
+  "refresh_history": {
+   "n": 60,
+   "s": 0.006108358735218644
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 6.868029334582388
+  },
+  "route_all": {
+   "n": 2,
+   "s": 10.441111298976466
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.22039415896870196
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.20637745689600706
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  1.965140578104183,
+  1.9503581628669053,
+  1.8616322551388294,
+  1.9330038139596581,
+  4.2125158060807735,
+  4.806962058180943
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 10.441111298976466,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 30.214784618932754
+}

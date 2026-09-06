@@ -1,0 +1,97 @@
+{
+ "area": null,
+ "astar_s": 6.8622640401590616,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 16475067,
+ "groups": 33,
+ "hits": 1492,
+ "islands": null,
+ "machines": 449,
+ "misses": 35,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1527,
+   "s": 6.8622640401590616
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.1990100780967623
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 2.2577851531095803
+  },
+  "commit_paths": {
+   "n": 10,
+   "s": 11.899871872272342
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.1943662811536342
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.2147674614097923
+  },
+  "merge_frontier": {
+   "n": 883,
+   "s": 3.9925186578184366
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 3.440986862871796
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.2075193680357188
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 1.8059865618124604
+  },
+  "prepare": {
+   "n": 6,
+   "s": 16.491535264300182
+  },
+  "refresh_history": {
+   "n": 60,
+   "s": 0.006261236034333706
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 6.791120139649138
+  },
+  "route_all": {
+   "n": 2,
+   "s": 18.57309867325239
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.2122554900124669
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.21566555509343743
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  1.94511494692415,
+  1.9401251419913024,
+  1.8491099700331688,
+  1.921690568095073,
+  4.189576198114082,
+  4.645918439142406
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 18.57309867325239,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 38.03243564092554
+}
