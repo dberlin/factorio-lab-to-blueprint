@@ -69,18 +69,24 @@ def _apportion(
 ) -> list[Fraction]:
     """Split ``total`` across ``indices``' lanes, sum preserved exactly.
 
-    Rated by machines behind each lane's strip (``owner_strip``) when that
-    provenance survived placement; when it did not (``owner_strip`` is
-    ``None`` on every one of these lanes, or none of them trace to a strip
-    with a counted machine), split evenly instead -- there is no machine count
-    to weight by. Either way the split is exact ``Fraction`` arithmetic, so
-    the parts always sum back to ``total``.
+    Rated by machines behind each lane's strip (``owner_strip``) only when
+    EVERY lane in this group traces to one. A lane missing that provenance has
+    no machine count to weight it, and giving it weight 0 would zero-rate a
+    real lane -- a zero-rated entry head is one the assignment never feeds,
+    which the validator later convicts as unfed -- so a group with even one
+    strip-less lane falls back to an even split for the WHOLE group, not just
+    that lane. (A group all present but whose machine counts still sum to 0
+    falls back the same way, defensively.) Either way the split is exact
+    ``Fraction`` arithmetic, so the parts always sum back to ``total``.
     """
     n = len(indices)
+    if any(buildings[i].owner_strip is None for i in indices):
+        return [total / n for _ in range(n)]
     weights: list[int] = []
     for i in indices:
         strip = buildings[i].owner_strip
-        weights.append(0 if strip is None else _machines_behind(buildings, strip))
+        assert strip is not None  # every lane checked above
+        weights.append(_machines_behind(buildings, strip))
     total_weight = sum(weights)
     if total_weight == 0:
         return [total / n for _ in range(n)]
@@ -158,6 +164,10 @@ def assign_lanes(
     for cut in cuts:
         by_item[cut.item].append(cut)
     for item, item_cuts in sorted(by_item.items()):
+        # Pooled across every cut of this item, not solved cut-by-cut: `derive_cuts`
+        # emits one `Cut` per (surplus block, deficit block) PAIR, so an item with
+        # several producing or consuming blocks has several cuts here, and their
+        # tails/heads must be assigned together for fan-out/fan-in to work at all.
         supply = sorted(
             (t for src in {c.src for c in item_cuts} for t in tails.get(src, ()) if t.item == item),
             key=lambda t: (-t.rate, t.block, t.building),
