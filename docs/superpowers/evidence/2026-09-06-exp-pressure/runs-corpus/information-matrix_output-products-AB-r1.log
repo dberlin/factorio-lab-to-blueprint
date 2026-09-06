@@ -1,0 +1,3 @@
+{"target": "information-matrix", "rate": 60, "machines": 84, "strategy": "freeform", "verdict": "OK", "wall_s": 15.972939932020381, "route_all_s": 6.126074853120372, "astar_s": 2.0086693605408072}
+
+--- stderr ---

@@ -1,0 +1,3 @@
+{"target": "universe-matrix", "rate": 120, "machines": 439, "strategy": "freeform", "verdict": "OK", "wall_s": 18.790620374958962, "route_all_s": 4.860538631211966, "astar_s": 2.8936106266919523}
+
+--- stderr ---

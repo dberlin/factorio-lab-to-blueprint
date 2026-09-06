@@ -1,0 +1,99 @@
+{
+ "area": null,
+ "astar_s": 6.811988800531253,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 17800070,
+ "groups": 33,
+ "hits": 1527,
+ "islands": null,
+ "machines": 449,
+ "misses": 26,
+ "passes": 4,
+ "phases": {
+  "astar": {
+   "n": 1553,
+   "s": 6.811988800531253
+  },
+  "build_landmarks": {
+   "n": 4,
+   "s": 0.37011654186062515
+  },
+  "coater_frame_bans": {
+   "n": 4,
+   "s": 4.00192611804232
+  },
+  "commit_paths": {
+   "n": 15,
+   "s": 19.822233952349052
+  },
+  "junction_ban": {
+   "n": 4,
+   "s": 0.2358085447922349
+  },
+  "last_mile": {
+   "n": 5,
+   "s": 0.014564428245648742
+  },
+  "make_grid": {
+   "n": 86,
+   "s": 0.3993994281627238
+  },
+  "merge_frontier": {
+   "n": 1556,
+   "s": 7.250567357521504
+  },
+  "place_coaters": {
+   "n": 4,
+   "s": 2.5819856377784163
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.21467863186262548
+  },
+  "power_plan": {
+   "n": 4,
+   "s": 3.619911039015278
+  },
+  "prepare": {
+   "n": 4,
+   "s": 17.24765530275181
+  },
+  "refresh_history": {
+   "n": 105,
+   "s": 0.0070123940240591764
+  },
+  "reserve_port_access": {
+   "n": 8,
+   "s": 5.341258441330865
+  },
+  "route_all": {
+   "n": 4,
+   "s": 30.78455360699445
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.21523611200973392
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.21612316789105535
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  3.6348630958236754,
+  3.760640194872394,
+  4.979795055929571,
+  4.872356956126168
+ ],
+ "rate": 60,
+ "rounds": 4,
+ "route_all_s": 30.78455360699445,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; 1 candidate heights were skipped as over-band",
+ "wall_s": 51.55007531796582
+}

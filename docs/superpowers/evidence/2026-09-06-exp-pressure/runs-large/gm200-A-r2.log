@@ -1,0 +1,3 @@
+{"target": "gravity-matrix", "rate": 200, "machines": 349, "strategy": "freeform", "verdict": "OK", "wall_s": 26.966121673118323, "route_all_s": 6.634749731048942, "astar_s": 3.295826347079128}
+
+--- stderr ---

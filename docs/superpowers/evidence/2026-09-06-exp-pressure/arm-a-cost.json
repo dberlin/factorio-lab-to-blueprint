@@ -1,0 +1,670 @@
+[
+ {
+  "box_area_added": 972,
+  "box_area_added_pct": 9.47,
+  "box_area_without_switch": 10266,
+  "chain_depth": 8,
+  "label": "um60",
+  "lane_pressure_by_cut": [
+   13,
+   16,
+   17,
+   13,
+   10,
+   8,
+   7,
+   6
+  ],
+  "max_lane_pressure": 17,
+  "policy": "no-proliferator",
+  "rows_bought": 50,
+  "rows_by_depth": {
+   "0": [
+    1
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    1
+   ],
+   "4": [
+    1
+   ],
+   "5": [
+    0
+   ],
+   "6": [
+    0
+   ],
+   "7": [
+    0
+   ],
+   "8": [
+    0
+   ]
+  },
+  "strips": 57,
+  "strips_widened": 50
+ },
+ {
+  "box_area_added": 1845,
+  "box_area_added_pct": 9.38,
+  "box_area_without_switch": 19661,
+  "chain_depth": 8,
+  "label": "um120",
+  "lane_pressure_by_cut": [
+   17,
+   20,
+   19,
+   15,
+   11,
+   8,
+   7,
+   6
+  ],
+  "max_lane_pressure": 20,
+  "policy": "no-proliferator",
+  "rows_bought": 75,
+  "rows_by_depth": {
+   "0": [
+    1
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    1
+   ],
+   "4": [
+    1
+   ],
+   "5": [
+    0
+   ],
+   "6": [
+    0
+   ],
+   "7": [
+    0
+   ],
+   "8": [
+    0
+   ]
+  },
+  "strips": 87,
+  "strips_widened": 75
+ },
+ {
+  "box_area_added": 1006,
+  "box_area_added_pct": 7.37,
+  "box_area_without_switch": 13650,
+  "chain_depth": 7,
+  "label": "gm200",
+  "lane_pressure_by_cut": [
+   15,
+   15,
+   11,
+   9,
+   6,
+   3,
+   2
+  ],
+  "max_lane_pressure": 15,
+  "policy": "no-proliferator",
+  "rows_bought": 50,
+  "rows_by_depth": {
+   "0": [
+    1
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ],
+   "5": [
+    0
+   ],
+   "6": [
+    0
+   ],
+   "7": [
+    0
+   ]
+  },
+  "strips": 73,
+  "strips_widened": 50
+ },
+ {
+  "box_area_added": 0,
+  "box_area_added_pct": 0.0,
+  "box_area_without_switch": 7983,
+  "chain_depth": 4,
+  "label": "qc180",
+  "lane_pressure_by_cut": [
+   12,
+   8,
+   3,
+   2
+  ],
+  "max_lane_pressure": 12,
+  "policy": "no-proliferator",
+  "rows_bought": 0,
+  "rows_by_depth": {
+   "0": [
+    0
+   ],
+   "1": [
+    0
+   ],
+   "2": [
+    0
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ]
+  },
+  "strips": 45,
+  "strips_widened": 0
+ },
+ {
+  "box_area_added": 0,
+  "box_area_added_pct": 0.0,
+  "box_area_without_switch": 9963,
+  "chain_depth": 5,
+  "label": "belt3-all",
+  "lane_pressure_by_cut": [
+   9,
+   11,
+   9,
+   7,
+   3
+  ],
+  "max_lane_pressure": 11,
+  "policy": "all-products",
+  "rows_bought": 0,
+  "rows_by_depth": {
+   "0": [
+    0
+   ],
+   "1": [
+    0
+   ],
+   "2": [
+    0
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ],
+   "5": [
+    0
+   ]
+  },
+  "strips": 52,
+  "strips_widened": 0
+ },
+ {
+  "box_area_added": 676,
+  "box_area_added_pct": 4.13,
+  "box_area_without_switch": 16351,
+  "chain_depth": 5,
+  "label": "belt3-nopro",
+  "lane_pressure_by_cut": [
+   12,
+   15,
+   11,
+   7,
+   3
+  ],
+  "max_lane_pressure": 15,
+  "policy": "no-proliferator",
+  "rows_bought": 26,
+  "rows_by_depth": {
+   "0": [
+    0
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ],
+   "5": [
+    0
+   ]
+  },
+  "strips": 90,
+  "strips_widened": 26
+ },
+ {
+  "box_area_added": 2022,
+  "box_area_added_pct": 11.71,
+  "box_area_without_switch": 17270,
+  "chain_depth": 5,
+  "label": "mall",
+  "lane_pressure_by_cut": [
+   13,
+   19,
+   20,
+   14,
+   11
+  ],
+  "max_lane_pressure": 20,
+  "policy": "all-products",
+  "rows_bought": 91,
+  "rows_by_depth": {
+   "0": [
+    1
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    1
+   ],
+   "4": [
+    1
+   ],
+   "5": [
+    0
+   ]
+  },
+  "strips": 95,
+  "strips_widened": 91
+ },
+ {
+  "box_area_added": 1950,
+  "box_area_added_pct": 11.74,
+  "box_area_without_switch": 16613,
+  "chain_depth": 5,
+  "label": "zurl2",
+  "lane_pressure_by_cut": [
+   19,
+   24,
+   18,
+   14,
+   8
+  ],
+  "max_lane_pressure": 24,
+  "policy": "all-products",
+  "rows_bought": 83,
+  "rows_by_depth": {
+   "0": [
+    1
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    1
+   ],
+   "4": [
+    1
+   ],
+   "5": [
+    0
+   ]
+  },
+  "strips": 85,
+  "strips_widened": 83
+ },
+ {
+  "box_area_added": 607,
+  "box_area_added_pct": 8.94,
+  "box_area_without_switch": 6786,
+  "chain_depth": 8,
+  "label": "universe-matrix/all-products",
+  "lane_pressure_by_cut": [
+   14,
+   17,
+   18,
+   14,
+   11,
+   9,
+   8,
+   7
+  ],
+  "max_lane_pressure": 18,
+  "policy": "all-products",
+  "rows_bought": 40,
+  "rows_by_depth": {
+   "0": [
+    1
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    1
+   ],
+   "4": [
+    1
+   ],
+   "5": [
+    0
+   ],
+   "6": [
+    0
+   ],
+   "7": [
+    0
+   ],
+   "8": [
+    0
+   ]
+  },
+  "strips": 46,
+  "strips_widened": 40
+ },
+ {
+  "box_area_added": 844,
+  "box_area_added_pct": 9.46,
+  "box_area_without_switch": 8920,
+  "chain_depth": 8,
+  "label": "universe-matrix/output-products",
+  "lane_pressure_by_cut": [
+   14,
+   17,
+   18,
+   14,
+   11,
+   9,
+   8,
+   7
+  ],
+  "max_lane_pressure": 18,
+  "policy": "output-products",
+  "rows_bought": 47,
+  "rows_by_depth": {
+   "0": [
+    1
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    1
+   ],
+   "4": [
+    1
+   ],
+   "5": [
+    0
+   ],
+   "6": [
+    0
+   ],
+   "7": [
+    0
+   ],
+   "8": [
+    0
+   ]
+  },
+  "strips": 53,
+  "strips_widened": 47
+ },
+ {
+  "box_area_added": 972,
+  "box_area_added_pct": 9.47,
+  "box_area_without_switch": 10266,
+  "chain_depth": 8,
+  "label": "universe-matrix/no-proliferator",
+  "lane_pressure_by_cut": [
+   13,
+   16,
+   17,
+   13,
+   10,
+   8,
+   7,
+   6
+  ],
+  "max_lane_pressure": 17,
+  "policy": "no-proliferator",
+  "rows_bought": 50,
+  "rows_by_depth": {
+   "0": [
+    1
+   ],
+   "1": [
+    1
+   ],
+   "2": [
+    1
+   ],
+   "3": [
+    1
+   ],
+   "4": [
+    1
+   ],
+   "5": [
+    0
+   ],
+   "6": [
+    0
+   ],
+   "7": [
+    0
+   ],
+   "8": [
+    0
+   ]
+  },
+  "strips": 57,
+  "strips_widened": 50
+ },
+ {
+  "box_area_added": 0,
+  "box_area_added_pct": 0.0,
+  "box_area_without_switch": 2042,
+  "chain_depth": 4,
+  "label": "quantum-chip/all-products",
+  "lane_pressure_by_cut": [
+   11,
+   7,
+   4,
+   3
+  ],
+  "max_lane_pressure": 11,
+  "policy": "all-products",
+  "rows_bought": 0,
+  "rows_by_depth": {
+   "0": [
+    0
+   ],
+   "1": [
+    0
+   ],
+   "2": [
+    0
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ]
+  },
+  "strips": 16,
+  "strips_widened": 0
+ },
+ {
+  "box_area_added": 0,
+  "box_area_added_pct": 0.0,
+  "box_area_without_switch": 2531,
+  "chain_depth": 4,
+  "label": "quantum-chip/output-products",
+  "lane_pressure_by_cut": [
+   11,
+   7,
+   4,
+   3
+  ],
+  "max_lane_pressure": 11,
+  "policy": "output-products",
+  "rows_bought": 0,
+  "rows_by_depth": {
+   "0": [
+    0
+   ],
+   "1": [
+    0
+   ],
+   "2": [
+    0
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ]
+  },
+  "strips": 19,
+  "strips_widened": 0
+ },
+ {
+  "box_area_added": 0,
+  "box_area_added_pct": 0.0,
+  "box_area_without_switch": 2835,
+  "chain_depth": 4,
+  "label": "quantum-chip/no-proliferator",
+  "lane_pressure_by_cut": [
+   10,
+   6,
+   3,
+   2
+  ],
+  "max_lane_pressure": 10,
+  "policy": "no-proliferator",
+  "rows_bought": 0,
+  "rows_by_depth": {
+   "0": [
+    0
+   ],
+   "1": [
+    0
+   ],
+   "2": [
+    0
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ]
+  },
+  "strips": 20,
+  "strips_widened": 0
+ },
+ {
+  "box_area_added": 0,
+  "box_area_added_pct": 0.0,
+  "box_area_without_switch": 2603,
+  "chain_depth": 4,
+  "label": "information-matrix/all-products",
+  "lane_pressure_by_cut": [
+   8,
+   7,
+   5,
+   3
+  ],
+  "max_lane_pressure": 8,
+  "policy": "all-products",
+  "rows_bought": 0,
+  "rows_by_depth": {
+   "0": [
+    0
+   ],
+   "1": [
+    0
+   ],
+   "2": [
+    0
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ]
+  },
+  "strips": 17,
+  "strips_widened": 0
+ },
+ {
+  "box_area_added": 0,
+  "box_area_added_pct": 0.0,
+  "box_area_without_switch": 3290,
+  "chain_depth": 4,
+  "label": "information-matrix/output-products",
+  "lane_pressure_by_cut": [
+   8,
+   7,
+   5,
+   3
+  ],
+  "max_lane_pressure": 8,
+  "policy": "output-products",
+  "rows_bought": 0,
+  "rows_by_depth": {
+   "0": [
+    0
+   ],
+   "1": [
+    0
+   ],
+   "2": [
+    0
+   ],
+   "3": [
+    0
+   ],
+   "4": [
+    0
+   ]
+  },
+  "strips": 21,
+  "strips_widened": 0
+ }
+]

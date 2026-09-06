@@ -1,0 +1,170 @@
+===== large =====
+
+cell                               arm  rep verdict                                         wall     area    belt  routeS     expans rounds   prepS  validS  finalS   load
+mall                               off    1 no packing of 46 strips could be wired at an   37.88        -       -   18.71   16475067      2   16.25    0.00    0.00   4.15
+mall                               off    2 no packing of 46 strips could be wired at an   37.58        -       -   18.18   16475067      2   16.47    0.00    0.00   4.15
+mall                               A      1 no packing of 46 strips could be wired at an   51.55        -       -   30.78   17800070      4   17.25    0.00    0.00   3.21
+mall                               A      2 no packing of 46 strips could be wired at an   50.34        -       -   30.12   17800070      4   16.65    0.00    0.00   3.21
+mall                               B      1 no packing of 46 strips could be wired at an   29.76        -       -   10.21   15506402      2   16.58    0.00    0.00   3.37
+mall                               B      2 no packing of 46 strips could be wired at an   29.82        -       -   10.31   15506402      2   16.47    0.00    0.00   3.37
+mall                               AB     1 no packing of 46 strips could be wired at an   42.10        -       -   22.55   16259687      4   15.78    0.00    0.00   3.35
+mall                               AB     2 no packing of 46 strips could be wired at an   41.29        -       -   22.47   16259687      4   15.34    0.00    0.00   3.35
+
+um60                               off    1 OK                                             25.51    31898   11238    5.59    5347029      4    5.62    9.61    2.43   7.64
+um60                               off    2 OK                                             24.07    31898   11238    4.96    5347029      4    5.29    9.42    2.44   7.64
+um60                               A      1 OK                                             27.30    28795   12658    6.32    6183020      5    6.39    9.07    3.29   6.08
+um60                               A      2 OK                                             28.32    28795   12658    6.42    6183020      5    6.50    9.49    3.55   5.83
+um60                               B      1 OK                                             24.25    31898   11170    6.58    7523322      5    6.64    6.78    2.12   4.78
+um60                               B      2 OK                                             24.69    31898   11170    6.69    7523322      5    6.75    6.89    2.20   4.64
+um60                               AB     1 OK                                             24.62    38272   11907    8.20    7359402      6    7.89    5.07    0.78   4.49
+um60                               AB     2 OK                                             30.49    28795   12743    9.08    8103170      7    9.08    7.53    1.78   4.37
+
+gm200                              off    1 OK                                             23.79    48640   12455    7.71    6444038      5    7.22    4.38    2.53   5.77
+gm200                              off    2 OK                                             23.70    48640   12455    7.89    6444038      5    7.00    4.36    2.59   5.79
+gm200                              A      1 OK                                             26.72    32718    9335    6.53    7298509      6    9.54    3.48    4.20   6.12
+gm200                              A      2 OK                                             26.97    32718    9335    6.63    7298509      6    9.56    3.54    4.25   6.19
+gm200                              B      1 OK                                             22.60    48640   12465    7.31    6769091      5    7.04    3.97    2.48   6.18
+gm200                              B      2 OK                                             23.65    48640   12465    7.48    6769091      5    7.72    4.08    2.56   5.84
+gm200                              AB     1 OK                                             26.60    32718    9329    6.46    7306594      6    9.56    3.39    4.32   5.37
+gm200                              AB     2 OK                                             26.88    32718    9329    6.63    7306594      6    9.62    3.45    4.29   5.58
+
+qc180                              off    1 OK                                             21.96    14896    4902    5.06    6064982      9    5.68    2.41    6.25   5.25
+qc180                              off    2 OK                                             23.72    14896    4902    5.19    6064982      9    6.51    2.64    6.59   5.20
+qc180                              A      1 OK                                             21.55    14896    4902    4.99    6064982      9    5.66    2.21    6.17   4.65
+qc180                              A      2 OK                                             21.99    14896    4902    5.07    6064982      9    5.72    2.26    6.36   4.46
+qc180                              B      1 OK                                             16.54    14820    4933    1.87    3228668      5    5.80    2.12    4.12   4.14
+qc180                              B      2 OK                                             16.79    14820    4933    1.95    3228668      5    5.80    2.15    4.16   4.13
+qc180                              AB     1 OK                                             16.72    14820    4933    1.95    3228668      5    5.94    2.14    4.07   4.26
+qc180                              AB     2 OK                                             16.65    14820    4933    1.92    3228668      5    5.97    2.08    4.10   4.22
+
+um120                              off    1 OK                                             30.24    80442   21899    6.72    7390306      3    8.25   10.28    2.49   4.18
+um120                              off    2 OK                                             30.62    80442   21899    7.09    7390306      3    8.32   10.08    2.58   5.13
+um120                              A      1 OK                                             19.18    85657   20940    4.90    5768633      2    6.22    5.00    1.22   5.69
+um120                              A      2 OK                                             18.62    85657   20940    4.78    5768633      2    5.83    5.00    1.21   5.20
+um120                              B      1 OK                                             31.04    80442   21864    6.63    7219771      3    8.74   10.54    2.48   4.70
+um120                              B      2 OK                                             18.79    80496   19090    4.86    5386197      2    6.49    4.30    1.27   4.37
+um120                              AB     1 OK                                             20.35    85657   20992    5.22    5685159      2    6.19    5.52    1.36   4.16
+um120                              AB     2 OK                                             21.61    85657   20992    5.94    5685159      2    7.15    5.23    1.21   4.16
+
+zurl2                              off    1 every packing that wired was rejected by our   57.26        -       -   18.71   24903368      5   22.60   10.50    1.54   3.43
+zurl2                              off    2 every packing that wired was rejected by our   55.94        -       -   18.62   22011905      5   21.43   10.73    1.56   3.43
+zurl2                              A      1 every packing that wired was rejected by our   58.16        -       -   19.94   21237316      5   21.33   11.51    1.79   3.26
+zurl2                              A      2 every packing that wired was rejected by our   55.39        -       -   18.44   21237316      5   20.50   11.32    1.76   3.26
+zurl2                              B      1 every packing that wired was rejected by our   55.07        -       -   14.93   21047770      4   20.02   14.73    2.12   3.04
+zurl2                              B      2 every packing that wired was rejected by our   56.29        -       -   15.82   18156307      4   18.94   16.10    2.24   3.04
+zurl2                              AB     1 every packing that wired was rejected by our   55.24        -       -   18.51   21199113      5   20.08   11.01    2.30   3.61
+zurl2                              AB     2 every packing that wired was rejected by our   57.26        -       -   19.04   21199113      5   20.38   11.32    2.89   3.64
+
+belt3-all                          off    1 OK                                             44.06    15207    6618   16.70   20013512     21   16.69    3.47    4.03   4.34
+belt3-all                          off    2 OK                                             42.29    15207    6618   15.93   20013512     21   15.93    3.43    3.90   4.13
+belt3-all                          A      1 OK                                             42.98    15207    6618   16.15   20013512     21   16.24    3.42    3.98   4.87
+belt3-all                          A      2 OK                                             42.54    15207    6618   16.14   20013512     21   16.02    3.35    3.97   4.64
+belt3-all                          B      1 OK                                             36.56    15207    6691   10.94   14906401     12   12.97    4.72    5.01   3.90
+belt3-all                          B      2 OK                                             35.58    15207    6691   10.34   14906401     12   12.90    4.63    5.02   3.90
+belt3-all                          AB     1 OK                                             36.79    15207    6691   10.46   14906401     12   13.50    4.82    5.13   4.07
+belt3-all                          AB     2 OK                                             36.23    15207    6691   10.42   14906401     12   13.13    4.87    5.09   8.55
+
+belt3-nopro                        off    1 no packing of 26 strips could be wired at an   36.83        -       -   17.96   29832116     20   16.78    0.00    0.00   6.46
+belt3-nopro                        off    2 no packing of 26 strips could be wired at an   37.86        -       -   18.70   29832116     20   17.04    0.00    0.00   6.11
+belt3-nopro                        A      1 every packing that wired was rejected by our   45.85        -       -   21.59   29245464     16   16.48    3.68    1.13   5.66
+belt3-nopro                        A      2 every packing that wired was rejected by our   42.93        -       -   21.48   29245464     16   14.09    3.63    1.10   5.76
+belt3-nopro                        B      1 no packing of 26 strips could be wired at an   39.34        -       -   22.19   28507418     18   15.02    0.00    0.00   5.38
+belt3-nopro                        B      2 no packing of 26 strips could be wired at an   38.16        -       -   21.12   28507418     18   14.91    0.00    0.00   5.27
+belt3-nopro                        AB     1 every packing that wired was rejected by our   47.56        -       -   24.09   29760602     18   15.07    4.52    1.28   4.76
+belt3-nopro                        AB     2 every packing that wired was rejected by our   46.90        -       -   24.19   29760602     18   15.26    3.79    1.08   4.62
+
+----- large: arm vs off (median of two reps) -----
+cell                               arm  verdict                           wall  d wall%     area  d area%    belt  d belt%  routeS    d rt% rounds     expans
+mall                               off  no packing of 46 strips could    37.73    +0.00        -        -       -        -   18.44    +0.00   2.00 16475067.00
+mall                               A    no packing of 46 strips could    50.94   +35.01        -        -       -        -   30.45   +65.09   4.00 17800070.00
+mall                               B    no packing of 46 strips could    29.79   -21.05        -        -       -        -   10.26   -44.36   2.00 15506402.00
+mall                               AB   no packing of 46 strips could    41.70   +10.51        -        -       -        -   22.51   +22.04   4.00 16259687.00
+
+um60                               off  OK                               24.79    +0.00 31898.00    +0.00 11238.00    +0.00    5.28    +0.00   4.00 5347029.00
+um60                               A    OK                               27.81   +12.19 28795.00    -9.73 12658.00   +12.64    6.37   +20.73   5.00 6183020.00
+um60                               B    OK                               24.47    -1.28 31898.00    +0.00 11170.00    -0.61    6.64   +25.75   5.00 7523322.00
+um60                               AB   OK                               27.56   +11.17 33533.50    +5.13 12325.00    +9.67    8.64   +63.73   6.50 7731286.00
+
+gm200                              off  OK                               23.75    +0.00 48640.00    +0.00 12455.00    +0.00    7.80    +0.00   5.00 6444038.00
+gm200                              A    OK                               26.84   +13.02 32718.00   -32.73 9335.00   -25.05    6.58   -15.59   6.00 7298509.00
+gm200                              B    OK                               23.13    -2.62 48640.00    +0.00 12465.00    +0.08    7.40    -5.19   5.00 6769091.00
+gm200                              AB   OK                               26.74   +12.59 32718.00   -32.73 9329.00   -25.10    6.54   -16.12   6.00 7306594.00
+
+qc180                              off  OK                               22.84    +0.00 14896.00    +0.00 4902.00    +0.00    5.13    +0.00   9.00 6064982.00
+qc180                              A    OK                               21.77    -4.70 14896.00    +0.00 4902.00    +0.00    5.03    -1.94   9.00 6064982.00
+qc180                              B    OK                               16.66   -27.04 14820.00    -0.51 4933.00    +0.63    1.91   -62.81   5.00 3228668.00
+qc180                              AB   OK                               16.68   -26.95 14820.00    -0.51 4933.00    +0.63    1.93   -62.31   5.00 3228668.00
+
+um120                              off  OK                               30.43    +0.00 80442.00    +0.00 21899.00    +0.00    6.91    +0.00   3.00 7390306.00
+um120                              A    OK                               18.90   -37.90 85657.00    +6.48 20940.00    -4.38    4.84   -29.96   2.00 5768633.00
+um120                              B    OK                               24.91   -18.12 80469.00    +0.03 20477.00    -6.49    5.75   -16.81   2.50 6302984.00
+um120                              AB   OK                               20.98   -31.04 85657.00    +6.48 20992.00    -4.14    5.58   -19.23   2.00 5685159.00
+
+zurl2                              off  every packing that wired was r   56.60    +0.00        -        -       -        -   18.67    +0.00   5.00 23457636.50
+zurl2                              A    every packing that wired was r   56.78    +0.31        -        -       -        -   19.19    +2.81   5.00 21237316.00
+zurl2                              B    every packing that wired was r   55.68    -1.62        -        -       -        -   15.38   -17.63   4.00 19602038.50
+zurl2                              AB   every packing that wired was r   56.25    -0.61        -        -       -        -   18.78    +0.59   5.00 21199113.00
+
+belt3-all                          off  OK                               43.17    +0.00 15207.00    +0.00 6618.00    +0.00   16.32    +0.00  21.00 20013512.00
+belt3-all                          A    OK                               42.76    -0.96 15207.00    +0.00 6618.00    +0.00   16.14    -1.07  21.00 20013512.00
+belt3-all                          B    OK                               36.07   -16.45 15207.00    +0.00 6691.00    +1.10   10.64   -34.80  12.00 14906401.00
+belt3-all                          AB   OK                               36.51   -15.44 15207.00    +0.00 6691.00    +1.10   10.44   -36.00  12.00 14906401.00
+
+belt3-nopro                        off  no packing of 26 strips could    37.34    +0.00        -        -       -        -   18.33    +0.00  20.00 29832116.00
+belt3-nopro                        A    every packing that wired was r   44.39   +18.87        -        -       -        -   21.54   +17.49  16.00 29245464.00
+belt3-nopro                        B    no packing of 26 strips could    38.75    +3.76        -        -       -        -   21.65   +18.14  18.00 28507418.00
+belt3-nopro                        AB   every packing that wired was r   47.23   +26.48        -        -       -        -   24.14   +31.68  18.00 29760602.00
+
+===== corpus =====
+
+cell                               arm  rep verdict                                         wall     area    belt  routeS     expans rounds   prepS  validS  finalS   load
+quantum-chip/all-products          off    1 OK                                             28.97     3825    2358    3.61    5136581     14   15.79    1.01    6.32   2.91
+quantum-chip/all-products          AB     1 OK                                             29.07     3825    2333    4.24    5259200     16   15.92    0.97    5.71   2.91
+
+quantum-chip/no-proliferator       off    1 OK                                              9.05     5610    2142    2.57    2999942      7    1.86    0.51    1.84   3.09
+quantum-chip/no-proliferator       AB     1 OK                                             10.79     5610    2183    4.21    4474736     14    2.03    0.70    1.88   3.09
+
+quantum-chip/output-products       off    1 OK                                             13.99     4290    1836    5.30    4262699     26    4.58    0.21    1.83   3.01
+quantum-chip/output-products       AB     1 OK                                             17.74     4290    1847    2.95    2152484     14    4.30    0.26    7.75   3.01
+
+universe-matrix/all-products       off    1 OK                                             26.90    29744   15046    7.86   11991119      4   12.79    2.79    1.23   2.80
+universe-matrix/all-products       AB     1 OK                                             27.54    29744   14449    8.32   12478950      4   13.02    2.71    1.13   2.80
+
+information-matrix/all-products    off    1 OK                                             27.79     4760    2704    3.54    3621894     15   15.07    1.39    5.52   5.56
+information-matrix/all-products    AB     1 OK                                             27.71     4760    2718    3.49    3441927     12   14.98    1.46    5.61   5.40
+
+universe-matrix/no-proliferator    off    1 OK                                             29.39    26752   11853    6.17    6012213      5    6.32   11.28    3.26   2.99
+universe-matrix/no-proliferator    AB     1 OK                                             30.12    28795   12743    9.17    8103170      7    8.82    7.26    1.77   2.91
+
+universe-matrix/output-products    off    1 OK                                             26.52    22464   10588    9.11    6715498      8    9.30    3.89    1.07   2.71
+universe-matrix/output-products    AB     1 OK                                             29.26    21420   10807    9.59    8929300      8   10.12    4.53    1.63   2.71
+
+information-matrix/output-products off    1 OK                                             21.79     5434    3291   10.59    8610670     25    5.70    1.00    2.41   6.28
+information-matrix/output-products AB     1 OK                                             15.97     5472    3455    6.13    4571826     17    4.53    0.76    2.58   5.93
+
+----- corpus: arm vs off (median of two reps) -----
+cell                               arm  verdict                           wall  d wall%     area  d area%    belt  d belt%  routeS    d rt% rounds     expans
+quantum-chip/all-products          off  OK                               28.97    +0.00  3825.00    +0.00 2358.00    +0.00    3.61    +0.00  14.00 5136581.00
+quantum-chip/all-products          AB   OK                               29.07    +0.34  3825.00    +0.00 2333.00    -1.06    4.24   +17.58  16.00 5259200.00
+
+quantum-chip/no-proliferator       off  OK                                9.05    +0.00  5610.00    +0.00 2142.00    +0.00    2.57    +0.00   7.00 2999942.00
+quantum-chip/no-proliferator       AB   OK                               10.79   +19.25  5610.00    +0.00 2183.00    +1.91    4.21   +63.54  14.00 4474736.00
+
+quantum-chip/output-products       off  OK                               13.99    +0.00  4290.00    +0.00 1836.00    +0.00    5.30    +0.00  26.00 4262699.00
+quantum-chip/output-products       AB   OK                               17.74   +26.85  4290.00    +0.00 1847.00    +0.60    2.95   -44.39  14.00 2152484.00
+
+universe-matrix/all-products       off  OK                               26.90    +0.00 29744.00    +0.00 15046.00    +0.00    7.86    +0.00   4.00 11991119.00
+universe-matrix/all-products       AB   OK                               27.54    +2.38 29744.00    +0.00 14449.00    -3.97    8.32    +5.83   4.00 12478950.00
+
+information-matrix/all-products    off  OK                               27.79    +0.00  4760.00    +0.00 2704.00    +0.00    3.54    +0.00  15.00 3621894.00
+information-matrix/all-products    AB   OK                               27.71    -0.29  4760.00    +0.00 2718.00    +0.52    3.49    -1.35  12.00 3441927.00
+
+universe-matrix/no-proliferator    off  OK                               29.39    +0.00 26752.00    +0.00 11853.00    +0.00    6.17    +0.00   5.00 6012213.00
+universe-matrix/no-proliferator    AB   OK                               30.12    +2.49 28795.00    +7.64 12743.00    +7.51    9.17   +48.56   7.00 8103170.00
+
+universe-matrix/output-products    off  OK                               26.52    +0.00 22464.00    +0.00 10588.00    +0.00    9.11    +0.00   8.00 6715498.00
+universe-matrix/output-products    AB   OK                               29.26   +10.34 21420.00    -4.65 10807.00    +2.07    9.59    +5.21   8.00 8929300.00
+
+information-matrix/output-products off  OK                               21.79    +0.00  5434.00    +0.00 3291.00    +0.00   10.59    +0.00  25.00 8610670.00
+information-matrix/output-products AB   OK                               15.97   -26.69  5472.00    +0.70 3455.00    +4.98    6.13   -42.14  17.00 4571826.00
+

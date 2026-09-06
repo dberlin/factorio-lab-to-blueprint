@@ -1,0 +1,98 @@
+{
+ "area": null,
+ "astar_s": 14.326794234570116,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 29832116,
+ "groups": 13,
+ "hits": 2118,
+ "islands": null,
+ "machines": 537,
+ "misses": 953,
+ "passes": 15,
+ "phases": {
+  "astar": {
+   "n": 3071,
+   "s": 14.326794234570116
+  },
+  "build_landmarks": {
+   "n": 15,
+   "s": 0.8834071112796664
+  },
+  "commit_paths": {
+   "n": 25,
+   "s": 3.4218335254117846
+  },
+  "junction_ban": {
+   "n": 15,
+   "s": 0.39506616187281907
+  },
+  "last_mile": {
+   "n": 1,
+   "s": 0.017613440053537488
+  },
+  "make_grid": {
+   "n": 39,
+   "s": 0.16922359121963382
+  },
+  "merge_frontier": {
+   "n": 2895,
+   "s": 1.9690289702266455
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.013280498795211315
+  },
+  "power_plan": {
+   "n": 15,
+   "s": 8.703331951517612
+  },
+  "prepare": {
+   "n": 15,
+   "s": 17.04115212475881
+  },
+  "refresh_history": {
+   "n": 60,
+   "s": 0.016013709595426917
+  },
+  "reserve_port_access": {
+   "n": 30,
+   "s": 3.3996482021175325
+  },
+  "route_all": {
+   "n": 15,
+   "s": 18.695653072092682
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.18719445099122822
+  }
+ },
+ "policy": "no-proliferator",
+ "prepare_calls_s": [
+  1.5176615468226373,
+  1.0478120581246912,
+  1.0557265989482403,
+  1.2822532569989562,
+  1.1401078151538968,
+  1.0339073489885777,
+  1.0273675818461925,
+  1.1103062920738012,
+  1.1900404288899153,
+  1.0905723900068551,
+  1.0453246380202472,
+  1.021536123007536,
+  1.1012019130866975,
+  1.2166556499432772,
+  1.1606784828472883
+ ],
+ "rate": 60,
+ "rounds": 20,
+ "route_all_s": 18.695653072092682,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "belt3",
+ "verdict": "REFUSED: no packing of 26 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing",
+ "wall_s": 37.85563541087322
+}

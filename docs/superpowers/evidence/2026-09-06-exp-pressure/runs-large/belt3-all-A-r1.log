@@ -1,0 +1,3 @@
+{"target": "belt3", "rate": 60, "machines": 280, "strategy": "freeform", "verdict": "OK", "wall_s": 42.97671641316265, "route_all_s": 16.145730913849548, "astar_s": 7.161117442185059}
+
+--- stderr ---

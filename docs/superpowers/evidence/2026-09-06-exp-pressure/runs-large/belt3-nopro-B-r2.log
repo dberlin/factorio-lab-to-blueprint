@@ -1,0 +1,3 @@
+{"target": "belt3", "rate": 60, "machines": 537, "strategy": "freeform", "verdict": "REFUSED: no packing of 26 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing", "wall_s": 38.163776494096965, "route_all_s": 21.120452667120844, "astar_s": 14.167811590712517}
+
+--- stderr ---

@@ -1,0 +1,184 @@
+{
+ "area": 14820.0,
+ "astar_s": 1.627078355057165,
+ "budget_s": 30.0,
+ "cprofile": false,
+ "expansions": 3228668,
+ "groups": 15,
+ "hits": 1418,
+ "islands": null,
+ "machines": 252,
+ "misses": 1,
+ "passes": 5,
+ "phases": {
+  "astar": {
+   "n": 1419,
+   "s": 1.627078355057165
+  },
+  "build_landmarks": {
+   "n": 5,
+   "s": 0.19255701266229153
+  },
+  "commit_paths": {
+   "n": 10,
+   "s": 0.9657450150698423
+  },
+  "finalize": {
+   "n": 5,
+   "s": 4.155098491348326
+  },
+  "junction_ban": {
+   "n": 5,
+   "s": 0.16028017597272992
+  },
+  "make_grid": {
+   "n": 50,
+   "s": 0.1077535126823932
+  },
+  "merge_frontier": {
+   "n": 277,
+   "s": 0.5589762234594673
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.013850251911208034
+  },
+  "power_plan": {
+   "n": 5,
+   "s": 2.149775539059192
+  },
+  "prepare": {
+   "n": 13,
+   "s": 5.800260531716049
+  },
+  "refresh_history": {
+   "n": 55,
+   "s": 4.5933760702610016e-05
+  },
+  "reserve_port_access": {
+   "n": 26,
+   "s": 1.8553762242663652
+  },
+  "route_all": {
+   "n": 5,
+   "s": 1.9463212960399687
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.21933598397299647
+  },
+  "validate": {
+   "n": 3,
+   "s": 2.1548846086952835
+  }
+ },
+ "policy": "no-proliferator",
+ "prepare_calls_s": [
+  0.903080235933885,
+  0.26545999804511666,
+  0.28604214102961123,
+  0.8992962830234319,
+  0.24825125001370907,
+  0.7757461799774319,
+  0.2422844460234046,
+  0.2563510099425912,
+  0.5846496887970716,
+  0.25061505287885666,
+  0.25070866802707314,
+  0.2708631108980626,
+  0.5669124671258032
+ ],
+ "rate": 180,
+ "rounds": 5,
+ "route_all_s": 1.9463212960399687,
+ "route_backend": "cython",
+ "stats": {
+  "alns_applied": "1.0",
+  "alns_choices": "1.0",
+  "alns_encode_errors": "0.0",
+  "alns_evaluations": "13.0",
+  "alns_operators": "destroy:failed-endpoints:1|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:1",
+  "alns_routing_seconds": "0.3363127261400223",
+  "alns_skipped_no_goods": "0.0",
+  "alns_window_accepted": "1.0",
+  "alns_window_seconds": "0.050623251823708415",
+  "alns_window_solves": "1.0",
+  "area": "14820.0",
+  "belt_tiles": "4933.0",
+  "budget_unspent_s": "0.0",
+  "certify_skipped": "2.0",
+  "compaction_time_s": "0.07779586990363896",
+  "detailed_route_time_s": "2.0978183469269425",
+  "direct_insert_candidates": "16.0",
+  "direct_inserts": "0.0",
+  "entry_lanes_needed": "9.0",
+  "fallback_used": "0.0",
+  "finalization_time_s": "4.155151239363477",
+  "hit_time_budget": "1.0",
+  "last_mile_bounded": "0.0",
+  "last_mile_commit_rejected": "0.0",
+  "last_mile_expansions": "0.0",
+  "last_mile_invocations": "0.0",
+  "last_mile_nodes": "0.0",
+  "last_mile_proved": "0.0",
+  "last_mile_relation_skipped_siblings": "0.0",
+  "last_mile_relation_strips": "0.0",
+  "last_mile_restore_mismatch": "0.0",
+  "last_mile_seconds": "0.0",
+  "last_mile_solved": "0.0",
+  "machines": "252.0",
+  "nets": "26.0",
+  "pack_cp_deterministic_time_s": "0.28665092490388067",
+  "pack_cp_feasible": "15.0",
+  "pack_cp_infeasible": "0.0",
+  "pack_cp_last_best_bound": "5979479.0",
+  "pack_cp_last_objective": "11776074.0",
+  "pack_cp_last_status": "FEASIBLE",
+  "pack_cp_model_invalid": "0.0",
+  "pack_cp_optimal": "1.0",
+  "pack_cp_solves": "16.0",
+  "pack_cp_unknown": "0.0",
+  "pack_cp_wall_time_s": "1.289584334474057",
+  "pack_time_s": "1.2793594491668046",
+  "pack_window_distinct_submodels": "1.0",
+  "pack_window_feasible": "0.0",
+  "pack_window_infeasible": "0.0",
+  "pack_window_model_invalid": "0.0",
+  "pack_window_optimal": "1.0",
+  "pack_window_repeated_submodel_seconds": "0.0",
+  "pack_window_repeated_submodels": "0.0",
+  "pack_window_solves": "1.0",
+  "pack_window_unknown": "0.0",
+  "pilers": "0.0",
+  "planning_time_s": "0.238925859099254",
+  "preparation_time_s": "5.800336150219664",
+  "projection_addon_result_cache_hits": "0",
+  "projection_addon_splitter_result_cache_hits": "0",
+  "projection_collider_pairs": "109392",
+  "projection_count": "86",
+  "projection_frame_candidates": "1",
+  "projection_invariant_cache_hits": "0",
+  "projection_object_cache_hits": "0",
+  "projection_pair_cache_hits": "0",
+  "projection_power_pairs": "660",
+  "projection_power_result_cache_hits": "0",
+  "projection_sorter_result_cache_hits": "0",
+  "projection_sorters": "62952",
+  "projection_static_result_cache_hits": "0",
+  "repair_iterations": "1.0",
+  "route_backend": "cython",
+  "route_failures": "0.0",
+  "routed": "26.0",
+  "solver_status": "0.5",
+  "sorters": "732.0",
+  "spray_coaters": "0.0",
+  "strips": "20.0",
+  "total_time_s": "16.78607479808852",
+  "towers": "89.0",
+  "validation_time_s": "2.1552239081356674"
+ },
+ "strategy": "freeform",
+ "target": "quantum-chip",
+ "verdict": "OK",
+ "wall_s": 16.787117063999176
+}

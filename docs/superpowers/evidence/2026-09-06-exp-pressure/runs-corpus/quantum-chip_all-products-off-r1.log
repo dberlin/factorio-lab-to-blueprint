@@ -1,0 +1,3 @@
+{"target": "quantum-chip", "rate": 60, "machines": 49, "strategy": "freeform", "verdict": "OK", "wall_s": 28.96983335004188, "route_all_s": 3.6064679145347327, "astar_s": 1.6149420773144811}
+
+--- stderr ---

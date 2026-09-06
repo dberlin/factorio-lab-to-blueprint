@@ -1,0 +1,2 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-pressure/.venv` and will be ignored; use `--active` to target the active environment instead[0m
+{"target": "universe-matrix", "rate": 120, "machines": 439, "strategy": "freeform", "verdict": "OK", "wall_s": 31.711421872954816, "route_all_s": 7.19553844910115, "astar_s": 4.097828236175701}

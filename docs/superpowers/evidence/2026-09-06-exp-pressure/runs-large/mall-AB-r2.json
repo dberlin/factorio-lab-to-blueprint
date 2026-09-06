@@ -1,0 +1,99 @@
+{
+ "area": null,
+ "astar_s": 5.648720482364297,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 16259687,
+ "groups": 33,
+ "hits": 1512,
+ "islands": null,
+ "machines": 449,
+ "misses": 31,
+ "passes": 4,
+ "phases": {
+  "astar": {
+   "n": 1543,
+   "s": 5.648720482364297
+  },
+  "build_landmarks": {
+   "n": 4,
+   "s": 0.33974645915441215
+  },
+  "coater_frame_bans": {
+   "n": 4,
+   "s": 3.5881688725203276
+  },
+  "commit_paths": {
+   "n": 11,
+   "s": 13.346578200813383
+  },
+  "junction_ban": {
+   "n": 4,
+   "s": 0.24833185505121946
+  },
+  "last_mile": {
+   "n": 6,
+   "s": 0.01148394588381052
+  },
+  "make_grid": {
+   "n": 84,
+   "s": 0.3856613412499428
+  },
+  "merge_frontier": {
+   "n": 1548,
+   "s": 5.715518398443237
+  },
+  "place_coaters": {
+   "n": 4,
+   "s": 2.3782170489430428
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.21128029515966773
+  },
+  "power_plan": {
+   "n": 4,
+   "s": 3.2860856109764427
+  },
+  "prepare": {
+   "n": 4,
+   "s": 15.335705722449347
+  },
+  "refresh_history": {
+   "n": 103,
+   "s": 0.005581690464168787
+  },
+  "reserve_port_access": {
+   "n": 8,
+   "s": 4.4351061643101275
+  },
+  "route_all": {
+   "n": 4,
+   "s": 22.46690879878588
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.21443328028544784
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.20302715804427862
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  3.647216572891921,
+  3.1540931197814643,
+  3.7254735389724374,
+  4.808922490803525
+ ],
+ "rate": 60,
+ "rounds": 4,
+ "route_all_s": 22.46690879878588,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; 1 candidate heights were skipped as over-band; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 41.294205863028765
+}
