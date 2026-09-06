@@ -162,13 +162,28 @@ identically at `c3cf24ef` with the fix reverted in the same tree (checked). `ruf
 
 ## 7. What remains
 
-- The predicate judges the *first* output-side assignment that seats at all and asks only that
-  *some* variant of that assignment is servable; `default_strip_variant` picks by `sort_key`, not
-  by servability. A family whose default variant is unservable while a sibling is would still be
-  convicted downstream. Not observed on this URL or the corpus.
-- The generous span (a profile's shortest) and the generous stack mean the preference can accept
-  a split that the validator still convicts. That is deliberate -- it degrades to today's
+The predicate is a **model** of the seating, not a replay of it, and it is wider of production in
+four ways. None of them can raise an error: it only steers `_seat_inputs` between splits it would
+otherwise take in order, and a split it judges wrongly is one the fallback pass takes anyway.
+
+- **Yaw.** Production tries every yaw in `_CARDINAL_YAWS` and keeps the first output-side
+  assignment that yields a variant at *any* of them; the predicate reads `lane_reach_profiles` at
+  `group.yaw` alone. 8 of the 18 machine types have yaw-varying profiles (Chemical Plant, Quantum
+  Chemical Plant, Oil Refinery and Miniature Particle Collider among them), so the assignment
+  judged here can differ from the one shipped -- a different seating, never a failure.
+- **Slot matching.** Production seats items into slots through `_match_attachment_plans`; the
+  predicate only counts a row's attachments and charges every item on the lane the row's
+  *shortest* span. It also ignores port docks, box height and pitch, which production's break
+  depends on.
+- **Variant selection.** The predicate asks only that *some* seating of the judged assignment is
+  servable; `default_strip_variant` picks by `sort_key`, not by servability. A family whose
+  default variant is unservable while a sibling is would still be convicted downstream. Not
+  observed on this URL or the corpus.
+- **Generosity.** The shortest span and the lane's full planned stack mean the preference can
+  accept a split the validator still convicts. That is deliberate -- it degrades to today's
   behaviour -- but it is why this is not a proof of servability.
+
+Beyond the model:
 - A lane that genuinely cannot be served from any row is still reported late, by
   `flow.sorter_capacity`, after the budget is spent. Turning that into an early structured
   refusal (the shape `BuildSpec.planning_stack` uses for the Pile Sorter) is a separate change and
@@ -176,6 +191,10 @@ identically at `c3cf24ef` with the fix reverted in the same tree (checked). `ruf
 - `_seat_both_fed_outermost` remains rate-blind; it is the *reason* the outermost row was chosen,
   and this fix works around it by choosing a split whose outermost row is closer, not by relaxing
   it. A both-fed lane whose rate exceeds the closest available outer row is still unbuildable.
+- Every stack-dependent branch of the predicate is inert at `belt_stack == 1`, which is every
+  corpus URL and this one, so the corpus guard cannot exercise it. The three `belt_stack > 1`
+  unit tests in `tests/layout/test_strip_variants.py` are what cover it, and each was checked
+  against a mutant restoring the pre-review behaviour.
 
 ## Files
 

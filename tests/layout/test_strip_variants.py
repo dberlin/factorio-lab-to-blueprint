@@ -236,9 +236,17 @@ def _outer_row_overload_spec() -> BuildSpec:
     )
 
 
-def _fastest_sorter_rate(spec: BuildSpec, span: int) -> Fraction:
-    tiers = freeform._sorter_tiers_for(spec)
-    return max(catalog.sorter_rate(tier, span) for tier in tiers)
+def _fastest_sorter_rate(spec: BuildSpec, item: str, span: int) -> Fraction:
+    """What the seating predicate promises an INPUT lane of ``item`` at ``span``.
+
+    The ``* stack`` factor is not decoration: a sorter carrying a stack of n
+    moves n items per trip (``catalog.SORTER_STACK_RATE_FACTOR``), so a helper
+    that dropped it would judge every stacked save at a quarter of its capacity
+    and could not tell a real overload from a stacked lane.
+    """
+    return strip_variants_module._fastest_lane_rate(
+        strip_variants_module._sorter_ceilings(spec), spec, item, span, produced=False
+    )
 
 
 def test_a_lane_is_never_seated_on_a_row_no_sorter_tier_can_serve() -> None:
@@ -262,7 +270,8 @@ def test_a_lane_is_never_seated_on_a_row_no_sorter_tier_can_serve() -> None:
         for plan in variant.attachment_plan
         if plan.lane.kind == "input"
         for attachment in plan.attachments
-        if group.inputs[attachment.item] > _fastest_sorter_rate(spec, attachment.span)
+        if group.inputs[attachment.item]
+        > _fastest_sorter_rate(spec, attachment.item, attachment.span)
     ]
     assert not overloaded
 
@@ -301,6 +310,81 @@ def test_a_seating_no_row_can_serve_still_plans_and_is_judged_downstream() -> No
         "input:south:1": ("graphene",),
         "input:south:2": ("optical-grating-crystal",),
     }
+
+
+def _stacking_spec(
+    *,
+    belt_stack: int,
+    pick: tuple[int, ...],
+    place: tuple[int, ...],
+    piler: bool = False,
+) -> BuildSpec:
+    """`_outer_row_overload_spec` on a save whose bus carries stacks."""
+    return _outer_row_overload_spec().model_copy(
+        update={
+            "belt_stack": belt_stack,
+            "sorter_pick_stacks": pick,
+            "sorter_place_stacks": place,
+            "piler_unlocked": piler,
+        }
+    )
+
+
+def _lane_ceiling(spec: BuildSpec, item: str, span: int, *, produced: bool) -> Fraction:
+    return strip_variants_module._fastest_lane_rate(
+        strip_variants_module._sorter_ceilings(spec), spec, item, span, produced=produced
+    )
+
+
+def test_the_seating_predicate_plans_an_output_lane_as_produced() -> None:
+    """An output lane leaves on a sorter, so it is planned at `external=False`.
+
+    Hydrogen is belted in AND made here, and the DEFAULT classification hands a
+    both-fed item `min(belt_stack, place)` -- the merged lane's stack, which is
+    what a CONSUMER draws.  Reading that for the output lane understates its
+    capacity fourfold on this save, and understating capacity is the one
+    direction this predicate promises never to take: it would reject a split
+    that carries the flow.
+    """
+    spec = _stacking_spec(belt_stack=2, pick=(1, 1, 1, 4), place=(1, 1, 1, 4))
+    assert spec.planning_stack("hydrogen") == 2  # min(belt_stack, place)
+    assert spec.planning_stack("hydrogen", external=False) == 4  # what the sorter PLACES
+    # Pile Sorter at one tile is 20/s, times the stack it moves per trip.
+    assert _lane_ceiling(spec, "hydrogen", 1, produced=True) == Fraction(80)
+    assert _lane_ceiling(spec, "hydrogen", 1, produced=False) == Fraction(40)
+
+
+def test_the_seating_predicate_gates_an_output_lane_on_the_place_stack() -> None:
+    """`_link_lane` gates an output sorter on PLACE and an input one on PICK.
+
+    Reading pick for both was right only by accident: `planning_stack` refuses a
+    produced stack above the fastest tier's pick, so the two gates agreed on the
+    fastest tier.  A PILED lane breaks that agreement -- its stack comes from
+    the piler, not from any tier's row -- and here the Pile Sorter places 1
+    against a lane piled to 2, so the tier the emitter would actually keep is
+    the Mk.III at 6/s, not the Pile Sorter at 20/s.
+    """
+    spec = _stacking_spec(belt_stack=2, pick=(1, 1, 2, 2), place=(1, 1, 2, 1), piler=True)
+    assert spec.planning_stack("hydrogen", external=False) == 2  # raised by the piler
+    assert _lane_ceiling(spec, "hydrogen", 1, produced=True) == Fraction(12)  # Mk.III x 2
+    # The two gates on the SAME stack, which is where they part company: PICK
+    # admits the Pile Sorter at 20/s and PLACE stops at the Mk.III at 6/s.
+    ceilings = strip_variants_module._sorter_ceilings(spec)
+    assert ceilings.rate(2, 1, produced=False) == Fraction(40)
+    assert ceilings.rate(2, 1, produced=True) == Fraction(12)
+
+
+def test_a_lane_no_tier_can_keep_is_still_sized_at_the_tier_that_gets_built() -> None:
+    """`_pick_sorter` builds the fastest tier anyway when no tier keeps the stack.
+
+    A piler raises a produced lane above what ANY sorter places, so the gate
+    empties.  Reading that as "no capacity" would call every output lane on a
+    piled save unservable and hand the seating search nothing to prefer.
+    """
+    spec = _stacking_spec(belt_stack=2, pick=(1, 1, 1, 4), place=(1, 1, 1, 1), piler=True)
+    assert spec.planning_stack("hydrogen", external=False) == 4
+    assert max(spec.sorter_place_stacks) < 4  # no tier can place it
+    assert _lane_ceiling(spec, "hydrogen", 1, produced=True) == Fraction(80)
 
 
 def test_machine_cap_is_the_floor_of_capacity_over_the_largest_single_item_rate() -> None:
