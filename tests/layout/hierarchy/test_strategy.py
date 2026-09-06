@@ -277,6 +277,35 @@ def test_a_dead_pool_is_a_refusal_not_a_crash(chain_spec: BuildSpec) -> None:
         layout.lay_out(chain_spec, time_budget_s=30.0)
 
 
+def test_a_pool_that_cannot_be_constructed_is_a_refusal_not_a_crash(chain_spec: BuildSpec) -> None:
+    """A pool built once per build means a construction failure is possible
+    exactly once, before any round -- and it must refuse, not escape as a raw
+    `OSError`.
+
+    `ProcessPoolExecutor.__init__` does not spawn a worker, but it does build
+    the multiprocessing queues a worker will use (pipes plus a POSIX
+    semaphore), which is real work that can fail with `OSError` on a shared,
+    permanently loaded box: fd exhaustion (EMFILE) or a full `/dev/shm`
+    (ENOSPC).  A different failure point from the dead-pool test above, which
+    only exercises `map` raising on an already-constructed pool.
+    """
+
+    class _UnbuildablePool:
+        def __init__(self, max_workers: int) -> None:
+            raise OSError(24, "Too many open files")
+
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+        block_strategy="freeform",
+    )
+    layout._executor_factory = _UnbuildablePool  # type: ignore[assignment]
+    with pytest.raises(NoValidLayout, match="block pool unavailable: OSError"):
+        layout.lay_out(chain_spec, time_budget_s=30.0)
+
+
 def test_a_composer_crash_is_a_refusal_not_a_traceback(
     chain_spec: BuildSpec,
     monkeypatch: pytest.MonkeyPatch,

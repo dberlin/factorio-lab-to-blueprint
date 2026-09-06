@@ -51,8 +51,11 @@ plan proposed and each is spelled out separately below:
   (v2 Task 3): at the web UI's 15 s default the old floor alone (10 s) left a
   5.0 s round -- exactly ``BLOCK_BUDGET_MIN_S``, so any wall at all spent
   partitioning tipped it under the floor and the build refused having
-  attempted nothing.  0.4 * budget already exceeds the new floor above 12.5 s,
-  so this only changes builds at or below the web UI's own default.
+  attempted nothing.  The NEW floor only binds below a 12.5 s budget, but the
+  CHANGE reaches further than that: the old 10 s floor bound every budget
+  under 25 s (``0.4 * budget < 10`` there), so every build in ``[12.5, 25)``
+  also gets a smaller reserve now (``0.4 * budget`` instead of the old flat
+  10 s) even though the new floor itself is not what is binding for it.
 * ``_pool_width() = max(1, min(_POOL_CAP, (workers or _available_cpu_count())
   // 4))`` with ``_POOL_CAP = 32``, and each child is constructed with
   ``_BLOCK_WORKERS = 4`` CP-SAT search workers.  v1 divided a hardcoded
@@ -143,8 +146,12 @@ BLOCK_BUDGET_MAX_S = 20.0
 #: 15 s default that floor alone left a round exactly ``BLOCK_BUDGET_MIN_S``
 #: wide -- one second of partitioning wall tipped it under the floor and the
 #: whole build refused without a single block ever having been offered to a
-#: placer.  ``SETTLEMENT_RESERVE_SHARE`` already exceeds 5 s above a 12.5 s
-#: budget, so this floor only matters at or below the web UI's own default.
+#: placer.  This floor itself only binds below a 12.5 s budget (where
+#: ``SETTLEMENT_RESERVE_SHARE * budget`` is under 5 s), but the CHANGE from 10
+#: to 5 reaches every budget under 25 s: the OLD floor bound anywhere
+#: ``0.4 * budget < 10``, so a build anywhere in ``[12.5, 25)`` also gets a
+#: smaller reserve now even though the new floor is not what is binding for
+#: it -- a 20 s build's reserve silently drops from 10 s to 8 s.
 SETTLEMENT_RESERVE_MIN_S = 5.0
 SETTLEMENT_RESERVE_MAX_S = 40.0
 SETTLEMENT_RESERVE_SHARE = 0.4
@@ -381,7 +388,26 @@ class HierarchicalLayout:
         # refuses before ever funding a round (the check just below) spawns
         # nothing at all.
         width = self._pool_width()
-        with self._executor_factory(width) as pool:
+        try:
+            executor = self._executor_factory(width)
+        except Exception as exc:  # noqa: BLE001 - a pool that cannot even be built is a refusal
+            # `ProcessPoolExecutor.__init__` does not spawn a worker, but it DOES
+            # build the multiprocessing queues a worker will use -- pipes plus a
+            # POSIX semaphore -- which fail with `OSError` on fd exhaustion
+            # (EMFILE) or a full `/dev/shm` (ENOSPC), both real on a shared box
+            # that is never idle.  Uncaught, that would escape as a raw
+            # traceback, breaking the `Placement` or `NoValidLayout` contract
+            # this method promises -- the same failure `_solve_round`'s own
+            # guard exists to prevent for a pool that dies mid-round, one step
+            # earlier: before it is ever used.
+            raise refuse(
+                _block_refusal(
+                    entries,
+                    [index for index, entry in enumerate(entries) if entry.placement is None],
+                    why=f"block pool unavailable: {type(exc).__name__}: {exc}",
+                )
+            ) from exc
+        with executor as pool:
             while True:
                 # Re-derived every round: a re-cut changes both the block count
                 # and the topological order, and `derive_cuts` returns the
