@@ -26,17 +26,22 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from flab2bp.dsp import catalog
+from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.freeform import (
+    CoaterSupplyPort,
     _Canvas,
+    _collision_pose,
     _lane_stacks_for,
     _Net,
     _Port,
     _port_access_inventory,
     _reserve_port_access,
+    _reserve_staged_coater_belt_ban,
     _route_all,
     _sorter_stacks_for,
     _sorter_tiers_for,
+    _StagedCoater,
 )
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import NetId, NetRole
@@ -59,6 +64,9 @@ class BlockPlaced:
     """One solved block, and where it landed on the composed canvas."""
 
     index: int
+    #: The block's own NORMALIZED placement -- shifted to the origin, links
+    #: still block-local. The composed copy with ``base``-rebased links lives
+    #: only in ``ComposeResult.placement``.
     placement: Placement
     base: int
     offset: tuple[int, int]
@@ -106,6 +114,16 @@ def pack_blocks(sizes: list[tuple[int, int]], gap: int) -> tuple[list[tuple[int,
     strict topological order along the bus for much less shelf waste.  The
     router searches the whole canvas, so the order only decides how far a trunk
     has to travel.
+
+    WHAT A SHELF PACK COSTS, from the prototype's ``_shelf``:
+    ``finalize.finalize_placement`` projects tile rows onto LATITUDE rows, and a
+    block certified at one latitude is not certified at another, so moving a
+    block DOWN re-prices every east-west gap inside it.  Anchoring every block
+    at ``y = 0`` preserves each one's own rows and its power-pole spacings; a
+    shelf pack does not, and refuses on ``game.power_too_close``.  The single
+    row is not offered here because it cannot meet the band ceiling below at any
+    real scale, but a caller that finalizes a composition has to expect that
+    refusal and cannot read a block's own certification as still holding.
 
     The tallest DSP latitude band holds :data:`BAND_MAX_ROWS` rows, and
     ``finalize_placement`` refuses anything deeper with ``game.blueprint_area``
@@ -189,20 +207,117 @@ def _translate(placement: Placement, base: int, ox: int, oy: int) -> list[Placed
     return out
 
 
+#: Belt-integrated kinds that hold their own routing level and nothing more.
+#:
+#: ``_place_junctions`` adds a Splitter with `canvas.add(stack_member)` and
+#: ``_emit_piler_chain`` adds a Piler the same way, both at the default
+#: ``solid=False``: they share the tile of the belts they join, so a crossing
+#: band over them is a ban the game never asked for.
+_BELT_INTEGRATED = frozenset({catalog.SPLITTER_ID, catalog.PILER_ID})
+
+
+def _coater_belt_ban(canvas: _Canvas, index: int, belt_model: int) -> None:
+    """Price one composed Coater's collider the way ``_place_coaters`` does.
+
+    ``_reserve_staged_coater_belt_ban`` wants a :class:`_StagedCoater`, which
+    only the seating pass builds.  Everything it READS is recoverable from the
+    committed Coater alone: ``port.host_x``/``host_y`` are the Coater's own
+    tile, ``port.x``/``y`` its drop cell (``slots.addon_supply_cell`` is a pure
+    function of the Coater's pose), ``port.yaw`` and ``coater.model_index`` are
+    on the building, and ``projected_pair[1]`` is ``_collision_pose`` of it.
+
+    Every OTHER field of the staged triple -- the approach and supply belts and
+    their indices, the item -- is inert here and is filled with an obvious
+    placeholder rather than a plausible-looking guess.  A composed block does
+    carry those belts, but only at the drop's own altitude, and a lookup that
+    silently returned the ground belt under the Coater instead would be a wrong
+    answer wearing a right one's clothes.
+    """
+    coater = canvas.buildings[index]
+    drop = slots.addon_supply_cell(
+        catalog.SPRAY_COATER_ID, x=coater.x, y=coater.y, z=coater.z, yaw=coater.yaw, area=1
+    )
+    inert = coater  # never read by `_reserve_staged_coater_belt_ban`
+    _reserve_staged_coater_belt_ban(
+        canvas,
+        _StagedCoater(
+            approach=inert,
+            supply=inert,
+            coater=coater,
+            projected_pair=(index, _collision_pose(coater)),
+            port=CoaterSupplyPort(
+                coater=index,
+                host_belt=index,
+                approach_belt=index,
+                supply_belt=index,
+                item=coater.carries_item or "",
+                yaw=coater.yaw,
+                host_x=coater.x,
+                host_y=coater.y,
+                host_z=int(coater.z),
+                x=drop[0],
+                y=drop[1],
+                z=drop[2],
+            ),
+        ),
+        belt_model,
+    )
+
+
 def canvas_for(
     spec: BuildSpec, buildings: list[PlacedBuilding], *, ramped: bool, margin: int
 ) -> _Canvas:
-    """The composed buildings as a routing canvas, sized to their own extent."""
+    """The composed buildings as a routing canvas, sized to their own extent.
+
+    Each kind is registered the way the pass that BUILDS it registers it, and
+    the differences are not cosmetic:
+
+    * machines and Tesla towers are ``solid=True`` (``_emit_strip`` ~6575,
+      ``_place_power`` ~15705), so ``_crossing_ban_levels`` writes the band
+      from the ground to their collider's top into ``blocked``;
+    * belts, Splitters and Pilers are ``solid=False``, holding only their own
+      level;
+    * SORTERS are appended with NO lattice reservation at all, exactly as
+      ``_emit_sorter`` (~7170) does -- every collision sweep skips them, and
+      banning their band here would cost the router paths the game allows;
+    * Spray Coaters are appended and then priced through
+      ``_reserve_staged_coater_belt_ban``, which is the only thing that stops
+      the router laying a level-1 belt beside a Coater that the game then
+      refuses on paste.
+
+    Index order is the composed buildings list's own, because every ``_Port``
+    and ``_Net`` indexes into ``canvas.buildings``.
+    """
     canvas = _Canvas(
         ramped=ramped,
         sorter_tiers=_sorter_tiers_for(spec),
         sorter_stacks=_sorter_stacks_for(spec),
         lane_stacks=_lane_stacks_for(spec),
     )
+    coaters: list[int] = []
     for b in buildings:
-        # Mirror `_prepare_routing_problem`: machines and addons are solid
-        # (their crossing band goes into `blocked`), belts hold their own level.
-        canvas.add(b, solid=not catalog.is_belt(b.item_id))
+        if catalog.is_sorter(b.item_id):
+            canvas.buildings.append(b)
+        elif b.item_id == catalog.SPRAY_COATER_ID:
+            coaters.append(len(canvas.buildings))
+            canvas.buildings.append(b)
+        elif catalog.is_belt(b.item_id) or b.item_id in _BELT_INTEGRATED:
+            canvas.add(b)
+        else:
+            canvas.add(b, solid=True)
+    if coaters:
+        belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
+        belt_model = catalog.building(belt_id).model_index
+        for index in coaters:
+            _coater_belt_ban(canvas, index, belt_model)
+        # Every drop is exempt from every overlapping Coater ban: it is a
+        # required positional addon connection whichever Coater owns the ban.
+        for index in coaters:
+            coater = canvas.buildings[index]
+            drop = slots.addon_supply_cell(
+                catalog.SPRAY_COATER_ID, x=coater.x, y=coater.y, z=coater.z, yaw=coater.yaw, area=1
+            )
+            canvas.belt_ban.pop((drop[0], drop[1]), None)
     min_x, min_y, max_x, max_y = Placement(buildings=tuple(buildings)).bounds
     canvas.limit = (min_x - margin, min_y - margin, max_x + margin, max_y + margin)
     return canvas
@@ -235,12 +350,17 @@ def _port(buildings: list[PlacedBuilding], index: int, machines: int) -> _Port:
     """The router's view of one boundary lane, attached at ``index``."""
     tiles = _lane(buildings, index)
     b = buildings[index]
+    x0 = buildings[tiles[0]].x
+    x1 = buildings[tiles[-1]].x
+    # `_Port.at_tile` reads the k-th tap off as `x0 + k`, so the column span and
+    # the tile list have to be the same lane.
+    assert x1 - x0 + 1 == len(tiles), f"lane at {index} is not one contiguous row"
     return _Port(
         belt=index,
         x=b.x,
         y=b.y,
-        x0=buildings[tiles[0]].x,
-        x1=buildings[tiles[-1]].x,
+        x0=x0,
+        x1=x1,
         tiles=tiles,
         machines=machines,
         z=int(b.z),

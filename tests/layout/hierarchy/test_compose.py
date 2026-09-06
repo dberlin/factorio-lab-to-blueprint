@@ -1,6 +1,12 @@
+import re
+import time
+from fractions import Fraction
+
 import pytest
 
-from flab2bp.layout.base import Placement
+from flab2bp.dsp import catalog
+from flab2bp.layout import slots
+from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import (
@@ -10,6 +16,7 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
 )
 from flab2bp.spec import BuildSpec
+from tests.layout.hierarchy.conftest import chain_spec
 
 TwoSolvedBlocks = tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]
 
@@ -32,6 +39,104 @@ def test_pack_blocks_never_exceeds_160_rows_when_a_legal_shape_exists():
     assert min(width, height) <= 160
 
 
+def _coater_canvas() -> tuple[list[PlacedBuilding], int, int, tuple[int, int, int]]:
+    """A hand-built composed block: a lane, a Coater on it, a sorter, a machine."""
+    spec = chain_spec()
+    belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
+    belt_model = catalog.building(belt_id).model_index
+    coater = PlacedBuilding(
+        item_id=catalog.SPRAY_COATER_ID,
+        model_index=catalog.building(catalog.SPRAY_COATER_ID).model_index,
+        x=3,
+        y=0,
+        z=Fraction(0),
+        width=1,
+        height=1,
+        yaw=Facing.EAST.value,
+    )
+    drop = slots.addon_supply_cell(
+        catalog.SPRAY_COATER_ID, x=coater.x, y=coater.y, z=coater.z, yaw=coater.yaw, area=1
+    )
+    approach = (2 * drop[0] - coater.x, 2 * drop[1] - coater.y)
+    # The host lane on the ground, plus the Coater's supply pair at the drop's
+    # own altitude -- which is a level up, not a tile across.
+    cells = [(x, 0, Fraction(0)) for x in range(7)] + [
+        (drop[0], drop[1], Fraction(drop[2])),
+        (approach[0], approach[1], Fraction(drop[2])),
+    ]
+    buildings = [
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=belt_model,
+            x=x,
+            y=y,
+            z=z,
+            width=1,
+            height=1,
+            carries_item="iron-ingot",
+        )
+        for x, y, z in cells
+    ]
+    sorter_index = len(buildings)
+    buildings.append(
+        PlacedBuilding(
+            item_id=catalog.SORTER_TIERS[0],
+            model_index=catalog.building(catalog.SORTER_TIERS[0]).model_index,
+            x=2,
+            y=4,
+            width=1,
+            height=1,
+        )
+    )
+    machine_id = catalog.get_item_id("arc-smelter")
+    assert machine_id is not None
+    machine = catalog.building(machine_id)
+    machine_index = len(buildings)
+    buildings.append(
+        PlacedBuilding(
+            item_id=machine_id,
+            model_index=machine.model_index,
+            x=8,
+            y=6,
+            width=machine.width,
+            height=machine.height,
+            recipe_id=1,
+        )
+    )
+    buildings.append(coater)
+    return buildings, sorter_index, machine_index, drop
+
+
+def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
+    """Kind by kind, and the Coater's belt ban is the one the game enforces.
+
+    A composed canvas that marks a sorter solid costs the router paths the game
+    allows, and one that never prices a Coater's collider lets it lay a level-1
+    belt beside the Coater that the game refuses on paste.
+    """
+    buildings, sorter_index, machine_index, drop = _coater_canvas()
+    canvas = compose.canvas_for(chain_spec(), buildings, ramped=False, margin=4)
+
+    # Index order is the composed list's own: every `_Port` indexes into it.
+    assert canvas.buildings == buildings
+
+    sorter = buildings[sorter_index]
+    assert (sorter.x, sorter.y) not in canvas.solid
+    assert not any(key[:2] == (sorter.x, sorter.y) for key in canvas.blocked)
+
+    machine = buildings[machine_index]
+    assert (machine.x, machine.y) in canvas.solid
+    assert any(key[:2] == (machine.x, machine.y) for key in canvas.blocked)
+
+    coater = buildings[-1]
+    assert canvas.belt_ban, "a composed Coater must price its own collider"
+    banned = set(canvas.belt_ban)
+    assert any(abs(x - coater.x) <= 2 and abs(y - coater.y) <= 2 for x, y in banned)
+    assert all(levels and min(levels) >= 1 for levels in canvas.belt_ban.values())
+    # The drop is a required positional addon connection and is exempt.
+    assert (drop[0], drop[1]) not in canvas.belt_ban
+
+
 def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: TwoSolvedBlocks):
     # `two_solved_blocks` (conftest): the `chain_spec` of test_pressure split at
     # its one cut, both blocks laid out by FreeformLayout at 10 s, plus the
@@ -45,23 +150,26 @@ def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: Two
     assert heads <= fed
 
 
-def test_compose_reports_an_unroutable_cut_instead_of_handing_it_back(
+def test_compose_reports_an_unwired_cut_instead_of_handing_it_back(
     two_solved_blocks: TwoSolvedBlocks,
 ):
+    """A real router verdict, not a mock: the deadline is already spent.
+
+    `_route_all` checks its deadline between rounds AND between nets and never
+    commits the live paths once it has expired, so every cut comes back
+    unwired. What is under test is that they come back NAMED -- an unwired
+    entry lane the composer swallowed is a block that starves, convicted many
+    stages later with no way back to the cause.
+    """
     left, right, flows, spec, ramped = two_solved_blocks
-    walled = compose.compose(
-        [left, right],
-        flows,
-        spec,
-        gap=2,
-        ramped=ramped,
-        deadline=None,
-        _limit_margin=0,  # no room outside the packed boxes
+    expired = compose.compose(
+        [left, right], flows, spec, gap=2, ramped=ramped, deadline=time.monotonic() - 1.0
     )
-    assert walled.failures or walled.routed == len(flows)
-    # Either the router still finds a path inside the gap, or it names the
-    # failure; never silence.
-    assert not any("external_input" in f for f in walled.failures)
+    assert expired.routed < len(flows)
+    assert expired.failures
+    for line in expired.failures:
+        assert re.fullmatch(r"\S+: block \d+ -> block \d+: [A-Z_]+", line), line
+        assert "external_input" not in line
 
 
 def test_a_stranded_cut_is_named_by_item_blocks_and_router_kind(
