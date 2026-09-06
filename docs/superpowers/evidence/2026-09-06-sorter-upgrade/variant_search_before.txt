@@ -1,0 +1,16 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/debug-sorters/.venv` and will be ignored; use `--active` to target the active environment instead[0m
+candidate: no-proliferator
+  casimir-crystal-advanced: 8 variants, 0 sorter-feasible; e.g. ['hydrogen@span3 8.00>6.67']
+    reach profiles for Re-composing Assembler:
+      yaw 0.0: [('south', -1, (1,), 3), ('south', -2, (2,), 3), ('south', -3, (3,), 3), ('north', 4, (2,), 3), ('north', 5, (3,), 3)]
+      yaw 90.0: [('south', -1, (1,), 3), ('south', -2, (2,), 3), ('south', -3, (3,), 3), ('north', 4, (2,), 3), ('north', 5, (3,), 3)]
+      yaw 180.0: [('south', -1, (1,), 3), ('south', -2, (2,), 3), ('south', -3, (3,), 3), ('north', 4, (2,), 3), ('north', 5, (3,), 3)]
+      yaw 270.0: [('south', -1, (1,), 3), ('south', -2, (2,), 3), ('south', -3, (3,), 3), ('north', 4, (2,), 3), ('north', 5, (3,), 3)]
+  circuit-board: 24 variants, 24 sorter-feasible
+  glass: 36 variants, 36 sorter-feasible
+  graphene-advanced: 9 variants, 9 sorter-feasible
+  high-purity-silicon: 36 variants, 36 sorter-feasible
+  microcrystalline-component: 24 variants, 24 sorter-feasible
+  plane-filter: 24 variants, 24 sorter-feasible
+  processor: 24 variants, 24 sorter-feasible
+  titanium-glass: 4 variants, 4 sorter-feasible
