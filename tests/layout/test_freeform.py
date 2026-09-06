@@ -5446,6 +5446,160 @@ def test_sweep_validates_exact_compacted_and_finalized_placement_before_completi
     assert attempts[0].budget_stage is None
 
 
+def _sweep_over_finalized_areas(
+    monkeypatch: pytest.MonkeyPatch,
+    areas: tuple[int, ...],
+    *,
+    invalid: frozenset[int] = frozenset(),
+    on_certify: Callable[[], None] | None = None,
+) -> tuple[Placement | None, list[int], list[tuple[int, int]]]:
+    """One routed candidate per height, finalized to ``areas`` in sweep order.
+
+    The frame is ``area x 1``, so a candidate's finalized area IS the number the
+    fixture handed it and the certifier can name which candidate it was asked
+    about.  Every candidate routes cleanly, so the only thing that separates
+    them is the ``(area, belt_tiles)`` key the sweep ranks them by.
+    """
+    finalized: list[int] = []
+    certified: list[int] = []
+
+    def finish(
+        placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        if len(finalized) >= len(areas):
+            pytest.fail("the sweep finalized more candidates than the fixture describes")
+        area = areas[len(finalized)]
+        finalized.append(area)
+        return replace(placement, frame=AreaFrame(area, 1, 4, (4,), False))
+
+    def certify(
+        placement: Placement,
+        *_args: object,
+        **_kwargs: object,
+    ) -> validate.Report:
+        assert placement.frame is not None
+        certified.append(placement.frame.width)
+        if on_certify is not None:
+            on_certify()
+        if placement.frame.width not in invalid:
+            return validate.Report(findings=())
+        return validate.Report(
+            findings=(
+                validate.Finding(
+                    "flow.conservation",
+                    validate.Severity.ERROR,
+                    "forced",
+                    (),
+                    {},
+                ),
+            )
+        )
+
+    result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routed(),
+        arrangements=1,
+        heights=tuple(20 + index for index in range(len(areas))),
+        certifier=certify,
+        finalizer=finish,
+        time_budget_s=1e6,
+    )
+    return result, certified, seen
+
+
+def test_sweep_certifies_only_candidates_that_would_become_the_incumbent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L4: a candidate that loses on area can never be returned, report or not.
+
+    The middle candidate is worse than the incumbent it is measured against, so
+    its report cannot change which placement the sweep hands back -- and
+    certification is 15-19 % of the freeform budget on the largest cells.  The
+    second half of this test neutralises the gate and shows the two runs return
+    the same placement, which is the whole claim.
+    """
+    result, certified, seen = _sweep_over_finalized_areas(monkeypatch, (40, 90, 10))
+
+    assert seen == [(20, 0), (21, 0), (22, 0)]
+    assert certified == [40, 10]
+    assert result is not None
+    assert result.area == 10
+    assert result.stats["certify_skipped"] == 1
+
+    # The same fixture with the gate forced open is exactly today's behaviour:
+    # every completed candidate certified, and the same placement returned.
+    monkeypatch.setattr(freeform, "_would_become_incumbent", lambda *_args: True)
+    ungated, ungated_certified, ungated_seen = _sweep_over_finalized_areas(
+        monkeypatch,
+        (40, 90, 10),
+    )
+
+    assert ungated_certified == [40, 90, 10]
+    assert ungated_seen == seen
+    assert ungated is not None
+    assert ungated.area == result.area
+    assert ungated.frame == result.frame
+    assert ungated.buildings == result.buildings
+    assert ungated.completion is result.completion
+
+
+def test_sweep_certifies_the_next_candidate_when_the_incumbent_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate compares against the CERTIFIED incumbent, so a refusal costs nothing.
+
+    A candidate the validator rejects never becomes the incumbent, so the key it
+    is measured against is still the one before it -- and the next candidate is
+    certified even though it is worse than the refused one.
+    """
+    result, certified, seen = _sweep_over_finalized_areas(
+        monkeypatch,
+        (40, 90, 10),
+        invalid=frozenset({40}),
+    )
+
+    assert seen == [(20, 0), (21, 0), (22, 0)]
+    assert certified == [40, 90, 10]
+    assert result is not None
+    assert result.area == 10
+    assert result.stats["certify_skipped"] == 0
+
+
+def test_sweep_measures_the_validation_reserve_before_any_certification_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`validation_reserve_s` is fed off observed certify spans, so one must run.
+
+    The first completed candidate has no incumbent to lose to, so it is always
+    certified and the reserve that guards admission is measured before any
+    candidate is allowed to skip.
+    """
+    clock = 0.0
+
+    def monotonic() -> float:
+        return clock
+
+    def spend() -> None:
+        nonlocal clock
+        clock += 0.2
+
+    monkeypatch.setattr(time, "monotonic", monotonic)
+    result, certified, _seen = _sweep_over_finalized_areas(
+        monkeypatch,
+        (40, 90, 10),
+        on_certify=spend,
+    )
+
+    assert certified == [40, 10]
+    assert result is not None
+    # Two measured certify spans of 0.2 s each; `validation_reserve_s` is their
+    # max, so it is non-zero from the first candidate onwards.
+    assert result.stats["validation_time_s"] == pytest.approx(0.4)
+    assert result.stats["certify_skipped"] == 1
+
+
 def test_sweep_reserves_compaction_finalization_and_validation_as_exact_sum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -20167,6 +20167,9 @@ class FreeformLayout:
         compaction_time_s = 0.0
         finalization_time_s = 0.0
         validation_time_s = 0.0
+        #: Completed candidates that never reached `validate.certify` because
+        #: they could not have displaced the certified incumbent (L4).
+        certify_skipped = 0
         #: Window repairs waiting to be evaluated, and the queue that drains
         #: them.  `candidate_packs` is iterated by index and already mutated in
         #: four places; a separate queue adds no fifth mutation.
@@ -21503,6 +21506,33 @@ class FreeformLayout:
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
+                    # Area, then belt count. Two packs of equal area are not equally
+                    # good: the one with fewer belt tiles is fewer buildings to paste,
+                    # and a direct insert shows up here as exactly that. Without the
+                    # second key, ties fell to whichever height the sweep tried first,
+                    # which silently discarded direct-inserted packs.
+                    #
+                    # Read BEFORE certification, and `replace` below only rewrites
+                    # `completion`, so neither term can move between here and the
+                    # comparison that uses it.
+                    key = (placement.area, float(placement.stats["belt_tiles"]))
+                    # L4: certifying a candidate that cannot displace the incumbent
+                    # buys nothing -- it is not returnable at any report -- and
+                    # certification is 15-19 % of the freeform budget on the largest
+                    # cells.  Held back while a window credit is outstanding: the
+                    # acceptance settle below is the one place a `validator_clean=True`
+                    # outcome exists, and dropping it would move the operator ledger
+                    # that steers the rest of the sweep.  Skipping is otherwise
+                    # invisible: both certified exits from this candidate --
+                    # `report.errors` and a losing key -- call `retain_attempt()` with
+                    # no stage and go round again, which is exactly what happens here.
+                    if inbound_choice is None and not _would_become_incumbent(key, best_key):
+                        certify_skipped += 1
+                        if _expired(completion_deadline):
+                            retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                            break
+                        retain_attempt()
+                        continue
                     certify_started = time.monotonic()
                     report = validate.certify(placement, spec, expect_power=True)
                     validation_time_s += time.monotonic() - certify_started
@@ -21535,12 +21565,9 @@ class FreeformLayout:
                             completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
                         )
                     retain_attempt()
-                    # Area, then belt count. Two packs of equal area are not equally
-                    # good: the one with fewer belt tiles is fewer buildings to paste,
-                    # and a direct insert shows up here as exactly that. Without the
-                    # second key, ties fell to whichever height the sweep tried first,
-                    # which silently discarded direct-inserted packs.
-                    key = (placement.area, float(placement.stats["belt_tiles"]))
+                    # The authority on what is returned, spelled inline rather than
+                    # delegated to `_would_become_incumbent`: see that docstring for
+                    # why the gate above is deliberately a separate copy.
                     if best_key is None or key < best_key:
                         placement.stats["solver_status"] = 1.0 if pack.status == "OPTIMAL" else 0.5
                         placement.stats["hit_time_budget"] = float(pack.hit_budget)
@@ -21620,6 +21647,7 @@ class FreeformLayout:
                     "compaction_time_s": compaction_time_s,
                     "finalization_time_s": finalization_time_s,
                     "validation_time_s": validation_time_s,
+                    "certify_skipped": float(certify_skipped),
                     **cp_stats,
                 }
             )
@@ -21645,10 +21673,32 @@ class FreeformLayout:
                     "compaction_time_s": compaction_time_s,
                     "finalization_time_s": finalization_time_s,
                     "validation_time_s": validation_time_s,
+                    "certify_skipped": float(certify_skipped),
                 }
             )
             best.stats.update(cast(PlacementStats, cp_stats))
         return best
+
+
+def _would_become_incumbent(
+    candidate_key: tuple[int, float],
+    incumbent_key: tuple[int, float] | None,
+) -> bool:
+    """Would this ``(area, belt_tiles)`` displace the sweep's certified best?
+
+    Pure, and deliberately the SAME predicate `_sweep`'s acceptance path spells
+    inline.  The two are not shared on purpose: this one is an optimisation --
+    it decides whether a candidate is worth certifying at all -- and the
+    acceptance one is the authority that decides what is returned.  Keeping the
+    authority independent means a wrong answer here can only cost clock, and it
+    is what lets a test force this gate open and compare the two runs.
+
+    ``incumbent_key`` is ``None`` until a candidate has been CERTIFIED clean, so
+    the first completed candidate always answers True: the sweep never skips its
+    way into having no measured certify span, and a candidate the validator
+    rejects leaves the key it was measured against untouched.
+    """
+    return incumbent_key is None or candidate_key < incumbent_key
 
 
 def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -> bool:

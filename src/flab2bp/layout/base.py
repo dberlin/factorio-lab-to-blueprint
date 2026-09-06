@@ -241,6 +241,7 @@ class PlacementStats(TypedDict, total=False):
     boundary_cleanup_time_s: float
     box_area: float
     cache_hits: float
+    certify_skipped: float
     compact_seed_attempt: float
     compact_seed_base_seed: int
     compact_seed_closure_backend: str
