@@ -2132,6 +2132,155 @@ def test_direct_net_candidates_adapt_the_spec_once(
     assert calls == 1
 
 
+def _direct_candidate_fixtures() -> list[tuple[str, list[Strip], BuildSpec]]:
+    """Strip plans that reach every branch of ``_direct_net_candidates``.
+
+    One fixture proves nothing about a memo key: the branches that read the
+    widest set of strip fields are the belt-port host, the piled output lane and
+    the mixed spray domain, and each of those is a different strip plan.
+    """
+    two_stage = two_stage_spec()
+    spray = spray_domain_spec(clean=True, sprayed=True)
+    prefab = ray_receiver_spec()
+    belt_required = magnetic_ring_spec().model_copy(
+        update={"belt_required_edges": frozenset({("iron-ingot", "gear")})}
+    )
+    piled = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
+    piled_strips = plan_strips(piled, strip_len=1)
+    destination_index, destination = next(
+        (index, strip) for index, strip in enumerate(piled_strips) if strip.recipe_id == "gear"
+    )
+    piled_strips[destination_index] = _strip_with_attachment_column(destination, "input", 2)
+    return [
+        ("two-stage", list(_direct_flow_order_strips()), two_stage),
+        ("mixed-spray-domain", plan_strips(spray, strip_len=6), spray),
+        ("prefab-belt-ports", plan_strips(prefab, strip_len=6), prefab),
+        ("belt-required-edge", plan_strips(belt_required, strip_len=6), belt_required),
+        ("piled-output", piled_strips, piled),
+    ]
+
+
+#: Read once: ``__getattribute__`` below runs on every attribute load.
+_STRIP_FIELD_NAMES: frozenset[str] = frozenset(field.name for field in fields(Strip))
+
+
+class _ReadRecordingStrip(Strip):
+    """A real ``Strip`` that records every field read through it, TRANSITIVELY.
+
+    ``_FieldRecordingStrip`` delegates with ``__getattr__``, so a property like
+    ``machine_row`` runs on the WRAPPED strip and the fields it reads never
+    reach the recorder -- which is why its own guard can only assert a subset.
+    A memo key over a strip PAIR has to be checked against the transitive read
+    set instead, because ``row_of_output`` and ``input_lane_tiles`` are exactly
+    where the extra fields come from.  Overriding ``__getattribute__`` on a real
+    subclass records the reads a method makes of ``self`` as well.
+    """
+
+    @classmethod
+    def recording(cls, strip: Strip, read: set[str]) -> _ReadRecordingStrip:
+        recorder = cls(**{field.name: getattr(strip, field.name) for field in fields(Strip)})
+        object.__setattr__(recorder, "_read", read)
+        return recorder
+
+    def __getattribute__(self, name: str) -> object:
+        if name in _STRIP_FIELD_NAMES:
+            # ``__post_init__`` runs before ``recording`` attaches the set.
+            read = cast(
+                "set[str] | None",
+                object.__getattribute__(self, "__dict__").get("_read"),
+            )
+            if read is not None:
+                read.add(name)
+        return Strip.__getattribute__(self, name)
+
+
+def test_direct_candidate_key_classifies_every_strip_field() -> None:
+    """Every ``Strip`` field is in the pair memo key or declared unread.
+
+    A NEW ``Strip`` FIELD FAILS THIS TEST UNTIL IT IS CLASSIFIED, for the same
+    reason as ``test_direct_geometry_key_classifies_every_strip_field``: the
+    key is exact only while it IS the set of fields
+    ``_direct_net_candidate_uncached`` reads off its two endpoints, and a field
+    that quietly joins the read set without joining the key would hand one
+    strip pair another pair's candidate with nothing else to see.
+
+    The key is a SUPERSET of ``_direct_geometry_key``: enumeration reads
+    ``recipe_id`` and ``group_key`` for the eligibility and destination
+    lookups, and ``row_of_output`` reads ``port_dock_plan``, none of which
+    ``_direct_origin_deltas`` ever touches.
+    """
+    strip_fields = {field.name for field in fields(Strip)}
+    assert strip_fields == (
+        freeform._DIRECT_CANDIDATE_KEY_FIELDS | freeform._UNREAD_BY_DIRECT_CANDIDATE
+    )
+    assert not (freeform._DIRECT_CANDIDATE_KEY_FIELDS & freeform._UNREAD_BY_DIRECT_CANDIDATE)
+
+    read: set[str] = set()
+    for label, strips, spec in _direct_candidate_fixtures():
+        # ``plan_strips`` populates the deltas memo for every strip it plans;
+        # without this clear the recorded run could hit a value-equal entry and
+        # never execute the body whose reads are being counted.
+        freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+        expected = _direct_net_candidates(strips, spec)
+        freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+        probed = [_ReadRecordingStrip.recording(strip, read) for strip in strips]
+        assert _direct_net_candidates(cast("list[Strip]", probed), spec) == expected, label
+    freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
+
+    assert read == freeform._DIRECT_CANDIDATE_KEY_FIELDS
+
+
+def test_direct_net_candidates_memo_is_transparent() -> None:
+    """The pair memo answers exactly what the uncached body would build."""
+    memo = freeform.DirectCandidateMemo()
+    nonempty = 0
+    for label, strips, spec in _direct_candidate_fixtures():
+        expected = _direct_net_candidates(strips, spec)
+        first = _direct_net_candidates(strips, spec, memo=memo)
+        second = _direct_net_candidates(strips, spec, memo=memo)
+        # Value-equal copies must hit the same entries: the key is content, not
+        # identity, and the annealer re-selects equal strips constantly.
+        copies = _direct_net_candidates([replace(strip) for strip in strips], spec, memo=memo)
+        assert expected == first == second == copies, label
+        nonempty += bool(expected)
+    # An all-empty fixture set would make every assertion above vacuously true.
+    assert nonempty >= 2
+    assert memo.pairs
+
+
+def test_direct_net_candidate_memo_reuses_one_adapted_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shared memo adapts each spec once and re-adapts when the spec changes."""
+    first_spec = two_stage_spec()
+    strips = list(_direct_flow_order_strips())
+    second_spec = spray_domain_spec(clean=True, sprayed=True)
+    second_strips = plan_strips(second_spec, strip_len=6)
+    expected = _direct_net_candidates(strips, first_spec)
+    adapt = freeform._adapt
+    calls = 0
+
+    def counted(candidate: BuildSpec) -> dict[str, freeform._Group]:
+        nonlocal calls
+        calls += 1
+        return adapt(candidate)
+
+    monkeypatch.setattr(freeform, "_adapt", counted)
+    memo = freeform.DirectCandidateMemo()
+
+    assert _direct_net_candidates(strips, first_spec, memo=memo)
+    assert _direct_net_candidates(strips, first_spec, memo=memo)
+    assert calls == 1
+
+    # A different spec means different groups and a different eligible set, so
+    # the pair entries no longer describe this question and must not be served.
+    assert _direct_net_candidates(second_strips, second_spec, memo=memo) == {}
+    assert calls == 2
+    assert not memo.pairs or memo.spec is second_spec
+    assert _direct_net_candidates(strips, first_spec, memo=memo) == expected
+    assert calls == 3
+
+
 def test_direct_origin_deltas_memo_is_transparent() -> None:
     spec = spray_domain_spec(clean=True, sprayed=True)
     strips = plan_strips(spec, strip_len=6)

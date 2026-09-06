@@ -3118,8 +3118,196 @@ def _direct_origin_deltas_uncached(
     return _direct_column_deltas(source_columns, destination_columns)
 
 
+#: The ``Strip`` fields :func:`_direct_candidate_key` puts in the pair memo key,
+#: and the ones it deliberately leaves out.  Together they must PARTITION
+#: ``dataclasses.fields(Strip)``, which
+#: ``test_direct_candidate_key_classifies_every_strip_field`` enforces, for the
+#: same reason as :data:`_DIRECT_GEOMETRY_KEY_FIELDS`: the key is exact only
+#: while it IS the read set of :func:`_direct_net_candidate_uncached`, and a
+#: field that quietly joins that read set without joining the key would hand one
+#: strip pair another pair's candidate in silence.
+#:
+#: It is a strict SUPERSET of the geometry key.  Enumeration asks three
+#: questions ``_direct_origin_deltas`` never asks: ``recipe_id`` for the
+#: eligibility lookup, ``group_key`` for the destination match and the two rate
+#: lookups, and ``port_dock_plan`` for ``row_of_output``'s planned-dock branch.
+#: ``physical_variant`` is read by :func:`_direct_geometry_key` itself as the
+#: "do not memo" gate, so it is classified here as read rather than unread.
+_DIRECT_CANDIDATE_KEY_FIELDS: frozenset[str] = _DIRECT_GEOMETRY_KEY_FIELDS | frozenset(
+    {
+        "group_key",
+        "recipe_id",
+        "port_dock_plan",
+        "physical_variant",
+    }
+)
+_UNREAD_BY_DIRECT_CANDIDATE: frozenset[str] = frozenset(
+    {
+        "model_index",
+        "mw",
+        "mh",
+        "box_height",
+        "mode_params",
+        "family_id",
+        "machine_start",
+        "west_channel",
+        "tail_extension",
+    }
+)
+
+#: One entry per DISTINCT strip pair, not per selection, so the bound is the
+#: number of distinct endpoint geometries a run projects.  Bounded and cleared
+#: on overflow like :data:`_DIRECT_ALIGNMENT_MEMO_LIMIT`: clearing costs
+#: recomputation and stays exact.
+_DIRECT_CANDIDATE_MEMO_LIMIT = 16384
+
+#: ``(source geometry key, source group/recipe/variant/dock plan, then the same
+#: for the destination)`` -- everything :func:`_direct_net_candidate_uncached`
+#: reads off its two endpoints.
+type _DirectCandidatePairKey = tuple[object, ...]
+
+
+@dataclass(slots=True)
+class DirectCandidateMemo:
+    """Run-scoped memo for :func:`_direct_net_candidates`.
+
+    Two halves, both keyed by what the enumeration actually reads:
+
+    * the adapted spec.  ``_adapt`` plus ``_direct_insert_candidates_from_groups``
+      is a pure function of ``spec`` and cost a third of this function's time
+      when it ran once per call, so it is held here and reused while the SAME
+      spec object comes back.  Identity, not equality: the memo holds the spec
+      it adapted, so the object cannot be collected and its identity reused.
+    * one entry per strip pair.  ``_variant_direct_eligibility`` moves one
+      producer and one consumer variant at a time, so every net between the
+      other unmoved strips re-asks a question already answered.
+
+    A different spec means different groups and a different eligible set, which
+    invalidates every pair entry -- ``adapt`` clears them rather than trying to
+    namespace the key by a spec it would then have to hash.
+    """
+
+    spec: BuildSpec | None = None
+    groups: dict[str, _Group] = field(default_factory=dict)
+    eligible: frozenset[tuple[str, str]] = frozenset()
+    pairs: dict[_DirectCandidatePairKey, _DirectCandidate | None] = field(default_factory=dict)
+
+    def adapt(self, spec: BuildSpec) -> tuple[dict[str, _Group], frozenset[tuple[str, str]]]:
+        """The adapted group graph and eligible recipe edges for ``spec``."""
+        if self.spec is not spec:
+            groups = _adapt(spec)
+            eligible = frozenset(_direct_insert_candidates_from_groups(spec, groups))
+            self.pairs.clear()
+            self.spec = spec
+            self.groups = groups
+            self.eligible = eligible
+        return self.groups, self.eligible
+
+
+def _direct_candidate_key(
+    source: Strip,
+    destination: Strip,
+) -> _DirectCandidatePairKey | None:
+    """Everything :func:`_direct_net_candidate_uncached` reads off one pair.
+
+    THE FIELDS ARE THE READ SET, not the strips: two pairs agreeing on all of
+    them cannot disagree about the candidate, and a field left out here is a
+    wrong cached answer.  :func:`_direct_geometry_key` already certifies the
+    geometry half -- it is the read set of ``_direct_origin_deltas``, which in
+    turn covers ``input_lane_tiles``, ``lane_of_input`` and
+    ``_piled_output_tail_column``.  The four fields added on top are the ones
+    enumeration reads and the deltas never do; see
+    :data:`_DIRECT_CANDIDATE_KEY_FIELDS`.
+
+    ``None`` means "do not memo", inherited from the geometry key: a strip with
+    no realized pose belongs to a compatibility family and is rare enough not to
+    be worth an entry.  ``physical_variant`` therefore enters the key through
+    that gate as well as on its own.
+    """
+    source_key = _direct_geometry_key(source)
+    if source_key is None:
+        return None
+    destination_key = _direct_geometry_key(destination)
+    if destination_key is None:
+        return None
+    return (
+        source_key,
+        source.group_key,
+        source.recipe_id,
+        source.physical_variant,
+        source.port_dock_plan,
+        destination_key,
+        destination.group_key,
+        destination.recipe_id,
+        destination.physical_variant,
+        destination.port_dock_plan,
+    )
+
+
+def _direct_net_candidate_uncached(
+    source: Strip,
+    destination: Strip,
+    groups: Mapping[str, _Group],
+    eligible: frozenset[tuple[str, str]],
+) -> _DirectCandidate | None:
+    """The lane rows a bridging sorter would connect for ONE strip pair.
+
+    ``None`` is a real answer, not a failure: most nets are not direct-insert
+    candidates, and the memo caches that verdict like any other.
+    """
+    if source.takes_belt_ports or (source.recipe_id, destination.recipe_id) not in eligible:
+        return None
+    lane = next(
+        (
+            (k, item)
+            for k, (item, dest, cargo_domain) in enumerate(source.out_lanes)
+            if cargo_domain is CargoDomain.UNSPRAYED and destination.group_key in _dests(dest)
+        ),
+        None,
+    )
+    if lane is None:
+        return None
+    k, item = lane
+    if item not in destination.in_lanes:
+        return None
+    # Ask the strip for the rows rather than recomputing the layout here:
+    # inputs may sit above or below the machine band, and duplicating that
+    # arithmetic is how the two drift apart.
+    source_rate = groups[source.group_key].outputs.get(item, Fraction(0))
+    required_rate = destination.machines * groups[destination.group_key].inputs.get(
+        item,
+        Fraction(0),
+    )
+    origin_deltas = _direct_origin_deltas(
+        source,
+        destination,
+        k,
+        item,
+        source_rate=source_rate,
+        required_rate=required_rate,
+    )
+    if not origin_deltas:
+        # With no occupied lane column clear of both strips' already seated
+        # sorters, emission cannot prove a bridge. Do not create a Boolean:
+        # an absent variable cannot earn the direct-insert reward.
+        return None
+    piled_tail_column = _piled_output_tail_column(source, k)
+    return _DirectCandidate(
+        item=item,
+        prod_row=source.row_of_output(k),
+        cons_row=destination.row_of_input(item),
+        prod_span=(piled_tail_column + 1 if piled_tail_column is not None else source.width),
+        cons_span=destination.input_lane_tiles(destination.lane_of_input(item)),
+        cargo_domain=CargoDomain.UNSPRAYED,
+        origin_deltas=origin_deltas,
+    )
+
+
 def _direct_net_candidates(
-    strips: list[Strip], spec: BuildSpec
+    strips: list[Strip],
+    spec: BuildSpec,
+    *,
+    memo: DirectCandidateMemo | None = None,
 ) -> dict[tuple[int, int], _DirectCandidate]:
     """Map eligible nets to the lane rows a bridging sorter would connect.
 
@@ -3127,61 +3315,37 @@ def _direct_net_candidates(
     :func:`_direct_insert_candidates` works at recipe granularity -- one recipe
     can be split across several strips, and each of those nets is separately
     eligible.
+
+    ``memo`` optionally shares the adapted spec and the per-pair verdicts across
+    callers that re-enumerate the SAME endpoint geometry.  It must stay
+    RUN-SCOPED: every entry is a pure function of its key, but the dict would
+    otherwise outlive the plan whose strips it describes for no benefit.
+    Omitted, the walk below is exactly the one this function has always done.
     """
-    groups = _adapt(spec)
-    eligible = set(_direct_insert_candidates_from_groups(spec, groups))
+    if memo is None:
+        groups: Mapping[str, _Group] = _adapt(spec)
+        eligible = frozenset(_direct_insert_candidates_from_groups(spec, groups))
+        pairs: dict[_DirectCandidatePairKey, _DirectCandidate | None] | None = None
+    else:
+        groups, eligible = memo.adapt(spec)
+        pairs = memo.pairs
     if not eligible:
         return {}
 
     out: dict[tuple[int, int], _DirectCandidate] = {}
     for i, j in _nets_between(strips):
-        src, dst = strips[i], strips[j]
-        if src.takes_belt_ports or (src.recipe_id, dst.recipe_id) not in eligible:
-            continue
-        lane = next(
-            (
-                (k, item)
-                for k, (item, dest, cargo_domain) in enumerate(src.out_lanes)
-                if cargo_domain is CargoDomain.UNSPRAYED and dst.group_key in _dests(dest)
-            ),
-            None,
-        )
-        if lane is None:
-            continue
-        k, item = lane
-        if item not in dst.in_lanes:
-            continue
-        # Ask the strip for the rows rather than recomputing the layout here:
-        # inputs may sit above or below the machine band, and duplicating that
-        # arithmetic is how the two drift apart.
-        source_rate = groups[src.group_key].outputs.get(item, Fraction(0))
-        required_rate = dst.machines * groups[dst.group_key].inputs.get(
-            item,
-            Fraction(0),
-        )
-        origin_deltas = _direct_origin_deltas(
-            src,
-            dst,
-            k,
-            item,
-            source_rate=source_rate,
-            required_rate=required_rate,
-        )
-        if not origin_deltas:
-            # With no occupied lane column clear of both strips' already seated
-            # sorters, emission cannot prove a bridge. Do not create a Boolean:
-            # an absent variable cannot earn the direct-insert reward.
-            continue
-        piled_tail_column = _piled_output_tail_column(src, k)
-        out[i, j] = _DirectCandidate(
-            item=item,
-            prod_row=src.row_of_output(k),
-            cons_row=dst.row_of_input(item),
-            prod_span=(piled_tail_column + 1 if piled_tail_column is not None else src.width),
-            cons_span=dst.input_lane_tiles(dst.lane_of_input(item)),
-            cargo_domain=CargoDomain.UNSPRAYED,
-            origin_deltas=origin_deltas,
-        )
+        source, destination = strips[i], strips[j]
+        key = None if pairs is None else _direct_candidate_key(source, destination)
+        if key is not None and pairs is not None and key in pairs:
+            candidate = pairs[key]
+        else:
+            candidate = _direct_net_candidate_uncached(source, destination, groups, eligible)
+            if key is not None and pairs is not None:
+                if len(pairs) >= _DIRECT_CANDIDATE_MEMO_LIMIT:
+                    pairs.clear()
+                pairs[key] = candidate
+        if candidate is not None:
+            out[i, j] = candidate
     return out
 
 

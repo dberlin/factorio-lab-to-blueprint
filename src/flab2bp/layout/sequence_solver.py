@@ -50,6 +50,7 @@ from flab2bp.layout.freeform import (
     C_WINDOW_SECONDS,
     WEST_CHANNEL,
     DirectAlignmentMemo,
+    DirectCandidateMemo,
     DirectInsertId,
     ExactPackNoGood,
     PreparedRoutingLowerBound,
@@ -3826,6 +3827,7 @@ def _selected_direct_targets(
     band_policy: BandPolicy,
     memo: dict[tuple[int, StripInstanceId, StripVariant], Strip] | None = None,
     alignment_memo: DirectAlignmentMemo | None = None,
+    candidate_memo: DirectCandidateMemo | None = None,
 ) -> tuple[DirectInsertTarget, ...]:
     """Derive pair geometry only after both complete endpoint variants are selected."""
     selected = _selected_strips(
@@ -3837,7 +3839,7 @@ def _selected_direct_targets(
     )
     return _refinement_direct_targets(
         _direct_alignment_targets(
-            _direct_net_candidates(selected, spec),
+            _direct_net_candidates(selected, spec, memo=candidate_memo),
             memo=alignment_memo,
         ),
         selected,
@@ -4394,6 +4396,11 @@ def _variant_direct_eligibility(
     # pair that leaves the direct geometry alone rebuilds the identical
     # ``DirectInsertTarget`` tuple.  Run-scoped like ``memo`` above.
     alignment_memo: DirectAlignmentMemo = {}
+    # One level lower again: the candidate mapping is enumerated net by net, so
+    # every pair of unmoved strips answers the identical question on every
+    # projection.  This one also holds the adapted spec, which is otherwise
+    # re-derived once per projection for a fixed ``spec``.
+    candidate_memo = DirectCandidateMemo()
     baseline = _selected_direct_targets(
         spec,
         strips,
@@ -4402,6 +4409,7 @@ def _variant_direct_eligibility(
         band_policy=band_policy,
         memo=memo,
         alignment_memo=alignment_memo,
+        candidate_memo=candidate_memo,
     )
     if not baseline:
         return ()
@@ -4432,6 +4440,7 @@ def _variant_direct_eligibility(
                         band_policy=band_policy,
                         memo=memo,
                         alignment_memo=alignment_memo,
+                        candidate_memo=candidate_memo,
                     )
                 }
                 target = selected.get(candidate.key)
@@ -5177,6 +5186,10 @@ def _production_run(
     # the direct geometry alone still rebuilds every target; this one is keyed
     # by that geometry instead.
     direct_alignment_memo: DirectAlignmentMemo = {}
+    # ``direct_candidate_cache`` above keys whole selections as well, so a move
+    # that leaves one strip pair alone still re-enumerates it; this one is keyed
+    # by the pair's own geometry, and carries the adapted spec besides.
+    direct_candidate_memo = DirectCandidateMemo()
     from flab2bp.layout import geometry_memo
 
     staged_static_cache = geometry_memo.for_spec(spec)
@@ -5210,6 +5223,7 @@ def _production_run(
             candidates = _direct_net_candidates(
                 list(selected_strips(problem, variant_indices)),
                 spec,
+                memo=direct_candidate_memo,
             )
             direct_candidate_cache[key] = candidates
         return candidates

@@ -5886,6 +5886,62 @@ def test_variant_direct_eligibility_is_unchanged_by_the_alignment_memo(
     assert memoized_calls < calls
 
 
+def test_variant_direct_eligibility_is_unchanged_by_the_candidate_memo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-pass returns the same tuple with the memo neutralised, but works less.
+
+    The saving is per STRIP PAIR rather than per selection: the two loops move
+    one producer and one consumer variant at a time, so every net between the
+    other unmoved strips re-asks a question already answered.
+    """
+    spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
+    uncached = freeform_module._direct_net_candidate_uncached
+    memoized_candidates = freeform_module._direct_net_candidates
+    calls = 0
+
+    def counting(
+        source: freeform_module.Strip,
+        destination: freeform_module.Strip,
+        groups: Mapping[str, freeform_module._Group],
+        eligible: frozenset[tuple[str, str]],
+    ) -> freeform_module._DirectCandidate | None:
+        nonlocal calls
+        calls += 1
+        return uncached(source, destination, groups, eligible)
+
+    monkeypatch.setattr(freeform_module, "_direct_net_candidate_uncached", counting)
+    memoized = sequence_solver_module._variant_direct_eligibility(
+        spec,
+        strips,
+        problem,
+        band_policy=policy,
+    )
+    memoized_calls = calls
+
+    def without_memo(
+        selected: list[freeform_module.Strip],
+        build_spec: BuildSpec,
+        *,
+        memo: freeform_module.DirectCandidateMemo | None = None,
+    ) -> dict[tuple[int, int], freeform_module._DirectCandidate]:
+        return memoized_candidates(selected, build_spec)
+
+    monkeypatch.setattr(sequence_solver_module, "_direct_net_candidates", without_memo)
+    calls = 0
+    plain = sequence_solver_module._variant_direct_eligibility(
+        spec,
+        strips,
+        problem,
+        band_policy=policy,
+    )
+
+    assert memoized
+    assert memoized == plain
+    assert memoized_calls < calls
+
+
 def _selected_strips_split_fixture() -> tuple[
     list[freeform_module.Strip],
     PlacementProblem,
