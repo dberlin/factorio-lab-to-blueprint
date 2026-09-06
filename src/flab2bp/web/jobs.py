@@ -347,10 +347,6 @@ class Job:
         return self.state in ("done", "refused", "error")
 
 
-
-
-
-
 def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.Build:
     """Run one build through the pipeline's shared CPU-allocation policy.
 

@@ -97,7 +97,7 @@ def _available_cpu_count() -> int:
     """Return the CPU set this process may actually schedule on."""
     try:
         return max(1, len(os.sched_getaffinity(0)))
-    except (AttributeError, OSError):
+    except AttributeError, OSError:
         return max(1, os.process_cpu_count() or 1)
 
 
@@ -162,9 +162,7 @@ def _worker_allocations(
 ) -> tuple[int, ...]:
     """Divide one worker budget exactly across a concurrent candidate batch."""
     per_candidate, remainder = divmod(total_workers, concurrent_candidates)
-    return tuple(
-        per_candidate + int(index < remainder) for index in range(concurrent_candidates)
-    )
+    return tuple(per_candidate + int(index < remainder) for index in range(concurrent_candidates))
 
 
 def _candidate_race_parallelism(
@@ -187,10 +185,7 @@ def _candidate_race_parallelism(
     widest = min(candidate_count, requested_parallelism)
     for parallelism in range(widest, 0, -1):
         allocations = _worker_allocations(total_workers, parallelism)
-        if all(
-            candidate_workers >= PRODUCTION_STRATEGY_COUNT
-            for candidate_workers in allocations
-        ):
+        if all(candidate_workers >= PRODUCTION_STRATEGY_COUNT for candidate_workers in allocations):
             return parallelism
     return 0
 
@@ -643,9 +638,7 @@ def build(
     if workers is not None and (type(workers) is not int or workers < 1):
         raise ValueError("workers must be a positive integer")
     worker_budget = (
-        workers
-        if workers is not None
-        else min(_available_cpu_count(), DEFAULT_WORKER_BUDGET_CAP)
+        workers if workers is not None else min(_available_cpu_count(), DEFAULT_WORKER_BUDGET_CAP)
     )
     islands = resolve_sequence_islands(strategy, worker_budget, sequence_islands)
     if strategy in ("sequence-pair", "best") and islands > worker_budget:
@@ -915,9 +908,7 @@ def build(
                     for spec, candidate_workers in zip(batch, allocations, strict=True)
                 )
                 results = tuple(future.result() for future in futures)
-                for offset_in_batch, (spec, result) in enumerate(
-                    zip(batch, results, strict=True)
-                ):
+                for offset_in_batch, (spec, result) in enumerate(zip(batch, results, strict=True)):
                     yield batch_start + offset_in_batch, spec, result
 
     parallel_candidates = resolved_candidate_parallelism > 1
@@ -1012,9 +1003,7 @@ def build(
             # settlement runs serially. Neither delay belongs to this attempt.
             settlement_started = time.monotonic()
             settlement_wait_s = (
-                0.0
-                if result_finished is None
-                else max(0.0, settlement_started - result_finished)
+                0.0 if result_finished is None else max(0.0, settlement_started - result_finished)
             )
             # A HARD wall per attempt, in the one place that can see the whole
             # cost. A strategy's own budget covers its search; compaction,
@@ -1022,10 +1011,7 @@ def build(
             # Shift only by time spent waiting to be settled, never by solve
             # time, so a real solver overshoot still expires immediately.
             attempt_deadline = (
-                attempt_started
-                + time_budget_s
-                + completion_grace_s
-                + settlement_wait_s
+                attempt_started + time_budget_s + completion_grace_s + settlement_wait_s
             )
 
             def attempt_expired(_deadline: float = attempt_deadline) -> bool:
@@ -1211,9 +1197,7 @@ def build(
             # Each raced arm is charged its shared race plus only its own
             # post-processing. Waiting for peer candidates or earlier arms to
             # settle is deliberately excluded.
-            attempt_wall_s = (
-                time.monotonic() - attempt_started - settlement_wait_s
-            )
+            attempt_wall_s = time.monotonic() - attempt_started - settlement_wait_s
             labelled.stats["attempt_wall_s"] = attempt_wall_s
             labelled.stats["wall_overshoot_s"] = max(
                 0.0,

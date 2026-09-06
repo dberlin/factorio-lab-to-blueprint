@@ -616,8 +616,6 @@ def test_run_build_delegates_default_cpu_allocation_to_pipeline(
     assert "candidate_parallelism" not in calls[0]
 
 
-
-
 def test_pinned_flow_snapshot_advertises_one_effective_candidate(
     small_build: pipeline.Build,
 ) -> None:

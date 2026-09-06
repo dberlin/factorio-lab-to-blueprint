@@ -256,7 +256,6 @@ def _belt_rates() -> list[tuple[int, str, str]]:
     ]
 
 
-
 def _piler_plan() -> piling.MergePlan:
     return piling.plan_merges(
         (piling.LaneLoad("lane", 0, Fraction(20), catalog.PILER_MAX_STACK),),
@@ -264,6 +263,7 @@ def _piler_plan() -> piling.MergePlan:
         max_stack=catalog.PILER_MAX_STACK,
         sink_pick_stack=catalog.PILER_MAX_STACK,
     )
+
 
 def _belt_ceiling() -> list[str]:
     return [str(catalog.belt_max_z(level)) for level in (3, 9, 13, 15)]

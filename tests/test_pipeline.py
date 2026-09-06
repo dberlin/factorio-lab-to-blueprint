@@ -1732,9 +1732,7 @@ def test_candidate_attempt_wall_excludes_waiting_for_a_slower_peer(
     )
     fast_returned = threading.Event()
 
-    def race(
-        spec: BuildSpec, **_kwargs: object
-    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+    def race(spec: BuildSpec, **_kwargs: object) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
         if spec.label == CandidatePolicy.NO_PROLIFERATOR.value:
             fast_returned.set()
         else:
@@ -1872,9 +1870,7 @@ def test_raced_build_defaults_to_a_shared_sixteen_cpu_budget(
     )
     seen_workers: dict[str, object] = {}
 
-    def record(
-        spec: BuildSpec, **kwargs: object
-    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+    def record(spec: BuildSpec, **kwargs: object) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
         seen_workers[spec.label] = kwargs["workers"]
         return (
             strategy_race._StrategyRaceOutcome(
@@ -1969,9 +1965,7 @@ def test_an_explicit_island_count_no_longer_unfunds_a_race(
     """
     raced: dict[str, object] = {}
 
-    def record(
-        spec: BuildSpec, **kwargs: object
-    ) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
+    def record(spec: BuildSpec, **kwargs: object) -> tuple[strategy_race._StrategyRaceOutcome, ...]:
         del spec
         raced.update(kwargs)
         return (
@@ -2139,8 +2133,6 @@ def test_raced_build_breaks_equal_area_ties_by_belt_tiles(
     assert len(calls) == 1
     assert built.strategy == "sequence-pair"
     assert built.placement.stats["belt_tiles"] == 3
-
-
 
 
 def test_both_arms_are_announced_before_the_race_rather_than_after_it(
@@ -2338,9 +2330,9 @@ def test_raced_islands_come_from_the_candidate_share_and_never_narrow_the_batch(
     )
     allocations = pipeline._worker_allocations(worker_budget, parallelism)
     assert allocations == shares
-    assert [
-        pipeline.resolve_sequence_islands("best", share, None) for share in allocations
-    ] == [islands_each] * parallelism
+    assert [pipeline.resolve_sequence_islands("best", share, None) for share in allocations] == [
+        islands_each
+    ] * parallelism
 
 
 def test_an_explicit_island_count_still_reaches_every_raced_candidate() -> None:

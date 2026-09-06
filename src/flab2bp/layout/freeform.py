@@ -3083,9 +3083,9 @@ def _direct_origin_deltas_uncached(
     source_machines_needed = math.ceil(required_rate / source_rate)
     if source_machines_needed > source.machines:
         return ()
-    last_source_injection = (
-        (source_machines_needed - 1) * source.pw + source_plan.attachments[0].column
-    )
+    last_source_injection = (source_machines_needed - 1) * source.pw + source_plan.attachments[
+        0
+    ].column
     first_destination_pickup = min(
         machine * destination.pw + attachment.column
         for machine in range(destination.machines)
@@ -3177,11 +3177,7 @@ def _direct_net_candidates(
             item=item,
             prod_row=src.row_of_output(k),
             cons_row=dst.row_of_input(item),
-            prod_span=(
-                piled_tail_column + 1
-                if piled_tail_column is not None
-                else src.width
-            ),
+            prod_span=(piled_tail_column + 1 if piled_tail_column is not None else src.width),
             cons_span=dst.input_lane_tiles(dst.lane_of_input(item)),
             cargo_domain=CargoDomain.UNSPRAYED,
             origin_deltas=origin_deltas,
@@ -8549,11 +8545,7 @@ def _prepared_routing_lower_bound(
     """
     protected = _protected_template_belt_indices(problem)
 
-    nets = tuple(
-        net
-        for net in (*problem.nets, *problem.external_output_nets)
-        if not net.prelinked
-    )
+    nets = tuple(net for net in (*problem.nets, *problem.external_output_nets) if not net.prelinked)
     net_by_id = {net.net_id: net for net in nets}
     parent = {net_id: net_id for net_id in net_by_id}
 
@@ -8601,11 +8593,7 @@ def _prepared_routing_lower_bound(
             for cell in goals(sibling)
         )
         return min(
-            (
-                abs(sx - gx) + abs(sy - gy) + 1
-                for sx, sy in legal_starts
-                for gx, gy in legal_goals
-            ),
+            (abs(sx - gx) + abs(sy - gy) + 1 for sx, sy in legal_starts for gx, gy in legal_goals),
             default=0,
         )
 
@@ -9467,11 +9455,7 @@ def _route_all(
                 canvas,
                 key,
                 endpoint_cells,
-                (
-                    PortAccessKind.INTERNAL_DEPARTURE
-                    if source
-                    else PortAccessKind.INTERNAL_ARRIVAL
-                ),
+                (PortAccessKind.INTERNAL_DEPARTURE if source else PortAccessKind.INTERNAL_ARRIVAL),
             )
             if retired is None:
                 continue
@@ -11724,9 +11708,7 @@ def _reserve_port_access(
         options = tuple(
             (access, exit_cell)
             for access in access_cells
-            for exit_cell in (
-                (access[0] + dx, access[1] + dy, access[2]) for dx, dy in _STEPS
-            )
+            for exit_cell in ((access[0] + dx, access[1] + dy, access[2]) for dx, dy in _STEPS)
             if exit_cell != key and canvas.free(exit_cell)
         )
         local_options[demand] = options
@@ -11775,17 +11757,11 @@ def _reserve_port_access(
         ordered_owners = tuple(assigned)
         owner_index = {owner: index for index, owner in enumerate(ordered_owners)}
         owner_by_index = dict(enumerate(ordered_owners))
-        cell_owner_index = {
-            cell: owner_index[owner] for cell, owner in selected_cells.items()
-        }
+        cell_owner_index = {cell: owner_index[owner] for cell, owner in selected_cells.items()}
         for demand, corridor in assigned.items():
             if not demand.kind.reaches_boundary:
                 continue
-            forbidden = {
-                cell
-                for cell, owner in selected_cells.items()
-                if owner != demand
-            }
+            forbidden = {cell for cell, owner in selected_cells.items() if owner != demand}
             result = _astar(
                 canvas,
                 [corridor.exit],
@@ -11809,9 +11785,7 @@ def _reserve_port_access(
             blocking_demands = {
                 owner_by_index[index]
                 for cell in result.wall
-                for index in (
-                    cell_owner_index.get(cell),
-                )
+                for index in (cell_owner_index.get(cell),)
                 if index is not None
             }
             return (demand, *sorted(blocking_demands, key=lambda blocked: blocked.cell))
@@ -11843,11 +11817,7 @@ def _reserve_port_access(
             sorted(
                 assigned,
                 key=lambda corridor: (
-                    (
-                        kind_order[corridor.kind]
-                        if corridor.kind is not None
-                        else len(kind_order)
-                    ),
+                    (kind_order[corridor.kind] if corridor.kind is not None else len(kind_order)),
                     corridor.access,
                     corridor.exit,
                 ),
@@ -16298,14 +16268,11 @@ def _prepare_routing_problem(
     # occupied by a building rather than contested by another path.
     #
     internal_source_belts = {
-        net.source.belt
-        for net in (*nets, *piler_nets)
-        if net.src is not None and not net.prelinked
+        net.source.belt for net in (*nets, *piler_nets) if net.src is not None and not net.prelinked
     }
     late_output_belts = frozenset(wanted_outputs) & internal_source_belts
     provisional_boundary_inputs: list[tuple[str, _Port, int | None]] = [
-        (carried[belt], port, strip_index)
-        for belt, (port, strip_index) in wanted.items()
+        (carried[belt], port, strip_index) for belt, (port, strip_index) in wanted.items()
     ]
     provisional_boundary_inputs.extend(
         (item, port, strip_of_belt.get(port.belt))
@@ -16516,8 +16483,7 @@ def _prepare_routing_problem(
     port_access_inventory = _port_access_inventory(
         nets,
         boundary_inputs=tuple(
-            (carried[belt], port, strip_index)
-            for belt, (port, strip_index) in wanted.items()
+            (carried[belt], port, strip_index) for belt, (port, strip_index) in wanted.items()
         ),
         boundary_outputs=tuple(wanted_outputs.values()),
         late_output_belts=late_output_belts,
@@ -16534,7 +16500,6 @@ def _prepare_routing_problem(
         )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-
 
     # The stack-aware sharing plan has reduced ``wanted`` to unshared roots;
     # shared groups already have one zero-predecessor perimeter trunk each.
@@ -16694,8 +16659,7 @@ def _prepare_routing_problem(
             return prepared.net_id.role is NetRole.EXTERNAL_OUTPUT and source == demand.cell
         if demand.kind is PortAccessKind.INTERNAL_DEPARTURE:
             return (
-                prepared.net_id.role
-                not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
+                prepared.net_id.role not in (NetRole.EXTERNAL, NetRole.EXTERNAL_OUTPUT)
                 and source == demand.cell
             )
         return (
@@ -16709,11 +16673,7 @@ def _prepare_routing_problem(
         for demand in access_reservation.missing
         for prepared in (
             next(
-                (
-                    candidate
-                    for candidate in all_prepared_nets
-                    if matches_demand(candidate, demand)
-                ),
+                (candidate for candidate in all_prepared_nets if matches_demand(candidate, demand)),
                 None,
             ),
         )
@@ -17283,9 +17243,7 @@ def _build_prepared(
         if net.net_id not in prepared.late_output_net_ids
     ]
     late_output_nets = [
-        net
-        for net in workspace.external_output_nets
-        if net.net_id in prepared.late_output_net_ids
+        net for net in workspace.external_output_nets if net.net_id in prepared.late_output_net_ids
     ]
 
     empty_routing = DetailedRouteResult(

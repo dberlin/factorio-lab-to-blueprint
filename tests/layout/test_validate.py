@@ -4387,7 +4387,7 @@ def directional_flow_spec(*, count: int = 1) -> BuildSpec:
 
 
 def directed_lane_placement(*, producer_upstream: bool) -> Placement:
-    producer_belt, consumer_belt = ((1, 4) if producer_upstream else (4, 1))
+    producer_belt, consumer_belt = (1, 4) if producer_upstream else (4, 1)
     return place(
         *(belt(x, 0, out=x + 1 if x < 4 else None, carries="intermediate") for x in range(5)),
         machine(3, 2, item_id=SMELTER, recipe_id=10),  # 5 producer

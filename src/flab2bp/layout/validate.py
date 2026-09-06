@@ -5263,9 +5263,7 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
         needs[i] = group.inputs_per_machine
     supplied_items = {item for rates in makes.values() for item in rates}
     supplied_items.update(ctx.spec.external_inputs)
-    wanted_items = sorted(
-        {item for rates in needs.values() for item in rates} & supplied_items
-    )
+    wanted_items = sorted({item for rates in needs.values() for item in rates} & supplied_items)
     physical_kinds = (Kind.BELT, Kind.SPLITTER, Kind.PILER)
     building_count = len(bs)
     source_node = 3 * building_count
@@ -5280,12 +5278,8 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
         return 2 * building_count + machine
 
     for item in wanted_items:
-        supply_rates = {
-            machine: rates[item] for machine, rates in makes.items() if item in rates
-        }
-        demand_rates = {
-            machine: rates[item] for machine, rates in needs.items() if item in rates
-        }
+        supply_rates = {machine: rates[item] for machine, rates in makes.items() if item in rates}
+        demand_rates = {machine: rates[item] for machine, rates in needs.items() if item in rates}
         external_rate = ctx.spec.external_inputs.get(item, Fraction(0))
         scale = math.lcm(
             *(
@@ -5295,15 +5289,12 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
             )
         )
 
-        total_demand = sum(
-            _flow_rate_units(rate, scale) for rate in demand_rates.values()
-        )
+        total_demand = sum(_flow_rate_units(rate, scale) for rate in demand_rates.values())
         if total_demand <= 0:
             continue
         graph: list[list[_FlowEdge]] = [[] for _ in range(node_count)]
         predecessors: dict[int, set[int]] = defaultdict(set)
         consumer_feeders: set[int] = set()
-
 
         for index, belt in ctx.of_kind(Kind.BELT):
             onward = belt.output_obj

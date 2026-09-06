@@ -607,8 +607,6 @@ def test_topology_refinement_rewards_only_allowed_direct_origin_delta() -> None:
     assert candidate.x[target.consumer] - candidate.x[target.producer] == 1
 
 
-
-
 def test_topology_beam_rejects_foreign_or_duplicate_no_goods() -> None:
     problem = _fixed_problem(nets=())
     beam = CompactTopologyBeam(
@@ -722,8 +720,6 @@ def test_normal_compact_seed_requires_allowed_direct_origin_delta(
 
     assert cp_direct == expected
     assert compact_seed_module._decoded_direct_keys(decoded, (0, 0), eligibility) == expected
-
-
 
 
 def test_cp_coordinate_direct_success_is_not_accepted_as_zero_gap_decoded_truth() -> None:

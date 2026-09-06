@@ -237,7 +237,6 @@ def two_stage_spec() -> BuildSpec:
     )
 
 
-
 def plastic_spec() -> BuildSpec:
     """The captured corpus ``plastic/all-products`` candidate."""
     from flab2bp.bench.corpus import URL_CORPUS
@@ -3203,17 +3202,14 @@ def test_direct_origin_deltas_reject_columns_after_the_first_destination_pickup(
 def test_direct_origin_deltas_keep_source_tail_to_destination_head_alignment() -> None:
     source, destination = _direct_flow_order_strips()
 
-    assert (
-        _direct_origin_deltas(
-            source,
-            destination,
-            0,
-            "iron-ingot",
-            source_rate=F(1),
-            required_rate=F(4),
-        )
-        == (9, 10, 11)
-    )
+    assert _direct_origin_deltas(
+        source,
+        destination,
+        0,
+        "iron-ingot",
+        source_rate=F(1),
+        required_rate=F(4),
+    ) == (9, 10, 11)
 
 
 def test_direct_origin_deltas_admit_a_bridge_after_sufficient_partial_supply() -> None:
@@ -11512,12 +11508,8 @@ class TestPortAccessIsReservedForEveryRole:
         )
 
     def test_selected_corridors_never_share_an_exit_cell(self) -> None:
-        first = _access_demand(
-            (0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=1
-        )
-        second = _access_demand(
-            (2, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=2
-        )
+        first = _access_demand((0, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=1)
+        second = _access_demand((2, 0, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=2)
         matched = freeform._match_access_corridors(
             (first, second),
             {
@@ -18835,7 +18827,6 @@ def test_projected_coater_junction_bans_reuse_identical_exact_relations(
         materialized.append(building)
         return original_materialize(building, **kwargs)  # type: ignore[arg-type]
 
-
     def no_overlap(_left: object, _right: object) -> bool:
         nonlocal overlaps
         overlaps += 1
@@ -19600,14 +19591,10 @@ def test_direct_candidate_uses_the_emitted_post_piler_tail() -> None:
     spec = _piler_two_stage_spec(Fraction(40), pick_stack=2, place_stack=1)
     strips = plan_strips(spec, strip_len=1)
     source_index, source = next(
-        (index, strip)
-        for index, strip in enumerate(strips)
-        if strip.recipe_id == "iron-ingot"
+        (index, strip) for index, strip in enumerate(strips) if strip.recipe_id == "iron-ingot"
     )
     destination_index, destination = next(
-        (index, strip)
-        for index, strip in enumerate(strips)
-        if strip.recipe_id == "gear"
+        (index, strip) for index, strip in enumerate(strips) if strip.recipe_id == "gear"
     )
     strips[destination_index] = _strip_with_attachment_column(destination, "input", 2)
 
@@ -19635,9 +19622,7 @@ def test_piled_direct_alignment_target_includes_the_emitted_tail() -> None:
     strips = plan_strips(spec, strip_len=1)
     source = next(strip for strip in strips if strip.recipe_id == "iron-ingot")
     destination_index, destination = next(
-        (index, strip)
-        for index, strip in enumerate(strips)
-        if strip.recipe_id == "gear"
+        (index, strip) for index, strip in enumerate(strips) if strip.recipe_id == "gear"
     )
     strips[destination_index] = _strip_with_attachment_column(destination, "input", 2)
 
@@ -19651,9 +19636,7 @@ def test_each_piled_output_candidate_uses_its_own_emitted_tail() -> None:
     spec = _two_output_piler_spec()
     strips = plan_strips(spec, strip_len=1)
     source_index, source = next(
-        (index, strip)
-        for index, strip in enumerate(strips)
-        if strip.recipe_id == "plasma-refining"
+        (index, strip) for index, strip in enumerate(strips) if strip.recipe_id == "plasma-refining"
     )
     assert sorted(plan.count for plan in source.pilers) == [1, 2]
     for index, strip in enumerate(strips):
@@ -19671,9 +19654,7 @@ def test_each_piled_output_candidate_uses_its_own_emitted_tail() -> None:
         {},
         owner_strip=source_index,
     )
-    emitted_tails = {
-        item: port for (item, _destination, _domain), port in outputs.items()
-    }
+    emitted_tails = {item: port for (item, _destination, _domain), port in outputs.items()}
     candidates = _direct_net_candidates(strips, spec)
     candidate_by_item = {
         candidate.item: (key, candidate)
@@ -19681,8 +19662,7 @@ def test_each_piled_output_candidate_uses_its_own_emitted_tail() -> None:
         if key[0] == source_index
     }
     targets = {
-        target.key: target
-        for target in freeform_module._direct_alignment_targets(candidates)
+        target.key: target for target in freeform_module._direct_alignment_targets(candidates)
     }
 
     assert set(candidate_by_item) == {"refined-oil", "hydrogen"}
@@ -23666,9 +23646,7 @@ def test_prepared_routing_bound_allows_differing_shared_source_taps() -> None:
             input_obj=(index - 1 if y == 0 and index > 0 else None),
             output_obj=(index + 1 if y == 0 and index < 10 else None),
         )
-        for index, (x, y) in enumerate(
-            (*((x, 0) for x in range(11)), (11, 1), (12, 1))
-        )
+        for index, (x, y) in enumerate((*((x, 0) for x in range(11)), (11, 1), (12, 1)))
     )
     sorter_id = min(catalog.SORTER_IDS)
     sorters = tuple(
@@ -23734,9 +23712,7 @@ def test_prepared_routing_bound_uses_nearest_boundary_goal() -> None:
         boundary_goals=((0, 0, 0), (5, 2, 0), (9, 9, 0)),
     )
 
-    bound = freeform_module._prepared_routing_lower_bound(
-        _prepared_bound_problem(nets=(external,))
-    )
+    bound = freeform_module._prepared_routing_lower_bound(_prepared_bound_problem(nets=(external,)))
 
     assert bound.component_count == 1
     assert bound.route_floor == 3
@@ -23921,9 +23897,7 @@ def test_boundary_port_physical_claim_counts() -> None:
     )
     counts = {
         cell: tuple(
-            sorted(
-                demand.kind.value for demand in inventory.demands if demand.cell == cell
-            )
+            sorted(demand.kind.value for demand in inventory.demands if demand.cell == cell)
         )
         for cell in {demand.cell for demand in inventory.demands}
     }
@@ -23993,9 +23967,7 @@ def test_port_access_probes_share_one_grid(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(freeform, "_make_grid", counting_make_grid)
     canvas, demands, boundary, bounds = _boundary_reachable_port_fixture()
-    reservation = freeform._reserve_port_access(
-        canvas, demands, boundary=boundary, bounds=bounds
-    )
+    reservation = freeform._reserve_port_access(canvas, demands, boundary=boundary, bounds=bounds)
     assert reservation.assigned
     assert builds["n"] == 1, builds
 
@@ -24024,9 +23996,7 @@ def test_two_reachable_boundary_claims_are_jointly_rematched() -> None:
         },
     )
     assert set(matched) == {first, second}
-    occupied = {
-        cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)
-    }
+    occupied = {cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)}
     assert len(occupied) == 4
 
 
@@ -24091,10 +24061,7 @@ def test_tie_work_limit_unknown_uses_ranked_fallback_before_wall_deadline(
         solver: cp_model.CpSolver,
         model: cp_model.CpModel,
     ) -> cp_model.CpSolverStatus:
-        if (
-            solver.parameters.max_deterministic_time
-            == freeform._ACCESS_TIE_DETERMINISTIC_WORK
-        ):
+        if solver.parameters.max_deterministic_time == freeform._ACCESS_TIE_DETERMINISTIC_WORK:
             return cp_model.UNKNOWN
         return original_solve(solver, model)
 
@@ -24122,10 +24089,7 @@ def test_tie_work_limit_after_validation_cut_never_reuses_cut_assignment(
         solver: cp_model.CpSolver,
         model: cp_model.CpModel,
     ) -> cp_model.CpSolverStatus:
-        if (
-            solver.parameters.max_deterministic_time
-            == freeform._ACCESS_TIE_DETERMINISTIC_WORK
-        ):
+        if solver.parameters.max_deterministic_time == freeform._ACCESS_TIE_DETERMINISTIC_WORK:
             return cp_model.UNKNOWN
         return original_solve(solver, model)
 
@@ -24196,9 +24160,9 @@ def test_self_consuming_requested_output_routes_from_late_tail() -> None:
         late_output_belts={source.belt},
         strip_of_belt={0: 0, 1: 1},
     )
-    assert tuple(
-        demand.kind for demand in inventory.demands if demand.cell == (1, 1, 0)
-    ) == (freeform.PortAccessKind.INTERNAL_DEPARTURE,)
+    assert tuple(demand.kind for demand in inventory.demands if demand.cell == (1, 1, 0)) == (
+        freeform.PortAccessKind.INTERNAL_DEPARTURE,
+    )
     assert source.belt in inventory.late_output_belts
 
     canvas = _Canvas(limit=(0, 0, 8, 4))
@@ -24268,8 +24232,7 @@ def test_broke7_recorded_pack_outcomes_after_boundary_role_repair(
         assert built.routing.status is DetailedRouteStatus.STRANDED
         assert not built.routing.exhaustive
         assert all(
-            failure.kind is not RouteFailureKind.STATIC_ACCESS
-            for failure in built.routing.failures
+            failure.kind is not RouteFailureKind.STATIC_ACCESS for failure in built.routing.failures
         )
 
 

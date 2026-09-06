@@ -463,8 +463,6 @@ def test_direct_insert_targets_use_compiled_kernel_with_exact_controls(
     assert compiled_calls == 2
 
 
-
-
 def _cartesian_origin_delta_oracle(
     source_columns: Iterable[int],
     destination_columns: Iterable[int],

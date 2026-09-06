@@ -1158,7 +1158,6 @@ class SequenceSolver[PreparedT]:
         if started is not None and self.stage_admission is not None:
             self.stage_admission.finish_completion(started)
 
-
     def _run_detailed_route(
         self,
         prepared: PreparedT,
@@ -1172,9 +1171,7 @@ class SequenceSolver[PreparedT]:
             if self.adapters.exact_lower_bound is None
             else self.adapters.exact_lower_bound(prepared)
         )
-        lower_key = (
-            None if declared is None else (declared[0], declared[1].total)
-        )
+        lower_key = None if declared is None else (declared[0], declared[1].total)
         dominated = (
             lower_key is not None
             and self._incumbent is not None
@@ -1226,7 +1223,6 @@ class SequenceSolver[PreparedT]:
             None,
         )
         return observation.global_skip_reason if observation is not None else None
-
 
     def _portfolio_pruned(self, height_state: _HeightState) -> bool:
         """Can this height still beat what the other racer already certified?
@@ -2561,10 +2557,7 @@ class SequenceSolver[PreparedT]:
         # Domination proves only that this candidate cannot improve the winner;
         # it is neither routed evidence nor failure feedback.  Advance the
         # anneal cursor while preserving every evidence-driven scheduling field.
-        if (
-            detailed.routing.status is DetailedRouteStatus.DOMINATED
-            and observation.continue_search
-        ):
+        if detailed.routing.status is DetailedRouteStatus.DOMINATED and observation.continue_search:
             source = selected.source
             if source is None:
                 raise ValueError("continuing dominated stage must retain its annealed source")
@@ -4076,8 +4069,6 @@ def _search_stage_cap(
     return None
 
 
-
-
 def _needs_topology_beam(
     *,
     topology_role: bool,
@@ -5271,10 +5262,7 @@ def _production_run(
                 for parameter in preparation_parameters.values()
             )
             preparation_kwargs: _OptionalPreparationKwargs = {}
-            if (
-                "staged_static_cache" in preparation_parameters
-                or accepts_preparation_keywords
-            ):
+            if "staged_static_cache" in preparation_parameters or accepts_preparation_keywords:
                 preparation_kwargs["staged_static_cache"] = staged_static_cache
             if "cancelled" in preparation_parameters or accepts_preparation_keywords:
                 preparation_kwargs["cancelled"] = deadline_reached
@@ -5911,7 +5899,6 @@ def _production_run(
         direct_targets=direct_targets,
         direct_targets_for_state=direct_targets_for_state,
         stage_boundary_transform=transform_stage,
-
         stage_boundary_commit=commit_stage,
         # The window adapter exists here, so LOCAL_EXACT_PACK has an
         # implementation behind it, and `band_target_for` above gives
@@ -6427,11 +6414,7 @@ def _prepared_lower_bound_stats(
     prepared = tuple(stage for stage in stages if stage.prepared_lower_key is not None)
     hits = tuple(stage for stage in prepared if stage.lower_bound_dominated)
     detailed_seconds = sum(stage.detailed_route_time_s for stage in stages)
-    skips = tuple(
-        stage
-        for stage in hits
-        if stage.detailed_skip_reason == "prepared-lower-bound"
-    )
+    skips = tuple(stage for stage in hits if stage.detailed_skip_reason == "prepared-lower-bound")
     hit_seconds = sum(stage.detailed_route_time_s for stage in hits)
     return {
         "prepared_lower_bound_candidates": float(len(prepared)),
@@ -6513,9 +6496,7 @@ def _refusal_stats(run: _ProductionRun) -> dict[str, float | str]:
         "prepared_lower_bound_hits": bound_stats["prepared_lower_bound_hits"],
         "prepared_lower_bound_skips": bound_stats["prepared_lower_bound_skips"],
         "prepared_lower_bound_hit_time_s": bound_stats["prepared_lower_bound_hit_time_s"],
-        "prepared_lower_bound_hit_time_share": bound_stats[
-            "prepared_lower_bound_hit_time_share"
-        ],
+        "prepared_lower_bound_hit_time_share": bound_stats["prepared_lower_bound_hit_time_share"],
         "prepared_lower_bound_violations": bound_stats["prepared_lower_bound_violations"],
     }
 
@@ -6594,20 +6575,14 @@ def _with_observational_stats(
             "decoded_candidates": float(sum(stage.global_routes for stage in result.stages)),
             "global_routes": float(telemetry.global_routes),
             "detailed_routes": float(telemetry.detailed_routes),
-            "prepared_lower_bound_candidates": bound_stats[
-                "prepared_lower_bound_candidates"
-            ],
+            "prepared_lower_bound_candidates": bound_stats["prepared_lower_bound_candidates"],
             "prepared_lower_bound_hits": bound_stats["prepared_lower_bound_hits"],
             "prepared_lower_bound_skips": bound_stats["prepared_lower_bound_skips"],
-            "prepared_lower_bound_hit_time_s": bound_stats[
-                "prepared_lower_bound_hit_time_s"
-            ],
+            "prepared_lower_bound_hit_time_s": bound_stats["prepared_lower_bound_hit_time_s"],
             "prepared_lower_bound_hit_time_share": bound_stats[
                 "prepared_lower_bound_hit_time_share"
             ],
-            "prepared_lower_bound_violations": bound_stats[
-                "prepared_lower_bound_violations"
-            ],
+            "prepared_lower_bound_violations": bound_stats["prepared_lower_bound_violations"],
             "best_overflow": float(
                 telemetry.best_overflow if telemetry.best_overflow is not None else -1
             ),
@@ -6714,12 +6689,8 @@ def _with_observational_stats(
                 if telemetry.alns_window_last_best_bound is not None
                 else float("nan")
             ),
-            "alns_window_distinct_submodels": float(
-                telemetry.alns_window_distinct_submodels
-            ),
-            "alns_window_repeated_submodels": float(
-                telemetry.alns_window_repeated_submodels
-            ),
+            "alns_window_distinct_submodels": float(telemetry.alns_window_distinct_submodels),
+            "alns_window_repeated_submodels": float(telemetry.alns_window_repeated_submodels),
             "alns_window_repeated_submodel_seconds": (
                 telemetry.alns_window_repeated_submodel_seconds
             ),
