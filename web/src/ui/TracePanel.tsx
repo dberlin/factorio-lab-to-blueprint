@@ -27,10 +27,18 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
     // possible `seq` belongs — every later call passes the server's own
     // `next` straight back, with no arithmetic on it.
     let cursor = -1;
-    let stop = false;
+    let stopped = false;
     (async () => {
-      while (!stop) {
+      while (!stopped) {
         const page = await pollTrace(jobId, cursor, controller.signal);
+        // Aborting the in-flight request is not enough on its own: an abort
+        // can lose the race against a response that already arrived (e.g. a
+        // real build's `load()` settles the job and this effect is cleaned
+        // up between the fetch resolving and this line running). Checking
+        // `stopped` again here, immediately before touching any state, is
+        // what actually stops a frame from a poll that was told to stop from
+        // repainting over a fresh real result.
+        if (stopped) return;
         cursor = page.next;
         setDropped(page.dropped);
         if (page.frames.length > 0) {
@@ -41,7 +49,7 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
       }
     })().catch(() => undefined);
     return () => {
-      stop = true;
+      stopped = true;
       controller.abort();
     };
   }, [jobId, active]);

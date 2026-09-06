@@ -66,6 +66,14 @@ body {
 .warn {
   color: #ffcc66;
 }
+/* The one label a viewer sees while the canvas is showing a search
+   snapshot rather than a result -- deliberately louder than `.warn`, since
+   this is not a caveat on a real answer but a statement that there isn't
+   one yet. */
+.trace-live {
+  color: #ff9f43;
+  letter-spacing: 0.02em;
+}
 .canvas {
   min-height: 0;
 }

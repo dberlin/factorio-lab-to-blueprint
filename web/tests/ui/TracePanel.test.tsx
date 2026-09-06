@@ -1,5 +1,6 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { render, waitFor } from '@testing-library/react';
+import { TRACE_POLL_MS } from '../../src/api/trace';
 import type { Blueprint } from '../../src/format/types';
 import { TracePanel } from '../../src/ui/TracePanel';
 import { restoreFetch, serving } from '../support/build';
@@ -81,4 +82,55 @@ test('does nothing while inactive', async () => {
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   expect(calls).toHaveLength(0);
+});
+
+test('unmounting mid-poll stops the loop and makes no further requests', async () => {
+  const calls = serving(
+    { body: { frames: [FRAME], next: 1, dropped: 0, complete: false } },
+    { body: { frames: [FRAME], next: 2, dropped: 0, complete: false } },
+  );
+
+  const { unmount } = render(<TracePanel jobId="abc123" active={true} />);
+  await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(1));
+
+  unmount();
+  const callsAtUnmount = calls.length;
+
+  // Long enough to span several TRACE_POLL_MS intervals if the loop were
+  // still running unattended after unmount.
+  await new Promise((resolve) => setTimeout(resolve, TRACE_POLL_MS * 3));
+
+  expect(calls.length).toBe(callsAtUnmount);
+});
+
+test('a response that arrives after polling has been told to stop is discarded, not applied', async () => {
+  // A hand-controlled fetch, so the response can be made to arrive AFTER
+  // unmount -- the exact race `controller.abort()` alone cannot win, because
+  // an abort cannot cancel a response that has already come back on the wire.
+  let resolveFetch: ((response: Response) => void) | undefined;
+  const pending = new Promise<Response>((resolve) => {
+    resolveFetch = resolve;
+  });
+  globalThis.fetch = (() => pending) as unknown as typeof fetch;
+
+  const before = loadSnapshotCalls.length;
+  const { unmount } = render(<TracePanel jobId="abc123" active={true} />);
+
+  // Stop the panel -- mirroring `active` flipping to false the instant a real
+  // build settles -- WHILE the request is still in flight.
+  unmount();
+
+  resolveFetch?.(
+    new Response(JSON.stringify({ frames: [FRAME], next: 1, dropped: 0, complete: false }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  );
+  await pending;
+  // Give the poll loop's continuation a tick to run, and to prove it applies
+  // nothing: this is what would repaint a stale trace frame over a fresh
+  // real result if the apply step were not itself guarded.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  expect(loadSnapshotCalls.length).toBe(before);
 });
