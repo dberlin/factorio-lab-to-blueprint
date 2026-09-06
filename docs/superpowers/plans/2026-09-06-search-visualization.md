@@ -16,10 +16,10 @@
 - **Hot-path contract (spec §5.4).** R1: no observer call inside a CP-SAT callback or solver-driven loop — candidate/stage/round/incumbent boundaries only. R2: an observer call never reads, writes, or keys on anything the search reads. R3: `note` never raises. R4: `SearchEvent` is constructed *inside* the `due()` branch.
 - **Never reuse `publish_incumbent`** (`freeform.py:19420`, `sequence_solver.py:6303`) for trace. In the raced child it runs a full `validate.validate` (`strategy_race.py:515-530`). The observer is a separate parameter; both coexist.
 - **A trace frame is never pasteable.** No blueprint string on a frame, no validity claim, `snapshotLabel` non-null while one is shown.
-- **Constants** (exact values, `src/flab2bp/web/trace.py` unless stated): `TRACE_RING_FRAMES = 256`; `TRACE_RING_BYTES = 32 * 1024 * 1024`; `TRACE_MAX_BUILDINGS = 6000`; `TRACE_PAGE_FRAMES = 8`; `TRACE_DRAIN_INTERVAL_S = 0.1`; `TRACE_STAGE1_MAXLEN = 64`; and in `src/flab2bp/layout/observe_channel.py`: `TRACE_QUEUE_MAXSIZE = 64`, `TRACE_DRAIN_MAX_EVENTS = 32`.
-- **Sample intervals:** `0.25` s in-process, `0.5` s inside a spawned child.
+- **Constants** (exact values, `src/flab2bp/web/trace.py` unless stated): `TRACE_RING_FRAMES = 256`; `TRACE_RING_BYTES = 32 * 1024 * 1024`; `TRACE_MAX_BUILDINGS = 6000`; `TRACE_PAGE_FRAMES = 8`; `TRACE_DRAIN_INTERVAL_S = 0.1`; `TRACE_STAGE1_MAXLEN = 64`; in `src/flab2bp/layout/observe.py`: `TRACE_SAMPLE_INTERVAL_S = 0.25`, `TRACE_CHILD_SAMPLE_INTERVAL_S = 0.5`; and in `src/flab2bp/layout/observe_channel.py`: `TRACE_QUEUE_MAXSIZE = 64`, `TRACE_DRAIN_MAX_EVENTS = 32`.
+- **Sample intervals are fixed constants in v1, not a UI control.** `TRACE_SAMPLE_INTERVAL_S = 0.25` s in-process, `TRACE_CHILD_SAMPLE_INTERVAL_S = 0.5` s inside a spawned child (doubled because a child's queue is fed by a pickling thread whose CPU is the child's own — spec §5.3, §9 R2). Settled by the user: no "detail" slider; a configurable interval is a follow-on, taken up only if Task 13's overhead-gate baseline leaves budget headroom (spec §10).
 - **`web/src/format`, `web/src/model`, `web/src/api` must import neither React nor three.js** — enforced by `web/tests/architecture.test.ts:40-47`.
-- **Do not run layouts on this box without checking with the user.** Tasks 1–11 are unit-testable in milliseconds. Task 12 is the only one that runs real solves.
+- **Do not run layouts on this box without checking with the user.** Tasks 1–12 are unit-testable in milliseconds. Task 13 is the only one that runs real solves.
 - **Commit trailers** on every commit:
   ```
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -59,7 +59,9 @@
 | `web/src/state/BlueprintProvider.tsx:6-20, 24-66` | `loadSnapshot`, `snapshotLabel`. |
 | `web/src/ui/BuildPanel.tsx:28-35` | Trace checkbox; mount `<TracePanel>`. |
 | `web/src/scene/BlueprintCanvas.tsx` | Mount `<TraceOverlay>`. |
+| `src/flab2bp/cli.py:217-321, 324-399` | `--trace-jsonl PATH` flag; observer wired into the existing `pipeline.build` call. |
 | `tests/web/test_server.py`, `tests/web/test_options.py` | Endpoint and option coverage. |
+| `tests/test_cli.py` | `--trace-jsonl` parsing and end-to-end JSONL output. |
 
 ---
 
@@ -71,7 +73,7 @@
 
 **Interfaces:**
 - Consumes: `flab2bp.layout.base.Placement`.
-- Produces: `SearchPhase` (StrEnum: `PACKED`, `ROUTED`, `CERTIFIED`, `INCUMBENT`, `REFUSED`, `BLOCK`, `RECUT`, `COMPOSED`); `ALWAYS_SAMPLE: frozenset[SearchPhase]`; `SearchEvent` (frozen slots dataclass, fields in the order below); `SearchObserver` Protocol with `due(phase) -> bool` and `note(event) -> None`; `SampledObserver(sink, min_interval_s=0.25, monotonic=time.monotonic)`.
+- Produces: `SearchPhase` (StrEnum: `PACKED`, `ROUTED`, `CERTIFIED`, `INCUMBENT`, `REFUSED`, `BLOCK`, `RECUT`, `COMPOSED`); `ALWAYS_SAMPLE: frozenset[SearchPhase]`; `TRACE_SAMPLE_INTERVAL_S: Final = 0.25` and `TRACE_CHILD_SAMPLE_INTERVAL_S: Final = 0.5` (fixed v1 constants — no UI control, per the user's settled answer, spec §5.3/§10); `SearchEvent` (frozen slots dataclass, fields in the order below); `SearchObserver` Protocol with `due(phase) -> bool` and `note(event) -> None`; `SampledObserver(sink, min_interval_s=TRACE_SAMPLE_INTERVAL_S, monotonic=time.monotonic)`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -84,6 +86,8 @@ import pytest
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.observe import (
     ALWAYS_SAMPLE,
+    TRACE_CHILD_SAMPLE_INTERVAL_S,
+    TRACE_SAMPLE_INTERVAL_S,
     SampledObserver,
     SearchEvent,
     SearchPhase,
@@ -155,6 +159,15 @@ def test_event_is_frozen() -> None:
     event = SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.PACKED)
     with pytest.raises(AttributeError):
         event.strategy = "sequence-pair"  # type: ignore[misc]
+
+
+def test_the_two_sample_intervals_are_fixed_v1_constants() -> None:
+    # Settled by the user: no "detail" slider in v1. A configurable interval
+    # is a follow-on, only if Task 13's overhead-gate baseline leaves room
+    # (design §5.3, §10).
+    assert TRACE_SAMPLE_INTERVAL_S == 0.25
+    assert TRACE_CHILD_SAMPLE_INTERVAL_S == 0.5
+    assert SampledObserver(sink=lambda _e: None).min_interval_s == TRACE_SAMPLE_INTERVAL_S
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -213,6 +226,17 @@ ALWAYS_SAMPLE: Final[frozenset[SearchPhase]] = frozenset(
 )
 
 
+#: Fixed for v1, not a UI control -- settled by the user (design §10). 250 ms
+#: keeps every Rule W cell comfortably inside the 1% budget; a configurable
+#: interval is a follow-on, only worth taking up if Task 13's baseline leaves
+#: headroom to spend.
+TRACE_SAMPLE_INTERVAL_S: Final = 0.25
+
+#: Doubled across a spawn boundary: the queue's feeder thread does the
+#: pickling (§9 R2), and that CPU is the child's own, not free background work.
+TRACE_CHILD_SAMPLE_INTERVAL_S: Final = 0.5
+
+
 @dataclass(frozen=True, slots=True)
 class SearchEvent:
     """One thing a search did, as an immutable reference to state it already holds.
@@ -265,7 +289,7 @@ class SampledObserver:
     """
 
     sink: Callable[[SearchEvent], None]
-    min_interval_s: float = 0.25
+    min_interval_s: float = TRACE_SAMPLE_INTERVAL_S
     monotonic: Callable[[], float] = time.monotonic
     _last_s: float = field(default=float("-inf"), init=False)
 
@@ -637,6 +661,13 @@ Claude-Session: https://claude.ai/code/session_014jHGF2vGRJ5KDBB3JevhQb"
 - Consumes: `SearchObserver`, `SearchEvent`, `SearchPhase` (Task 1).
 - Produces: `pipeline.build(..., search_observer: SearchObserver | None = None)`; `pipeline._new_layout(..., observer: SearchObserver | None = None)`; `FreeformLayout(..., observer: SearchObserver | None = None)`.
 
+**`PACKED` ships here, in v1.** It is one of the five call sites below, in the
+very first task that wires freeform to an observer at all — settled by the
+user (design §10): the pack-before-routing frame is the single most
+informative one this feature has, and `SampledObserver.due()` (Task 1) is what
+keeps its cost inside Rule W's budget (Task 13) despite it being the
+highest-frequency site in the sweep. Nothing here waits for a baseline first.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -990,7 +1021,7 @@ class TraceCollector:
     ring: TraceRing
     started_at: float
     stage1_maxlen: int = TRACE_STAGE1_MAXLEN
-    min_interval_s: float = 0.25
+    min_interval_s: float = TRACE_SAMPLE_INTERVAL_S
     _pending: deque[tuple[float, SearchEvent]] = field(init=False)
     _dropped: int = field(default=0, init=False)
     _seq: int = field(default=0, init=False)
@@ -1038,7 +1069,8 @@ class TraceCollector:
         self.drain_once()
 ```
 
-with `import threading`, `import time`, and `from flab2bp.layout.observe import SampledObserver`
+with `import threading`, `import time`, and
+`from flab2bp.layout.observe import SampledObserver, TRACE_SAMPLE_INTERVAL_S`
 added at the top.
 
 In `src/flab2bp/web/jobs.py`:
@@ -1917,11 +1949,12 @@ In `src/flab2bp/layout/strategy_race.py`:
       observer = (
           None
           if trace is None
-          else SampledObserver(sink=trace.offer, min_interval_s=0.5)
+          else SampledObserver(sink=trace.offer, min_interval_s=TRACE_CHILD_SAMPLE_INTERVAL_S)
       )
   ```
-  `0.5` and not `0.25` in a child: the frame is pickled by the queue's feeder
-  thread, and that thread's CPU is the child's. Pass `observer=observer` into
+  `TRACE_CHILD_SAMPLE_INTERVAL_S` and not `TRACE_SAMPLE_INTERVAL_S` in a child:
+  the frame is pickled by the queue's feeder thread, and that thread's CPU is
+  the child's. Pass `observer=observer` into
   `_build_layout`, add `trace_dropped=0 if trace is None else trace.dropped` to
   the `_StrategyRaceOutcome`, and call `trace.close()` alongside
   `channels.close()` in the leg's teardown.
@@ -2354,7 +2387,165 @@ Claude-Session: https://claude.ai/code/session_014jHGF2vGRJ5KDBB3JevhQb"
 
 ---
 
-### Task 12: The overhead gate
+### Task 12: CLI trace — `--trace-jsonl <path>`
+
+Settled by the user (design §10, §7.4): in scope for v1, and placed here — right
+before the overhead-gate task — because it is that task's route to capturing
+frames without a web server and the offline-analysis path more generally.
+
+**Files:**
+- Modify: `src/flab2bp/cli.py:217-321` (`build_parser`), `:324-399` (`main`)
+- Test: `tests/test_cli.py` (append)
+
+**Interfaces:**
+- Consumes: `SearchObserver`, `SearchEvent`, `SampledObserver`, `TRACE_SAMPLE_INTERVAL_S` (Task 1); `frame_json` (Task 2); `pipeline.build(..., search_observer=)` (Task 3).
+- Produces: `--trace-jsonl PATH` on the CLI's argument parser; `args.trace_jsonl: Path | None`, default `None`; one JSON object per line at that path, in `frame_json`'s shape — the same shape a web trace poll's `frames[i]` carries (design §7.4: one observer, one frame schema, two transports).
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_cli.py  (append)
+import json
+from pathlib import Path
+
+from flab2bp.layout.observe import SearchEvent, SearchPhase
+
+
+def test_trace_jsonl_defaults_to_none() -> None:
+    args = cli.build_parser().parse_args(["https://example/x"])
+    assert args.trace_jsonl is None
+
+
+def test_trace_jsonl_parses_to_a_path() -> None:
+    args = cli.build_parser().parse_args(
+        ["https://example/x", "--trace-jsonl", "trace.jsonl"]
+    )
+    assert args.trace_jsonl == Path("trace.jsonl")
+
+
+def test_without_the_flag_no_observer_is_built(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_build(*_args: object, **kwargs: object) -> pipeline.Build:
+        seen["search_observer"] = kwargs.get("search_observer")
+        # KeyError short-circuits before a real solve; `main` already turns
+        # one into exit code 2 (cli.py:381-383), so no new exception path
+        # is needed here.
+        raise KeyError("short-circuit before a real solve")
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    exit_code = cli.main(["https://example/x"])
+    assert exit_code == 2
+    assert seen["search_observer"] is None
+
+
+def test_main_writes_one_json_object_per_search_event_per_line(
+    deuteron_build: pipeline.Build,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_build(*_args: object, **kwargs: object) -> pipeline.Build:
+        # The same contract every other call site gets: due() gates, note()
+        # records. Exercising it here is what proves the CLI and the web
+        # path share one observer and one frame schema (design §7.4).
+        observer = kwargs["search_observer"]
+        assert observer is not None
+        assert observer.due(SearchPhase.INCUMBENT) is True
+        observer.note(
+            SearchEvent(
+                strategy="freeform", candidate="c",
+                phase=SearchPhase.INCUMBENT, incumbent=True,
+            )
+        )
+        return deuteron_build
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    trace_path = tmp_path / "trace.jsonl"
+    exit_code = cli.main(["https://example/x", "--trace-jsonl", str(trace_path)])
+
+    assert exit_code == 0
+    lines = trace_path.read_text().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["phase"] == "incumbent"
+    assert row["strategy"] == "freeform"
+    assert "blueprint" not in row  # N1: not even the CLI's own copy is pasteable.
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_cli.py -k trace_jsonl -x -q`
+Expected: FAIL — `AttributeError: 'Namespace' object has no attribute 'trace_jsonl'`
+
+- [ ] **Step 3: Write minimal implementation**
+
+In `build_parser` (`cli.py:217-321`), beside `-o`/`--out` (`cli.py:312`):
+
+```python
+    ap.add_argument(
+        "--trace-jsonl",
+        type=Path,
+        metavar="PATH",
+        help="write every search snapshot as one JSON object per line to PATH "
+        "-- the same frames the web transport carries (design §4), the input "
+        "scripts/trace_overhead.py uses, and the offline-analysis path when "
+        "there is no browser. Off by default: no path, no observer, no cost.",
+    )
+```
+
+In `main` (`cli.py:324-399`), before the existing `try: build = pipeline.build(...)`
+block (`cli.py:351`):
+
+```python
+    trace_file = None
+    search_observer = None
+    if args.trace_jsonl is not None:
+        trace_file = args.trace_jsonl.open("w", encoding="utf-8")
+        seq = count()
+        t0 = time.monotonic()
+
+        def _write_frame(event: SearchEvent) -> None:
+            # frame_json is the ONE place, web or CLI, that projects a
+            # SearchEvent into the wire shape (web/trace.py, design §4). `t`
+            # has no job clock to measure against here, so it is seconds
+            # since main() started tracing -- a CLI trace has no job's
+            # `started_at` to share.
+            assert trace_file is not None
+            trace_file.write(json.dumps(frame_json(next(seq), time.monotonic() - t0, event)))
+            trace_file.write("\n")
+
+        search_observer = SampledObserver(
+            sink=_write_frame, min_interval_s=TRACE_SAMPLE_INTERVAL_S
+        )
+```
+
+Pass `search_observer=search_observer` into the existing `pipeline.build(...)`
+call (`cli.py:351-367`), and wrap the whole build in a `try`/`finally` that
+closes `trace_file` when it is not `None` — so a raised `NoValidLayout` still
+leaves a complete, readable file.
+
+Add at the top of `cli.py`: `import json`, `import time`, `from itertools import
+count`, `from flab2bp.layout.observe import SampledObserver, SearchEvent,
+TRACE_SAMPLE_INTERVAL_S`, `from flab2bp.web.trace import frame_json`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `uv run pytest tests/test_cli.py -q; echo $?`
+Expected: `0`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/flab2bp/cli.py tests/test_cli.py
+git commit -m "feat(cli): add --trace-jsonl, the CLI's half of the shared observer
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014jHGF2vGRJ5KDBB3JevhQb"
+```
+
+---
+
+### Task 13: The overhead gate
 
 > **Coordinate with the user before running this task.** It is the only task that
 > runs real solves, and other agents may be measuring on this box.
@@ -2498,24 +2689,33 @@ Claude-Session: https://claude.ai/code/session_014jHGF2vGRJ5KDBB3JevhQb"
 
 ## Self-review
 
-**Spec coverage.** §1 understanding → Tasks 1–12 collectively. §4 snapshot schema
+**Spec coverage.** §1 understanding → Tasks 1–13 collectively. §4 snapshot schema
 → Task 2 (server) and Task 5 (client). §5 observer protocol → Task 1; call sites
 → Tasks 3, 7, 9. §6 process boundary → Tasks 6, 8. §7 transport → Task 4;
-viewer → Tasks 5, 10, 11. §8 overhead → Task 12. §9 risks: R1 → Task 12 Rule P;
-R2 → Task 12 Rule W; R3 → Task 6 `TraceChannel.close`; R4 → Task 2 byte bound;
-R5 → Task 5 `snapshotLabel`; R6 → Task 12. L1 → Task 7's island test. L2 → the
-gate on Task 9. L3 → Task 11's caption.
+viewer → Tasks 5, 10, 11; CLI (§7.4) → Task 12. §8 overhead → Task 13. §9 risks:
+R1 → Task 13 Rule P; R2 → Task 13 Rule W; R3 → Task 6 `TraceChannel.close`;
+R4 → Task 2 byte bound; R5 → Task 5 `snapshotLabel`; R6 → Task 13. L1 → Task 7's
+island test. L2 → the gate on Task 9. L3 → Task 11's caption.
 
-**Gaps closed during review.** The spec's §10 open question 3 (a CLI
-`--trace-jsonl`) has **no task**: it is deliberately out of scope and needs the
-user's answer before it earns one. Open questions 1 and 2 are settled by the
-plan's constants (0.25 / 0.5 s) and by Task 3 shipping `PACKED` behind the
-sampler; both are cheap to revise after Task 12 produces a baseline.
+**All three open questions are now settled** (design §10). Sample interval:
+fixed v1 constants `TRACE_SAMPLE_INTERVAL_S` / `TRACE_CHILD_SAMPLE_INTERVAL_S`
+(Task 1) — no UI "detail" control ships, and one is a follow-on only if Task
+13's baseline leaves budget headroom. `PACKED`: ships in v1, in Task 3, as one
+of freeform's five call sites from the start — the sampler (Task 1) is what
+keeps its cost in budget, not a delay until Task 13 has a baseline. CLI trace:
+in scope, now Task 12 — placed directly before the overhead-gate task (Task
+13, renumbered from 12 to make room) so the gate, and any offline analysis,
+have `--trace-jsonl` available as a file-based capture alongside the direct
+`pipeline.build(..., search_observer=)` calls Task 13's harness already makes.
 
 **Type consistency.** `SearchObserver` / `SearchEvent` / `SearchPhase` are spelled
-identically in Tasks 1, 3, 6, 7, 8, 9. The constructor keyword is `observer=`
-everywhere in Python and the pipeline parameter is `search_observer=` everywhere
-— that asymmetry is deliberate (`build` already distinguishes `on_progress` from
-what a strategy takes) and is stated in Task 3. `TraceRing.since` returns
-`(frames, next)` in Tasks 2, 4 and is consumed as such. `TRACE_BUILDING_FIELDS`
-order is asserted in Task 2 and relied on in Task 5's `traceFrameToBlueprint`.
+identically in Tasks 1, 3, 6, 7, 8, 9, 12. The constructor keyword is
+`observer=` everywhere a layout strategy takes one, and the pipeline/CLI
+parameter is `search_observer=` everywhere — that asymmetry is deliberate
+(`build` already distinguishes `on_progress` from what a strategy takes) and is
+stated in Task 3. `TraceRing.since` returns `(frames, next)` in Tasks 2, 4 and
+is consumed as such. `TRACE_BUILDING_FIELDS` order is asserted in Task 2 and
+relied on in Task 5's `traceFrameToBlueprint`. `TRACE_SAMPLE_INTERVAL_S` /
+`TRACE_CHILD_SAMPLE_INTERVAL_S` (Task 1) are the one spelling of the sample
+interval used everywhere one is needed — Tasks 4, 8, 12 reference them rather
+than repeating either literal.
