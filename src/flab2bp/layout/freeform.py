@@ -13811,6 +13811,27 @@ def _minimum_projection_grid_scale(
     )
 
 
+def _power_projection_contexts(
+    projections: Sequence[planet.Projection],
+) -> tuple[tuple[int, bool, float], ...]:
+    """Distinct curvature contexts the power broad phase has to consider.
+
+    Two projections that share a band's column count, an orientation and a
+    grid scale bound the same node pair identically, so the broad phase reads
+    each such context once however many anchors produced it.
+    """
+    return tuple(
+        dict.fromkeys(
+            (
+                projection.band.columns,
+                projection.rotated,
+                _minimum_projection_grid_scale((projection.band,)),
+            )
+            for projection in projections
+        )
+    )
+
+
 def _projected_power_peer_possible(
     candidate: tuple[int, PlacedBuilding, rules.PowerNode],
     peer: tuple[int, PlacedBuilding, rules.PowerNode],
@@ -15294,16 +15315,6 @@ def _power_plan(
             key=lambda band: band.area_segments,
         )
     )
-    power_projection_contexts = tuple(
-        dict.fromkeys(
-            (
-                projection.band.columns,
-                projection.rotated,
-                _minimum_projection_grid_scale((projection.band,)),
-            )
-            for projection in projections
-        )
-    )
     static_buildings = list(enumerate(canvas.buildings))
     static_by_index = dict(static_buildings)
     obstacle_index = _ProjectedObstacleIndex.build(
@@ -15319,6 +15330,12 @@ def _power_plan(
     static_frames_by_bounds: dict[
         tuple[int, int, int, int],
         tuple[_JunctionProjectionFrame, ...],
+    ] = {}
+    #: Per-candidate narrowing of ``projections``, keyed on the cleanup-survivor
+    #: rectangle the candidate itself forces.  See the placement loop.
+    reachable_by_bounds: dict[
+        tuple[int, int, int, int],
+        tuple[tuple[planet.Projection, ...], tuple[tuple[int, bool, float], ...]],
     ] = {}
     for projection in projections:
         if cancelled is not None and cancelled():
@@ -15497,20 +15514,82 @@ def _power_plan(
             candidate[1].width,
             candidate[1].height,
         )
+        # A TOWER IS A BUILDING, SO IT NARROWS THE BLUEPRINT'S OWN PROJECTIONS.
+        #
+        # `projections` is the union over every rectangle the finished build
+        # could still shrink to, taken before a single tower existed. Standing
+        # one here makes the build at least as large as `candidate_bounds`, and
+        # a band whose frame cannot hold that rectangle is a paste this
+        # candidate can never be part of -- so a paste rule tested there
+        # rejects a site on the geometry of a blueprint that would not contain
+        # it.
+        #
+        # That is not a corner case, it is the five-machine hole. A one-strip
+        # block's survivors are four rows tall, so the whole 5-row half of the
+        # planet is still in the envelope; a tower one row outside them makes
+        # the build six rows tall and rules every one of those bands out. Left
+        # unnarrowed, `game.power_too_close` in band 4 -- where a longitude
+        # collapses to a point, so ANY two nodes are zero units apart -- vetoed
+        # nearly every free cell, the greedy ran out of ground with the block's
+        # west corner still dark, and both placers refused specs of exactly 5
+        # and 6 machines while 4 and 7 laid out.
+        #
+        # The static-collision check below has always narrowed to exactly this
+        # rectangle. The power-node check now does too, from the same bounds.
+        #
+        # "NARROWING" HOLDS ONLY WHEN `canvas.limit` IS SET.  The per-candidate
+        # envelope below is `_projection_envelope(candidate_bounds,
+        # canvas.limit or candidate_bounds, ...)`, and `projections` was taken
+        # as `_projection_envelope(cleanup_inner, canvas.limit or occupied,
+        # ...)`. With a limit the two share that outer box and the candidate's
+        # inner rectangle only grew, so the candidate set is a SUBSET of
+        # `projections`. Production always has one: `_prepare_routing_problem`
+        # assigns `canvas.limit = capacity` (~16740) before it plans power.
+        # With `limit=None` -- which only a caller that builds its own canvas
+        # reaches, such as the `_power_plan` tests -- the outer box collapses to
+        # the inner one on both sides, so the candidate envelope is the
+        # projections of the SINGLE rectangle `candidate_bounds` and is not a
+        # subset of `projections` at all: `candidate_bounds` can extend past
+        # `occupied`, and the extents in between are never enumerated.
+        #
+        # A linkless tower already inside the certified rectangle cannot change
+        # cleanup survivors. Extending any side can revive a linked belt that
+        # the old boundary pruned, including one that expands the orthogonal
+        # axis, so that case must advance the exact prefix.
+        candidate_cleanup, candidate_bounds = _cleanup_snapshot_with_linkless_static(
+            cleanup_prefix,
+            cleanup_bounds,
+            candidate[1],
+            cancelled=cancelled,
+        )
+        reachable = reachable_by_bounds.get(candidate_bounds)
+        if reachable is None:
+            candidate_projections = _projection_envelope(
+                candidate_bounds,
+                canvas.limit or candidate_bounds,
+                policy,
+                cancelled=cancelled,
+            )
+            reachable = (
+                candidate_projections,
+                _power_projection_contexts(candidate_projections),
+            )
+            reachable_by_bounds[candidate_bounds] = reachable
+        candidate_projections, candidate_contexts = reachable
         projected_power_peers = tuple(
             peer
             for peer, peer_centre in zip(power_nodes, peer_centres, strict=True)
             if _projected_power_peer_possible(
                 candidate,
                 peer,
-                power_projection_contexts,
+                candidate_contexts,
                 cancelled=cancelled,
                 candidate_centre=candidate_centre,
                 peer_centre=peer_centre,
             )
         )
         candidate_failure: finalize.ProjectionFailure | None = None
-        for projection in projections:
+        for projection in candidate_projections:
             if cancelled is not None and cancelled():
                 raise _PreparationDeadline
             for projected_peer in projected_power_peers:
@@ -15538,16 +15617,6 @@ def _power_plan(
                 candidate[1],
                 projection_bands,
                 staged_static_cache,
-                cancelled=cancelled,
-            )
-            # A linkless tower already inside the certified rectangle cannot
-            # change cleanup survivors. Extending any side can revive a linked
-            # belt that the old boundary pruned, including one that expands the
-            # orthogonal axis, so that case must advance the exact prefix.
-            candidate_cleanup, candidate_bounds = _cleanup_snapshot_with_linkless_static(
-                cleanup_prefix,
-                cleanup_bounds,
-                candidate[1],
                 cancelled=cancelled,
             )
             if potential_peers:

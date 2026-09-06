@@ -74,14 +74,43 @@ Framing that binds all of them: coverage and bounded time first, area within a
   gateable without the harness.
 
 ### From the hierarchical prototype (a production version must solve first)
-- Lane-contract block interfaces: a cut item's out-lanes and in-lanes must match
-  in count and rate on both sides, or the corridor must merge/split.
-- `_route_all` callable on a prepared canvas so composition reuses the real
-  router instead of a corridor router.
-- Compositional finalization: power towers, gap rules and latitude bands checked
-  on the composed placement, not per block.
-- Fix the negentropy-smelter 5-6 machine hole and the sequence-pair
-  stage-boundary crash.
+
+All four were built on branch `hierarchical-v1` as `--strategy hierarchical`
+(explicit, default off) and gated in
+`docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md` — the gate is a
+**FAIL** (no large cell builds), so "done" below means the mechanism exists and
+runs, not that it produces a blueprint on a large URL.
+
+- **DONE** Lane-contract block interfaces: a cut item's out-lanes and in-lanes must
+  match in count and rate on both sides
+  (`src/flab2bp/layout/hierarchy/contracts.py`). *Partly*: a rate shortfall is a
+  `ContractError` refusal, not a merge/split — `zurl2/all-products` hit exactly
+  that on `hydrogen` (`large-zurl2-all-products-r2.log`), so the merge/split the
+  original item asks for is still open.
+- **DONE** `_route_all` callable on a prepared canvas so composition reuses the
+  real router (`src/flab2bp/layout/hierarchy/compose.py`). The router now runs on
+  the composed canvas — and *refuses* the cut lanes on `DYNAMIC_ACCESS`, which is
+  the gate's top lever. See gate.md §3.
+- **DONE** Compositional finalization: `assign_sorter_slots`,
+  `compact_open_boundary_belts`, `finalize_placement` and `certify` all run once
+  on the composed placement (`hierarchy/strategy.py`).
+- **DONE** Fix the negentropy-smelter 5-6 machine hole (`ee4ead43`, freeform's
+  power broad phase now narrows to the candidate's own cleanup-survivor
+  rectangle) and the sequence-pair stage-boundary crash (`caf893f3`, a seed-site
+  merge a sibling cannot follow abandons the collapse instead of raising).
+  Corpus effect measured: no cell regressed; `sequence-pair
+  magnetic-coil/output-products` is reproducibly 4.3 % smaller (299 -> 286).
+
+Still open, and now with measurements behind them (gate.md §6):
+- A bus corridor reserved BEFORE block placement, rather than routing cuts on
+  whatever ground the packing left — design §4 E specifies it and v1 does not do
+  it; `DYNAMIC_ACCESS` on the cut lanes is the direct evidence.
+- Round funding that does not divide a round's wall by WAVES, so a finer
+  partition stops being self-defeating (a 4-strip cap refuses the mall in 0.1 s
+  without attempting one solve).
+- Adaptive memory for the block solver: a within-build no-good keyed on block
+  shape, a cross-build solved-block cache, and a strip cap that moves with
+  outcomes. gate.md §7 records the evidence motivating each.
 
 ### Orchestrator and dispatch
 - Anytime dispatch of strategy, budget and islands from the feature vector:

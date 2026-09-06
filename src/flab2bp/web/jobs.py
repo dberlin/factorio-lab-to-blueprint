@@ -43,7 +43,7 @@ from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
 
 State = Literal["queued", "running", "done", "refused", "error"]
-WebStrategyName = Literal["best", "freeform", "sequence-pair"]
+WebStrategyName = Literal["best", "freeform", "sequence-pair", "hierarchical"]
 
 #: The projected total, in seconds, past which a submitted job says out loud
 #: that it will take a while.  This is a WARNING and not a bound: how long to
@@ -215,10 +215,12 @@ def parse_options(raw: JsonValue) -> Options:
 
     strategy = raw.get("strategy", "best")
     match strategy:
-        case "best" | "freeform" | "sequence-pair":
+        case "best" | "freeform" | "sequence-pair" | "hierarchical":
             web_strategy: WebStrategyName = strategy
         case _:
-            raise InvalidOptions("'strategy' must be one of best, freeform, sequence-pair")
+            raise InvalidOptions(
+                "'strategy' must be one of best, freeform, sequence-pair, hierarchical"
+            )
 
     raw_band = raw.get("band", "portable")
     if not isinstance(raw_band, str):

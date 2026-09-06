@@ -1228,6 +1228,19 @@ LINT_EXCEPTIONS: tuple[LintException, ...] = (
         30.0,
         "CP-SAT time limit in seconds; not degrees",
     ),
+    LintException(
+        "flab2bp.layout.hierarchy.pressure",
+        "depth_pressure_blocks",
+        30.0,
+        "`1 << 30` as an infinity sentinel on the depth profile's edges; not "
+        "the sorter skew angle.  Same shape as `freeform._astar`'s.",
+    ),
+    LintException(
+        "flab2bp.layout.hierarchy.strategy",
+        "<module>",
+        20.0,
+        "BLOCK_BUDGET_MAX_S: ceiling on one block solve's wall, in seconds; not a craft count",
+    ),
     # NOTE: `flab2bp.layout.last_mile:<module> 0.35` (B_MIN_SECONDS, excused as
     # "not SORTER_END_EXTENSION geometry") was deleted when Task 9 measured the
     # floor above 1 s (1.98 ships), which coincides with nothing and needs no

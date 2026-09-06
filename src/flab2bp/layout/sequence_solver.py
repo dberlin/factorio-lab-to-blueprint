@@ -2656,33 +2656,48 @@ class SequenceSolver[PreparedT]:
                         False,
                     )
                     if sibling is None or sibling.problem != transformed.problem:
+                        # A merge collapses two children only where the restart's
+                        # own sequence pair, gaps, and pose selections admit it,
+                        # so a sibling that cannot follow one is an ordinary
+                        # outcome, not a broken transform: abandon the collapse
+                        # and leave the shared problem as it was.  Anything else
+                        # is a real defect and still raises.  The LNS
+                        # stage-boundary site below has carried this same guard
+                        # since merges were introduced; this seed site never
+                        # had it, so a spec whose restarts disagreed about one
+                        # merge crashed `lay_out` instead of laying out or
+                        # refusing.
+                        if transformed.problem.size < problem.size:
+                            transformed = None
+                            break
                         raise ValueError(
                             "stage-boundary transform must rebuild every restart identically"
                         )
                     seed_sibling_updates.append((other, sibling))
-                if self.stage_boundary_commit is not None:
-                    self.stage_boundary_commit(
-                        height_state.height,
-                        transformed.problem,
-                    )
-                for other, sibling in seed_sibling_updates:
-                    other.anneal = sibling.state
-                    other.failure_signature = ()
-                    other.feedback_stagnation = 0
-                primary_restart.anneal = transformed.state
-                primary_restart.failure_signature = ()
-                primary_restart.feedback_stagnation = 0
-                height_state.problem = transformed.problem
-                height_state.feedback_restart = primary_restart.restart
-                height_state.projection_feedback_pending = True
-                if transformed.problem != problem:
-                    for candidate_restart in height_state.restarts:
-                        candidate_restart.archive = ()
-                    height_state.objective_mode = ObjectiveMode.EXPLORATION
-                    height_state.quality_restart = None
-                    height_state.pending_quality_exit = False
-                    height_state.quality_stagnation = 0
-                    height_state.narrowest_key = None
+                if transformed is not None:
+                    if self.stage_boundary_commit is not None:
+                        self.stage_boundary_commit(
+                            height_state.height,
+                            transformed.problem,
+                        )
+                    for other, sibling in seed_sibling_updates:
+                        other.anneal = sibling.state
+                        other.failure_signature = ()
+                        other.feedback_stagnation = 0
+                    primary_restart.anneal = transformed.state
+                    primary_restart.failure_signature = ()
+                    primary_restart.feedback_stagnation = 0
+                    height_state.problem = transformed.problem
+                    height_state.feedback_restart = primary_restart.restart
+                    height_state.projection_feedback_pending = True
+                    if transformed.problem != problem:
+                        for candidate_restart in height_state.restarts:
+                            candidate_restart.archive = ()
+                        height_state.objective_mode = ObjectiveMode.EXPLORATION
+                        height_state.quality_restart = None
+                        height_state.pending_quality_exit = False
+                        height_state.quality_stagnation = 0
+                        height_state.narrowest_key = None
         if not observation.continue_search:
             if detailed.routing.failures:
                 origins = (

@@ -1,0 +1,21 @@
+{
+ "groups": 33,
+ "machines": 935,
+ "policy": "no-proliferator",
+ "probe": false,
+ "rows": [
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 6,
+   "policy": "no-proliferator",
+   "stats": {},
+   "unrouted": {},
+   "url": "mall",
+   "verdict": "REFUSED: 28 block(s) never placed, 11.3s left over 4 wave(s) is under the 5s a block solve is given at all: block 0 (titanium-ingot): not attempted; block 1 (titanium-ingot): not attempted; block 2 (magnet): not attempted; block 3 (magnet): not attempted; block 4 (magnet): not attempted; block 5 (iron-ingot): not attempted; block 6 (iron-ingot): not attempted; block 7 (iron-ingot): not attempted; block 9 (graphene-advanced): not attempted; block 10 (graphene-advanced): not attempted; block 12 (glass): not attempted; block 13 (glass): not attempted; block 14 (energetic-graphite): not attempted;",
+   "verdict_full": "REFUSED: 28 block(s) never placed, 11.3s left over 4 wave(s) is under the 5s a block solve is given at all: block 0 (titanium-ingot): not attempted; block 1 (titanium-ingot): not attempted; block 2 (magnet): not attempted; block 3 (magnet): not attempted; block 4 (magnet): not attempted; block 5 (iron-ingot): not attempted; block 6 (iron-ingot): not attempted; block 7 (iron-ingot): not attempted; block 9 (graphene-advanced): not attempted; block 10 (graphene-advanced): not attempted; block 12 (glass): not attempted; block 13 (glass): not attempted; block 14 (energetic-graphite): not attempted; block 15 (energetic-graphite): not attempted; block 16 (energetic-graphite): not attempted; block 17 (copper-ingot): not attempted; block 18 (copper-ingot): not attempted; block 19 (microcrystalline-component): not attempted; block 20 (microcrystalline-component): not attempted; block 21 (microcrystalline-component): not attempted; block 22 (gear): not attempted; block 24 (electric-motor): not attempted; block 25 (magnetic-coil, plasma-exciter): not attempted; block 26 (electromagnetic-turbine): not attempted; block 27 (electromagnetic-turbine): not attempted; block 28 (conveyor-belt-1, conveyor-belt-2): not attempted; block 29 (super-magnetic-ring): not attempted; block 30 (super-magnetic-ring): not attempted",
+   "wall_s": 24.7
+  }
+ ],
+ "url": "mall"
+}

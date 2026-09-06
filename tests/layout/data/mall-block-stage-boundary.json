@@ -1,0 +1,73 @@
+{
+  "groups": [
+    {
+      "recipe_id": "iron-ingot",
+      "machine_item_id": "negentropy-smelter",
+      "count": 19,
+      "proliferator_mode": "products",
+      "inputs_per_machine": {
+        "iron-ore": "10448192/3515625"
+      },
+      "outputs_per_machine": {
+        "iron-ingot": "2612048/703125"
+      }
+    },
+    {
+      "recipe_id": "steel",
+      "machine_item_id": "negentropy-smelter",
+      "count": 11,
+      "proliferator_mode": "products",
+      "inputs_per_machine": {
+        "iron-ingot": "3968/1375"
+      },
+      "outputs_per_machine": {
+        "steel": "992/825"
+      }
+    }
+  ],
+  "external_inputs": {
+    "iron-ore": "198515648/3515625",
+    "proliferator-3": "16081549/8231250"
+  },
+  "outputs": {
+    "iron-ingot": "27308912/703125",
+    "steel": "992/75"
+  },
+  "surplus_outputs": {},
+  "belt_item_id": "conveyor-belt-3",
+  "belt_items_per_second": "30",
+  "belt_upgrades": [],
+  "sorter_item_ids": [
+    "sorter-1",
+    "sorter-2",
+    "sorter-3",
+    "sorter-4"
+  ],
+  "belt_stack": 4,
+  "sorter_pick_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "sorter_place_stacks": [
+    1,
+    1,
+    1,
+    4
+  ],
+  "piler_unlocked": true,
+  "label": "all-products#block7",
+  "belt_required_edges": [
+    [
+      "iron-ingot",
+      "steel"
+    ]
+  ],
+  "spray_lanes": {
+    "iron-ore": true,
+    "iron-ingot": false
+  },
+  "lanes_requiring_split": [],
+  "coproduct_buffer_proofs": []
+}

@@ -565,12 +565,13 @@ test.each(['50x800', '160x1000'])(
   },
 );
 
-test('the strategy choices are exactly the production strategy set', () => {
+test('the strategy choices are exactly the request strategy set', () => {
   mount();
   const strategy = screen.getByLabelText('Strategy');
   expect(strategy).toHaveTextContent('best');
   expect(strategy).toHaveTextContent('freeform');
   expect(strategy).toHaveTextContent('sequence-pair');
+  expect(strategy).toHaveTextContent('hierarchical');
 });
 
 test('proliferator tier exposes auto and every spray tier', () => {

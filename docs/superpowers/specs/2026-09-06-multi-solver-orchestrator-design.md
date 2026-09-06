@@ -329,6 +329,20 @@ capacity refusal in one band that no single-band search can fix. **Against doing
 the largest new interface here, one of nine classes, no corpus cell needs it. **The
 recommendation does not depend on it.**
 
+**Status (2026-09-07).** Built as `--strategy hierarchical`, explicit and default-off
+(`src/flab2bp/layout/hierarchy/`), and gated on the large URLs:
+`docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md` — **FAIL**. All five large
+cells REFUSE at `--budget 60` in both rounds, none reaching a blueprint, so no area was
+measured against the prototype's 1.23x (belt3) and 0.78x (zurl2). The corpus guard shows no
+regression: 0 of 72 cells go CLEAN -> not CLEAN. Two measured causes, both about the
+*interface* this section predicted would be the cost. (1) The block-to-block lanes the
+composer hands the real router refuse on `DYNAMIC_ACCESS`, and doubling the budget to 120 s
+does not change that class — the bus corridor "reserved before block placement" that this
+section specifies is exactly what v1 does not do; it routes cuts after composition, on
+whatever ground the packing left. (2) The round-funding rule divides a round's remaining wall
+by WAVES, so a finer partition — the thing that makes each block easy — is what starves the
+round: on the mall a 4-strip cap refuses in 0.1 s without attempting a single solve.
+
 ### F. Keep or drop the freeform packer at high strip counts?
 
 **Keep and gate.** It is the better placer on 18 of 72 cells and 10x faster (§2.4), and its

@@ -5,6 +5,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from fractions import Fraction
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Never, TypedDict
 
@@ -11149,3 +11150,31 @@ def test_the_portable_band_core_boundary_is_the_number_the_helper_is_given() -> 
         )
         <= 154
     )
+
+
+def test_a_decomposed_mall_block_never_crashes_the_stage_boundary_transform(
+    mall_all_products: tuple[BuildSpec, bool],
+) -> None:
+    """A sub-spec a decomposer hands the placer is a placer input like any other.
+
+    `mall-block-stage-boundary.json` is the `iron-ingot`/`steel` block the
+    hierarchical prototype cut out of the mall at `--cap 60`; it drove the
+    stage-boundary transform into `ValueError: stage-boundary transform must
+    rebuild every restart identically`.  A crash is never an allowed outcome:
+    `lay_out` either returns a certified placement or refuses with
+    `NoValidLayout`.
+    """
+    _spec, vertical = mall_all_products
+    sub = BuildSpec.model_validate_json(
+        (Path(__file__).parent / "data" / "mall-block-stage-boundary.json").read_text()
+    )
+
+    layout = SequencePairLayout(
+        belt_vertical_construction=vertical, islands=1, band_policy=BandPolicy.parse("portable")
+    )
+    try:
+        placement = layout.lay_out(sub, time_budget_s=12.0)
+    except NoValidLayout:
+        return
+
+    assert validate.certify(placement, sub, expect_power=True).ok

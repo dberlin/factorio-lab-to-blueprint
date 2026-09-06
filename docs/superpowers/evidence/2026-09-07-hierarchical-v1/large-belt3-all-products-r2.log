@@ -1,0 +1,4 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+flab2bp: no valid layout for all-products after 60s: hierarchical/all-products: 3 block(s) never placed, 5.7s left over 2 wave(s) is under the 5s a block solve is given at all: block 1 (gear): not attempted; block 3 (electric-motor): not attempted; block 4 (electric-motor): not attempted. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+EXIT=3
+WALL_S=31.925975753

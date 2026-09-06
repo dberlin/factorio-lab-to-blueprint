@@ -1,0 +1,21 @@
+{
+ "groups": 33,
+ "machines": 449,
+ "policy": "all-products",
+ "probe": false,
+ "rows": [
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 6,
+   "policy": "all-products",
+   "stats": {},
+   "unrouted": {},
+   "url": "mall",
+   "verdict": "REFUSED: 27 block(s) never placed, 13.3s left over 4 wave(s) is under the 5s a block solve is given at all: block 1 (magnet): not attempted; block 2 (magnet): not attempted; block 3 (iron-ingot): not attempted; block 4 (iron-ingot): not attempted; block 5 (iron-ingot): not attempted; block 6 (gear): not attempted; block 7 (gear): not attempted; block 8 (gear): not attempted; block 9 (high-purity-silicon): not attempted; block 10 (high-purity-silicon): not attempted; block 11 (high-purity-silicon): not attempted; block 13 (carbon-nanotube): not attempted; block 14 (steel, titanium-alloy): not a",
+   "verdict_full": "REFUSED: 27 block(s) never placed, 13.3s left over 4 wave(s) is under the 5s a block solve is given at all: block 1 (magnet): not attempted; block 2 (magnet): not attempted; block 3 (iron-ingot): not attempted; block 4 (iron-ingot): not attempted; block 5 (iron-ingot): not attempted; block 6 (gear): not attempted; block 7 (gear): not attempted; block 8 (gear): not attempted; block 9 (high-purity-silicon): not attempted; block 10 (high-purity-silicon): not attempted; block 11 (high-purity-silicon): not attempted; block 13 (carbon-nanotube): not attempted; block 14 (steel, titanium-alloy): not attempted; block 15 (frame-material): not attempted; block 17 (energetic-graphite): not attempted; block 18 (energetic-graphite): not attempted; block 19 (energetic-graphite): not attempted; block 20 (copper-ingot): not attempted; block 21 (copper-ingot): not attempted; block 23 (magnetic-coil): not attempted; block 24 (electric-motor): not attempted; block 25 (electric-motor): not attempted; block 26 (electric-motor): not attempted; block 27 (conveyor-belt-1, conveyor-belt-2, electromagnetic-turbine): not attempted; block 28 (electromagnetic-turbine): not attempted; block 29 (super-magnetic-ring): not attempted; block 30 (super-magnetic-ring): not attempted",
+   "wall_s": 22.7
+  }
+ ],
+ "url": "mall"
+}

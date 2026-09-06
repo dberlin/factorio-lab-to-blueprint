@@ -1,0 +1,25 @@
+{
+ "groups": 13,
+ "machines": 280,
+ "policy": "all-products",
+ "probe": false,
+ "rows": [
+  {
+   "area": null,
+   "budget_s": 60.0,
+   "cap": 6,
+   "policy": "all-products",
+   "stats": {},
+   "unrouted": {
+    "COMMIT_LINK": 4,
+    "DYNAMIC_ACCESS": 10,
+    "SEALED_POCKET": 4
+   },
+   "url": "belt3",
+   "verdict": "REFUSED: unrouted cut(s): electric-motor: block 4 -> block 3: DYNAMIC_ACCESS; energetic-graphite: block 0 -> block 3: COMMIT_LINK; energetic-graphite: block 0 -> block 3: COMMIT_LINK; gear: block 1 -> block 5: DYNAMIC_ACCESS; gear: block 1 -> block 5: DYNAMIC_ACCESS; graphene: block 0 -> block 2: SEALED_POCKET; iron-ingot: block 0 -> block 4: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 4: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 4: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 4: SEALED_POCKET; iron-ingot: block 0 -> block 5: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 1: SEALED_POCKET; i",
+   "verdict_full": "REFUSED: unrouted cut(s): electric-motor: block 4 -> block 3: DYNAMIC_ACCESS; energetic-graphite: block 0 -> block 3: COMMIT_LINK; energetic-graphite: block 0 -> block 3: COMMIT_LINK; gear: block 1 -> block 5: DYNAMIC_ACCESS; gear: block 1 -> block 5: DYNAMIC_ACCESS; graphene: block 0 -> block 2: SEALED_POCKET; iron-ingot: block 0 -> block 4: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 4: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 4: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 4: SEALED_POCKET; iron-ingot: block 0 -> block 5: DYNAMIC_ACCESS; iron-ingot: block 0 -> block 1: SEALED_POCKET; iron-ingot: block 0 -> block 1: COMMIT_LINK; iron-ingot: block 0 -> block 1: COMMIT_LINK; magnet: block 0 -> block 3: DYNAMIC_ACCESS; magnet: block 0 -> block 3: DYNAMIC_ACCESS; magnet: block 0 -> block 3: SEALED_POCKET; magnet: block 0 -> block 3: DYNAMIC_ACCESS",
+   "wall_s": 48.2
+  }
+ ],
+ "url": "belt3"
+}
