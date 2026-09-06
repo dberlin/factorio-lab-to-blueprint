@@ -20441,6 +20441,14 @@ class FreeformLayout:
                         dearest_remainder_s,
                         candidate_total_s - candidate_pack_s,
                     )
+                    # CHARGED ONCE.  A turn that never starts a candidate --
+                    # the height whose seed no frame can hold `continue`s
+                    # BEFORE `started_at` is set below -- would otherwise leave
+                    # this pointing at the last candidate that really ran, and
+                    # the next turn would charge that candidate a second time
+                    # from a later clock.  The maximum absorbed the duplicate;
+                    # the median does not, and it is biased upwards.
+                    started_at = None
                 # WHAT THIS TURN COSTS, in the two halves `_room_for_another`
                 # keeps apart: the completion tail, which must fit in full and is
                 # a maximum, and the estimate of the turn's own work in front of
@@ -20468,7 +20476,14 @@ class FreeformLayout:
                     turn_candidate_s = dearest_remainder_s
                 else:
                     turn_tail_s = completion_tail_s
-                    turn_candidate_s = _next_candidate_seconds(candidate_totals_s)
+                    # Capped at the old charge (Ruling D3): a median taken over
+                    # totals that each contain their own tail, plus the tail
+                    # again, can ask for more than any candidate ever cost.
+                    turn_candidate_s = _capped_next_candidate_seconds(
+                        _next_candidate_seconds(candidate_totals_s),
+                        completion_tail_s=completion_tail_s,
+                        dearest_candidate_s=dearest_candidate_s,
+                    )
                 if best is not None and not _room_for_another(
                     deadline,
                     improvement_soft,
@@ -21837,6 +21852,42 @@ def _next_candidate_seconds(completed_s: Sequence[float]) -> float:
     if not completed_s:
         return 0.0
     return statistics.median(completed_s)
+
+
+def _capped_next_candidate_seconds(
+    next_candidate_s: float,
+    *,
+    completion_tail_s: float,
+    dearest_candidate_s: float,
+) -> float:
+    """RULING D3: never charge a fresh candidate more than the dearest completed one.
+
+    `_room_for_another` charges ``completion_tail_s + next_candidate_s``, and the
+    median is taken over candidate TOTALS -- each of which already contains that
+    candidate's own compaction, finalization and certification.  Adding the
+    reserves on top therefore counts the tail twice, and on a cell whose
+    candidates all cost about the same the sum comes out ABOVE the dearest
+    candidate the sweep ever completed: `[8, 8, 8]` with a 3 s tail asks for
+    11 s where the old rule asked for 8.  A lever meant to spend more budget
+    must not be able to refuse a candidate the rule it replaces would admit.
+
+    ``dearest_candidate_s`` -- the old charge -- was itself wall-safe precisely
+    because a completed total contains its own tail, so capping the sum at it
+    can only ever LOWER the charge and never below what one candidate really
+    cost.  The floor is the tail: this returns what to hand
+    `_room_for_another` as ``next_candidate_s`` so that the resulting charge is
+    ``max(completion_tail_s, min(dearest_candidate_s, completion_tail_s +
+    next_candidate_s))``.  The tail must still fit in full whatever the estimate
+    says, which is the one direction this cap deliberately does not relax.
+
+    Pure, and applied only at the fresh-candidate gates.  The sites that charge
+    a span they measured whole -- the queued repair's remainder, the window, the
+    projection and learned retries -- pass ``completion_tail_s=0.0`` and are not
+    capped here: their charge IS a whole candidate's measurement, and Ruling AD
+    turns on it staying one.
+    """
+    capped_charge_s = min(dearest_candidate_s, completion_tail_s + next_candidate_s)
+    return max(0.0, capped_charge_s - completion_tail_s)
 
 
 def _room_for_another(

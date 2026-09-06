@@ -5613,12 +5613,15 @@ def _sweep_over_timed_candidates(
     validation spans all measure zero -- which holds the completion tail at zero
     and isolates the NEXT-candidate estimate, the one thing these tests are
     about.  The frame is ``area x 1``, so a candidate's finalized area is the
-    other number the schedule hands it.
+    other number the schedule hands it -- keyed by HEIGHT rather than by
+    position, so a height the sweep skips does not shift the areas of the ones
+    behind it.
     """
     clock = 0.0
     heights = tuple(20 + index for index in range(len(schedule)))
     costs = {height: cost for height, (cost, _area) in zip(heights, schedule, strict=True)}
-    areas = [area for _cost, area in schedule]
+    areas = {height: area for height, (_cost, area) in zip(heights, schedule, strict=True)}
+    building: list[int] = []
     finalized: list[int] = []
 
     def monotonic() -> float:
@@ -5626,6 +5629,7 @@ def _sweep_over_timed_candidates(
 
     def spend(height: int, _arrangement: int) -> None:
         nonlocal clock
+        building.append(height)
         clock += costs[height]
 
     def finish(
@@ -5633,9 +5637,7 @@ def _sweep_over_timed_candidates(
         _policy: BandPolicy,
         **_kwargs: object,
     ) -> Placement:
-        if len(finalized) >= len(areas):
-            pytest.fail("the sweep finalized more candidates than the schedule describes")
-        area = areas[len(finalized)]
+        area = areas[building[-1]]
         finalized.append(area)
         return replace(placement, frame=AreaFrame(area, 1, 4, (4,), False))
 
@@ -5697,6 +5699,57 @@ def test_the_sweep_starts_a_candidate_the_dearest_completed_one_would_have_refus
     assert dearest is not None
     assert dearest.area == 90
     assert dearest.stats["budget_unspent_s"] == pytest.approx(9.0)
+    # RULING D3, on the sweep rather than on the predicate: whatever the two
+    # estimates say, the new rule may never stop EARLIER than the old one.
+    assert len(seen) >= len(dearest_seen)
+    assert len(finalized) >= len(dearest_finalized)
+
+
+def test_a_height_whose_seed_is_rejected_adds_no_candidate_totals_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn that never starts a candidate must not charge one twice.
+
+    The height whose seed no frame can hold `continue`s BEFORE
+    ``started_at = time.monotonic()``, so `started_at` still points at the last
+    candidate that actually ran.  Left set, the next turn charges that candidate
+    a second time and the duplicate is upward-biased -- the maximum absorbed it,
+    a median does not.
+    """
+    captured: list[list[float]] = []
+    original_outline = freeform._realized_pack_outline
+    original_estimate = freeform._next_candidate_seconds
+
+    def outline(
+        strips: Sequence[Strip],
+        pack: freeform._Pack,
+    ) -> tuple[int, int]:
+        # A zero-width core: `frame_candidates` refuses it outright, which is
+        # the sweep's "no frame can hold this height" path.
+        if pack.height == 21:
+            return 0, 0
+        return original_outline(strips, pack)
+
+    def recording(completed_s: Sequence[float]) -> float:
+        captured.append(list(completed_s))
+        return original_estimate(completed_s)
+
+    monkeypatch.setattr(freeform, "_realized_pack_outline", outline)
+    monkeypatch.setattr(freeform, "_next_candidate_seconds", recording)
+
+    result, finalized, seen = _sweep_over_timed_candidates(
+        monkeypatch,
+        ((4.0, 100), (99.0, 50), (1.0, 40)),
+        budget_s=25.0,
+    )
+
+    # Height 21 never ran, so its 99 s were never spent and it contributed no
+    # completed total: one candidate has completed by the third turn, not two.
+    assert seen == [(20, 0), (22, 0)]
+    assert finalized == [100, 40]
+    assert captured == [[], [4.0], [4.0]]
+    assert result is not None
+    assert result.area == 40
 
 
 def test_an_over_running_extra_candidate_is_abandoned_and_the_incumbent_kept(
@@ -6721,18 +6774,28 @@ def test_arrangement_retry_requires_enough_wall_and_sweep_budget(
 
 
 @pytest.mark.parametrize(
-    ("completion_tail_s", "left_s", "expected"),
+    ("completed_s", "completion_tail_s", "left_s", "expected"),
     [
         # The median (4 s) plus the tail (2 s) fits in nine seconds.
-        (2.0, 9.0, True),
+        ((4.0, 4.0, 12.0), 2.0, 9.0, True),
         # ...and does not fit in five.
-        (2.0, 5.0, False),
+        ((4.0, 4.0, 12.0), 2.0, 5.0, False),
         # A tail that is a MAXIMUM, and it is what refuses this one: the median
         # still costs 4 s, but the tail no longer fits behind it.
-        (6.0, 7.0, False),
+        ((4.0, 4.0, 12.0), 6.0, 7.0, False),
+        # THE CAP BINDS (Ruling D3).  Uniform candidates and a tail that is a
+        # third of one of them: median 8 + tail 3 is 11 and would refuse, while
+        # the old rule charged 8 and admitted it.  The cap is what keeps this
+        # lever from ever being STRICTER than the rule it replaces.
+        ((8.0, 8.0, 8.0), 3.0, 9.0, True),
+        # THE CAP DOES NOT BIND, and the lever fires: the dearest completed
+        # candidate is 30 s, which refuses six seconds outright, while the
+        # median plus the tail is 5 s and fits.
+        ((2.0, 4.0, 30.0), 1.0, 6.0, True),
     ],
 )
 def test_a_further_candidate_is_charged_the_median_plus_the_whole_completion_tail(
+    completed_s: tuple[float, ...],
     completion_tail_s: float,
     left_s: float,
     expected: bool,
@@ -6741,14 +6804,22 @@ def test_a_further_candidate_is_charged_the_median_plus_the_whole_completion_tai
 
     ``[4, 4, 12]`` is the shape the sweep actually measures -- a couple of
     ordinary candidates and one outlier that ran into a wall -- and charging the
-    outlier is what left 6-37 % of every budget unspent.
+    outlier is what left 6-37 % of every budget unspent.  ``[8, 8, 8]`` is the
+    shape that made the cap necessary: a completed total already contains its
+    own finalize and certify, so median-plus-tail double-counts the tail and can
+    ask for more than any candidate ever cost.
     """
-    completed_s = (4.0, 4.0, 12.0)
-    next_candidate_s = freeform._next_candidate_seconds(completed_s)
+    dearest_candidate_s = max(completed_s)
+    next_candidate_s = freeform._capped_next_candidate_seconds(
+        freeform._next_candidate_seconds(completed_s),
+        completion_tail_s=completion_tail_s,
+        dearest_candidate_s=dearest_candidate_s,
+    )
 
-    assert next_candidate_s == 4.0
-    # The old charge is the outlier, and it refuses all three rows.
-    assert max(completed_s) > left_s
+    # NEVER STRICTER THAN THE OLD RULE, on every row: the charge the sweep is
+    # about to make is at most the dearest completed candidate (or the tail,
+    # which had to fit under the old rule too).
+    assert completion_tail_s + next_candidate_s <= max(dearest_candidate_s, completion_tail_s)
     now = time.monotonic()
     assert (
         _room_for_another(
@@ -6758,6 +6829,39 @@ def test_a_further_candidate_is_charged_the_median_plus_the_whole_completion_tai
             next_candidate_s=next_candidate_s,
         )
         is expected
+    )
+
+
+def test_the_cap_never_charges_more_than_the_dearest_completed_candidate() -> None:
+    """RULING D3, stated as the property rather than as a table.
+
+    The uncapped estimate is the median of totals PLUS the reserves, and a total
+    already contains reserves of its own, so on a cell whose candidates all cost
+    the same the sum exceeds every candidate the sweep has ever completed.  The
+    cap is the whole of the fix: it can only ever lower the charge, and never
+    below the tail, which must fit whatever the estimate says.
+    """
+    for completed_s in [(8.0, 8.0, 8.0), (4.0, 4.0, 12.0), (2.0, 4.0, 30.0), (0.5,)]:
+        for completion_tail_s in [0.0, 0.5, 3.0, 40.0]:
+            dearest_candidate_s = max(completed_s)
+            capped_s = freeform._capped_next_candidate_seconds(
+                freeform._next_candidate_seconds(completed_s),
+                completion_tail_s=completion_tail_s,
+                dearest_candidate_s=dearest_candidate_s,
+            )
+            charge_s = completion_tail_s + capped_s
+            assert charge_s <= max(dearest_candidate_s, completion_tail_s)
+            assert charge_s >= completion_tail_s
+            assert capped_s >= 0.0
+
+    # Nothing measured, nothing charged.
+    assert (
+        freeform._capped_next_candidate_seconds(
+            0.0,
+            completion_tail_s=0.0,
+            dearest_candidate_s=0.0,
+        )
+        == 0.0
     )
 
 
@@ -22288,9 +22392,13 @@ def test_the_sweep_repairs_a_window_when_a_full_resolve_is_unaffordable(
 ) -> None:
     """A failed pack with no clock for a full re-solve still gets a bounded repair.
 
-    `_room_for_another` charges the DEAREST COMPLETED candidate for a full
-    retry; a window costs `C_WINDOW_SECONDS` plus the measured post-pack work,
-    which is a different and much smaller charge.  When only the second one is
+    THE RETRY PATH -- the promoted learned retry, which is what this fixture's
+    `room_for_another` is answering -- is charged the DEAREST COMPLETED
+    candidate, because a retry re-runs a whole candidate it may not abandon
+    cheaply.  (A fresh candidate is charged the median plus the completion tail,
+    capped at that same dearest total; that is a different gate.)  A window
+    costs `C_WINDOW_SECONDS` plus the measured post-pack work, which is a
+    different and much smaller charge again.  When only the window is
     affordable, the sweep must take it, and it must not call `_pack` again for
     that candidate.
     """
