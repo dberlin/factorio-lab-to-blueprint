@@ -1,0 +1,71 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/debug-sorters/.venv` and will be ignored; use `--active` to target the active environment instead[0m
+=== save ===
+belt_id: conveyor-belt-3
+researched set size: None
+sorter_item_ids: ('sorter-1', 'sorter-2', 'sorter-3', 'sorter-4')
+sorter_pick_stacks: (1, 1, 1, 4)
+sorter_place_stacks: (1, 1, 1, 4)
+piler: True
+belt_item_ids: ('conveyor-belt-3',)
+SORTER_STACKING_LEVELS: 6
+SORTER_STACK_RATE_FACTOR: True
+
+=== candidate: no-proliferator ===
+belt: conveyor-belt-3 30 stack 1
+sorter_item_ids: ('sorter-1', 'sorter-2', 'sorter-3', 'sorter-4')
+pick stacks: (1, 1, 1, 4) place stacks: (1, 1, 1, 4)
+piler_unlocked: True
+groups: 9 machines: 70
+picker tiers (slow->fast): (2011, 2012, 2013, 2014)
+pick_by_tier: {2011: 1, 2012: 1, 2013: 1, 2014: 4} place_by_tier: {2011: 1, 2012: 1, 2013: 1, 2014: 4}
+  IN  casimir-crystal-advanced x5 hydrogen: per-machine 8 (8.000/s) total 40
+  OUT graphene-advanced x4 hydrogen: per-machine 5/6 (0.833/s) total 10/3
+planning_stack(hydrogen, external=True): 1  (external=False): 1
+lane_stacks consumed[hydrogen]: 1
+lane_stacks produced[hydrogen]: 1
+  _pick_sorter(8, span=1, machines=1) -> tier 2014 rate 20
+  _pick_sorter(8, span=2, machines=1) -> tier 2014 rate 10
+  _pick_sorter(8, span=3, machines=1) -> tier 2014 rate 20/3
+  _pick_sorter(128/15, span=1, machines=1) -> tier 2014 rate 20
+  _pick_sorter(128/15, span=2, machines=1) -> tier 2014 rate 10
+  _pick_sorter(128/15, span=3, machines=1) -> tier 2014 rate 20/3
+
+=== candidate: all-products ===
+belt: conveyor-belt-3 30 stack 1
+sorter_item_ids: ('sorter-1', 'sorter-2', 'sorter-3', 'sorter-4')
+pick stacks: (1, 1, 1, 4) place stacks: (1, 1, 1, 4)
+piler_unlocked: True
+groups: 9 machines: 45
+picker tiers (slow->fast): (2011, 2012, 2013, 2014)
+pick_by_tier: {2011: 1, 2012: 1, 2013: 1, 2014: 4} place_by_tier: {2011: 1, 2012: 1, 2013: 1, 2014: 4}
+  IN  casimir-crystal-advanced x3 hydrogen: per-machine 128/15 (8.533/s) total 128/5
+  OUT graphene-advanced x2 hydrogen: per-machine 16/15 (1.067/s) total 32/15
+planning_stack(hydrogen, external=True): 1  (external=False): 1
+lane_stacks consumed[hydrogen]: 1
+lane_stacks produced[hydrogen]: 1
+  _pick_sorter(8, span=1, machines=1) -> tier 2014 rate 20
+  _pick_sorter(8, span=2, machines=1) -> tier 2014 rate 10
+  _pick_sorter(8, span=3, machines=1) -> tier 2014 rate 20/3
+  _pick_sorter(128/15, span=1, machines=1) -> tier 2014 rate 20
+  _pick_sorter(128/15, span=2, machines=1) -> tier 2014 rate 10
+  _pick_sorter(128/15, span=3, machines=1) -> tier 2014 rate 20/3
+
+=== candidate: output-products ===
+belt: conveyor-belt-3 30 stack 1
+sorter_item_ids: ('sorter-1', 'sorter-2', 'sorter-3', 'sorter-4')
+pick stacks: (1, 1, 1, 4) place stacks: (1, 1, 1, 4)
+piler_unlocked: True
+groups: 9 machines: 52
+picker tiers (slow->fast): (2011, 2012, 2013, 2014)
+pick_by_tier: {2011: 1, 2012: 1, 2013: 1, 2014: 4} place_by_tier: {2011: 1, 2012: 1, 2013: 1, 2014: 4}
+  IN  casimir-crystal-advanced x4 hydrogen: per-machine 8 (8.000/s) total 32
+  OUT graphene-advanced x3 hydrogen: per-machine 8/9 (0.889/s) total 8/3
+planning_stack(hydrogen, external=True): 1  (external=False): 1
+lane_stacks consumed[hydrogen]: 1
+lane_stacks produced[hydrogen]: 1
+  _pick_sorter(8, span=1, machines=1) -> tier 2014 rate 20
+  _pick_sorter(8, span=2, machines=1) -> tier 2014 rate 10
+  _pick_sorter(8, span=3, machines=1) -> tier 2014 rate 20/3
+  _pick_sorter(128/15, span=1, machines=1) -> tier 2014 rate 20
+  _pick_sorter(128/15, span=2, machines=1) -> tier 2014 rate 10
+  _pick_sorter(128/15, span=3, machines=1) -> tier 2014 rate 20/3

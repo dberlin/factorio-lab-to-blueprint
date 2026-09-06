@@ -10,7 +10,7 @@ must reproduce.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from fractions import Fraction
@@ -27,7 +27,7 @@ from flab2bp.layout.finalize import (
 from flab2bp.spec import MAX_CARGO_STACK, BuildSpec
 
 if TYPE_CHECKING:
-    from flab2bp.layout.freeform import _Group
+    from flab2bp.layout.freeform import _Group, _SorterStacks
 
 LaneKind = Literal["input", "output"]
 LaneSide = Literal["north", "south"]
@@ -914,6 +914,226 @@ def _has_exact_two_face_seating(
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class _SorterCeilings:
+    """The most a sorter this save can build moves, by lane stack and span.
+
+    Mirrors :func:`~flab2bp.layout.freeform._pick_sorter`, including its
+    fallback: a lane whose stack no tier promises is still BUILT, with the
+    fastest tier the save has, and it is ``flow.sorter_capacity`` that reports
+    the shortfall.  Reading that fallback as "no capacity" would make every
+    output lane on a piled save unservable, since a piler raises a produced
+    lane above what any sorter PLACES.
+    """
+
+    #: Catalog tier ids, slowest first, from ``freeform._sorter_tiers_for``.
+    tiers: tuple[int, ...]
+    stacks: _SorterStacks
+
+    def rate(self, stack: int, span: int, *, produced: bool) -> Fraction:
+        """Items/second the tier ``_pick_sorter`` would choose sustains here.
+
+        ``produced`` picks the gate the EMITTER gates on for this side: an
+        output sorter is skipped when it cannot PLACE the lane's stack
+        (``_link_lane``'s ``min_place_stack``), an input sorter when it cannot
+        PICK it.  Reading pick for both was right only by accident --
+        ``BuildSpec.planning_stack`` refuses a produced stack above the fastest
+        tier's pick, so the two gates agreed on the fastest tier and therefore
+        on the maximum.  A piled lane breaks that: its stack comes from the
+        piler, not from any tier's row.
+        """
+        promise = self.stacks.place if produced else self.stacks.pick
+        eligible = [tier for tier in self.tiers if promise(tier) >= stack]
+        best = max(
+            (catalog.sorter_rate(tier, span) for tier in eligible),
+            default=catalog.sorter_rate(self.tiers[-1], span),
+        )
+        return best * stack
+
+
+def _sorter_ceilings(spec: BuildSpec) -> _SorterCeilings:
+    from flab2bp.layout.freeform import _sorter_stacks_for, _sorter_tiers_for
+
+    return _SorterCeilings(tiers=_sorter_tiers_for(spec), stacks=_sorter_stacks_for(spec))
+
+
+def _fastest_lane_rate(
+    ceilings: _SorterCeilings,
+    spec: BuildSpec,
+    item: str,
+    span: int,
+    *,
+    produced: bool,
+) -> Fraction:
+    """Items/second the best sorter this save can build moves across ``span``.
+
+    The lane's planned stack is part of the answer twice over: a tier that
+    cannot keep it is not a candidate (``_pick_sorter`` skips it), and a tier
+    that can moves the whole stack per trip
+    (``catalog.SORTER_STACK_RATE_FACTOR``), which is how
+    ``validate._sorter_capacity`` scores the sorter that gets built.
+
+    An output lane is PRODUCED even for an item the spec also belts in -- it
+    leaves the machine on a sorter, whatever the bus does -- so it is planned
+    at ``external=False`` exactly as :func:`_output_logical_lanes` plans it.
+    The default classification would hand a both-fed item ``min(belt_stack,
+    place)`` instead, understating an output lane's capacity on a stacking
+    save: a false "cannot", the one direction this must never take.
+    """
+    stack = spec.planning_stack(item, external=False) if produced else spec.planning_stack(item)
+    return ceilings.rate(stack, span, produced=produced)
+
+
+@dataclass(frozen=True, slots=True)
+class _SeatingDemand:
+    """Items/second one machine's lane must move, by lane kind.
+
+    Kept apart rather than merged: an item that is both an ingredient and a
+    product of one recipe would otherwise size its output lane at the larger of
+    the two rates, which is not a rate anything on that lane carries.
+    """
+
+    consumed: Mapping[str, Fraction]
+    produced: Mapping[str, Fraction]
+
+    def of(self, item: str, *, produced: bool) -> Fraction:
+        table = self.produced if produced else self.consumed
+        return table.get(item, Fraction(0))
+
+
+@dataclass(frozen=True, slots=True)
+class _SeatedLane:
+    """One lane of a candidate seating, as the row order sees it."""
+
+    side_index: int
+    lane_id: str
+    items: tuple[str, ...]
+    produced: bool
+
+    @property
+    def order(self) -> tuple[int, str]:
+        return (self.side_index, self.lane_id)
+
+
+def _side_rows_serve(
+    lanes: Sequence[_SeatedLane],
+    profiles: Sequence[LaneReachProfile],
+    demand: _SeatingDemand,
+    ceilings: _SorterCeilings,
+    spec: BuildSpec,
+) -> bool | None:
+    """Can SOME choice of rows on one side carry every lane seated there?
+
+    Mirrors :func:`_side_seatings`: rows come from this side's reach profiles
+    and pair with the lanes in ``(side_index, lane_id)`` order against
+    ``lane_y`` ascending -- nearest row to lowest index on the north side,
+    furthest row to lowest index on the south.  Output lanes are ordinary
+    members of that order, which is why they are passed in rather than counted.
+
+    ``None`` means the side cannot seat these lanes at all, at any capacity;
+    the caller reads that as "this output-side assignment is not the one
+    production would use" rather than as a verdict on throughput.
+
+    Deliberately GENEROUS about throughput -- a profile's shortest span, and
+    the fastest tier's rate at the lane's full planned stack -- because a false
+    "cannot" would move a seating that works today.
+    """
+    if not lanes:
+        return True
+    if len(profiles) < len(lanes):
+        return None
+    ordered_lanes = sorted(lanes, key=lambda lane: lane.order)
+    seated = False
+    for chosen in combinations(profiles, len(ordered_lanes)):
+        rows = sorted(chosen, key=lambda profile: profile.lane_y)
+        if any(
+            len(row.attachments) < len(lane.items)
+            for lane, row in zip(ordered_lanes, rows, strict=True)
+        ):
+            continue
+        seated = True
+        if all(
+            _lane_is_servable(lane, row, demand, ceilings, spec)
+            for lane, row in zip(ordered_lanes, rows, strict=True)
+        ):
+            return True
+    return False if seated else None
+
+
+def _lane_is_servable(
+    lane: _SeatedLane,
+    profile: LaneReachProfile,
+    demand: _SeatingDemand,
+    ceilings: _SorterCeilings,
+    spec: BuildSpec,
+) -> bool:
+    span = min(attachment.span for _column, attachment in profile.attachments)
+    return all(
+        demand.of(item, produced=lane.produced)
+        <= _fastest_lane_rate(ceilings, spec, item, span, produced=lane.produced)
+        for item in lane.items
+    )
+
+
+def _split_is_servable(
+    in_above: tuple[tuple[str, ...], ...],
+    in_below: tuple[tuple[str, ...], ...],
+    output_items: tuple[str, ...],
+    south_profiles: Sequence[LaneReachProfile],
+    north_profiles: Sequence[LaneReachProfile],
+    demand: _SeatingDemand,
+    ceilings: _SorterCeilings,
+    spec: BuildSpec,
+) -> bool:
+    """Can the rows this seating implies carry every lane's rate?
+
+    A row's DISTANCE sizes the sorter that reaches it and the ladder stops at
+    the Pile Sorter, so a lane seated on a row whose span costs more throughput
+    than its rate leaves cannot be built at all -- ``_pick_sorter`` has nothing
+    left to upgrade to and ``flow.sorter_capacity`` convicts every packing that
+    wires.  This is that question asked before the seating is accepted.
+
+    A MODEL of the seating, not a replay of it.  Output lanes take rows too and
+    :func:`_output_side_assignments` may put them on either face, so the same
+    walk is made here and the first assignment that seats at all is the one
+    judged -- but production's own break is wider than this walk in three ways.
+    It tries every yaw in :data:`_CARDINAL_YAWS` and keeps the first assignment
+    that yields a variant at ANY of them, while this reads the reach profiles
+    at ``group.yaw`` alone, and 8 of the 18 machine types have yaw-varying
+    profiles (Chemical Plant, Quantum Chemical Plant, Oil Refinery and
+    Miniature Particle Collider among them).  It seats items into slots through
+    :func:`_match_attachment_plans`, while this only counts a row's attachments
+    and charges every item on the lane the row's SHORTEST span.  And it weighs
+    port docks, box height and pitch, which this ignores entirely.
+
+    So the assignment judged here can differ from the one shipped.  That costs
+    a different seating, never an error: this only ever steers
+    :func:`~flab2bp.layout.freeform._seat_inputs` between splits it would
+    otherwise take in order, and a split it rejects wrongly is one the search
+    falls back to when no split satisfies the preference at all.
+    """
+    for sides in _output_side_assignments(len(output_items)):
+        south: list[_SeatedLane] = [
+            _SeatedLane(index, f"input:south:{index}", lane, produced=False)
+            for index, lane in enumerate(in_above)
+        ]
+        north: list[_SeatedLane] = [
+            _SeatedLane(len(output_items) + index, f"input:north:{index}", lane, produced=False)
+            for index, lane in enumerate(in_below)
+        ]
+        for index, side in enumerate(sides):
+            lane = _SeatedLane(
+                index, f"output:{side}:{index}", (output_items[index],), produced=True
+            )
+            (south if side == "south" else north).append(lane)
+        south_serves = _side_rows_serve(south, south_profiles, demand, ceilings, spec)
+        north_serves = _side_rows_serve(north, north_profiles, demand, ceilings, spec)
+        if south_serves is None or north_serves is None:
+            continue  # not a seating production could ship; try the next assignment
+        return south_serves and north_serves
+    return False
+
+
 def _seat_both_fed_outermost(
     in_above: tuple[tuple[str, ...], ...],
     in_below: tuple[tuple[str, ...], ...],
@@ -1073,6 +1293,9 @@ def _logical_strip_plans(
     # the only corpus spec where it is non-empty (R4 §4); measured today it is
     # exactly `{'hydrogen'}`.
     both_fed = frozenset(spec.external_inputs) & frozenset(producers)
+    # One table for the whole spec: the tiers and their stack rows are a
+    # property of the SAVE, not of a group.
+    ceilings = _sorter_ceilings(spec)
 
     plans: list[_LogicalStripPlan] = []
     for key, group in groups.items():
@@ -1152,6 +1375,68 @@ def _logical_strip_plans(
 
         probe = slots.probe_building(group.item_id, group.yaw)
         columns = len(slots.attachable_columns(probe, -1)) or 1
+
+        # A row's DISTANCE sizes the sorter that reaches it, and the ladder ends
+        # at the Pile Sorter, so a lane whose per-machine rate exceeds what that
+        # tier sustains across the row it lands on cannot be built -- no amount
+        # of upgrading reaches it, and `flow.sorter_capacity` convicts every
+        # packing that wires.  Judged BEFORE the split is accepted, over the
+        # seating `_seat_both_fed_outermost` will actually ship, because that
+        # normalisation is what moves a both-fed lane to the outermost row in
+        # the first place.
+        profiles = lane_reach_profiles(group.item_id, group.yaw)
+        south_profiles = tuple(p for p in profiles if p.side == "south")
+        north_profiles = tuple(p for p in profiles if p.side == "north")
+        sink_items = tuple(item for item, _destination, _domain in sinks)
+        # One item on several output lanes is served by one sorter EACH, and
+        # `validate._item_share` divides that item's rate between them; sizing
+        # every lane at the whole rate would refuse a seating that carries it.
+        lane_demand = _SeatingDemand(
+            consumed=dict(group.inputs),
+            produced={
+                item: rate / (sink_items.count(item) or 1) for item, rate in group.outputs.items()
+            },
+        )
+
+        def seating_servable(
+            above: tuple[tuple[str, ...], ...],
+            below: tuple[tuple[str, ...], ...],
+            *,
+            flank_outputs: bool = False,
+            _demand: _SeatingDemand = lane_demand,
+            _ceilings: _SorterCeilings = ceilings,
+            _sink_items: tuple[str, ...] = sink_items,
+            _above_cap: int = above_cap,
+            _below_cap: int = below_cap,
+            _columns: int = columns,
+            _south: tuple[LaneReachProfile, ...] = south_profiles,
+            _north: tuple[LaneReachProfile, ...] = north_profiles,
+        ) -> bool:
+            try:
+                seated_above, seated_below = _seat_both_fed_outermost(
+                    above,
+                    below,
+                    both_fed,
+                    above_cap=_above_cap,
+                    below_cap=_below_cap,
+                    columns=_columns,
+                    n_sinks=len(_sink_items),
+                    flank_outputs=flank_outputs,
+                )
+            except ValueError:
+                return False  # the normalisation refuses it; the fallback pass reports why
+            return _split_is_servable(
+                seated_above,
+                seated_below,
+                # An output leaving east takes no lane row on either face.
+                () if flank_outputs else _sink_items,
+                _south,
+                _north,
+                _demand,
+                _ceilings,
+                spec,
+            )
+
         flank = False
         try:
             in_above, in_below = _seat_inputs(
@@ -1163,6 +1448,7 @@ def _logical_strip_plans(
                 columns=columns,
                 prefer_shared=prefer_shared_inputs,
                 lane_fits=input_lane_fits if prefer_shared_inputs else None,
+                seating_fits=seating_servable,
             )
         except ValueError as exc:
             seat = _flank_seat(group.item_id, group.yaw, group.pitch_w) if len(sinks) == 1 else None
@@ -1179,6 +1465,9 @@ def _logical_strip_plans(
                     flank_outputs=True,
                     prefer_shared=prefer_shared_inputs,
                     lane_fits=input_lane_fits if prefer_shared_inputs else None,
+                    seating_fits=lambda above, below: seating_servable(
+                        above, below, flank_outputs=True
+                    ),
                 )
             except ValueError as flanked:
                 raise ValueError(f"recipe {group.recipe_id!r}: {flanked}") from None

@@ -2178,6 +2178,8 @@ def _seat_inputs(
     flank_outputs: bool = False,
     prefer_shared: bool = False,
     lane_fits: Callable[[tuple[str, ...]], bool] | None = None,
+    seating_fits: Callable[[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]], bool]
+    | None = None,
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
     """Seat ingredients into lanes above and below the machine band.
 
@@ -2220,6 +2222,15 @@ def _seat_inputs(
     out east.  It changes only the column arithmetic here -- the rows, the reach
     caps and the mixing ladder are the same for both.
 
+    ``seating_fits`` judges a whole candidate split rather than one lane: it is
+    where the caller asks whether the ROWS this split implies can be served at
+    all.  A row's distance sizes the sorter that reaches it, and no tier is
+    faster than the Pile Sorter, so a lane whose rate exceeds what that tier
+    sustains across the row it landed on cannot be built however the picker
+    upgrades.  It is a PREFERENCE, not a filter: when no split satisfies it the
+    search runs again without it, so a spec that has no servable seating keeps
+    exactly the seating it had and is judged downstream as before.
+
     Returns ``(above, below)``.  ``below`` shares the south side with the output
     lanes, so it is kept as small as possible.
     """
@@ -2232,30 +2243,45 @@ def _seat_inputs(
     mix_sizes = (
         range(max(1, max_per_lane), 0, -1) if prefer_shared else range(1, max(1, max_per_lane) + 1)
     )
-    for k in mix_sizes:
-        lanes = [tuple(items[i : i + k]) for i in range(0, n, k)]
-        if lane_fits is not None and any(not lane_fits(lane) for lane in lanes):
-            continue
-        # The split point is searched rather than fixed at `above_cap`.  Filling
-        # the north side first was harmless while only ROWS were rationed --
-        # a full north side left the whole south side for the rest.  With
-        # columns rationed too it is not: four ingredients mixed two-to-a-lane
-        # give two lanes, both of which fit above by row count and neither of
-        # which fits by column count, and a fixed split would have refused a
-        # spec that seats perfectly well one lane per side.  Largest `above`
-        # first, so `below` stays as small as it can and leaves the output lane
-        # its room.
-        for a in range(min(len(lanes), above_cap), -1, -1):
-            above, below = tuple(lanes[:a]), tuple(lanes[a:])
-            if len(below) > below_cap:
-                continue  # more lanes than that side can hold; mix harder
-            if n_sinks and below_cap - len(below) <= 0:
-                continue  # no room left below for an output lane
-            if sum(len(lane) for lane in above) > columns:
-                continue  # more sorters than the north face has slots
-            if sum(len(lane) for lane in below) + out_columns > columns:
-                continue  # ... or than the south face has, output lane included
-            return above, below
+
+    def search(
+        require_servable: bool,
+    ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]] | None:
+        for k in mix_sizes:
+            lanes = [tuple(items[i : i + k]) for i in range(0, n, k)]
+            if lane_fits is not None and any(not lane_fits(lane) for lane in lanes):
+                continue
+            # The split point is searched rather than fixed at `above_cap`.
+            # Filling the north side first was harmless while only ROWS were
+            # rationed -- a full north side left the whole south side for the
+            # rest.  With columns rationed too it is not: four ingredients mixed
+            # two-to-a-lane give two lanes, both of which fit above by row count
+            # and neither of which fits by column count, and a fixed split would
+            # have refused a spec that seats perfectly well one lane per side.
+            # Largest `above` first, so `below` stays as small as it can and
+            # leaves the output lane its room.
+            for a in range(min(len(lanes), above_cap), -1, -1):
+                above, below = tuple(lanes[:a]), tuple(lanes[a:])
+                if len(below) > below_cap:
+                    continue  # more lanes than that side can hold; mix harder
+                if n_sinks and below_cap - len(below) <= 0:
+                    continue  # no room left below for an output lane
+                if sum(len(lane) for lane in above) > columns:
+                    continue  # more sorters than the north face has slots
+                if sum(len(lane) for lane in below) + out_columns > columns:
+                    continue  # ... or than the south face has, output lane included
+                if require_servable and seating_fits is not None and not seating_fits(above, below):
+                    continue  # rows this split implies carry less than the lanes need
+                return above, below
+        return None
+
+    if seating_fits is not None:
+        servable = search(True)
+        if servable is not None:
+            return servable
+    seated = search(False)
+    if seated is not None:
+        return seated
     flanked = " with the product leaving east" if flank_outputs else ""
     raise ValueError(
         f"{n} ingredients cannot be seated{flanked}: {above_cap} lane(s) above "

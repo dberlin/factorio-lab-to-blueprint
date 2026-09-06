@@ -1,0 +1,121 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/debug-sorters/.venv` and will be ignored; use `--active` to target the active environment instead[0m
+
+=== candidate no-proliferator ===
+external_inputs: ['copper-ingot', 'fire-ice', 'high-purity-silicon', 'hydrogen', 'iron-ingot', 'optical-grating-crystal', 'silicon-ore', 'stone', 'titanium-ingot', 'water']
+  casimir-crystal-advanced on Re-composing Assembler x5 yaw=0.0
+       input:south:0 y= -2 span=2 hydrogen                 rate=  8.000/s tier=2014 cap= 10.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 graphene                 rate=  1.333/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 casimir-crystal          rate=  0.667/s tier=2011 cap=  0.750 best_tier_cap= 10.000
+       input:north:0 y=  5 span=3 optical-grating-crystal  rate=  5.333/s tier=2014 cap=  6.667 best_tier_cap=  6.667
+  circuit-board on Re-composing Assembler x2 yaw=0.0
+       input:south:0 y= -2 span=2 copper-ingot             rate=  1.667/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 iron-ingot               rate=  3.333/s tier=2013 cap=  6.000 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 circuit-board            rate=  3.333/s tier=2014 cap= 10.000 best_tier_cap= 10.000
+  glass on Plane Smelter x15 yaw=0.0
+       input:south:0 y= -1 span=1 stone                    rate=  2.000/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:0 y=  3 span=1 glass                    rate=  1.000/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+  graphene-advanced on Quantum Chemical Plant x4 yaw=0.0
+       input:south:0 y= -1 span=2 fire-ice                 rate=  1.667/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+      output:north:0 y=  5 span=1 graphene                 rate=  1.667/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:1 y=  6 span=2 hydrogen                 rate=  0.833/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+  high-purity-silicon on Plane Smelter x8 yaw=0.0
+       input:south:0 y= -1 span=1 silicon-ore              rate=  1.875/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:0 y=  3 span=1 high-purity-silicon      rate=  0.938/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+  microcrystalline-component on Re-composing Assembler x5 yaw=0.0
+       input:south:0 y= -2 span=2 high-purity-silicon      rate=  2.667/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 copper-ingot             rate=  1.333/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 microcrystalline-component rate=  1.333/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+  plane-filter on Re-composing Assembler x14 yaw=0.0
+       input:south:0 y= -2 span=2 casimir-crystal          rate=  0.238/s tier=2011 cap=  0.750 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 titanium-glass           rate=  0.476/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 plane-filter             rate=  0.238/s tier=2011 cap=  0.750 best_tier_cap= 10.000
+  processor on Re-composing Assembler x4 yaw=0.0
+       input:south:0 y= -2 span=2 circuit-board            rate=  1.667/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 microcrystalline-component rate=  1.667/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 processor                rate=  0.833/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+  titanium-glass on Re-composing Assembler x13 yaw=0.0
+       input:south:0 y= -3 span=3 glass                    rate=  1.154/s tier=2013 cap=  2.000 best_tier_cap=  6.667
+       input:south:1 y= -2 span=2 titanium-ingot           rate=  1.154/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+       input:south:2 y= -1 span=1 water                    rate=  1.154/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 titanium-glass           rate=  1.154/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+      output:north:1 y=  5 span=3 titanium-glass           rate=  1.154/s tier=2013 cap=  2.000 best_tier_cap=  6.667
+
+=== candidate all-products ===
+external_inputs: ['copper-ingot', 'fire-ice', 'high-purity-silicon', 'hydrogen', 'iron-ingot', 'optical-grating-crystal', 'proliferator-3', 'silicon-ore', 'stone', 'titanium-ingot', 'water']
+  casimir-crystal-advanced on Re-composing Assembler x3 yaw=0.0
+       input:south:0 y= -2 span=2 hydrogen                 rate=  8.533/s tier=2014 cap= 10.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 graphene                 rate=  1.422/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 casimir-crystal          rate=  0.889/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+       input:north:0 y=  5 span=3 optical-grating-crystal  rate=  5.689/s tier=2014 cap=  6.667 best_tier_cap=  6.667
+  circuit-board on Re-composing Assembler x1 yaw=0.0
+       input:south:0 y= -2 span=2 copper-ingot             rate=  2.133/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 iron-ingot               rate=  4.267/s tier=2013 cap=  6.000 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 circuit-board            rate=  5.333/s tier=2014 cap= 10.000 best_tier_cap= 10.000
+  glass on Plane Smelter x9 yaw=0.0
+       input:south:0 y= -1 span=1 stone                    rate=  1.944/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:0 y=  3 span=1 glass                    rate=  1.215/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+  graphene-advanced on Quantum Chemical Plant x2 yaw=0.0
+       input:south:0 y= -1 span=2 fire-ice                 rate=  1.707/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+      output:north:0 y=  5 span=1 graphene                 rate=  2.133/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:1 y=  6 span=2 hydrogen                 rate=  1.067/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+  high-purity-silicon on Plane Smelter x3 yaw=0.0
+       input:south:0 y= -1 span=1 silicon-ore              rate=  1.440/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  3 span=1 high-purity-silicon      rate=  0.900/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+  microcrystalline-component on Re-composing Assembler x3 yaw=0.0
+       input:south:0 y= -2 span=2 high-purity-silicon      rate=  2.844/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 copper-ingot             rate=  1.422/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 microcrystalline-component rate=  1.778/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+  plane-filter on Re-composing Assembler x11 yaw=0.0
+       input:south:0 y= -2 span=2 casimir-crystal          rate=  0.242/s tier=2011 cap=  0.750 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 titanium-glass           rate=  0.485/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 plane-filter             rate=  0.303/s tier=2011 cap=  0.750 best_tier_cap= 10.000
+  processor on Re-composing Assembler x3 yaw=0.0
+       input:south:0 y= -2 span=2 circuit-board            rate=  1.778/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 microcrystalline-component rate=  1.778/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 processor                rate=  1.111/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+  titanium-glass on Re-composing Assembler x10 yaw=0.0
+       input:south:0 y= -3 span=3 glass                    rate=  1.093/s tier=2013 cap=  2.000 best_tier_cap=  6.667
+       input:south:1 y= -2 span=2 titanium-ingot           rate=  1.093/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+       input:south:2 y= -1 span=1 water                    rate=  1.093/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 titanium-glass           rate=  1.367/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+      output:north:1 y=  5 span=3 titanium-glass           rate=  1.367/s tier=2013 cap=  2.000 best_tier_cap=  6.667
+
+=== candidate output-products ===
+external_inputs: ['copper-ingot', 'fire-ice', 'high-purity-silicon', 'hydrogen', 'iron-ingot', 'optical-grating-crystal', 'proliferator-3', 'silicon-ore', 'stone', 'titanium-ingot', 'water']
+  casimir-crystal-advanced on Re-composing Assembler x4 yaw=0.0
+       input:south:0 y= -2 span=2 hydrogen                 rate=  8.000/s tier=2014 cap= 10.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 graphene                 rate=  1.333/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 casimir-crystal          rate=  0.667/s tier=2011 cap=  0.750 best_tier_cap= 10.000
+       input:north:0 y=  5 span=3 optical-grating-crystal  rate=  5.333/s tier=2014 cap=  6.667 best_tier_cap=  6.667
+  circuit-board on Re-composing Assembler x1 yaw=0.0
+       input:south:0 y= -2 span=2 copper-ingot             rate=  2.667/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 iron-ingot               rate=  5.333/s tier=2013 cap=  6.000 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 circuit-board            rate=  5.333/s tier=2014 cap= 10.000 best_tier_cap= 10.000
+  glass on Plane Smelter x11 yaw=0.0
+       input:south:0 y= -1 span=1 stone                    rate=  1.988/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:0 y=  3 span=1 glass                    rate=  0.994/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+  graphene-advanced on Quantum Chemical Plant x3 yaw=0.0
+       input:south:0 y= -1 span=2 fire-ice                 rate=  1.778/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+      output:north:0 y=  5 span=1 graphene                 rate=  1.778/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:1 y=  6 span=2 hydrogen                 rate=  0.889/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+  high-purity-silicon on Plane Smelter x5 yaw=0.0
+       input:south:0 y= -1 span=1 silicon-ore              rate=  1.933/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:0 y=  3 span=1 high-purity-silicon      rate=  0.967/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+  microcrystalline-component on Re-composing Assembler x4 yaw=0.0
+       input:south:0 y= -2 span=2 high-purity-silicon      rate=  2.667/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 copper-ingot             rate=  1.333/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 microcrystalline-component rate=  1.333/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+  plane-filter on Re-composing Assembler x11 yaw=0.0
+       input:south:0 y= -2 span=2 casimir-crystal          rate=  0.242/s tier=2011 cap=  0.750 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 titanium-glass           rate=  0.485/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 plane-filter             rate=  0.303/s tier=2011 cap=  0.750 best_tier_cap= 10.000
+  processor on Re-composing Assembler x3 yaw=0.0
+       input:south:0 y= -2 span=2 circuit-board            rate=  1.778/s tier=2013 cap=  3.000 best_tier_cap= 10.000
+       input:south:1 y= -1 span=1 microcrystalline-component rate=  1.778/s tier=2012 cap=  3.000 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 processor                rate=  1.111/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+  titanium-glass on Re-composing Assembler x10 yaw=0.0
+       input:south:0 y= -3 span=3 glass                    rate=  1.093/s tier=2013 cap=  2.000 best_tier_cap=  6.667
+       input:south:1 y= -2 span=2 titanium-ingot           rate=  1.093/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+       input:south:2 y= -1 span=1 water                    rate=  1.093/s tier=2011 cap=  1.500 best_tier_cap= 20.000
+      output:north:0 y=  4 span=2 titanium-glass           rate=  1.367/s tier=2012 cap=  1.500 best_tier_cap= 10.000
+      output:north:1 y=  5 span=3 titanium-glass           rate=  1.367/s tier=2013 cap=  2.000 best_tier_cap=  6.667
