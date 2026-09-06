@@ -1428,3 +1428,58 @@ def test_the_exact_lp_refuses_a_point_the_simplex_never_proved() -> None:
     ), "sympy no longer returns an infeasible point here"
 
     assert _linprog_checked(cost, rows, limits) is None
+
+
+# --- Limit objectives: only zero is meaningful, and it forbids an input ------
+
+
+def _with_limit(item_id: str, value: int, *, extra: tuple[Objective, ...] = ()) -> LabRequest:
+    """The example request plus a FactorioLab ``Limit`` objective on ``item_id``."""
+    base = parse_url(EXAMPLE_URL)
+    limit = Objective(
+        id="9",
+        target_id=item_id,
+        value=Fraction(value),
+        unit=ObjectiveUnit.Items,
+        type=ObjectiveType.Limit,
+    )
+    return replace(base, objectives=(*base.objectives, limit, *extra))
+
+
+def test_a_zero_limit_is_a_constraint_not_a_target(data: Dataset) -> None:
+    """``Limit 0`` says "never use this item as an input"; it asks for nothing."""
+    assert target_rates(data, _with_limit("iron-ore", 0)) == {"super-magnetic-ring": Fraction(1)}
+
+
+def test_a_nonzero_limit_is_still_refused(data: Dataset) -> None:
+    """A bounded input rate needs an LP row this solver does not have yet."""
+    with pytest.raises(UnsupportedObjectiveError, match="only a Limit of zero"):
+        target_rates(data, _with_limit("iron-ore", 5))
+
+
+def test_a_zero_limit_that_contradicts_a_declared_input_is_refused(data: Dataset) -> None:
+    supply = Objective(
+        id="10",
+        target_id="iron-ore",
+        value=Fraction(10),
+        unit=ObjectiveUnit.Items,
+        type=ObjectiveType.Input,
+    )
+    with pytest.raises(
+        UnsupportedObjectiveError, match="both a declared Input and a Limit of zero"
+    ):
+        target_rates(data, _with_limit("iron-ore", 0, extra=(supply,)))
+
+
+def test_a_zero_limit_on_a_crafted_intermediate_changes_nothing(data: Dataset) -> None:
+    """Iron ingot is smelted here already, so forbidding it as an input is inert."""
+    solution = solve(data, _with_limit("iron-ingot", 0))
+    assert {g.recipe_id: g.machines for g in solution.groups} == GOLDEN_COUNTS
+    assert "iron-ingot" not in solution.external_inputs
+    assert "iron-ingot" in solution.forbidden_inputs
+
+
+def test_a_zero_limit_on_a_raw_input_refuses_the_solve(data: Dataset) -> None:
+    """Nothing here crafts iron ore, so the block cannot honour the limit."""
+    with pytest.raises(InfeasibleError, match="iron-ore is limited to zero as an input"):
+        solve(data, _with_limit("iron-ore", 0))

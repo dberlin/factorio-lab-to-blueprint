@@ -118,6 +118,9 @@ class RateSolution:
     tier: ProliferatorTier = ProliferatorTier.NONE
     #: Exact continuous footprint before each physical group is rounded up.
     lower_bound_area: Fraction = Fraction(0)
+    #: Items the URL forbade as inputs (``Limit`` objectives at zero); every
+    #: one of them was crafted here, or the solve refused.
+    forbidden_inputs: frozenset[str] = frozenset()
 
     @property
     def machine_count(self) -> int:
@@ -258,9 +261,18 @@ def target_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
     """Normalise objectives to items/second, keyed by item id."""
     period = _SECONDS_PER_PERIOD[request.display_rate]
     out: dict[str, Fraction] = {}
+    forbidden = forbidden_inputs(request)  # validates the Limit objectives too
     for objective in request.objectives:
         if objective.type is ObjectiveType.Input:
+            if objective.target_id in forbidden:
+                raise UnsupportedObjectiveError(
+                    f"{objective.target_id} carries both a declared Input and a Limit "
+                    "of zero: it cannot be supplied from outside and forbidden as an "
+                    "input at once"
+                )
             continue  # a declared external supply; see supplied_rates()
+        if objective.type is ObjectiveType.Limit:
+            continue  # a constraint on the boundary, not a target; see forbidden_inputs()
         if objective.type is not ObjectiveType.Output:
             raise UnsupportedObjectiveError(
                 f"objective type {objective.type.name!r} is not supported: only "
@@ -338,6 +350,32 @@ def supplied_rates(data: Dataset, request: LabRequest) -> dict[str, Fraction]:
             )
         out[objective.target_id] = out.get(objective.target_id, Fraction(0)) + rate
     return out
+
+
+def forbidden_inputs(request: LabRequest) -> frozenset[str]:
+    """Items the URL forbids as inputs: every ``Limit`` objective at zero.
+
+    FactorioLab's ``Limit`` objective bounds how much of an item may arrive
+    from outside.  A bound of zero has one meaning this solver can honour
+    exactly -- the item must never be belted in, so whatever the chain needs
+    of it is crafted here or the build refuses -- and that is the only bound
+    supported: a positive limit needs an LP row that caps one boundary flow,
+    which does not exist yet, so it is refused rather than silently read as
+    zero or ignored.
+    """
+    out: set[str] = set()
+    for objective in request.objectives:
+        if objective.type is not ObjectiveType.Limit:
+            continue
+        if objective.unit is not ObjectiveUnit.Items or objective.value != 0:
+            raise UnsupportedObjectiveError(
+                f"objective type 'Limit' on {objective.target_id} is supported for "
+                "only a Limit of zero in items, which forbids the item as an input; "
+                f"a limit of {objective.value} {objective.unit.name.lower()} would need "
+                "a bounded boundary flow the rate solve cannot express"
+            )
+        out.add(objective.target_id)
+    return frozenset(out)
 
 
 def _supply_cap(supplied: Mapping[str, Fraction], item_id: str) -> Fraction:
@@ -502,6 +540,7 @@ def _resolve_chain(
     supplied: Mapping[str, Fraction] = MappingProxyType({}),
     *,
     include_consumers: bool = False,
+    forbidden: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, tuple[Recipe, ...]], set[str]]:
     """Walk the recipe graph from the targets.
 
@@ -575,7 +614,14 @@ def _resolve_chain(
             continue
 
         crafting = _buildable_producers(data, item_id, excluded)
-        extraction = () if item_id in requested else _extraction_producers(data, item_id, excluded)
+        # A forbidden input gets no extraction option either: extraction is a
+        # belt-in by another name (the ore still arrives at the boundary), and
+        # a Limit of zero is exactly the promise that it will not.
+        extraction = (
+            ()
+            if item_id in requested or item_id in forbidden
+            else _extraction_producers(data, item_id, excluded)
+        )
         options = crafting + extraction
         if options:
             producers[item_id] = options
@@ -1120,6 +1166,7 @@ def solve(
             "objectives against the request leaves nothing to build"
         )
     excluded = _excluded_recipes(data, request)
+    forbidden = forbidden_inputs(request)
     has_surplus_cost = _cost(request.costs.surplus, 0) > 0
     producers, external = _resolve_chain(
         data,
@@ -1127,6 +1174,7 @@ def solve(
         excluded,
         supplied,
         include_consumers=has_surplus_cost,
+        forbidden=forbidden,
     )
     internal_items = sorted(producers)
     columns = _columns(
@@ -1308,6 +1356,11 @@ def solve(
         shortfall = rate - produced.get(item_id, Fraction(0))
         if shortfall <= 0:
             continue
+        if item_id in forbidden:
+            raise InfeasibleError(
+                f"{item_id} is limited to zero as an input, but the chain needs "
+                f"{shortfall} items/s of it from outside and nothing here crafts it"
+            )
         available_extracted = extracted.get(item_id, Fraction(0))
         if available_extracted < shortfall and item_id not in external:
             raise InfeasibleError(
@@ -1345,5 +1398,6 @@ def solve(
         surplus=MappingProxyType(dict(sorted(surplus.items()))),
         target_rates=MappingProxyType(targets),
         tier=tier,
+        forbidden_inputs=forbidden,
         lower_bound_area=lower_bound,
     )
