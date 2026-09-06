@@ -507,7 +507,24 @@ class SearchObserver(Protocol):
 
 ### 5.3 The sampler
 
+**Fixed constants in v1** — not a UI-configurable "detail" level. `min_interval_s`
+is a parameter so a test can inject an arbitrary value (§5.3's own tests do), but
+every production call site is built with one of these two named constants:
+
 ```python
+#: In-process sample interval. Fixed for v1: 250 ms keeps every Rule W cell
+#: (§8.2, §8.3) comfortably inside the 1% budget while still showing several
+#: samples a second of the busiest sweep. A UI control that trades frames for
+#: budget is a follow-on, taken up only if the plan's overhead-gate task
+#: (Task 13, §8.4) leaves headroom to spend — see §10.
+TRACE_SAMPLE_INTERVAL_S: Final = 0.25
+
+#: Sample interval inside a spawned child. Doubled, not equal: the queue's
+#: feeder thread does the pickling (§9 R2), and that CPU is the child's own,
+#: not free background work the way the parent's trace thread is.
+TRACE_CHILD_SAMPLE_INTERVAL_S: Final = 0.5
+
+
 @dataclass(slots=True)
 class SampledObserver:
     """Rate-limits by wall time and hands survivors to a sink.
@@ -519,7 +536,7 @@ class SampledObserver:
     """
 
     sink: Callable[[SearchEvent], None]
-    min_interval_s: float = 0.25
+    min_interval_s: float = TRACE_SAMPLE_INTERVAL_S
     monotonic: Callable[[], float] = time.monotonic
     _last_s: float = field(default=float("-inf"), init=False)
 
@@ -533,7 +550,9 @@ class SampledObserver:
         self.sink(event)
 ```
 
-Defaults: `min_interval_s = 0.25` in-process, `0.5` in a spawned child (§6.2).
+Defaults: `TRACE_SAMPLE_INTERVAL_S = 0.25` in-process, `TRACE_CHILD_SAMPLE_INTERVAL_S
+= 0.5` in a spawned child (§6.2). Both live in `src/flab2bp/layout/observe.py`
+beside `ALWAYS_SAMPLE`.
 
 ### 5.4 The hot-path contract
 
@@ -836,9 +855,37 @@ The canvas caption reads e.g.
 - a dropped-frame count, stated rather than hidden;
 - the per-frame metadata table (G3).
 
-Trace polling runs its own loop in `TracePanel` at a fixed 250 ms while live and
-stops when `complete` is true — deliberately not the job poll's backoff, which
-exists to keep a five-minute build from making 300 requests.
+Trace polling runs its own loop in `TracePanel` at a fixed `TRACE_SAMPLE_INTERVAL_S
+* 1000` ms while live and stops when `complete` is true — deliberately not the
+job poll's backoff, which exists to keep a five-minute build from making 300
+requests.
+
+### 7.4 The CLI: `--trace-jsonl`
+
+`pipeline.build` already grows `search_observer` (§7.2), so a CLI flag that
+hands it a file-writing observer is nearly free, and it is in scope for v1:
+
+```
+flab2bp <url> --trace-jsonl trace.jsonl
+```
+
+- `flab2bp/cli.py`'s `build_parser` (`cli.py:217-321`) gains `--trace-jsonl
+  PATH`, a `Path | None`, default `None`.
+- `main` (`cli.py:324-397`), when the flag is given, builds a
+  `SampledObserver` whose sink writes `frame_json(...)` (§4, `web/trace.py`) as
+  one `json.dumps(...)` line per event to `PATH`, and passes it as
+  `pipeline.build(..., search_observer=observer)` beside the existing call.
+  Omitting the flag installs no observer, exactly like every other trace call
+  site.
+
+**One observer, one frame schema, two transports.** The CLI's JSONL line and a
+web trace poll's `frames[i]` are the same `frame_json` projection; the file is
+newline-delimited because a CLI has no cursor to page through and no browser to
+gzip for, not because the frame differs. This is what lets `--trace-jsonl` serve
+two purposes at once: it is `scripts/trace_overhead.py`'s (§8.4) way to capture
+frames without a web server, and it is the offline-analysis path — inspecting
+what a search did after the fact, with no browser involved — for anyone who
+wants one.
 
 ---
 
@@ -930,7 +977,8 @@ a candidate/stage/round boundary, and Rule P (§8.2) is the falsification test.
 **R2 — the child's pickle cost.** `put_nowait` on a `multiprocessing.Queue`
 appends to an internal buffer and a **feeder thread** does the pickling, so the
 search thread does not pay it — but the feeder thread's CPU is still the child's.
-At `min_interval_s = 0.5` that is ≤ 2 pickles/s of a ~250 kB structure.
+At `TRACE_CHILD_SAMPLE_INTERVAL_S = 0.5` that is ≤ 2 pickles/s of a ~250 kB
+structure.
 *Mitigation:* `TRACE_MAX_BUILDINGS` caps the payload; Rule W measures the rest.
 If it fails, Architecture B is the escalation.
 
@@ -969,18 +1017,28 @@ saying in the UI.
 
 ---
 
-## 10. Open questions
+## 10. Questions settled by the user
 
-1. **Default sample interval.** 250 ms in-process / 500 ms in a child is a
-   guess sized to keep Rule W comfortable. Should the UI expose it (a "detail"
-   slider that trades frames for the 1 % budget), or is a fixed, defensible
-   number better?
-2. **`PACKED` frames on freeform.** Emitting a frame *before* routing is the
-   single most informative thing here — you see the pack the router then fails on
-   — but it is also the highest-frequency site in the sweep. Ship it in v1 behind
-   the sampler, or start with `ROUTED` and above and add `PACKED` once Rule W has
-   a baseline?
-3. **Trace in the CLI.** `pipeline.build` grows `search_observer`, so a
-   `--trace-jsonl <path>` flag on the CLI is nearly free and would make the
-   harness in §8 and offline analysis much easier. In scope for this plan, or a
-   follow-on?
+This document originally left three questions open. The user has since answered
+all three; the answers are folded into the sections named below so nobody has to
+go looking for them.
+
+1. **Sample interval: fixed for v1, not a UI control.** `TRACE_SAMPLE_INTERVAL_S
+   = 0.25` in-process / `TRACE_CHILD_SAMPLE_INTERVAL_S = 0.5` across a child
+   boundary (§5.3) are named constants, each with the one-line rationale given
+   there. There is no "detail" slider: making the interval configurable is a
+   follow-on, and only worth taking up if the plan's overhead-gate task (Task
+   13, §8.4) leaves room in the 1 % budget to spend.
+2. **`PACKED` frames on freeform: ship in v1, behind the sampler.** This is
+   already what §5.1's vocabulary, §5.4's hot-path contract, and §5.6's call-site
+   table describe, and what the plan's Task 3 implements as one of freeform's
+   five call sites — the first task that wires freeform to an observer at all.
+   `SampledObserver.due()` (§5.3) is the thing that keeps its cost inside Rule
+   W's budget despite it being the highest-frequency site in the sweep; nothing
+   here waits for a baseline first.
+3. **CLI trace flag: in scope for v1.** §7.4 specifies `--trace-jsonl <path>`
+   on the `flab2bp` CLI. It is a second consumer of the exact same
+   `SearchObserver` / `SearchEvent` / `frame_json` machinery the web transport
+   uses — one observer, one frame schema, two transports — and it is what the
+   overhead harness (§8.4) and any offline analysis use to capture frames
+   without a browser or a running server.
