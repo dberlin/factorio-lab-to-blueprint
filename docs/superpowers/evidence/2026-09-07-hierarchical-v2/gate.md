@@ -38,6 +38,18 @@ geomean within ±0.11 % (that arm is not bit-reproducible across rounds because
 of islands). `audit.py` prints `NOT CLEAN` on any refusal, so the counts and the
 differing cells are read, not the banner.
 
+**Declared deviation from that rule, and why.** The guard was judged on the ONE
+paired round it asks for (§5's `baseline-round1` / `candidate-round1`). A
+SECOND, three-url `--only` pair was then run on both trees — four audit
+invocations in total, not two — purely to decide whether the six cells that
+moved in the paired round are a branch effect or run-to-run noise, which the
+"identical freeform areas" and "±0.11 % geomean" sub-clauses cannot be judged
+without. v1's gate did the same, for the same reason
+(`../2026-09-07-hierarchical-v1/gate.md` §5b, `moved-*-r2`). No gate number is
+taken from the second pair except the §5 stability table; it is a control, not
+a re-measurement of the guard, and it happens to cut against this branch's
+convenience by finding a seventh unstable cell.
+
 Best-known dense areas for the `area / best_known` column, as the controller
 supplied them: belt3 all-products **12408**, zurl2 all-products **40905**,
 titanium-glass all-products **5727** (sequence-pair, `best` at 30 s). The mall
@@ -55,7 +67,7 @@ has no best-known area.
 | zurl2 area ≤ 1.0 x 40905 | an area | **no area** | **FAIL** (not demonstrated) |
 | titanium-glass area ≤ 1.25 x 5727 = 7159 | an area | **no area** | **FAIL** (not demonstrated) |
 | both malls build, or refuse with every block placed and the refusal naming composition | every block placed | **neither**: `mall/all-products` refuses with **22 blocks never placed**, `mall/no-proliferator` with **45**, both naming the FUNDING rule, not composition | **FAIL** |
-| wall within budget + race grace | ≤ 60 + 6.0 s | 22.8-63.2 s in-process; the largest, zurl2 at 63.2 s, is inside 66.0 s | PASS |
+| wall within budget + race grace | ≤ 60 + 6.0 s (and ≤ 15 + 6.0 s) | the six 60 s cells ran 22.8-63.2 s in-process — the largest, zurl2 at 63.2 s, is inside 66.0 s; the two 15 s cells ran 11.2-15.2 s, inside 21.0 s | PASS |
 | default guard unchanged | identical CLEAN counts, identical freeform areas, seq-pair geomean ±0.11 % | CLEAN counts **72 = 72, identical**; 3 freeform cells and 3 sequence-pair cells moved, **every one of them demonstrably run-to-run noise present on BOTH trees** (§5), and no line of code either audited arm executes differs between the trees | **FAIL as literally declared**, PASS in substance — see §5 |
 
 **The clause the gate fails on is coverage: 0 of 8 cells build.** No cell
@@ -99,18 +111,29 @@ reads, and why, is in its module docstring. Files:
 | belt3 / all-products | 60 | 49.4 / 50.7 s | 45.7 / 46.8 s | REFUSED (exit 3) | composed; router refused **28** cuts | — | n/a |
 | belt3 / no-proliferator | 60 | 32.8 / 34.4 s | 34.2 / 35.8 s | REFUSED | composed; **7** cuts (r1), **9** (r2) | — | n/a |
 | zurl2 / all-products | 60 | 63.2 / 64.7 s | 62.5 / 63.8 s | REFUSED | composed; **18** cuts (r1), **15** (r2) | — | n/a |
-| mall / all-products | 60 | 28.8 / 30.3 s | 28.7 / 29.9 s | REFUSED | **22 blocks never placed**, 8.0 s over 2 waves | — | n/a |
-| mall / no-proliferator | 60 | 22.9 / 24.0 s | 22.8 / 24.2 s | REFUSED | **45 blocks never placed**, 13.8 s over 3 waves | — | n/a |
+| mall / all-products | 60 | 28.8 / 30.3 s | 28.7 / 29.9 s | REFUSED | **22 blocks never placed**, 8.0 s (r2 8.1 s) over 2 waves | — | n/a |
+| mall / no-proliferator | 60 | 22.9 / 24.0 s | 22.8 / 24.2 s | REFUSED | **45 blocks never placed**, 13.8 s (r2 14.0 s) over 3 waves | — | n/a |
 | titanium-glass / all-products | 60 | 30.1 / 31.2 s | 31.8 / 33.3 s | REFUSED | composed; **1** cut (r1), **3** (r2), all `BUDGET` | — | n/a |
 | titanium-glass / all-products | 15 | 15.2 / 16.8 s | 15.2 / 17.1 s | REFUSED | composed; **4** cuts | — | n/a |
-| belt3 / all-products | 15 | 11.2 / 12.8 s | 11.3 / 13.0 s | REFUSED | **3 blocks never placed**, -1.5 s over 1 wave | — | n/a |
+| belt3 / all-products | 15 | 11.2 / 12.8 s | 11.3 / 13.0 s | REFUSED | **3 blocks never placed**, -1.5 s (r2 -1.6 s) over 1 wave | — | n/a |
 
 "proc" is `run_cell.py`'s own `perf_counter` around `cli.main`; "shell" is the
 `date`-to-`date` wall in `run_large.sh` and includes ~1.5 s of interpreter and
-dataset start-up. Exit 3 is the CLI's "no layout exists" code on every cell: no
-crash, no handback, no invalid blueprint anywhere in the sixteen runs.
+dataset start-up. **The "how far it got" column quotes ROUND 1**, with round 2's
+value in parentheses wherever the two differ; both rounds' full text is in the
+`-r{1,2}.log` files. Exit 3 is the CLI's "no layout exists" code on every cell:
+no crash, no handback, no invalid blueprint anywhere in the sixteen runs.
 **`area / best_known` is not computable on any cell** — nothing was emitted, so
 no `*.blueprint.txt` exists in this directory.
+
+**Validator errors by class: n/a on every cell, and not by omission.** The
+brief asks for that column; `run_cell.py` records it (`build["validation_errors"]`,
+a `Counter` over `report.errors[].check`), but it can only be recorded from a
+returned `Build`, and `pipeline.build` raises `NoValidLayout` on all sixteen
+runs. No cell ever reached `validate.certify` with a placement to convict, so
+there is no class breakdown to report — the same shape of absence as
+`nogood_skips` below. Every sidecar's `build` key is therefore absent, which is
+itself the evidence.
 
 ### 2.1 The stats the CLI does not print
 
@@ -128,8 +151,8 @@ Read by `run_cell.py`; every number below is from the `-r{1,2}.json` sidecars.
 | belt3 / all-products b15 | 9 | — | — | — | — | — | 1 | 0 | never composed |
 
 `CL` = `COMMIT_LINK`, `DA` = `DYNAMIC_ACCESS`, `SP` = `SEALED_POCKET`. Seed
-block counts are from `probe-{url}-{policy}.json` (`initial_partition` only,
-milliseconds, cap 12).
+block counts are from `probe-{url}-{policy}.json` (`initial_partition` only, at
+the shipped cap 12; 0.22-0.87 s per URL, no solve).
 
 Three provenance notes, because R6 asks for them explicitly:
 
@@ -194,21 +217,41 @@ round's wall is still divided by waves.
 because a sweep at v1's hardcoded `workers=16` would no longer measure the
 shipped default after Task 3's pipeline fix). Budget 60 s, caps 8/12/16/24, one
 build at a time in one process. Files `sweep-belt3-all-products.{json,log}` and
-`-load.txt`; partition-only probe in `probe-belt3-all-products.json`.
+`-load.txt`; partition-only probe in `probe-belt3-all-products-caps.json`
+(and `probe-belt3-caps-load.txt`).
 
-### 3.1 What the cap does to the seed partition (probe, milliseconds)
+### 3.1 What the cap does to the seed partition (probe, sub-second, no solve)
 
-| cap | blocks / cuts / strips_max / machines_max |
-| --- | --- |
-| 8 | 16 / 29 / 5 / 28 |
-| **12** (shipped) | 9 / 12 / 11 / 61 |
-| 16 | 9 / 12 / 11 / 61 |
-| 24 | 7 / 7 / 24 / 129 |
+| cap | blocks / cuts / strips_max / machines_max | `initial_partition` wall |
+| --- | --- | --- |
+| 8 | 16 / 29 / 5 / 28 | 0.322 s (first call in the process) |
+| **12** (shipped) | 9 / 12 / 11 / 61 | 0.079 s |
+| 16 | 9 / 12 / 11 / 61 | 0.083 s |
+| 24 | 7 / 7 / 24 / 129 | 0.066 s |
+
+**Provenance note, and a correction to how this table was first cited.** The
+four-cap probe originally ran into `probe-belt3-all-products.json`, and a later
+per-URL probe loop at the shipped cap 12 **overwrote that file**, leaving only
+its cap-12 row on disk. Three of the four rows above were therefore printed
+against an artifact that no longer held them. The probe was **re-run** into
+`probe-belt3-all-products-caps.json` (a distinct name that nothing else writes),
+and the table above is that re-run: **every partition row reproduces exactly**
+— 16/29/5/28, 9/12/11/61, 9/12/11/61, 7/7/24/129. The only figure that moved is
+the warm `initial_partition` wall, which an earlier draft of §4 gave as a single
+0.078 s and which the re-run measures as **0.066-0.083 s** across the three warm
+caps, against 0.322 s for the first (cold) call in the process.
 
 Compare v1's own probe at the same URL and cap: **3 blocks / 7 cuts / 7 strips /
 145 machines** at cap 12. That is Task 2's whole effect — `strip_count` now
 counts what `freeform.plan_strips` packs, the 129-machine block is 24 packed
 strips rather than 7 logical ones, and the cap bites where it never used to.
+
+One thing to reconcile before reading §3.2: the cap-24 **build** refuses naming
+`block 8`, and the cap-24 **partition** above has 7 blocks (indices 0-6). Those
+are consistent, and the reason is the re-cut loop rather than a discrepancy —
+`lay_out` rebuilds `entries` from `_recut` each round, so the indices in a
+refusal are into the GROWN list, not the seed partition. The same thing shows up
+on the shipped cap: a 9-block seed and a refusal naming blocks 7, 8 and 9.
 
 ### 3.2 What the cap does to a real build (60 s, workers None, one build per cap)
 
@@ -301,9 +344,12 @@ Per-task, with each implementer's own measurement cited as theirs:
   3 blocks -> 9 at cap 12, the 129-machine block splitting, and
   `initial_partition` costing 0.008 s -> 0.282 s. **This gate agrees** on the
   partition (§3.1: 9 blocks / 12 cuts at cap 12, against v1's 3 / 7) and on the
-  cost with a caveat: a COLD `initial_partition` here is 0.27-0.87 s depending
-  on the URL (`probe-*.json`), while a second call in the same process is
-  0.078 s. Task 2's 0.282 s is a cold call; both numbers are real and they are
+  cost with a caveat: a COLD `initial_partition` here is 0.22-0.87 s depending
+  on the URL (`probe-{url}-{policy}.json`; the extremes are
+  `titanium-glass/no-proliferator` at 0.219 s and `zurl2/all-products` at
+  0.865 s), while a later call in the same process is 0.066-0.083 s
+  (`probe-belt3-all-products-caps.json`, re-measured — see §3.1's provenance
+  note). Task 2's 0.282 s is a cold call; both numbers are real and they are
   not the same measurement.
 * **Task 3 (funding and the pool)** measured titanium-glass at `--budget 15`
   going from refusing having attempted NOTHING to placing and composing all 6
@@ -357,6 +403,12 @@ changed on this branch, so no rebuild was needed and none happened.
 Files: `baseline-round1.{jsonl,txt}`, `candidate-round1.{jsonl,txt}`, their
 `-load.txt`, `judge-round1.txt` (`judge.py`, copied from
 `../2026-09-07-hierarchical-v1/`).
+
+The lines below are **condensed from `judge-round1.txt`** — every value is
+copied from it unedited, but the moved-cell list is collapsed to its count, the
+`p95` / `total build wall` lines are merged with the run walls from the two
+`*-round1.txt` files, and the wall-safety block is reduced to its verdict line.
+Read `judge-round1.txt` for the unabridged output.
 
 ```
 commits  : baseline 826c9e3  candidate a7118ee
@@ -607,9 +659,13 @@ Two consequences of the shipped shape, unchanged from v1 and not defects:
   `sweep-belt3-all-products-load.txt`
 * `ladder_probe.py`; `ladder-belt3-all-products-cap8.{json,log}`,
   `ladder-probe-load.txt` (§3.4, the rung-by-rung re-run of the cap-8 cell)
-* `probe-belt3-all-products.json` (the cap sweep's partition probe) and
+* `probe-belt3-all-products-caps.json` + `probe-belt3-caps-load.txt` (the cap
+  sweep's four-cap partition probe, §3.1) and
   `probe-{belt3,zurl2,mall,titanium-glass}-{all-products,no-proliferator}.json`
-  (cap 12, the shipped default, for the §2.1 seed-block column)
+  (cap 12, the shipped default, for the §2.1 seed-block column). Note that
+  `probe-belt3-all-products.json` is the cap-12 member of that second set and
+  holds ONE row — see §3.1's provenance note for why the four-cap table is
+  cited to the `-caps` file instead.
 * `baseline-round1.{jsonl,txt}`, `candidate-round1.{jsonl,txt}`,
   `judge-round1.txt`, their `-load.txt`
 * `moved-{baseline,candidate}-r2.{jsonl,txt}`, `moved-cells-load.txt`
