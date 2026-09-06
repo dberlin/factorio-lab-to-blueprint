@@ -1,0 +1,19 @@
+{
+ "allocations": [],
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?o=conveyor-belt-3*1080&ibe=conveyor-belt-3&rex=P*Y*d*k*u*BN*BU*BX*Bk~Bl*Bs*CF~CG*CQ~CR&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "15",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v2/large-belt3-all-products-b15-r1.blueprint.txt"
+ ],
+ "exit": 3,
+ "packings": [],
+ "wall_s": 11.17
+}

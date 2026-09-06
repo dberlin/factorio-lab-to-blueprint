@@ -1,0 +1,32 @@
+{
+ "allocations": [
+  {
+   "flows": 26,
+   "player_fed": [],
+   "player_fed_pairs": 0
+  }
+ ],
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v2/large-titanium-glass-all-products-b60-r1.blueprint.txt"
+ ],
+ "exit": 3,
+ "packings": [
+  {
+   "gap": 2,
+   "reservation_assigned": 31,
+   "reservation_complete": true,
+   "reservation_missing": 0
+  }
+ ],
+ "wall_s": 30.09
+}

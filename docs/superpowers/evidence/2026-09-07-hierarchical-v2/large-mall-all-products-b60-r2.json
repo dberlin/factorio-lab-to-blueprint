@@ -1,0 +1,25 @@
+{
+ "allocations": [],
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v2/large-mall-all-products-b60-r2.blueprint.txt"
+ ],
+ "exit": 3,
+ "nogood_skips": 36,
+ "nogood_skips_per_round": [
+  6,
+  30
+ ],
+ "packings": [],
+ "rounds": 2,
+ "wall_s": 28.67
+}

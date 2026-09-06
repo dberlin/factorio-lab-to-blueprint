@@ -1,0 +1,172 @@
+{
+ "groups": 33,
+ "machines": 449,
+ "policy": "all-products",
+ "probe": true,
+ "rows": [
+  {
+   "block_detail": [
+    {
+     "machines": 6,
+     "recipes": [
+      "titanium-ingot"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 37,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 7
+    },
+    {
+     "machines": 37,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 7
+    },
+    {
+     "machines": 25,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 25,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 25,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 21,
+     "recipes": [
+      "gear"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 21,
+     "recipes": [
+      "high-purity-silicon"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 10,
+     "recipes": [
+      "graphene-advanced"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 35,
+     "recipes": [
+      "carbon-nanotube",
+      "frame-material",
+      "steel",
+      "titanium-alloy"
+     ],
+     "strips": 7
+    },
+    {
+     "machines": 6,
+     "recipes": [
+      "glass"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 11,
+     "recipes": [
+      "energetic-graphite"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 24,
+     "recipes": [
+      "copper-ingot"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 6,
+     "recipes": [
+      "conveyor-belt-3",
+      "miniature-particle-collider",
+      "ray-receiver",
+      "sorter-4"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 20,
+     "recipes": [
+      "super-magnetic-ring"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 8,
+     "recipes": [
+      "sorter-1",
+      "sorter-2",
+      "sorter-3"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 47,
+     "recipes": [
+      "electric-motor"
+     ],
+     "strips": 8
+    },
+    {
+     "machines": 53,
+     "recipes": [
+      "conveyor-belt-1",
+      "conveyor-belt-2",
+      "electromagnetic-turbine",
+      "magnetic-coil"
+     ],
+     "strips": 11
+    },
+    {
+     "machines": 32,
+     "recipes": [
+      "circuit-board",
+      "logistics-distributor",
+      "microcrystalline-component",
+      "photon-combiner",
+      "plasma-exciter",
+      "prism",
+      "processor"
+     ],
+     "strips": 10
+    }
+   ],
+   "blocks": 19,
+   "cap": 12,
+   "cuts": 49,
+   "machines_max": 53,
+   "partition_wall_s": 0.848,
+   "policy": "all-products",
+   "strips_max": 11,
+   "url": "mall"
+  }
+ ],
+ "url": "mall",
+ "workers": null
+}

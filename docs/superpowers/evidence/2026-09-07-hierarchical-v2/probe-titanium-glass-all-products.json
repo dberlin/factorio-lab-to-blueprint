@@ -1,0 +1,67 @@
+{
+ "groups": 9,
+ "machines": 116,
+ "policy": "all-products",
+ "probe": true,
+ "rows": [
+  {
+   "block_detail": [
+    {
+     "machines": 14,
+     "recipes": [
+      "high-purity-silicon",
+      "microcrystalline-component"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 18,
+     "recipes": [
+      "glass"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 28,
+     "recipes": [
+      "titanium-glass"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 3,
+     "recipes": [
+      "circuit-board"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 13,
+     "recipes": [
+      "casimir-crystal-advanced",
+      "graphene-advanced"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 40,
+     "recipes": [
+      "plane-filter",
+      "processor"
+     ],
+     "strips": 8
+    }
+   ],
+   "blocks": 6,
+   "cap": 12,
+   "cuts": 5,
+   "machines_max": 40,
+   "partition_wall_s": 0.272,
+   "policy": "all-products",
+   "strips_max": 8,
+   "url": "titanium-glass"
+  }
+ ],
+ "url": "titanium-glass",
+ "workers": null
+}

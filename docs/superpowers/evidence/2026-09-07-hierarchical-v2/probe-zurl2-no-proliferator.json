@@ -1,0 +1,236 @@
+{
+ "groups": 32,
+ "machines": 868,
+ "policy": "no-proliferator",
+ "probe": true,
+ "rows": [
+  {
+   "block_detail": [
+    {
+     "machines": 37,
+     "recipes": [
+      "titanium-ingot"
+     ],
+     "strips": 7
+    },
+    {
+     "machines": 1,
+     "recipes": [
+      "stone-brick"
+     ],
+     "strips": 1
+    },
+    {
+     "machines": 54,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 9
+    },
+    {
+     "machines": 54,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 9
+    },
+    {
+     "machines": 55,
+     "recipes": [
+      "magnet"
+     ],
+     "strips": 10
+    },
+    {
+     "machines": 27,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 28,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 28,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 27,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 28,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 28,
+     "recipes": [
+      "iron-ingot"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 49,
+     "recipes": [
+      "gear"
+     ],
+     "strips": 9
+    },
+    {
+     "machines": 34,
+     "recipes": [
+      "steel",
+      "titanium-alloy"
+     ],
+     "strips": 6
+    },
+    {
+     "machines": 15,
+     "recipes": [
+      "high-purity-silicon"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 23,
+     "recipes": [
+      "graphene-advanced"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 14,
+     "recipes": [
+      "casimir-crystal",
+      "titanium-crystal"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 7,
+     "recipes": [
+      "glass"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 30,
+     "recipes": [
+      "plane-filter",
+      "titanium-glass"
+     ],
+     "strips": 6
+    },
+    {
+     "machines": 16,
+     "recipes": [
+      "energetic-graphite"
+     ],
+     "strips": 3
+    },
+    {
+     "machines": 47,
+     "recipes": [
+      "copper-ingot"
+     ],
+     "strips": 8
+    },
+    {
+     "machines": 43,
+     "recipes": [
+      "magnetic-coil"
+     ],
+     "strips": 8
+    },
+    {
+     "machines": 43,
+     "recipes": [
+      "electric-motor"
+     ],
+     "strips": 8
+    },
+    {
+     "machines": 43,
+     "recipes": [
+      "electric-motor"
+     ],
+     "strips": 8
+    },
+    {
+     "machines": 43,
+     "recipes": [
+      "electromagnetic-turbine"
+     ],
+     "strips": 8
+    },
+    {
+     "machines": 23,
+     "recipes": [
+      "super-magnetic-ring"
+     ],
+     "strips": 4
+    },
+    {
+     "machines": 12,
+     "recipes": [
+      "conveyor-belt-1",
+      "conveyor-belt-2"
+     ],
+     "strips": 2
+    },
+    {
+     "machines": 17,
+     "recipes": [
+      "arc-smelter",
+      "circuit-board",
+      "microcrystalline-component",
+      "processor",
+      "quantum-chip"
+     ],
+     "strips": 5
+    },
+    {
+     "machines": 32,
+     "recipes": [
+      "carbon-nanotube",
+      "frame-material",
+      "plane-smelter"
+     ],
+     "strips": 7
+    },
+    {
+     "machines": 10,
+     "recipes": [
+      "advanced-mining-machine",
+      "conveyor-belt-3"
+     ],
+     "strips": 2
+    }
+   ],
+   "blocks": 29,
+   "cap": 12,
+   "cuts": 78,
+   "machines_max": 55,
+   "partition_wall_s": 0.459,
+   "policy": "no-proliferator",
+   "strips_max": 10,
+   "url": "zurl2"
+  }
+ ],
+ "url": "zurl2",
+ "workers": null
+}
