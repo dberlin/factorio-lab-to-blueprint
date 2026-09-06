@@ -1,0 +1,68 @@
+         48638371 function calls (45622009 primitive calls) in 22.901 seconds
+
+   Ordered by: internal time
+   List reduced from 1522 to 60 due to restriction <60>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      693    1.567    0.002    2.580    0.004 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:8098(_astar)
+4494497/1495328    1.415    0.000    2.316    0.000 {built-in method builtins.hash}
+  3621102    0.647    0.000    1.005    0.000 {method 'get' of 'dict' objects}
+        4    0.643    0.161    3.027    0.757 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:15044(_power_plan)
+     8004    0.578    0.000    3.957    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_kernel.py:149(score_state)
+    62278    0.543    0.000    1.029    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1782(_replace)
+   730703    0.522    0.000    0.852    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:151(variant)
+   440220    0.500    0.000    0.800    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:277(<genexpr>)
+3974394/3974389    0.440    0.000    0.440    0.000 {built-in method builtins.len}
+  1715026    0.416    0.000    0.620    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_solver.py:4795(deadline_reached)
+      240    0.415    0.002    2.222    0.009 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/global_router.py:503(_search_relaxed)
+     2085    0.386    0.000    2.526    0.001 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:3306(_direct_net_candidates)
+  1528021    0.347    0.000    0.498    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:147(size)
+     8004    0.344    0.000    1.365    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:267(__post_init__)
+        8    0.272    0.034    0.758    0.095 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/dsp/colliders.py:1742(_belt_overlap_candidates)
+   239430    0.271    0.000    1.594    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/global_router.py:79(present_cost)
+     4075    0.265    0.000    0.361    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:5782(junction_is_clear)
+86126/84966    0.261    0.000    0.539    0.000 {built-in method builtins.min}
+   256256    0.233    0.000    0.499    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:1160(_validate_direct_target)
+   479898    0.229    0.000    1.252    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/global_router.py:83(<genexpr>)
+   190386    0.215    0.000    0.410    0.000 <string>:18(__eq__)
+180335/178163    0.210    0.000    0.343    0.000 {built-in method builtins.max}
+  1506384    0.208    0.000    0.208    0.000 {built-in method builtins.getattr}
+  1296648    0.206    0.000    0.206    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:280(<genexpr>)
+  1717653    0.204    0.000    0.204    0.000 {built-in method time.monotonic}
+   790152    0.203    0.000    0.308    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/enum.py:1300(__hash__)
+   146141    0.202    0.000    0.307    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/dsp/colliders.py:1418(sphere_box_overlap)
+  1359555    0.199    0.000    0.199    0.000 {method 'append' of 'list' objects}
+      578    0.195    0.000    0.516    0.001 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/finalize.py:858(first_projected_static_failure)
+     2111    0.186    0.000    0.370    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/dsp/colliders.py:1064(collisions)
+   526711    0.184    0.000    0.630    0.000 <string>:45(__hash__)
+        8    0.171    0.021    0.659    0.082 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/finalize.py:2968(__init__)
+   570256    0.167    0.000    0.247    0.000 <string>:39(__hash__)
+    15459    0.165    0.000    0.356    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:40(validate)
+   153433    0.160    0.000    0.221    0.000 {built-in method builtins.sorted}
+       32    0.155    0.005    0.339    0.011 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/finalize.py:3089(_ordered_coordinates)
+   850245    0.153    0.000    0.153    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:46(<genexpr>)
+  1220680    0.150    0.000    0.150    0.000 {built-in method builtins.divmod}
+   941954    0.138    0.000    0.200    0.000 {built-in method builtins.isinstance}
+   192936    0.132    0.000    0.154    0.000 <string>:15(__eq__)
+       19    0.130    0.007    0.429    0.023 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:14196(_junction_projection_frames)
+        8    0.129    0.016    0.181    0.023 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/dsp/colliders.py:1810(_reverse_input_choices)
+    49251    0.128    0.000    0.320    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:12395(<genexpr>)
+   310218    0.121    0.000    1.092    0.000 <string>:32(__hash__)
+      254    0.120    0.000    0.241    0.001 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:13040(_tap_source)
+   748078    0.116    0.000    0.116    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/dsp/catalog.py:234(is_belt)
+   329904    0.114    0.000    0.114    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/slots.py:327(rank)
+        8    0.113    0.014    2.435    0.304 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:12104(_commit_paths)
+   602994    0.108    0.000    0.117    0.000 {method 'add' of 'set' objects}
+     2082    0.108    0.000    0.803    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_solver.py:3730(_selected_strips)
+    12479    0.104    0.000    0.507    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:188(_validate_variant_indices)
+      264    0.102    0.000    0.120    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:12602(_splitter_successors)
+     2085    0.101    0.000    0.201    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:3868(_nets_between)
+873492/872982    0.100    0.000    0.100    0.000 {built-in method builtins.abs}
+    10664    0.098    0.000    0.516    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/slots.py:353(attachment)
+   154120    0.098    0.000    0.134    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:5805(free)
+      481    0.094    0.000    1.901    0.004 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:8907(_merge_frontier)
+   310406    0.091    0.000    0.208    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/finalize.py:3348(_poll)
+   440220    0.089    0.000    0.089    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_pair.py:275(<genexpr>)
+   127002    0.086    0.000    0.138    0.000 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/freeform.py:3207(_direct_candidate_key)
+
+

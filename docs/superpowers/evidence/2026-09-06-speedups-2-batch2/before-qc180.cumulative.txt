@@ -1,0 +1,68 @@
+         454757 function calls (454549 primitive calls) in 27.237 seconds
+
+   Ordered by: cumulative time
+   List reduced from 674 to 60 due to restriction <60>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        7    0.000    0.000   27.944    3.992 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/process.py:149(join)
+        1    0.001    0.001   27.237   27.237 /tmp/speedups-2-batch2-baseline/src/flab2bp/layout/sequence_solver.py:6294(lay_out)
+        1    0.000    0.000   27.219   27.219 /tmp/speedups-2-batch2-baseline/src/flab2bp/layout/sequence_islands.py:272(run_sequence_islands)
+        1    0.000    0.000   27.216   27.216 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:955(shutdown)
+      2/1    0.000    0.000   27.214   27.214 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/threading.py:1097(join)
+      2/1    0.000    0.000   27.214   27.214 {method 'join' of '_thread._ThreadHandle' objects}
+      2/1    0.000    0.000   27.213   27.213 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/threading.py:1030(_bootstrap)
+      2/1    0.000    0.000   27.213   27.213 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/threading.py:1065(_bootstrap_inner)
+      2/1    0.000    0.000   27.213   27.213 {method 'run' of '_contextvars.Context' objects}
+        1    0.000    0.000   27.213   27.213 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:353(run)
+        1    0.000    0.000   27.213   27.213 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:644(join_executor_internals)
+        1    0.000    0.000   27.213   27.213 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:648(_join_executor_internals)
+       14    0.000    0.000   26.510    1.894 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/util.py:276(__call__)
+        1    0.000    0.000   26.509   26.509 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/queues.py:145(join_thread)
+        1    0.000    0.000   26.509   26.509 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/queues.py:212(_finalize_join)
+        7    0.000    0.000   25.534    3.648 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:495(wait_result_broken_or_wakeup)
+       18    0.000    0.000   25.200    1.400 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/connection.py:1176(wait)
+       18    0.000    0.000   25.199    1.400 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/selectors.py:385(select)
+       18   25.199    1.400   25.199    1.400 {method 'poll' of 'select.poll' objects}
+       28    0.000    0.000    1.671    0.060 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/popen_fork.py:25(poll)
+        7    0.000    0.000    1.670    0.239 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/popen_fork.py:37(wait)
+       28    1.670    0.060    1.670    0.060 {built-in method posix.waitpid}
+        4    0.000    0.000    0.333    0.083 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/connection.py:256(recv)
+        4    0.022    0.006    0.332    0.083 {built-in method _pickle.loads}
+    13683    0.124    0.000    0.294    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1255(_dataclass_setstate)
+    13705    0.105    0.000    0.170    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1454(fields)
+   355779    0.058    0.000    0.058    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1469(<genexpr>)
+     22/4    0.000    0.000    0.019    0.005 <frozen importlib._bootstrap>:1360(_find_and_load)
+     22/4    0.000    0.000    0.019    0.005 <frozen importlib._bootstrap>:1308(_find_and_load_unlocked)
+     21/4    0.000    0.000    0.019    0.005 <frozen importlib._bootstrap>:914(_load_unlocked)
+     16/4    0.000    0.000    0.019    0.005 <frozen importlib._bootstrap_external>:753(exec_module)
+     53/8    0.000    0.000    0.018    0.002 <frozen importlib._bootstrap>:483(_call_with_frames_removed)
+     25/4    0.004    0.000    0.018    0.004 {built-in method builtins.exec}
+        1    0.000    0.000    0.017    0.017 /tmp/speedups-2-batch2-baseline/src/flab2bp/layout/sequence_islands.py:1(<module>)
+     7601    0.013    0.000    0.017    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/fractions.py:206(__new__)
+        7    0.000    0.000    0.009    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:272(_spawn_worker)
+    34/21    0.000    0.000    0.009    0.000 <frozen importlib._bootstrap>:1409(_handle_fromlist)
+        7    0.000    0.000    0.008    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/process.py:110(start)
+        7    0.000    0.000    0.008    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/context.py:291(_Popen)
+        8    0.000    0.000    0.007    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1440(wrap)
+        8    0.000    0.000    0.007    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:986(_process_class)
+        7    0.000    0.000    0.007    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/popen_spawn_posix.py:30(__init__)
+     10/4    0.000    0.000    0.007    0.002 {built-in method builtins.__import__}
+        1    0.000    0.000    0.006    0.006 /tmp/speedups-2-batch2-baseline/src/flab2bp/layout/strategy_race.py:1(<module>)
+        7    0.000    0.000    0.006    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/popen_fork.py:16(__init__)
+        7    0.000    0.000    0.005    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/popen_spawn_posix.py:38(_launch)
+        1    0.000    0.000    0.005    0.005 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/__init__.py:1(<module>)
+        4    0.000    0.000    0.005    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:855(_adjust_process_count)
+        4    0.000    0.000    0.005    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:888(_spawn_process)
+        1    0.000    0.000    0.005    0.005 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/context.py:1(<module>)
+        4    0.000    0.000    0.004    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:894(submit)
+        8    0.000    0.000    0.004    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:478(add_fns_to_class)
+        8    0.000    0.000    0.004    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/util.py:518(spawnv_passfds)
+        8    0.004    0.000    0.004    0.000 {built-in method _posixsubprocess.fork_exec}
+        1    0.000    0.000    0.004    0.004 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/reduction.py:1(<module>)
+       16    0.000    0.000    0.004    0.000 <frozen importlib._bootstrap_external>:826(get_code)
+        4    0.000    0.000    0.004    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:407(_replace_dead_worker)
+    13738    0.003    0.000    0.003    0.000 {method 'values' of 'dict' objects}
+        1    0.000    0.000    0.003    0.003 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:734(__init__)
+        1    0.000    0.000    0.003    0.003 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/socket.py:1(<module>)
+
+

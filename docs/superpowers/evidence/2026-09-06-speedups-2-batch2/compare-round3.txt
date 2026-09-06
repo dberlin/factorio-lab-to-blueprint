@@ -1,0 +1,3 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/.venv` and will be ignored; use `--active` to target the active environment instead[0m
+clean 72  refused 0  invalid 0  crashed 0  paired 71  area ratio 0.9951  p95 32.0s
+PASS

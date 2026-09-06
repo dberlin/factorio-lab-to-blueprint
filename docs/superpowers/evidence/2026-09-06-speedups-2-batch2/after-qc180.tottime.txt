@@ -1,0 +1,68 @@
+         454766 function calls (454558 primitive calls) in 31.769 seconds
+
+   Ordered by: internal time
+   List reduced from 674 to 60 due to restriction <60>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       18   30.312    1.684   30.312    1.684 {method 'poll' of 'select.poll' objects}
+       28    1.141    0.041    1.141    0.041 {built-in method posix.waitpid}
+    13684    0.098    0.000    0.248    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1255(_dataclass_setstate)
+    13706    0.091    0.000    0.150    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1454(fields)
+   355784    0.053    0.000    0.053    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1469(<genexpr>)
+        4    0.018    0.005    0.279    0.070 {built-in method _pickle.loads}
+     7601    0.010    0.000    0.013    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/fractions.py:206(__new__)
+        8    0.004    0.001    0.004    0.001 {built-in method _posixsubprocess.fork_exec}
+     25/4    0.004    0.000    0.017    0.004 {built-in method builtins.exec}
+    13739    0.003    0.000    0.003    0.000 {method 'values' of 'dict' objects}
+    14497    0.003    0.000    0.003    0.000 {built-in method builtins.getattr}
+       16    0.002    0.000    0.002    0.000 {built-in method marshal.loads}
+     7754    0.002    0.000    0.002    0.000 {built-in method __new__ of type object at 0x15a0bc0}
+     7601    0.001    0.000    0.001    0.000 {built-in method math.gcd}
+       21    0.001    0.000    0.002    0.000 {method 'dump' of '_pickle.Pickler' objects}
+        1    0.001    0.001   31.769   31.769 /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/src/flab2bp/layout/sequence_solver.py:6327(lay_out)
+       72    0.001    0.000    0.001    0.000 {built-in method builtins.__build_class__}
+       16    0.001    0.000    0.001    0.000 {method 'read' of '_io.BufferedReader' objects}
+        6    0.001    0.000    0.001    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:1338(_add_slots)
+       26    0.001    0.000    0.001    0.000 {built-in method posix.read}
+        8    0.000    0.000    0.007    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:986(_process_class)
+       69    0.000    0.000    0.000    0.000 {built-in method posix.stat}
+        4    0.000    0.000    0.002    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/enum.py:881(_convert_)
+        4    0.000    0.000    0.001    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/enum.py:1741(convert_class)
+       26    0.000    0.000    0.000    0.000 {method 'write' of '_io.BytesIO' objects}
+      180    0.000    0.000    0.001    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:766(_is_type)
+        7    0.000    0.000   32.377    4.625 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/process.py:149(join)
+      2/1    0.000    0.000   31.745   31.745 {method 'join' of '_thread._ThreadHandle' objects}
+      2/1    0.000    0.000   31.745   31.745 {method 'run' of '_contextvars.Context' objects}
+       16    0.000    0.000    0.000    0.000 {built-in method _io.open_code}
+     1357    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
+        4    0.000    0.000    0.000    0.000 {built-in method _imp.exec_builtin}
+       32    0.000    0.000    0.001    0.000 <frozen importlib._bootstrap_external>:1357(find_spec)
+     1682    0.000    0.000    0.000    0.000 {method 'isupper' of 'str' objects}
+       60    0.000    0.000    0.001    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:825(_get_field)
+        5    0.000    0.000    0.002    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/synchronize.py:49(__init__)
+        7    0.000    0.000    0.006    0.001 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/popen_spawn_posix.py:38(_launch)
+       21    0.000    0.000    0.000    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/reduction.py:38(__init__)
+       18    0.000    0.000   30.313    1.684 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/connection.py:1176(wait)
+       51    0.000    0.000    0.000    0.000 {built-in method posix.close}
+     1627    0.000    0.000    0.000    0.000 {method 'startswith' of 'str' objects}
+       22    0.000    0.000    0.002    0.000 <frozen importlib._bootstrap>:1243(_find_spec)
+        2    0.000    0.000    0.000    0.000 {built-in method _thread.start_joinable_thread}
+      177    0.000    0.000    0.000    0.000 <frozen importlib._bootstrap_external>:131(_path_join)
+      364    0.000    0.000    0.000    0.000 {method 'join' of 'str' objects}
+      421    0.000    0.000    0.000    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/socket.py:91(<lambda>)
+        1    0.000    0.000   31.748   31.748 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:955(shutdown)
+      422    0.000    0.000    0.000    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/socket.py:96(<lambda>)
+      419    0.000    0.000    0.000    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/socket.py:81(<lambda>)
+      420    0.000    0.000    0.000    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/socket.py:86(<lambda>)
+    47/19    0.000    0.000    0.000    0.000 {method 'acquire' of '_thread.lock' objects}
+       26    0.000    0.000    0.000    0.000 {built-in method posix.pipe}
+       14    0.000    0.000   31.520    2.251 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/util.py:276(__call__)
+      180    0.000    0.000    0.000    0.000 {method 'match' of 're.Pattern' objects}
+       35    0.000    0.000    0.000    0.000 <frozen importlib._bootstrap>:304(acquire)
+      693    0.000    0.000    0.000    0.000 {method 'get' of 'dict' objects}
+       29    0.000    0.000    0.000    0.000 {built-in method posix.write}
+       28    0.000    0.000    1.142    0.041 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/multiprocessing/popen_fork.py:25(poll)
+        7    0.000    0.000   30.593    4.370 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py:495(wait_result_broken_or_wakeup)
+        8    0.000    0.000    0.004    0.000 /home/dannyb/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/lib/python3.14/dataclasses.py:478(add_fns_to_class)
+
+

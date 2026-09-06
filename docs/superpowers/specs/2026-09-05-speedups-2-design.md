@@ -12,7 +12,27 @@ corpus (the design's -13.6 % was four large cells; 16 of 36 corpus cells are
 byte-identical), freeform unchanged.  §2's fourth gate item, peak RSS per
 cell, is UNMET: nothing writes an RSS key for the non-raced sequence-pair arm.
 Gate record: `docs/superpowers/evidence/2026-09-05-speedups-2/gate.md`.
-L3 (second batch) is next and unstarted.
+
+**Status (2026-09-06): §2's second batch — L3 — is implemented and GATED
+(PASS).**  `2cf583b` (memoize `_direct_alignment_targets` on the candidate
+mapping's read set) and `ef3da8f` (memoize `_direct_net_candidates` per strip
+pair, adapted spec pinned by identity), with the drift guard closed in
+`ef2207a`.  Three paired 30 s corpus rounds against master `79eed92`: **zero
+regressions, INVALID 0, CRASH 0, max `wall_overshoot_s` 0.000 s**, sequence-pair
+area **-0.15 %** and freeform **-0.27 %**, both inside the baseline tree's own
++0.65 % round-to-round noise; the single differing cell
+(`sequence-pair universe-matrix/all-products`) is a load flake that six
+dedicated re-runs clear on both trees.  The memoized functions are 60-72 %
+cheaper per call and the mall completes a second pass inside the same 60 s
+budget, but the design's headline — 55-67 % of the sequence-pair search — was
+measured at `a232f0a` and **no longer held at `79eed92`**: the first batch had
+already taken it, leaving the pre-pass at ~10 % of a qc180 run, so the corpus
+area is flat.  The brief's `DirectInsertTarget` copy path was NOT implemented
+(0.12 s of a 23 s run at HEAD, measured); the lever moved to
+`_direct_net_candidates` instead.  Next lever named by the measurement:
+`_selected_strips` (`sequence_solver.py:3730`), 9.56 s cumulative on the mall.
+Gate record: `docs/superpowers/evidence/2026-09-06-speedups-2-batch2/gate.md`.
+L4 + L5 (third batch) are next and unstarted.
 
 Evidence: `docs/superpowers/evidence/2026-09-05-speedups-2/README.md`
 (measurements, cProfile dumps, core traces, two prototypes).  Baseline is

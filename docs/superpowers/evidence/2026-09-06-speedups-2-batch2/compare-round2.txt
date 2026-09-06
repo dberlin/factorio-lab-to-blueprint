@@ -1,0 +1,4 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/.venv` and will be ignored; use `--active` to target the active environment instead[0m
+clean 71  refused 1  invalid 0  crashed 0  paired 71  area ratio 0.9985  p95 31.5s
+  FAIL REFUSED: sequence-pair universe-matrix/all-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout
+FAIL

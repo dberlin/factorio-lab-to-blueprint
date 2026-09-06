@@ -1,0 +1,102 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/speedups-2-batch2/.venv` and will be ignored; use `--active` to target the active environment instead[0m
+baseline : baseline-79eed92-round1.jsonl  (72 cells)
+candidate: candidate-round1.jsonl  (72 cells)
+commits  : baseline 79eed92  candidate ef2207a
+
+status counts
+  status      baseline  candidate
+  CLEAN             71         72
+  REFUSED            1          0
+
+status counts per arm
+  freeform       CLEAN 36->36
+  sequence-pair  CLEAN 35->36  REFUSED 1->0
+
+CLEAN in baseline, not CLEAN in candidate: 0
+
+not CLEAN in baseline, CLEAN in candidate: 1
+  sequence-pair universe-matrix [1/all-products]: REFUSED ->  all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an
+
+INVALID/CRASH rows in candidate: 0
+INVALID/CRASH rows in baseline: 0
+
+cells CLEAN in both: 71
+geometric-mean area ratio (candidate/baseline)
+  all            cells  71  gmean area ratio 1.00010  (+0.01 %)  moved 4
+  freeform       cells  36  gmean area ratio 1.00060  (+0.06 %)  moved 2
+  sequence-pair  cells  35  gmean area ratio 0.99958  (-0.04 %)  moved 2
+cells whose area moved at all: 4
+  0.9667  sequence-pair quantum-chip [1/all-products]  3300 -> 3190
+  1.0278  freeform super-magnetic-ring [0/no-proliferator]  2088 -> 2146
+  1.0192  sequence-pair universe-matrix [2/output-products]  16032 -> 16340
+  0.9944  freeform super-magnetic-ring [2/output-products]  2132 -> 2120
+
+p95 build wall: baseline 31.10 s  candidate 32.95 s
+total build wall: baseline 1418.9 s  candidate 1447.7 s
+
+wall_overshoot_s (already net of each cell's allowance)
+  baseline   rows carrying it  71  max 0.000 s  over-allowance 0
+  candidate  rows carrying it  72  max 0.000 s  over-allowance 0
+
+islands (sequence-pair arm)
+  baseline   sequence-pair rows 36  carrying island stats 35
+    islands_requested {4: 35}
+    islands_completed {4: 35}
+    islands_refused   {0: 34, 1: 1}
+    winner_island_id  {0: 20, 1: 6, 2: 6, 3: 3}
+  candidate  sequence-pair rows 36  carrying island stats 36
+    islands_requested {4: 36}
+    islands_completed {4: 36}
+    islands_refused   {0: 34, 1: 1, 2: 1}
+    winner_island_id  {0: 20, 1: 6, 2: 7, 3: 3}
+
+compact seed (sequence-pair arm)
+  baseline   rows carrying compact_seed_status 20 of 36
+    status {'cancelled': 1, 'feasible': 2, 'optimal': 13, 'unknown': 4}
+    compact_seed_wall_time_s  n 20  max 2.51  median 0.12  mean 0.78
+  candidate  rows carrying compact_seed_status 21 of 36
+    status {'feasible': 4, 'optimal': 13, 'unknown': 4}
+    compact_seed_wall_time_s  n 21  max 2.50  median 0.20  mean 0.88
+
+per sequence-pair cell: status, area, wall, islands, compact seed
+  cell                                           base     cand      base area  cand area  cand wall     isl       seed  seed s
+  casimir-crystal [0/no-proliferator]            CLEAN    CLEAN          1092       1092      31.22   4/4/0    unknown    2.38
+  casimir-crystal [1/all-products]               CLEAN    CLEAN          1100       1100      28.87   4/4/0    optimal    0.11
+  casimir-crystal [2/output-products]            CLEAN    CLEAN          1100       1100      29.62   4/4/0    unknown    2.34
+  electromagnetic-matrix [0/no-proliferator]     CLEAN    CLEAN           504        504      31.03   4/4/0          -       -
+  electromagnetic-matrix [1/all-products]        CLEAN    CLEAN           841        841      29.63   4/4/0    optimal    0.24
+  electromagnetic-matrix [2/output-products]     CLEAN    CLEAN           576        576      30.02   4/4/0    unknown    1.60
+  energy-matrix [0/no-proliferator]              CLEAN    CLEAN           504        504      31.27   4/4/0    unknown    1.62
+  energy-matrix [1/all-products]                 CLEAN    CLEAN           756        756      30.62   4/4/0    optimal    0.01
+  energy-matrix [2/output-products]              CLEAN    CLEAN           572        572      30.84   4/4/0          -       -
+  graphene [0/no-proliferator]                   CLEAN    CLEAN           363        363      26.66   4/4/0    optimal    0.11
+  graphene [1/all-products]                      CLEAN    CLEAN           518        518      30.67   4/4/0    optimal    0.01
+  graphene [2/output-products]                   CLEAN    CLEAN           420        420      30.92   4/4/0          -       -
+  information-matrix [0/no-proliferator]         CLEAN    CLEAN          4560       4560      29.16   4/4/0          -       -
+  information-matrix [1/all-products]            CLEAN    CLEAN          3944       3944      27.43   4/4/0          -       -
+  information-matrix [2/output-products]         CLEAN    CLEAN          4905       4905      27.91   4/4/1          -       -
+  iron-ingot [0/no-proliferator]                 CLEAN    CLEAN            63         63       9.95   4/4/0    optimal    0.01
+  iron-ingot [1/all-products]                    CLEAN    CLEAN           104        104      22.45   4/4/0    optimal    0.00
+  iron-ingot [2/output-products]                 CLEAN    CLEAN           104        104      22.70   4/4/0    optimal    0.01
+  magnetic-coil [0/no-proliferator]              CLEAN    CLEAN           230        230      20.80   4/4/0    optimal    0.23
+  magnetic-coil [1/all-products]                 CLEAN    CLEAN           342        342      30.87   4/4/0    optimal    0.02
+  magnetic-coil [2/output-products]              CLEAN    CLEAN           299        299      31.12   4/4/0          -       -
+  plastic [0/no-proliferator]                    CLEAN    CLEAN           684        684      31.46   4/4/0   feasible    2.14
+  plastic [1/all-products]                       CLEAN    CLEAN           850        850      29.37   4/4/0    optimal    0.02
+  plastic [2/output-products]                    CLEAN    CLEAN           800        800      30.02   4/4/0    optimal    0.02
+  processor [0/no-proliferator]                  CLEAN    CLEAN           810        810      31.00   4/4/0          -       -
+  processor [1/all-products]                     CLEAN    CLEAN           918        918      28.67   4/4/0    optimal    0.20
+  processor [2/output-products]                  CLEAN    CLEAN           810        810      30.71   4/4/0          -       -
+  quantum-chip [0/no-proliferator]               CLEAN    CLEAN          3692       3692      29.48   4/4/0          -       -
+  quantum-chip [1/all-products]                  CLEAN    CLEAN          3300       3190      25.89   4/4/0          -       -
+  quantum-chip [2/output-products]               CLEAN    CLEAN          3280       3280      29.88   4/4/0          -       -
+  super-magnetic-ring [0/no-proliferator]        CLEAN    CLEAN          2294       2294      28.96   4/4/0          -       -
+  super-magnetic-ring [1/all-products]           CLEAN    CLEAN          1886       1886      29.50   4/4/0          -       -
+  super-magnetic-ring [2/output-products]        CLEAN    CLEAN          2016       2016      28.91   4/4/0          -       -
+  universe-matrix [0/no-proliferator]            CLEAN    CLEAN         17836      17836      33.59   4/4/0   feasible    2.50
+  universe-matrix [1/all-products]               REFUSED  CLEAN             0      31317      33.16   4/4/2   feasible    2.50
+  universe-matrix [2/output-products]            CLEAN    CLEAN         16032      16340      32.95   4/4/0   feasible    2.50
+
+peak RSS
+  no *rss* key in either file: audit.py records none for the explicit
+  sequence-pair arm (strategy_race._peak_rss_kib covers RACED children only)
