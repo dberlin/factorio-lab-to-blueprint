@@ -120,10 +120,12 @@ def test_ring_evicts_oldest_on_the_frame_bound_and_counts_it() -> None:
 
 
 def test_ring_evicts_oldest_on_the_byte_bound_and_counts_it() -> None:
-    ring = TraceRing(max_frames=1000, max_bytes=200)
+    # Each frame with 3 rows of 10 numbers costs 3*80+512 = 752 bytes.
+    # max_bytes=2500 retains roughly 3 frames, making eviction order observable.
+    ring = TraceRing(max_frames=1000, max_bytes=2500)
     for seq in range(20):
         ring.append({"seq": seq, "buildings": [[0] * 10] * 3})
     frames, _ = ring.since(-1, limit=100)
-    assert ring.dropped > 0
-    assert len(frames) < 20
-    assert [f["seq"] for f in frames] == sorted(f["seq"] for f in frames)
+    # Oldest frames (0-16) are evicted, newest (17-19) survive.
+    assert [f["seq"] for f in frames] == [17, 18, 19]
+    assert ring.dropped == 17
