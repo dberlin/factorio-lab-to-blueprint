@@ -23,6 +23,8 @@ neighbour's build collider, and :data:`BAND_MAX_ROWS`, because
 
 from __future__ import annotations
 
+import bisect
+import time
 from dataclasses import dataclass, replace
 
 from flab2bp.dsp import catalog
@@ -30,12 +32,14 @@ from flab2bp.layout import junction, slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.freeform import (
     CoaterSupplyPort,
+    PortAccessEvidence,
     _Canvas,
     _collision_pose,
     _lane_stacks_for,
     _Net,
     _Port,
     _port_access_inventory,
+    _PreparationDeadline,
     _reserve_port_access,
     _reserve_staged_coater_belt_ban,
     _route_all,
@@ -44,7 +48,7 @@ from flab2bp.layout.freeform import (
     _StagedCoater,
 )
 from flab2bp.layout.hierarchy.contracts import LaneFlow
-from flab2bp.layout.route_feedback import NetId, NetRole
+from flab2bp.layout.route_feedback import DetailedRouteStatus, NetId, NetRole
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
 
@@ -428,6 +432,29 @@ def _machines_behind(buildings: list[PlacedBuilding], block: BlockPlaced, index:
     )
 
 
+def _block_of(blocks: list[BlockPlaced], index: int) -> int:
+    """Which block a composed building index belongs to.
+
+    ``blocks`` is built in packing order and each ``base`` is the running length
+    of the composed list, so the bases ascend and the owning block is the last
+    one that starts at or before ``index``.
+    """
+    return max(0, bisect.bisect_right([block.base for block in blocks], index) - 1)
+
+
+def _corridor_evidence(evidence: PortAccessEvidence | None) -> str:
+    """The counts that explain one unserved port claim, in one clause.
+
+    ``options == 1`` is the signature of a middle lane head and is not a
+    matching failure at all -- there was nothing to match; the same reading
+    ``StrandedPort.options`` documents.  An unmatched demand can also carry no
+    evidence, when nothing about it was enumerated.
+    """
+    if evidence is None:
+        return "no candidate corridor"
+    return f"held={evidence.held} wants={evidence.wanted} options={evidence.local_options}"
+
+
 def compose(
     placements: list[Placement],
     flows: list[LaneFlow],
@@ -489,17 +516,61 @@ def compose(
     # net's path takes the last one and every later net using that port is
     # handed an empty start set -- a search that expands nothing and so
     # registers no congestion for the negotiation to price.
-    _reserve_port_access(canvas, _port_access_inventory(nets).demands, bounds=bounds)
+    #
+    # UNDER THE SAME CLOCK AS THE ROUTE.  The reservation enumerates corridors
+    # per demand and re-probes reachability inside the matcher, which on an
+    # interface-sized net list is seconds of work, not a preamble -- so run it
+    # unbounded and a composition handed an expired deadline burns wall the
+    # caller no longer has.  `_reserve_port_access` takes both a `cancelled`
+    # predicate and a `deadline`, restores the canvas it cleared, and raises
+    # `_PreparationDeadline`; `_prepare_routing_problem` lets that unwind to
+    # whoever owns the budget.  Here the caller wants a REFUSAL, so it is caught
+    # and every cut is reported unwired under the router's own budget word.
+    try:
+        reservation = _reserve_port_access(
+            canvas,
+            _port_access_inventory(nets).demands,
+            bounds=bounds,
+            cancelled=lambda: deadline is not None and time.monotonic() >= deadline,
+            deadline=deadline,
+        )
+    except _PreparationDeadline:
+        return ComposeResult(
+            Placement(buildings=tuple(canvas.buildings), description="hierarchical composition"),
+            blocks,
+            0,
+            tuple(
+                f"{net.item}: block {net.net_id.source_strip} -> "
+                f"block {net.net_id.destination_strip}: {DetailedRouteStatus.BUDGET.name}"
+                for net in nets
+                if net.net_id is not None
+            ),
+        )
+
+    # A PORT THE MATCHER COULD NOT SERVE IS A REPORTED CUT, not a discarded
+    # verdict.  `_prepare_routing_problem` turns the same evidence into
+    # `StrandedPort` so a refusal can name the LANE HEAD rather than the nets
+    # that happened to end on it (freeform ~16608); the composer has no strips
+    # to name, so it names the block the lane head sits in and carries the same
+    # `held`/`wants`/`options` counts, which are the whole story of why the
+    # matching failed.  The router still runs: a missing corridor makes some
+    # nets unroutable, and its own failures are better evidence than nothing.
+    evidence_by_demand = {evidence.demand: evidence for evidence in reservation.evidence}
+    failures = [
+        f"{demand.item}: block {_block_of(blocks, demand.belt)} lane head {demand.belt}: "
+        f"no port access corridor ({_corridor_evidence(evidence_by_demand.get(demand))})"
+        for demand in reservation.missing
+    ]
 
     belt_id = _belt_id_for(spec)
     belt_model = _belt_model_for(spec)
     result = _route_all(canvas, nets, belt_id, belt_model, bounds, deadline=deadline)
 
-    failures = [
+    failures.extend(
         f"{failure.net_id.item}: block {failure.net_id.source_strip} -> "
         f"block {failure.net_id.destination_strip}: {failure.kind.name}"
         for failure in result.failures
-    ]
+    )
     # A net that neither routed nor failed is one the pass never reached -- a
     # deadline or a spent budget. It is still an unwired cut and is reported as
     # one, under the status that stopped the pass.

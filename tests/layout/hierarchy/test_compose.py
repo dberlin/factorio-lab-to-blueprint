@@ -8,6 +8,7 @@ import pytest
 from flab2bp.dsp import catalog
 from flab2bp.layout import junction, slots
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
+from flab2bp.layout.freeform import PortAccessEvidence, PortAccessReservation
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import (
@@ -209,13 +210,17 @@ def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: Two
 def test_compose_reports_an_unwired_cut_instead_of_handing_it_back(
     two_solved_blocks: TwoSolvedBlocks,
 ):
-    """A real router verdict, not a mock: the deadline is already spent.
+    """A real verdict, not a mock: the deadline is already spent.
 
-    `_route_all` checks its deadline between rounds AND between nets and never
-    commits the live paths once it has expired, so every cut comes back
-    unwired. What is under test is that they come back NAMED -- an unwired
-    entry lane the composer swallowed is a block that starves, convicted many
-    stages later with no way back to the cause.
+    Whichever stage reads the clock first refuses -- the port reservation, which
+    is entered with the same deadline and raises `_PreparationDeadline` on an
+    expired one, before `_route_all` (which checks its own deadline between
+    rounds AND between nets and never commits the live paths once it has
+    expired). Either way every cut comes back unwired. What is under test here
+    is that they come back NAMED -- an unwired entry lane the composer swallowed
+    is a block that starves, convicted many stages later with no way back to the
+    cause. That the reservation is the stage that stops is pinned separately by
+    `test_an_expired_deadline_stops_the_reservation_without_raising`.
     """
     left, right, flows, spec, ramped = two_solved_blocks
     expired = compose.compose(
@@ -289,6 +294,95 @@ def test_a_cut_the_router_never_reached_is_reported_under_its_status(
     assert result.routed == 0
     assert len(result.failures) == len(flows)
     assert all(f.endswith(": BUDGET") for f in result.failures)
+
+
+def test_an_expired_deadline_stops_the_reservation_without_raising(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """The reservation runs under the composition's clock, and refuses in it.
+
+    `_reserve_port_access` raises `_PreparationDeadline` when it is entered past
+    its deadline -- `_prepare_routing_problem` lets that unwind to whoever owns
+    the budget, but `compose` promises a `ComposeResult`. What is under test is
+    that the deadline REACHES the reservation (the router is never even called)
+    and that the cut lines come back in the ordinary shape.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    routed_calls: list[object] = []
+    monkeypatch.setattr(
+        compose, "_route_all", lambda *a, **k: routed_calls.append(a) or pytest.fail("routed")
+    )
+
+    result = compose.compose(
+        [left, right], flows, spec, gap=2, ramped=ramped, deadline=time.monotonic() - 1.0
+    )
+
+    assert routed_calls == [], "an expired reservation must not go on to route"
+    assert result.routed == 0
+    assert len(result.failures) == len(flows)
+    for line in result.failures:
+        assert re.fullmatch(r"\S+: block \d+ -> block \d+: BUDGET", line), line
+
+
+def test_a_missing_port_corridor_is_named_by_item_and_block(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """The reservation's verdict is REPORTED, not discarded.
+
+    The fixture's ports all obtain corridors, so the reporting path is reached by
+    scripting the matcher's verdict. A port with no corridor is a lane head no
+    net can start from; discarding the verdict left the router to fail those
+    nets later with `DYNAMIC_ACCESS` and no way back to the cause -- which is
+    what `_prepare_routing_problem` builds `StrandedPort` to avoid.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    real_reserve = compose._reserve_port_access
+    seen: list[PortAccessReservation] = []
+
+    def one_missing(canvas, demands, **kwargs):
+        reservation = real_reserve(canvas, demands, **kwargs)
+        stranded = demands[0]
+        cut = PortAccessReservation(
+            assigned=reservation.assigned,
+            missing=(stranded,),
+            evidence=(
+                PortAccessEvidence(
+                    demand=stranded,
+                    held=1,
+                    wanted=2,
+                    local_options=1,
+                    reachable_options=1,
+                    exhaustive=True,
+                ),
+            ),
+        )
+        seen.append(cut)
+        return cut
+
+    monkeypatch.setattr(compose, "_reserve_port_access", one_missing)
+    result = compose.compose([left, right], flows, spec, gap=2, ramped=ramped, deadline=None)
+
+    assert seen, "the composer must call the reservation"
+    stranded = seen[0].missing[0]
+    block = compose._block_of(result.blocks, stranded.belt)
+    line = (
+        f"{stranded.item}: block {block} lane head {stranded.belt}: "
+        "no port access corridor (held=1 wants=2 options=1)"
+    )
+    assert line in result.failures
+
+
+def test_block_of_names_the_block_a_composed_index_belongs_to(
+    two_solved_blocks: TwoSolvedBlocks,
+):
+    """Every index in a block's own range answers with that block."""
+    left, right, flows, spec, ramped = two_solved_blocks
+    result = compose.compose([left, right], flows, spec, gap=2, ramped=ramped, deadline=None)
+    for block in result.blocks:
+        stop = block.base + len(block.placement.buildings)
+        assert {compose._block_of(result.blocks, i) for i in range(block.base, stop)} == {
+            block.index
+        }
 
 
 def _chain_belts(cells: list[tuple[int, int]]) -> list[PlacedBuilding]:
