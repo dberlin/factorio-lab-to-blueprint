@@ -222,7 +222,8 @@ def test_boundary_lanes_weights_tails_by_machines_behind_when_every_lane_has_a_s
 def test_boundary_lanes_falls_back_to_even_split_when_any_tail_lacks_a_strip():
     # Tail A's strip still carries two machines behind it -- a weighted split
     # would favour it 2:1 over tail B -- but tail B lost its strip provenance,
-    # so the WHOLE side must fall back to an even split, not just tail B.
+    # and no sorter in this fixture names a machine, so there is nothing left
+    # to weight by and the WHOLE side falls back to an even split.
     placement = _two_tail_placement(strip_b=None)
     sub = _spec_with_output("ingredientA", Fraction(8))
     tails, _heads = boundary_lanes(placement, sub, block=0)
@@ -231,3 +232,95 @@ def test_boundary_lanes_falls_back_to_even_split_when_any_tail_lacks_a_strip():
         LaneEnd(block=0, building=5, item="ingredientA", rate=Fraction(4)),
     ]
     assert sum(t.rate for t in tails) == Fraction(8)
+
+
+def _stripless_docked_placement() -> Placement:
+    """Two strip-less output tails, docked by two and by one machine.
+
+    This is the shape a solved FREEFORM block actually hands the contract: its
+    boundary belts are router trunks, so ``owner_strip`` is ``None`` on every
+    one of them, and the only surviving record of what stands behind a lane is
+    which machines' sorters put onto it.
+    """
+    b = PlacedBuilding
+    belt = dict(item_id=BELT, model_index=0, carries_item="ingredientA")
+    machine = dict(item_id=9999, model_index=0, recipe_id=100)
+    return Placement(
+        buildings=(
+            b(**machine, x=0, y=1),  # 0
+            b(**machine, x=1, y=1),  # 1
+            b(**machine, x=4, y=1),  # 2
+            b(item_id=SORTER, model_index=0, x=0, y=0, input_obj=0, output_obj=6),  # 3
+            b(item_id=SORTER, model_index=0, x=1, y=0, input_obj=1, output_obj=6),  # 4
+            b(item_id=SORTER, model_index=0, x=4, y=0, input_obj=2, output_obj=8),  # 5
+            b(**belt, x=0, y=0, output_obj=7),  # 6: tail A's run, head tile
+            b(**belt, x=1, y=0),  # 7: tail A
+            b(**belt, x=4, y=0, output_obj=9),  # 8: tail B's run, head tile
+            b(**belt, x=5, y=0),  # 9: tail B
+        )
+    )
+
+
+def test_boundary_lanes_weights_stripless_tails_by_the_machines_docked_on_them():
+    # Two machines put onto tail A's run and one onto tail B's, so tail A
+    # carries two thirds of the block's output.  Splitting this evenly is what
+    # `flow.conservation` convicts on the composed canvas: the assignment then
+    # promises tail B more than the one machine behind it can make.
+    placement = _stripless_docked_placement()
+    sub = _spec_with_output("ingredientA", Fraction(9))
+    tails, _heads = boundary_lanes(placement, sub, block=0)
+    assert tails == [
+        LaneEnd(block=0, building=7, item="ingredientA", rate=Fraction(6)),
+        LaneEnd(block=0, building=9, item="ingredientA", rate=Fraction(3)),
+    ]
+    assert sum(t.rate for t in tails) == Fraction(9)
+
+
+def _stripless_head_placement() -> Placement:
+    """Two strip-less entry heads, drawn by two machines and by one."""
+    b = PlacedBuilding
+    belt = dict(item_id=BELT, model_index=0, carries_item="ingredientB")
+    machine = dict(item_id=9999, model_index=0, recipe_id=100)
+    return Placement(
+        buildings=(
+            b(**machine, x=0, y=1),  # 0
+            b(**machine, x=1, y=1),  # 1
+            b(**machine, x=4, y=1),  # 2
+            b(item_id=SORTER, model_index=0, x=0, y=0, input_obj=7, output_obj=0),  # 3
+            b(item_id=SORTER, model_index=0, x=1, y=0, input_obj=7, output_obj=1),  # 4
+            b(item_id=SORTER, model_index=0, x=4, y=0, input_obj=9, output_obj=2),  # 5
+            b(**belt, x=0, y=0, output_obj=7),  # 6: head A
+            b(**belt, x=1, y=0),  # 7: tail of head A's run
+            b(**belt, x=4, y=0, output_obj=9),  # 8: head B
+            b(**belt, x=5, y=0),  # 9: tail of head B's run
+        )
+    )
+
+
+def _spec_with_external(item: str, rate: Fraction) -> BuildSpec:
+    return BuildSpec(
+        groups=(),
+        external_inputs={item: rate},
+        outputs={},
+        surplus_outputs={},
+        belt_item_id="conveyor-belt-1",
+        belt_items_per_second=Fraction(6),
+        belt_upgrades=(),
+        sorter_item_ids=("sorter-1",),
+        belt_stack=1,
+        sorter_pick_stacks=(1,),
+        sorter_place_stacks=(1,),
+        piler_unlocked=False,
+        label="provenance-test",
+    )
+
+
+def test_boundary_lanes_weights_stripless_heads_by_the_machines_drawing_from_them():
+    placement = _stripless_head_placement()
+    sub = _spec_with_external("ingredientB", Fraction(9))
+    _tails, heads = boundary_lanes(placement, sub, block=0)
+    assert heads == [
+        LaneEnd(block=0, building=6, item="ingredientB", rate=Fraction(6)),
+        LaneEnd(block=0, building=8, item="ingredientB", rate=Fraction(3)),
+    ]
+    assert sum(h.rate for h in heads) == Fraction(9)

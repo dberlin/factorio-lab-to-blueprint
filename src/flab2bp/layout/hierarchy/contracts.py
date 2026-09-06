@@ -64,29 +64,104 @@ def _machines_behind(buildings: tuple[PlacedBuilding, ...], strip: int) -> int:
     return sum(1 for b in buildings if b.owner_strip == strip and b.recipe_id != 0)
 
 
+def _belt_run(buildings: tuple[PlacedBuilding, ...], index: int, *, forward: bool) -> set[int]:
+    """Every belt of the run through ``index``, in one direction.
+
+    Belt chains are forward-linked, so a tail's run is everything that flows
+    INTO it (``forward=False``) and a head's run is everything it flows into
+    (``forward=True``).  Splitters and pilers are crossed rather than stopped
+    at: the belts around one name it as their ``output_obj``/``input_obj``, and
+    the cargo does pass through.
+    """
+    onward: dict[int, list[int]] = defaultdict(list)
+    for i, b in enumerate(buildings):
+        link = b.output_obj
+        if link is None or not 0 <= link < len(buildings):
+            continue
+        if catalog.is_belt(b.item_id) and catalog.is_belt(buildings[link].item_id):
+            onward[i].append(link)
+        elif catalog.is_belt(b.item_id):
+            # ``i`` feeds a splitter/piler; every belt drawing from that
+            # junction continues the run.
+            for j, other in enumerate(buildings):
+                if catalog.is_belt(other.item_id) and other.input_obj == link:
+                    onward[i].append(j)
+    if not forward:
+        backward: dict[int, list[int]] = defaultdict(list)
+        for src, dsts in onward.items():
+            for dst in dsts:
+                backward[dst].append(src)
+        onward = backward
+    seen = {index}
+    pending = [index]
+    while pending:
+        node = pending.pop()
+        for nxt in onward.get(node, ()):
+            if nxt not in seen:
+                seen.add(nxt)
+                pending.append(nxt)
+    return seen
+
+
+def _machines_on_lane(buildings: tuple[PlacedBuilding, ...], index: int, *, puts_on: bool) -> int:
+    """Machines docked on the run through lane ``index``.
+
+    ``puts_on`` selects the direction of the dock: a producing machine's sorter
+    names the machine as its ``input_obj`` and a belt as its ``output_obj``, a
+    consuming machine's the other way round.  This is the provenance that
+    survives when ``owner_strip`` does not, which on a freeform block's routed
+    boundary belts is always.
+    """
+    run = _belt_run(buildings, index, forward=not puts_on)
+    machines: set[int] = set()
+    for b in buildings:
+        if not catalog.is_sorter(b.item_id):
+            continue
+        machine, belt = (b.input_obj, b.output_obj) if puts_on else (b.output_obj, b.input_obj)
+        if machine is None or belt is None or belt not in run:
+            continue
+        if 0 <= machine < len(buildings) and buildings[machine].recipe_id != 0:
+            machines.add(machine)
+    return len(machines)
+
+
 def _apportion(
-    total: Fraction, buildings: tuple[PlacedBuilding, ...], indices: list[int]
+    total: Fraction,
+    buildings: tuple[PlacedBuilding, ...],
+    indices: list[int],
+    *,
+    puts_on: bool = True,
 ) -> list[Fraction]:
     """Split ``total`` across ``indices``' lanes, sum preserved exactly.
 
-    Rated by machines behind each lane's strip (``owner_strip``) only when
-    EVERY lane in this group traces to one. A lane missing that provenance has
-    no machine count to weight it, and giving it weight 0 would zero-rate a
-    real lane -- a zero-rated entry head is one the assignment never feeds,
-    which the validator later convicts as unfed -- so a group with even one
-    strip-less lane falls back to an even split for the WHOLE group, not just
-    that lane. (A group all present but whose machine counts still sum to 0
-    falls back the same way, defensively.) Either way the split is exact
-    ``Fraction`` arithmetic, so the parts always sum back to ``total``.
+    A lane's share is the share of the block's machines standing behind it, and
+    there are two records of that.  ``owner_strip`` is the precise one and is
+    used whenever EVERY lane in the group carries it.  A freeform block's
+    boundary belts are router trunks and carry none, which used to send the
+    whole group to an EVEN split -- a split that is fiction whenever the lanes
+    are not equally backed, and fiction with a consequence: ``assign_lanes``
+    builds the transportation assignment on these rates, ``compose`` realises
+    exactly that bipartite structure in belt, and ``flow.conservation`` then
+    convicts the component whose promised rate exceeds the machines actually
+    wired into it.  So the fallback is the machines DOCKED on each lane's belt
+    run instead, which no router pass erases.
+
+    Only when neither record yields a weight -- no strips and no docked
+    machines -- is the split even.  Giving one lane weight 0 would zero-rate a
+    real lane, and a zero-rated entry head is one the assignment never feeds,
+    which the validator convicts as unfed.  Every branch is exact ``Fraction``
+    arithmetic, so the parts always sum back to ``total``.
     """
     n = len(indices)
+    weights: list[int]
     if any(buildings[i].owner_strip is None for i in indices):
-        return [total / n for _ in range(n)]
-    weights: list[int] = []
-    for i in indices:
-        strip = buildings[i].owner_strip
-        assert strip is not None  # every lane checked above
-        weights.append(_machines_behind(buildings, strip))
+        weights = [_machines_on_lane(buildings, i, puts_on=puts_on) for i in indices]
+    else:
+        weights = []
+        for i in indices:
+            strip = buildings[i].owner_strip
+            assert strip is not None  # every lane checked above
+            weights.append(_machines_behind(buildings, strip))
     total_weight = sum(weights)
     if total_weight == 0:
         return [total / n for _ in range(n)]
@@ -132,7 +207,9 @@ def boundary_lanes(
         LaneEnd(block=block, building=i, item=item, rate=rate)
         for item, indices in sorted(tail_indices.items())
         for i, rate in zip(
-            indices, _apportion(sub.outputs.get(item, Fraction(0)), buildings, indices), strict=True
+            indices,
+            _apportion(sub.outputs.get(item, Fraction(0)), buildings, indices, puts_on=True),
+            strict=True,
         )
     ]
     heads = [
@@ -140,7 +217,12 @@ def boundary_lanes(
         for item, indices in sorted(head_indices.items())
         for i, rate in zip(
             indices,
-            _apportion(sub.external_inputs.get(item, Fraction(0)), buildings, indices),
+            _apportion(
+                sub.external_inputs.get(item, Fraction(0)),
+                buildings,
+                indices,
+                puts_on=False,
+            ),
             strict=True,
         )
     ]
