@@ -2555,7 +2555,11 @@ class SequenceSolver[PreparedT]:
                         candidate=self._candidate_label,
                         phase=SearchPhase.REFUSED,
                         placement=detailed.placement,
-                        reason="; ".join(verdict.failed_checks) or "validation refused",
+                        reason=(
+                            "validation budget exhausted before a verdict was reached"
+                            if validation_budget
+                            else "; ".join(verdict.failed_checks) or "validation refused"
+                        ),
                     )
                 )
         if validation_budget:

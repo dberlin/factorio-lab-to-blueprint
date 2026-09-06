@@ -11,6 +11,7 @@ from typing import Any, Never, TypedDict
 import pytest
 
 import flab2bp.layout.freeform as freeform_module
+import flab2bp.layout.sequence_islands as sequence_islands_module
 import flab2bp.layout.sequence_solver as sequence_solver
 import flab2bp.layout.sequence_solver as sequence_solver_module
 import flab2bp.layout.strip_variants as strip_variants_module
@@ -433,6 +434,7 @@ def _solver(
     borrow_first_discovery: bool = False,
     stage_admission: sequence_solver_module._MeasuredStageAdmission | None = None,
     prune_dominated_prepared: bool = False,
+    observer: SearchObserver | None = None,
 ) -> SequenceSolver[Prepared]:
     return SequenceSolver(
         heights=heights,
@@ -457,6 +459,7 @@ def _solver(
         borrow_first_discovery=borrow_first_discovery,
         stage_admission=stage_admission,
         prune_dominated_prepared=prune_dominated_prepared,
+        observer=observer,
     )
 
 
@@ -9762,6 +9765,90 @@ def test_validation_budget_status_cannot_install_exact_incumbent() -> None:
     assert solver._stage_stats[-1].detailed_status is DetailedRouteStatus.BUDGET
 
 
+def test_sequence_pair_refused_event_distinguishes_budget_from_a_real_refusal() -> None:
+    """A stage that ran out of time before a verdict was reached is a
+    different diagnosis than one whose placement was actually rejected --
+    REFUSED must say which happened, not label both "validation refused".
+    """
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED),
+                exact,
+                charged_expansions=0,
+            ),
+        )
+    )
+    observer = _RecordingObserver()
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig.test(),
+        observer=observer,
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        validate=lambda _placement: ValidationVerdict(
+            ok=False,
+            failed_checks=(),
+            placement=None,
+            status=DetailedRouteStatus.BUDGET,
+        ),
+    )
+
+    with pytest.raises(NoValidLayout, match="cancelled"):
+        solver.search(max_stages=1)
+
+    refusals = [e for e in observer.events if e.phase is SearchPhase.REFUSED]
+    assert refusals, "a budget-exhausted stage is still worth a REFUSED frame"
+    reason = refusals[-1].reason
+    assert reason is not None
+    assert reason != "validation refused"
+    assert "budget" in reason.lower()
+
+
+def test_sequence_pair_refused_event_reports_a_real_validation_failure() -> None:
+    """The genuine-refusal path is unchanged: it still joins the validator's
+    own failed checks, so a real refusal and a budget stall never read alike.
+    """
+    exact = _placement(area=20, belt_tiles=4)
+    fake = _FakeRouting(
+        detailed_results=(
+            DetailedStageResult(
+                _routing(DetailedRouteStatus.ROUTED),
+                exact,
+                charged_expansions=0,
+            ),
+        )
+    )
+    observer = _RecordingObserver()
+    solver = _solver(
+        fake,
+        heights=(40,),
+        config=SequenceSolverConfig.test(),
+        observer=observer,
+    )
+    solver.adapters = replace(
+        solver.adapters,
+        validate=lambda placement: ValidationVerdict(
+            ok=False,
+            failed_checks=("unreachable belt",),
+            placement=None,
+        ),
+    )
+
+    # A single-stage search with no incumbent is itself a `NoValidLayout` --
+    # not the point of this test, which is what the REFUSED frame said on
+    # the way there.
+    with pytest.raises(NoValidLayout, match="no scheduled stage produced an exact layout"):
+        solver.search(max_stages=1)
+
+    refusals = [e for e in observer.events if e.phase is SearchPhase.REFUSED]
+    assert refusals
+    assert refusals[-1].reason == "unreachable belt"
+
+
 def test_production_certify_maps_projection_cancellation_to_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -11200,9 +11287,28 @@ def test_sequence_pair_reports_stage_observations_and_incumbents(small_spec: Bui
     assert incumbents[-1].placement is not None
 
 
-def test_sequence_pair_islands_report_no_island_index(small_spec: BuildSpec) -> None:
-    # v1 limitation L1: a second spawn level is not traced. The frame says so
-    # with a null rather than implying the merged result is one island's search.
+def test_sequence_pair_islands_report_no_island_index(
+    small_spec: BuildSpec,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # v1 limitation L1: a second spawn level is not traced. `lay_out` never
+    # forwards `observer` into `run_sequence_islands`, so a two-island search
+    # reports NOTHING rather than misattributing the merged result to one
+    # island's search. The spawn itself is stubbed out: what this test proves
+    # is that the argument is never passed, which does not require paying for
+    # a real two-island process-pool run to demonstrate.
+    captured: dict[str, object] = {}
+
+    def fake_run_sequence_islands(spec: BuildSpec, **kwargs: object) -> Placement:
+        del spec
+        captured.update(kwargs)
+        return _placement(area=10, belt_tiles=2)
+
+    monkeypatch.setattr(
+        sequence_islands_module,
+        "run_sequence_islands",
+        fake_run_sequence_islands,
+    )
     observer = _RecordingObserver()
     SequencePairLayout(
         band_policy=BandPolicy.parse("portable"),
@@ -11210,4 +11316,5 @@ def test_sequence_pair_islands_report_no_island_index(small_spec: BuildSpec) -> 
         islands=2,
         observer=observer,
     ).lay_out(small_spec, time_budget_s=10.0)
-    assert all(e.island is None for e in observer.events)
+    assert "observer" not in captured
+    assert observer.events == []
