@@ -1,0 +1,22 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+sequence-pair / all-products: 116 machines, 5796 tiles, 3832 buildings
+primary_band: 200
+certified_bands: 200
+inputs to belt in: copper-ingot, fire-ice, high-purity-silicon, hydrogen, iron-ingot, optical-grating-crystal, proliferator-3, silicon-ore, stone, titanium-ingot, water  (17 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-3 (30.0/s); it is the fastest belt this save can build, so a lane over that rate is refused; stack 1; 0 piler(s)
+  entry lanes: copper-ingot 2 (needs 1 at 30/s)
+  entry lanes: stone 2 (needs 1 at 30/s)
+  entry lanes: titanium-ingot 2 (needs 1 at 30/s)
+  entry lanes: water 2 (needs 1 at 30/s)
+  4 strategy/candidate pair(s) produced no layout:
+    freeform/no-proliferator: no pack of 33 strips was ever produced at any candidate height; all 5 pack solves ended UNKNOWN rather than INFEASIBLE, inside the 0.02-unit deterministic work bound a pack of 33 strips is given, so the SOLVE gave up before the packing was shown impossible, and 29.0s of the 30s ceiling went unspent; the sweep stopped after 5 draws that produced no new packing
+    freeform/all-products: no packing of 23 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+    freeform/output-products: the 30s deadline passed with no completed packing of 25 strips; 14 packs were routed in that time and the best of them still left 1 nets unrouted (worst 9), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec
+    sequence-pair/output-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout
+
+candidate           strategy      area  errors
+all-products        sequence-pair    5796       0
+no-proliferator     sequence-pair    8316       0
+WALL 161.95 s

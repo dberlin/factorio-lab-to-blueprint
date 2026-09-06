@@ -23924,6 +23924,49 @@ def test_lay_out_reports_a_neutral_refusal_when_no_pack_and_no_skip_explain_it(
     assert "skipped" not in message
 
 
+def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pack solve that ends UNKNOWN is the SOLVE giving up, not a verdict.
+
+    "no pack was ever produced" reads as a statement about the packing, and on
+    the user's compressed-mall URL it was read that way: at 33 strips every one
+    of the fifteen candidate solves returned UNKNOWN inside the fixed
+    ``_DETERMINISTIC_PACK_WORK`` allowance, the sweep exhausted its candidates
+    in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and none of that
+    was in the sentence.  INFEASIBLE would have been a verdict; UNKNOWN is a
+    clock, and a refusal that cannot tell them apart sends the next reader to
+    the packer's model instead of to its work bound.
+    """
+
+    def unknown_every_solve(
+        self: FreeformLayout,
+        *_args: object,
+        telemetry: dict[str, float | str] | None = None,
+        **_kwargs: object,
+    ) -> Placement | None:
+        if telemetry is not None:
+            telemetry["pack_cp_solves"] = 15.0
+            telemetry["pack_cp_unknown"] = 15.0
+            telemetry["pack_cp_infeasible"] = 0.0
+        return None
+
+    monkeypatch.setattr(FreeformLayout, "_sweep", unknown_every_solve)
+    monkeypatch.setattr(freeform, "_DETERMINISTIC_PACK_STRIPS", 1)
+
+    with pytest.raises(NoValidLayout) as caught:
+        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+            two_stage_spec(), time_budget_s=30.0
+        )
+
+    message = str(caught.value)
+    assert "was ever produced at any candidate height" in message
+    assert "all 15 pack solves ended UNKNOWN" in message
+    assert "deterministic work bound" in message
+    assert "unspent" in message
+    assert "PACKER" not in message
+
+
 def test_lay_out_still_names_the_packer_defect_for_a_routed_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

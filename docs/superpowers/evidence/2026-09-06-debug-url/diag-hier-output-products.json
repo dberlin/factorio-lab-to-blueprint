@@ -1,0 +1,1265 @@
+{
+  "policy": "output-products",
+  "budget_s": 60.0,
+  "asked_counts": {
+    "casimir-crystal-advanced": 11,
+    "circuit-board": 3,
+    "glass": 22,
+    "graphene-advanced": 6,
+    "high-purity-silicon": 10,
+    "microcrystalline-component": 11,
+    "plane-filter": 32,
+    "processor": 8,
+    "titanium-glass": 28
+  },
+  "asked_balance": {
+    "casimir-crystal": {
+      "made": "8/3",
+      "used": "8/3",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "circuit-board": {
+      "made": "16/3",
+      "used": "16/3",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "copper-ingot": {
+      "made": "0",
+      "used": "8",
+      "external_in": "8",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "fire-ice": {
+      "made": "0",
+      "used": "16/3",
+      "external_in": "16/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "glass": {
+      "made": "164/15",
+      "used": "164/15",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "graphene": {
+      "made": "16/3",
+      "used": "16/3",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "high-purity-silicon": {
+      "made": "29/6",
+      "used": "32/3",
+      "external_in": "35/6",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "hydrogen": {
+      "made": "8/3",
+      "used": "32",
+      "external_in": "88/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "iron-ingot": {
+      "made": "0",
+      "used": "16/3",
+      "external_in": "16/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "microcrystalline-component": {
+      "made": "16/3",
+      "used": "16/3",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "optical-grating-crystal": {
+      "made": "0",
+      "used": "64/3",
+      "external_in": "64/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "plane-filter": {
+      "made": "10/3",
+      "used": "0",
+      "external_in": "0",
+      "belted_out": "10/3",
+      "slack": "0"
+    },
+    "processor": {
+      "made": "10/3",
+      "used": "0",
+      "external_in": "0",
+      "belted_out": "10/3",
+      "slack": "0"
+    },
+    "silicon-ore": {
+      "made": "0",
+      "used": "29/3",
+      "external_in": "29/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "stone": {
+      "made": "0",
+      "used": "328/15",
+      "external_in": "328/15",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "titanium-glass": {
+      "made": "41/3",
+      "used": "16/3",
+      "external_in": "0",
+      "belted_out": "25/3",
+      "slack": "0"
+    },
+    "titanium-ingot": {
+      "made": "0",
+      "used": "164/15",
+      "external_in": "164/15",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "water": {
+      "made": "0",
+      "used": "164/15",
+      "external_in": "164/15",
+      "belted_out": "0",
+      "slack": "0"
+    }
+  },
+  "verdict": "REFUSED",
+  "reason": "composed placement failed validation: flow.conservation: 32 machine(s) consume 8/3 items/s of casimir-crystal but only 347/132 items/s of it can reach them in flow order (lanes [1, 3, 148, 149, 150, 151]); short by 5/132 items/s; flow.conservation: 8 machine(s) consume 16/3 items/s of microcrystalline-component but only 56/11 items/s of it can reach them in flow order (lanes [14, 16]); short by 8/33 items/s",
+  "stats": {},
+  "wall_s": 37.5,
+  "apportion": [
+    {
+      "total": "8/3",
+      "lanes": [
+        2213,
+        2232
+      ],
+      "item": [
+        "casimir-crystal",
+        "casimir-crystal"
+      ],
+      "owner_strips": [
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "4/3",
+        "4/3"
+      ]
+    },
+    {
+      "total": "16/3",
+      "lanes": [
+        2259
+      ],
+      "item": [
+        "circuit-board"
+      ],
+      "owner_strips": [
+        null
+      ],
+      "machines_behind": [
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "16/3"
+      ]
+    },
+    {
+      "total": "16/3",
+      "lanes": [
+        2265,
+        2275
+      ],
+      "item": [
+        "microcrystalline-component",
+        "microcrystalline-component"
+      ],
+      "owner_strips": [
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "8/3",
+        "8/3"
+      ]
+    },
+    {
+      "total": "41/3",
+      "lanes": [
+        2278,
+        2281,
+        2284,
+        2291,
+        2294
+      ],
+      "item": [
+        "titanium-glass",
+        "titanium-glass",
+        "titanium-glass",
+        "titanium-glass",
+        "titanium-glass"
+      ],
+      "owner_strips": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "41/15",
+        "41/15",
+        "41/15",
+        "41/15",
+        "41/15"
+      ]
+    },
+    {
+      "total": "8",
+      "lanes": [
+        1646,
+        1883,
+        1905
+      ],
+      "item": [
+        "copper-ingot",
+        "copper-ingot",
+        "copper-ingot"
+      ],
+      "owner_strips": [
+        null,
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "8/3",
+        "8/3",
+        "8/3"
+      ]
+    },
+    {
+      "total": "16/3",
+      "lanes": [
+        1840
+      ],
+      "item": [
+        "fire-ice"
+      ],
+      "owner_strips": [
+        null
+      ],
+      "machines_behind": [
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "16/3"
+      ]
+    },
+    {
+      "total": "0",
+      "lanes": [
+        495
+      ],
+      "item": [
+        "graphene"
+      ],
+      "owner_strips": [
+        7
+      ],
+      "machines_behind": [
+        6
+      ],
+      "even_split_fallback": false,
+      "parts": [
+        "0"
+      ]
+    },
+    {
+      "total": "35/6",
+      "lanes": [
+        1894,
+        1927
+      ],
+      "item": [
+        "high-purity-silicon",
+        "high-purity-silicon"
+      ],
+      "owner_strips": [
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "35/12",
+        "35/12"
+      ]
+    },
+    {
+      "total": "88/3",
+      "lanes": [
+        543,
+        1602,
+        1612
+      ],
+      "item": [
+        "hydrogen",
+        "hydrogen",
+        "hydrogen"
+      ],
+      "owner_strips": [
+        7,
+        null,
+        null
+      ],
+      "machines_behind": [
+        6,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "88/9",
+        "88/9",
+        "88/9"
+      ]
+    },
+    {
+      "total": "16/3",
+      "lanes": [
+        1671
+      ],
+      "item": [
+        "iron-ingot"
+      ],
+      "owner_strips": [
+        null
+      ],
+      "machines_behind": [
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "16/3"
+      ]
+    },
+    {
+      "total": "64/3",
+      "lanes": [
+        1605,
+        1627
+      ],
+      "item": [
+        "optical-grating-crystal",
+        "optical-grating-crystal"
+      ],
+      "owner_strips": [
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "32/3",
+        "32/3"
+      ]
+    },
+    {
+      "total": "1351/3825",
+      "lanes": [
+        1530
+      ],
+      "item": [
+        "proliferator-3"
+      ],
+      "owner_strips": [
+        null
+      ],
+      "machines_behind": [
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "1351/3825"
+      ]
+    },
+    {
+      "total": "29/3",
+      "lanes": [
+        1867,
+        1880
+      ],
+      "item": [
+        "silicon-ore",
+        "silicon-ore"
+      ],
+      "owner_strips": [
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "29/6",
+        "29/6"
+      ]
+    },
+    {
+      "total": "328/15",
+      "lanes": [
+        1701,
+        1735,
+        1773,
+        1810
+      ],
+      "item": [
+        "stone",
+        "stone",
+        "stone",
+        "stone"
+      ],
+      "owner_strips": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "82/15",
+        "82/15",
+        "82/15",
+        "82/15"
+      ]
+    },
+    {
+      "total": "164/15",
+      "lanes": [
+        1947,
+        2009,
+        2079,
+        2136,
+        2183
+      ],
+      "item": [
+        "titanium-ingot",
+        "titanium-ingot",
+        "titanium-ingot",
+        "titanium-ingot",
+        "titanium-ingot"
+      ],
+      "owner_strips": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "164/75",
+        "164/75",
+        "164/75",
+        "164/75",
+        "164/75"
+      ]
+    },
+    {
+      "total": "164/15",
+      "lanes": [
+        1977,
+        2047,
+        2110,
+        2164,
+        2195
+      ],
+      "item": [
+        "water",
+        "water",
+        "water",
+        "water",
+        "water"
+      ],
+      "owner_strips": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "164/75",
+        "164/75",
+        "164/75",
+        "164/75",
+        "164/75"
+      ]
+    },
+    {
+      "total": "10/3",
+      "lanes": [
+        1063,
+        1085,
+        1097,
+        1102,
+        1113,
+        1117
+      ],
+      "item": [
+        "plane-filter",
+        "plane-filter",
+        "plane-filter",
+        "plane-filter",
+        "plane-filter",
+        "plane-filter"
+      ],
+      "owner_strips": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "5/9",
+        "5/9",
+        "5/9",
+        "5/9",
+        "5/9",
+        "5/9"
+      ]
+    },
+    {
+      "total": "10/3",
+      "lanes": [
+        1126,
+        1144
+      ],
+      "item": [
+        "processor",
+        "processor"
+      ],
+      "owner_strips": [
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "5/3",
+        "5/3"
+      ]
+    },
+    {
+      "total": "8/3",
+      "lanes": [
+        838,
+        850,
+        885,
+        924,
+        949,
+        986
+      ],
+      "item": [
+        "casimir-crystal",
+        "casimir-crystal",
+        "casimir-crystal",
+        "casimir-crystal",
+        "casimir-crystal",
+        "casimir-crystal"
+      ],
+      "owner_strips": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "4/9",
+        "4/9",
+        "4/9",
+        "4/9",
+        "4/9",
+        "4/9"
+      ]
+    },
+    {
+      "total": "16/3",
+      "lanes": [
+        1009,
+        1021
+      ],
+      "item": [
+        "circuit-board",
+        "circuit-board"
+      ],
+      "owner_strips": [
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "8/3",
+        "8/3"
+      ]
+    },
+    {
+      "total": "16/3",
+      "lanes": [
+        1014,
+        1036
+      ],
+      "item": [
+        "microcrystalline-component",
+        "microcrystalline-component"
+      ],
+      "owner_strips": [
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "8/3",
+        "8/3"
+      ]
+    },
+    {
+      "total": "386/765",
+      "lanes": [
+        712
+      ],
+      "item": [
+        "proliferator-3"
+      ],
+      "owner_strips": [
+        null
+      ],
+      "machines_behind": [
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "386/765"
+      ]
+    },
+    {
+      "total": "16/3",
+      "lanes": [
+        843,
+        865,
+        907,
+        939,
+        970,
+        1000
+      ],
+      "item": [
+        "titanium-glass",
+        "titanium-glass",
+        "titanium-glass",
+        "titanium-glass",
+        "titanium-glass",
+        "titanium-glass"
+      ],
+      "owner_strips": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "machines_behind": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "even_split_fallback": true,
+      "parts": [
+        "8/9",
+        "8/9",
+        "8/9",
+        "8/9",
+        "8/9",
+        "8/9"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "item": "casimir-crystal",
+      "rate": "4/9",
+      "src": [
+        0,
+        2213,
+        "4/3"
+      ],
+      "dst": [
+        1,
+        838,
+        "4/9"
+      ]
+    },
+    {
+      "item": "casimir-crystal",
+      "rate": "4/9",
+      "src": [
+        0,
+        2213,
+        "4/3"
+      ],
+      "dst": [
+        1,
+        850,
+        "4/9"
+      ]
+    },
+    {
+      "item": "casimir-crystal",
+      "rate": "4/9",
+      "src": [
+        0,
+        2213,
+        "4/3"
+      ],
+      "dst": [
+        1,
+        885,
+        "4/9"
+      ]
+    },
+    {
+      "item": "casimir-crystal",
+      "rate": "4/9",
+      "src": [
+        0,
+        2232,
+        "4/3"
+      ],
+      "dst": [
+        1,
+        924,
+        "4/9"
+      ]
+    },
+    {
+      "item": "casimir-crystal",
+      "rate": "4/9",
+      "src": [
+        0,
+        2232,
+        "4/3"
+      ],
+      "dst": [
+        1,
+        949,
+        "4/9"
+      ]
+    },
+    {
+      "item": "casimir-crystal",
+      "rate": "4/9",
+      "src": [
+        0,
+        2232,
+        "4/3"
+      ],
+      "dst": [
+        1,
+        986,
+        "4/9"
+      ]
+    },
+    {
+      "item": "circuit-board",
+      "rate": "8/3",
+      "src": [
+        0,
+        2259,
+        "16/3"
+      ],
+      "dst": [
+        1,
+        1009,
+        "8/3"
+      ]
+    },
+    {
+      "item": "circuit-board",
+      "rate": "8/3",
+      "src": [
+        0,
+        2259,
+        "16/3"
+      ],
+      "dst": [
+        1,
+        1021,
+        "8/3"
+      ]
+    },
+    {
+      "item": "microcrystalline-component",
+      "rate": "8/3",
+      "src": [
+        0,
+        2265,
+        "8/3"
+      ],
+      "dst": [
+        1,
+        1014,
+        "8/3"
+      ]
+    },
+    {
+      "item": "microcrystalline-component",
+      "rate": "8/3",
+      "src": [
+        0,
+        2275,
+        "8/3"
+      ],
+      "dst": [
+        1,
+        1036,
+        "8/3"
+      ]
+    },
+    {
+      "item": "titanium-glass",
+      "rate": "8/9",
+      "src": [
+        0,
+        2278,
+        "41/15"
+      ],
+      "dst": [
+        1,
+        843,
+        "8/9"
+      ]
+    },
+    {
+      "item": "titanium-glass",
+      "rate": "8/9",
+      "src": [
+        0,
+        2278,
+        "41/15"
+      ],
+      "dst": [
+        1,
+        865,
+        "8/9"
+      ]
+    },
+    {
+      "item": "titanium-glass",
+      "rate": "8/9",
+      "src": [
+        0,
+        2278,
+        "41/15"
+      ],
+      "dst": [
+        1,
+        907,
+        "8/9"
+      ]
+    },
+    {
+      "item": "titanium-glass",
+      "rate": "1/15",
+      "src": [
+        0,
+        2278,
+        "41/15"
+      ],
+      "dst": [
+        1,
+        939,
+        "8/9"
+      ]
+    },
+    {
+      "item": "titanium-glass",
+      "rate": "37/45",
+      "src": [
+        0,
+        2281,
+        "41/15"
+      ],
+      "dst": [
+        1,
+        939,
+        "8/9"
+      ]
+    },
+    {
+      "item": "titanium-glass",
+      "rate": "8/9",
+      "src": [
+        0,
+        2281,
+        "41/15"
+      ],
+      "dst": [
+        1,
+        970,
+        "8/9"
+      ]
+    },
+    {
+      "item": "titanium-glass",
+      "rate": "8/9",
+      "src": [
+        0,
+        2281,
+        "41/15"
+      ],
+      "dst": [
+        1,
+        1000,
+        "8/9"
+      ]
+    }
+  ],
+  "compose_routed": 17,
+  "compose_failures": [],
+  "compose_blocks": [
+    {
+      "index": 0,
+      "base": 0,
+      "offset": [
+        0,
+        0
+      ],
+      "w": 83,
+      "h": 72
+    },
+    {
+      "index": 1,
+      "base": 3945,
+      "offset": [
+        0,
+        74
+      ],
+      "w": 56,
+      "h": 38
+    }
+  ],
+  "built_counts": {
+    "casimir-crystal-advanced": 11,
+    "circuit-board": 3,
+    "glass": 22,
+    "graphene-advanced": 6,
+    "high-purity-silicon": 10,
+    "microcrystalline-component": 11,
+    "plane-filter": 32,
+    "processor": 8,
+    "titanium-glass": 28
+  },
+  "built_balance": {
+    "casimir-crystal": {
+      "made": "8/3",
+      "used": "8/3",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "circuit-board": {
+      "made": "16/3",
+      "used": "16/3",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "copper-ingot": {
+      "made": "0",
+      "used": "8",
+      "external_in": "8",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "fire-ice": {
+      "made": "0",
+      "used": "16/3",
+      "external_in": "16/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "glass": {
+      "made": "164/15",
+      "used": "164/15",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "graphene": {
+      "made": "16/3",
+      "used": "16/3",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "high-purity-silicon": {
+      "made": "29/6",
+      "used": "32/3",
+      "external_in": "35/6",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "hydrogen": {
+      "made": "8/3",
+      "used": "32",
+      "external_in": "88/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "iron-ingot": {
+      "made": "0",
+      "used": "16/3",
+      "external_in": "16/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "microcrystalline-component": {
+      "made": "16/3",
+      "used": "16/3",
+      "external_in": "0",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "optical-grating-crystal": {
+      "made": "0",
+      "used": "64/3",
+      "external_in": "64/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "plane-filter": {
+      "made": "10/3",
+      "used": "0",
+      "external_in": "0",
+      "belted_out": "10/3",
+      "slack": "0"
+    },
+    "processor": {
+      "made": "10/3",
+      "used": "0",
+      "external_in": "0",
+      "belted_out": "10/3",
+      "slack": "0"
+    },
+    "silicon-ore": {
+      "made": "0",
+      "used": "29/3",
+      "external_in": "29/3",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "stone": {
+      "made": "0",
+      "used": "328/15",
+      "external_in": "328/15",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "titanium-glass": {
+      "made": "41/3",
+      "used": "16/3",
+      "external_in": "0",
+      "belted_out": "25/3",
+      "slack": "0"
+    },
+    "titanium-ingot": {
+      "made": "0",
+      "used": "164/15",
+      "external_in": "164/15",
+      "belted_out": "0",
+      "slack": "0"
+    },
+    "water": {
+      "made": "0",
+      "used": "164/15",
+      "external_in": "164/15",
+      "belted_out": "0",
+      "slack": "0"
+    }
+  },
+  "built_external_inputs": {
+    "copper-ingot": "8",
+    "fire-ice": "16/3",
+    "high-purity-silicon": "35/6",
+    "hydrogen": "88/3",
+    "iron-ingot": "16/3",
+    "optical-grating-crystal": "64/3",
+    "proliferator-3": "193/225",
+    "silicon-ore": "29/3",
+    "stone": "328/15",
+    "titanium-ingot": "164/15",
+    "water": "164/15"
+  },
+  "report_ok": false,
+  "errors": [
+    {
+      "check": "flow.conservation",
+      "detail": {
+        "item": "casimir-crystal",
+        "demand": "8/3",
+        "supply": "347/132",
+        "shortfall": "5/132",
+        "consumers": 32,
+        "lanes": [
+          1,
+          3,
+          148,
+          149,
+          150,
+          151,
+          152,
+          153,
+          154,
+          155
+        ]
+      },
+      "buildings": [
+        4020,
+        4021,
+        4022,
+        4023,
+        4024
+      ]
+    },
+    {
+      "check": "flow.conservation",
+      "detail": {
+        "item": "microcrystalline-component",
+        "demand": "16/3",
+        "supply": "56/11",
+        "shortfall": "8/33",
+        "consumers": 8,
+        "lanes": [
+          14,
+          16
+        ]
+      },
+      "buildings": [
+        4526,
+        4527,
+        4528,
+        4529,
+        4593
+      ]
+    }
+  ]
+}

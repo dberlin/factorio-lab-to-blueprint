@@ -1,0 +1,219 @@
+{
+  "strip_cap": 12,
+  "BLOCK_BUDGET_MIN_S": 5.0,
+  "BLOCK_BUDGET_MAX_S": 20.0,
+  "SETTLEMENT_RESERVE": [
+    10.0,
+    40.0,
+    0.4
+  ],
+  "policies": [
+    {
+      "policy": "no-proliferator",
+      "arms": [
+        "freeform",
+        "sequence-pair"
+      ],
+      "blocks": 2,
+      "cuts": 4,
+      "per_block": [
+        {
+          "block": 0,
+          "recipes": [
+            "casimir-crystal-advanced",
+            "circuit-board",
+            "glass",
+            "graphene-advanced",
+            "high-purity-silicon",
+            "microcrystalline-component",
+            "titanium-glass"
+          ],
+          "machines": 122,
+          "strips": 7
+        },
+        {
+          "block": 1,
+          "recipes": [
+            "plane-filter",
+            "processor"
+          ],
+          "machines": 50,
+          "strips": 2
+        }
+      ],
+      "funding": [
+        {
+          "budget_s": 15.0,
+          "reserve_s": 10.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 5.0,
+          "share_s": 5.0,
+          "refuses_round_1": false,
+          "block_budget_s": 5.0
+        },
+        {
+          "budget_s": 30.0,
+          "reserve_s": 12.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 18.0,
+          "share_s": 18.0,
+          "refuses_round_1": false,
+          "block_budget_s": 18.0
+        },
+        {
+          "budget_s": 60.0,
+          "reserve_s": 24.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 36.0,
+          "share_s": 36.0,
+          "refuses_round_1": false,
+          "block_budget_s": 20.0
+        }
+      ]
+    },
+    {
+      "policy": "all-products",
+      "arms": [
+        "freeform",
+        "sequence-pair"
+      ],
+      "blocks": 2,
+      "cuts": 4,
+      "per_block": [
+        {
+          "block": 0,
+          "recipes": [
+            "casimir-crystal-advanced",
+            "circuit-board",
+            "glass",
+            "graphene-advanced",
+            "high-purity-silicon",
+            "microcrystalline-component",
+            "titanium-glass"
+          ],
+          "machines": 76,
+          "strips": 7
+        },
+        {
+          "block": 1,
+          "recipes": [
+            "plane-filter",
+            "processor"
+          ],
+          "machines": 40,
+          "strips": 2
+        }
+      ],
+      "funding": [
+        {
+          "budget_s": 15.0,
+          "reserve_s": 10.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 5.0,
+          "share_s": 5.0,
+          "refuses_round_1": false,
+          "block_budget_s": 5.0
+        },
+        {
+          "budget_s": 30.0,
+          "reserve_s": 12.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 18.0,
+          "share_s": 18.0,
+          "refuses_round_1": false,
+          "block_budget_s": 18.0
+        },
+        {
+          "budget_s": 60.0,
+          "reserve_s": 24.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 36.0,
+          "share_s": 36.0,
+          "refuses_round_1": false,
+          "block_budget_s": 20.0
+        }
+      ]
+    },
+    {
+      "policy": "output-products",
+      "arms": [
+        "freeform",
+        "sequence-pair"
+      ],
+      "blocks": 2,
+      "cuts": 4,
+      "per_block": [
+        {
+          "block": 0,
+          "recipes": [
+            "casimir-crystal-advanced",
+            "circuit-board",
+            "glass",
+            "graphene-advanced",
+            "high-purity-silicon",
+            "microcrystalline-component",
+            "titanium-glass"
+          ],
+          "machines": 91,
+          "strips": 7
+        },
+        {
+          "block": 1,
+          "recipes": [
+            "plane-filter",
+            "processor"
+          ],
+          "machines": 40,
+          "strips": 2
+        }
+      ],
+      "funding": [
+        {
+          "budget_s": 15.0,
+          "reserve_s": 10.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 5.0,
+          "share_s": 5.0,
+          "refuses_round_1": false,
+          "block_budget_s": 5.0
+        },
+        {
+          "budget_s": 30.0,
+          "reserve_s": 12.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 18.0,
+          "share_s": 18.0,
+          "refuses_round_1": false,
+          "block_budget_s": 18.0
+        },
+        {
+          "budget_s": 60.0,
+          "reserve_s": 24.0,
+          "jobs": 4,
+          "pool_width": 4,
+          "waves": 1,
+          "remaining_s": 36.0,
+          "share_s": 36.0,
+          "refuses_round_1": false,
+          "block_budget_s": 20.0
+        }
+      ]
+    }
+  ]
+}

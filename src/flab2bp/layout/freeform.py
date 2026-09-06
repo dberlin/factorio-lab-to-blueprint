@@ -19923,6 +19923,34 @@ class FreeformLayout:
             )
         else:
             base = f"no pack of {len(strips)} strips was ever produced at any candidate height"
+            # AND IT HAS TO SAY WHICH OF THE TWO THINGS THAT MEANS.  A pack
+            # solve that returns INFEASIBLE is a verdict on the packing; one
+            # that returns UNKNOWN is the solve running out of its own
+            # allowance, and the sentence above reads as the first while being
+            # true of both.  The user's compressed-mall URL is the second: at 33
+            # strips all fifteen candidate solves ended UNKNOWN inside the fixed
+            # `_DETERMINISTIC_PACK_WORK` bound -- 0.02 units, calibrated on the
+            # fifteen-strip cell where a shelf warm start yields an incumbent at
+            # once -- and the sweep exhausted its candidates in 1.4s with 28.6s
+            # of a 30s ceiling never spent.  Raising that bound to 0.5 on the
+            # same spec turns all fifteen UNKNOWNs into four FEASIBLE packs, so
+            # the packing was never the thing that could not be found.
+            solves = float(refusal_stats.get("pack_cp_solves", 0.0))
+            unknown = float(refusal_stats.get("pack_cp_unknown", 0.0))
+            if solves and unknown == solves:
+                unspent = max(0.0, budgets[-1] - (time.monotonic() - started))
+                work = (
+                    f", inside the {_DETERMINISTIC_PACK_WORK:g}-unit deterministic work "
+                    f"bound a pack of {len(strips)} strips is given"
+                    if len(strips) >= _DETERMINISTIC_PACK_STRIPS
+                    else ""
+                )
+                base += (
+                    f"; all {int(solves)} pack solves ended UNKNOWN rather than "
+                    f"INFEASIBLE{work}, so the SOLVE gave up before the packing was "
+                    f"shown impossible, and {unspent:.1f}s of the {budgets[-1]:g}s "
+                    "ceiling went unspent"
+                )
         raise NoValidLayout(
             (_port_seating_refusal(attempts) or base) + over_band + stale_note,
             spec_label=spec.label,
