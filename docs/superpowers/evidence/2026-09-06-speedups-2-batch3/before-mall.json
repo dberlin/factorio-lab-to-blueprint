@@ -1,0 +1,97 @@
+{
+ "area": null,
+ "astar_s": 7.114663107786328,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 16475067,
+ "groups": 33,
+ "hits": 1492,
+ "islands": null,
+ "machines": 449,
+ "misses": 35,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1527,
+   "s": 7.114663107786328
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.17442385503090918
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 2.2942290261853486
+  },
+  "commit_paths": {
+   "n": 10,
+   "s": 11.727186310570687
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.2038121388759464
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.21328665758483112
+  },
+  "merge_frontier": {
+   "n": 883,
+   "s": 3.9192349112126976
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 3.6586963708978146
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.2118242927826941
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 1.8361787581816316
+  },
+  "prepare": {
+   "n": 6,
+   "s": 17.36981719196774
+  },
+  "refresh_history": {
+   "n": 60,
+   "s": 0.005366326309740543
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 7.260293693980202
+  },
+  "route_all": {
+   "n": 2,
+   "s": 18.213726663962007
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.21364240208640695
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.20073137385770679
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  1.9187159340362996,
+  1.8890201030299067,
+  2.786750898929313,
+  1.8964353560004383,
+  4.299922795034945,
+  4.578972104936838
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 18.213726663962007,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 38.49472199403681
+}

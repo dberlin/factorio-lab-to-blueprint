@@ -1,0 +1,97 @@
+{
+ "area": null,
+ "astar_s": 6.50339676765725,
+ "budget_s": 60.0,
+ "cprofile": false,
+ "expansions": 16475067,
+ "groups": 33,
+ "hits": 1492,
+ "islands": null,
+ "machines": 449,
+ "misses": 35,
+ "passes": 2,
+ "phases": {
+  "astar": {
+   "n": 1527,
+   "s": 6.50339676765725
+  },
+  "build_landmarks": {
+   "n": 2,
+   "s": 0.1729387801606208
+  },
+  "coater_frame_bans": {
+   "n": 2,
+   "s": 2.2006786167621613
+  },
+  "commit_paths": {
+   "n": 10,
+   "s": 11.652147619286552
+  },
+  "junction_ban": {
+   "n": 2,
+   "s": 0.19936631293967366
+  },
+  "make_grid": {
+   "n": 47,
+   "s": 0.20494983694516122
+  },
+  "merge_frontier": {
+   "n": 883,
+   "s": 3.8364870599471033
+  },
+  "place_coaters": {
+   "n": 6,
+   "s": 3.4981525449547917
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.20708200405351818
+  },
+  "power_plan": {
+   "n": 2,
+   "s": 1.806904701050371
+  },
+  "prepare": {
+   "n": 6,
+   "s": 16.226842205272987
+  },
+  "refresh_history": {
+   "n": 60,
+   "s": 0.006460790056735277
+  },
+  "reserve_port_access": {
+   "n": 12,
+   "s": 6.485891241347417
+  },
+  "route_all": {
+   "n": 2,
+   "s": 18.075941791990772
+  },
+  "static_risks": {
+   "n": 4,
+   "s": 0.21264227689243853
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.20082395197823644
+  }
+ },
+ "policy": "all-products",
+ "prepare_calls_s": [
+  1.926365615800023,
+  1.9328699891921133,
+  1.9403284220024943,
+  1.9178571270313114,
+  4.255877434043214,
+  4.253543617203832
+ ],
+ "rate": 60,
+ "rounds": 2,
+ "route_all_s": 18.075941791990772,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "mall",
+ "verdict": "REFUSED: no packing of 46 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing; the sweep stopped after 3 draws that produced no new packing",
+ "wall_s": 37.24119566800073
+}

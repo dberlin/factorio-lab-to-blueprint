@@ -32,7 +32,35 @@ area is flat.  The brief's `DirectInsertTarget` copy path was NOT implemented
 `_direct_net_candidates` instead.  Next lever named by the measurement:
 `_selected_strips` (`sequence_solver.py:3730`), 9.56 s cumulative on the mall.
 Gate record: `docs/superpowers/evidence/2026-09-06-speedups-2-batch2/gate.md`.
-L4 + L5 (third batch) are next and unstarted.
+
+**Status (2026-09-06): §2's third batch — L4 + L5 — is implemented and GATED
+(PASS).**  `2e1a724` (certify only a candidate that would become the incumbent),
+`c53843f` (size the next candidate by the median, completion tail still a
+maximum) and `811190a` (cap the fresh-candidate charge at `dearest_candidate_s`,
+clear `started_at` once charged), with `2020e86` documenting the certify gate's
+invariant.  Three paired 30 s corpus rounds against master `b01f6fc`: **zero
+regressions, INVALID 0, CRASH 0, max `wall_overshoot_s` 0.000 s on BOTH trees**
+(216 cell-rounds each), freeform area **-0.40 %** pooled — inside the baseline
+tree's own -0.62 % round-to-round noise, with 9 of 11 moved cell-pairs smaller
+and no cell larger in all three rounds, so Ruling D2's "no worse" holds.  The one
+differing cell (`sequence-pair universe-matrix/all-products`, an arm this batch
+does not touch — the `src/` diff is `freeform.py` plus two `PlacementStats` field
+declarations) refuses once on the BASELINE tree in dedicated re-runs and is 5/6
+CLEAN on each tree: a flake.  **L4 delivers**: 372 certifications skipped over 108
+freeform cell-rounds, corpus certification time 129.15 s -> 88.16 s (-31.7 %), up
+to -87 % on a single cell, and 14 % of a 30 s budget returned on gm200.  **L5's
+predicted ~20 % more budget spent is NOT there as a corpus statistic**: mean
+budget spent 36.3 % -> 35.6 % and candidates attempted 780 -> 776.  It is real on
+four named cells (`universe-matrix/all-products` 2 -> 3 candidates and 81 -> 92 %
+of budget, `information-matrix/all-products` 7.3 -> 9.3, `quantum-chip/all-products`
+10 -> 11, and um120 in the re-profile 2 -> 3 with a smaller area); elsewhere the
+sweep stops for a reason the room predicate does not control — no new packing, or
+convergence — so L4's freed seconds shorten the run instead of buying search.
+Next levers named by this measurement: the completion tail (`validation_reserve_s`
+is a maximum over observed certify spans and is now what binds the large cells,
+`budget_unspent_s` 2-6 s), and the packing generator for the sweeps that exit
+with `budget_unspent_s` 0.000 at 54-74 % of budget.
+Gate record: `docs/superpowers/evidence/2026-09-06-speedups-2-batch3/gate.md`.
 
 Evidence: `docs/superpowers/evidence/2026-09-05-speedups-2/README.md`
 (measurements, cProfile dumps, core traces, two prototypes).  Baseline is
