@@ -343,3 +343,62 @@ body {
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+/* ---- trace timeline (search visualization, task 11) ---- */
+
+.trace-scrubber input[type='range'] {
+  flex: 1 1 12rem;
+}
+
+/* One row per strategy, all on the same horizontal `t` axis -- a raced build
+   reads as two rows rather than one interleaved stream. */
+.trace-lanes {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.25rem 0;
+}
+.trace-lane {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  align-items: center;
+  gap: 0.5rem;
+}
+.trace-lane-label {
+  font-size: 11px;
+  color: #8fa0b3;
+  text-transform: uppercase;
+}
+.trace-lane-track {
+  position: relative;
+  height: 1rem;
+  background: #0c1016;
+  border: 1px solid #26313d;
+  border-radius: 3px;
+}
+/* Positioned with `left` in percent, computed from `frame.t` -- never `seq`
+   or array order (task-11-addendum.md Ruling 2). */
+.trace-tick {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 60%;
+  transform: translate(-1px, -50%);
+  background: #5a6b7d;
+}
+.trace-tick-incumbent {
+  /* Incumbents drawn taller, per task-11-addendum.md Ruling 1. */
+  height: 100%;
+  width: 3px;
+  background: #9ad6a0;
+}
+.trace-tick-refused {
+  background: #ff8080;
+}
+.trace-tick-certified,
+.trace-tick-routed {
+  background: #4c8fd4;
+}
+.trace-tick-selected {
+  outline: 1px solid #e6edf5;
+  outline-offset: 1px;
+}
