@@ -1,0 +1,312 @@
+[
+ {
+  "commit": "ad442cac",
+  "strategy": "freeform",
+  "when": "2026-09-03 21:03:57 -0400",
+  "subject": "fix(bench): drop non-scalar stats before they reach a JSONL row",
+  "rows": 105,
+  "direct_inserts": 36,
+  "rows_with_direct": 21,
+  "direct_insert_candidates": 519
+ },
+ {
+  "commit": "ad442cac",
+  "strategy": "sequence-pair",
+  "when": "2026-09-03 21:03:57 -0400",
+  "subject": "fix(bench): drop non-scalar stats before they reach a JSONL row",
+  "rows": 105,
+  "direct_inserts": 36,
+  "rows_with_direct": 18,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "554e9b2e",
+  "strategy": "sequence-pair",
+  "when": "2026-09-03 21:29:17 -0400",
+  "subject": "docs(bench): describe gate E1's recorded load as the audit's own jobs",
+  "rows": 5,
+  "direct_inserts": 0,
+  "rows_with_direct": 0,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "8f8f1600",
+  "strategy": "sequence-pair",
+  "when": "2026-09-03 21:56:46 -0400",
+  "subject": "fix(layout): probe the destroy-repair product and count the window dro",
+  "rows": 15,
+  "direct_inserts": 0,
+  "rows_with_direct": 0,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "2561a08a",
+  "strategy": "freeform",
+  "when": "2026-09-04 01:53:54 -0400",
+  "subject": "test(layout): restore the Phase E mypy baseline",
+  "rows": 105,
+  "direct_inserts": 38,
+  "rows_with_direct": 21,
+  "direct_insert_candidates": 519
+ },
+ {
+  "commit": "2561a08a",
+  "strategy": "sequence-pair",
+  "when": "2026-09-04 01:53:54 -0400",
+  "subject": "test(layout): restore the Phase E mypy baseline",
+  "rows": 105,
+  "direct_inserts": 38,
+  "rows_with_direct": 19,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "891d09ea",
+  "strategy": "sequence-pair",
+  "when": "2026-09-04 08:40:55 -0400",
+  "subject": "feat: measure reusable sequence relation proofs",
+  "rows": 6,
+  "direct_inserts": 0,
+  "rows_with_direct": 0,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "fa9032df",
+  "strategy": "freeform",
+  "when": "2026-09-04 10:25:35 -0400",
+  "subject": "feat(layout): complete automatic piler reporting",
+  "rows": 105,
+  "direct_inserts": 39,
+  "rows_with_direct": 21,
+  "direct_insert_candidates": 519
+ },
+ {
+  "commit": "fa9032df",
+  "strategy": "sequence-pair",
+  "when": "2026-09-04 10:25:35 -0400",
+  "subject": "feat(layout): complete automatic piler reporting",
+  "rows": 105,
+  "direct_inserts": 38,
+  "rows_with_direct": 19,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "a1afec54",
+  "strategy": "freeform",
+  "when": "2026-09-05 03:10:49 -0400",
+  "subject": "docs: format cache plan example",
+  "rows": 108,
+  "direct_inserts": 39,
+  "rows_with_direct": 21,
+  "direct_insert_candidates": 708
+ },
+ {
+  "commit": "a1afec54",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 03:10:49 -0400",
+  "subject": "docs: format cache plan example",
+  "rows": 108,
+  "direct_inserts": 55,
+  "rows_with_direct": 26,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "789625fb",
+  "strategy": "freeform",
+  "when": "2026-09-05 10:52:10 -0400",
+  "subject": "Merge reviewed broke7 packer fix",
+  "rows": 102,
+  "direct_inserts": 55,
+  "rows_with_direct": 24,
+  "direct_insert_candidates": 528
+ },
+ {
+  "commit": "789625fb",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 10:52:10 -0400",
+  "subject": "Merge reviewed broke7 packer fix",
+  "rows": 107,
+  "direct_inserts": 45,
+  "rows_with_direct": 24,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "d81c4d9f",
+  "strategy": "freeform",
+  "when": "2026-09-05 12:26:37 -0400",
+  "subject": "Merge reviewed Sequence adapter typing",
+  "rows": 108,
+  "direct_inserts": 54,
+  "rows_with_direct": 23,
+  "direct_insert_candidates": 708
+ },
+ {
+  "commit": "d81c4d9f",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 12:26:37 -0400",
+  "subject": "Merge reviewed Sequence adapter typing",
+  "rows": 105,
+  "direct_inserts": 45,
+  "rows_with_direct": 24,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "19f95a68",
+  "strategy": "freeform",
+  "when": "2026-09-05 14:45:53 -0400",
+  "subject": "Merge master d81c4d9 into scale-levers",
+  "rows": 108,
+  "direct_inserts": 53,
+  "rows_with_direct": 24,
+  "direct_insert_candidates": 708
+ },
+ {
+  "commit": "19f95a68",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 14:45:53 -0400",
+  "subject": "Merge master d81c4d9 into scale-levers",
+  "rows": 105,
+  "direct_inserts": 45,
+  "rows_with_direct": 24,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "a232f0aa",
+  "strategy": "freeform",
+  "when": "2026-09-05 16:23:36 -0400",
+  "subject": "fix: refuse an unsupported or fully supplied objective with its reason",
+  "rows": 108,
+  "direct_inserts": 57,
+  "rows_with_direct": 24,
+  "direct_insert_candidates": 708
+ },
+ {
+  "commit": "a232f0aa",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 16:23:36 -0400",
+  "subject": "fix: refuse an unsupported or fully supplied objective with its reason",
+  "rows": 105,
+  "direct_inserts": 45,
+  "rows_with_direct": 24,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "c3d72294",
+  "strategy": "freeform",
+  "when": "2026-09-05 19:21:07 -0400",
+  "subject": "fix(layout): keep race parallelism and clamp island deadlines under th",
+  "rows": 108,
+  "direct_inserts": 57,
+  "rows_with_direct": 23,
+  "direct_insert_candidates": 708
+ },
+ {
+  "commit": "c3d72294",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 19:21:07 -0400",
+  "subject": "fix(layout): keep race parallelism and clamp island deadlines under th",
+  "rows": 107,
+  "direct_inserts": 47,
+  "rows_with_direct": 32,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "79eed920",
+  "strategy": "freeform",
+  "when": "2026-09-05 20:42:42 -0400",
+  "subject": "test(layout): rebuild the direct-insert fixtures for the flow-order ru",
+  "rows": 108,
+  "direct_inserts": 0,
+  "rows_with_direct": 0,
+  "direct_insert_candidates": 708
+ },
+ {
+  "commit": "79eed920",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 20:42:42 -0400",
+  "subject": "test(layout): rebuild the direct-insert fixtures for the flow-order ru",
+  "rows": 115,
+  "direct_inserts": 2,
+  "rows_with_direct": 2,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "ef2207a0",
+  "strategy": "freeform",
+  "when": "2026-09-05 21:44:52 -0400",
+  "subject": "test(layout): make the direct-candidate drift guard exercise the key b",
+  "rows": 108,
+  "direct_inserts": 0,
+  "rows_with_direct": 0,
+  "direct_insert_candidates": 708
+ },
+ {
+  "commit": "ef2207a0",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 21:44:52 -0400",
+  "subject": "test(layout): make the direct-candidate drift guard exercise the key b",
+  "rows": 116,
+  "direct_inserts": 0,
+  "rows_with_direct": 0,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "b01f6fc0",
+  "strategy": "freeform",
+  "when": "2026-09-05 22:08:32 -0400",
+  "subject": "evidence: speedups batch 2 gate and re-profile",
+  "rows": 228,
+  "direct_inserts": 0,
+  "rows_with_direct": 0,
+  "direct_insert_candidates": 1224
+ },
+ {
+  "commit": "b01f6fc0",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 22:08:32 -0400",
+  "subject": "evidence: speedups batch 2 gate and re-profile",
+  "rows": 238,
+  "direct_inserts": 2,
+  "rows_with_direct": 2,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "811190ac",
+  "strategy": "freeform",
+  "when": "2026-09-05 22:59:18 -0400",
+  "subject": "fix(layout): never charge a fresh freeform candidate more than the dea",
+  "rows": 108,
+  "direct_inserts": 0,
+  "rows_with_direct": 0,
+  "direct_insert_candidates": 708
+ },
+ {
+  "commit": "811190ac",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 22:59:18 -0400",
+  "subject": "fix(layout): never charge a fresh freeform candidate more than the dea",
+  "rows": 116,
+  "direct_inserts": 1,
+  "rows_with_direct": 1,
+  "direct_insert_candidates": 0
+ },
+ {
+  "commit": "?",
+  "strategy": "freeform",
+  "when": "2026-09-05 23:22:53 -0400",
+  "subject": "evidence: speedups batch 3 gate and re-profile",
+  "rows": 46,
+  "direct_inserts": 79,
+  "rows_with_direct": 11,
+  "direct_insert_candidates": 1725
+ },
+ {
+  "commit": "?",
+  "strategy": "sequence-pair",
+  "when": "2026-09-05 23:22:53 -0400",
+  "subject": "evidence: speedups batch 3 gate and re-profile",
+  "rows": 34,
+  "direct_inserts": 24,
+  "rows_with_direct": 16,
+  "direct_insert_candidates": 0
+ }
+]

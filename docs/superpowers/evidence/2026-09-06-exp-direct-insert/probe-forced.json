@@ -1,0 +1,112 @@
+[
+ {
+  "verdict": "CLEAN",
+  "errors": [],
+  "skipped_checks": 0,
+  "area": 363.0,
+  "direct_inserts": 0.0,
+  "belt_tiles": 70.0,
+  "cell": "graphene",
+  "forced": false,
+  "models": 0,
+  "vars": 0
+ },
+ {
+  "verdict": "NoValidLayout('no valid layout for no-proliferator after 10s: no pack of 2 strips was ever produced at any can",
+  "cell": "graphene",
+  "forced": true,
+  "models": 5,
+  "vars": 5
+ },
+ {
+  "verdict": "CLEAN",
+  "errors": [],
+  "skipped_checks": 0,
+  "area": 198.0,
+  "direct_inserts": 0.0,
+  "belt_tiles": 50.0,
+  "cell": "magnetic-coil",
+  "forced": false,
+  "models": 0,
+  "vars": 0
+ },
+ {
+  "verdict": "NoValidLayout('no valid layout for no-proliferator after 10s: no packing of 3 strips could be wired at any can",
+  "cell": "magnetic-coil",
+  "forced": true,
+  "models": 6,
+  "vars": 6
+ },
+ {
+  "verdict": "CLEAN",
+  "errors": [],
+  "skipped_checks": 0,
+  "area": 609.0,
+  "direct_inserts": 0.0,
+  "belt_tiles": 166.0,
+  "cell": "electromagnetic-matrix",
+  "forced": false,
+  "models": 0,
+  "vars": 0
+ },
+ {
+  "verdict": "CLEAN",
+  "errors": [],
+  "skipped_checks": 0,
+  "area": 630.0,
+  "direct_inserts": 1.0,
+  "belt_tiles": 152.0,
+  "cell": "electromagnetic-matrix",
+  "forced": true,
+  "models": 16,
+  "vars": 16
+ },
+ {
+  "verdict": "CLEAN",
+  "errors": [],
+  "skipped_checks": 0,
+  "area": 810.0,
+  "direct_inserts": 0.0,
+  "belt_tiles": 271.0,
+  "cell": "processor",
+  "forced": false,
+  "models": 0,
+  "vars": 0
+ },
+ {
+  "verdict": "CLEAN",
+  "errors": [],
+  "skipped_checks": 0,
+  "area": 1044.0,
+  "direct_inserts": 0.0,
+  "belt_tiles": 299.0,
+  "cell": "processor",
+  "forced": true,
+  "models": 16,
+  "vars": 16
+ },
+ {
+  "verdict": "CLEAN",
+  "errors": [],
+  "skipped_checks": 0,
+  "area": 1107.0,
+  "direct_inserts": 0.0,
+  "belt_tiles": 398.0,
+  "cell": "casimir-crystal",
+  "forced": false,
+  "models": 0,
+  "vars": 0
+ },
+ {
+  "verdict": "CLEAN",
+  "errors": [],
+  "skipped_checks": 0,
+  "area": 1248.0,
+  "direct_inserts": 1.0,
+  "belt_tiles": 350.0,
+  "cell": "casimir-crystal",
+  "forced": true,
+  "models": 15,
+  "vars": 15
+ }
+]
