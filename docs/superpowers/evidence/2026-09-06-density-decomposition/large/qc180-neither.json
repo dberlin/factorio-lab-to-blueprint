@@ -1,0 +1,95 @@
+{
+ "area": null,
+ "astar_s": 5.678650756366551,
+ "budget_s": 30.0,
+ "cprofile": false,
+ "expansions": 15265353,
+ "groups": 15,
+ "hits": 2673,
+ "islands": null,
+ "machines": 252,
+ "misses": 788,
+ "passes": 16,
+ "phases": {
+  "astar": {
+   "n": 3461,
+   "s": 5.678650756366551
+  },
+  "build_landmarks": {
+   "n": 16,
+   "s": 0.6209540066774935
+  },
+  "commit_paths": {
+   "n": 50,
+   "s": 1.6180658547673374
+  },
+  "junction_ban": {
+   "n": 16,
+   "s": 0.2984546187799424
+  },
+  "make_grid": {
+   "n": 93,
+   "s": 0.20932597806677222
+  },
+  "merge_frontier": {
+   "n": 3532,
+   "s": 0.0026903117541223764
+  },
+  "plan_strips": {
+   "n": 2,
+   "s": 0.008624179987236857
+  },
+  "power_plan": {
+   "n": 16,
+   "s": 6.576087336055934
+  },
+  "prepare": {
+   "n": 16,
+   "s": 11.404977038968354
+  },
+  "refresh_history": {
+   "n": 182,
+   "s": 0.046442544320598245
+  },
+  "reserve_port_access": {
+   "n": 32,
+   "s": 2.4394253022037446
+  },
+  "route_all": {
+   "n": 16,
+   "s": 6.653920808574185
+  },
+  "strip_families": {
+   "n": 1,
+   "s": 0.13667573290877044
+  }
+ },
+ "policy": "no-proliferator",
+ "prepare_calls_s": [
+  0.8802004388999194,
+  0.6992353149689734,
+  0.5984904689248651,
+  0.6778033480513841,
+  0.7131122669670731,
+  0.7029149001464248,
+  0.7543767930474132,
+  0.6777976169250906,
+  0.75655836192891,
+  0.6824331120587885,
+  0.7708315521012992,
+  0.7439979249611497,
+  0.7089365019928664,
+  0.6751717959996313,
+  0.694717895006761,
+  0.6683987469878048
+ ],
+ "rate": 180,
+ "rounds": 41,
+ "route_all_s": 6.653920808574185,
+ "route_backend": "cython",
+ "stats": {},
+ "strategy": "freeform",
+ "target": "quantum-chip",
+ "verdict": "REFUSED: no packing of 20 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing",
+ "wall_s": 20.877401842037216
+}

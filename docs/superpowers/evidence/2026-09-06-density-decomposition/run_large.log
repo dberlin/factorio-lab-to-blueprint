@@ -1,0 +1,25 @@
+=== base 2026-09-05T22:36:48-04:00
+um60/base exit 0
+um120/base exit 0
+qc180/base exit 0
+gm200/base exit 0
+belt3/base exit 0
+=== nodirect 2026-09-05T22:38:31-04:00
+um120/nodirect exit 0
+um60/nodirect exit 0
+qc180/nodirect exit 0
+gm200/nodirect exit 0
+belt3/nodirect exit 0
+=== noshare 2026-09-05T22:40:28-04:00
+um60/noshare exit 0
+um120/noshare exit 0
+gm200/noshare exit 0
+qc180/noshare exit 0
+belt3/noshare exit 0
+=== neither 2026-09-05T22:42:01-04:00
+um60/neither exit 0
+um120/neither exit 0
+gm200/neither exit 0
+qc180/neither exit 0
+belt3/neither exit 0
+large-done

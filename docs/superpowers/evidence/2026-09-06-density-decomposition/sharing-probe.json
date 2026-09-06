@@ -1,0 +1,32 @@
+[
+ {
+  "cell": "um60",
+  "machines": 330,
+  "nets": 67,
+  "splitters": 6,
+  "belt_tiles": 14874,
+  "area": 39710,
+  "merge_frontier_calls": 4704,
+  "merge_frontier_nonempty": 92
+ },
+ {
+  "cell": "qc180",
+  "machines": 432,
+  "nets": 26,
+  "splitters": 7,
+  "belt_tiles": 7582,
+  "area": 25608,
+  "merge_frontier_calls": 1234,
+  "merge_frontier_nonempty": 108
+ },
+ {
+  "cell": "processor60",
+  "machines": 25,
+  "nets": 7,
+  "splitters": 0,
+  "belt_tiles": 445,
+  "area": 1008,
+  "merge_frontier_calls": 210,
+  "merge_frontier_nonempty": 15
+ }
+]
