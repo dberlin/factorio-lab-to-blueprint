@@ -2208,6 +2208,9 @@ def test_racing_forwards_every_knob_the_race_owns(
         "workers": 9,
         "sequence_islands": 2,
         "share": False,
+        # `None`: no `search_observer` was given, so no trace queue is built
+        # (Task 8) -- the untraced, shipping shape of a raced build.
+        "trace_queue": None,
     }
     # Pre-splitting here would split twice: `run_strategy_race` calls
     # `race_worker_split` itself, and (6, 3) is what 9 becomes inside it.

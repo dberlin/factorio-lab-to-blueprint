@@ -1,3 +1,4 @@
+import queue
 import threading
 import time
 from fractions import Fraction
@@ -235,4 +236,60 @@ def test_collector_drops_and_counts_when_stage_one_overflows() -> None:
         collector.observer.note(
             SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT)
         )
+    assert collector.dropped == 8
+
+
+def test_collector_drains_a_raced_builds_queue_alongside_its_in_process_deque() -> None:
+    """Task 8: a raced arm's events arrive on a queue, not through `.note()` --
+    ``drain_once`` must pull from both sources in the same pass."""
+    trace_queue: queue.Queue[object] = queue.Queue()
+    trace_queue.put_nowait(
+        SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT)
+    )
+    trace_queue.put_nowait(
+        SearchEvent(strategy="sequence-pair", candidate="c", phase=SearchPhase.INCUMBENT)
+    )
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic(), queue=trace_queue)
+
+    collector.drain_once()
+
+    frames, nxt = collector.ring.since(-1, limit=10)
+    assert [f["strategy"] for f in frames] == ["freeform", "sequence-pair"]
+    assert nxt == 1
+
+
+def test_collector_merges_an_in_process_event_and_a_queued_event_into_one_ordered_ring() -> None:
+    """'One ordered ring' (Task 8): a cross-process source and an in-process
+    one must not race each other into the ring on separate passes."""
+    trace_queue: queue.Queue[object] = queue.Queue()
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic(), queue=trace_queue)
+
+    collector.observer.note(
+        SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT)
+    )
+    trace_queue.put_nowait(
+        SearchEvent(strategy="sequence-pair", candidate="c", phase=SearchPhase.INCUMBENT)
+    )
+    collector.drain_once()
+
+    frames, nxt = collector.ring.since(-1, limit=10)
+    assert [(f["seq"], f["strategy"]) for f in frames] == [
+        (0, "freeform"),
+        (1, "sequence-pair"),
+    ]
+    assert nxt == 1
+
+
+def test_collector_counts_a_queue_sourced_overflow_the_same_way_a_deque_overflow_is() -> None:
+    trace_queue: queue.Queue[object] = queue.Queue()
+    for _ in range(10):
+        trace_queue.put_nowait(
+            SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT)
+        )
+    collector = TraceCollector(
+        TraceRing(), started_at=time.monotonic(), stage1_maxlen=2, queue=trace_queue
+    )
+
+    collector.drain_once()
+
     assert collector.dropped == 8

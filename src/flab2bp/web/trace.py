@@ -22,6 +22,7 @@ from typing import Final, cast
 
 from flab2bp.layout.base import PlacedBuilding
 from flab2bp.layout.observe import TRACE_SAMPLE_INTERVAL_S, SampledObserver, SearchEvent
+from flab2bp.layout.observe_channel import _MessageQueue, drain_trace
 from flab2bp.web.payload import Json
 
 #: The row order.  Positional, so the client decodes with a zod tuple and the
@@ -186,6 +187,11 @@ class TraceCollector:
     started_at: float
     stage1_maxlen: int = TRACE_STAGE1_MAXLEN
     min_interval_s: float = TRACE_SAMPLE_INTERVAL_S
+    #: The parent's read end of a raced build's child-to-parent trace queue, or
+    #: ``None`` for an in-process-only build.  Drained in the same
+    #: ``drain_once`` pass as ``_pending`` (Task 8), so a cross-process source
+    #: and an in-process one land in one ordered ring rather than two.
+    queue: object | None = None
     _pending: deque[tuple[float, SearchEvent]] = field(init=False)
     _dropped: int = field(default=0, init=False)
     _seq: int = field(default=0, init=False)
@@ -209,6 +215,14 @@ class TraceCollector:
         self._pending.append((time.monotonic(), event))
 
     def drain_once(self) -> None:
+        if self.queue is not None:
+            for event in drain_trace(cast(_MessageQueue, self.queue)):
+                # Same overflow accounting `_offer` uses: a bounded deque
+                # evicts silently, so an eviction forced by a queue-sourced
+                # event must be counted here too or it is discovered later.
+                if len(self._pending) == self._pending.maxlen:
+                    self._dropped += 1
+                self._pending.append((time.monotonic(), event))
         while self._pending:
             at, event = self._pending.popleft()
             self.ring.append(frame_json(self._seq, round(at - self.started_at, 3), event))

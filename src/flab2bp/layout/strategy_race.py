@@ -46,6 +46,12 @@ from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Placement, ProjectionFailureRecord
 from flab2bp.layout.compact_seed import CompactSeedConfig
+from flab2bp.layout.observe import (
+    TRACE_CHILD_SAMPLE_INTERVAL_S,
+    SampledObserver,
+    SearchObserver,
+)
+from flab2bp.layout.observe_channel import install_trace_channel, trace_channel
 from flab2bp.layout.sequence_solver import SequenceSolverConfig, _validate_sequence_islands
 from flab2bp.layout.strip_variants import StripInstanceId
 from flab2bp.spec import BuildSpec
@@ -325,6 +331,10 @@ class _StrategyRaceRequest:
     config: SequenceSolverConfig
     compact_seed_config: CompactSeedConfig
     share: bool
+    #: Whether a trace queue was installed for this race. A plain bool, not the
+    #: queue itself: a ``multiprocessing.Queue`` cannot be pickled as a task
+    #: argument (see ``_pool_submit``'s ``initargs`` instead, ``:399-401``).
+    trace: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +353,11 @@ class _StrategyRaceOutcome:
     published_no_goods: int = 0
     consumed_no_goods: int = 0
     dropped_messages: int = 0
+    #: Frames this leg's own trace channel dropped -- a transiently full queue,
+    #: OR (Ruling 4, task-8-addendum.md) an event that could not be pickled at
+    #: all.  Both increment the same counter; a sustained nonzero value across
+    #: many builds is the signal a structural failure looks like from here.
+    trace_dropped: int = 0
     #: Process-local measurements for exactly this strategy child. Peak RSS is
     #: normalized to KiB across supported POSIX platforms; platforms without
     #: ``resource.getrusage`` report zero. CPU deltas exclude the spawned
@@ -417,6 +432,25 @@ def _install_race_channels(to_freeform: object, to_sequence_pair: object) -> Non
     }
 
 
+def _install_child_channels(
+    to_freeform: object,
+    to_sequence_pair: object,
+    trace_queue: object,
+) -> None:
+    """Pool initializer.  One function because an executor takes exactly one.
+
+    Either half may be a no-op: sharing off passes both race ends as ``None``,
+    trace off passes the trace queue as ``None``, and the child then installs
+    nothing rather than an empty channel that would look installed. (Ruling 1,
+    task-8-addendum.md: a two-branch initializer keyed only on sharing would
+    leave trace-on/share-off with no initializer at all, and every raced arm
+    would silently emit zero frames.)
+    """
+    if to_freeform is not None and to_sequence_pair is not None:
+        _install_race_channels(to_freeform, to_sequence_pair)
+    install_trace_channel(trace_queue)
+
+
 def _channels_for(strategy: str) -> RaceChannels | None:
     return None if _RACE_CHANNELS is None else _RACE_CHANNELS.get(strategy)
 
@@ -426,8 +460,15 @@ def _build_layout(
     *,
     portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
     publish_incumbent: Callable[[Placement], None] | None = None,
+    observer: SearchObserver | None = None,
 ) -> FreeformLayout | SequencePairLayout:
-    """Reconstruct one strategy from the pickled request, in the child."""
+    """Reconstruct one strategy from the pickled request, in the child.
+
+    ``observer`` is a SEPARATE parameter from ``publish_incumbent`` (Ruling 3,
+    task-8-addendum.md): the publish hook runs a full ``validate.validate``
+    before it publishes, and trace must never inherit that cost. All three
+    hooks -- portfolio, publish, and observer -- coexist.
+    """
     from flab2bp.layout.freeform import FreeformLayout
     from flab2bp.layout.sequence_solver import SequencePairLayout
 
@@ -439,6 +480,7 @@ def _build_layout(
             belt_vertical_construction=request.belt_vertical_construction,
             portfolio_incumbent=portfolio_incumbent,
             publish_incumbent=publish_incumbent,
+            observer=observer,
         )
     return SequencePairLayout(
         band_policy=request.band_policy,
@@ -448,6 +490,7 @@ def _build_layout(
         islands=request.sequence_islands,
         portfolio_incumbent=portfolio_incumbent,
         publish_incumbent=publish_incumbent,
+        observer=observer,
     )
 
 
@@ -477,6 +520,19 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
     from flab2bp.layout.base import NoValidLayout
 
     channels = _channels_for(request.strategy) if request.share else None
+    #: The child's write end of the trace queue, or ``None`` when tracing is
+    #: off. Built from ``trace_channel()`` and not from ``request`` directly:
+    #: the queue itself cannot ride a pickled request, so the pool initializer
+    #: installed it as a module global before this leg ever ran (Ruling 1).
+    trace = trace_channel() if request.trace else None
+    #: The CHILD sample interval and not the parent's (Ruling 2,
+    #: task-8-addendum.md): the queue's feeder thread does the pickling, and
+    #: that CPU is this child's own, not free parent background work.
+    observer = (
+        None
+        if trace is None
+        else SampledObserver(sink=trace.offer, min_interval_s=TRACE_CHILD_SAMPLE_INTERVAL_S)
+    )
 
     #: The best key any drained message has carried, kept as a RUNNING minimum:
     #: the queue is drained once and the answer is asked for many times, so the
@@ -551,6 +607,7 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         request,
         portfolio_incumbent=portfolio_incumbent,
         publish_incumbent=publish,
+        observer=observer,
     )
     try:
         placement = layout.lay_out(
@@ -593,6 +650,8 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         # refused still holds whatever it published.
         if channels is not None:
             channels.close()
+        if trace is not None:
+            trace.close()
     usage_finished = _process_usage()
     return replace(
         outcome,
@@ -600,17 +659,31 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         process_user_cpu_s=usage_finished[0] - usage_started[0],
         process_system_cpu_s=usage_finished[1] - usage_started[1],
         process_peak_rss_kib=usage_finished[2],
+        trace_dropped=0 if trace is None else trace.dropped,
     )
 
 
-#: What ``run_strategy_race`` needs from whatever starts the two legs: given the
-#: requests and the channels, return the futures by strategy and the executor to
-#: stop.  The seam exists so the parent's wall discipline can be tested without a
-#: process pool.
-type RaceSubmit = Callable[
-    [tuple[_StrategyRaceRequest, ...], dict[str, RaceChannels]],
-    tuple[dict[Future[_StrategyRaceOutcome], str], object],
-]
+class RaceSubmit(Protocol):
+    """What ``run_strategy_race`` needs from whatever starts the two legs.
+
+    Given the requests, the channels, and (optionally) a trace queue, return
+    the futures by strategy and the executor to stop.  The seam exists so the
+    parent's wall discipline can be tested without a process pool.
+
+    A ``Protocol`` with a defaulted third parameter, not a two-argument
+    ``Callable``: every pre-tracing seam in the test suite supplies exactly two
+    arguments, and ``run_strategy_race`` calls a seam with three ONLY when a
+    trace queue was actually given, so a seam that never expected one is never
+    asked for it.
+    """
+
+    def __call__(
+        self,
+        requests: tuple[_StrategyRaceRequest, ...],
+        channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
+        /,
+    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]: ...
 
 
 def _available_cores() -> int:
@@ -649,22 +722,34 @@ def _terminate_executor(
 def _pool_submit(
     requests: tuple[_StrategyRaceRequest, ...],
     channels: dict[str, RaceChannels],
+    trace_queue: object | None = None,
 ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
     """Start both legs in spawned children, one task per child.
 
-    An EMPTY ``channels`` means sharing is off.  The initializer is then omitted
-    entirely rather than handed empty queues: only a ``multiprocessing.Queue``
-    survives the spawn hand-off, so passing anything else in ``initargs`` fails
-    at pickling in the parent.
+    A THIRD shape, not two (Ruling 1, task-8-addendum.md): the composite
+    initializer runs whenever EITHER sharing or tracing is on, because a
+    two-branch initializer keyed only on ``channels`` would leave (trace on,
+    share off) with no initializer at all, and every raced arm would silently
+    emit zero frames.
+
+    An EMPTY ``channels`` AND a ``None`` trace queue means neither is on.  The
+    initializer is then omitted entirely rather than handed empty/``None``
+    arguments -- this is the shipping path, and it keeps the exact shape it
+    always had: only a ``multiprocessing.Queue`` survives the spawn hand-off,
+    so passing anything else in ``initargs`` fails at pickling in the parent.
     """
     context = multiprocessing.get_context("spawn")
-    if channels:
+    if channels or trace_queue is not None:
         executor = ProcessPoolExecutor(
             max_workers=len(RACE_STRATEGIES),
             mp_context=context,
             max_tasks_per_child=1,
-            initializer=_install_race_channels,
-            initargs=(channels["freeform"].consume, channels["sequence-pair"].consume),
+            initializer=_install_child_channels,
+            initargs=(
+                channels["freeform"].consume if channels else None,
+                channels["sequence-pair"].consume if channels else None,
+                trace_queue,
+            ),
         )
     else:
         executor = ProcessPoolExecutor(
@@ -691,6 +776,11 @@ def run_strategy_race(
     config: SequenceSolverConfig | None = None,
     compact_seed_config: CompactSeedConfig | None = None,
     share: bool = True,
+    #: The parent's read end for child-to-parent trace events, or ``None`` --
+    #: the default and the shipping path -- when tracing is off.  Independent
+    #: of ``share``: sharing exchanges incumbents and no-goods BETWEEN the two
+    #: arms, while this carries a debugging view FROM each arm TO the parent.
+    trace_queue: object | None = None,
     submit: RaceSubmit | None = None,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> tuple[_StrategyRaceOutcome, ...]:
@@ -748,13 +838,20 @@ def run_strategy_race(
             config=config or SequenceSolverConfig(),
             compact_seed_config=compact_seed_config or CompactSeedConfig(),
             share=share,
+            trace=trace_queue is not None,
         )
         for name in RACE_STRATEGIES
     )
     outcomes: list[_StrategyRaceOutcome] = []
     first_error: BaseException | None = None
     try:
-        futures, executor = (submit or _pool_submit)(requests, channels)
+        # Two shapes, not one unconditional 3-argument call: a seam predating
+        # tracing accepts exactly two arguments, and is never asked for a third
+        # it never promised to take (see ``RaceSubmit``).
+        if trace_queue is None:
+            futures, executor = (submit or _pool_submit)(requests, channels)
+        else:
+            futures, executor = (submit or _pool_submit)(requests, channels, trace_queue)
         strategy_by_future = dict(futures)
         # One future per arm, asserted rather than assumed.  The collector takes
         # the FIRST future for each name and `_ordered` keys a dict on the
