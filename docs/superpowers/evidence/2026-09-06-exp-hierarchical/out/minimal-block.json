@@ -1,0 +1,162 @@
+[
+  {
+    "case": "as-decomposed (belt_stack 4, sprayed)",
+    "strategy": "freeform",
+    "budget_s": 12.0,
+    "wall_s": 11.6,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run"
+  },
+  {
+    "case": "as-decomposed (belt_stack 4, sprayed)",
+    "strategy": "freeform",
+    "budget_s": 60.0,
+    "wall_s": 13.51,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; the sweep stopped after"
+  },
+  {
+    "case": "as-decomposed (belt_stack 4, sprayed)",
+    "strategy": "sequence-pair",
+    "budget_s": 12.0,
+    "wall_s": 1.05,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "as-decomposed (belt_stack 4, sprayed)",
+    "strategy": "sequence-pair",
+    "budget_s": 60.0,
+    "wall_s": 1.05,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "belt_stack 1",
+    "strategy": "freeform",
+    "budget_s": 12.0,
+    "wall_s": 12.0,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run"
+  },
+  {
+    "case": "belt_stack 1",
+    "strategy": "freeform",
+    "budget_s": 60.0,
+    "wall_s": 13.65,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; the sweep stopped after"
+  },
+  {
+    "case": "belt_stack 1",
+    "strategy": "sequence-pair",
+    "budget_s": 12.0,
+    "wall_s": 1.06,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "belt_stack 1",
+    "strategy": "sequence-pair",
+    "budget_s": 60.0,
+    "wall_s": 1.05,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "no piler",
+    "strategy": "freeform",
+    "budget_s": 12.0,
+    "wall_s": 11.47,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run"
+  },
+  {
+    "case": "no piler",
+    "strategy": "freeform",
+    "budget_s": 60.0,
+    "wall_s": 13.51,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; the sweep stopped after"
+  },
+  {
+    "case": "no piler",
+    "strategy": "sequence-pair",
+    "budget_s": 12.0,
+    "wall_s": 1.04,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "no piler",
+    "strategy": "sequence-pair",
+    "budget_s": 60.0,
+    "wall_s": 1.04,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "belt_stack 1 + no piler",
+    "strategy": "freeform",
+    "budget_s": 12.0,
+    "wall_s": 11.62,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run"
+  },
+  {
+    "case": "belt_stack 1 + no piler",
+    "strategy": "freeform",
+    "budget_s": 60.0,
+    "wall_s": 13.5,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; the sweep stopped after"
+  },
+  {
+    "case": "belt_stack 1 + no piler",
+    "strategy": "sequence-pair",
+    "budget_s": 12.0,
+    "wall_s": 1.06,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "belt_stack 1 + no piler",
+    "strategy": "sequence-pair",
+    "budget_s": 60.0,
+    "wall_s": 1.06,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "unsprayed",
+    "strategy": "freeform",
+    "budget_s": 12.0,
+    "wall_s": 11.56,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run"
+  },
+  {
+    "case": "unsprayed",
+    "strategy": "freeform",
+    "budget_s": 60.0,
+    "wall_s": 13.65,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run; the sweep stopped after"
+  },
+  {
+    "case": "unsprayed",
+    "strategy": "sequence-pair",
+    "budget_s": 12.0,
+    "wall_s": 1.07,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "case": "unsprayed",
+    "strategy": "sequence-pair",
+    "budget_s": 60.0,
+    "wall_s": 1.06,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  }
+]

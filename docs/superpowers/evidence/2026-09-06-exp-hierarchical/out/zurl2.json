@@ -1,0 +1,1167 @@
+{
+  "label": "zurl2",
+  "routing": "corridor router",
+  "url": "zurl2",
+  "policy": "all-products",
+  "cap": 60,
+  "budget_s": 12.0,
+  "gap": 2,
+  "best_known_area": 40905,
+  "uptime_start": "00:32:12 up 21 days,  6:18, 11 users,  load average: 4.62, 4.94, 6.11",
+  "machines": 436,
+  "groups": 32,
+  "depth_pressure_profile": [
+    {
+      "cut_after_depth": 0,
+      "recipes_below": 9,
+      "machines_below": 206,
+      "item_pressure": 10,
+      "lane_pressure": 13,
+      "items": [
+        "copper-ingot",
+        "energetic-graphite",
+        "glass",
+        "graphene",
+        "high-purity-silicon",
+        "hydrogen",
+        "iron-ingot",
+        "magnet",
+        "stone-brick",
+        "titanium-ingot"
+      ]
+    },
+    {
+      "cut_after_depth": 1,
+      "recipes_below": 17,
+      "machines_below": 279,
+      "item_pressure": 16,
+      "lane_pressure": 18,
+      "items": [
+        "carbon-nanotube",
+        "circuit-board",
+        "energetic-graphite",
+        "gear",
+        "graphene",
+        "high-purity-silicon",
+        "hydrogen",
+        "iron-ingot",
+        "magnet",
+        "magnetic-coil",
+        "microcrystalline-component",
+        "steel",
+        "stone-brick",
+        "titanium-crystal",
+        "titanium-glass",
+        "titanium-ingot"
+      ]
+    },
+    {
+      "cut_after_depth": 2,
+      "recipes_below": 23,
+      "machines_below": 348,
+      "item_pressure": 13,
+      "lane_pressure": 13,
+      "items": [
+        "arc-smelter",
+        "carbon-nanotube",
+        "casimir-crystal",
+        "conveyor-belt-1",
+        "electric-motor",
+        "energetic-graphite",
+        "graphene",
+        "high-purity-silicon",
+        "magnet",
+        "magnetic-coil",
+        "processor",
+        "titanium-alloy",
+        "titanium-glass"
+      ]
+    },
+    {
+      "cut_after_depth": 3,
+      "recipes_below": 26,
+      "machines_below": 399,
+      "item_pressure": 10,
+      "lane_pressure": 10,
+      "items": [
+        "arc-smelter",
+        "conveyor-belt-1",
+        "electromagnetic-turbine",
+        "energetic-graphite",
+        "frame-material",
+        "graphene",
+        "magnet",
+        "plane-filter",
+        "processor",
+        "titanium-alloy"
+      ]
+    },
+    {
+      "cut_after_depth": 4,
+      "recipes_below": 30,
+      "machines_below": 427,
+      "item_pressure": 6,
+      "lane_pressure": 6,
+      "items": [
+        "conveyor-belt-2",
+        "frame-material",
+        "graphene",
+        "quantum-chip",
+        "super-magnetic-ring",
+        "titanium-alloy"
+      ]
+    }
+  ],
+  "arm": "size-cap",
+  "partition_wall_s": 0.045,
+  "composed_machines": 436,
+  "block_solve_wall_s": 0.0,
+  "escalation_rounds": [
+    {
+      "depth": 0,
+      "solved": 9,
+      "refused": 1,
+      "blocks": 10
+    },
+    {
+      "depth": 1,
+      "solved": 2,
+      "refused": 0,
+      "blocks": 11
+    }
+  ],
+  "blocks": [
+    {
+      "index": 0,
+      "machines": 10,
+      "recipes": 1,
+      "depth": 0,
+      "external_inputs": 2,
+      "outputs": 1
+    },
+    {
+      "index": 1,
+      "machines": 57,
+      "recipes": 2,
+      "depth": 0,
+      "external_inputs": 2,
+      "outputs": 2
+    },
+    {
+      "index": 2,
+      "machines": 56,
+      "recipes": 3,
+      "depth": 0,
+      "external_inputs": 8,
+      "outputs": 3
+    },
+    {
+      "index": 3,
+      "machines": 58,
+      "recipes": 12,
+      "depth": 0,
+      "external_inputs": 11,
+      "outputs": 4
+    },
+    {
+      "index": 4,
+      "machines": 57,
+      "recipes": 2,
+      "depth": 0,
+      "external_inputs": 4,
+      "outputs": 1
+    },
+    {
+      "index": 5,
+      "machines": 60,
+      "recipes": 6,
+      "depth": 0,
+      "external_inputs": 8,
+      "outputs": 5
+    },
+    {
+      "index": 6,
+      "machines": 2,
+      "recipes": 1,
+      "depth": 1,
+      "external_inputs": 3,
+      "outputs": 1
+    },
+    {
+      "index": 7,
+      "machines": 1,
+      "recipes": 1,
+      "depth": 1,
+      "external_inputs": 3,
+      "outputs": 1
+    },
+    {
+      "index": 8,
+      "machines": 60,
+      "recipes": 5,
+      "depth": 0,
+      "external_inputs": 6,
+      "outputs": 3
+    },
+    {
+      "index": 9,
+      "machines": 46,
+      "recipes": 1,
+      "depth": 0,
+      "external_inputs": 4,
+      "outputs": 1
+    },
+    {
+      "index": 10,
+      "machines": 29,
+      "recipes": 1,
+      "depth": 0,
+      "external_inputs": 3,
+      "outputs": 1
+    }
+  ],
+  "cut_pressure": {
+    "item_pressure": 43,
+    "lane_pressure": 46,
+    "distinct_crossing_items": 31,
+    "boundaries": 25,
+    "max_boundary_lane_pressure": 3
+  },
+  "cut_pressure_boundaries": [
+    {
+      "from": 0,
+      "to": 2,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "energetic-graphite": "88/15"
+      }
+    },
+    {
+      "from": 1,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "3128/1875"
+      }
+    },
+    {
+      "from": 1,
+      "to": 8,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "gear": "24/5"
+      }
+    },
+    {
+      "from": 1,
+      "to": 9,
+      "item_pressure": 2,
+      "lane_pressure": 2,
+      "items": {
+        "gear": "8512/375",
+        "iron-ingot": "7988/375"
+      }
+    },
+    {
+      "from": 2,
+      "to": 4,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnet": "100112/8875"
+      }
+    },
+    {
+      "from": 2,
+      "to": 8,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "super-magnetic-ring": "6"
+      }
+    },
+    {
+      "from": 3,
+      "to": 2,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "quantum-chip": "8/15"
+      }
+    },
+    {
+      "from": 3,
+      "to": 4,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "copper-ingot": "12808/625"
+      }
+    },
+    {
+      "from": 3,
+      "to": 5,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "high-purity-silicon": "22/15"
+      }
+    },
+    {
+      "from": 4,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnetic-coil": "4/25"
+      }
+    },
+    {
+      "from": 4,
+      "to": 9,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnetic-coil": "8512/375"
+      }
+    },
+    {
+      "from": 4,
+      "to": 10,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnetic-coil": "2128/75"
+      }
+    },
+    {
+      "from": 5,
+      "to": 2,
+      "item_pressure": 2,
+      "lane_pressure": 2,
+      "items": {
+        "frame-material": "4/3",
+        "titanium-alloy": "8/3"
+      }
+    },
+    {
+      "from": 5,
+      "to": 3,
+      "item_pressure": 3,
+      "lane_pressure": 3,
+      "items": {
+        "casimir-crystal": "376/375",
+        "frame-material": "1/2",
+        "titanium-ingot": "3008/1875"
+      }
+    },
+    {
+      "from": 5,
+      "to": 6,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "titanium-ingot": "12032/9375"
+      }
+    },
+    {
+      "from": 5,
+      "to": 7,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "titanium-ingot": "6016/9375"
+      }
+    },
+    {
+      "from": 5,
+      "to": 8,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "graphene": "6"
+      }
+    },
+    {
+      "from": 6,
+      "to": 5,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "titanium-crystal": "3008/5625"
+      }
+    },
+    {
+      "from": 7,
+      "to": 5,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "titanium-crystal": "1504/5625"
+      }
+    },
+    {
+      "from": 8,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "3128/1875"
+      }
+    },
+    {
+      "from": 8,
+      "to": 5,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "steel": "248/75"
+      }
+    },
+    {
+      "from": 8,
+      "to": 9,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "48308/1875"
+      }
+    },
+    {
+      "from": 9,
+      "to": 10,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electric-motor": "2128/75"
+      }
+    },
+    {
+      "from": 10,
+      "to": 2,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electromagnetic-turbine": "176/15"
+      }
+    },
+    {
+      "from": 10,
+      "to": 8,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electromagnetic-turbine": "6"
+      }
+    }
+  ],
+  "cuts_point_to_point": [
+    [
+      "casimir-crystal",
+      5,
+      3,
+      "376/375"
+    ],
+    [
+      "copper-ingot",
+      3,
+      4,
+      "12808/625"
+    ],
+    [
+      "electric-motor",
+      9,
+      10,
+      "2128/75"
+    ],
+    [
+      "energetic-graphite",
+      0,
+      2,
+      "88/15"
+    ],
+    [
+      "graphene",
+      5,
+      8,
+      "6"
+    ],
+    [
+      "high-purity-silicon",
+      3,
+      5,
+      "22/15"
+    ],
+    [
+      "magnet",
+      2,
+      4,
+      "100112/8875"
+    ],
+    [
+      "quantum-chip",
+      3,
+      2,
+      "8/15"
+    ],
+    [
+      "steel",
+      8,
+      5,
+      "248/75"
+    ],
+    [
+      "super-magnetic-ring",
+      2,
+      8,
+      "6"
+    ],
+    [
+      "titanium-alloy",
+      5,
+      2,
+      "8/3"
+    ]
+  ],
+  "cuts_shared_trunk": [
+    [
+      "electromagnetic-turbine",
+      10,
+      2,
+      "176/15"
+    ],
+    [
+      "electromagnetic-turbine",
+      10,
+      8,
+      "6"
+    ],
+    [
+      "frame-material",
+      5,
+      2,
+      "4/3"
+    ],
+    [
+      "frame-material",
+      5,
+      3,
+      "1/2"
+    ],
+    [
+      "gear",
+      1,
+      8,
+      "24/5"
+    ],
+    [
+      "gear",
+      1,
+      9,
+      "8512/375"
+    ],
+    [
+      "iron-ingot",
+      1,
+      3,
+      "3128/1875"
+    ],
+    [
+      "iron-ingot",
+      1,
+      9,
+      "7988/375"
+    ],
+    [
+      "iron-ingot",
+      8,
+      3,
+      "3128/1875"
+    ],
+    [
+      "iron-ingot",
+      8,
+      9,
+      "48308/1875"
+    ],
+    [
+      "magnetic-coil",
+      4,
+      3,
+      "4/25"
+    ],
+    [
+      "magnetic-coil",
+      4,
+      9,
+      "8512/375"
+    ],
+    [
+      "magnetic-coil",
+      4,
+      10,
+      "2128/75"
+    ],
+    [
+      "titanium-crystal",
+      6,
+      5,
+      "3008/5625"
+    ],
+    [
+      "titanium-crystal",
+      7,
+      5,
+      "1504/5625"
+    ],
+    [
+      "titanium-ingot",
+      5,
+      3,
+      "3008/1875"
+    ],
+    [
+      "titanium-ingot",
+      5,
+      6,
+      "12032/9375"
+    ],
+    [
+      "titanium-ingot",
+      5,
+      7,
+      "6016/9375"
+    ]
+  ],
+  "partition_notes": [
+    "residual multi-consumer cuts the prototype cannot wire: electromagnetic-turbine, frame-material, gear, iron-ingot, magnet, magnetic-coil, titanium-ingot"
+  ],
+  "refused_sub_specs": [],
+  "block_results": [
+    {
+      "block": 0,
+      "machines": 10,
+      "area": 425,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 1.83,
+          "verdict": "OK",
+          "ok": true,
+          "area": 425,
+          "strips": 2.0,
+          "buildings": 142
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 0.75,
+          "verdict": "OK",
+          "ok": true,
+          "area": 425,
+          "strips": 2.0,
+          "buildings": 142
+        }
+      ]
+    },
+    {
+      "block": 1,
+      "machines": 57,
+      "area": 2280,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 10.23,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2280,
+          "strips": 10.0,
+          "buildings": 1580
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 11.7,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2726,
+          "strips": 10.0,
+          "buildings": 1591
+        }
+      ]
+    },
+    {
+      "block": 2,
+      "machines": 56,
+      "area": 3337,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 12.1,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3337,
+          "strips": 10.0,
+          "buildings": 2191
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 13.26,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3627,
+          "strips": 10.0,
+          "buildings": 2506
+        }
+      ]
+    },
+    {
+      "block": 3,
+      "machines": 58,
+      "area": 3692,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 10.52,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3750,
+          "strips": 16.0,
+          "buildings": 3175
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 10.19,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3692,
+          "strips": 16.0,
+          "buildings": 3241
+        }
+      ]
+    },
+    {
+      "block": 4,
+      "machines": 57,
+      "area": 3007,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 12.0,
+          "verdict": "REFUSED: the 12s deadline passed with no completed packing of 10 strips; 5 packs were routed in that time and the best of them still left 1 nets unrouted (worst 3), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec",
+          "ok": false
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 10.09,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3007,
+          "strips": 10.0,
+          "buildings": 1961
+        }
+      ]
+    },
+    {
+      "block": 5,
+      "machines": 60,
+      "area": 6210,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 12.0,
+          "verdict": "REFUSED: the 12s deadline passed with no completed packing of 12 strips; 3 packs were routed in that time and the best of them still left 2 nets unrouted (worst 3), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec",
+          "ok": false
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 11.79,
+          "verdict": "OK",
+          "ok": true,
+          "area": 6210,
+          "strips": 7.0,
+          "buildings": 2685
+        }
+      ]
+    },
+    {
+      "block": 6,
+      "machines": 2,
+      "area": 247,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 1.53,
+          "verdict": "OK",
+          "ok": true,
+          "area": 247,
+          "strips": 1.0,
+          "buildings": 85
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.52,
+          "verdict": "OK",
+          "ok": true,
+          "area": 247,
+          "strips": 1.0,
+          "buildings": 85
+        }
+      ]
+    },
+    {
+      "block": 7,
+      "machines": 1,
+      "area": 195,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 0.95,
+          "verdict": "OK",
+          "ok": true,
+          "area": 195,
+          "strips": 1.0,
+          "buildings": 69
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.09,
+          "verdict": "OK",
+          "ok": true,
+          "area": 195,
+          "strips": 1.0,
+          "buildings": 69
+        }
+      ]
+    },
+    {
+      "block": 8,
+      "machines": 60,
+      "area": 2622,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 11.26,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2622,
+          "strips": 11.0,
+          "buildings": 1883
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 10.66,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2730,
+          "strips": 11.0,
+          "buildings": 1973
+        }
+      ]
+    },
+    {
+      "block": 9,
+      "machines": 46,
+      "area": 3264,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 11.04,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3264,
+          "strips": 8.0,
+          "buildings": 2627
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 9.08,
+          "verdict": "OK",
+          "ok": true,
+          "area": 6018,
+          "strips": 8.0,
+          "buildings": 3074
+        }
+      ]
+    },
+    {
+      "block": 10,
+      "machines": 29,
+      "area": 1575,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 6.8,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1575,
+          "strips": 5.0,
+          "buildings": 803
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.29,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2220,
+          "strips": 5.0,
+          "buildings": 968
+        }
+      ]
+    }
+  ],
+  "single_row": false,
+  "compose_wall_s": 2.89,
+  "routed": [
+    [
+      "copper-ingot",
+      3,
+      4,
+      95
+    ],
+    [
+      "copper-ingot",
+      3,
+      4,
+      48
+    ],
+    [
+      "high-purity-silicon",
+      3,
+      5,
+      33
+    ],
+    [
+      "titanium-alloy",
+      5,
+      2,
+      450
+    ]
+  ],
+  "unrouted": [
+    [
+      "casimir-crystal",
+      5,
+      3,
+      "lane count differs: 1 out, 3 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "electric-motor",
+      9,
+      10,
+      "lane count differs: 8 out, 5 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "energetic-graphite",
+      0,
+      2,
+      "lane count differs: 2 out, 3 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "graphene",
+      5,
+      8,
+      "lane count differs: 2 out, 1 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "magnet",
+      2,
+      4,
+      "lane count differs: 6 out, 4 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "quantum-chip",
+      3,
+      2,
+      "no entry lane on the consuming block"
+    ],
+    [
+      "steel",
+      8,
+      5,
+      "lane count differs: 2 out, 1 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "super-magnetic-ring",
+      2,
+      8,
+      "lane count differs: 3 out, 1 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "copper-ingot",
+      3,
+      4,
+      "no corridor path over free ground"
+    ],
+    [
+      "copper-ingot",
+      3,
+      4,
+      "no corridor path over free ground"
+    ]
+  ],
+  "corridor_tiles": 626,
+  "player_closed_loops": {
+    "casimir-crystal": "376/375",
+    "copper-ingot": "12808/625",
+    "electric-motor": "2128/75",
+    "electromagnetic-turbine": "266/15",
+    "energetic-graphite": "88/15",
+    "frame-material": "11/6",
+    "gear": "10312/375",
+    "graphene": "6",
+    "iron-ingot": "29416/625",
+    "magnet": "100112/8875",
+    "magnetic-coil": "6404/125",
+    "quantum-chip": "8/15",
+    "steel": "248/75",
+    "super-magnetic-ring": "6",
+    "titanium-crystal": "1504/1875",
+    "titanium-ingot": "33088/9375"
+  },
+  "player_closed_loop_count": 24,
+  "player_closed_loop_detail": [
+    [
+      "frame-material",
+      2,
+      "0/1 entry lanes wired, 0/4/3 supplied"
+    ],
+    [
+      "frame-material",
+      3,
+      "0/1 entry lanes wired, 0/1/2 supplied"
+    ],
+    [
+      "quantum-chip",
+      2,
+      "0/0 entry lanes wired, 0/8/15 supplied"
+    ],
+    [
+      "electromagnetic-turbine",
+      2,
+      "0/3 entry lanes wired, 0/176/15 supplied"
+    ],
+    [
+      "electromagnetic-turbine",
+      8,
+      "0/1 entry lanes wired, 0/6 supplied"
+    ],
+    [
+      "energetic-graphite",
+      2,
+      "0/3 entry lanes wired, 0/88/15 supplied"
+    ],
+    [
+      "iron-ingot",
+      3,
+      "0/2 entry lanes wired, 0/3128/1875 supplied"
+    ],
+    [
+      "iron-ingot",
+      9,
+      "0/8 entry lanes wired, 0/17024/375 supplied"
+    ],
+    [
+      "casimir-crystal",
+      3,
+      "0/3 entry lanes wired, 0/376/375 supplied"
+    ],
+    [
+      "titanium-ingot",
+      3,
+      "0/1 entry lanes wired, 0/3008/1875 supplied"
+    ],
+    [
+      "titanium-ingot",
+      6,
+      "0/1 entry lanes wired, 0/12032/9375 supplied"
+    ],
+    [
+      "titanium-ingot",
+      7,
+      "0/1 entry lanes wired, 0/6016/9375 supplied"
+    ],
+    [
+      "magnetic-coil",
+      3,
+      "0/1 entry lanes wired, 0/4/25 supplied"
+    ],
+    [
+      "magnetic-coil",
+      9,
+      "0/8 entry lanes wired, 0/8512/375 supplied"
+    ],
+    [
+      "magnetic-coil",
+      10,
+      "0/5 entry lanes wired, 0/2128/75 supplied"
+    ],
+    [
+      "copper-ingot",
+      4,
+      "2/4 entry lanes wired, 0/12808/625 supplied"
+    ],
+    [
+      "magnet",
+      4,
+      "0/4 entry lanes wired, 0/100112/8875 supplied"
+    ],
+    [
+      "titanium-crystal",
+      5,
+      "0/1 entry lanes wired, 0/1504/1875 supplied"
+    ],
+    [
+      "steel",
+      5,
+      "0/1 entry lanes wired, 0/248/75 supplied"
+    ],
+    [
+      "gear",
+      8,
+      "0/1 entry lanes wired, 0/24/5 supplied"
+    ],
+    [
+      "gear",
+      9,
+      "0/8 entry lanes wired, 0/8512/375 supplied"
+    ],
+    [
+      "graphene",
+      8,
+      "0/1 entry lanes wired, 0/6 supplied"
+    ],
+    [
+      "super-magnetic-ring",
+      8,
+      "0/1 entry lanes wired, 0/6 supplied"
+    ],
+    [
+      "electric-motor",
+      10,
+      "0/5 entry lanes wired, 0/2128/75 supplied"
+    ]
+  ],
+  "finalize_wall_s": 2.07,
+  "validate_wall_s": 4.5,
+  "validator_errors": {},
+  "validator_warnings": {
+    "geom.bounds": 1,
+    "belt.termination": 71,
+    "flow.external_entry_points": 18
+  },
+  "validator_error_samples": [],
+  "validator_ok": true,
+  "finalize_errors": [],
+  "area": 33480,
+  "width": 310,
+  "height": 108,
+  "buildings": 17893,
+  "block_area_sum": 26854,
+  "area_ratio_vs_best_known": 0.8185,
+  "machines_per_tile": 0.01302,
+  "blueprint_emitted": true,
+  "total_wall_s": 10.89,
+  "uptime_end": "00:32:23 up 21 days,  6:18, 11 users,  load average: 5.25, 5.06, 6.13"
+}

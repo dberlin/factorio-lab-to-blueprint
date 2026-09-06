@@ -1,0 +1,790 @@
+{
+  "label": "belt3-depth-pressure",
+  "routing": "corridor router",
+  "url": "belt3",
+  "policy": "all-products",
+  "cap": 60,
+  "budget_s": 12.0,
+  "gap": 2,
+  "best_known_area": 12408,
+  "uptime_start": "00:34:44 up 21 days,  6:20, 11 users,  load average: 3.73, 4.56, 5.80",
+  "machines": 280,
+  "groups": 13,
+  "depth_cut_after": [
+    0,
+    4
+  ],
+  "depth_pressure_profile": [
+    {
+      "cut_after_depth": 0,
+      "recipes_below": 5,
+      "machines_below": 145,
+      "item_pressure": 5,
+      "lane_pressure": 8,
+      "items": [
+        "copper-ingot",
+        "energetic-graphite",
+        "graphene",
+        "iron-ingot",
+        "magnet"
+      ]
+    },
+    {
+      "cut_after_depth": 1,
+      "recipes_below": 7,
+      "machines_below": 183,
+      "item_pressure": 6,
+      "lane_pressure": 8,
+      "items": [
+        "energetic-graphite",
+        "gear",
+        "graphene",
+        "iron-ingot",
+        "magnet",
+        "magnetic-coil"
+      ]
+    },
+    {
+      "cut_after_depth": 2,
+      "recipes_below": 9,
+      "machines_below": 228,
+      "item_pressure": 6,
+      "lane_pressure": 6,
+      "items": [
+        "conveyor-belt-1",
+        "electric-motor",
+        "energetic-graphite",
+        "graphene",
+        "magnet",
+        "magnetic-coil"
+      ]
+    },
+    {
+      "cut_after_depth": 3,
+      "recipes_below": 10,
+      "machines_below": 253,
+      "item_pressure": 5,
+      "lane_pressure": 5,
+      "items": [
+        "conveyor-belt-1",
+        "electromagnetic-turbine",
+        "energetic-graphite",
+        "graphene",
+        "magnet"
+      ]
+    },
+    {
+      "cut_after_depth": 4,
+      "recipes_below": 12,
+      "machines_below": 274,
+      "item_pressure": 3,
+      "lane_pressure": 3,
+      "items": [
+        "conveyor-belt-2",
+        "graphene",
+        "super-magnetic-ring"
+      ]
+    }
+  ],
+  "arm": "depth-pressure",
+  "partition_wall_s": 0.001,
+  "composed_machines": 280,
+  "block_solve_wall_s": 0.0,
+  "escalation_rounds": [
+    {
+      "depth": 0,
+      "solved": 2,
+      "refused": 1,
+      "blocks": 3
+    },
+    {
+      "depth": 1,
+      "solved": 2,
+      "refused": 1,
+      "blocks": 5
+    },
+    {
+      "depth": 2,
+      "solved": 3,
+      "refused": 0,
+      "blocks": 7
+    }
+  ],
+  "blocks": [
+    {
+      "index": 0,
+      "machines": 145,
+      "recipes": 5,
+      "depth": 0,
+      "external_inputs": 5,
+      "outputs": 6
+    },
+    {
+      "index": 1,
+      "machines": 20,
+      "recipes": 1,
+      "depth": 2,
+      "external_inputs": 2,
+      "outputs": 1
+    },
+    {
+      "index": 2,
+      "machines": 11,
+      "recipes": 2,
+      "depth": 1,
+      "external_inputs": 4,
+      "outputs": 1
+    },
+    {
+      "index": 3,
+      "machines": 20,
+      "recipes": 1,
+      "depth": 2,
+      "external_inputs": 4,
+      "outputs": 1
+    },
+    {
+      "index": 4,
+      "machines": 20,
+      "recipes": 1,
+      "depth": 2,
+      "external_inputs": 4,
+      "outputs": 1
+    },
+    {
+      "index": 5,
+      "machines": 58,
+      "recipes": 3,
+      "depth": 1,
+      "external_inputs": 5,
+      "outputs": 3
+    },
+    {
+      "index": 6,
+      "machines": 6,
+      "recipes": 1,
+      "depth": 0,
+      "external_inputs": 3,
+      "outputs": 1
+    }
+  ],
+  "cut_pressure": {
+    "item_pressure": 21,
+    "lane_pressure": 25,
+    "distinct_crossing_items": 15,
+    "boundaries": 16,
+    "max_boundary_lane_pressure": 4
+  },
+  "cut_pressure_boundaries": [
+    {
+      "from": 0,
+      "to": 1,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "12384/625"
+      }
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "48/5"
+      }
+    },
+    {
+      "from": 0,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "2496/125"
+      }
+    },
+    {
+      "from": 0,
+      "to": 4,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "2496/125"
+      }
+    },
+    {
+      "from": 0,
+      "to": 5,
+      "item_pressure": 3,
+      "lane_pressure": 4,
+      "items": {
+        "copper-ingot": "11232/625",
+        "energetic-graphite": "24/5",
+        "magnet": "31464/625"
+      }
+    },
+    {
+      "from": 0,
+      "to": 6,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "graphene": "6"
+      }
+    },
+    {
+      "from": 1,
+      "to": 2,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "gear": "24/5"
+      }
+    },
+    {
+      "from": 1,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "gear": "1248/125"
+      }
+    },
+    {
+      "from": 1,
+      "to": 4,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "gear": "1248/125"
+      }
+    },
+    {
+      "from": 2,
+      "to": 6,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "conveyor-belt-2": "18"
+      }
+    },
+    {
+      "from": 3,
+      "to": 5,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electric-motor": "312/25"
+      }
+    },
+    {
+      "from": 4,
+      "to": 5,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electric-motor": "312/25"
+      }
+    },
+    {
+      "from": 5,
+      "to": 2,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electromagnetic-turbine": "6"
+      }
+    },
+    {
+      "from": 5,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnetic-coil": "1248/125"
+      }
+    },
+    {
+      "from": 5,
+      "to": 4,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnetic-coil": "1248/125"
+      }
+    },
+    {
+      "from": 5,
+      "to": 6,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "super-magnetic-ring": "6"
+      }
+    }
+  ],
+  "cuts_point_to_point": [
+    [
+      "conveyor-belt-2",
+      2,
+      6,
+      "18"
+    ],
+    [
+      "copper-ingot",
+      0,
+      5,
+      "11232/625"
+    ],
+    [
+      "electromagnetic-turbine",
+      5,
+      2,
+      "6"
+    ],
+    [
+      "energetic-graphite",
+      0,
+      5,
+      "24/5"
+    ],
+    [
+      "graphene",
+      0,
+      6,
+      "6"
+    ],
+    [
+      "magnet",
+      0,
+      5,
+      "31464/625"
+    ],
+    [
+      "super-magnetic-ring",
+      5,
+      6,
+      "6"
+    ]
+  ],
+  "cuts_shared_trunk": [
+    [
+      "electric-motor",
+      3,
+      5,
+      "312/25"
+    ],
+    [
+      "electric-motor",
+      4,
+      5,
+      "312/25"
+    ],
+    [
+      "gear",
+      1,
+      2,
+      "24/5"
+    ],
+    [
+      "gear",
+      1,
+      3,
+      "1248/125"
+    ],
+    [
+      "gear",
+      1,
+      4,
+      "1248/125"
+    ],
+    [
+      "iron-ingot",
+      0,
+      1,
+      "12384/625"
+    ],
+    [
+      "iron-ingot",
+      0,
+      2,
+      "48/5"
+    ],
+    [
+      "iron-ingot",
+      0,
+      3,
+      "2496/125"
+    ],
+    [
+      "iron-ingot",
+      0,
+      4,
+      "2496/125"
+    ],
+    [
+      "magnetic-coil",
+      5,
+      3,
+      "1248/125"
+    ],
+    [
+      "magnetic-coil",
+      5,
+      4,
+      "1248/125"
+    ]
+  ],
+  "partition_notes": [],
+  "refused_sub_specs": [],
+  "block_results": [
+    {
+      "block": 0,
+      "machines": 145,
+      "area": 4900,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 9.59,
+          "verdict": "OK",
+          "ok": true,
+          "area": 5440,
+          "strips": 27.0,
+          "buildings": 3636
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 8.98,
+          "verdict": "OK",
+          "ok": true,
+          "area": 4900,
+          "strips": 27.0,
+          "buildings": 3841
+        }
+      ]
+    },
+    {
+      "block": 1,
+      "machines": 20,
+      "area": 1023,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 4.03,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1023,
+          "strips": 4.0,
+          "buildings": 344
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.05,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1456,
+          "strips": 4.0,
+          "buildings": 416
+        }
+      ]
+    },
+    {
+      "block": 2,
+      "machines": 11,
+      "area": 576,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 1.75,
+          "verdict": "OK",
+          "ok": true,
+          "area": 576,
+          "strips": 2.0,
+          "buildings": 254
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 0.87,
+          "verdict": "OK",
+          "ok": true,
+          "area": 576,
+          "strips": 2.0,
+          "buildings": 254
+        }
+      ]
+    },
+    {
+      "block": 3,
+      "machines": 20,
+      "area": 1271,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 7.6,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1271,
+          "strips": 4.0,
+          "buildings": 971
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.42,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1792,
+          "strips": 4.0,
+          "buildings": 1106
+        }
+      ]
+    },
+    {
+      "block": 4,
+      "machines": 20,
+      "area": 1271,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 7.6,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1271,
+          "strips": 4.0,
+          "buildings": 971
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.42,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1792,
+          "strips": 4.0,
+          "buildings": 1106
+        }
+      ]
+    },
+    {
+      "block": 5,
+      "machines": 58,
+      "area": 3776,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 10.86,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3776,
+          "strips": 11.0,
+          "buildings": 3163
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 10.42,
+          "verdict": "REFUSED: deadline exhausted before finding an exact layout",
+          "ok": false
+        }
+      ]
+    },
+    {
+      "block": 6,
+      "machines": 6,
+      "area": 270,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 0.34,
+          "verdict": "OK",
+          "ok": true,
+          "area": 270,
+          "strips": 1.0,
+          "buildings": 135
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 0.08,
+          "verdict": "OK",
+          "ok": true,
+          "area": 270,
+          "strips": 1.0,
+          "buildings": 135
+        }
+      ]
+    }
+  ],
+  "single_row": false,
+  "compose_wall_s": 2.12,
+  "routed": [
+    [
+      "conveyor-belt-2",
+      2,
+      6,
+      18
+    ],
+    [
+      "copper-ingot",
+      0,
+      5,
+      255
+    ],
+    [
+      "copper-ingot",
+      0,
+      5,
+      298
+    ]
+  ],
+  "unrouted": [
+    [
+      "electromagnetic-turbine",
+      5,
+      2,
+      "lane count differs: 5 out, 1 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "energetic-graphite",
+      0,
+      5,
+      "lane count differs: 2 out, 3 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "magnet",
+      0,
+      5,
+      "lane count differs: 11 out, 6 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "super-magnetic-ring",
+      5,
+      6,
+      "lane count differs: 3 out, 1 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "copper-ingot",
+      0,
+      5,
+      "no corridor path over free ground"
+    ],
+    [
+      "graphene",
+      0,
+      6,
+      "no corridor path over free ground"
+    ]
+  ],
+  "corridor_tiles": 571,
+  "player_closed_loops": {
+    "copper-ingot": "11232/625",
+    "electric-motor": "624/25",
+    "electromagnetic-turbine": "6",
+    "energetic-graphite": "24/5",
+    "gear": "3096/125",
+    "graphene": "6",
+    "iron-ingot": "43344/625",
+    "magnet": "31464/625",
+    "magnetic-coil": "2496/125",
+    "super-magnetic-ring": "6"
+  },
+  "player_closed_loop_count": 16,
+  "player_closed_loop_detail": [
+    [
+      "iron-ingot",
+      1,
+      "0/4 entry lanes wired, 0/12384/625 supplied"
+    ],
+    [
+      "iron-ingot",
+      2,
+      "0/1 entry lanes wired, 0/48/5 supplied"
+    ],
+    [
+      "iron-ingot",
+      3,
+      "0/4 entry lanes wired, 0/2496/125 supplied"
+    ],
+    [
+      "iron-ingot",
+      4,
+      "0/4 entry lanes wired, 0/2496/125 supplied"
+    ],
+    [
+      "gear",
+      2,
+      "0/1 entry lanes wired, 0/24/5 supplied"
+    ],
+    [
+      "gear",
+      3,
+      "0/4 entry lanes wired, 0/1248/125 supplied"
+    ],
+    [
+      "gear",
+      4,
+      "0/4 entry lanes wired, 0/1248/125 supplied"
+    ],
+    [
+      "electromagnetic-turbine",
+      2,
+      "0/1 entry lanes wired, 0/6 supplied"
+    ],
+    [
+      "magnetic-coil",
+      3,
+      "0/4 entry lanes wired, 0/1248/125 supplied"
+    ],
+    [
+      "magnetic-coil",
+      4,
+      "0/4 entry lanes wired, 0/1248/125 supplied"
+    ],
+    [
+      "electric-motor",
+      5,
+      "0/5 entry lanes wired, 0/624/25 supplied"
+    ],
+    [
+      "energetic-graphite",
+      5,
+      "0/3 entry lanes wired, 0/24/5 supplied"
+    ],
+    [
+      "magnet",
+      5,
+      "0/6 entry lanes wired, 0/31464/625 supplied"
+    ],
+    [
+      "copper-ingot",
+      5,
+      "2/3 entry lanes wired, 0/11232/625 supplied"
+    ],
+    [
+      "graphene",
+      6,
+      "0/1 entry lanes wired, 0/6 supplied"
+    ],
+    [
+      "super-magnetic-ring",
+      6,
+      "0/1 entry lanes wired, 0/6 supplied"
+    ]
+  ],
+  "finalize_wall_s": 1.58,
+  "validate_wall_s": 1.79,
+  "validator_errors": {},
+  "validator_warnings": {
+    "belt.termination": 60,
+    "flow.external_entry_points": 10
+  },
+  "validator_error_samples": [],
+  "validator_ok": true,
+  "finalize_errors": [],
+  "area": 16296,
+  "width": 168,
+  "height": 97,
+  "buildings": 10250,
+  "block_area_sum": 13087,
+  "area_ratio_vs_best_known": 1.3133,
+  "machines_per_tile": 0.01718,
+  "blueprint_emitted": true,
+  "total_wall_s": 6.44,
+  "uptime_end": "00:34:50 up 21 days,  6:20, 11 users,  load average: 3.67, 4.53, 5.78"
+}

@@ -1,0 +1,331 @@
+{
+  "label": "belt3-depth-pressure",
+  "routing": "corridor router",
+  "url": "belt3",
+  "policy": "all-products",
+  "cap": 60,
+  "budget_s": 12.0,
+  "gap": 2,
+  "best_known_area": 12408,
+  "uptime_start": "00:34:41 up 21 days,  6:20, 11 users,  load average: 3.73, 4.56, 5.80",
+  "machines": 280,
+  "groups": 13,
+  "depth_cut_after": [
+    0,
+    4
+  ],
+  "depth_pressure_profile": [
+    {
+      "cut_after_depth": 0,
+      "recipes_below": 5,
+      "machines_below": 145,
+      "item_pressure": 5,
+      "lane_pressure": 8,
+      "items": [
+        "copper-ingot",
+        "energetic-graphite",
+        "graphene",
+        "iron-ingot",
+        "magnet"
+      ]
+    },
+    {
+      "cut_after_depth": 1,
+      "recipes_below": 7,
+      "machines_below": 183,
+      "item_pressure": 6,
+      "lane_pressure": 8,
+      "items": [
+        "energetic-graphite",
+        "gear",
+        "graphene",
+        "iron-ingot",
+        "magnet",
+        "magnetic-coil"
+      ]
+    },
+    {
+      "cut_after_depth": 2,
+      "recipes_below": 9,
+      "machines_below": 228,
+      "item_pressure": 6,
+      "lane_pressure": 6,
+      "items": [
+        "conveyor-belt-1",
+        "electric-motor",
+        "energetic-graphite",
+        "graphene",
+        "magnet",
+        "magnetic-coil"
+      ]
+    },
+    {
+      "cut_after_depth": 3,
+      "recipes_below": 10,
+      "machines_below": 253,
+      "item_pressure": 5,
+      "lane_pressure": 5,
+      "items": [
+        "conveyor-belt-1",
+        "electromagnetic-turbine",
+        "energetic-graphite",
+        "graphene",
+        "magnet"
+      ]
+    },
+    {
+      "cut_after_depth": 4,
+      "recipes_below": 12,
+      "machines_below": 274,
+      "item_pressure": 3,
+      "lane_pressure": 3,
+      "items": [
+        "conveyor-belt-2",
+        "graphene",
+        "super-magnetic-ring"
+      ]
+    }
+  ],
+  "arm": "depth-pressure",
+  "partition_wall_s": 0.001,
+  "composed_machines": 280,
+  "block_solve_wall_s": 0.0,
+  "escalation_rounds": [
+    {
+      "depth": 0,
+      "solved": 2,
+      "refused": 1,
+      "blocks": 3
+    }
+  ],
+  "blocks": [
+    {
+      "index": 0,
+      "machines": 145,
+      "recipes": 5,
+      "depth": 0,
+      "external_inputs": 5,
+      "outputs": 6
+    },
+    {
+      "index": 1,
+      "machines": 129,
+      "recipes": 7,
+      "depth": 0,
+      "external_inputs": 5,
+      "outputs": 2
+    },
+    {
+      "index": 2,
+      "machines": 6,
+      "recipes": 1,
+      "depth": 0,
+      "external_inputs": 3,
+      "outputs": 1
+    }
+  ],
+  "cut_pressure": {
+    "item_pressure": 11,
+    "lane_pressure": 17,
+    "distinct_crossing_items": 11,
+    "boundaries": 3,
+    "max_boundary_lane_pressure": 7
+  },
+  "cut_pressure_boundaries": [
+    {
+      "from": 0,
+      "to": 1,
+      "item_pressure": 4,
+      "lane_pressure": 7,
+      "items": {
+        "copper-ingot": "11232/625",
+        "energetic-graphite": "24/5",
+        "iron-ingot": "43344/625",
+        "magnet": "31464/625"
+      }
+    },
+    {
+      "from": 0,
+      "to": 2,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "graphene": "6"
+      }
+    },
+    {
+      "from": 1,
+      "to": 2,
+      "item_pressure": 2,
+      "lane_pressure": 2,
+      "items": {
+        "conveyor-belt-2": "18",
+        "super-magnetic-ring": "6"
+      }
+    }
+  ],
+  "cuts_point_to_point": [
+    [
+      "conveyor-belt-2",
+      1,
+      2,
+      "18"
+    ],
+    [
+      "copper-ingot",
+      0,
+      1,
+      "11232/625"
+    ],
+    [
+      "energetic-graphite",
+      0,
+      1,
+      "24/5"
+    ],
+    [
+      "graphene",
+      0,
+      2,
+      "6"
+    ],
+    [
+      "iron-ingot",
+      0,
+      1,
+      "43344/625"
+    ],
+    [
+      "magnet",
+      0,
+      1,
+      "31464/625"
+    ],
+    [
+      "super-magnetic-ring",
+      1,
+      2,
+      "6"
+    ]
+  ],
+  "cuts_shared_trunk": [],
+  "partition_notes": [],
+  "refused_sub_specs": [
+    {
+      "block": 1,
+      "machines": 129,
+      "recipes": {
+        "conveyor-belt-1": 5,
+        "conveyor-belt-2": 6,
+        "electric-motor": 40,
+        "electromagnetic-turbine": 25,
+        "gear": 20,
+        "magnetic-coil": 18,
+        "super-magnetic-ring": 15
+      },
+      "machine_items": [
+        "assembling-machine-2"
+      ],
+      "external_inputs": [
+        "copper-ingot",
+        "energetic-graphite",
+        "iron-ingot",
+        "magnet",
+        "proliferator-3"
+      ],
+      "outputs": [
+        "conveyor-belt-2",
+        "super-magnetic-ring"
+      ],
+      "belt_stack": 1,
+      "piler_unlocked": true,
+      "spray_lanes": [
+        "copper-ingot",
+        "electric-motor",
+        "electromagnetic-turbine",
+        "energetic-graphite",
+        "gear",
+        "iron-ingot",
+        "magnet",
+        "magnetic-coil"
+      ]
+    }
+  ],
+  "block_results": [
+    {
+      "block": 0,
+      "machines": 145,
+      "area": 4900,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 9.59,
+          "verdict": "OK",
+          "ok": true,
+          "area": 5440,
+          "strips": 27.0,
+          "buildings": 3636
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 8.98,
+          "verdict": "OK",
+          "ok": true,
+          "area": 4900,
+          "strips": 27.0,
+          "buildings": 3841
+        }
+      ]
+    },
+    {
+      "block": 1,
+      "machines": 129,
+      "area": null,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 12.0,
+          "verdict": "REFUSED: the 12s deadline passed with no completed packing of 24 strips; 2 packs were routed in that time and the best of them still left 9 nets unrouted (worst 11), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec",
+          "ok": false
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 10.54,
+          "verdict": "REFUSED: deadline exhausted before finding an exact layout",
+          "ok": false
+        }
+      ]
+    },
+    {
+      "block": 2,
+      "machines": 6,
+      "area": 270,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 0.34,
+          "verdict": "OK",
+          "ok": true,
+          "area": 270,
+          "strips": 1.0,
+          "buildings": 135
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 0.08,
+          "verdict": "OK",
+          "ok": true,
+          "area": 270,
+          "strips": 1.0,
+          "buildings": 135
+        }
+      ]
+    }
+  ],
+  "verdict": "REFUSED: some block refused",
+  "refused_blocks": [
+    1
+  ],
+  "total_wall_s": 0.65,
+  "uptime_end": "00:34:42 up 21 days,  6:20, 11 users,  load average: 3.73, 4.56, 5.80"
+}

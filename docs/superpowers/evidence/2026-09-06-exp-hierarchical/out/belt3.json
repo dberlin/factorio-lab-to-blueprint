@@ -1,0 +1,776 @@
+{
+  "label": "belt3",
+  "routing": "corridor router",
+  "url": "belt3",
+  "policy": "all-products",
+  "cap": 60,
+  "budget_s": 12.0,
+  "gap": 2,
+  "best_known_area": 12408,
+  "uptime_start": "00:31:59 up 21 days,  6:18, 11 users,  load average: 4.80, 4.99, 6.14",
+  "machines": 280,
+  "groups": 13,
+  "depth_pressure_profile": [
+    {
+      "cut_after_depth": 0,
+      "recipes_below": 5,
+      "machines_below": 145,
+      "item_pressure": 5,
+      "lane_pressure": 8,
+      "items": [
+        "copper-ingot",
+        "energetic-graphite",
+        "graphene",
+        "iron-ingot",
+        "magnet"
+      ]
+    },
+    {
+      "cut_after_depth": 1,
+      "recipes_below": 7,
+      "machines_below": 183,
+      "item_pressure": 6,
+      "lane_pressure": 8,
+      "items": [
+        "energetic-graphite",
+        "gear",
+        "graphene",
+        "iron-ingot",
+        "magnet",
+        "magnetic-coil"
+      ]
+    },
+    {
+      "cut_after_depth": 2,
+      "recipes_below": 9,
+      "machines_below": 228,
+      "item_pressure": 6,
+      "lane_pressure": 6,
+      "items": [
+        "conveyor-belt-1",
+        "electric-motor",
+        "energetic-graphite",
+        "graphene",
+        "magnet",
+        "magnetic-coil"
+      ]
+    },
+    {
+      "cut_after_depth": 3,
+      "recipes_below": 10,
+      "machines_below": 253,
+      "item_pressure": 5,
+      "lane_pressure": 5,
+      "items": [
+        "conveyor-belt-1",
+        "electromagnetic-turbine",
+        "energetic-graphite",
+        "graphene",
+        "magnet"
+      ]
+    },
+    {
+      "cut_after_depth": 4,
+      "recipes_below": 12,
+      "machines_below": 274,
+      "item_pressure": 3,
+      "lane_pressure": 3,
+      "items": [
+        "conveyor-belt-2",
+        "graphene",
+        "super-magnetic-ring"
+      ]
+    }
+  ],
+  "arm": "size-cap",
+  "partition_wall_s": 0.005,
+  "composed_machines": 280,
+  "block_solve_wall_s": 0.0,
+  "escalation_rounds": [
+    {
+      "depth": 0,
+      "solved": 5,
+      "refused": 1,
+      "blocks": 6
+    },
+    {
+      "depth": 1,
+      "solved": 3,
+      "refused": 0,
+      "blocks": 8
+    }
+  ],
+  "blocks": [
+    {
+      "index": 0,
+      "machines": 15,
+      "recipes": 1,
+      "depth": 0,
+      "external_inputs": 2,
+      "outputs": 1
+    },
+    {
+      "index": 1,
+      "machines": 56,
+      "recipes": 1,
+      "depth": 0,
+      "external_inputs": 2,
+      "outputs": 1
+    },
+    {
+      "index": 2,
+      "machines": 20,
+      "recipes": 1,
+      "depth": 1,
+      "external_inputs": 2,
+      "outputs": 1
+    },
+    {
+      "index": 3,
+      "machines": 47,
+      "recipes": 5,
+      "depth": 0,
+      "external_inputs": 7,
+      "outputs": 3
+    },
+    {
+      "index": 4,
+      "machines": 53,
+      "recipes": 3,
+      "depth": 0,
+      "external_inputs": 4,
+      "outputs": 2
+    },
+    {
+      "index": 5,
+      "machines": 49,
+      "recipes": 2,
+      "depth": 0,
+      "external_inputs": 4,
+      "outputs": 1
+    },
+    {
+      "index": 6,
+      "machines": 20,
+      "recipes": 1,
+      "depth": 1,
+      "external_inputs": 4,
+      "outputs": 1
+    },
+    {
+      "index": 7,
+      "machines": 20,
+      "recipes": 1,
+      "depth": 1,
+      "external_inputs": 4,
+      "outputs": 1
+    }
+  ],
+  "cut_pressure": {
+    "item_pressure": 21,
+    "lane_pressure": 22,
+    "distinct_crossing_items": 12,
+    "boundaries": 16,
+    "max_boundary_lane_pressure": 1
+  },
+  "cut_pressure_boundaries": [
+    {
+      "from": 0,
+      "to": 5,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "copper-ingot": "11232/625"
+      }
+    },
+    {
+      "from": 1,
+      "to": 2,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "12384/625"
+      }
+    },
+    {
+      "from": 1,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "48/5"
+      }
+    },
+    {
+      "from": 1,
+      "to": 6,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "2496/125"
+      }
+    },
+    {
+      "from": 1,
+      "to": 7,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "iron-ingot": "2496/125"
+      }
+    },
+    {
+      "from": 2,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "gear": "24/5"
+      }
+    },
+    {
+      "from": 2,
+      "to": 6,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "gear": "1248/125"
+      }
+    },
+    {
+      "from": 2,
+      "to": 7,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "gear": "1248/125"
+      }
+    },
+    {
+      "from": 3,
+      "to": 4,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electromagnetic-turbine": "48/5"
+      }
+    },
+    {
+      "from": 4,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "super-magnetic-ring": "6"
+      }
+    },
+    {
+      "from": 4,
+      "to": 5,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnet": "78984/7625"
+      }
+    },
+    {
+      "from": 5,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnetic-coil": "624/25"
+      }
+    },
+    {
+      "from": 5,
+      "to": 6,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnetic-coil": "1248/125"
+      }
+    },
+    {
+      "from": 5,
+      "to": 7,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "magnetic-coil": "1248/125"
+      }
+    },
+    {
+      "from": 6,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electric-motor": "312/25"
+      }
+    },
+    {
+      "from": 7,
+      "to": 3,
+      "item_pressure": 1,
+      "lane_pressure": 1,
+      "items": {
+        "electric-motor": "312/25"
+      }
+    }
+  ],
+  "cuts_point_to_point": [
+    [
+      "copper-ingot",
+      0,
+      5,
+      "11232/625"
+    ],
+    [
+      "electromagnetic-turbine",
+      3,
+      4,
+      "48/5"
+    ],
+    [
+      "magnet",
+      4,
+      5,
+      "78984/7625"
+    ],
+    [
+      "super-magnetic-ring",
+      4,
+      3,
+      "6"
+    ]
+  ],
+  "cuts_shared_trunk": [
+    [
+      "electric-motor",
+      6,
+      3,
+      "312/25"
+    ],
+    [
+      "electric-motor",
+      7,
+      3,
+      "312/25"
+    ],
+    [
+      "gear",
+      2,
+      3,
+      "24/5"
+    ],
+    [
+      "gear",
+      2,
+      6,
+      "1248/125"
+    ],
+    [
+      "gear",
+      2,
+      7,
+      "1248/125"
+    ],
+    [
+      "iron-ingot",
+      1,
+      2,
+      "12384/625"
+    ],
+    [
+      "iron-ingot",
+      1,
+      3,
+      "48/5"
+    ],
+    [
+      "iron-ingot",
+      1,
+      6,
+      "2496/125"
+    ],
+    [
+      "iron-ingot",
+      1,
+      7,
+      "2496/125"
+    ],
+    [
+      "magnetic-coil",
+      5,
+      3,
+      "624/25"
+    ],
+    [
+      "magnetic-coil",
+      5,
+      6,
+      "1248/125"
+    ],
+    [
+      "magnetic-coil",
+      5,
+      7,
+      "1248/125"
+    ]
+  ],
+  "partition_notes": [
+    "residual multi-consumer cuts the prototype cannot wire: iron-ingot, magnet, magnetic-coil"
+  ],
+  "refused_sub_specs": [],
+  "block_results": [
+    {
+      "block": 0,
+      "machines": 15,
+      "area": 575,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 1.69,
+          "verdict": "OK",
+          "ok": true,
+          "area": 575,
+          "strips": 3.0,
+          "buildings": 218
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 0.94,
+          "verdict": "OK",
+          "ok": true,
+          "area": 575,
+          "strips": 3.0,
+          "buildings": 219
+        }
+      ]
+    },
+    {
+      "block": 1,
+      "machines": 56,
+      "area": 1750,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 11.81,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1750,
+          "strips": 10.0,
+          "buildings": 1065
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 9.26,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2093,
+          "strips": 10.0,
+          "buildings": 1202
+        }
+      ]
+    },
+    {
+      "block": 2,
+      "machines": 20,
+      "area": 1023,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 4.03,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1023,
+          "strips": 4.0,
+          "buildings": 344
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.05,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1456,
+          "strips": 4.0,
+          "buildings": 416
+        }
+      ]
+    },
+    {
+      "block": 3,
+      "machines": 47,
+      "area": 3200,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 9.49,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3200,
+          "strips": 9.0,
+          "buildings": 2075
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 11.28,
+          "verdict": "OK",
+          "ok": true,
+          "area": 3200,
+          "strips": 9.0,
+          "buildings": 2165
+        }
+      ]
+    },
+    {
+      "block": 4,
+      "machines": 53,
+      "area": 2975,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 12.01,
+          "verdict": "REFUSED: the 12s deadline passed with no completed packing of 10 strips; 8 packs were routed in that time and the best of them still left 1 nets unrouted (worst 2), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec",
+          "ok": false
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 10.12,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2975,
+          "strips": 10.0,
+          "buildings": 2186
+        }
+      ]
+    },
+    {
+      "block": 5,
+      "machines": 49,
+      "area": 2209,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 10.08,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2209,
+          "strips": 9.0,
+          "buildings": 1386
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 10.22,
+          "verdict": "OK",
+          "ok": true,
+          "area": 2255,
+          "strips": 9.0,
+          "buildings": 1362
+        }
+      ]
+    },
+    {
+      "block": 6,
+      "machines": 20,
+      "area": 1271,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 7.6,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1271,
+          "strips": 4.0,
+          "buildings": 971
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.42,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1792,
+          "strips": 4.0,
+          "buildings": 1106
+        }
+      ]
+    },
+    {
+      "block": 7,
+      "machines": 20,
+      "area": 1271,
+      "arms": [
+        {
+          "strategy": "freeform",
+          "wall_s": 7.6,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1271,
+          "strips": 4.0,
+          "buildings": 971
+        },
+        {
+          "strategy": "sequence-pair",
+          "wall_s": 1.42,
+          "verdict": "OK",
+          "ok": true,
+          "area": 1792,
+          "strips": 4.0,
+          "buildings": 1106
+        }
+      ]
+    }
+  ],
+  "single_row": false,
+  "compose_wall_s": 2.28,
+  "routed": [
+    [
+      "copper-ingot",
+      0,
+      5,
+      269
+    ],
+    [
+      "copper-ingot",
+      0,
+      5,
+      274
+    ]
+  ],
+  "unrouted": [
+    [
+      "electromagnetic-turbine",
+      3,
+      4,
+      "lane count differs: 5 out, 3 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "magnet",
+      4,
+      5,
+      "lane count differs: 5 out, 3 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "super-magnetic-ring",
+      4,
+      3,
+      "lane count differs: 3 out, 1 in; a splitter or merge is needed to reconcile them"
+    ],
+    [
+      "copper-ingot",
+      0,
+      5,
+      "no corridor path over free ground"
+    ]
+  ],
+  "corridor_tiles": 543,
+  "player_closed_loops": {
+    "copper-ingot": "11232/625",
+    "electric-motor": "624/25",
+    "electromagnetic-turbine": "48/5",
+    "gear": "3096/125",
+    "iron-ingot": "43344/625",
+    "magnet": "78984/7625",
+    "magnetic-coil": "5616/125",
+    "super-magnetic-ring": "6"
+  },
+  "player_closed_loop_count": 15,
+  "player_closed_loop_detail": [
+    [
+      "iron-ingot",
+      2,
+      "0/4 entry lanes wired, 0/12384/625 supplied"
+    ],
+    [
+      "iron-ingot",
+      3,
+      "0/1 entry lanes wired, 0/48/5 supplied"
+    ],
+    [
+      "iron-ingot",
+      6,
+      "0/4 entry lanes wired, 0/2496/125 supplied"
+    ],
+    [
+      "iron-ingot",
+      7,
+      "0/4 entry lanes wired, 0/2496/125 supplied"
+    ],
+    [
+      "electric-motor",
+      3,
+      "0/5 entry lanes wired, 0/624/25 supplied"
+    ],
+    [
+      "super-magnetic-ring",
+      3,
+      "0/1 entry lanes wired, 0/6 supplied"
+    ],
+    [
+      "magnetic-coil",
+      3,
+      "0/5 entry lanes wired, 0/624/25 supplied"
+    ],
+    [
+      "magnetic-coil",
+      6,
+      "0/4 entry lanes wired, 0/1248/125 supplied"
+    ],
+    [
+      "magnetic-coil",
+      7,
+      "0/4 entry lanes wired, 0/1248/125 supplied"
+    ],
+    [
+      "gear",
+      3,
+      "0/1 entry lanes wired, 0/24/5 supplied"
+    ],
+    [
+      "gear",
+      6,
+      "0/4 entry lanes wired, 0/1248/125 supplied"
+    ],
+    [
+      "gear",
+      7,
+      "0/4 entry lanes wired, 0/1248/125 supplied"
+    ],
+    [
+      "electromagnetic-turbine",
+      4,
+      "0/3 entry lanes wired, 0/48/5 supplied"
+    ],
+    [
+      "copper-ingot",
+      5,
+      "2/3 entry lanes wired, 0/11232/625 supplied"
+    ],
+    [
+      "magnet",
+      5,
+      "0/3 entry lanes wired, 0/78984/7625 supplied"
+    ]
+  ],
+  "finalize_wall_s": 1.67,
+  "validate_wall_s": 1.38,
+  "validator_errors": {},
+  "validator_warnings": {
+    "belt.termination": 55,
+    "flow.external_entry_points": 10
+  },
+  "validator_error_samples": [],
+  "validator_ok": true,
+  "finalize_errors": [],
+  "area": 18841,
+  "width": 227,
+  "height": 83,
+  "buildings": 9759,
+  "block_area_sum": 14274,
+  "area_ratio_vs_best_known": 1.5185,
+  "machines_per_tile": 0.01486,
+  "blueprint_emitted": true,
+  "total_wall_s": 6.42,
+  "uptime_end": "00:32:05 up 21 days,  6:18, 11 users,  load average: 4.73, 4.97, 6.13"
+}
