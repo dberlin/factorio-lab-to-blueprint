@@ -21596,10 +21596,17 @@ class FreeformLayout:
                     # cells.  Held back while a window credit is outstanding: the
                     # acceptance settle below is the one place a `validator_clean=True`
                     # outcome exists, and dropping it would move the operator ledger
-                    # that steers the rest of the sweep.  Skipping is otherwise
-                    # invisible: both certified exits from this candidate --
-                    # `report.errors` and a losing key -- call `retain_attempt()` with
-                    # no stage and go round again, which is exactly what happens here.
+                    # that steers the rest of the sweep.
+                    #
+                    # The skip takes the SAME exit a rejected candidate takes -- both
+                    # certified exits, `report.errors` and a losing key, call
+                    # `retain_attempt()` with no stage and go round again -- so the
+                    # attempts ledger and the loop control are unchanged.  The CLOCK
+                    # is not: this turn is shorter, the budget terms drawn from it
+                    # shrink, and a later candidate can be admitted that the un-gated
+                    # sweep would have refused.  That makes the search a superset and
+                    # the answer no worse, never a different pick among the same
+                    # candidates; `_would_become_incumbent` states it in full.
                     if inbound_choice is None and not _would_become_incumbent(key, best_key):
                         certify_skipped += 1
                         if _expired(completion_deadline):
@@ -21773,6 +21780,30 @@ def _would_become_incumbent(
     the first completed candidate always answers True: the sweep never skips its
     way into having no measured certify span, and a candidate the validator
     rejects leaves the key it was measured against untouched.
+
+    WHAT THE GATE PROMISES, AND WHAT IT DOES NOT.  It does not promise the same
+    placement on every input, and the reason is the clock rather than the
+    ranking.  A skipped certify is time the candidate's turn does not spend, so
+    the `candidate_total_s` it is charged comes out smaller and with it both
+    terms taken from it -- `dearest_candidate_s` and the `candidate_totals_s`
+    `_next_candidate_seconds` takes its median over.  `validation_reserve_s`
+    likewise becomes a maximum over incumbent-sized certifies alone.  All three
+    feed `_room_for_another` and the completion-reserve break, so this sweep can
+    START a candidate the un-gated one would have refused admission.
+
+    What does hold, and what the tests pin:
+
+    * the certified set is a SUBSET of the set certifying everything produces;
+    * among the candidates actually evaluated, selection is bit-identical -- the
+      key is read before certification and no report can move either term, so a
+      skipped candidate is one the acceptance comparison would have rejected;
+    * every budget term the skip perturbs can only SHRINK, so the sweep explores
+      a SUPERSET of the un-gated candidates and the placement it returns is no
+      worse than the un-gated one on `(area, belt_tiles)`.
+
+    The extra candidate is bought inside the gate's own wall, so Ruling D2 leaves
+    this as it stands and checks it at the gate's ``wall_overshoot_s`` maximum
+    rather than with a code change here.
     """
     return incumbent_key is None or candidate_key < incumbent_key
 
