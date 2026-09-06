@@ -24,7 +24,7 @@ from flab2bp.spec import BuildSpec, MachineGroup
 _BLOCK_BUDGET_S = 10.0
 
 
-def chain_spec() -> BuildSpec:
+def chain_build_spec() -> BuildSpec:
     """``test_pressure._chain`` with ids the catalog actually knows.
 
     Same graph and the same rates -- ore -> ingot (two smelters), ingot -> two
@@ -74,6 +74,17 @@ def chain_spec() -> BuildSpec:
     )
 
 
+@pytest.fixture
+def chain_spec() -> BuildSpec:
+    """:func:`chain_build_spec` as a fixture, for the tests that take a spec.
+
+    Function-scoped and rebuilt each time: ``BuildSpec`` is frozen, but a
+    strategy under test may put it through a partition and a composition, and a
+    shared instance would make one test's diagnosis depend on another's.
+    """
+    return chain_build_spec()
+
+
 @pytest.fixture(scope="module")
 def two_solved_blocks() -> tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]:
     """``chain_spec`` split at its one cut, both halves laid out for real.
@@ -82,7 +93,7 @@ def two_solved_blocks() -> tuple[Placement, Placement, list[LaneFlow], BuildSpec
     test mutates a ``Placement`` -- the composer copies every building through
     ``dataclasses.replace`` before it touches one.
     """
-    spec = chain_spec()
+    spec = chain_build_spec()
     partition = initial_partition(spec)
     assert len(partition.blocks) == 2, "the chain must split into exactly two blocks"
 

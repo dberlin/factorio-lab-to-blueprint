@@ -17,7 +17,7 @@ from flab2bp.layout.route_feedback import (
     RouteFailureKind,
 )
 from flab2bp.spec import BuildSpec
-from tests.layout.hierarchy.conftest import chain_spec
+from tests.layout.hierarchy.conftest import chain_build_spec
 
 TwoSolvedBlocks = tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]
 
@@ -72,7 +72,7 @@ def _drop_of(coater: PlacedBuilding) -> tuple[int, int, int]:
 
 def _mixed_block(*, coater_seats: tuple[int, ...]) -> MixedBlock:
     """A lane with a Splitter on it, ``coater_seats`` Coaters, a sorter, a machine."""
-    spec = chain_spec()
+    spec = chain_build_spec()
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
     coaters = [_coater(x, 0) for x in coater_seats]
@@ -135,7 +135,7 @@ def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
     refuses on paste.
     """
     block = _mixed_block(coater_seats=(3,))
-    canvas = compose.canvas_for(chain_spec(), block.buildings, ramped=False, margin=4)
+    canvas = compose.canvas_for(chain_build_spec(), block.buildings, ramped=False, margin=4)
 
     # Index order is the composed list's own: every `_Port` indexes into it.
     assert canvas.buildings == block.buildings
@@ -183,10 +183,10 @@ def test_a_coater_drop_is_exempt_from_another_coaters_ban():
     assert peer_drop == (3, 0), "the fixture's second Coater must drop onto the first"
 
     banned_alone = compose.canvas_for(
-        chain_spec(), alone.buildings, ramped=False, margin=4
+        chain_build_spec(), alone.buildings, ramped=False, margin=4
     ).belt_ban
     banned_both = compose.canvas_for(
-        chain_spec(), with_peer.buildings, ramped=False, margin=4
+        chain_build_spec(), with_peer.buildings, ramped=False, margin=4
     ).belt_ban
 
     assert peer_drop in banned_alone, "the first Coater must ban that cell on its own"

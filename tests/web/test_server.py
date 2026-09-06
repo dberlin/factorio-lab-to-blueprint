@@ -243,7 +243,10 @@ def test_unknown_strategy_is_rejected_before_submission(start: Callable[..., Cli
         "/api/build", {"url": URL, "strategy": "unknown"}, method="POST"
     )
     assert status == 400
-    assert _string(body, "error") == "'strategy' must be one of best, freeform, sequence-pair"
+    assert (
+        _string(body, "error")
+        == "'strategy' must be one of best, freeform, sequence-pair, hierarchical"
+    )
 
 
 def test_a_body_that_is_not_json_is_400(start: Callable[..., Client]) -> None:

@@ -49,6 +49,7 @@ from flab2bp.layout.base import (
     SpecInfeasible,
 )
 from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.hierarchy import HierarchicalLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout, _validate_sequence_islands
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.candidates import (
@@ -59,15 +60,19 @@ from flab2bp.rates.candidates import (
 from flab2bp.rates.solve import InfeasibleError, UnsupportedObjectiveError, supplied_rates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
-ExplicitStrategyName = Literal["freeform", "sequence-pair"]
-StrategyName = Literal["best", "freeform", "sequence-pair"]
+ExplicitStrategyName = Literal["freeform", "sequence-pair", "hierarchical"]
+StrategyName = Literal["best", "freeform", "sequence-pair", "hierarchical"]
 
 STRATEGY_CHOICES: tuple[StrategyName, ...] = (
     "best",
     "freeform",
     "sequence-pair",
+    "hierarchical",
 )
-#: Explicit strategies included when callers request ``best``.
+#: Explicit strategies included when callers request ``best``.  ``hierarchical``
+#: is deliberately absent: it decomposes a spec and runs the other two backends
+#: underneath itself, so admitting it here would change every default build's
+#: wall and its answer.  It is reachable only by naming it.
 PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = (
     "freeform",
     "sequence-pair",
@@ -209,8 +214,16 @@ def _new_layout(
     #: such argument: its sub-solves are pinned at one worker each, so its share
     #: of a split is headroom for its process rather than a solver setting.
     workers: int | None = None,
-) -> FreeformLayout | SequencePairLayout:
+) -> FreeformLayout | SequencePairLayout | HierarchicalLayout:
     """Construct one explicitly selected layout backend."""
+    if strategy == "hierarchical":
+        # No island argument: islands live inside the sequence-pair backend, and
+        # the hierarchical one runs its own children with one each.
+        return HierarchicalLayout(
+            belt_vertical_construction=belt_vertical_construction,
+            band_policy=band_policy,
+            workers=workers,
+        )
     if strategy == "freeform":
         return FreeformLayout(
             belt_vertical_construction=belt_vertical_construction,

@@ -191,6 +191,16 @@ def test_proliferator_tier_is_optional_and_explicit() -> None:
 def test_web_strategies_are_the_public_subset() -> None:
     assert parse_options({"url": URL, "strategy": "freeform"}).strategy == "freeform"
     assert parse_options({"url": URL, "strategy": "sequence-pair"}).strategy == "sequence-pair"
+    assert parse_options({"url": URL, "strategy": "hierarchical"}).strategy == "hierarchical"
+
+
+def test_an_unknown_strategy_names_every_choice_the_web_accepts() -> None:
+    """The error is the only place a caller learns what it may ask for."""
+    with pytest.raises(
+        InvalidOptions,
+        match=r"'strategy' must be one of best, freeform, sequence-pair, hierarchical",
+    ):
+        parse_options({"url": URL, "strategy": "spine"})
 
 
 def test_a_long_budget_is_accepted_and_warned_about_rather_than_refused() -> None:
