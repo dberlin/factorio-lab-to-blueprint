@@ -1,0 +1,218 @@
+[
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 1,
+    "strategy": "freeform",
+    "wall_s": 0.72,
+    "area": 104,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 1,
+    "strategy": "sequence-pair",
+    "wall_s": 0.21,
+    "area": 104,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 2,
+    "strategy": "freeform",
+    "wall_s": 1.2,
+    "area": 128,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 2,
+    "strategy": "sequence-pair",
+    "wall_s": 0.18,
+    "area": 128,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 3,
+    "strategy": "freeform",
+    "wall_s": 0.69,
+    "area": 171,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 3,
+    "strategy": "sequence-pair",
+    "wall_s": 0.17,
+    "area": 171,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 4,
+    "strategy": "freeform",
+    "wall_s": 0.93,
+    "area": 198,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 4,
+    "strategy": "sequence-pair",
+    "wall_s": 0.16,
+    "area": 198,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 5,
+    "strategy": "freeform",
+    "wall_s": 11.18,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (48, 56): build colliders intersect); a placement that fails validation is refused rath"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 5,
+    "strategy": "sequence-pair",
+    "wall_s": 9.47,
+    "area": null,
+    "verdict": "REFUSED: deadline exhausted before finding an exact layout"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 6,
+    "strategy": "freeform",
+    "wall_s": 11.82,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect);"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 6,
+    "strategy": "sequence-pair",
+    "wall_s": 1.1,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 7,
+    "strategy": "freeform",
+    "wall_s": 1.32,
+    "area": 374,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 7,
+    "strategy": "sequence-pair",
+    "wall_s": 0.36,
+    "area": 374,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 8,
+    "strategy": "freeform",
+    "wall_s": 1.25,
+    "area": 374,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "copper-ingot",
+    "machine": "negentropy-smelter",
+    "count": 8,
+    "strategy": "sequence-pair",
+    "wall_s": 0.38,
+    "area": 374,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "iron-ingot",
+    "machine": "negentropy-smelter",
+    "count": 1,
+    "strategy": "freeform",
+    "wall_s": 0.65,
+    "area": 104,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "iron-ingot",
+    "machine": "negentropy-smelter",
+    "count": 1,
+    "strategy": "sequence-pair",
+    "wall_s": 0.19,
+    "area": 104,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "iron-ingot",
+    "machine": "negentropy-smelter",
+    "count": 2,
+    "strategy": "freeform",
+    "wall_s": 0.72,
+    "area": 128,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "iron-ingot",
+    "machine": "negentropy-smelter",
+    "count": 2,
+    "strategy": "sequence-pair",
+    "wall_s": 0.18,
+    "area": 128,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "iron-ingot",
+    "machine": "negentropy-smelter",
+    "count": 3,
+    "strategy": "freeform",
+    "wall_s": 0.74,
+    "area": 171,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "iron-ingot",
+    "machine": "negentropy-smelter",
+    "count": 3,
+    "strategy": "sequence-pair",
+    "wall_s": 0.16,
+    "area": 171,
+    "verdict": "OK"
+  },
+  {
+    "recipe": "iron-ingot",
+    "machine": "negentropy-smelter",
+    "count": 6,
+    "strategy": "freeform",
+    "wall_s": 11.82,
+    "area": null,
+    "verdict": "REFUSED: every packing that wired was rejected by our own validator (geom.collide; findings: band 4 geom.collide (57, 65): build colliders intersect);"
+  },
+  {
+    "recipe": "iron-ingot",
+    "machine": "negentropy-smelter",
+    "count": 6,
+    "strategy": "sequence-pair",
+    "wall_s": 1.12,
+    "area": null,
+    "verdict": "REFUSED: expansion budget exhausted before finding an exact layout"
+  }
+]
