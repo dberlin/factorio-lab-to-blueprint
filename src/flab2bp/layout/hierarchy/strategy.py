@@ -74,6 +74,15 @@ plan proposed and each is spelled out separately below:
   computed inside :func:`_solve_block` at job start rather than by the round.
 * ``MAX_RESPLIT_ATTEMPTS = 4`` is counted PER BLOCK, not as a global round
   bound: a child created by a re-cut starts at attempt 0.
+* A ``(shape, arm)`` no-good memo, local to one :meth:`lay_out` call (v2 Task
+  5): ``_solve_round`` solves each distinct shape AT MOST ONCE per round --
+  two same-shaped children of one re-cut block routinely land in the same
+  round and are answered together rather than asked twice -- and skips a
+  ``(shape, arm)`` a prior round already saw refused at this budget or
+  higher, without building its sub-spec. ``_next_cut`` skips a cut whose
+  every child is remembered refused for every arm, trying the next attempt
+  instead. ``stats["nogood_skips"]`` counts every ``(block, arm)`` pair this
+  spared.
 * The pool is SPAWNED (``multiprocessing.get_context("spawn")``), like
   ``strategy_race``'s, and built ONCE per :meth:`HierarchicalLayout.lay_out`
   call rather than once per round (v2 Task 3): every round of one build shares
@@ -317,6 +326,65 @@ def _solve_block(args: _BlockJob) -> tuple[dict[str, object], Placement | None]:
     )
 
 
+#: A block's shape: sorted `(recipe_id, total machine count)` pairs, summed
+#: across every `Unit` of that recipe.  Deliberately NOT keyed on `uid`,
+#: `MachineGroup` identity or block position -- `_solve_block`'s outcome is a
+#: pure function of `sub_spec(spec, units, index)`, and `sub_spec` (see its
+#: docstring) computes external inputs/outputs by aggregating each unit's own
+#: produced/consumed rates, never from who a block is wired to.  Two blocks
+#: with the same shape therefore ask the placer the identical question, and
+#: `split_block`'s "halve" attempt on a single-recipe block routinely
+#: produces exactly that pair (a refused two-machine smelter block splits
+#: into two one-machine ones).  Recipe count alone is also what the module
+#: docstring's "six machines refused, three plus three placed" is about: it
+#: is the coarsest key that still tracks what makes the placers say yes or
+#: no.
+ShapeKey = tuple[tuple[str, int], ...]
+
+
+def shape_key(units: list[Unit]) -> ShapeKey:
+    """The shape `units` presents to a placer: recipe multiset, machine counts.
+
+    Aggregated by recipe id rather than listed per `Unit`, so a block that
+    happens to carry more than one `Unit` of the same recipe (never produced
+    by `split_block` today, but not forbidden by `Unit` itself) still hashes
+    the same as one that carries a single `Unit` of the combined count.
+    """
+    counts: dict[str, int] = {}
+    for unit in units:
+        counts[unit.recipe] = counts.get(unit.recipe, 0) + unit.count
+    return tuple(sorted(counts.items()))
+
+
+@dataclass
+class _ShapeNoGood:
+    """Refused `(shape, arm)` pairs, remembered for the rest of one build.
+
+    Lives on the `lay_out` CALL, not on `HierarchicalLayout` itself: a block
+    shape is only evidence about what THIS build's placers can do with THIS
+    budget, and stashing it on `self` would leak one build's refusals into
+    the next `lay_out` call on the same instance -- exactly the mistake
+    `test_the_memo_forgets_across_lay_out_calls` guards against.
+
+    Keyed by the HIGHEST budget a `(shape, arm)` has been refused at, not the
+    latest: block size interacts with the placers non-monotonically (the
+    module docstring's "six machines refused, three plus three placed"), but
+    WALL TIME does not -- a placer given more of it never does worse, so a
+    refusal at a higher budget also answers a round asking for less.
+    """
+
+    refused: dict[tuple[ShapeKey, str], float] = field(default_factory=dict)
+
+    def remembers(self, key: ShapeKey, arm: str, budget_s: float) -> bool:
+        seen = self.refused.get((key, arm))
+        return seen is not None and seen >= budget_s
+
+    def record(self, key: ShapeKey, arm: str, budget_s: float) -> None:
+        seen = self.refused.get((key, arm))
+        if seen is None or budget_s > seen:
+            self.refused[(key, arm)] = budget_s
+
+
 @dataclass(slots=True)
 class _Entry:
     """One block: its units, its winning placement, and why it refused."""
@@ -379,6 +447,10 @@ class HierarchicalLayout:
         entries = [_Entry(list(block)) for block in partition.blocks]
         block_wall = 0.0
         resplits = 0
+        nogood_skips = 0
+        # THIS CALL'S OWN no-good memo -- see `_ShapeNoGood`'s docstring for
+        # why it is a local rather than `self._nogood`.
+        nogood = _ShapeNoGood()
         # ONE POOL FOR THE WHOLE BUILD, not one per round: a re-cut starts a
         # new round with more (smaller) blocks, and building a fresh pool for
         # it would pay a spawned process pool's own start-up again for jobs
@@ -435,14 +507,22 @@ class HierarchicalLayout:
                     )
                 block_budget = min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, share))
                 started = time.monotonic()
-                self._solve_round(
-                    spec, entries, todo, pool=pool, block_budget=block_budget, deadline=deadline
+                nogood_skips += self._solve_round(
+                    spec,
+                    entries,
+                    todo,
+                    pool=pool,
+                    block_budget=block_budget,
+                    deadline=deadline,
+                    nogood=nogood,
                 )
                 block_wall += time.monotonic() - started
                 still = [index for index in todo if entries[index].placement is None]
                 if not still:
                     break
-                grown, progress = _recut(entries, still)
+                grown, progress = _recut(
+                    entries, still, nogood=nogood, arms=self._arms(), budget_s=block_budget
+                )
                 if not progress:
                     raise refuse(_block_refusal(entries, still, why="out of re-cut attempts"))
                 entries = grown
@@ -557,6 +637,7 @@ class HierarchicalLayout:
                 "compose_wall_s": round(compose_wall, 3),
                 "cut_lanes": float(len(allocation.flows)),
                 "resplits": float(resplits),
+                "nogood_skips": float(nogood_skips),
                 "strips_max": float(max((strip_count(spec, block) for block in blocks), default=0)),
             }
         )
@@ -590,19 +671,54 @@ class HierarchicalLayout:
         pool: Executor,
         block_budget: float,
         deadline: float,
-    ) -> None:
+        nogood: _ShapeNoGood,
+    ) -> int:
         """Solve every block in ``todo`` with every arm; smallest valid wins.
 
         ``pool`` is the ONE pool `lay_out` built for the whole build, opened
         and closed there -- this method never constructs or shuts one down.
+
+        A JOB IS KEYED BY ``(shape, arm)``, NOT BY ``(block, arm)``.
+        ``_recut``'s "halve" attempt on a single-recipe block routinely hands
+        back two children of the IDENTICAL shape (a refused two-machine
+        smelter block splits into two one-machine ones), and both land in
+        THIS round together -- so every distinct ``(shape, arm)`` in ``todo``
+        is solved AT MOST ONCE here: the first block that needs it is the one
+        actually offered to a placer, and every later block sharing that
+        shape gets the SAME answer, including the same ``Placement`` object.
+        That reuse is safe because nothing downstream mutates a ``Placement``
+        in place -- the composer only ever reads one through
+        ``dataclasses.replace`` (see ``tests/layout/hierarchy/conftest.py``'s
+        ``two_solved_blocks`` docstring) -- and it is correct because
+        ``sub_spec`` (see its own docstring) is a pure function of a block's
+        own units, never of who it is wired to, so two same-shaped blocks are
+        asking the identical question. ``nogood`` additionally skips a
+        ``(shape, arm)`` a PRIOR round already saw refused at this budget or
+        higher, without even building its sub-spec. Returns how many
+        ``(block, arm)`` pairs this round did NOT hand to a placer -- a
+        remembered no-good or a same-round duplicate.
         """
         arms = self._arms()
+        shapes = [shape_key(entries[index].units) for index in todo]
+        # `(shape, arm) -> todo-slots that need this exact question answered`,
+        # insertion-ordered so the FIRST slot to need a key is the one whose
+        # sub-spec actually gets built and solved.
+        slots_by_key: dict[tuple[ShapeKey, str], list[int]] = {}
+        for slot in range(len(todo)):
+            for arm in arms:
+                slots_by_key.setdefault((shapes[slot], arm), []).append(slot)
+
         jobs: list[_BlockJob] = []
-        for index in todo:
-            sub = sub_spec(spec, entries[index].units, index)
-            jobs.extend(
+        job_keys: list[tuple[ShapeKey, str]] = []
+        skipped = 0
+        for (key, arm), slots in slots_by_key.items():
+            if nogood.remembers(key, arm, block_budget):
+                skipped += len(slots)
+                continue
+            index = todo[slots[0]]
+            jobs.append(
                 (
-                    sub,
+                    sub_spec(spec, entries[index].units, index),
                     arm,
                     block_budget,
                     self.belt_vertical_construction,
@@ -612,8 +728,11 @@ class HierarchicalLayout:
                     # not handed a clock the earlier waves already spent.
                     deadline,
                 )
-                for arm in arms
             )
+            job_keys.append((key, arm))
+            # Every OTHER slot sharing this key is answered without a job of
+            # its own -- see the docstring's "AT MOST ONCE".
+            skipped += len(slots) - 1
         try:
             # `_solve_block` is resolved from the module globals at call time,
             # which is what lets a test substitute the worker.
@@ -639,22 +758,47 @@ class HierarchicalLayout:
                 for job in jobs
             ]
 
-        width = len(arms)
+        skip_record: tuple[dict[str, object], Placement | None] = (
+            {"verdict": "REFUSED: shape already refused this build (no-good)", "ok": False},
+            None,
+        )
+        outcome_by_key: dict[tuple[ShapeKey, str], tuple[dict[str, object], Placement | None]] = {}
+        for job_key, result in zip(job_keys, results, strict=True):
+            record, _placement = result
+            # Only a genuine placer REFUSAL says anything about the SHAPE.
+            # "POOL FAILED" and a placer CRASH are infrastructure failures --
+            # remembering either as a no-good would hide a pool or placer bug
+            # behind "this shape is already known to be impossible."
+            if str(record.get("verdict", "")).startswith("REFUSED:"):
+                nogood.record(job_key[0], job_key[1], block_budget)
+            outcome_by_key[job_key] = result
+
         for slot, index in enumerate(todo):
-            outcomes = results[slot * width : (slot + 1) * width]
+            outcomes = [outcome_by_key.get((shapes[slot], arm), skip_record) for arm in arms]
             winners = [placement for _record, placement in outcomes if placement is not None]
             entries[index].verdicts = tuple(
                 str(record.get("verdict", "no verdict")) for record, _placement in outcomes
             )
             if winners:
                 entries[index].placement = min(winners, key=lambda p: p.area)
+        return skipped
 
 
-def _recut(entries: list[_Entry], still: list[int]) -> tuple[list[_Entry], bool]:
+def _recut(
+    entries: list[_Entry],
+    still: list[int],
+    *,
+    nogood: _ShapeNoGood,
+    arms: tuple[str, ...],
+    budget_s: float,
+) -> tuple[list[_Entry], bool]:
     """Replace every refusing entry with its children; did anything change?
 
     Each block spends its OWN attempt counter, so ``split_block``'s four
     distinct cuts are all reachable by a block however late it was created.
+    ``nogood``, ``arms`` and ``budget_s`` are threaded through to
+    ``_next_cut`` so it can skip a cut this build already knows is wasted --
+    see its own docstring.
     """
     grown: list[_Entry] = []
     progress = False
@@ -663,7 +807,7 @@ def _recut(entries: list[_Entry], still: list[int]) -> tuple[list[_Entry], bool]
         if index not in refusing:
             grown.append(entry)
             continue
-        children = _next_cut(entry)
+        children = _next_cut(entry, nogood=nogood, arms=arms, budget_s=budget_s)
         if children is None:
             grown.append(entry)
             continue
@@ -672,18 +816,31 @@ def _recut(entries: list[_Entry], still: list[int]) -> tuple[list[_Entry], bool]
     return grown, progress
 
 
-def _next_cut(entry: _Entry) -> list[list[Unit]] | None:
+def _next_cut(
+    entry: _Entry, *, nogood: _ShapeNoGood, arms: tuple[str, ...], budget_s: float
+) -> list[list[Unit]] | None:
     """The next cut of ``entry`` that actually divides it, or ``None``.
 
     Attempts that yield a single child are spent here rather than costing a
     whole solve round to discover, so ``_recut``'s "nothing moved" answer means
     the block is genuinely indivisible or out of attempts.
+
+    A cut whose EVERY child is already remembered refused, for EVERY arm, at
+    ``budget_s`` or higher is spent too without ever being offered to a
+    placer: the round about to run this cut already paid, in an EARLIER
+    round, for exactly the refusal solving those children again would only
+    rediscover.
     """
     while entry.attempts < MAX_RESPLIT_ATTEMPTS:
         children = split_block(entry.units, attempt=entry.attempts)
         entry.attempts += 1
-        if len(children) >= 2:
-            return children
+        if len(children) < 2:
+            continue
+        if all(
+            nogood.remembers(shape_key(child), arm, budget_s) for child in children for arm in arms
+        ):
+            continue
+        return children
     return None
 
 

@@ -19,7 +19,7 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement, PlacementCompletion
 from flab2bp.layout.hierarchy import compose as compose_mod
 from flab2bp.layout.hierarchy import strategy
-from flab2bp.layout.hierarchy.strategy import HierarchicalLayout
+from flab2bp.layout.hierarchy.strategy import HierarchicalLayout, ShapeKey
 from flab2bp.spec import BuildSpec
 
 
@@ -158,6 +158,72 @@ def test_a_block_that_refuses_is_re_cut_before_the_whole_spec_refuses(
     placement = layout.lay_out(chain_spec, time_budget_s=40.0)
     assert placement.stats["resplits"] >= 1
     assert 1 in calls  # the ingot block was split into 1 + 1
+
+
+def shape_key_from_spec(spec: BuildSpec) -> ShapeKey:
+    """`strategy.shape_key`, but from the sub-spec a solved job actually carries.
+
+    Not part of the production interface: `_solve_block`'s job carries a
+    `BuildSpec`, not the `Unit` list `strategy.shape_key` takes, so a test
+    spying on `_solve_block` derives the same key from the spec's own groups
+    instead.  Aggregated by recipe id, same as `shape_key`, so the two agree
+    on the same block even if a spec ever carried more than one group per
+    recipe.
+    """
+    counts: dict[str, int] = {}
+    for group in spec.groups:
+        counts[group.recipe_id] = counts.get(group.recipe_id, 0) + group.count
+    return tuple(sorted(counts.items()))
+
+
+def test_a_refused_shape_is_not_re_solved_at_the_same_budget(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `(shape, arm)` already answered -- refused or not -- is asked once.
+
+    Forcing the two-machine ingot block to refuse drives the same re-cut as
+    `test_a_block_that_refuses_is_re_cut_before_the_whole_spec_refuses`:
+    `split_block`'s "halve" attempt on a single-recipe block hands back two
+    one-machine children of the IDENTICAL shape.  Both land in the same
+    round, so this also exercises the same-round half of the no-good design,
+    not only the across-round half its name suggests.
+    """
+    calls: list[tuple[ShapeKey, str, float]] = []
+    real = strategy._solve_block
+
+    def spy(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        calls.append((shape_key_from_spec(args[0]), args[1], args[2]))
+        if len(args[0].groups) == 1 and args[0].machine_count == 2:
+            return (
+                {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+                None,
+            )
+        return real(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", spy)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    placement = layout.lay_out(chain_spec, time_budget_s=40.0)
+    keys = [(k, arm) for k, arm, _ in calls]
+    assert len(keys) == len(set(keys)), "a (shape, arm) was solved twice"
+    assert placement.stats["nogood_skips"] >= 0
+
+
+def test_the_memo_forgets_across_lay_out_calls(chain_spec: BuildSpec) -> None:
+    """The no-good memo lives on the `lay_out` call, not the instance."""
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout.lay_out(chain_spec, time_budget_s=30.0)
+    assert not hasattr(layout, "_nogood")
 
 
 def test_an_unwired_cut_is_a_refusal_not_a_handback(
