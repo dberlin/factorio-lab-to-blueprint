@@ -63,6 +63,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import math
+import statistics
 import time
 from array import array
 from bisect import bisect_left, bisect_right
@@ -20142,8 +20143,16 @@ class FreeformLayout:
         best: Placement | None = None
         best_key: tuple[int, float] | None = None
         #: The dearest candidate this sweep has COMPLETED, pack through validate.
-        #: What `_room_for_another` charges the next improvement arrangement.
+        #: Still the charge for the two sites that price a WHOLE candidate they
+        #: may not abandon cheaply -- the projection retry and the learned-retry
+        #: promotion -- and no longer the charge for the next arrangement.
         dearest_candidate_s = 0.0
+        #: Every completed candidate's total, in the same units and measured at
+        #: the same place as `dearest_candidate_s`.  `_next_candidate_seconds`
+        #: takes their median, which is what the next arrangement is charged
+        #: (L5): the maximum prices every later candidate at whichever one
+        #: happened to walk into a congestion wall.
+        candidate_totals_s: list[float] = []
         #: The dearest POST-PACK REMAINDER this sweep has completed: over the
         #: candidates that finished, the largest value of (that candidate's own
         #: total minus that SAME candidate's own `_pack` seconds).  A windowed
@@ -20170,6 +20179,11 @@ class FreeformLayout:
         #: Completed candidates that never reached `validate.certify` because
         #: they could not have displaced the certified incumbent (L4).
         certify_skipped = 0
+        #: Clock left on the CALL's wall when the sweep last declined to start a
+        #: candidate, and zero if it never did -- a sweep that ran out of
+        #: candidates rather than out of clock has no unspent decision to
+        #: report.  This is the currency L5 buys, measured rather than argued.
+        budget_unspent_s = 0.0
         #: Window repairs waiting to be evaluated, and the queue that drains
         #: them.  `candidate_packs` is iterated by index and already mutated in
         #: four places; a separate queue adds no fifth mutation.
@@ -20282,11 +20296,29 @@ class FreeformLayout:
 
         def projection_retry_affordable() -> bool:
             current_candidate_s = 0.0 if started_at is None else time.monotonic() - started_at
+            # A WHOLE candidate, measured whole, so it carries its own completion
+            # transforms and the reserves must not be added on top of it.  The
+            # maximum stays the charge here on purpose: this is a retry of a
+            # candidate that has already spent most of its cost, so the estimate
+            # is about THIS candidate rather than about a typical one.
             return _room_for_another(
                 deadline,
                 soft,
-                max(dearest_candidate_s, current_candidate_s),
+                completion_tail_s=0.0,
+                next_candidate_s=max(dearest_candidate_s, current_candidate_s),
             )
+
+        def decline_to_start() -> None:
+            """Record the wall clock the sweep is about to hand back.
+
+            Called at every break that refuses to START a candidate, and never
+            at one that abandons a candidate already running: the number is
+            "budget the sweep chose not to spend", which is the thing L5 is
+            trying to make small.  The last such decision wins, and there is at
+            most one -- each of these breaks leaves the loop.
+            """
+            nonlocal budget_unspent_s
+            budget_unspent_s = 0.0 if deadline is None else max(0.0, deadline - time.monotonic())
 
         def band_target_for(height: int, width: int) -> int:
             """Widest core this policy's bands still accept at ``height``, guarded.
@@ -20401,6 +20433,7 @@ class FreeformLayout:
                 if started_at is not None:
                     candidate_total_s = time.monotonic() - started_at
                     dearest_candidate_s = max(dearest_candidate_s, candidate_total_s)
+                    candidate_totals_s.append(candidate_total_s)
                     # The remainder is taken against THIS candidate's own pack,
                     # so it is a span one candidate really ran (Ruling AD) and
                     # never a difference between two different ones.
@@ -20408,19 +20441,41 @@ class FreeformLayout:
                         dearest_remainder_s,
                         candidate_total_s - candidate_pack_s,
                     )
-                # WHAT THIS TURN COSTS, and a queued repair does not cost a whole
-                # candidate.  `_room_for_another` charges `dearest_candidate_s`,
-                # which is pack THROUGH validate; a window has already bought this
-                # candidate's pack, so what is left to spend on it is route, power,
-                # finalize and validate -- the same measured remainder
-                # `_window_candidate_seconds` charges on top of the window's own
-                # wall.  Charging a queued repair for a whole candidate drops
-                # repairs the sweep can plainly afford, and drops them AFTER paying
-                # for the CP-SAT solve that produced them.
-                turn_cost = dearest_remainder_s if queued is not None else dearest_candidate_s
+                # WHAT THIS TURN COSTS, in the two halves `_room_for_another`
+                # keeps apart: the completion tail, which must fit in full and is
+                # a maximum, and the estimate of the turn's own work in front of
+                # it, which is a median (L5).
+                #
+                # The reserves cannot move between here and the point they are
+                # read again below -- everything in between is a gate that breaks
+                # or continues -- so this is the same sum that check computes.
+                completion_tail_s = compaction_reserve_s + finalize_reserve_s + validation_reserve_s
+                # AND A QUEUED REPAIR DOES NOT COST A WHOLE CANDIDATE.  A window
+                # has already bought this candidate's pack, so what is left to
+                # spend on it is route, power, finalize and validate -- the same
+                # measured remainder `_window_candidate_seconds` charges on top of
+                # the window's own wall.  Charging a queued repair for a whole
+                # candidate drops repairs the sweep can plainly afford, and drops
+                # them AFTER paying for the CP-SAT solve that produced them.
+                #
+                # That remainder is measured WHOLE and already contains the
+                # completion transforms it ran, so it is charged as the turn's
+                # own work with a zero tail; adding the reserves would bill them
+                # twice and is the one way this split could tighten a gate it was
+                # meant to loosen.
+                if queued is not None:
+                    turn_tail_s = 0.0
+                    turn_candidate_s = dearest_remainder_s
+                else:
+                    turn_tail_s = completion_tail_s
+                    turn_candidate_s = _next_candidate_seconds(candidate_totals_s)
                 if best is not None and not _room_for_another(
-                    deadline, improvement_soft, turn_cost
+                    deadline,
+                    improvement_soft,
+                    completion_tail_s=turn_tail_s,
+                    next_candidate_s=turn_candidate_s,
                 ):
+                    decline_to_start()
                     break
                 # A SECOND ARRANGEMENT NORMALLY IMPROVES; ONE STRONG NEAR MISS MAY RESCUE.
                 #
@@ -20519,8 +20574,14 @@ class FreeformLayout:
                 if (
                     not projection_retry
                     and best is not None
-                    and not _room_for_another(deadline, improvement_soft, turn_cost)
+                    and not _room_for_another(
+                        deadline,
+                        improvement_soft,
+                        completion_tail_s=turn_tail_s,
+                        next_candidate_s=turn_candidate_s,
+                    )
                 ):
+                    decline_to_start()
                     break
                 # A SECOND ARRANGEMENT WITH NOTHING TO IMPROVE USED TO BE A HARD
                 # STOP, and it stopped the sweep at slot 6 of 15 with 25 to 28 s
@@ -20530,8 +20591,8 @@ class FreeformLayout:
                 # different pack, and the honest stop condition is that the draws
                 # have stopped being new.
                 #
-                # `_room_for_another(deadline, improvement_soft, turn_cost)`, the
-                # `completion_reserve_s` check and the hard `remaining <= 0`
+                # the `_room_for_another` improvement call, the completion-tail
+                # check and the hard `remaining <= 0`
                 # break all sit immediately BELOW this gate and are unchanged, so
                 # a draw this gate now lets through still has to buy its clock
                 # from them: it can only ever extend a sweep INSIDE clock it
@@ -20550,21 +20611,24 @@ class FreeformLayout:
                 ):
                     stale_stop = True
                     break
-                # `turn_cost` here is `dearest_candidate_s` under every reachable
-                # state: a window launches only from `arrangement == 0`, so every
-                # queued turn short-circuits on `and arrangement` before this
-                # predicate runs.  It is written as `turn_cost` so the day a
-                # window launches from a later arrangement the charge is already
-                # right; no fixture can distinguish the two today.
+                # The charge here is the fresh-candidate one under every
+                # reachable state: a window launches only from
+                # `arrangement == 0`, so every queued turn short-circuits on
+                # `and arrangement` before this predicate runs.  It is written as
+                # the turn's own pair so the day a window launches from a later
+                # arrangement the charge is already right; no fixture can
+                # distinguish the two today.
                 if (
                     not projection_retry
                     and arrangement
                     and not _room_for_another(
                         deadline,
                         soft if best is None else improvement_soft,
-                        turn_cost,
+                        completion_tail_s=turn_tail_s,
+                        next_candidate_s=turn_candidate_s,
                     )
                 ):
+                    decline_to_start()
                     break
                 # The SOFT deadline stops us IMPROVING, never FINDING. A refusal
                 # means the model could not lay the spec out; a sweep's own clock
@@ -20578,15 +20642,14 @@ class FreeformLayout:
                     and best is not None
                     and time.monotonic() >= improvement_soft
                 ):
+                    decline_to_start()
                     break
                 # The HARD deadline is the call's, and it does stop us finding --
                 # that is what makes `time_budget_s` a wall rather than a suggestion.
                 # `lay_out` turns it into a refusal that names the deadline, so the
                 # distinction between "cannot" and "ran out" survives into the error.
-                completion_reserve_s = (
-                    compaction_reserve_s + finalize_reserve_s + validation_reserve_s
-                )
-                if deadline is not None and deadline - time.monotonic() < completion_reserve_s:
+                if deadline is not None and deadline - time.monotonic() < completion_tail_s:
+                    decline_to_start()
                     break
                 seed = seeds[height]
                 seed_width, seed_height = strip_outline(seed)
@@ -20603,6 +20666,7 @@ class FreeformLayout:
                     per_solve if deadline is None else min(per_solve, deadline - time.monotonic())
                 )
                 if remaining <= 0:
+                    decline_to_start()
                     break
                 # CP-SAT's multi-worker portfolio changes the returned large-plan
                 # arrangement with audit job allocation.  Those 24+ strip cells
@@ -21137,7 +21201,10 @@ class FreeformLayout:
                                     and _room_for_another(
                                         deadline,
                                         soft,
-                                        retry_cost,
+                                        # A whole candidate, measured whole, so
+                                        # it carries its own completion tail.
+                                        completion_tail_s=0.0,
+                                        next_candidate_s=retry_cost,
                                     )
                                 ):
                                     if single_failure_feedback_retry:
@@ -21198,7 +21265,14 @@ class FreeformLayout:
                             if (
                                 (height, arrangement) not in window_packs
                                 and (height, arrangement) not in window_choices
-                                and _room_for_another(deadline, soft, window_cost)
+                                and _room_for_another(
+                                    deadline,
+                                    soft,
+                                    # The bounded solve plus a remainder measured
+                                    # whole: the tail is already inside it.
+                                    completion_tail_s=0.0,
+                                    next_candidate_s=window_cost,
+                                )
                             ):
                                 target = band_target_for(height, pack.width)
                                 relation_problem = _pack_relation_problem(pack, strips, height)
@@ -21648,6 +21722,7 @@ class FreeformLayout:
                     "finalization_time_s": finalization_time_s,
                     "validation_time_s": validation_time_s,
                     "certify_skipped": float(certify_skipped),
+                    "budget_unspent_s": budget_unspent_s,
                     **cp_stats,
                 }
             )
@@ -21674,6 +21749,7 @@ class FreeformLayout:
                     "finalization_time_s": finalization_time_s,
                     "validation_time_s": validation_time_s,
                     "certify_skipped": float(certify_skipped),
+                    "budget_unspent_s": budget_unspent_s,
                 }
             )
             best.stats.update(cast(PlacementStats, cp_stats))
@@ -21701,7 +21777,44 @@ def _would_become_incumbent(
     return incumbent_key is None or candidate_key < incumbent_key
 
 
-def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -> bool:
+def _next_candidate_seconds(completed_s: Sequence[float]) -> float:
+    """What ONE MORE candidate is expected to cost, and why it is not a maximum.
+
+    The median of what the completed candidates actually took, and zero until
+    one has completed -- so the first candidate of a sweep is never refused for
+    want of a measurement.
+
+    THE MAXIMUM WAS THE WRONG STATISTIC.  A sweep's candidate costs are not
+    symmetric: most candidates route in a comparable time and one occasionally
+    walks into a congestion wall and burns several times that.  Charging the
+    next candidate the dearest one ever seen therefore prices it at the outlier,
+    and the sweep hands the clock back rather than spend it -- 6-37 % of every
+    30 s budget on the profiled cells (speedups-2 design L5).
+
+    Under-estimating is cheap and over-estimating is not.  A candidate admitted
+    on a median it then over-runs is abandoned at the pack budget's
+    ``remaining <= 0``, at the completion-tail check that follows its pack, or by
+    `_expired(completion_deadline)` inside the completion transforms; in every
+    one of those the sweep still holds an incumbent that is already compacted,
+    finalized and certified, so what the abandoned candidate cost is clock and
+    nothing else.  A candidate REFUSED on an outlier's price, by contrast, is a
+    draw at a denser placement that was affordable and never taken.
+
+    What must NOT be estimated this way is the completion tail; see
+    `_room_for_another`, which is where the two are added.
+    """
+    if not completed_s:
+        return 0.0
+    return statistics.median(completed_s)
+
+
+def _room_for_another(
+    deadline: float | None,
+    soft: float,
+    *,
+    completion_tail_s: float,
+    next_candidate_s: float,
+) -> bool:
     """Is there clock left to pack, route, power and validate one more candidate?
 
     Both clocks have to allow it and they say different things.  ``soft`` is the
@@ -21711,18 +21824,35 @@ def _room_for_another(deadline: float | None, soft: float, candidate_s: float) -
     already holds a routed placement, so an abandoned improvement buys nothing
     and spends the clock a later spec-critical pass might have used.
 
-    ``candidate_s`` is the dearest candidate this sweep has actually completed,
-    which makes this a measurement rather than a threshold: see the note in
-    :meth:`FreeformLayout._sweep` for why a tuned constant could not span a
-    corpus running from 1 to 955 machines.
+    THE CHARGE IS TWO DIFFERENT KINDS OF NUMBER and they used to be one.
+
+    ``completion_tail_s`` is what MUST fit, and it is always a maximum: the
+    compaction, finalization and validation reserves, each the dearest span this
+    sweep has measured for that transform.  Those three are the exact work that
+    turns a routed candidate into a placement this program will emit, they are
+    not interruptible into anything useful, and a sweep that starts a candidate
+    without room for them has bought a routing pass it cannot cash.
+
+    ``next_candidate_s`` is what the next turn's own work is EXPECTED to cost,
+    and it deliberately need not be a maximum -- see `_next_candidate_seconds`
+    for why the median is the honest estimate and what an under-estimate costs.
+
+    The two are added, so the caller decides the split.  A caller charging a
+    span it has MEASURED WHOLE -- a queued repair's post-pack remainder, a
+    window's bounded solve plus that remainder, a projection retry's whole
+    candidate -- passes it as ``next_candidate_s`` with a zero tail, because
+    such a span already contains its own completion transforms and adding the
+    reserves on top would charge for them twice.  Only the fresh-candidate gate
+    in :meth:`FreeformLayout._sweep` splits them.
 
     A ``deadline`` of ``None`` means a caller with no wall -- a test or a probe
     -- and only the soft clock then applies.
     """
+    charge_s = completion_tail_s + next_candidate_s
     now = time.monotonic()
-    if soft - now < candidate_s:
+    if soft - now < charge_s:
         return False
-    return deadline is None or deadline - now >= candidate_s
+    return deadline is None or deadline - now >= charge_s
 
 
 def _window_candidate_seconds(*, dearest_remainder_s: float) -> float:

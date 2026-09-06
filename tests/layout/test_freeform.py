@@ -4136,7 +4136,7 @@ def test_the_window_launches_on_a_best_failing_pack_with_three_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A slot and a clock, and no `learned` evidence: that is the trigger now."""
-    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: True)
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         freeform,
         "destroy_strips",
@@ -4187,7 +4187,7 @@ def test_the_window_is_withheld_on_a_pack_that_only_ties_the_best_failing_one(
     a pack that ties the incumbent offers no better evidence than the solve
     already spent, so it does not buy a second one.
     """
-    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: True)
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         freeform,
         "destroy_strips",
@@ -4220,7 +4220,7 @@ def test_the_window_is_withheld_on_a_pack_that_only_ties_the_best_failing_one(
 def test_the_window_is_withheld_on_a_pack_worse_than_the_best_failing_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: True)
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         freeform,
         "destroy_strips",
@@ -4974,7 +4974,7 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The repaired pack supplements, rather than replaces, its source pack's cut."""
-    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: True)
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         freeform,
         "destroy_strips",
@@ -5600,6 +5600,130 @@ def test_sweep_measures_the_validation_reserve_before_any_certification_is_skipp
     assert result.stats["certify_skipped"] == 1
 
 
+def _sweep_over_timed_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    schedule: tuple[tuple[float, int], ...],
+    *,
+    budget_s: float,
+) -> tuple[Placement | None, list[int], list[tuple[int, int]]]:
+    """One routed candidate per height, each costing the fake seconds it is given.
+
+    The clock only moves inside ``_build``, so a candidate's measured total IS
+    the number the schedule hands it, and the compaction, finalization and
+    validation spans all measure zero -- which holds the completion tail at zero
+    and isolates the NEXT-candidate estimate, the one thing these tests are
+    about.  The frame is ``area x 1``, so a candidate's finalized area is the
+    other number the schedule hands it.
+    """
+    clock = 0.0
+    heights = tuple(20 + index for index in range(len(schedule)))
+    costs = {height: cost for height, (cost, _area) in zip(heights, schedule, strict=True)}
+    areas = [area for _cost, area in schedule]
+    finalized: list[int] = []
+
+    def monotonic() -> float:
+        return clock
+
+    def spend(height: int, _arrangement: int) -> None:
+        nonlocal clock
+        clock += costs[height]
+
+    def finish(
+        placement: Placement,
+        _policy: BandPolicy,
+        **_kwargs: object,
+    ) -> Placement:
+        if len(finalized) >= len(areas):
+            pytest.fail("the sweep finalized more candidates than the schedule describes")
+        area = areas[len(finalized)]
+        finalized.append(area)
+        return replace(placement, frame=AreaFrame(area, 1, 4, (4,), False))
+
+    monkeypatch.setattr(time, "monotonic", monotonic)
+    result, seen, _attempts = _sweep_after_first_routing(
+        monkeypatch,
+        _routed(),
+        arrangements=1,
+        heights=heights,
+        deadline=budget_s,
+        before_build=spend,
+        finalizer=finish,
+        time_budget_s=budget_s,
+    )
+    return result, finalized, seen
+
+
+def test_the_sweep_starts_a_candidate_the_dearest_completed_one_would_have_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L5: the next candidate is sized by the MEDIAN, not by the dearest outlier.
+
+    Two candidates cost 12 s and 4 s of a 25 s budget, so nine seconds remain and
+    the dearest one does not fit in them.  The median does, and the third
+    candidate is the densest of the three -- which is exactly the budget the old
+    rule handed back.  The second half of this test restores the old charge and
+    shows the sweep stopping with those nine seconds unspent.
+    """
+    schedule = ((12.0, 100), (4.0, 90), (1.0, 50))
+
+    result, finalized, seen = _sweep_over_timed_candidates(
+        monkeypatch,
+        schedule,
+        budget_s=25.0,
+    )
+
+    assert seen == [(20, 0), (21, 0), (22, 0)]
+    assert finalized == [100, 90, 50]
+    assert result is not None
+    assert result.area == 50
+    # The loop ran out of candidates rather than out of clock, so no decision
+    # not to start one was ever taken.
+    assert result.stats["budget_unspent_s"] == pytest.approx(0.0)
+
+    # THE OLD RULE, restored by charging the dearest completed candidate again.
+    monkeypatch.setattr(
+        freeform,
+        "_next_candidate_seconds",
+        lambda completed_s: max(completed_s, default=0.0),
+    )
+    dearest, dearest_finalized, dearest_seen = _sweep_over_timed_candidates(
+        monkeypatch,
+        schedule,
+        budget_s=25.0,
+    )
+
+    assert dearest_seen == [(20, 0), (21, 0)]
+    assert dearest_finalized == [100, 90]
+    assert dearest is not None
+    assert dearest.area == 90
+    assert dearest.stats["budget_unspent_s"] == pytest.approx(9.0)
+
+
+def test_an_over_running_extra_candidate_is_abandoned_and_the_incumbent_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wall stays a wall: a median that under-estimates costs the incumbent nothing.
+
+    The third candidate is admitted on the median and then runs five seconds past
+    the hard deadline.  It is abandoned before it reaches the completion
+    transforms -- so it can never spend the reserve the incumbent's own
+    completion already bought -- and the placement the sweep returns is the
+    incumbent, complete.
+    """
+    result, finalized, seen = _sweep_over_timed_candidates(
+        monkeypatch,
+        ((12.0, 100), (4.0, 90), (30.0, 50)),
+        budget_s=25.0,
+    )
+
+    assert seen == [(20, 0), (21, 0), (22, 0)]
+    # Started, and dropped before compaction, finalization or validation.
+    assert finalized == [100, 90]
+    assert result is not None
+    assert result.area == 90
+    assert result.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+
+
 def test_sweep_reserves_compaction_finalization_and_validation_as_exact_sum(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5803,7 +5927,7 @@ def test_feedback_retry_does_not_reroute_the_same_assignment(
             at={index: (x + 1, y) for index, (x, y) in pack.at.items()},
         )
 
-    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: False)
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args, **_kwargs: False)
     result, seen, attempts = _sweep_after_first_routing(
         monkeypatch,
         _feedback_bearing_routing(),
@@ -5868,10 +5992,21 @@ def test_feedback_rescue_uses_positive_hard_time_without_prior_candidate_afforda
     )
 
     assert prior_candidate_s > remaining_s
-    assert not room_for_another(deadline, deadline, prior_candidate_s)
+    assert not room_for_another(
+        deadline,
+        deadline,
+        completion_tail_s=0.0,
+        next_candidate_s=prior_candidate_s,
+    )
     assert result is not None
-    assert seen == [(20, 0), (20, 1)]
-    assert [attempt.routing.failed_count for attempt in attempts] == [1, 0]
+    # THE RESCUE IS THE SECOND CANDIDATE, which is the whole subject here: it
+    # runs on positive hard time although the dearest completed candidate does
+    # not fit in what is left.  What follows it is L5's doing and is not this
+    # test's business -- the median of a 9.2 s candidate and the instant rescue
+    # fits in the 5.1 s remaining, so the sweep goes on spending a wall it used
+    # to hand back.
+    assert seen[:2] == [(20, 0), (20, 1)]
+    assert [attempt.routing.failed_count for attempt in attempts][:2] == [1, 0]
 
     clock = 0.0
     first_attempt_s = deadline
@@ -5916,7 +6051,7 @@ def test_proof_scoped_ineligible_failures_preserve_base_height_order(
 def test_unaffordable_ordinary_retry_preserves_later_base_height(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args: False)
+    monkeypatch.setattr(freeform, "_room_for_another", lambda *_args, **_kwargs: False)
 
     result, seen, _attempts = _sweep_after_first_routing(
         monkeypatch,
@@ -5939,9 +6074,11 @@ def test_ordinary_retry_admission_uses_measured_nonzero_candidate_cost(
     def refuse_retry(
         _deadline: float | None,
         _soft: float,
-        candidate_s: float,
+        *,
+        completion_tail_s: float,
+        next_candidate_s: float,
     ) -> bool:
-        measured.append(candidate_s)
+        measured.append(completion_tail_s + next_candidate_s)
         return False
 
     monkeypatch.setattr(freeform, "_room_for_another", refuse_retry)
@@ -5962,7 +6099,7 @@ def test_feedback_retry_bypasses_ordinary_affordability_gate(
 ) -> None:
     affordability_checks = 0
 
-    def refuse_ordinary_retry(*_args: object) -> bool:
+    def refuse_ordinary_retry(*_args: object, **_kwargs: object) -> bool:
         nonlocal affordability_checks
         affordability_checks += 1
         return False
@@ -6572,7 +6709,62 @@ def test_arrangement_retry_requires_enough_wall_and_sweep_budget(
 ) -> None:
     now = time.monotonic()
     deadline = None if deadline_s is None else now + deadline_s
-    assert _room_for_another(deadline, now + soft_s, candidate_s) is expected
+    assert (
+        _room_for_another(
+            deadline,
+            now + soft_s,
+            completion_tail_s=0.0,
+            next_candidate_s=candidate_s,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("completion_tail_s", "left_s", "expected"),
+    [
+        # The median (4 s) plus the tail (2 s) fits in nine seconds.
+        (2.0, 9.0, True),
+        # ...and does not fit in five.
+        (2.0, 5.0, False),
+        # A tail that is a MAXIMUM, and it is what refuses this one: the median
+        # still costs 4 s, but the tail no longer fits behind it.
+        (6.0, 7.0, False),
+    ],
+)
+def test_a_further_candidate_is_charged_the_median_plus_the_whole_completion_tail(
+    completion_tail_s: float,
+    left_s: float,
+    expected: bool,
+) -> None:
+    """L5: the tail must fit in full; the candidate in front of it need not.
+
+    ``[4, 4, 12]`` is the shape the sweep actually measures -- a couple of
+    ordinary candidates and one outlier that ran into a wall -- and charging the
+    outlier is what left 6-37 % of every budget unspent.
+    """
+    completed_s = (4.0, 4.0, 12.0)
+    next_candidate_s = freeform._next_candidate_seconds(completed_s)
+
+    assert next_candidate_s == 4.0
+    # The old charge is the outlier, and it refuses all three rows.
+    assert max(completed_s) > left_s
+    now = time.monotonic()
+    assert (
+        _room_for_another(
+            now + left_s,
+            now + left_s,
+            completion_tail_s=completion_tail_s,
+            next_candidate_s=next_candidate_s,
+        )
+        is expected
+    )
+
+
+def test_the_next_candidate_estimate_is_zero_until_one_candidate_has_completed() -> None:
+    """Nothing measured, nothing charged -- the first candidate is never refused."""
+    assert freeform._next_candidate_seconds(()) == 0.0
+    assert freeform._next_candidate_seconds((7.5,)) == 7.5
 
 
 # --- solver quality --------------------------------------------------------
@@ -21737,7 +21929,9 @@ _SLOW_PACK_S = 0.2
 def _only_a_window_charge_is_affordable(
     _deadline: float | None,
     _soft: float,
-    candidate_s: float,
+    *,
+    completion_tail_s: float,
+    next_candidate_s: float,
 ) -> bool:
     """A clock with room for a window's charge and for nothing dearer.
 
@@ -21747,8 +21941,11 @@ def _only_a_window_charge_is_affordable(
     same statement as "no room for a full retry, room for a window", written so
     that it holds on a box where the stubs return instantly rather than
     depending on a real solve being slow.
+
+    The two halves of the charge are summed back here: what this fixture is
+    about is the total the sweep is asking to spend, not how it was estimated.
     """
-    return candidate_s >= freeform.C_WINDOW_SECONDS
+    return completion_tail_s + next_candidate_s >= freeform.C_WINDOW_SECONDS
 
 
 def _window_solve_outcome(pack: freeform._Pack) -> freeform._PackSolveOutcome:
@@ -22569,7 +22766,9 @@ def test_a_sweep_that_dies_mid_flight_still_settles_its_outstanding_choices(
 def _room_for_a_window_or_a_routing_only_turn(
     _deadline: float | None,
     _soft: float,
-    candidate_s: float,
+    *,
+    completion_tail_s: float,
+    next_candidate_s: float,
 ) -> bool:
     """Room for a window's charge, and for what is left of a packed candidate.
 
@@ -22579,6 +22778,7 @@ def _room_for_a_window_or_a_routing_only_turn(
     exact clock in which a queued repair charged for a whole candidate is
     dropped and one charged for what it has left to spend is kept.
     """
+    candidate_s = completion_tail_s + next_candidate_s
     return candidate_s >= freeform.C_WINDOW_SECONDS or candidate_s < _SLOW_PACK_S / 2
 
 
@@ -22587,10 +22787,15 @@ def test_a_queued_repair_is_charged_for_routing_and_not_for_a_whole_candidate(
 ) -> None:
     """The window bought the pack, so the loop head must not charge for it again.
 
-    `_room_for_another` charges `dearest_candidate_s`, which is pack THROUGH
-    validate.  A queued repair arrives already packed; charging it the whole
-    candidate throws away a repair the sweep can afford, after paying for the
-    CP-SAT solve that produced it.
+    A FRESH candidate is charged for pack THROUGH validate.  A queued repair
+    arrives already packed; charging it the whole candidate throws away a repair
+    the sweep can afford, after paying for the CP-SAT solve that produced it.
+
+    The two candidates before the repair are the ones this test is about.  What
+    the sweep does after it is L5's business: the fresh charge is now the MEDIAN
+    of what completed, and the median of one cheap candidate, one slow-packing
+    one and the repair is cheap -- so the sweep goes on drawing arrangements
+    where the dearest charge stopped it.
     """
     session = OperatorSession()
 
@@ -22607,9 +22812,12 @@ def test_a_queued_repair_is_charged_for_routing_and_not_for_a_whole_candidate(
     )
 
     assert result is not None
-    assert packed == [(20, 0), (21, 0)]
-    # The third build is the repair: it survived the loop-head gate.
-    assert builds == ["test", "test", "window"]
+    assert packed[:2] == [(20, 0), (21, 0)]
+    # The third build is the repair: it survived the loop-head gate, and it was
+    # never packed again -- `packed` holds two entries before the arrangements
+    # that follow it, not three.
+    assert builds[:3] == ["test", "test", "window"]
+    assert (21, 0) not in packed[2:]
 
 
 #: A candidate whose PACK dominates its cost, and one whose ROUTE does.  Their
@@ -22623,7 +22831,9 @@ _ROUTE_HEAVY_S = 0.6
 def _room_for_everything_but_a_measured_route(
     _deadline: float | None,
     _soft: float,
-    candidate_s: float,
+    *,
+    completion_tail_s: float,
+    next_candidate_s: float,
 ) -> bool:
     """Refuse only the band between the two candidates' costs.
 
@@ -22634,6 +22844,7 @@ def _room_for_everything_but_a_measured_route(
     maxima would have produced, and the window's own `C_WINDOW_SECONDS` floor.
     """
     midpoint = (_PACK_HEAVY_S + _ROUTE_HEAVY_S) / 2
+    candidate_s = completion_tail_s + next_candidate_s
     return candidate_s < midpoint or candidate_s >= freeform.C_WINDOW_SECONDS
 
 
@@ -22657,10 +22868,17 @@ def test_a_queued_repair_is_charged_the_dearest_post_pack_remainder(
     def recording_room(
         deadline: float | None,
         soft: float,
-        candidate_s: float,
+        *,
+        completion_tail_s: float,
+        next_candidate_s: float,
     ) -> bool:
-        charges.append(candidate_s)
-        return _room_for_everything_but_a_measured_route(deadline, soft, candidate_s)
+        charges.append(completion_tail_s + next_candidate_s)
+        return _room_for_everything_but_a_measured_route(
+            deadline,
+            soft,
+            completion_tail_s=completion_tail_s,
+            next_candidate_s=next_candidate_s,
+        )
 
     result, packed, builds = _sweep_over_a_stranded_first_candidate(
         monkeypatch,
@@ -23275,9 +23493,20 @@ def test_a_portfolio_bound_never_costs_the_placement(
     seen: list[float] = []
     original_room = freeform_module._room_for_another
 
-    def spying(deadline: float | None, soft: float, candidate_s: float) -> bool:
+    def spying(
+        deadline: float | None,
+        soft: float,
+        *,
+        completion_tail_s: float,
+        next_candidate_s: float,
+    ) -> bool:
         seen.append(soft)
-        return original_room(deadline, soft, candidate_s)
+        return original_room(
+            deadline,
+            soft,
+            completion_tail_s=completion_tail_s,
+            next_candidate_s=next_candidate_s,
+        )
 
     calls: list[tuple[float, float]] = []
     original_rule = freeform_module._portfolio_soft_deadline
@@ -23324,9 +23553,20 @@ def test_without_a_portfolio_bound_the_sweep_sees_only_its_own_soft(
     seen: list[float] = []
     original_room = freeform_module._room_for_another
 
-    def spying(deadline: float | None, soft: float, candidate_s: float) -> bool:
+    def spying(
+        deadline: float | None,
+        soft: float,
+        *,
+        completion_tail_s: float,
+        next_candidate_s: float,
+    ) -> bool:
         seen.append(soft)
-        return original_room(deadline, soft, candidate_s)
+        return original_room(
+            deadline,
+            soft,
+            completion_tail_s=completion_tail_s,
+            next_candidate_s=next_candidate_s,
+        )
 
     monkeypatch.setattr(freeform_module, "_room_for_another", spying)
 

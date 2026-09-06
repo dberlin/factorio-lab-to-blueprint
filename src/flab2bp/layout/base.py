@@ -240,6 +240,7 @@ class PlacementStats(TypedDict, total=False):
     boundary_belts_removed: float
     boundary_cleanup_time_s: float
     box_area: float
+    budget_unspent_s: float
     cache_hits: float
     certify_skipped: float
     compact_seed_attempt: float
