@@ -6,36 +6,55 @@ refused-in-all-rounds: corpus=0, large=9
 
 SPEARMAN vs median wall -- corpus, both arms  (n=72)
 feature                         spearman
+sum_live_range                    +0.399
+sum_pressure                      +0.399
 machines                          +0.399
 chain_depth                       +0.395
 distinct_items                    +0.392
 max_ingredients_per_strip         +0.392
+max_pressure                      +0.392
+max_lane_pressure                 +0.392
+max_live_range                    +0.387
+max_pressure_no_spray             +0.387
+max_lane_pressure_no_spray        +0.387
 strips                            +0.378
 groups                            +0.378
 recipes                           +0.378
 mean_ingredients_per_strip        +0.366
 max_consumers                     +0.339
+items_live_range_ge3              +0.332
 items_with_3plus_consumers        +0.331
 both_fed_items                    +0.329
 max_spread                        +0.326
 sum_spread                        +0.326
 items_above_one_belt              +0.277
+proliferator_live_range           +0.200
 coaters                           +0.128
 proliferator_consumers            +0.128
 proliferator_span                 +0.109
 proliferator_spread               +0.104
+lane_pressure_per_strip           -0.037
 
 SPEARMAN vs median wall -- corpus, freeform  (n=36)
 feature                         spearman
+sum_live_range                    +0.930
+sum_pressure                      +0.930
 distinct_items                    +0.925
+max_live_range                    +0.920
+max_pressure                      +0.914
+max_lane_pressure                 +0.914
 chain_depth                       +0.909
 groups                            +0.889
 recipes                           +0.889
 strips                            +0.881
+max_pressure_no_spray             +0.880
+max_lane_pressure_no_spray        +0.880
 machines                          +0.845
 max_ingredients_per_strip         +0.843
 max_consumers                     +0.786
+items_live_range_ge3              +0.774
 mean_ingredients_per_strip        +0.745
+proliferator_live_range           +0.629
 max_spread                        +0.591
 sum_spread                        +0.591
 coaters                           +0.504
@@ -45,6 +64,7 @@ proliferator_spread               +0.467
 items_with_3plus_consumers        +0.440
 both_fed_items                    +0.438
 items_above_one_belt              +0.285
+lane_pressure_per_strip           -0.282
 
 SPEARMAN vs median wall -- corpus, sequence-pair  (n=36)
 feature                         spearman
@@ -53,9 +73,16 @@ items_with_3plus_consumers        +0.411
 mean_ingredients_per_strip        +0.292
 machines                          +0.287
 items_above_one_belt              +0.268
+lane_pressure_per_strip           +0.247
 max_ingredients_per_strip         +0.245
 max_spread                        +0.221
 sum_spread                        +0.221
+max_pressure_no_spray             +0.220
+max_lane_pressure_no_spray        +0.220
+sum_live_range                    +0.205
+sum_pressure                      +0.205
+max_pressure                      +0.200
+max_lane_pressure                 +0.200
 chain_depth                       +0.197
 distinct_items                    +0.191
 strips                            +0.180
@@ -63,27 +90,40 @@ proliferator_spread               -0.176
 groups                            +0.172
 recipes                           +0.172
 proliferator_span                 -0.169
+max_live_range                    +0.154
 max_consumers                     +0.148
 coaters                           -0.104
 proliferator_consumers            -0.104
+items_live_range_ge3              +0.099
+proliferator_live_range           +0.009
 
 SPEARMAN vs median area -- corpus, both arms  (n=72)
 feature                         spearman
 machines                          +0.957
 distinct_items                    +0.948
+max_pressure_no_spray             +0.938
+max_lane_pressure_no_spray        +0.938
+sum_live_range                    +0.933
+sum_pressure                      +0.933
+max_pressure                      +0.931
+max_lane_pressure                 +0.931
 chain_depth                       +0.928
 max_ingredients_per_strip         +0.915
 strips                            +0.905
+max_live_range                    +0.904
 groups                            +0.902
 recipes                           +0.902
 mean_ingredients_per_strip        +0.835
 max_consumers                     +0.747
+items_live_range_ge3              +0.709
 max_spread                        +0.531
 sum_spread                        +0.531
+proliferator_live_range           +0.484
 both_fed_items                    +0.479
 items_with_3plus_consumers        +0.479
 coaters                           +0.299
 proliferator_consumers            +0.299
+lane_pressure_per_strip           -0.288
 proliferator_span                 +0.285
 proliferator_spread               +0.283
 items_above_one_belt              +0.273
@@ -101,15 +141,24 @@ max_spread                        -0.237
 sum_spread                        -0.237
 max_consumers                     -0.237
 items_with_3plus_consumers        -0.237
+items_live_range_ge3              -0.212
 max_ingredients_per_strip         -0.205
+max_lane_pressure                 -0.184
+max_lane_pressure_no_spray        -0.184
 machines                          -0.155
 items_above_one_belt              -0.122
+max_pressure_no_spray             -0.118
 distinct_items                    -0.099
+sum_live_range                    -0.099
+max_pressure                      -0.099
+sum_pressure                      -0.099
+lane_pressure_per_strip           +0.099
 coaters                           +0.090
 proliferator_consumers            +0.090
 proliferator_spread               +0.090
 mean_ingredients_per_strip        -0.085
 proliferator_span                 +0.031
+proliferator_live_range           +0.031
 both_fed_items                    +0.000
 
 SINGLE-FEATURE SEPARATION -- all points  (n=84, refused-in-all-rounds=9)
@@ -118,25 +167,37 @@ machines                           436    0.90    1.00    0.95    9    1    0
 strips                              85    0.90    1.00    0.95    9    1    0
 items_above_one_belt                 4    0.75    1.00    0.86    9    3    0
 max_consumers                        6    0.88    0.78    0.82    7    1    2
+max_lane_pressure                   20    0.88    0.78    0.82    7    1    2
+max_lane_pressure_no_spray          19    0.88    0.78    0.82    7    1    2
 chain_depth                          5    0.50    1.00    0.67    9    9    0
 sum_spread                          11    0.50    1.00    0.67    9    9    0
 items_with_3plus_consumers           1    0.50    1.00    0.67    9    9    0
+max_live_range                       5    0.50    1.00    0.67    9    9    0
 groups                              32    0.50    0.78    0.61    7    7    2
 recipes                             32    0.50    0.78    0.61    7    7    2
 distinct_items                      42    0.50    0.78    0.61    7    7    2
 max_ingredients_per_strip            5    0.50    0.78    0.61    7    7    2
 max_spread                          12    0.50    0.78    0.61    7    7    2
+sum_live_range                      60    0.50    0.78    0.61    7    7    2
+items_live_range_ge3                 7    0.50    0.78    0.61    7    7    2
+max_pressure                        15    0.50    0.78    0.61    7    7    2
+sum_pressure                        60    0.50    0.78    0.61    7    7    2
+max_pressure_no_spray               15    0.50    0.78    0.61    7    7    2
 coaters                             31    0.50    0.33    0.40    3    3    6
 proliferator_consumers              31    0.50    0.33    0.40    3    3    6
 proliferator_span                    5    0.50    0.33    0.40    3    3    6
 proliferator_spread                155    0.50    0.33    0.40    3    3    6
 mean_ingredients_per_strip        1.51    0.21    1.00    0.35    9   33    0
+proliferator_live_range              5    0.38    0.33    0.35    3    5    6
 both_fed_items                       1    0.30    0.33    0.32    3    7    6
+lane_pressure_per_strip           0.14    0.12    1.00    0.21    9   69    0
 
 SINGLE-FEATURE SEPARATION -- large URLs only  (n=12, refused-in-all-rounds=9)
 feature                           >= t    prec     rec      F1   TP   FP   FN
 machines                           436    0.90    1.00    0.95    9    1    0
 strips                              85    0.90    1.00    0.95    9    1    0
+max_lane_pressure                   15    0.90    1.00    0.95    9    1    0
+max_lane_pressure_no_spray          15    0.90    1.00    0.95    9    1    0
 groups                              32    0.88    0.78    0.82    7    1    2
 recipes                             32    0.88    0.78    0.82    7    1    2
 distinct_items                      42    0.88    0.78    0.82    7    1    2
@@ -145,24 +206,31 @@ max_spread                          12    0.88    0.78    0.82    7    1    2
 sum_spread                          41    0.88    0.78    0.82    7    1    2
 max_consumers                        6    0.88    0.78    0.82    7    1    2
 items_with_3plus_consumers           5    0.88    0.78    0.82    7    1    2
+sum_live_range                      60    0.88    0.78    0.82    7    1    2
+items_live_range_ge3                 7    0.88    0.78    0.82    7    1    2
+max_pressure                        15    0.88    0.78    0.82    7    1    2
+sum_pressure                        60    0.88    0.78    0.82    7    1    2
+max_pressure_no_spray               15    0.88    0.78    0.82    7    1    2
 items_above_one_belt                 8    1.00    0.67    0.80    6    0    3
 mean_ingredients_per_strip        1.57    0.70    0.78    0.74    7    3    2
+lane_pressure_per_strip          0.167    0.70    0.78    0.74    7    3    2
 coaters                             31    0.75    0.33    0.46    3    1    6
 both_fed_items                       1    0.75    0.33    0.46    3    1    6
 proliferator_consumers              31    0.75    0.33    0.46    3    1    6
 proliferator_span                    5    0.75    0.33    0.46    3    1    6
 proliferator_spread                155    0.75    0.33    0.46    3    1    6
+proliferator_live_range              5    0.75    0.33    0.46    3    1    6
 
 BEST FEATURE PAIR -- all points  (n=84, refused-in-all-rounds=9)
 rule                                                             prec    rec     F1   TP   FP
-machines >= 436 AND groups >= 2                                  0.90   1.00   0.95    9    1
 machines >= 3 AND strips >= 85                                   0.90   1.00   0.95    9    1
-machines >= 436 AND recipes >= 2                                 0.90   1.00   0.95    9    1
 machines >= 436 AND distinct_items >= 3                          0.90   1.00   0.95    9    1
-machines >= 436 AND max_ingredients_per_strip >= 2               0.90   1.00   0.95    9    1
-machines >= 436 AND mean_ingredients_per_strip >= 1.3333         0.90   1.00   0.95    9    1
 machines >= 436 AND items_above_one_belt >= 1                    0.90   1.00   0.95    9    1
 machines >= 436 AND chain_depth >= 1                             0.90   1.00   0.95    9    1
+machines >= 436 AND max_spread >= 6                              0.90   1.00   0.95    9    1
+machines >= 436 AND max_live_range >= 1                          0.90   1.00   0.95    9    1
+machines >= 436 AND max_pressure >= 2                            0.90   1.00   0.95    9    1
+machines >= 280 AND max_lane_pressure >= 15                      0.90   1.00   0.95    9    1
 
 LARGE-URL ARMS IN FULL  (the 6 spec x 2 strategy points)
 
@@ -187,17 +255,27 @@ coaters                                           19  19
 distinct_items                                    19  19
 proliferator_consumers                            19  19
 machines                                          18  19
+lane_pressure_per_strip                           16  19
+max_lane_pressure                                 16  19
+max_pressure                                      16  19
+proliferator_live_range                           16  19
 proliferator_span                                 16  19
 proliferator_spread                               16  19
+sum_live_range                                    16  19
+sum_pressure                                      16  19
 strips                                            12  19
 mean_ingredients_per_strip                        10  19
+items_live_range_ge3                               9  19
+max_live_range                                     7  19
 items_above_one_belt                               6  19
+max_lane_pressure_no_spray                         3  19
 both_fed_items                                     1  19
 chain_depth                                        0  19
 groups                                             0  19
 items_with_3plus_consumers                         0  19
 max_consumers                                      0  19
 max_ingredients_per_strip                          0  19
+max_pressure_no_spray                              0  19
 max_spread                                         0  19
 recipes                                            0  19
 sum_spread                                         0  19
@@ -262,15 +340,24 @@ universe-matrix/no-proliferator                  31898     17836   1.788      57
 
 feature                         spearman vs log(ff/sp)
 machines                                        +0.667
+max_pressure_no_spray                           +0.607
+max_lane_pressure_no_spray                      +0.600
 distinct_items                                  +0.565
 strips                                          +0.561
 groups                                          +0.560
 recipes                                         +0.560
 chain_depth                                     +0.540
+max_pressure                                    +0.530
+max_lane_pressure                               +0.523
+sum_live_range                                  +0.519
+sum_pressure                                    +0.519
 max_ingredients_per_strip                       +0.517
 mean_ingredients_per_strip                      +0.507
 max_consumers                                   +0.483
+max_live_range                                  +0.444
+lane_pressure_per_strip                         -0.372
 items_with_3plus_consumers                      +0.360
+items_live_range_ge3                            +0.352
 both_fed_items                                  +0.342
 items_above_one_belt                            +0.270
 sum_spread                                      +0.173
@@ -279,6 +366,7 @@ proliferator_span                               -0.118
 coaters                                         -0.110
 proliferator_consumers                          -0.110
 proliferator_spread                             -0.108
+proliferator_live_range                         +0.105
 
 Positive rho: the bigger the feature, the more freeform's pack loses.
 
@@ -287,6 +375,12 @@ MEAN ff/sp AREA RATIO, coating x size  (freeform wins below 1.00)
                        coaters = 0     coaters > 0
 strips <= 6            1.059 (n=7)    0.987 (n=15)
 strips > 6             1.399 (n=5)    1.142 (n=10)
+
+MEAN ff/sp AREA RATIO by pressure tercile (freeform wins below 1.00)
+
+max_lane_pressure         < 3: 1.028 (n=7)   3..6: 1.002 (n=16)   >= 6: 1.244 (n=14)
+lane_pressure_per_strip   < 0.4706: 1.177 (n=12)   0.4706..1: 1.115 (n=12)   >= 1: 1.011 (n=13)
+max_live_range            < 1: 1.000 (n=3)   1..2: 1.018 (n=14)   >= 2: 1.169 (n=20)
 
 COPPER INGOT vs GREEN CUBE  (4c)
 
@@ -313,4 +407,81 @@ top items by spread (item, consumers x depth-span):
                                widest fan-out: copper-ingot(c=4,d=1..4), energetic-graphite(c=4,d=1..2), iron-ingot(c=4,d=1..5)
   universe-matrix-12           iron-ingot=16, copper-ingot=12, diamond=8
                                widest fan-out: copper-ingot(c=4,d=1..4), energetic-graphite(c=4,d=1..2), iron-ingot(c=4,d=1..5)
+
+EXPERIMENT 5 HEAD TO HEAD
+
+wall/area: Spearman on the freeform corpus arm (n=36); the
+sequence-pair arm is budget-bound and carries no signal.  Refusal: best
+threshold by F1 over all 84 points (9 positive), and over the
+12 large-URL arms alone.
+
+feature                      rho wall rho area  all F1     (t)     P     R  lg F1    (t)  vals
+strips                         +0.881   +0.907    0.95      85  0.90  1.00   0.95     85    23
+distinct_items                 +0.925   +0.946    0.61      42  0.50  0.78   0.82     42    24
+items_above_one_belt           +0.285   +0.285    0.86       4  0.75  1.00   0.80      8     5
+max_spread                     +0.591   +0.531    0.61      12  0.50  0.78   0.82     12     5
+max_live_range                 +0.920   +0.893    0.67       5  0.50  1.00   0.00      0     7
+sum_live_range                 +0.930   +0.924    0.61      60  0.50  0.78   0.82     60    20
+items_live_range_ge3           +0.774   +0.698    0.61       7  0.50  0.78   0.82      7    11
+max_pressure                   +0.914   +0.921    0.61      15  0.50  0.78   0.82     15    16
+max_lane_pressure              +0.914   +0.921    0.82      20  0.88  0.78   0.95     15    17
+lane_pressure_per_strip        -0.282   -0.301    0.21  0.1404  0.12  1.00   0.74 0.1667    25
+max_pressure_no_spray          +0.880   +0.937    0.61      15  0.50  0.78   0.82     15    10
+max_lane_pressure_no_spray     +0.880   +0.937    0.82      19  0.88  0.78   0.95     15    12
+
+MONOTONE EQUIVALENCE AMONG THE HEADLINE FEATURES
+
+distinct values across the 84 points:
+  strips                        23   [1, 2, 3, 5, 6, 7, 10, 13, 16, 17, ... (+13)]
+  distinct_items                24   [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, ... (+14)]
+  items_above_one_belt           5   [0, 1, 4, 8, 9]
+  max_spread                     5   [0, 6, 12, 14, 16]
+  max_live_range                 7   [0, 1, 2, 4, 5, 7, 8]
+  sum_live_range                20   [0, 2, 3, 5, 7, 8, 10, 16, 19, 20, ... (+10)]
+  items_live_range_ge3          11   [0, 1, 2, 3, 4, 7, 8, 9, 10, 11, ... (+1)]
+  max_pressure                  16   [0, 2, 3, 4, 5, 6, 7, 8, 10, 11, ... (+6)]
+  max_lane_pressure             17   [0, 2, 3, 4, 5, 6, 7, 8, 10, 11, ... (+7)]
+  lane_pressure_per_strip       25   [0, 0.1404, 0.1667, 0.1875, 0.2105, 0.2115, 0.2824, 0.2982, 0.3182, 0.3396, ... (+15)]
+  max_pressure_no_spray         10   [0, 2, 3, 5, 6, 7, 10, 15, 17, 19]
+  max_lane_pressure_no_spray    12   [0, 2, 3, 5, 7, 10, 15, 17, 19, 23, ... (+2)]
+
+pairwise Spearman (|rho| = 1.000 means one is a relabelling of the other):
+
+                               strips distinct items_ab max_spre max_live sum_live items_li max_pres max_lane lane_pre max_pres max_lane
+strips                         +1.000   +0.950   +0.645   +0.718   +0.925   +0.944   +0.810   +0.914   +0.939   -0.542   +0.945   +0.963
+distinct_items                 +0.950   +1.000   +0.504   +0.689   +0.943   +0.981   +0.814   +0.980   +0.968   -0.418   +0.983   +0.971
+items_above_one_belt           +0.645   +0.504   +1.000   +0.698   +0.583   +0.563   +0.642   +0.523   +0.617   -0.540   +0.541   +0.623
+max_spread                     +0.718   +0.689   +0.698   +1.000   +0.792   +0.737   +0.912   +0.670   +0.708   -0.559   +0.676   +0.712
+max_live_range                 +0.925   +0.943   +0.583   +0.792   +1.000   +0.971   +0.889   +0.939   +0.954   -0.411   +0.937   +0.949
+sum_live_range                 +0.944   +0.981   +0.563   +0.737   +0.971   +1.000   +0.852   +0.983   +0.986   -0.407   +0.977   +0.978
+items_live_range_ge3           +0.810   +0.814   +0.642   +0.912   +0.889   +0.852   +1.000   +0.798   +0.818   -0.569   +0.798   +0.815
+max_pressure                   +0.914   +0.980   +0.523   +0.670   +0.939   +0.983   +0.798   +1.000   +0.987   -0.347   +0.980   +0.968
+max_lane_pressure              +0.939   +0.968   +0.617   +0.708   +0.954   +0.986   +0.818   +0.987   +1.000   -0.384   +0.971   +0.981
+lane_pressure_per_strip        -0.542   -0.418   -0.540   -0.559   -0.411   -0.407   -0.569   -0.347   -0.384   +1.000   -0.412   -0.441
+max_pressure_no_spray          +0.945   +0.983   +0.541   +0.676   +0.937   +0.977   +0.798   +0.980   +0.971   -0.412   +1.000   +0.990
+max_lane_pressure_no_spray     +0.963   +0.971   +0.623   +0.712   +0.949   +0.978   +0.815   +0.968   +0.981   -0.441   +0.990   +1.000
+
+No pair is monotone-equivalent.
+
+COPPER INGOT vs GREEN CUBE, IN LIVE-RANGE NUMBERS
+
+spec                                           machines         strips    chain_depth     max_spread  max_live_rang  sum_live_rang  items_live_ra   max_pressure  max_lane_pres  lane_pressure  proliferator_
+copper-ingot-2000/no-proliferator                    34              6              0              0              0              0              0              0              0            0.0              0
+copper-ingot-2000/all-products                       27              5              0              0              0              0              0              0              0            0.0              0
+copper-ingot-12000/no-proliferator                  200             34              0              0              0              0              0              0              0            0.0              0
+copper-ingot-12000/all-products                     160             27              0              0              0              0              0              0              0            0.0              0
+information-matrix-120/no-proliferator              193             38              4              0              2             19              0              7              7         0.1842              0
+information-matrix-120/all-products                 105             23              4              0              4             23              1              8              8         0.3478              4
+universe-matrix/no-proliferator                     224             57              8             16              7             90             11             17             17         0.2982              0
+universe-matrix/all-products                        113             46              8             16              8             98             12             18             18         0.3913              8
+
+longest live ranges, and the cut where pressure peaks:
+  copper-ingot-2000          copper-ingot=0, copper-ore=0
+                             (no cuts: depth 0)
+  copper-ingot-12000         copper-ingot=0, copper-ore=0
+                             (no cuts: depth 0)
+  information-matrix-120     crystal-silicon=2, plastic=2, processor=2
+                             cut0: 7 items / 7 lanes, cut1: 6 items / 6 lanes, cut2: 4 items / 4 lanes, cut3: 2 items / 2 lanes
+  universe-matrix            antimatter=7, electromagnetic-matrix=6, energy-matrix=6
+                             cut0: 13 items / 13 lanes, cut1: 16 items / 16 lanes, cut2: 17 items / 17 lanes, cut3: 13 items / 13 lanes, cut4: 10 items / 10 lanes, cut5: 8 items / 8 lanes, cut6: 7 items / 7 lanes, cut7: 6 items / 6 lanes
 

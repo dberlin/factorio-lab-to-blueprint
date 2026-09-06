@@ -48,6 +48,7 @@ MILP does its most interesting work.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -155,7 +156,26 @@ class RoutingFeatures:
     max_spread_no_prolif: int
     sum_spread_no_prolif: int
 
+    # -- experiment 5: live range and cut pressure ------------------------
+    max_live_range: int
+    sum_live_range: int
+    items_live_range_ge3: int
+    top_live_range: tuple[tuple[str, int], ...]
+    max_pressure: int
+    max_pressure_depth: int
+    max_lane_pressure: int
+    max_lane_pressure_depth: int
+    sum_pressure: int
+    lane_pressure_per_strip: float
+    max_pressure_no_spray: int
+    max_lane_pressure_no_spray: int
+    proliferator_live_range: int
+    proliferator_lanes: int
+
     items: tuple[ItemProfile, ...]
+    live_items: tuple[LiveProfile, ...]
+    #: ``(cut, item pressure, lane pressure)`` per horizontal band.
+    pressure_profile: tuple[tuple[int, int, int], ...]
 
     def as_dict(self) -> dict[str, Any]:
         """Flat, JSON-safe, ``items`` last so a row stays readable."""
@@ -181,7 +201,23 @@ class RoutingFeatures:
             "proliferator_spread": self.proliferator_spread,
             "max_spread_no_prolif": self.max_spread_no_prolif,
             "sum_spread_no_prolif": self.sum_spread_no_prolif,
+            "max_live_range": self.max_live_range,
+            "sum_live_range": self.sum_live_range,
+            "items_live_range_ge3": self.items_live_range_ge3,
+            "top_live_range": [list(pair) for pair in self.top_live_range],
+            "max_pressure": self.max_pressure,
+            "max_pressure_depth": self.max_pressure_depth,
+            "max_lane_pressure": self.max_lane_pressure,
+            "max_lane_pressure_depth": self.max_lane_pressure_depth,
+            "sum_pressure": self.sum_pressure,
+            "lane_pressure_per_strip": round(self.lane_pressure_per_strip, 4),
+            "max_pressure_no_spray": self.max_pressure_no_spray,
+            "max_lane_pressure_no_spray": self.max_lane_pressure_no_spray,
+            "proliferator_live_range": self.proliferator_live_range,
+            "proliferator_lanes": self.proliferator_lanes,
             "items": [item.as_dict() for item in self.items],
+            "live_items": [item.as_dict() for item in self.live_items],
+            "pressure_profile": [list(entry) for entry in self.pressure_profile],
         }
 
 
@@ -270,13 +306,13 @@ def lane_capacity(spec: BuildSpec) -> Fraction:
     return best * spec.belt_stack
 
 
-def items_above_one_belt(spec: BuildSpec) -> tuple[str, ...]:
-    """Items whose block-wide flow cannot fit on a single best-tier belt.
+def item_flows(spec: BuildSpec) -> dict[str, Fraction]:
+    """Block-wide items/second per item: the larger of made and eaten.
 
-    Flow is the larger of what the block makes and what it eats, because
-    either side can be the one that needs splitting.
+    Either side can be the one that needs splitting, so the belt has to carry
+    the maximum.  Shared by :func:`items_above_one_belt` and the live-lane
+    count so the two cannot drift apart about what an item's flow is.
     """
-    capacity = lane_capacity(spec)
     produced: dict[str, Fraction] = {}
     consumed: dict[str, Fraction] = {}
     for group in spec.groups:
@@ -286,13 +322,16 @@ def items_above_one_belt(spec: BuildSpec) -> tuple[str, ...]:
             consumed[item_id] = consumed.get(item_id, Fraction(0)) + rate * group.count
     for item_id, rate in spec.external_inputs.items():
         produced[item_id] = max(produced.get(item_id, Fraction(0)), rate)
-
-    over = {
-        item_id
+    return {
+        item_id: max(produced.get(item_id, Fraction(0)), consumed.get(item_id, Fraction(0)))
         for item_id in set(produced) | set(consumed)
-        if max(produced.get(item_id, Fraction(0)), consumed.get(item_id, Fraction(0))) > capacity
     }
-    return tuple(sorted(over))
+
+
+def items_above_one_belt(spec: BuildSpec) -> tuple[str, ...]:
+    """Items whose block-wide flow cannot fit on a single best-tier belt."""
+    capacity = lane_capacity(spec)
+    return tuple(sorted(item for item, flow in item_flows(spec).items() if flow > capacity))
 
 
 def both_fed_items(spec: BuildSpec) -> tuple[str, ...]:
@@ -304,6 +343,146 @@ def both_fed_items(spec: BuildSpec) -> tuple[str, ...]:
     """
     produced = {item_id for group in spec.groups for item_id in group.outputs_per_machine}
     return tuple(sorted(produced & set(spec.external_inputs)))
+
+
+@dataclass(frozen=True, slots=True)
+class LiveProfile:
+    """One item's LIVE RANGE, in the register-allocation sense.
+
+    The difference from :attr:`ItemProfile.spread` is the whole point of
+    experiment 5, and it is two differences, not one:
+
+    * a live range starts at the DEFINITION -- the depth of the producing
+      recipe, or layer 0 for anything arriving at the block boundary -- where
+      ``spread``'s window starts at the FIRST USE;
+    * a live range has no fan-out multiplier.  Six consumers in one layer and
+      one consumer in that layer produce the same range.
+
+    So an item made at depth 0 and eaten once at depth 5 has live range 5 and
+    spread 0.  They are not the same measurement, and section "Experiment 5" of
+    the README reports how far apart they actually land on this corpus.
+    """
+
+    item_id: str
+    #: Layer the item becomes available in.  0 for raw and external inputs.
+    producer_depth: int
+    #: Deepest layer that consumes it; ``-1`` when nothing does.
+    last_use_depth: int
+    #: Belts this item needs at its block-wide flow -- ``ceil(rate/capacity)``.
+    live_lanes: int
+    #: Whether this is the proliferator spray rather than a recipe item.
+    is_spray: bool = False
+
+    @property
+    def live_range(self) -> int:
+        """Layers the item must stay on a belt.  Never negative."""
+        if self.last_use_depth < 0:
+            return 0
+        return max(0, self.last_use_depth - self.producer_depth)
+
+    def crosses(self, cut: int) -> bool:
+        """Is the item live across the horizontal cut between ``cut`` and ``cut+1``?"""
+        return self.producer_depth <= cut < self.last_use_depth
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "item_id": self.item_id,
+            "producer_depth": self.producer_depth,
+            "last_use_depth": self.last_use_depth,
+            "live_range": self.live_range,
+            "live_lanes": self.live_lanes,
+            "is_spray": self.is_spray,
+        }
+
+
+def live_profiles(spec: BuildSpec, *, include_spray: bool = True) -> tuple[LiveProfile, ...]:
+    """Live range and lane count for every item the block moves.
+
+    The spray is included by default and is not a special case physically: a
+    Spray Coater sits on the lane it coats, and the proliferator has to be
+    belted to each one, so the spray IS live from the boundary down to the
+    deepest coated lane and does cross every cut in between.  It is separable
+    (``include_spray=False``) only because it is one item that can dominate an
+    ``all-products`` block, and a reader should be able to see the delta.
+
+    Its lane count is computed from its external-input rate like any other
+    item, which UNDER-counts if each coater needs its own spur rather than
+    drinking from a shared bus.  The count is a floor, not a guess.
+    """
+    depths = group_depths(spec)
+    flows = item_flows(spec)
+    capacity = lane_capacity(spec)
+
+    producer_depth: dict[str, int] = {}
+    last_use: dict[str, int] = {}
+    for index, group in enumerate(spec.groups):
+        for item_id in group.outputs_per_machine:
+            # Earliest definition: with two producers the value is live from
+            # the first one, exactly as a register is.
+            producer_depth[item_id] = min(producer_depth.get(item_id, depths[index]), depths[index])
+        for item_id in group.inputs_per_machine:
+            last_use[item_id] = max(last_use.get(item_id, depths[index]), depths[index])
+
+    def lanes(flow: Fraction) -> int:
+        """Belts this flow needs.  Exact: the division stays rational."""
+        if flow <= 0:
+            return 0
+        return math.ceil(flow / capacity)
+
+    profiles = [
+        LiveProfile(
+            item_id=item_id,
+            # Raw ore and anything belted in at the boundary is defined in the
+            # source layer, which is 0: it is live from the edge of the block.
+            producer_depth=producer_depth.get(item_id, 0),
+            last_use_depth=last_use.get(item_id, -1),
+            live_lanes=lanes(flows.get(item_id, Fraction(0))),
+        )
+        for item_id in sorted(set(flows) | set(producer_depth) | set(last_use))
+    ]
+
+    if include_spray and spec.spray_lanes:
+        spray = proliferator_profile(spec)
+        profiles.append(
+            LiveProfile(
+                item_id=spray.item_id,
+                producer_depth=0,
+                last_use_depth=spray.latest_consumer_depth,
+                live_lanes=max(1, lanes(spec.external_inputs.get(spray.item_id, Fraction(0)))),
+                is_spray=True,
+            )
+        )
+        # The spray's own external-input row, if the flow walk produced one, is
+        # now duplicated: drop the non-spray copy rather than counting it twice.
+        profiles = [p for p in profiles if p.is_spray or p.item_id != spray.item_id]
+
+    return tuple(sorted(profiles, key=lambda p: (-p.live_range, p.item_id)))
+
+
+def cut_pressure(
+    profiles: Sequence[LiveProfile],
+    *,
+    chain_depth: int,
+) -> tuple[tuple[int, int, int], ...]:
+    """``(cut, items live across it, lanes live across it)`` for every cut.
+
+    Cut ``d`` is the horizontal band between layer ``d`` and layer ``d+1``.
+    This is the register-pressure analog: an item live across a cut is a belt
+    that must physically cross that band, and ``lane_pressure`` is the belt
+    count rather than the item count, since an item over one belt's capacity
+    crosses on several.
+
+    Both placers build in bands, so this is not a metaphor -- it is the width
+    the router has to find room in.
+    """
+    return tuple(
+        (
+            cut,
+            sum(1 for p in profiles if p.crosses(cut)),
+            sum(p.live_lanes for p in profiles if p.crosses(cut)),
+        )
+        for cut in range(max(0, chain_depth))
+    )
 
 
 def strip_shape(strips: Sequence[Strip]) -> tuple[int, int, float]:
@@ -392,8 +571,21 @@ def routing_features(
     strip_count, max_ing, mean_ing = strip_shape(planned)
     profiles = item_profiles(spec)
     depths = group_depths(spec)
+    chain_depth = max(depths) if depths else 0
     spray = proliferator_profile(spec)
     plain = [p for p in profiles if not p.item_id.startswith(PROLIFERATOR_PREFIX)]
+
+    live = live_profiles(spec)
+    pressure = cut_pressure(live, chain_depth=chain_depth)
+    dry = cut_pressure(
+        live_profiles(spec, include_spray=False),
+        chain_depth=chain_depth,
+    )
+    #: ``max(..., default=...)`` over an empty cut list is the depth-0 spec: a
+    #: single smelter has no horizontal band to cross, and 0 is the truth.
+    best_items = max(pressure, key=lambda entry: (entry[1], -entry[0]), default=(0, 0, 0))
+    best_lanes = max(pressure, key=lambda entry: (entry[2], -entry[0]), default=(0, 0, 0))
+    spray_live = next((p for p in live if p.is_spray), None)
 
     return RoutingFeatures(
         machines=sum(group.count for group in spec.groups),
@@ -406,7 +598,7 @@ def routing_features(
         coaters=len(spec.spray_lanes),
         items_above_one_belt=len(items_above_one_belt(spec)),
         both_fed_items=len(both_fed_items(spec)),
-        chain_depth=max(depths) if depths else 0,
+        chain_depth=chain_depth,
         max_spread=max((p.spread for p in profiles), default=0),
         sum_spread=sum(p.spread for p in profiles),
         max_consumers=max((p.consumers for p in profiles), default=0),
@@ -417,7 +609,26 @@ def routing_features(
         proliferator_spread=spray.spread,
         max_spread_no_prolif=max((p.spread for p in plain), default=0),
         sum_spread_no_prolif=sum(p.spread for p in plain),
+        max_live_range=max((p.live_range for p in live), default=0),
+        sum_live_range=sum(p.live_range for p in live),
+        items_live_range_ge3=sum(1 for p in live if p.live_range >= 3),
+        top_live_range=tuple((p.item_id, p.live_range) for p in live[:3]),
+        max_pressure=best_items[1],
+        max_pressure_depth=best_items[0],
+        max_lane_pressure=best_lanes[2],
+        max_lane_pressure_depth=best_lanes[0],
+        #: Identically ``sum_live_range``: an item crosses exactly one cut per
+        #: layer of its range.  Kept as its own column so the join can VERIFY
+        #: the identity rather than assume it.
+        sum_pressure=sum(entry[1] for entry in pressure),
+        lane_pressure_per_strip=(best_lanes[2] / strip_count if strip_count else 0.0),
+        max_pressure_no_spray=max((entry[1] for entry in dry), default=0),
+        max_lane_pressure_no_spray=max((entry[2] for entry in dry), default=0),
+        proliferator_live_range=spray_live.live_range if spray_live else 0,
+        proliferator_lanes=spray_live.live_lanes if spray_live else 0,
         items=profiles,
+        live_items=live,
+        pressure_profile=pressure,
     )
 
 
