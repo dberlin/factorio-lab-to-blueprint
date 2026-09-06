@@ -1,7 +1,7 @@
 from fractions import Fraction
 
 from flab2bp.layout.hierarchy import partition
-from tests.layout.hierarchy.test_pressure import _chain
+from tests.layout.hierarchy.test_pressure import _chain, _chain_with_external
 
 
 def test_initial_partition_covers_every_machine_exactly_once():
@@ -40,6 +40,14 @@ def test_composed_spec_matches_the_original_machine_counts():
     built = partition.composed_spec(spec, part.blocks)
     assert built.machine_count == spec.machine_count
     assert built.external_inputs == spec.external_inputs
+
+
+def test_composed_spec_declares_player_fed_block_deficits():
+    spec = _chain_with_external("ingot")
+    part = partition.initial_partition(spec, strip_cap=2)
+    built = partition.composed_spec(spec, part.blocks, player_fed={(1, "ingot")})
+    consumer_deficit = sum(u.consumes("ingot") for u in part.blocks[1])
+    assert built.external_inputs["ingot"] >= consumer_deficit
 
 
 def test_a_block_over_the_strip_cap_is_split_by_agglomeration():

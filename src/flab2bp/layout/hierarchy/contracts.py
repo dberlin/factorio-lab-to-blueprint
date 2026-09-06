@@ -188,13 +188,16 @@ def boundary_lanes(
     and for an item that is ALSO in the PARENT's ``external_inputs`` part of
     that share is belted in by the player at the parent level rather than by any
     cut.  ``partition.derive_cuts`` knows the difference -- it sizes each cut at
-    ``min(surplus, deficit)`` -- but the heads rated here do not, so
-    :func:`assign_lanes` asks the internal tails to cover the player's share too
-    and raises :class:`ContractError` when they cannot.  That is the
+    ``min(surplus, deficit)`` -- but the heads rated here do not, so a naive
+    assignment would ask the internal tails to cover the player's share too and
+    raise :class:`ContractError` when they cannot.  That was the
     ``zurl2/all-products`` hydrogen refusal (``hydrogen: block 0 supply
     exhausted; block 7 entry lane 1042 short by 4319/1875 items/s``), reached
-    only after every block placed.  Fixed in v2, not here: see lever 3 of
-    ``docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md`` §6.
+    only after every block placed.  :func:`allocate_cuts` is what now stands
+    between these heads and :func:`assign_lanes`: it leaves a block's remainder
+    to the player instead of demanding the internal tails cover it too, exactly
+    when the parent's ``external_inputs`` already promises the item from
+    outside.
     """
     buildings = placement.buildings
     sorter_fed = {
@@ -292,3 +295,64 @@ def assign_lanes(
                     f"block {head.block} entry lane {head.building} short by {want} items/s"
                 )
     return flows
+
+
+@dataclass(frozen=True)
+class CutAllocation:
+    """A wired assignment, plus what was left for the player instead."""
+
+    flows: list[LaneFlow]
+    #: (block index, item) pairs whose entry heads are left to the player.
+    player_fed: frozenset[tuple[int, str]]
+
+
+def allocate_cuts(
+    spec: BuildSpec,
+    cuts: list[Cut],
+    tails: dict[int, list[LaneEnd]],
+    heads: dict[int, list[LaneEnd]],
+) -> CutAllocation:
+    """Wire what the internal supply covers; leave a both-fed remainder to the
+    player instead of demanding the tails stretch to cover it too.
+
+    Per item, ``S`` is the total internal supply -- the tails of every block
+    the cuts name as a producer.  Consumer blocks are visited IN BLOCK-INDEX
+    ORDER and served WHOLE OR NOT AT ALL: a block is served only while what is
+    left of ``S`` still covers its whole deficit ``D_b``, so a shortfall always
+    lands on the last blocks in the order rather than on whichever one a less
+    careful pass happened to reach first.  A block that cannot be served is
+    handed to the player -- its heads are simply never offered to
+    :func:`assign_lanes` -- exactly when ``item`` is one the parent spec already
+    belts in (``spec.external_inputs``).  Otherwise nothing supplies that head
+    at all, and that is a genuine :class:`ContractError`.
+    """
+    by_item: dict[str, list[Cut]] = defaultdict(list)
+    for cut in cuts:
+        by_item[cut.item].append(cut)
+
+    player_fed: set[tuple[int, str]] = set()
+    served_heads: dict[int, list[LaneEnd]] = defaultdict(list)
+    for item, item_cuts in sorted(by_item.items()):
+        supply_blocks = sorted({c.src for c in item_cuts})
+        supply = sum(
+            (t.rate for src in supply_blocks for t in tails.get(src, ()) if t.item == item),
+            Fraction(0),
+        )
+        consumer_blocks = sorted({c.dst for c in item_cuts})
+        remaining = supply
+        for block in consumer_blocks:
+            block_heads = [h for h in heads.get(block, ()) if h.item == item]
+            deficit = sum((h.rate for h in block_heads), Fraction(0))
+            if remaining >= deficit:
+                remaining -= deficit
+                served_heads[block].extend(block_heads)
+            elif item in spec.external_inputs:
+                player_fed.add((block, item))
+            else:
+                raise ContractError(
+                    f"{item}: internal supply {supply} cannot cover block {block}'s "
+                    f"{deficit}; the parent does not belt it in"
+                )
+
+    flows = assign_lanes(cuts, tails, served_heads)
+    return CutAllocation(flows=flows, player_fed=frozenset(player_fed))

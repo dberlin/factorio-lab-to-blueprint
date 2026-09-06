@@ -87,7 +87,7 @@ from flab2bp.layout.hierarchy import compose as compose_mod
 from flab2bp.layout.hierarchy.contracts import (
     ContractError,
     LaneEnd,
-    assign_lanes,
+    allocate_cuts,
     boundary_lanes,
 )
 from flab2bp.layout.hierarchy.partition import (
@@ -377,8 +377,8 @@ class HierarchicalLayout:
         # blocks -- shapes no single block ever showed its own placer.
         #
         # WHAT IS GUARDED, exactly: the per-block loop (`sub_spec` and
-        # `boundary_lanes` for every entry), then `assign_lanes`, then
-        # `compose`. `ContractError` out of `assign_lanes` is a refusal naming
+        # `boundary_lanes` for every entry), then `allocate_cuts`, then
+        # `compose`. `ContractError` out of `allocate_cuts` is a refusal naming
         # the lane contract; ANY OTHER exception out of any of them -- including
         # a bug in `partition`, `contracts` or `compose` themselves -- becomes
         # the refusal `composition crashed: <type>: <message>`.
@@ -400,10 +400,10 @@ class HierarchicalLayout:
             for index, (entry, placement) in enumerate(zip(entries, solved, strict=True)):
                 sub = sub_spec(spec, entry.units, index)
                 tails[index], heads[index] = boundary_lanes(placement, sub, index)
-            flows = assign_lanes(cuts, tails, heads)
+            allocation = allocate_cuts(spec, cuts, tails, heads)
             composition = compose_mod.compose(
                 solved,
-                flows,
+                allocation.flows,
                 spec,
                 gap=DEFAULT_GAP,
                 ramped=self.ramped,
@@ -423,7 +423,7 @@ class HierarchicalLayout:
         # The spec the composition is JUDGED against is the one re-derived from
         # the blocks, not the one that was asked for: splitting rounds machine
         # counts up per (recipe, block), and that over-production is real.
-        built = composed_spec(spec, blocks)
+        built = composed_spec(spec, blocks, player_fed=allocation.player_fed)
         # The settlement below is the only stretch with no budget of its own:
         # `assign_sorter_slots` takes no `cancelled` and `certify` is atomic. It
         # is entered only with wall left to enter it with; `settlement_reserve_s`
@@ -472,7 +472,7 @@ class HierarchicalLayout:
                 "blocks": float(len(blocks)),
                 "block_wall_s": round(block_wall, 3),
                 "compose_wall_s": round(compose_wall, 3),
-                "cut_lanes": float(len(flows)),
+                "cut_lanes": float(len(allocation.flows)),
                 "resplits": float(resplits),
                 "strips_max": float(max((strip_count(spec, block) for block in blocks), default=0)),
             }

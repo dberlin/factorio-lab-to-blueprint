@@ -354,7 +354,12 @@ def sub_spec(spec: BuildSpec, block: list[Unit], index: int) -> BuildSpec:
     )
 
 
-def composed_spec(spec: BuildSpec, blocks: list[list[Unit]]) -> BuildSpec:
+def composed_spec(
+    spec: BuildSpec,
+    blocks: list[list[Unit]],
+    *,
+    player_fed: frozenset[tuple[int, str]] = frozenset(),
+) -> BuildSpec:
     """The whole spec re-derived from the blocks, so composition is judged
     against what was actually built rather than against the original counts.
 
@@ -362,6 +367,14 @@ def composed_spec(spec: BuildSpec, blocks: list[list[Unit]]) -> BuildSpec:
     count can exceed the original by a few machines.  That over-production is
     real and must be visible to ``flow.conservation``, which is why this is
     re-derived instead of reusing ``spec``.
+
+    ``player_fed`` names every (block index, item) whose entry head
+    ``contracts.allocate_cuts`` left unwired because the parent already belts
+    that item in.  The overall make/take balance below stays net-zero for such
+    an item -- it IS produced somewhere in the build, just not routed to this
+    particular block -- so each player-fed block's OWN local deficit is added
+    on top, on the understanding that the player closes exactly that lane by
+    hand.
     """
     by_recipe: dict[str, tuple[MachineGroup, int]] = {}
     for block in blocks:
@@ -393,6 +406,13 @@ def composed_spec(spec: BuildSpec, blocks: list[list[Unit]]) -> BuildSpec:
         deficit = took[item] - made.get(item, Fraction(0))
         if deficit > 0:
             external_inputs[item] = max(external_inputs.get(item, Fraction(0)), deficit)
+    for block_index, item in sorted(player_fed):
+        block = blocks[block_index]
+        block_made = sum((u.produces(item) for u in block), Fraction(0))
+        block_took = sum((u.consumes(item) for u in block), Fraction(0))
+        block_deficit = block_took - block_made
+        if block_deficit > 0:
+            external_inputs[item] = external_inputs.get(item, Fraction(0)) + block_deficit
     outputs = dict(spec.outputs)
     surplus = {}
     for item in sorted(made):

@@ -47,6 +47,18 @@ def _chain() -> BuildSpec:
     )
 
 
+def _chain_with_external(item: str) -> BuildSpec:
+    """``_chain()``, with ``item`` ALSO belted in by the parent from outside.
+
+    Same graph and the same rates as :func:`_chain` -- ``item`` is both
+    produced inside the build and declared in ``external_inputs`` at 1/s, so a
+    block short of ``item`` can be left to the player instead of raising
+    ``ContractError``.
+    """
+    spec = _chain()
+    return spec.model_copy(update={"external_inputs": {**spec.external_inputs, item: Fraction(1)}})
+
+
 def test_recipe_depths_are_longest_paths_from_the_inputs():
     assert pressure.recipe_depths(_chain()) == {"ingot": 0, "gear": 1, "plate": 1}
 
