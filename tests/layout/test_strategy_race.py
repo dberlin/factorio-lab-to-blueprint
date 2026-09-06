@@ -474,6 +474,7 @@ def _stub_submit(results: dict[str, object]) -> RaceSubmit:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for request in reversed(requests):
@@ -594,6 +595,7 @@ def test_the_race_spends_the_measured_grace_before_it_kills() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {slow: "freeform"}
         quick: Future[_StrategyRaceOutcome] = Future()
@@ -634,6 +636,7 @@ def test_the_requests_carry_the_parents_wall_not_a_budget_to_start_later() -> No
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for request in requests:
@@ -662,6 +665,7 @@ def test_share_false_creates_no_channels() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         seen.append(len(channels))
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
@@ -693,6 +697,7 @@ def test_share_true_wires_the_two_queues_crosswise_and_closes_them() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         captured.update(channels)
         return {}, _NoopExecutor()
@@ -720,6 +725,7 @@ def test_the_queues_are_closed_even_when_the_race_raises() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         captured.update(channels)
         raise RuntimeError("the pool refused to start")
@@ -744,6 +750,7 @@ def test_the_worker_split_reaches_the_requests() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for request in requests:
@@ -1235,6 +1242,7 @@ def test_two_futures_for_one_arm_is_refused_before_the_wait() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for _ in range(2):
@@ -2122,16 +2130,19 @@ def test_a_trace_queue_reaches_the_submit_seam_and_marks_every_request() -> None
     assert seen["trace_flags"] == {"freeform": True, "sequence-pair": True}
 
 
-def test_no_trace_queue_means_every_request_carries_trace_false_and_a_two_arg_submit_call() -> None:
-    """Without a trace queue, `run_strategy_race` must call a seam with
-    EXACTLY the two arguments every pre-tracing test's `submit` still takes --
-    not a third it never promised to accept."""
+def test_no_trace_queue_still_calls_the_seam_with_three_arguments_and_none() -> None:
+    """M2, fix round 1: the call is unconditionally three arguments -- the
+    seam's third parameter is defaulted, so a two-shape call keyed on
+    `trace_queue` would exist only to serve a test seam, which is backwards.
+    Every request still carries `trace=False` when there is no queue."""
     seen: dict[str, object] = {}
 
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
+        seen["trace_queue"] = trace_queue
         seen["trace_flags"] = {r.strategy: r.trace for r in requests}
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for request in requests:
@@ -2149,6 +2160,7 @@ def test_no_trace_queue_means_every_request_carries_trace_false_and_a_two_arg_su
         submit=submit,
     )
 
+    assert seen["trace_queue"] is None
     assert seen["trace_flags"] == {"freeform": False, "sequence-pair": False}
 
 
@@ -2306,8 +2318,11 @@ def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
         # every event travelling this whole path proves it made it out of a
         # REAL spawned child.
         assert events, "a traced race must deliver at least one event to the parent"
-        assert {e.strategy for e in events} <= set(RACE_STRATEGIES)
-        assert all(e.candidate for e in events)
+        # `==`, not `<=`: the test's own name claims BOTH arms deliver, and a
+        # subset check would still pass if only one of them ever did (M1, fix
+        # round 1).
+        assert {e.strategy for e in events} == set(RACE_STRATEGIES)
+        assert all(e.candidate == two_stage_spec().label for e in events)
     finally:
         trace_queue.cancel_join_thread()
         trace_queue.close()

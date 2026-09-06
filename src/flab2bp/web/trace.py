@@ -15,14 +15,13 @@ as arrays and ~1.1MB as objects, and the server's existing gzip
 from __future__ import annotations
 
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Final, cast
 
 from flab2bp.layout.base import PlacedBuilding
 from flab2bp.layout.observe import TRACE_SAMPLE_INTERVAL_S, SampledObserver, SearchEvent
-from flab2bp.layout.observe_channel import _MessageQueue, drain_trace
+from flab2bp.layout.observe_channel import MessageQueue, drain_trace
 from flab2bp.web.payload import Json
 
 #: The row order.  Positional, so the client decodes with a zod tuple and the
@@ -192,7 +191,7 @@ class TraceCollector:
     #: ``drain_once`` pass as ``_pending`` (Task 8), so a cross-process source
     #: and an in-process one land in one ordered ring rather than two.
     queue: object | None = None
-    _pending: deque[tuple[float, SearchEvent]] = field(init=False)
+    _pending: deque[SearchEvent] = field(init=False)
     _dropped: int = field(default=0, init=False)
     _seq: int = field(default=0, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)
@@ -212,20 +211,29 @@ class TraceCollector:
         eviction is counted here rather than discovered later."""
         if len(self._pending) == self._pending.maxlen:
             self._dropped += 1
-        self._pending.append((time.monotonic(), event))
+        self._pending.append(event)
 
     def drain_once(self) -> None:
         if self.queue is not None:
-            for event in drain_trace(cast(_MessageQueue, self.queue)):
+            for event in drain_trace(cast(MessageQueue, self.queue)):
                 # Same overflow accounting `_offer` uses: a bounded deque
                 # evicts silently, so an eviction forced by a queue-sourced
                 # event must be counted here too or it is discovered later.
                 if len(self._pending) == self._pending.maxlen:
                     self._dropped += 1
-                self._pending.append((time.monotonic(), event))
+                self._pending.append(event)
         while self._pending:
-            at, event = self._pending.popleft()
-            self.ring.append(frame_json(self._seq, round(at - self.started_at, 3), event))
+            event = self._pending.popleft()
+            # `event.monotonic_s`, a CHILD-originated timestamp captured where
+            # the event was created (`SearchEvent`'s own `default_factory`,
+            # observe.py) -- never the time THIS thread happened to forward or
+            # drain it. A raced arm's whole burst of events would otherwise
+            # collapse onto the one instant this thread got around to them,
+            # which is exactly candidate-settlement time for a queue-sourced
+            # burst and defeats a shared `t` axis across strategies.
+            self.ring.append(
+                frame_json(self._seq, round(event.monotonic_s - self.started_at, 3), event)
+            )
             self._seq += 1
 
     def start(self) -> None:

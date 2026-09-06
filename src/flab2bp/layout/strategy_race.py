@@ -845,13 +845,13 @@ def run_strategy_race(
     outcomes: list[_StrategyRaceOutcome] = []
     first_error: BaseException | None = None
     try:
-        # Two shapes, not one unconditional 3-argument call: a seam predating
-        # tracing accepts exactly two arguments, and is never asked for a third
-        # it never promised to take (see ``RaceSubmit``).
-        if trace_queue is None:
-            futures, executor = (submit or _pool_submit)(requests, channels)
-        else:
-            futures, executor = (submit or _pool_submit)(requests, channels, trace_queue)
+        # One unconditional 3-argument call, not two shapes (fix round 1, M2):
+        # `RaceSubmit`'s third parameter is defaulted, so this is correct for
+        # every seam -- a two-shape call keyed on `trace_queue` would exist
+        # only to keep pre-tracing test closures working, and a production
+        # branch serving a test seam is backwards. Every such closure in
+        # ``test_strategy_race.py`` now declares the third parameter.
+        futures, executor = (submit or _pool_submit)(requests, channels, trace_queue)
         strategy_by_future = dict(futures)
         # One future per arm, asserted rather than assumed.  The collector takes
         # the FIRST future for each name and `_ordered` keys a dict on the

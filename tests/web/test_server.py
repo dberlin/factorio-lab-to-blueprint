@@ -142,7 +142,10 @@ def test_the_post_does_not_wait_for_the_solve(
     release = threading.Event()
 
     def slow(
-        _o: Options, _p: pipeline.ProgressSink, _s: SearchObserver | None = None
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
     ) -> pipeline.Build:
         release.wait(timeout=20.0)
         return small_build
@@ -171,7 +174,10 @@ def test_a_refusal_comes_back_200_not_500(start: Callable[..., Client]) -> None:
     from flab2bp.layout.base import NoValidLayout
 
     def refuse(
-        _o: Options, _p: pipeline.ProgressSink, _s: SearchObserver | None = None
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
     ) -> pipeline.Build:
         raise NoValidLayout("freeform/a: too tall", spec_label="a", budget_s=1.0)
 
@@ -211,7 +217,10 @@ def test_sequence_pair_is_accepted_with_exact_wire_spelling(
     start: Callable[..., Client],
 ) -> None:
     def not_layout(
-        _options: Options, _progress: pipeline.ProgressSink, _search: SearchObserver | None = None
+        _options: Options,
+        _progress: pipeline.ProgressSink,
+        _search: SearchObserver | None = None,
+        _trace_queue: object | None = None,
     ) -> pipeline.Build:
         raise ValueError("layout is not part of this submission-boundary test")
 
@@ -227,7 +236,10 @@ def test_a_long_budget_is_submitted_with_a_warning_rather_than_refused(
     """The wire says "this will take a while", not "no"."""
 
     def not_layout(
-        _options: Options, _progress: pipeline.ProgressSink, _search: SearchObserver | None = None
+        _options: Options,
+        _progress: pipeline.ProgressSink,
+        _search: SearchObserver | None = None,
+        _trace_queue: object | None = None,
     ) -> pipeline.Build:
         raise ValueError("layout is not part of this submission-boundary test")
 
@@ -240,7 +252,10 @@ def test_a_long_budget_is_submitted_with_a_warning_rather_than_refused(
 
 def test_a_short_budget_carries_no_warning(start: Callable[..., Client]) -> None:
     def not_layout(
-        _options: Options, _progress: pipeline.ProgressSink, _search: SearchObserver | None = None
+        _options: Options,
+        _progress: pipeline.ProgressSink,
+        _search: SearchObserver | None = None,
+        _trace_queue: object | None = None,
     ) -> pipeline.Build:
         raise ValueError("layout is not part of this submission-boundary test")
 
@@ -283,7 +298,10 @@ def test_trace_endpoint_reports_an_empty_page_when_trace_is_off(
     release = threading.Event()
 
     def slow(
-        _o: Options, _p: pipeline.ProgressSink, _s: SearchObserver | None = None
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
     ) -> pipeline.Build:
         release.wait(timeout=20.0)
         raise ValueError("trace-endpoint test never needs a result")
@@ -307,7 +325,10 @@ def test_trace_endpoint_404s_for_an_unknown_job(start: Callable[..., Client]) ->
 
 def test_job_snapshot_echoes_the_trace_option(start: Callable[..., Client]) -> None:
     def not_layout(
-        _options: Options, _progress: pipeline.ProgressSink, _search: SearchObserver | None = None
+        _options: Options,
+        _progress: pipeline.ProgressSink,
+        _search: SearchObserver | None = None,
+        _trace_queue: object | None = None,
     ) -> pipeline.Build:
         raise ValueError("layout is not part of this submission-boundary test")
 
@@ -330,7 +351,10 @@ def test_solve_receives_no_observer_off_and_a_real_one_on(
     seen: list[SearchObserver | None] = []
 
     def record(
-        _o: Options, _p: pipeline.ProgressSink, observer: SearchObserver | None = None
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        observer: SearchObserver | None = None,
+        _t: object | None = None,
     ) -> pipeline.Build:
         seen.append(observer)
         raise ValueError("submission-boundary test never needs a result")
@@ -360,7 +384,10 @@ def test_trace_endpoint_pages_frames_from_a_live_collector(
     frame_count = 10
 
     def solve_with_trace(
-        _o: Options, _p: pipeline.ProgressSink, observer: SearchObserver | None = None
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        observer: SearchObserver | None = None,
+        _t: object | None = None,
     ) -> pipeline.Build:
         if observer is not None:
             for _ in range(frame_count):

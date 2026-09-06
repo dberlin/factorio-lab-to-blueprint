@@ -23,7 +23,7 @@ TRACE_QUEUE_MAXSIZE: Final = 64
 TRACE_DRAIN_MAX_EVENTS: Final = 32
 
 
-class _MessageQueue(Protocol):
+class MessageQueue(Protocol):
     def put_nowait(self, item: object, /) -> None: ...
 
     def get_nowait(self) -> object: ...
@@ -38,7 +38,7 @@ class _JoinCancellable(Protocol):
 class TraceChannel:
     """A child's write end of the child -> parent trace queue."""
 
-    publish: _MessageQueue
+    publish: MessageQueue
     _dropped: int = field(default=0, init=False)
 
     @property
@@ -74,7 +74,7 @@ def trace_channel() -> TraceChannel | None:
     return _TRACE_CHANNEL
 
 
-def drain_trace(q: _MessageQueue) -> tuple[SearchEvent, ...]:
+def drain_trace(q: MessageQueue) -> tuple[SearchEvent, ...]:
     """Parent side: at most ``TRACE_DRAIN_MAX_EVENTS`` events per poll.
 
     The bound is on the GETS and not on what survives the type check, for the

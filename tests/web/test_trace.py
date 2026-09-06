@@ -280,6 +280,43 @@ def test_collector_merges_an_in_process_event_and_a_queued_event_into_one_ordere
     assert nxt == 1
 
 
+def test_collector_stamps_a_frame_from_the_events_own_creation_time_not_drain_time() -> None:
+    """Fix round 1, Important 3: a raced arm's burst of queued events must not
+    collapse onto whatever instant this thread got around to draining them --
+    each frame's `t` comes from `SearchEvent.monotonic_s`, captured where the
+    event was made, in the CHILD, not from `time.monotonic()` read here."""
+    started_at = 100.0
+    trace_queue: queue.Queue[object] = queue.Queue()
+    # Two events minted seconds apart in a (simulated) child, put on the queue
+    # together -- as a real burst drained long after both were created would
+    # arrive. A forward-time stamp would give both the same `t`; a
+    # creation-time stamp must not.
+    trace_queue.put_nowait(
+        SearchEvent(
+            strategy="freeform",
+            candidate="c",
+            phase=SearchPhase.INCUMBENT,
+            monotonic_s=started_at + 1.0,
+        )
+    )
+    trace_queue.put_nowait(
+        SearchEvent(
+            strategy="freeform",
+            candidate="c",
+            phase=SearchPhase.INCUMBENT,
+            monotonic_s=started_at + 4.5,
+        )
+    )
+    collector = TraceCollector(TraceRing(), started_at=started_at, queue=trace_queue)
+
+    # However long AFTER creation this drain actually runs must not matter --
+    # only the SearchEvent's own `monotonic_s` should reach `frame["t"]`.
+    collector.drain_once()
+
+    frames, _next = collector.ring.since(-1, limit=10)
+    assert [f["t"] for f in frames] == [1.0, 4.5]
+
+
 def test_collector_counts_a_queue_sourced_overflow_the_same_way_a_deque_overflow_is() -> None:
     trace_queue: queue.Queue[object] = queue.Queue()
     for _ in range(10):

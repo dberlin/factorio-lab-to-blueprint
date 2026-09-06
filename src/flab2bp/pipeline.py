@@ -9,7 +9,6 @@ touch it.
 
 from __future__ import annotations
 
-import multiprocessing
 import os
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -37,7 +36,7 @@ from flab2bp.lab.flow import (
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
-from flab2bp.layout import finalize, markers, observe_channel, strategy_race, validate
+from flab2bp.layout import finalize, markers, strategy_race, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
@@ -262,6 +261,7 @@ def _raced_result(
                 "process_user_cpu_s": outcome.process_user_cpu_s,
                 "process_system_cpu_s": outcome.process_system_cpu_s,
                 "process_peak_rss_kib": outcome.process_peak_rss_kib,
+                "trace_dropped": outcome.trace_dropped,
             }
         )
         return outcome.placement
@@ -275,6 +275,7 @@ def _raced_result(
             "process_user_cpu_s": outcome.process_user_cpu_s,
             "process_system_cpu_s": outcome.process_system_cpu_s,
             "process_peak_rss_kib": outcome.process_peak_rss_kib,
+            "trace_dropped": outcome.trace_dropped,
         },
     )
 
@@ -603,6 +604,17 @@ def build(
     #: fires far more often, and is never allowed to raise.  `None` -- the
     #: default and the shipping path -- costs one `is None` per call site.
     search_observer: SearchObserver | None = None,
+    #: The parent's read end of a raced build's child-to-parent trace queue, or
+    #: ``None`` when tracing is off. Unlike `search_observer` -- which this
+    #: build also uses directly for a SERIAL leg, in-process, including a raced
+    #: build's own fallback-to-serial path when a race goes unfunded -- a raced
+    #: leg has no in-process observer to call at all, so this is the only way
+    #: its events reach anyone. The CALLER creates and owns this queue (Task 8
+    #: fix round 1): a build born and dying inside one call cannot be the
+    #: owner of a queue meant to outlive it in a long-lived web process, and
+    #: draining it belongs on whichever thread actually consumes the frames --
+    #: which is no longer this function (see below).
+    trace_queue: object | None = None,
     #: Aggregate solver-worker budget for one build. ``None`` uses at most 16
     #: CPUs from the process affinity set. A serial build gives the whole budget
     #: to its current strategy; concurrent candidate races divide it exactly
@@ -810,18 +822,6 @@ def build(
         )
     resolved_candidate_parallelism = max(1, strategy_race_parallelism)
 
-    # A build-scope queue, created ONCE and shared by every raced candidate:
-    # each arm runs in a spawned child, so a trace observer can reach the
-    # parent only through a `multiprocessing.Queue` (Task 8). `None` -- the
-    # default and the shipping path -- whenever tracing is off or nothing is
-    # actually being raced, so a serial build's in-process observer wiring
-    # (`_solve_one`, above) is untouched.
-    trace_queue: object | None = None
-    if search_observer is not None and strategy_race_parallelism:
-        trace_queue = multiprocessing.get_context("spawn").Queue(
-            maxsize=observe_channel.TRACE_QUEUE_MAXSIZE
-        )
-
     # Counted here, after the flow filter, so a progress report never promises a
     # pair that was already dropped.
     total_pairs = len(spec_set.candidates) * len(wanted)
@@ -961,19 +961,20 @@ def build(
                 race_started, race_finished, outcomes = _run_race(spec, worker_budget)
             else:
                 race_started, race_finished, outcomes = candidate_race
-            # The raced arms ran in spawned children, so whatever trace events
-            # they made it onto `trace_queue` only reach `search_observer` here,
-            # once this candidate has settled -- there is no live parent-side
-            # thread pulling from the queue in between. Bounded by
-            # `TRACE_DRAIN_MAX_EVENTS` per call (`observe_channel.drain_trace`),
-            # so a busy child cannot make this settlement loop's own poll
-            # unbounded.
-            if search_observer is not None and trace_queue is not None:
-                for event in observe_channel.drain_trace(
-                    cast(observe_channel._MessageQueue, trace_queue)
-                ):
-                    if search_observer.due(event.phase):
-                        search_observer.note(event)
+            # Trace events do NOT get forwarded into `search_observer` here.
+            # (Task 8 fix round 1, Criticals C1+C2.) Draining only once a
+            # candidate settles polls `trace_queue` far too coarsely -- a
+            # multi-second race writes continuously while nothing reads, and
+            # the queue saturates faster than a bounded per-settlement drain
+            # can ever clear it -- and re-applying `search_observer.due()` to
+            # a whole settlement's worth of events arriving in one instant
+            # collapses all but one of them (every event but an
+            # ALWAYS_SAMPLE phase fails a 0.25s gate that a burst clears in
+            # microseconds). `TraceCollector.queue` is the live path instead:
+            # its own background thread polls `trace_queue` continuously,
+            # independent of any candidate's settlement, and applies no
+            # second sample gate at all -- sampling happens once, in the
+            # child, at the source.
             by_strategy = {outcome.strategy: outcome for outcome in outcomes}
             if set(by_strategy) != set(wanted):
                 # A lost arm must never read as a complete build: `total_pairs`

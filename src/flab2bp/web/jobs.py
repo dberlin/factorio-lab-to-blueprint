@@ -19,14 +19,15 @@ remains the honest answer: a job that waits says so, with its position.
 from __future__ import annotations
 
 import math
+import multiprocessing
 import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from flab2bp import pipeline
@@ -38,6 +39,7 @@ from flab2bp.layout.base import (
     PlacementStats,
 )
 from flab2bp.layout.observe import SearchObserver
+from flab2bp.layout.observe_channel import TRACE_QUEUE_MAXSIZE
 from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
@@ -349,6 +351,12 @@ class Job:
     #: The collector for this job's search trace, or ``None`` when trace was
     #: never asked for.  Set once, under ``_lock``, before the solve starts.
     trace: TraceCollector | None = None
+    #: Every raced leg's OWN ``TraceChannel``-side drop count (a transiently
+    #: full queue, or an unpicklable event -- Ruling 4), summed once the build
+    #: settles. ``collector.dropped`` only ever sees the PARENT side (ring and
+    #: stage-1 eviction); without this the web ``dropped`` figure is silently
+    #: half the truth (fix round 1, Important 5).
+    leg_trace_dropped: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -366,6 +374,7 @@ def run_build(
     options: Options,
     on_progress: pipeline.ProgressSink,
     search_observer: SearchObserver | None = None,
+    trace_queue: object | None = None,
 ) -> pipeline.Build:
     """Run one build through the pipeline's shared CPU-allocation policy.
 
@@ -379,6 +388,11 @@ def run_build(
     for it, so it takes ``pipeline.resolve_sequence_islands``' default like any
     other caller that has no opinion.  Passing 1 here would be the one line
     that quietly kept the browser on a single core.
+
+    ``trace_queue`` is ``search_observer``'s companion for a RACED leg (Task 8
+    fix round 1): a raced arm runs in a spawned child and has no in-process
+    observer to call at all, so this is its only route to the parent. The
+    caller (:meth:`Builder._run`) creates and owns it -- see there for why.
     """
     return pipeline.build(
         options.url,
@@ -393,6 +407,7 @@ def run_build(
         fetch_url_validator=_validate_web_fetch_url if options.fetch_flow else None,
         on_progress=on_progress,
         search_observer=search_observer,
+        trace_queue=trace_queue,
         race=options.strategy == "best",
     )
 
@@ -400,7 +415,9 @@ def run_build(
 #: What a :class:`Builder` runs.  The progress sink is a parameter rather than
 #: something the builder reaches in and sets, so a test can substitute a solve
 #: that reports whatever sequence it wants to see rendered.
-Solve = Callable[[Options, pipeline.ProgressSink, SearchObserver | None], pipeline.Build]
+Solve = Callable[
+    [Options, pipeline.ProgressSink, SearchObserver | None, object | None], pipeline.Build
+]
 
 
 class Builder:
@@ -459,6 +476,17 @@ class Builder:
                     job.settled.append(step)
 
         collector: TraceCollector | None = None
+        # The parent's read end of a raced build's child-to-parent trace
+        # queue, or `None` when trace is off. Created and OWNED here (fix
+        # round 1): this is a long-lived web process, so whichever module
+        # creates a `multiprocessing.Queue` must be the one that closes it --
+        # `pipeline.build` no longer creates one itself, precisely so a build
+        # that starts and ends inside one call is never left holding a
+        # resource meant to outlive it. The SAME object is handed to both
+        # `TraceCollector` (which drains it on its own daemon thread, live,
+        # not just when a candidate settles) and `run_build` (which forwards
+        # it to whichever leg actually races).
+        trace_queue: object | None = None
         try:
             try:
                 # Constructed and started inside the try: if `collector.start()`
@@ -466,21 +494,31 @@ class Builder:
                 # a terminal state rather than getting stuck in "running"
                 # forever with `_run` propagating past its own caller.
                 if job.options.trace:
-                    collector = TraceCollector(TraceRing(), started_at=time.monotonic())
+                    trace_queue = multiprocessing.get_context("spawn").Queue(
+                        maxsize=TRACE_QUEUE_MAXSIZE
+                    )
+                    collector = TraceCollector(
+                        TraceRing(), started_at=time.monotonic(), queue=trace_queue
+                    )
                     collector.start()
                     with job._lock:
                         job.trace = collector
                 build = self._solve(
-                    job.options, note, None if collector is None else collector.observer
+                    job.options,
+                    note,
+                    None if collector is None else collector.observer,
+                    trace_queue,
                 )
                 result = describe(build, allow_invalid=job.options.allow_invalid)
             except NoValidLayout as exc:
                 # Not an error. A spec nobody can lay out reports which pairs
                 # were tried and why each gave up, and that is the most useful
                 # thing on the screen when it happens.
+                failures = _attempt_failures(exc)
                 with job._lock:
                     job.state = "refused"
-                    job.refusal = refusal(_attempt_failures(exc), message=str(exc))
+                    job.refusal = refusal(failures, message=str(exc))
+                    job.leg_trace_dropped = _sum_trace_dropped(f.stats for f in failures)
                     job.finished_at = time.monotonic()
             except (ValueError, KeyError) as exc:
                 with job._lock:
@@ -498,11 +536,25 @@ class Builder:
             else:
                 with job._lock:
                     job.state = "done"
+                    job.leg_trace_dropped = _sum_trace_dropped(
+                        a.placement.stats for a in build.attempts
+                    ) + _sum_trace_dropped(f.stats for f in build.refused)
                     job.result = result
                     job.finished_at = time.monotonic()
         finally:
+            # `collector.stop()` FIRST: it joins the daemon thread that reads
+            # `trace_queue`, so closing the queue before that thread has
+            # actually stopped risks a race between "stop reading" and
+            # "close the pipe underneath the reader."
             if collector is not None:
                 collector.stop()
+            if trace_queue is not None:
+                # Owned here because created here (see above): an unread
+                # `multiprocessing.Queue` with buffered data blocks its
+                # process's exit, and a long-lived web process is exactly the
+                # process that must never be left waiting on one.
+                cast(Any, trace_queue).cancel_join_thread()
+                cast(Any, trace_queue).close()
 
     def snapshot(self, job: Job) -> Json:
         """The job as JSON, including where it is if it is not finished."""
@@ -567,9 +619,21 @@ class Builder:
         return {
             "frames": cast(JsonValue, frames),
             "next": nxt,
-            "dropped": collector.dropped,
+            # `collector.dropped` is only the PARENT side (ring eviction, and
+            # stage-1 overflow) -- it knows nothing about a raced leg's OWN
+            # `TraceChannel` dropping a frame before it ever reached this
+            # process. Without `job.leg_trace_dropped`, a saturated queue
+            # (Criticals C1/C2) would report a drop count that is honest but
+            # incomplete, and Ruling 4 is exactly the case where that
+            # difference is a structural failure, not noise.
+            "dropped": collector.dropped + job.leg_trace_dropped,
             "complete": done and not frames,
         }
+
+
+def _sum_trace_dropped(stats_sources: Iterable[PlacementStats]) -> int:
+    """Fold every attempt/failure's own ``trace_dropped`` into one total."""
+    return sum(int(stats.get("trace_dropped", 0)) for stats in stats_sources)
 
 
 def _step(step: pipeline.AttemptProgress | None) -> Json | None:

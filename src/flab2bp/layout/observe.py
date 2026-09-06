@@ -68,6 +68,17 @@ class SearchEvent:
     strategy: str
     candidate: str
     phase: SearchPhase
+    #: When this event was made, ``time.monotonic()`` read at CONSTRUCTION
+    #: (the default factory runs as part of ``__init__``, inside the same
+    #: ``due()`` branch R4 already requires -- never at whatever later moment a
+    #: parent thread happens to forward, drain, or project it). Linux
+    #: ``CLOCK_MONOTONIC`` is system-wide, so a value read in a spawned child is
+    #: directly comparable to one read in the parent (``strategy_race.py``'s
+    #: ``soft_deadline`` already relies on exactly this). Without a timestamp
+    #: fixed at the source, a raced arm's whole burst of queued events would
+    #: share whatever instant a parent thread got around to draining them,
+    #: which collapses a shared ``t`` axis across strategies to one point.
+    monotonic_s: float = field(default_factory=time.monotonic)
     placement: Placement | None = None
     height: int | None = None
     arrangement: int | None = None
