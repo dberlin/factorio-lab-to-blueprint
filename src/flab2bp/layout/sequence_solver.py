@@ -49,6 +49,7 @@ from flab2bp.layout.freeform import (
     C_WINDOW_DEADLINE_SAFETY_SECONDS,
     C_WINDOW_SECONDS,
     WEST_CHANNEL,
+    DirectAlignmentMemo,
     DirectInsertId,
     ExactPackNoGood,
     PreparedRoutingLowerBound,
@@ -3824,6 +3825,7 @@ def _selected_direct_targets(
     *,
     band_policy: BandPolicy,
     memo: dict[tuple[int, StripInstanceId, StripVariant], Strip] | None = None,
+    alignment_memo: DirectAlignmentMemo | None = None,
 ) -> tuple[DirectInsertTarget, ...]:
     """Derive pair geometry only after both complete endpoint variants are selected."""
     selected = _selected_strips(
@@ -3834,7 +3836,10 @@ def _selected_direct_targets(
         memo=memo,
     )
     return _refinement_direct_targets(
-        _direct_alignment_targets(_direct_net_candidates(selected, spec)),
+        _direct_alignment_targets(
+            _direct_net_candidates(selected, spec),
+            memo=alignment_memo,
+        ),
         selected,
     )
 
@@ -4384,6 +4389,11 @@ def _variant_direct_eligibility(
     # strip for each producer/consumer variant pair, so all but two entries per
     # projection repeat.  ``strips`` and ``problem`` are fixed here.
     memo: dict[tuple[int, StripInstanceId, StripVariant], Strip] = {}
+    # Same argument one level up: the candidate MAPPING the two loops project
+    # differs only in the entries touching the two moved endpoints, so every
+    # pair that leaves the direct geometry alone rebuilds the identical
+    # ``DirectInsertTarget`` tuple.  Run-scoped like ``memo`` above.
+    alignment_memo: DirectAlignmentMemo = {}
     baseline = _selected_direct_targets(
         spec,
         strips,
@@ -4391,6 +4401,7 @@ def _variant_direct_eligibility(
         defaults,
         band_policy=band_policy,
         memo=memo,
+        alignment_memo=alignment_memo,
     )
     if not baseline:
         return ()
@@ -4420,6 +4431,7 @@ def _variant_direct_eligibility(
                         tuple(selection),
                         band_policy=band_policy,
                         memo=memo,
+                        alignment_memo=alignment_memo,
                     )
                 }
                 target = selected.get(candidate.key)
@@ -5161,6 +5173,10 @@ def _production_run(
     # ``strips`` is built once in the setup block above and never rebound, which
     # is what lets one dict serve every stage of this run.
     selected_strip_memo: dict[tuple[int, StripInstanceId, StripVariant], Strip] = {}
+    # ``direct_cache`` above keys whole selections too, so a move that leaves
+    # the direct geometry alone still rebuilds every target; this one is keyed
+    # by that geometry instead.
+    direct_alignment_memo: DirectAlignmentMemo = {}
     from flab2bp.layout import geometry_memo
 
     staged_static_cache = geometry_memo.for_spec(spec)
@@ -5207,7 +5223,10 @@ def _production_run(
         if targets is None:
             selected = selected_strips(problem, variant_indices)
             targets = _refinement_direct_targets(
-                _direct_alignment_targets(selected_direct_candidates(problem, variant_indices)),
+                _direct_alignment_targets(
+                    selected_direct_candidates(problem, variant_indices),
+                    memo=direct_alignment_memo,
+                ),
                 selected,
             )
             direct_cache[key] = targets

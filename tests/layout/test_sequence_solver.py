@@ -5787,6 +5787,105 @@ def test_compact_direct_eligibility_contains_exactly_authoritative_variant_targe
     assert len(actual) == len(expected)
 
 
+def test_direct_alignment_targets_memo_is_transparent() -> None:
+    """The alignment memo answers exactly what the uncached body would build.
+
+    The selections walked here are the ones ``_variant_direct_eligibility``
+    walks: the default plan plus every producer/consumer variant pair of the
+    baseline candidate.  Memo hits therefore have to be proved on real
+    projections rather than on hand-built candidate mappings, because the whole
+    claim is that two DIFFERENT selections legitimately share one entry.
+    """
+    spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
+    defaults = (0,) * problem.size
+    baseline = _selected_direct_targets(
+        spec,
+        strips,
+        problem,
+        defaults,
+        band_policy=policy,
+    )
+    assert baseline
+    candidate = baseline[0]
+    selections = [defaults]
+    for producer_variant in range(len(problem.variant_tables[candidate.producer])):
+        for consumer_variant in range(len(problem.variant_tables[candidate.consumer])):
+            selection = [0] * problem.size
+            selection[candidate.producer] = producer_variant
+            selection[candidate.consumer] = consumer_variant
+            selections.append(tuple(selection))
+
+    memo: freeform_module.DirectAlignmentMemo = {}
+    distinct: set[object] = set()
+    for selection_indices in selections:
+        selected = _selected_strips(
+            strips,
+            problem,
+            selection_indices,
+            band_policy=policy,
+        )
+        candidates = freeform_module._direct_net_candidates(selected, spec)
+        uncached = freeform_module._direct_alignment_targets(candidates)
+        first = freeform_module._direct_alignment_targets(candidates, memo=memo)
+        second = freeform_module._direct_alignment_targets(candidates, memo=memo)
+        assert uncached == first == second
+        distinct.add(freeform_module._direct_alignment_key(candidates))
+
+    # An all-empty fixture would make every assertion above vacuously true.
+    assert any(targets for targets in memo.values())
+    assert len(memo) == len(distinct)
+    # The point of the memo: distinct selections share candidate geometry.
+    assert len(distinct) < len(selections)
+
+
+def test_variant_direct_eligibility_is_unchanged_by_the_alignment_memo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-pass returns the same tuple with the memo neutralised, but works less."""
+    spec, strips, problem = _two_stage_variant_problem()
+    policy = BandPolicy("portable")
+    uncached = freeform_module._direct_alignment_targets_uncached
+    memoized_targets = freeform_module._direct_alignment_targets
+    calls = 0
+
+    def counting(
+        candidates: Mapping[tuple[int, int], freeform_module._DirectCandidate],
+    ) -> tuple[DirectInsertTarget, ...]:
+        nonlocal calls
+        calls += 1
+        return uncached(candidates)
+
+    monkeypatch.setattr(freeform_module, "_direct_alignment_targets_uncached", counting)
+    memoized = sequence_solver_module._variant_direct_eligibility(
+        spec,
+        strips,
+        problem,
+        band_policy=policy,
+    )
+    memoized_calls = calls
+
+    def without_memo(
+        candidates: Mapping[tuple[int, int], freeform_module._DirectCandidate],
+        *,
+        memo: freeform_module.DirectAlignmentMemo | None = None,
+    ) -> tuple[DirectInsertTarget, ...]:
+        return memoized_targets(candidates)
+
+    monkeypatch.setattr(sequence_solver_module, "_direct_alignment_targets", without_memo)
+    calls = 0
+    plain = sequence_solver_module._variant_direct_eligibility(
+        spec,
+        strips,
+        problem,
+        band_policy=policy,
+    )
+
+    assert memoized
+    assert memoized == plain
+    assert memoized_calls < calls
+
+
 def _selected_strips_split_fixture() -> tuple[
     list[freeform_module.Strip],
     PlacementProblem,

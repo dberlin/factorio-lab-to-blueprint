@@ -2317,6 +2317,58 @@ def test_direct_geometry_key_classifies_every_strip_field() -> None:
     assert touched_fields <= freeform._DIRECT_GEOMETRY_KEY_FIELDS | {"physical_variant"}
 
 
+class _FieldRecordingCandidate:
+    """A direct candidate that records which of its fields something read."""
+
+    def __init__(self, candidate: freeform._DirectCandidate) -> None:
+        object.__setattr__(self, "candidate", candidate)
+        object.__setattr__(self, "read", set())
+
+    def __getattr__(self, name: str) -> object:
+        cast(set[str], object.__getattribute__(self, "read")).add(name)
+        return getattr(object.__getattribute__(self, "candidate"), name)
+
+
+def test_direct_alignment_key_classifies_every_candidate_field() -> None:
+    """Every ``_DirectCandidate`` field is in the memo key or declared unread.
+
+    A NEW ``_DirectCandidate`` FIELD FAILS THIS TEST UNTIL IT IS CLASSIFIED,
+    which is the point: ``_direct_alignment_key`` is exact only while its tuple
+    IS the set of fields ``_direct_alignment_targets_uncached`` reads, and a
+    field that quietly joins the read set without joining the key makes the memo
+    hand one variant pair another pair's targets with nothing else to see.
+
+    The key is over the CANDIDATE MAPPING rather than over
+    ``_DirectCandidateSnapshot``: that class binds candidates to a strip plan,
+    but the memoized function is handed the mapping alone and never sees a
+    snapshot, so the mapping is the whole input and the snapshot's ``strips``
+    would be a key field nothing reads.
+    """
+    spec = two_stage_spec()
+    candidates = _direct_net_candidates(list(_direct_flow_order_strips()), spec)
+    assert candidates
+    recorders = {key: _FieldRecordingCandidate(value) for key, value in candidates.items()}
+    probed = cast(
+        "Mapping[tuple[int, int], freeform._DirectCandidate]",
+        cast(object, recorders),
+    )
+
+    key = freeform._direct_alignment_key(probed)
+    targets = freeform._direct_alignment_targets_uncached(probed)
+
+    assert key == freeform._direct_alignment_key(candidates)
+    assert targets == freeform._direct_alignment_targets_uncached(candidates)
+    candidate_fields = {field.name for field in dataclasses.fields(freeform._DirectCandidate)}
+    assert candidate_fields == (
+        freeform._DIRECT_ALIGNMENT_KEY_FIELDS | freeform._UNREAD_BY_DIRECT_ALIGNMENT
+    )
+    assert not (freeform._DIRECT_ALIGNMENT_KEY_FIELDS & freeform._UNREAD_BY_DIRECT_ALIGNMENT)
+    read: set[str] = set()
+    for recorder in recorders.values():
+        read |= cast(set[str], recorder.read)
+    assert read & candidate_fields == freeform._DIRECT_ALIGNMENT_KEY_FIELDS
+
+
 def test_staged_clearance_key_classifies_every_strip_field() -> None:
     """Every ``Strip`` field is either in the clearance memo key or declared unread.
 

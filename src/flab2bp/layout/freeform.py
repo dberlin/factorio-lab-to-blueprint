@@ -3236,7 +3236,71 @@ def _direct_candidate_snapshot(
     )
 
 
-def _direct_alignment_targets(
+#: The ``_DirectCandidate`` fields :func:`_direct_alignment_key` puts in the
+#: memo key, and the ones it deliberately leaves out.  Together they must
+#: PARTITION ``dataclasses.fields(_DirectCandidate)``, which
+#: ``test_direct_alignment_key_classifies_every_candidate_field`` enforces, for
+#: the same reason as :data:`_DIRECT_GEOMETRY_KEY_FIELDS`: the key is exact only
+#: while it IS the read set, and a candidate field that quietly joins the read
+#: set without joining the key would serve another pair's targets in silence.
+_DIRECT_ALIGNMENT_KEY_FIELDS: frozenset[str] = frozenset(
+    {
+        "prod_row",
+        "cons_row",
+        "prod_span",
+        "cons_span",
+        "origin_deltas",
+    }
+)
+_UNREAD_BY_DIRECT_ALIGNMENT: frozenset[str] = frozenset(
+    {
+        "item",
+        "cargo_domain",
+    }
+)
+
+#: One memo entry per DISTINCT candidate mapping, not per variant pair, so the
+#: bound is the number of distinct direct geometries a run projects rather than
+#: the number of selections it tries.  Bounded and cleared on overflow like
+#: :data:`_SELECTED_STRIP_MEMO_LIMIT` in ``sequence_solver``: clearing costs
+#: recomputation and stays exact.
+_DIRECT_ALIGNMENT_MEMO_LIMIT = 16384
+
+#: ``(net endpoints, prod_row, cons_row, prod_span, cons_span, origin_deltas)``
+#: for every candidate, in sorted key order.
+type _DirectAlignmentKey = tuple[tuple[tuple[int, int], int, int, int, int, tuple[int, ...]], ...]
+type DirectAlignmentMemo = dict[_DirectAlignmentKey, tuple[DirectInsertTarget, ...]]
+
+
+def _direct_alignment_key(
+    candidates: Mapping[tuple[int, int], _DirectCandidate],
+) -> _DirectAlignmentKey:
+    """Everything :func:`_direct_alignment_targets_uncached` reads off the map.
+
+    THE FIELDS ARE THE READ SET: two candidate mappings agreeing on the net
+    endpoints and on these five fields cannot disagree about the emitted
+    ``DirectInsertTarget``s, because those are the only values the constructor
+    is handed.  ``item`` and ``cargo_domain`` are deliberately absent -- they
+    select WHICH nets became candidates, upstream in
+    :func:`_direct_net_candidates`, but no target field is derived from them.
+    The partition is declared in :data:`_DIRECT_ALIGNMENT_KEY_FIELDS` /
+    :data:`_UNREAD_BY_DIRECT_ALIGNMENT` and a test says so, so a field added to
+    ``_DirectCandidate`` cannot slip past this decision.
+    """
+    return tuple(
+        (
+            key,
+            candidate.prod_row,
+            candidate.cons_row,
+            candidate.prod_span,
+            candidate.cons_span,
+            candidate.origin_deltas,
+        )
+        for key, candidate in sorted(candidates.items())
+    )
+
+
+def _direct_alignment_targets_uncached(
     candidates: Mapping[tuple[int, int], _DirectCandidate],
 ) -> tuple[DirectInsertTarget, ...]:
     """Expose candidate lane geometry as immutable placement-alignment inputs."""
@@ -3253,6 +3317,33 @@ def _direct_alignment_targets(
         )
         for key, candidate in sorted(candidates.items())
     )
+
+
+def _direct_alignment_targets(
+    candidates: Mapping[tuple[int, int], _DirectCandidate],
+    *,
+    memo: DirectAlignmentMemo | None = None,
+) -> tuple[DirectInsertTarget, ...]:
+    """Expose candidate lane geometry as immutable placement-alignment inputs.
+
+    ``memo`` optionally shares the built tuple across callers that re-enumerate
+    the SAME geometry -- ``_variant_direct_eligibility`` re-selects every
+    unmoved strip for each producer/consumer variant pair, so all but the two
+    moved endpoints project the identical candidate mapping every time.  The
+    memo must stay RUN-SCOPED: the targets it holds are pure functions of the
+    key, but the dict would otherwise outlive the plan whose geometry it
+    describes for no benefit.
+    """
+    if memo is None:
+        return _direct_alignment_targets_uncached(candidates)
+    key = _direct_alignment_key(candidates)
+    targets = memo.get(key)
+    if targets is None:
+        targets = _direct_alignment_targets_uncached(candidates)
+        if len(memo) >= _DIRECT_ALIGNMENT_MEMO_LIMIT:
+            memo.clear()
+        memo[key] = targets
+    return targets
 
 
 def tie_break_cap(n_terms: int, *, width_bound: int, height: int, n_direct: int) -> int:
