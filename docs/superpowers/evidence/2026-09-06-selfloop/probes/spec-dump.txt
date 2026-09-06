@@ -1,0 +1,328 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+== LabRequest ==
+objectives: (Objective(id='1', target_id='advanced-mining-machine', value=Fraction(5, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Output: 0>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='2', target_id='optical-grating-crystal', value=Fraction(10000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='3', target_id='diamond', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='4', target_id='super-magnetic-ring', value=Fraction(40, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='5', target_id='titanium-ingot', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='6', target_id='titanium-alloy', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='7', target_id='graphene', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='8', target_id='copper-ingot', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='9', target_id='high-purity-silicon', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='10', target_id='carbon-nanotube', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='11', target_id='assembling-machine-2', value=Fraction(6, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='12', target_id='crystal-silicon', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='13', target_id='iron-ingot', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='14', target_id='hydrogen', value=Fraction(10000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='15', target_id='refined-oil', value=Fraction(10000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='16', target_id='df-recomposing-assembler', value=Fraction(1, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Output: 0>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='17', target_id='assembling-machine-3', value=Fraction(5, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Output: 0>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='18', target_id='water', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='19', target_id='magnet', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='20', target_id='titanium-glass', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='21', target_id='plane-smelter', value=Fraction(1, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Output: 0>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='22', target_id='plane-filter', value=Fraction(200, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='23', target_id='processor', value=Fraction(100, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None))
+belt_id: conveyor-belt-2
+proliferator/items: {}
+recipes pinned: []
+
+========================================================================
+candidate label: no-proliferator
+machines: 38
+  group recipe=advanced-mining-machine machine=assembling-machine-2 n=2 mode=none
+     in  frame-material           5/12 (0.4167/s)  total 5/6 (0.8333/s)
+     in  optical-grating-crystal  5/3 (1.6667/s)  total 10/3 (3.3333/s)
+     in  quantum-chip             1/6 (0.1667/s)  total 1/3 (0.3333/s)
+     in  super-magnetic-ring      5/12 (0.4167/s)  total 5/6 (0.8333/s)
+     in  titanium-alloy           5/6 (0.8333/s)  total 5/3 (1.6667/s)
+     out advanced-mining-machine  1/24 (0.0417/s)  total 1/12 (0.0833/s)
+  group recipe=arc-smelter machine=assembling-machine-2 n=1 mode=none
+     in  circuit-board            1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     in  iron-ingot               1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     in  magnetic-coil            1/30 (0.0333/s)  total 1/30 (0.0333/s)
+     in  stone-brick              1/30 (0.0333/s)  total 1/30 (0.0333/s)
+     out arc-smelter              1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=assembling-machine-3 machine=assembling-machine-2 n=1 mode=none
+     in  assembling-machine-2     1/10 (0.1000/s)  total 1/10 (0.1000/s)
+     in  particle-broadband       4/5 (0.8000/s)  total 4/5 (0.8000/s)
+     in  quantum-chip             1/5 (0.2000/s)  total 1/5 (0.2000/s)
+     out assembling-machine-3     1/10 (0.1000/s)  total 1/10 (0.1000/s)
+  group recipe=circuit-board machine=assembling-machine-2 n=1 mode=none
+     in  copper-ingot             1/30 (0.0333/s)  total 1/30 (0.0333/s)
+     in  iron-ingot               1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     out circuit-board            1/15 (0.0667/s)  total 1/15 (0.0667/s)
+  group recipe=electric-motor machine=assembling-machine-2 n=2 mode=none
+     in  gear                     1/3 (0.3333/s)  total 2/3 (0.6667/s)
+     in  iron-ingot               2/3 (0.6667/s)  total 4/3 (1.3333/s)
+     in  magnetic-coil            1/3 (0.3333/s)  total 2/3 (0.6667/s)
+     out electric-motor           1/3 (0.3333/s)  total 2/3 (0.6667/s)
+  group recipe=electromagnetic-turbine machine=assembling-machine-2 n=1 mode=none
+     in  electric-motor           2/3 (0.6667/s)  total 2/3 (0.6667/s)
+     in  magnetic-coil            2/3 (0.6667/s)  total 2/3 (0.6667/s)
+     out electromagnetic-turbine  1/3 (0.3333/s)  total 1/3 (0.3333/s)
+  group recipe=frame-material machine=assembling-machine-2 n=6 mode=none
+     in  carbon-nanotube          11/18 (0.6111/s)  total 11/3 (3.6667/s)
+     in  high-purity-silicon      11/72 (0.1528/s)  total 11/12 (0.9167/s)
+     in  titanium-alloy           11/72 (0.1528/s)  total 11/12 (0.9167/s)
+     out frame-material           11/72 (0.1528/s)  total 11/12 (0.9167/s)
+  group recipe=gear machine=assembling-machine-2 n=1 mode=none
+     in  iron-ingot               2/3 (0.6667/s)  total 2/3 (0.6667/s)
+     out gear                     2/3 (0.6667/s)  total 2/3 (0.6667/s)
+  group recipe=magnetic-coil machine=assembling-machine-2 n=1 mode=none
+     in  copper-ingot             41/60 (0.6833/s)  total 41/60 (0.6833/s)
+     in  magnet                   41/30 (1.3667/s)  total 41/30 (1.3667/s)
+     out magnetic-coil            41/30 (1.3667/s)  total 41/30 (1.3667/s)
+  group recipe=particle-broadband machine=assembling-machine-2 n=7 mode=none
+     in  carbon-nanotube          8/35 (0.2286/s)  total 8/5 (1.6000/s)
+     in  crystal-silicon          8/35 (0.2286/s)  total 8/5 (1.6000/s)
+     in  plastic                  4/35 (0.1143/s)  total 4/5 (0.8000/s)
+     out particle-broadband       4/35 (0.1143/s)  total 4/5 (0.8000/s)
+  group recipe=plane-smelter machine=assembling-machine-2 n=1 mode=none
+     in  arc-smelter              1/60 (0.0167/s)  total 1/60 (0.0167/s)
+     in  frame-material           1/12 (0.0833/s)  total 1/12 (0.0833/s)
+     in  plane-filter             1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     in  unipolar-magnet          1/4 (0.2500/s)  total 1/4 (0.2500/s)
+     out plane-smelter            1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=plastic machine=chemical-plant n=3 mode=none
+     in  energetic-graphite       4/15 (0.2667/s)  total 4/5 (0.8000/s)
+     in  refined-oil              8/15 (0.5333/s)  total 8/5 (1.6000/s)
+     out plastic                  4/15 (0.2667/s)  total 4/5 (0.8000/s)
+  group recipe=quantum-chip machine=assembling-machine-2 n=4 mode=none
+     in  plane-filter             3/10 (0.3000/s)  total 6/5 (1.2000/s)
+     in  processor                3/10 (0.3000/s)  total 6/5 (1.2000/s)
+     out quantum-chip             3/20 (0.1500/s)  total 3/5 (0.6000/s)
+  group recipe=re-composing-assembler machine=assembling-machine-2 n=1 mode=none
+     in  assembling-machine-3     1/60 (0.0167/s)  total 1/60 (0.0167/s)
+     in  energy-shard             1/2 (0.5000/s)  total 1/2 (0.5000/s)
+     in  matter-recombinator      1/6 (0.1667/s)  total 1/6 (0.1667/s)
+     in  quantum-chip             1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     out re-composing-assembler   1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=stone-brick machine=arc-smelter n=1 mode=none
+     in  stone                    1/30 (0.0333/s)  total 1/30 (0.0333/s)
+     out stone-brick              1/30 (0.0333/s)  total 1/30 (0.0333/s)
+  group recipe=super-magnetic-ring machine=assembling-machine-2 n=1 mode=none
+     in  electromagnetic-turbine  1/3 (0.3333/s)  total 1/3 (0.3333/s)
+     in  energetic-graphite       1/6 (0.1667/s)  total 1/6 (0.1667/s)
+     in  magnet                   1/2 (0.5000/s)  total 1/2 (0.5000/s)
+     out super-magnetic-ring      1/6 (0.1667/s)  total 1/6 (0.1667/s)
+  group recipe=x-ray-cracking machine=oil-refinery n=4 mode=none
+     in  hydrogen                 29/60 (0.4833/s)  total 29/15 (1.9333/s)
+     in  refined-oil              29/120 (0.2417/s)  total 29/30 (0.9667/s)
+     out energetic-graphite       29/120 (0.2417/s)  total 29/30 (0.9667/s)
+     out hydrogen                 29/40 (0.7250/s)  total 29/10 (2.9000/s)
+     SELF-LOOP hydrogen: net per machine 29/120 (0.2417/s)
+  external_inputs: {'assembling-machine-2': '1/10', 'carbon-nanotube': '79/15', 'copper-ingot': '43/60', 'crystal-silicon': '8/5', 'energy-shard': '1/2', 'high-purity-silicon': '11/12', 'iron-ingot': '32/15', 'magnet': '28/15', 'matter-recombinator': '1/6', 'optical-grating-crystal': '10/3', 'plane-filter': '19/15', 'processor': '6/5', 'refined-oil': '77/30', 'stone': '1/30', 'super-magnetic-ring': '2/3', 'titanium-alloy': '31/12', 'unipolar-magnet': '1/4'}
+  outputs: {'advanced-mining-machine': '1/12', 're-composing-assembler': '1/60', 'assembling-machine-3': '1/12', 'plane-smelter': '1/60'}
+  surplus_outputs: {'hydrogen': '29/30'}
+  spray_lanes: {}
+  lanes_requiring_split: []
+  belt_required_edges: []
+  coproduct_buffer_proofs: ()
+  belt: conveyor-belt-2 12 (12.0000/s)
+  lane_capacity: 30 (30.0000/s)
+========================================================================
+candidate label: all-products
+machines: 31
+  group recipe=advanced-mining-machine machine=assembling-machine-2 n=2 mode=products
+     in  frame-material           25/72 (0.3472/s)  total 25/36 (0.6944/s)
+     in  optical-grating-crystal  25/18 (1.3889/s)  total 25/9 (2.7778/s)
+     in  quantum-chip             5/36 (0.1389/s)  total 5/18 (0.2778/s)
+     in  super-magnetic-ring      25/72 (0.3472/s)  total 25/36 (0.6944/s)
+     in  titanium-alloy           25/36 (0.6944/s)  total 25/18 (1.3889/s)
+     out advanced-mining-machine  1/24 (0.0417/s)  total 1/12 (0.0833/s)
+  group recipe=arc-smelter machine=assembling-machine-2 n=1 mode=products
+     in  circuit-board            1/18 (0.0556/s)  total 1/18 (0.0556/s)
+     in  iron-ingot               1/18 (0.0556/s)  total 1/18 (0.0556/s)
+     in  magnetic-coil            1/36 (0.0278/s)  total 1/36 (0.0278/s)
+     in  stone-brick              1/36 (0.0278/s)  total 1/36 (0.0278/s)
+     out arc-smelter              1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=assembling-machine-3 machine=assembling-machine-2 n=1 mode=none
+     in  assembling-machine-2     1/10 (0.1000/s)  total 1/10 (0.1000/s)
+     in  particle-broadband       4/5 (0.8000/s)  total 4/5 (0.8000/s)
+     in  quantum-chip             1/5 (0.2000/s)  total 1/5 (0.2000/s)
+     out assembling-machine-3     1/10 (0.1000/s)  total 1/10 (0.1000/s)
+  group recipe=circuit-board machine=assembling-machine-2 n=1 mode=products
+     in  copper-ingot             5/216 (0.0231/s)  total 5/216 (0.0231/s)
+     in  iron-ingot               5/108 (0.0463/s)  total 5/108 (0.0463/s)
+     out circuit-board            1/18 (0.0556/s)  total 1/18 (0.0556/s)
+  group recipe=electric-motor machine=assembling-machine-2 n=1 mode=products
+     in  gear                     125/1944 (0.0643/s)  total 125/1944 (0.0643/s)
+     in  iron-ingot               125/972 (0.1286/s)  total 125/972 (0.1286/s)
+     in  magnetic-coil            125/1944 (0.0643/s)  total 125/1944 (0.0643/s)
+     out electric-motor           25/324 (0.0772/s)  total 25/324 (0.0772/s)
+  group recipe=electromagnetic-turbine machine=assembling-machine-2 n=1 mode=products
+     in  electric-motor           25/324 (0.0772/s)  total 25/324 (0.0772/s)
+     in  magnetic-coil            25/324 (0.0772/s)  total 25/324 (0.0772/s)
+     out electromagnetic-turbine  5/108 (0.0463/s)  total 5/108 (0.0463/s)
+  group recipe=frame-material machine=assembling-machine-2 n=4 mode=products
+     in  carbon-nanotube          35/54 (0.6481/s)  total 70/27 (2.5926/s)
+     in  high-purity-silicon      35/216 (0.1620/s)  total 35/54 (0.6481/s)
+     in  titanium-alloy           35/216 (0.1620/s)  total 35/54 (0.6481/s)
+     out frame-material           7/36 (0.1944/s)  total 7/9 (0.7778/s)
+  group recipe=gear machine=assembling-machine-2 n=1 mode=products
+     in  iron-ingot               625/11664 (0.0536/s)  total 625/11664 (0.0536/s)
+     out gear                     125/1944 (0.0643/s)  total 125/1944 (0.0643/s)
+  group recipe=magnetic-coil machine=assembling-machine-2 n=1 mode=products
+     in  copper-ingot             1645/23328 (0.0705/s)  total 1645/23328 (0.0705/s)
+     in  magnet                   1645/11664 (0.1410/s)  total 1645/11664 (0.1410/s)
+     out magnetic-coil            329/1944 (0.1692/s)  total 329/1944 (0.1692/s)
+  group recipe=particle-broadband machine=assembling-machine-2 n=6 mode=products
+     in  carbon-nanotube          2/9 (0.2222/s)  total 4/3 (1.3333/s)
+     in  crystal-silicon          2/9 (0.2222/s)  total 4/3 (1.3333/s)
+     in  plastic                  1/9 (0.1111/s)  total 2/3 (0.6667/s)
+     out particle-broadband       2/15 (0.1333/s)  total 4/5 (0.8000/s)
+  group recipe=plane-smelter machine=assembling-machine-2 n=1 mode=none
+     in  arc-smelter              1/60 (0.0167/s)  total 1/60 (0.0167/s)
+     in  frame-material           1/12 (0.0833/s)  total 1/12 (0.0833/s)
+     in  plane-filter             1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     in  unipolar-magnet          1/4 (0.2500/s)  total 1/4 (0.2500/s)
+     out plane-smelter            1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=plastic machine=chemical-plant n=2 mode=products
+     in  energetic-graphite       5/18 (0.2778/s)  total 5/9 (0.5556/s)
+     in  refined-oil              5/9 (0.5556/s)  total 10/9 (1.1111/s)
+     out plastic                  1/3 (0.3333/s)  total 2/3 (0.6667/s)
+  group recipe=quantum-chip machine=assembling-machine-2 n=3 mode=products
+     in  plane-filter             49/162 (0.3025/s)  total 49/54 (0.9074/s)
+     in  processor                49/162 (0.3025/s)  total 49/54 (0.9074/s)
+     out quantum-chip             49/270 (0.1815/s)  total 49/90 (0.5444/s)
+  group recipe=re-composing-assembler machine=assembling-machine-2 n=1 mode=none
+     in  assembling-machine-3     1/60 (0.0167/s)  total 1/60 (0.0167/s)
+     in  energy-shard             1/2 (0.5000/s)  total 1/2 (0.5000/s)
+     in  matter-recombinator      1/6 (0.1667/s)  total 1/6 (0.1667/s)
+     in  quantum-chip             1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     out re-composing-assembler   1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=stone-brick machine=arc-smelter n=1 mode=products
+     in  stone                    5/216 (0.0231/s)  total 5/216 (0.0231/s)
+     out stone-brick              1/36 (0.0278/s)  total 1/36 (0.0278/s)
+  group recipe=super-magnetic-ring machine=assembling-machine-2 n=1 mode=products
+     in  electromagnetic-turbine  5/108 (0.0463/s)  total 5/108 (0.0463/s)
+     in  energetic-graphite       5/216 (0.0231/s)  total 5/216 (0.0231/s)
+     in  magnet                   5/72 (0.0694/s)  total 5/72 (0.0694/s)
+     out super-magnetic-ring      1/36 (0.0278/s)  total 1/36 (0.0278/s)
+  group recipe=x-ray-cracking machine=oil-refinery n=3 mode=none
+     in  hydrogen                 125/324 (0.3858/s)  total 125/108 (1.1574/s)
+     in  refined-oil              125/648 (0.1929/s)  total 125/216 (0.5787/s)
+     out energetic-graphite       125/648 (0.1929/s)  total 125/216 (0.5787/s)
+     out hydrogen                 125/216 (0.5787/s)  total 125/72 (1.7361/s)
+     SELF-LOOP hydrogen: net per machine 125/648 (0.1929/s)
+  external_inputs: {'assembling-machine-2': '1/10', 'carbon-nanotube': '106/27', 'copper-ingot': '2185/23328', 'crystal-silicon': '4/3', 'energy-shard': '1/2', 'high-purity-silicon': '35/54', 'iron-ingot': '3313/11664', 'magnet': '2455/11664', 'matter-recombinator': '1/6', 'optical-grating-crystal': '25/9', 'plane-filter': '263/270', 'processor': '49/54', 'proliferator-2': '410849/559872', 'refined-oil': '365/216', 'stone': '5/216', 'super-magnetic-ring': '2/3', 'titanium-alloy': '55/27', 'unipolar-magnet': '1/4'}
+  outputs: {'advanced-mining-machine': '1/12', 're-composing-assembler': '1/60', 'assembling-machine-3': '1/12', 'plane-smelter': '1/60'}
+  surplus_outputs: {'hydrogen': '125/216'}
+  spray_lanes: {'frame-material': False, 'optical-grating-crystal': True, 'quantum-chip': False, 'super-magnetic-ring': False, 'titanium-alloy': True, 'circuit-board': False, 'iron-ingot': True, 'magnetic-coil': False, 'stone-brick': False, 'copper-ingot': True, 'gear': False, 'electric-motor': False, 'carbon-nanotube': True, 'high-purity-silicon': True, 'magnet': True, 'crystal-silicon': True, 'plastic': False, 'energetic-graphite': False, 'refined-oil': True, 'plane-filter': True, 'processor': True, 'stone': True, 'electromagnetic-turbine': False}
+  lanes_requiring_split: ['frame-material', 'plane-filter', 'quantum-chip', 'refined-oil']
+  belt_required_edges: [('circuit-board', 'arc-smelter'), ('electric-motor', 'electromagnetic-turbine'), ('electromagnetic-turbine', 'super-magnetic-ring'), ('frame-material', 'advanced-mining-machine'), ('gear', 'electric-motor'), ('magnetic-coil', 'arc-smelter'), ('magnetic-coil', 'electric-motor'), ('magnetic-coil', 'electromagnetic-turbine'), ('plastic', 'particle-broadband'), ('quantum-chip', 'advanced-mining-machine'), ('stone-brick', 'arc-smelter'), ('super-magnetic-ring', 'advanced-mining-machine'), ('x-ray-cracking', 'plastic'), ('x-ray-cracking', 'super-magnetic-ring')]
+  coproduct_buffer_proofs: ()
+  belt: conveyor-belt-2 12 (12.0000/s)
+  lane_capacity: 30 (30.0000/s)
+========================================================================
+candidate label: output-products
+machines: 36
+  group recipe=advanced-mining-machine machine=assembling-machine-2 n=2 mode=products
+     in  frame-material           25/72 (0.3472/s)  total 25/36 (0.6944/s)
+     in  optical-grating-crystal  25/18 (1.3889/s)  total 25/9 (2.7778/s)
+     in  quantum-chip             5/36 (0.1389/s)  total 5/18 (0.2778/s)
+     in  super-magnetic-ring      25/72 (0.3472/s)  total 25/36 (0.6944/s)
+     in  titanium-alloy           25/36 (0.6944/s)  total 25/18 (1.3889/s)
+     out advanced-mining-machine  1/24 (0.0417/s)  total 1/12 (0.0833/s)
+  group recipe=arc-smelter machine=assembling-machine-2 n=1 mode=none
+     in  circuit-board            1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     in  iron-ingot               1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     in  magnetic-coil            1/30 (0.0333/s)  total 1/30 (0.0333/s)
+     in  stone-brick              1/30 (0.0333/s)  total 1/30 (0.0333/s)
+     out arc-smelter              1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=assembling-machine-3 machine=assembling-machine-2 n=1 mode=none
+     in  assembling-machine-2     1/10 (0.1000/s)  total 1/10 (0.1000/s)
+     in  particle-broadband       4/5 (0.8000/s)  total 4/5 (0.8000/s)
+     in  quantum-chip             1/5 (0.2000/s)  total 1/5 (0.2000/s)
+     out assembling-machine-3     1/10 (0.1000/s)  total 1/10 (0.1000/s)
+  group recipe=circuit-board machine=assembling-machine-2 n=1 mode=none
+     in  copper-ingot             1/30 (0.0333/s)  total 1/30 (0.0333/s)
+     in  iron-ingot               1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     out circuit-board            1/15 (0.0667/s)  total 1/15 (0.0667/s)
+  group recipe=electric-motor machine=assembling-machine-2 n=1 mode=none
+     in  gear                     1/9 (0.1111/s)  total 1/9 (0.1111/s)
+     in  iron-ingot               2/9 (0.2222/s)  total 2/9 (0.2222/s)
+     in  magnetic-coil            1/9 (0.1111/s)  total 1/9 (0.1111/s)
+     out electric-motor           1/9 (0.1111/s)  total 1/9 (0.1111/s)
+  group recipe=electromagnetic-turbine machine=assembling-machine-2 n=1 mode=none
+     in  electric-motor           1/9 (0.1111/s)  total 1/9 (0.1111/s)
+     in  magnetic-coil            1/9 (0.1111/s)  total 1/9 (0.1111/s)
+     out electromagnetic-turbine  1/18 (0.0556/s)  total 1/18 (0.0556/s)
+  group recipe=frame-material machine=assembling-machine-2 n=5 mode=none
+     in  carbon-nanotube          28/45 (0.6222/s)  total 28/9 (3.1111/s)
+     in  high-purity-silicon      7/45 (0.1556/s)  total 7/9 (0.7778/s)
+     in  titanium-alloy           7/45 (0.1556/s)  total 7/9 (0.7778/s)
+     out frame-material           7/45 (0.1556/s)  total 7/9 (0.7778/s)
+  group recipe=gear machine=assembling-machine-2 n=1 mode=none
+     in  iron-ingot               1/9 (0.1111/s)  total 1/9 (0.1111/s)
+     out gear                     1/9 (0.1111/s)  total 1/9 (0.1111/s)
+  group recipe=magnetic-coil machine=assembling-machine-2 n=1 mode=none
+     in  copper-ingot             23/180 (0.1278/s)  total 23/180 (0.1278/s)
+     in  magnet                   23/90 (0.2556/s)  total 23/90 (0.2556/s)
+     out magnetic-coil            23/90 (0.2556/s)  total 23/90 (0.2556/s)
+  group recipe=particle-broadband machine=assembling-machine-2 n=7 mode=none
+     in  carbon-nanotube          8/35 (0.2286/s)  total 8/5 (1.6000/s)
+     in  crystal-silicon          8/35 (0.2286/s)  total 8/5 (1.6000/s)
+     in  plastic                  4/35 (0.1143/s)  total 4/5 (0.8000/s)
+     out particle-broadband       4/35 (0.1143/s)  total 4/5 (0.8000/s)
+  group recipe=plane-smelter machine=assembling-machine-2 n=1 mode=none
+     in  arc-smelter              1/60 (0.0167/s)  total 1/60 (0.0167/s)
+     in  frame-material           1/12 (0.0833/s)  total 1/12 (0.0833/s)
+     in  plane-filter             1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     in  unipolar-magnet          1/4 (0.2500/s)  total 1/4 (0.2500/s)
+     out plane-smelter            1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=plastic machine=chemical-plant n=3 mode=none
+     in  energetic-graphite       4/15 (0.2667/s)  total 4/5 (0.8000/s)
+     in  refined-oil              8/15 (0.5333/s)  total 8/5 (1.6000/s)
+     out plastic                  4/15 (0.2667/s)  total 4/5 (0.8000/s)
+  group recipe=quantum-chip machine=assembling-machine-2 n=4 mode=none
+     in  plane-filter             49/180 (0.2722/s)  total 49/45 (1.0889/s)
+     in  processor                49/180 (0.2722/s)  total 49/45 (1.0889/s)
+     out quantum-chip             49/360 (0.1361/s)  total 49/90 (0.5444/s)
+  group recipe=re-composing-assembler machine=assembling-machine-2 n=1 mode=none
+     in  assembling-machine-3     1/60 (0.0167/s)  total 1/60 (0.0167/s)
+     in  energy-shard             1/2 (0.5000/s)  total 1/2 (0.5000/s)
+     in  matter-recombinator      1/6 (0.1667/s)  total 1/6 (0.1667/s)
+     in  quantum-chip             1/15 (0.0667/s)  total 1/15 (0.0667/s)
+     out re-composing-assembler   1/60 (0.0167/s)  total 1/60 (0.0167/s)
+  group recipe=stone-brick machine=arc-smelter n=1 mode=none
+     in  stone                    1/30 (0.0333/s)  total 1/30 (0.0333/s)
+     out stone-brick              1/30 (0.0333/s)  total 1/30 (0.0333/s)
+  group recipe=super-magnetic-ring machine=assembling-machine-2 n=1 mode=none
+     in  electromagnetic-turbine  1/18 (0.0556/s)  total 1/18 (0.0556/s)
+     in  energetic-graphite       1/36 (0.0278/s)  total 1/36 (0.0278/s)
+     in  magnet                   1/12 (0.0833/s)  total 1/12 (0.0833/s)
+     out super-magnetic-ring      1/36 (0.0278/s)  total 1/36 (0.0278/s)
+  group recipe=x-ray-cracking machine=oil-refinery n=4 mode=none
+     in  hydrogen                 149/360 (0.4139/s)  total 149/90 (1.6556/s)
+     in  refined-oil              149/720 (0.2069/s)  total 149/180 (0.8278/s)
+     out energetic-graphite       149/720 (0.2069/s)  total 149/180 (0.8278/s)
+     out hydrogen                 149/240 (0.6208/s)  total 149/60 (2.4833/s)
+     SELF-LOOP hydrogen: net per machine 149/720 (0.2069/s)
+  external_inputs: {'assembling-machine-2': '1/10', 'carbon-nanotube': '212/45', 'copper-ingot': '29/180', 'crystal-silicon': '8/5', 'energy-shard': '1/2', 'high-purity-silicon': '7/9', 'iron-ingot': '7/15', 'magnet': '61/180', 'matter-recombinator': '1/6', 'optical-grating-crystal': '25/9', 'plane-filter': '52/45', 'processor': '49/45', 'proliferator-2': '35/144', 'refined-oil': '437/180', 'stone': '1/30', 'super-magnetic-ring': '2/3', 'titanium-alloy': '13/6', 'unipolar-magnet': '1/4'}
+  outputs: {'advanced-mining-machine': '1/12', 're-composing-assembler': '1/60', 'assembling-machine-3': '1/12', 'plane-smelter': '1/60'}
+  surplus_outputs: {'hydrogen': '149/180'}
+  spray_lanes: {'frame-material': False, 'optical-grating-crystal': True, 'quantum-chip': False, 'super-magnetic-ring': False, 'titanium-alloy': True}
+  lanes_requiring_split: ['frame-material', 'quantum-chip', 'titanium-alloy']
+  belt_required_edges: [('frame-material', 'advanced-mining-machine'), ('quantum-chip', 'advanced-mining-machine'), ('super-magnetic-ring', 'advanced-mining-machine')]
+  coproduct_buffer_proofs: ()
+  belt: conveyor-belt-2 12 (12.0000/s)
+  lane_capacity: 30 (30.0000/s)
+
+== raw RateSolution (default objective) ==
+external_inputs: {'assembling-machine-2': '1/10', 'carbon-nanotube': '79/15', 'copper-ingot': '43/60', 'crystal-silicon': '8/5', 'df-energy-shard': '1/2', 'df-matter-recombinator': '1/6', 'high-purity-silicon': '11/12', 'iron-ingot': '32/15', 'magnet': '28/15', 'optical-grating-crystal': '10/3', 'plane-filter': '19/15', 'processor': '6/5', 'refined-oil': '77/30', 'stone': '1/30', 'super-magnetic-ring': '2/3', 'titanium-alloy': '31/12', 'unipolar-magnet': '1/4'}
+outputs: {'advanced-mining-machine': '1/12', 'df-recomposing-assembler': '1/60', 'assembling-machine-3': '1/12', 'plane-smelter': '1/60'}
+surplus: {'hydrogen': '29/30'}
+  advanced-mining-machine x2 inputs={'frame-material': '5/6', 'optical-grating-crystal': '10/3', 'quantum-chip': '1/3', 'super-magnetic-ring': '5/6', 'titanium-alloy': '5/3'}
+      outputs={'advanced-mining-machine': '1/12'}
+  arc-smelter x1 inputs={'circuit-board': '1/15', 'iron-ingot': '1/15', 'magnetic-coil': '1/30', 'stone-brick': '1/30'}
+      outputs={'arc-smelter': '1/60'}
+  assembling-machine-3 x1 inputs={'assembling-machine-2': '1/10', 'particle-broadband': '4/5', 'quantum-chip': '1/5'}
+      outputs={'assembling-machine-3': '1/10'}
+  circuit-board x1 inputs={'copper-ingot': '1/30', 'iron-ingot': '1/15'}
+      outputs={'circuit-board': '1/15'}
+  df-recomposing-assembler x1 inputs={'assembling-machine-3': '1/60', 'df-energy-shard': '1/2', 'df-matter-recombinator': '1/6', 'quantum-chip': '1/15'}
+      outputs={'df-recomposing-assembler': '1/60'}
+  electric-motor x2 inputs={'gear': '2/3', 'iron-ingot': '4/3', 'magnetic-coil': '2/3'}
+      outputs={'electric-motor': '2/3'}
+  electromagnetic-turbine x1 inputs={'electric-motor': '2/3', 'magnetic-coil': '2/3'}
+      outputs={'electromagnetic-turbine': '1/3'}
+  frame-material x6 inputs={'carbon-nanotube': '11/3', 'high-purity-silicon': '11/12', 'titanium-alloy': '11/12'}
+      outputs={'frame-material': '11/12'}
+  gear x1 inputs={'iron-ingot': '2/3'}
+      outputs={'gear': '2/3'}
+  magnetic-coil x1 inputs={'copper-ingot': '41/60', 'magnet': '41/30'}
+      outputs={'magnetic-coil': '41/30'}
+  particle-broadband x7 inputs={'carbon-nanotube': '8/5', 'crystal-silicon': '8/5', 'plastic': '4/5'}
+      outputs={'particle-broadband': '4/5'}
+  plane-smelter x1 inputs={'arc-smelter': '1/60', 'frame-material': '1/12', 'plane-filter': '1/15', 'unipolar-magnet': '1/4'}
+      outputs={'plane-smelter': '1/60'}
+  plastic x3 inputs={'energetic-graphite': '4/5', 'refined-oil': '8/5'}
+      outputs={'plastic': '4/5'}
+  quantum-chip x4 inputs={'plane-filter': '6/5', 'processor': '6/5'}
+      outputs={'quantum-chip': '3/5'}
+  stone-brick x1 inputs={'stone': '1/30'}
+      outputs={'stone-brick': '1/30'}
+  super-magnetic-ring x1 inputs={'electromagnetic-turbine': '1/3', 'energetic-graphite': '1/6', 'magnet': '1/2'}
+      outputs={'super-magnetic-ring': '1/6'}
+  x-ray-cracking x4 inputs={'hydrogen': '29/15', 'refined-oil': '29/30'}
+      outputs={'energetic-graphite': '29/30', 'hydrogen': '29/10'}
