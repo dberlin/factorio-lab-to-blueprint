@@ -2208,6 +2208,13 @@ def test_direct_candidate_key_classifies_every_strip_field() -> None:
     ``recipe_id`` and ``group_key`` for the eligibility and destination
     lookups, and ``row_of_output`` reads ``port_dock_plan``, none of which
     ``_direct_origin_deltas`` ever touches.
+
+    Two halves, and BOTH are needed.  The first drives the enumeration body and
+    says what it reads.  The second drives ``_direct_candidate_key`` itself and
+    says what the hand-written tuple covers -- without it, deleting
+    ``source.port_dock_plan`` from that tuple would serve one strip pair
+    another pair's candidate with this suite still green, because the body-read
+    half never builds a key at all.
     """
     strip_fields = {field.name for field in fields(Strip)}
     assert strip_fields == (
@@ -2228,6 +2235,25 @@ def test_direct_candidate_key_classifies_every_strip_field() -> None:
     freeform._DIRECT_ORIGIN_DELTAS_MEMO.clear()
 
     assert read == freeform._DIRECT_CANDIDATE_KEY_FIELDS
+
+    # The tuple the memo is actually keyed on has to cover that read set, and
+    # the walk above never built one.  Fresh recorders, one per endpoint: the
+    # builder asks each side the same questions, so each must read the whole
+    # classified set on its own.
+    pair_strips = _direct_candidate_fixtures()[0][1]
+    source_read: set[str] = set()
+    destination_read: set[str] = set()
+    key = freeform._direct_candidate_key(
+        _ReadRecordingStrip.recording(pair_strips[0], source_read),
+        _ReadRecordingStrip.recording(pair_strips[1], destination_read),
+    )
+
+    # A gated pair returns ``None`` before touching the second endpoint, which
+    # would make the two assertions below vacuous.
+    assert key is not None
+    assert key == freeform._direct_candidate_key(pair_strips[0], pair_strips[1])
+    assert source_read == freeform._DIRECT_CANDIDATE_KEY_FIELDS
+    assert destination_read == freeform._DIRECT_CANDIDATE_KEY_FIELDS
 
 
 def test_direct_net_candidates_memo_is_transparent() -> None:
