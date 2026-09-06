@@ -32,6 +32,98 @@ def _layout() -> HierarchicalLayout:
     )
 
 
+#: `strategy._solve_block` captured at IMPORT time, before any test can
+#: monkeypatch that name.  `_refuse_first_shape_then_real` is itself installed
+#: as the `strategy._solve_block` a test monkeypatches, so it must not look the
+#: real worker up by that name at call time -- it would recurse into itself.
+_REAL_SOLVE_BLOCK = strategy._solve_block
+
+
+def _refuse_first_shape_then_real(
+    args: strategy._BlockJob,
+) -> tuple[dict[str, object], Placement | None]:
+    """Refuse the unsplit ingot block once; solve everything else for real.
+
+    Same shape as `refuse_first_shape` inside
+    `test_a_block_that_refuses_is_re_cut_before_the_whole_spec_refuses`, lifted
+    to module scope so more than one test can force exactly one re-cut round
+    without also wanting that test's own `calls` instrumentation.
+    """
+    sub = args[0]
+    if sub.machine_count == 2 and len(sub.groups) == 1:  # the unsplit ingot block
+        return ({"verdict": "REFUSED: forced", "ok": False, "strategy": args[1]}, None)
+    return _REAL_SOLVE_BLOCK(args)
+
+
+def test_pool_width_comes_from_the_affinity_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No `workers` named -> the pool is sized from the box, capped at 32."""
+    monkeypatch.setattr(strategy, "_available_cpu_count", lambda: 128)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True, band_policy=BandPolicy.parse("portable")
+    )
+    assert layout._pool_width() == 32
+    # An explicit `workers` still wins over the affinity set.
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=16,
+    )
+    assert layout._pool_width() == 4
+
+
+def test_a_fifteen_second_build_funds_one_round(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The web UI's 15 s default must fund at least one real block solve.
+
+    v1's reserve floor (10 s) left exactly `BLOCK_BUDGET_MIN_S` (5 s) of round
+    at this budget, so any wall spent partitioning tipped the round under the
+    floor and the build refused without ever calling `_solve_block`.
+
+    ``workers=16`` here, not the file's usual 8: the chain splits into 2
+    blocks and both arms race each (`best`), so a round is 4 jobs, and 8
+    workers is only a pool 2 wide -- 2 waves at this budget's ~9 s remaining
+    is 4.5 s a wave, UNDER the floor by itself, independent of `_pool_width`'s
+    own fix.  16 workers is a pool 4 wide, one wave, 9 s a job -- what this
+    test exists to exercise.
+    """
+    seen: list[float] = []
+    real = strategy._solve_block
+
+    def spy(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        seen.append(args[2])  # index 2 is the block's own budget_s
+        return real(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", spy)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=16,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    layout.lay_out(chain_spec, time_budget_s=15.0)
+    assert seen and min(seen) >= strategy.BLOCK_BUDGET_MIN_S
+
+
+def test_one_pool_serves_every_round(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One re-cut, still exactly one pool built for the whole `lay_out` call."""
+    made: list[int] = []
+
+    class Counting(ThreadPoolExecutor):
+        def __init__(self, width: int) -> None:
+            made.append(width)
+            super().__init__(width)
+
+    monkeypatch.setattr(strategy, "_solve_block", _refuse_first_shape_then_real)
+    layout = _layout()
+    layout._executor_factory = Counting
+    layout.lay_out(chain_spec, time_budget_s=40.0)
+    assert len(made) == 1
+
+
 def test_hierarchical_lays_out_the_chain_as_two_blocks_and_certifies(
     chain_spec: BuildSpec,
 ) -> None:

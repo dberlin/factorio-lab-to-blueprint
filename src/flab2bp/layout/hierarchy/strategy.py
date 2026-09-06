@@ -46,10 +46,24 @@ named -- never a crash and never a handback.
 THE CONSTANTS AS SHIPPED, in one place, because they differ from the ones the
 plan proposed and each is spelled out separately below:
 
-* ``settlement_reserve_s(budget) = min(40, max(10, 0.4 * budget))`` -- a share
-  of the budget, not the plan's flat 5 s.
-* ``_pool_width() = max(1, (workers or 16) // 4)``, and each child is
-  constructed with ``_BLOCK_WORKERS = 4`` CP-SAT search workers.
+* ``settlement_reserve_s(budget) = min(40, max(5, 0.4 * budget))`` -- a share
+  of the budget, not the plan's flat 5 s.  The floor dropped from 10 s to 5 s
+  (v2 Task 3): at the web UI's 15 s default the old floor alone (10 s) left a
+  5.0 s round -- exactly ``BLOCK_BUDGET_MIN_S``, so any wall at all spent
+  partitioning tipped it under the floor and the build refused having
+  attempted nothing.  0.4 * budget already exceeds the new floor above 12.5 s,
+  so this only changes builds at or below the web UI's own default.
+* ``_pool_width() = max(1, min(_POOL_CAP, (workers or _available_cpu_count())
+  // 4))`` with ``_POOL_CAP = 32``, and each child is constructed with
+  ``_BLOCK_WORKERS = 4`` CP-SAT search workers.  v1 divided a hardcoded
+  fallback of 16 rather than the box's real affinity set: on a 128-core box
+  that made the pool 4 wide regardless of what the box could actually run,
+  turning an 18-block, 2-arm round (36 jobs) into 9 waves instead of 2 (v2
+  Task 3; see ``docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md``
+  §8).  ``_POOL_CAP`` keeps a nearly-idle box from spawning dozens of
+  CP-SAT-holding processes for a build with few blocks -- each is already
+  ``_BLOCK_WORKERS`` threads deep, so the pool count itself does not need to
+  chase the affinity set past a point.
 * Per round, ``block_budget = clamp(remaining / waves, 5, 20)`` seconds
   (``BLOCK_BUDGET_MIN_S``/``BLOCK_BUDGET_MAX_S``), where ``remaining`` is the
   parent's wall less the settlement reserve.
@@ -57,8 +71,12 @@ plan proposed and each is spelled out separately below:
   computed inside :func:`_solve_block` at job start rather than by the round.
 * ``MAX_RESPLIT_ATTEMPTS = 4`` is counted PER BLOCK, not as a global round
   bound: a child created by a re-cut starts at attempt 0.
-* The pools are SPAWNED (``multiprocessing.get_context("spawn")``), like
-  ``strategy_race``'s.
+* The pool is SPAWNED (``multiprocessing.get_context("spawn")``), like
+  ``strategy_race``'s, and built ONCE per :meth:`HierarchicalLayout.lay_out`
+  call rather than once per round (v2 Task 3): every round of one build shares
+  it, so the pool's own spawn start-up -- real wall on a process pool, paid by
+  the first job submitted to it -- is paid once per build rather than once per
+  round, and a re-cut's extra round does not pay it again.
 
 The same list, with the gate measurements behind it, is
 ``docs/superpowers/evidence/2026-09-07-hierarchical-v1/gate.md``,
@@ -120,7 +138,14 @@ BLOCK_BUDGET_MAX_S = 20.0
 #: interface is not a rounding error at the end of the build, it is a second
 #: routing problem the size of the interface, so the reserve scales with the
 #: budget instead of being a constant.
-SETTLEMENT_RESERVE_MIN_S = 10.0
+#:
+#: The floor was 10 s (v1); dropped to 5 s (v2 Task 3) because at the web UI's
+#: 15 s default that floor alone left a round exactly ``BLOCK_BUDGET_MIN_S``
+#: wide -- one second of partitioning wall tipped it under the floor and the
+#: whole build refused without a single block ever having been offered to a
+#: placer.  ``SETTLEMENT_RESERVE_SHARE`` already exceeds 5 s above a 12.5 s
+#: budget, so this floor only matters at or below the web UI's own default.
+SETTLEMENT_RESERVE_MIN_S = 5.0
 SETTLEMENT_RESERVE_MAX_S = 40.0
 SETTLEMENT_RESERVE_SHARE = 0.4
 #: ``partition.split_block`` varies WHERE it cuts by attempt, and offers four
@@ -136,10 +161,13 @@ DEFAULT_GAP = 2
 #: concurrently, so this is a per-block share rather than the box's width, and
 #: it is the divisor the pool width is derived from.
 _BLOCK_WORKERS = 4
-#: Mirrors ``pipeline.DEFAULT_WORKER_BUDGET_CAP``, duplicated rather than
-#: imported because importing ``pipeline`` here would be a cycle.  It is only
-#: the fallback when a caller names no budget.
-_WORKER_BUDGET_DEFAULT = 16
+#: Ceiling on the pool itself, independent of how wide the box's affinity set
+#: is.  Each pool worker already holds a whole placer (``_BLOCK_WORKERS`` CP-SAT
+#: threads of its own), so a box wider than this would spawn dozens of
+#: CP-SAT-holding processes for builds that rarely have that many blocks to
+#: offer them; the cap costs nothing when a round has fewer jobs than this to
+#: give out; ``_pool_width`` still floors the box's own affinity set below it.
+_POOL_CAP = 32
 
 BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
 
@@ -168,6 +196,22 @@ def settlement_reserve_s(time_budget_s: float) -> float:
         SETTLEMENT_RESERVE_MAX_S,
         max(SETTLEMENT_RESERVE_MIN_S, SETTLEMENT_RESERVE_SHARE * time_budget_s),
     )
+
+
+def _available_cpu_count() -> int:
+    """The affinity set this process may actually run on.
+
+    A module-level wrapper, not a lazy import inlined into :meth:`_pool_width`,
+    so a test can ``monkeypatch.setattr(strategy, "_available_cpu_count", ...)``
+    and have it take: a bare ``from flab2bp.pipeline import _available_cpu_count``
+    called from inside ``_pool_width`` would resolve ``pipeline``'s own name
+    every time, unreachable from here.  Lazy at CALL time, not at module load,
+    because ``pipeline`` imports ``hierarchy`` -- importing it back at module
+    scope would be the same cycle :func:`_block_layout`'s docstring explains.
+    """
+    from flab2bp.pipeline import _available_cpu_count as _impl
+
+    return _impl()
 
 
 def _spawn_pool(max_workers: int) -> Executor:
@@ -328,42 +372,55 @@ class HierarchicalLayout:
         entries = [_Entry(list(block)) for block in partition.blocks]
         block_wall = 0.0
         resplits = 0
-        while True:
-            # Re-derived every round: a re-cut changes both the block count and
-            # the topological order, and `derive_cuts` returns the permutation
-            # precisely so the solved placements can be carried through it.
-            order, cuts = derive_cuts([entry.units for entry in entries])
-            entries = [entries[index] for index in order]
-            todo = [index for index, entry in enumerate(entries) if entry.placement is None]
-            if not todo:
-                break
-            jobs = len(todo) * len(self._arms())
-            waves = math.ceil(jobs / self._pool_width())
-            remaining = deadline - time.monotonic() - reserve
-            share = remaining / waves
-            if share < BLOCK_BUDGET_MIN_S:
-                raise refuse(
-                    _block_refusal(
-                        entries,
-                        todo,
-                        why=(
-                            f"{remaining:.1f}s left over {waves} wave(s) is under the "
-                            f"{BLOCK_BUDGET_MIN_S:g}s a block solve is given at all"
-                        ),
+        # ONE POOL FOR THE WHOLE BUILD, not one per round: a re-cut starts a
+        # new round with more (smaller) blocks, and building a fresh pool for
+        # it would pay a spawned process pool's own start-up again for jobs
+        # that pool never even needed to be wider for.  Constructing the
+        # executor here does not itself spawn a worker -- `ProcessPoolExecutor`
+        # starts processes lazily, on the first `map()` -- so a build that
+        # refuses before ever funding a round (the check just below) spawns
+        # nothing at all.
+        width = self._pool_width()
+        with self._executor_factory(width) as pool:
+            while True:
+                # Re-derived every round: a re-cut changes both the block count
+                # and the topological order, and `derive_cuts` returns the
+                # permutation precisely so the solved placements can be carried
+                # through it.
+                order, cuts = derive_cuts([entry.units for entry in entries])
+                entries = [entries[index] for index in order]
+                todo = [index for index, entry in enumerate(entries) if entry.placement is None]
+                if not todo:
+                    break
+                jobs = len(todo) * len(self._arms())
+                waves = math.ceil(jobs / width)
+                remaining = deadline - time.monotonic() - reserve
+                share = remaining / waves
+                if share < BLOCK_BUDGET_MIN_S:
+                    raise refuse(
+                        _block_refusal(
+                            entries,
+                            todo,
+                            why=(
+                                f"{remaining:.1f}s left over {waves} wave(s) is under the "
+                                f"{BLOCK_BUDGET_MIN_S:g}s a block solve is given at all"
+                            ),
+                        )
                     )
+                block_budget = min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, share))
+                started = time.monotonic()
+                self._solve_round(
+                    spec, entries, todo, pool=pool, block_budget=block_budget, deadline=deadline
                 )
-            block_budget = min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, share))
-            started = time.monotonic()
-            self._solve_round(spec, entries, todo, block_budget=block_budget, deadline=deadline)
-            block_wall += time.monotonic() - started
-            still = [index for index in todo if entries[index].placement is None]
-            if not still:
-                break
-            grown, progress = _recut(entries, still)
-            if not progress:
-                raise refuse(_block_refusal(entries, still, why="out of re-cut attempts"))
-            entries = grown
-            resplits += 1
+                block_wall += time.monotonic() - started
+                still = [index for index in todo if entries[index].placement is None]
+                if not still:
+                    break
+                grown, progress = _recut(entries, still)
+                if not progress:
+                    raise refuse(_block_refusal(entries, still, why="out of re-cut attempts"))
+                entries = grown
+                resplits += 1
 
         blocks = [entry.units for entry in entries]
         solved = [entry.placement for entry in entries if entry.placement is not None]
@@ -488,8 +545,15 @@ class HierarchicalLayout:
     def _pool_width(self) -> int:
         """Jobs run at once.  One job is a whole placer holding CP-SAT workers,
         so the worker budget divides by what a job is given, not by the block
-        count -- a narrower pool than the budget funds would only add waves."""
-        return max(1, (self.workers or _WORKER_BUDGET_DEFAULT) // _BLOCK_WORKERS)
+        count -- a narrower pool than the budget funds would only add waves.
+
+        The fallback when no ``workers`` was named is the box's own affinity
+        set (:func:`_available_cpu_count`), not a hardcoded guess: a guess
+        narrower than the box is waves the box had room to avoid, and one
+        wider than the box would oversubscribe it.  ``_POOL_CAP`` still bounds
+        the result on a very wide box -- see its own docstring.
+        """
+        return max(1, min(_POOL_CAP, (self.workers or _available_cpu_count()) // _BLOCK_WORKERS))
 
     def _solve_round(
         self,
@@ -497,10 +561,15 @@ class HierarchicalLayout:
         entries: list[_Entry],
         todo: list[int],
         *,
+        pool: Executor,
         block_budget: float,
         deadline: float,
     ) -> None:
-        """Solve every block in ``todo`` with every arm; smallest valid wins."""
+        """Solve every block in ``todo`` with every arm; smallest valid wins.
+
+        ``pool`` is the ONE pool `lay_out` built for the whole build, opened
+        and closed there -- this method never constructs or shuts one down.
+        """
         arms = self._arms()
         jobs: list[_BlockJob] = []
         for index in todo:
@@ -520,16 +589,18 @@ class HierarchicalLayout:
                 for arm in arms
             )
         try:
-            with self._executor_factory(self._pool_width()) as pool:
-                # `_solve_block` is resolved from the module globals at call
-                # time, which is what lets a test substitute the worker.
-                results = list(pool.map(_solve_block, jobs))
+            # `_solve_block` is resolved from the module globals at call time,
+            # which is what lets a test substitute the worker.
+            results = list(pool.map(_solve_block, jobs))
         except Exception as exc:  # noqa: BLE001 - a dead pool is a refusal, not an abort
             # A worker killed by the OOM killer, an unpicklable spec, an
             # interpreter that failed to start: `map` re-raises all of it on the
             # parent side. Losing the whole build to that would be the same
             # mistake `_solve_block`'s own CRASH arm exists to avoid, one level
             # up -- so the round becomes a round of refusals naming the failure.
+            # The pool itself is left as `lay_out` made it: a pool that died
+            # here stays dead, and any further round this build starts (a
+            # re-cut) will hit this same guard again rather than crash.
             results = [
                 (
                     {
