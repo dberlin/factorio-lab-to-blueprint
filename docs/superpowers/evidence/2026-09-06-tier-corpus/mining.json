@@ -1,0 +1,6788 @@
+{
+ "corpus": {
+  "rows": 1041,
+  "solved": 940,
+  "refused": 101,
+  "distinct_spec_graphs": 123,
+  "min_support_specs": 25,
+  "subgraph_sizes": [
+   2,
+   6
+  ]
+ },
+ "recipe_frequency": [
+  {
+   "recipe": "iron-ingot",
+   "specs": 709,
+   "spec_share": 0.754,
+   "distinct_targets": 81,
+   "depth": 2
+  },
+  {
+   "recipe": "copper-ingot",
+   "specs": 653,
+   "spec_share": 0.695,
+   "distinct_targets": 75,
+   "depth": 2
+  },
+  {
+   "recipe": "circuit-board",
+   "specs": 490,
+   "spec_share": 0.521,
+   "distinct_targets": 53,
+   "depth": 3
+  },
+  {
+   "recipe": "magnet",
+   "specs": 482,
+   "spec_share": 0.513,
+   "distinct_targets": 56,
+   "depth": 2
+  },
+  {
+   "recipe": "magnetic-coil",
+   "specs": 475,
+   "spec_share": 0.505,
+   "distinct_targets": 55,
+   "depth": 3
+  },
+  {
+   "recipe": "gear",
+   "specs": 382,
+   "spec_share": 0.406,
+   "distinct_targets": 48,
+   "depth": 3
+  },
+  {
+   "recipe": "energetic-graphite",
+   "specs": 372,
+   "spec_share": 0.396,
+   "distinct_targets": 51,
+   "depth": 2
+  },
+  {
+   "recipe": "high-purity-silicon",
+   "specs": 302,
+   "spec_share": 0.321,
+   "distinct_targets": 42,
+   "depth": 2
+  },
+  {
+   "recipe": "electric-motor",
+   "specs": 271,
+   "spec_share": 0.288,
+   "distinct_targets": 38,
+   "depth": 4
+  },
+  {
+   "recipe": "glass",
+   "specs": 263,
+   "spec_share": 0.28,
+   "distinct_targets": 33,
+   "depth": 2
+  },
+  {
+   "recipe": "microcrystalline-component",
+   "specs": 247,
+   "spec_share": 0.263,
+   "distinct_targets": 33,
+   "depth": 3
+  },
+  {
+   "recipe": "steel",
+   "specs": 241,
+   "spec_share": 0.256,
+   "distinct_targets": 34,
+   "depth": 3
+  },
+  {
+   "recipe": "electromagnetic-turbine",
+   "specs": 241,
+   "spec_share": 0.256,
+   "distinct_targets": 35,
+   "depth": 5
+  },
+  {
+   "recipe": "titanium-ingot",
+   "specs": 233,
+   "spec_share": 0.248,
+   "distinct_targets": 36,
+   "depth": 2
+  },
+  {
+   "recipe": "processor",
+   "specs": 229,
+   "spec_share": 0.244,
+   "distinct_targets": 31,
+   "depth": 4
+  },
+  {
+   "recipe": "graphene",
+   "specs": 225,
+   "spec_share": 0.239,
+   "distinct_targets": 35,
+   "depth": 3
+  },
+  {
+   "recipe": "stone-brick",
+   "specs": 143,
+   "spec_share": 0.152,
+   "distinct_targets": 14,
+   "depth": 2
+  },
+  {
+   "recipe": "prism",
+   "specs": 127,
+   "spec_share": 0.135,
+   "distinct_targets": 15,
+   "depth": 3
+  },
+  {
+   "recipe": "super-magnetic-ring",
+   "specs": 114,
+   "spec_share": 0.121,
+   "distinct_targets": 16,
+   "depth": 6
+  },
+  {
+   "recipe": "titanium-crystal",
+   "specs": 103,
+   "spec_share": 0.11,
+   "distinct_targets": 15,
+   "depth": 3
+  },
+  {
+   "recipe": "carbon-nanotube",
+   "specs": 103,
+   "spec_share": 0.11,
+   "distinct_targets": 16,
+   "depth": 4
+  },
+  {
+   "recipe": "particle-container",
+   "specs": 101,
+   "spec_share": 0.107,
+   "distinct_targets": 15,
+   "depth": 6
+  },
+  {
+   "recipe": "titanium-alloy",
+   "specs": 97,
+   "spec_share": 0.103,
+   "distinct_targets": 18,
+   "depth": 4
+  },
+  {
+   "recipe": "plasma-exciter",
+   "specs": 84,
+   "spec_share": 0.089,
+   "distinct_targets": 8,
+   "depth": 4
+  },
+  {
+   "recipe": "diamond",
+   "specs": 83,
+   "spec_share": 0.088,
+   "distinct_targets": 9,
+   "depth": 3
+  },
+  {
+   "recipe": "plasma-refining",
+   "specs": 81,
+   "spec_share": 0.086,
+   "distinct_targets": 12,
+   "depth": 2
+  },
+  {
+   "recipe": "casimir-crystal",
+   "specs": 73,
+   "spec_share": 0.078,
+   "distinct_targets": 13,
+   "depth": 4
+  },
+  {
+   "recipe": "titanium-glass",
+   "specs": 73,
+   "spec_share": 0.078,
+   "distinct_targets": 13,
+   "depth": 3
+  },
+  {
+   "recipe": "plane-filter",
+   "specs": 69,
+   "spec_share": 0.073,
+   "distinct_targets": 12,
+   "depth": 5
+  },
+  {
+   "recipe": "deuterium",
+   "specs": 65,
+   "spec_share": 0.069,
+   "distinct_targets": 10,
+   "depth": 2
+  },
+  {
+   "recipe": "quantum-chip",
+   "specs": 60,
+   "spec_share": 0.064,
+   "distinct_targets": 10,
+   "depth": 6
+  },
+  {
+   "recipe": "crystal-silicon",
+   "specs": 59,
+   "spec_share": 0.063,
+   "distinct_targets": 8,
+   "depth": 3
+  },
+  {
+   "recipe": "strange-matter",
+   "specs": 54,
+   "spec_share": 0.057,
+   "distinct_targets": 7,
+   "depth": 7
+  },
+  {
+   "recipe": "plastic",
+   "specs": 51,
+   "spec_share": 0.054,
+   "distinct_targets": 6,
+   "depth": 3
+  },
+  {
+   "recipe": "frame-material",
+   "specs": 47,
+   "spec_share": 0.05,
+   "distinct_targets": 9,
+   "depth": 5
+  },
+  {
+   "recipe": "graviton-lens",
+   "specs": 44,
+   "spec_share": 0.047,
+   "distinct_targets": 5,
+   "depth": 8
+  },
+  {
+   "recipe": "sorter-1",
+   "specs": 43,
+   "spec_share": 0.046,
+   "distinct_targets": 4,
+   "depth": 4
+  },
+  {
+   "recipe": "electromagnetic-matrix",
+   "specs": 43,
+   "spec_share": 0.046,
+   "distinct_targets": 2,
+   "depth": 4
+  },
+  {
+   "recipe": "energy-matrix",
+   "specs": 40,
+   "spec_share": 0.043,
+   "distinct_targets": 2,
+   "depth": 3
+  },
+  {
+   "recipe": "particle-broadband",
+   "specs": 40,
+   "spec_share": 0.043,
+   "distinct_targets": 4,
+   "depth": 5
+  },
+  {
+   "recipe": "photon-combiner",
+   "specs": 37,
+   "spec_share": 0.039,
+   "distinct_targets": 6,
+   "depth": 4
+  },
+  {
+   "recipe": "information-matrix",
+   "specs": 35,
+   "spec_share": 0.037,
+   "distinct_targets": 2,
+   "depth": 6
+  },
+  {
+   "recipe": "structure-matrix",
+   "specs": 35,
+   "spec_share": 0.037,
+   "distinct_targets": 2,
+   "depth": 4
+  },
+  {
+   "recipe": "gravity-matrix",
+   "specs": 34,
+   "spec_share": 0.036,
+   "distinct_targets": 3,
+   "depth": 9
+  },
+  {
+   "recipe": "conveyor-belt-1",
+   "specs": 33,
+   "spec_share": 0.035,
+   "distinct_targets": 3,
+   "depth": 4
+  },
+  {
+   "recipe": "tesla-tower",
+   "specs": 33,
+   "spec_share": 0.035,
+   "distinct_targets": 3,
+   "depth": 4
+  },
+  {
+   "recipe": "sorter-2",
+   "specs": 30,
+   "spec_share": 0.032,
+   "distinct_targets": 3,
+   "depth": 5
+  },
+  {
+   "recipe": "assembling-machine-1",
+   "specs": 29,
+   "spec_share": 0.031,
+   "distinct_targets": 3,
+   "depth": 4
+  },
+  {
+   "recipe": "planetary-logistics-station",
+   "specs": 26,
+   "spec_share": 0.028,
+   "distinct_targets": 3,
+   "depth": 7
+  },
+  {
+   "recipe": "wireless-power-tower",
+   "specs": 20,
+   "spec_share": 0.021,
+   "distinct_targets": 2,
+   "depth": 5
+  },
+  {
+   "recipe": "conveyor-belt-2",
+   "specs": 20,
+   "spec_share": 0.021,
+   "distinct_targets": 2,
+   "depth": 6
+  },
+  {
+   "recipe": "accumulator-full",
+   "specs": 20,
+   "spec_share": 0.021,
+   "distinct_targets": 3,
+   "depth": 8
+  },
+  {
+   "recipe": "arc-smelter",
+   "specs": 19,
+   "spec_share": 0.02,
+   "distinct_targets": 2,
+   "depth": 4
+  },
+  {
+   "recipe": "chemical-plant",
+   "specs": 18,
+   "spec_share": 0.019,
+   "distinct_targets": 2,
+   "depth": 4
+  },
+  {
+   "recipe": "sorter-3",
+   "specs": 18,
+   "spec_share": 0.019,
+   "distinct_targets": 2,
+   "depth": 6
+  },
+  {
+   "recipe": "reinforced-thruster",
+   "specs": 17,
+   "spec_share": 0.018,
+   "distinct_targets": 3,
+   "depth": 6
+  },
+  {
+   "recipe": "assembling-machine-2",
+   "specs": 16,
+   "spec_share": 0.017,
+   "distinct_targets": 2,
+   "depth": 5
+  },
+  {
+   "recipe": "interstellar-logistics-station",
+   "specs": 16,
+   "spec_share": 0.017,
+   "distinct_targets": 2,
+   "depth": 8
+  },
+  {
+   "recipe": "critical-photon",
+   "specs": 16,
+   "spec_share": 0.017,
+   "distinct_targets": 4,
+   "depth": 1
+  },
+  {
+   "recipe": "proliferator-1",
+   "specs": 15,
+   "spec_share": 0.016,
+   "distinct_targets": 3,
+   "depth": 2
+  },
+  {
+   "recipe": "accumulator",
+   "specs": 14,
+   "spec_share": 0.015,
+   "distinct_targets": 3,
+   "depth": 7
+  },
+  {
+   "recipe": "mass-energy-storage",
+   "specs": 14,
+   "spec_share": 0.015,
+   "distinct_targets": 3,
+   "depth": 2
+  },
+  {
+   "recipe": "matrix-lab",
+   "specs": 13,
+   "spec_share": 0.014,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "mining-machine",
+   "specs": 13,
+   "spec_share": 0.014,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "storage-1",
+   "specs": 13,
+   "spec_share": 0.014,
+   "distinct_targets": 1,
+   "depth": 3
+  },
+  {
+   "recipe": "wind-turbine",
+   "specs": 13,
+   "spec_share": 0.014,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "holo-beacon",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "oil-extractor",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "oil-refinery",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "solar-panel",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "splitter",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "spray-coater",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "storage-tank",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 3
+  },
+  {
+   "recipe": "thermal-power-plant",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "traffic-monitor",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "water-pump",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "solar-sail",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 3,
+   "depth": 5
+  },
+  {
+   "recipe": "accumulator-discharge",
+   "specs": 12,
+   "spec_share": 0.013,
+   "distinct_targets": 3,
+   "depth": 9
+  },
+  {
+   "recipe": "conveyor-belt-3",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "em-rail-ejector",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "fractionator",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "geothermal-power-station",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "logistics-distributor",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "ray-receiver",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "storage-2",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "thruster",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 2,
+   "depth": 4
+  },
+  {
+   "recipe": "universe-matrix",
+   "specs": 10,
+   "spec_share": 0.011,
+   "distinct_targets": 1,
+   "depth": 10
+  },
+  {
+   "recipe": "proliferator-2",
+   "specs": 9,
+   "spec_share": 0.01,
+   "distinct_targets": 2,
+   "depth": 4
+  },
+  {
+   "recipe": "automatic-piler",
+   "specs": 8,
+   "spec_share": 0.009,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "energy-exchanger",
+   "specs": 8,
+   "spec_share": 0.009,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "mini-fusion-power-plant",
+   "specs": 8,
+   "spec_share": 0.009,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "miniature-particle-collider",
+   "specs": 8,
+   "spec_share": 0.009,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "orbital-collector",
+   "specs": 8,
+   "spec_share": 0.009,
+   "distinct_targets": 1,
+   "depth": 9
+  },
+  {
+   "recipe": "satellite-substation",
+   "specs": 8,
+   "spec_share": 0.009,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "sorter-4",
+   "specs": 8,
+   "spec_share": 0.009,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "annihilation-constraint-sphere",
+   "specs": 8,
+   "spec_share": 0.009,
+   "distinct_targets": 3,
+   "depth": 7
+  },
+  {
+   "recipe": "deuteron-fuel-rod",
+   "specs": 7,
+   "spec_share": 0.007,
+   "distinct_targets": 2,
+   "depth": 7
+  },
+  {
+   "recipe": "dyson-sphere-component",
+   "specs": 7,
+   "spec_share": 0.007,
+   "distinct_targets": 2,
+   "depth": 6
+  },
+  {
+   "recipe": "foundation",
+   "specs": 6,
+   "spec_share": 0.006,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "sulfuric-acid",
+   "specs": 6,
+   "spec_share": 0.006,
+   "distinct_targets": 1,
+   "depth": 3
+  },
+  {
+   "recipe": "assembling-machine-3",
+   "specs": 6,
+   "spec_share": 0.006,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "plane-smelter",
+   "specs": 6,
+   "spec_share": 0.006,
+   "distinct_targets": 1,
+   "depth": 6
+  },
+  {
+   "recipe": "quantum-chemical-plant",
+   "specs": 6,
+   "spec_share": 0.006,
+   "distinct_targets": 1,
+   "depth": 8
+  },
+  {
+   "recipe": "vertical-launching-silo",
+   "specs": 6,
+   "spec_share": 0.006,
+   "distinct_targets": 1,
+   "depth": 9
+  },
+  {
+   "recipe": "hydrogen-fuel-rod",
+   "specs": 5,
+   "spec_share": 0.005,
+   "distinct_targets": 1,
+   "depth": 3
+  },
+  {
+   "recipe": "df-engine",
+   "specs": 5,
+   "spec_share": 0.005,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "logistics-bot",
+   "specs": 5,
+   "spec_share": 0.005,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "logistics-drone",
+   "specs": 5,
+   "spec_share": 0.005,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "organic-crystal",
+   "specs": 5,
+   "spec_share": 0.005,
+   "distinct_targets": 1,
+   "depth": 4
+  },
+  {
+   "recipe": "logistics-vessel",
+   "specs": 4,
+   "spec_share": 0.004,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "proliferator-3",
+   "specs": 4,
+   "spec_share": 0.004,
+   "distinct_targets": 1,
+   "depth": 5
+  },
+  {
+   "recipe": "space-warper-advanced",
+   "specs": 4,
+   "spec_share": 0.004,
+   "distinct_targets": 1,
+   "depth": 10
+  },
+  {
+   "recipe": "advanced-mining-machine",
+   "specs": 4,
+   "spec_share": 0.004,
+   "distinct_targets": 1,
+   "depth": 7
+  },
+  {
+   "recipe": "artificial-star",
+   "specs": 4,
+   "spec_share": 0.004,
+   "distinct_targets": 1,
+   "depth": 8
+  },
+  {
+   "recipe": "small-carrier-rocket",
+   "specs": 3,
+   "spec_share": 0.003,
+   "distinct_targets": 1,
+   "depth": 8
+  },
+  {
+   "recipe": "antimatter-fuel-rod",
+   "specs": 2,
+   "spec_share": 0.002,
+   "distinct_targets": 1,
+   "depth": 8
+  },
+  {
+   "recipe": "deuterium-fractionation",
+   "specs": 1,
+   "spec_share": 0.001,
+   "distinct_targets": 1,
+   "depth": 2
+  }
+ ],
+ "shared_ingredients": [
+  {
+   "item": "iron-ingot",
+   "consuming_recipes_in_corpus": 24,
+   "specs_with_2plus_consumers": 514,
+   "internal_edges_carrying_it": 1753,
+   "depth": 2
+  },
+  {
+   "item": "iron-ore",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 462,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "copper-ingot",
+   "consuming_recipes_in_corpus": 8,
+   "specs_with_2plus_consumers": 430,
+   "internal_edges_carrying_it": 1350,
+   "depth": 2
+  },
+  {
+   "item": "magnetic-coil",
+   "consuming_recipes_in_corpus": 11,
+   "specs_with_2plus_consumers": 253,
+   "internal_edges_carrying_it": 747,
+   "depth": 3
+  },
+  {
+   "item": "energetic-graphite",
+   "consuming_recipes_in_corpus": 5,
+   "specs_with_2plus_consumers": 127,
+   "internal_edges_carrying_it": 513,
+   "depth": 2
+  },
+  {
+   "item": "titanium-ingot",
+   "consuming_recipes_in_corpus": 6,
+   "specs_with_2plus_consumers": 117,
+   "internal_edges_carrying_it": 407,
+   "depth": 2
+  },
+  {
+   "item": "magnet",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 114,
+   "internal_edges_carrying_it": 589,
+   "depth": 2
+  },
+  {
+   "item": "sulfuric-acid",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 81,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "high-purity-silicon",
+   "consuming_recipes_in_corpus": 5,
+   "specs_with_2plus_consumers": 79,
+   "internal_edges_carrying_it": 375,
+   "depth": 2
+  },
+  {
+   "item": "graphene",
+   "consuming_recipes_in_corpus": 7,
+   "specs_with_2plus_consumers": 75,
+   "internal_edges_carrying_it": 323,
+   "depth": 3
+  },
+  {
+   "item": "stone",
+   "consuming_recipes_in_corpus": 3,
+   "specs_with_2plus_consumers": 70,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "circuit-board",
+   "consuming_recipes_in_corpus": 17,
+   "specs_with_2plus_consumers": 57,
+   "internal_edges_carrying_it": 540,
+   "depth": 3
+  },
+  {
+   "item": "hydrogen",
+   "consuming_recipes_in_corpus": 6,
+   "specs_with_2plus_consumers": 43,
+   "internal_edges_carrying_it": 80,
+   "depth": 1
+  },
+  {
+   "item": "gear",
+   "consuming_recipes_in_corpus": 10,
+   "specs_with_2plus_consumers": 38,
+   "internal_edges_carrying_it": 413,
+   "depth": 3
+  },
+  {
+   "item": "titanium-alloy",
+   "consuming_recipes_in_corpus": 12,
+   "specs_with_2plus_consumers": 37,
+   "internal_edges_carrying_it": 130,
+   "depth": 4
+  },
+  {
+   "item": "electromagnetic-turbine",
+   "consuming_recipes_in_corpus": 5,
+   "specs_with_2plus_consumers": 26,
+   "internal_edges_carrying_it": 270,
+   "depth": 5
+  },
+  {
+   "item": "steel",
+   "consuming_recipes_in_corpus": 15,
+   "specs_with_2plus_consumers": 24,
+   "internal_edges_carrying_it": 259,
+   "depth": 3
+  },
+  {
+   "item": "processor",
+   "consuming_recipes_in_corpus": 18,
+   "specs_with_2plus_consumers": 23,
+   "internal_edges_carrying_it": 246,
+   "depth": 4
+  },
+  {
+   "item": "electric-motor",
+   "consuming_recipes_in_corpus": 3,
+   "specs_with_2plus_consumers": 18,
+   "internal_edges_carrying_it": 283,
+   "depth": 4
+  },
+  {
+   "item": "particle-container",
+   "consuming_recipes_in_corpus": 5,
+   "specs_with_2plus_consumers": 16,
+   "internal_edges_carrying_it": 112,
+   "depth": 6
+  },
+  {
+   "item": "prism",
+   "consuming_recipes_in_corpus": 3,
+   "specs_with_2plus_consumers": 12,
+   "internal_edges_carrying_it": 133,
+   "depth": 3
+  },
+  {
+   "item": "diamond",
+   "consuming_recipes_in_corpus": 3,
+   "specs_with_2plus_consumers": 10,
+   "internal_edges_carrying_it": 88,
+   "depth": 3
+  },
+  {
+   "item": "titanium-crystal",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 10,
+   "internal_edges_carrying_it": 108,
+   "depth": 3
+  },
+  {
+   "item": "glass",
+   "consuming_recipes_in_corpus": 7,
+   "specs_with_2plus_consumers": 9,
+   "internal_edges_carrying_it": 265,
+   "depth": 2
+  },
+  {
+   "item": "coal",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 9,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "titanium-glass",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 6,
+   "internal_edges_carrying_it": 75,
+   "depth": 3
+  },
+  {
+   "item": "refined-oil",
+   "consuming_recipes_in_corpus": 3,
+   "specs_with_2plus_consumers": 5,
+   "internal_edges_carrying_it": 62,
+   "depth": 2
+  },
+  {
+   "item": "super-magnetic-ring",
+   "consuming_recipes_in_corpus": 13,
+   "specs_with_2plus_consumers": 4,
+   "internal_edges_carrying_it": 113,
+   "depth": 6
+  },
+  {
+   "item": "accumulator-full",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 4,
+   "internal_edges_carrying_it": 20,
+   "depth": 8
+  },
+  {
+   "item": "stone-brick",
+   "consuming_recipes_in_corpus": 11,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 136,
+   "depth": 2
+  },
+  {
+   "item": "frame-material",
+   "consuming_recipes_in_corpus": 7,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 43,
+   "depth": 5
+  },
+  {
+   "item": "quantum-chip",
+   "consuming_recipes_in_corpus": 7,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 57,
+   "depth": 6
+  },
+  {
+   "item": "plasma-exciter",
+   "consuming_recipes_in_corpus": 6,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 78,
+   "depth": 4
+  },
+  {
+   "item": "carbon-nanotube",
+   "consuming_recipes_in_corpus": 4,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 99,
+   "depth": 4
+  },
+  {
+   "item": "photon-combiner",
+   "consuming_recipes_in_corpus": 3,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 32,
+   "depth": 4
+  },
+  {
+   "item": "water",
+   "consuming_recipes_in_corpus": 3,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "annihilation-constraint-sphere",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 6,
+   "depth": 7
+  },
+  {
+   "item": "antimatter",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 12,
+   "depth": 2
+  },
+  {
+   "item": "crystal-silicon",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 54,
+   "depth": 3
+  },
+  {
+   "item": "deuterium",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 61,
+   "depth": 1
+  },
+  {
+   "item": "graviton-lens",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 40,
+   "depth": 8
+  },
+  {
+   "item": "gravity-matrix",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 14,
+   "depth": 9
+  },
+  {
+   "item": "microcrystalline-component",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 241,
+   "depth": 3
+  },
+  {
+   "item": "particle-broadband",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 36,
+   "depth": 5
+  },
+  {
+   "item": "plane-filter",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 66,
+   "depth": 5
+  },
+  {
+   "item": "plastic",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 45,
+   "depth": 3
+  },
+  {
+   "item": "reinforced-thruster",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 12,
+   "depth": 6
+  },
+  {
+   "item": "strange-matter",
+   "consuming_recipes_in_corpus": 2,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 50,
+   "depth": 7
+  },
+  {
+   "item": "accumulator",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 20,
+   "depth": 7
+  },
+  {
+   "item": "arc-smelter",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 6,
+   "depth": 4
+  },
+  {
+   "item": "assembling-machine-1",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 16,
+   "depth": 4
+  },
+  {
+   "item": "assembling-machine-2",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 6,
+   "depth": 5
+  },
+  {
+   "item": "casimir-crystal",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 69,
+   "depth": 4
+  },
+  {
+   "item": "chemical-plant",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 6,
+   "depth": 4
+  },
+  {
+   "item": "conveyor-belt-1",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 20,
+   "depth": 4
+  },
+  {
+   "item": "conveyor-belt-2",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 10,
+   "depth": 6
+  },
+  {
+   "item": "copper-ore",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "critical-photon",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 14,
+   "depth": 1
+  },
+  {
+   "item": "crude-oil",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "deuteron-fuel-rod",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 3,
+   "depth": 7
+  },
+  {
+   "item": "df-engine",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 5,
+   "depth": 4
+  },
+  {
+   "item": "dyson-sphere-component",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 3,
+   "depth": 6
+  },
+  {
+   "item": "electromagnetic-matrix",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 10,
+   "depth": 4
+  },
+  {
+   "item": "energy-matrix",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 10,
+   "depth": 3
+  },
+  {
+   "item": "information-matrix",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 10,
+   "depth": 6
+  },
+  {
+   "item": "interstellar-logistics-station",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 8,
+   "depth": 8
+  },
+  {
+   "item": "optical-grating-crystal",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "organic-crystal",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "planetary-logistics-station",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 16,
+   "depth": 7
+  },
+  {
+   "item": "proliferator-1",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 9,
+   "depth": 2
+  },
+  {
+   "item": "proliferator-2",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 4,
+   "depth": 4
+  },
+  {
+   "item": "silicon-ore",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "solar-sail",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 7,
+   "depth": 5
+  },
+  {
+   "item": "sorter-1",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 30,
+   "depth": 4
+  },
+  {
+   "item": "sorter-2",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 18,
+   "depth": 5
+  },
+  {
+   "item": "sorter-3",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 8,
+   "depth": 6
+  },
+  {
+   "item": "structure-matrix",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 10,
+   "depth": 4
+  },
+  {
+   "item": "tesla-tower",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 20,
+   "depth": 4
+  },
+  {
+   "item": "thruster",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 5,
+   "depth": 4
+  },
+  {
+   "item": "titanium-ore",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "unipolar-magnet",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 0,
+   "depth": 1
+  },
+  {
+   "item": "wireless-power-tower",
+   "consuming_recipes_in_corpus": 1,
+   "specs_with_2plus_consumers": 0,
+   "internal_edges_carrying_it": 8,
+   "depth": 5
+  }
+ ],
+ "top_pairs": [
+  {
+   "pair": [
+    "copper-ingot",
+    "iron-ingot"
+   ],
+   "specs": 627,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "copper-ingot"
+   ],
+   "specs": 490,
+   "adjacent_specs": 490,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "iron-ingot"
+   ],
+   "specs": 490,
+   "adjacent_specs": 490,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "magnet"
+   ],
+   "specs": 475,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "magnetic-coil"
+   ],
+   "specs": 475,
+   "adjacent_specs": 475,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "magnetic-coil"
+   ],
+   "specs": 475,
+   "adjacent_specs": 475,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "magnet"
+   ],
+   "specs": 462,
+   "adjacent_specs": 0,
+   "shared_input_specs": 462,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "magnetic-coil"
+   ],
+   "specs": 462,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "iron-ingot"
+   ],
+   "specs": 382,
+   "adjacent_specs": 382,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "gear"
+   ],
+   "specs": 362,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "magnet"
+   ],
+   "specs": 330,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "magnetic-coil"
+   ],
+   "specs": 330,
+   "adjacent_specs": 0,
+   "shared_input_specs": 330,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "magnet"
+   ],
+   "specs": 309,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "magnetic-coil"
+   ],
+   "specs": 309,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "high-purity-silicon"
+   ],
+   "specs": 283,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "iron-ingot"
+   ],
+   "specs": 281,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "electric-motor"
+   ],
+   "specs": 271,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "gear"
+   ],
+   "specs": 271,
+   "adjacent_specs": 271,
+   "shared_input_specs": 271,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "iron-ingot"
+   ],
+   "specs": 271,
+   "adjacent_specs": 271,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "magnet"
+   ],
+   "specs": 271,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "magnetic-coil"
+   ],
+   "specs": 271,
+   "adjacent_specs": 271,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "iron-ingot"
+   ],
+   "specs": 265,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "energetic-graphite"
+   ],
+   "specs": 261,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "high-purity-silicon"
+   ],
+   "specs": 259,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "gear"
+   ],
+   "specs": 255,
+   "adjacent_specs": 0,
+   "shared_input_specs": 255,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "microcrystalline-component"
+   ],
+   "specs": 247,
+   "adjacent_specs": 247,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "microcrystalline-component"
+   ],
+   "specs": 247,
+   "adjacent_specs": 247,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "steel"
+   ],
+   "specs": 241,
+   "adjacent_specs": 241,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "microcrystalline-component"
+   ],
+   "specs": 241,
+   "adjacent_specs": 0,
+   "shared_input_specs": 241,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "microcrystalline-component"
+   ],
+   "specs": 241,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "electromagnetic-turbine"
+   ],
+   "specs": 241,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "electromagnetic-turbine"
+   ],
+   "specs": 241,
+   "adjacent_specs": 241,
+   "shared_input_specs": 241,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "gear"
+   ],
+   "specs": 241,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "iron-ingot"
+   ],
+   "specs": 241,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "magnet"
+   ],
+   "specs": 241,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "magnetic-coil"
+   ],
+   "specs": 241,
+   "adjacent_specs": 241,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "glass",
+    "iron-ingot"
+   ],
+   "specs": 237,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "glass"
+   ],
+   "specs": 231,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "processor"
+   ],
+   "specs": 229,
+   "adjacent_specs": 229,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "processor"
+   ],
+   "specs": 229,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "processor"
+   ],
+   "specs": 229,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "processor"
+   ],
+   "specs": 229,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "microcrystalline-component",
+    "processor"
+   ],
+   "specs": 229,
+   "adjacent_specs": 229,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "graphene"
+   ],
+   "specs": 225,
+   "adjacent_specs": 225,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "gear"
+   ],
+   "specs": 223,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "high-purity-silicon"
+   ],
+   "specs": 216,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "magnet"
+   ],
+   "specs": 213,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "magnetic-coil"
+   ],
+   "specs": 213,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "steel"
+   ],
+   "specs": 211,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "energetic-graphite"
+   ],
+   "specs": 207,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "energetic-graphite"
+   ],
+   "specs": 207,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "glass"
+   ],
+   "specs": 205,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "energetic-graphite"
+   ],
+   "specs": 205,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "titanium-ingot"
+   ],
+   "specs": 202,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "iron-ingot"
+   ],
+   "specs": 200,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "magnet"
+   ],
+   "specs": 196,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "magnetic-coil"
+   ],
+   "specs": 196,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "graphene"
+   ],
+   "specs": 196,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "steel"
+   ],
+   "specs": 190,
+   "adjacent_specs": 0,
+   "shared_input_specs": 190,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "electric-motor"
+   ],
+   "specs": 189,
+   "adjacent_specs": 0,
+   "shared_input_specs": 189,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "microcrystalline-component"
+   ],
+   "specs": 184,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "processor"
+   ],
+   "specs": 184,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "high-purity-silicon"
+   ],
+   "specs": 179,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "steel"
+   ],
+   "specs": 175,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "steel"
+   ],
+   "specs": 175,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "magnet"
+   ],
+   "specs": 174,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "magnetic-coil"
+   ],
+   "specs": 174,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "titanium-ingot"
+   ],
+   "specs": 173,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "microcrystalline-component"
+   ],
+   "specs": 172,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "microcrystalline-component"
+   ],
+   "specs": 172,
+   "adjacent_specs": 0,
+   "shared_input_specs": 172,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "high-purity-silicon"
+   ],
+   "specs": 170,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "titanium-ingot"
+   ],
+   "specs": 170,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "electromagnetic-turbine"
+   ],
+   "specs": 165,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "high-purity-silicon"
+   ],
+   "specs": 163,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "high-purity-silicon"
+   ],
+   "specs": 163,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "titanium-ingot"
+   ],
+   "specs": 162,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "titanium-ingot"
+   ],
+   "specs": 162,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "microcrystalline-component"
+   ],
+   "specs": 161,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "processor"
+   ],
+   "specs": 161,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "processor"
+   ],
+   "specs": 160,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "processor"
+   ],
+   "specs": 160,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "graphene"
+   ],
+   "specs": 159,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "graphene"
+   ],
+   "specs": 158,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "steel"
+   ],
+   "specs": 156,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "microcrystalline-component"
+   ],
+   "specs": 148,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "processor"
+   ],
+   "specs": 148,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "magnet"
+   ],
+   "specs": 148,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "magnetic-coil"
+   ],
+   "specs": 148,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "titanium-ingot"
+   ],
+   "specs": 146,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "microcrystalline-component"
+   ],
+   "specs": 145,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "processor"
+   ],
+   "specs": 145,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "microcrystalline-component"
+   ],
+   "specs": 145,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "processor"
+   ],
+   "specs": 145,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "graphene"
+   ],
+   "specs": 142,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "graphene"
+   ],
+   "specs": 142,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "microcrystalline-component",
+    "titanium-ingot"
+   ],
+   "specs": 140,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "processor",
+    "titanium-ingot"
+   ],
+   "specs": 140,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "steel"
+   ],
+   "specs": 139,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "microcrystalline-component",
+    "steel"
+   ],
+   "specs": 138,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "stone-brick"
+   ],
+   "specs": 136,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "steel"
+   ],
+   "specs": 133,
+   "adjacent_specs": 0,
+   "shared_input_specs": 133,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "steel"
+   ],
+   "specs": 133,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "steel"
+   ],
+   "specs": 133,
+   "adjacent_specs": 0,
+   "shared_input_specs": 133,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "titanium-ingot"
+   ],
+   "specs": 129,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "titanium-ingot"
+   ],
+   "specs": 129,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "titanium-ingot"
+   ],
+   "specs": 129,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "prism"
+   ],
+   "specs": 127,
+   "adjacent_specs": 127,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "processor",
+    "steel"
+   ],
+   "specs": 126,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "titanium-ingot"
+   ],
+   "specs": 123,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "titanium-ingot"
+   ],
+   "specs": 123,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "prism"
+   ],
+   "specs": 121,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "high-purity-silicon"
+   ],
+   "specs": 120,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "steel"
+   ],
+   "specs": 119,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "prism"
+   ],
+   "specs": 115,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "super-magnetic-ring"
+   ],
+   "specs": 114,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "super-magnetic-ring"
+   ],
+   "specs": 114,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "super-magnetic-ring"
+   ],
+   "specs": 114,
+   "adjacent_specs": 114,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "super-magnetic-ring"
+   ],
+   "specs": 114,
+   "adjacent_specs": 114,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "gear",
+    "super-magnetic-ring"
+   ],
+   "specs": 114,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "super-magnetic-ring"
+   ],
+   "specs": 114,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "super-magnetic-ring"
+   ],
+   "specs": 114,
+   "adjacent_specs": 114,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "super-magnetic-ring"
+   ],
+   "specs": 114,
+   "adjacent_specs": 0,
+   "shared_input_specs": 114,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "steel",
+    "titanium-ingot"
+   ],
+   "specs": 113,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "prism"
+   ],
+   "specs": 107,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "prism"
+   ],
+   "specs": 107,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "microcrystalline-component"
+   ],
+   "specs": 106,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "glass"
+   ],
+   "specs": 106,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "titanium-crystal",
+    "titanium-ingot"
+   ],
+   "specs": 103,
+   "adjacent_specs": 103,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "energetic-graphite"
+   ],
+   "specs": 103,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "graphene"
+   ],
+   "specs": 103,
+   "adjacent_specs": 103,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "titanium-ingot"
+   ],
+   "specs": 103,
+   "adjacent_specs": 103,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 101,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 101,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 101,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "particle-container"
+   ],
+   "specs": 101,
+   "adjacent_specs": 0,
+   "shared_input_specs": 101,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "titanium-crystal"
+   ],
+   "specs": 98,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "glass"
+   ],
+   "specs": 97,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "steel"
+   ],
+   "specs": 97,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "titanium-alloy"
+   ],
+   "specs": 97,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "steel",
+    "titanium-alloy"
+   ],
+   "specs": 97,
+   "adjacent_specs": 97,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "titanium-alloy",
+    "titanium-ingot"
+   ],
+   "specs": 97,
+   "adjacent_specs": 97,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "stone-brick"
+   ],
+   "specs": 95,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "prism"
+   ],
+   "specs": 95,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "high-purity-silicon"
+   ],
+   "specs": 95,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "processor"
+   ],
+   "specs": 94,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "iron-ingot"
+   ],
+   "specs": 91,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "titanium-alloy"
+   ],
+   "specs": 89,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "copper-ingot"
+   ],
+   "specs": 87,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "graphene"
+   ],
+   "specs": 86,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "super-magnetic-ring"
+   ],
+   "specs": 85,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "energetic-graphite",
+    "titanium-alloy"
+   ],
+   "specs": 85,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "titanium-alloy"
+   ],
+   "specs": 85,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "titanium-alloy"
+   ],
+   "specs": 85,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "titanium-alloy"
+   ],
+   "specs": 85,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "titanium-ingot"
+   ],
+   "specs": 85,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "copper-ingot",
+    "plasma-exciter"
+   ],
+   "specs": 84,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "plasma-exciter"
+   ],
+   "specs": 84,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "plasma-exciter"
+   ],
+   "specs": 84,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "plasma-exciter"
+   ],
+   "specs": 84,
+   "adjacent_specs": 84,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "plasma-exciter",
+    "prism"
+   ],
+   "specs": 84,
+   "adjacent_specs": 84,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "stone-brick"
+   ],
+   "specs": 83,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "diamond",
+    "energetic-graphite"
+   ],
+   "specs": 83,
+   "adjacent_specs": 83,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "particle-container"
+   ],
+   "specs": 82,
+   "adjacent_specs": 0,
+   "shared_input_specs": 82,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "high-purity-silicon",
+    "particle-container"
+   ],
+   "specs": 82,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "microcrystalline-component",
+    "particle-container"
+   ],
+   "specs": 82,
+   "adjacent_specs": 0,
+   "shared_input_specs": 82,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "particle-container",
+    "processor"
+   ],
+   "specs": 82,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "steel",
+    "super-magnetic-ring"
+   ],
+   "specs": 81,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "titanium-alloy"
+   ],
+   "specs": 81,
+   "adjacent_specs": 0,
+   "shared_input_specs": 81,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "particle-container",
+    "titanium-ingot"
+   ],
+   "specs": 80,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "glass"
+   ],
+   "specs": 79,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "glass"
+   ],
+   "specs": 79,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electric-motor",
+    "titanium-alloy"
+   ],
+   "specs": 79,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "electromagnetic-turbine",
+    "titanium-alloy"
+   ],
+   "specs": 79,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "gear",
+    "titanium-alloy"
+   ],
+   "specs": 79,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "circuit-board"
+   ],
+   "specs": 79,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "iron-ingot",
+    "plasma-exciter"
+   ],
+   "specs": 78,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "super-magnetic-ring"
+   ],
+   "specs": 77,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "steel",
+    "stone-brick"
+   ],
+   "specs": 74,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnet",
+    "stone-brick"
+   ],
+   "specs": 73,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "magnetic-coil",
+    "stone-brick"
+   ],
+   "specs": 73,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "circuit-board",
+    "titanium-alloy"
+   ],
+   "specs": 73,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "microcrystalline-component"
+   ],
+   "specs": 73,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "carbon-nanotube",
+    "processor"
+   ],
+   "specs": 73,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "casimir-crystal",
+    "energetic-graphite"
+   ],
+   "specs": 73,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "casimir-crystal",
+    "graphene"
+   ],
+   "specs": 73,
+   "adjacent_specs": 73,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "casimir-crystal",
+    "titanium-crystal"
+   ],
+   "specs": 73,
+   "adjacent_specs": 73,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "casimir-crystal",
+    "titanium-ingot"
+   ],
+   "specs": 73,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "graphene",
+    "titanium-crystal"
+   ],
+   "specs": 73,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "titanium-glass"
+   ],
+   "specs": 73,
+   "adjacent_specs": 73,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "titanium-glass",
+    "titanium-ingot"
+   ],
+   "specs": 73,
+   "adjacent_specs": 73,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "prism",
+    "steel"
+   ],
+   "specs": 71,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "glass",
+    "stone-brick"
+   ],
+   "specs": 70,
+   "adjacent_specs": 0,
+   "shared_input_specs": 70,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "casimir-crystal",
+    "glass"
+   ],
+   "specs": 69,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  },
+  {
+   "pair": [
+    "casimir-crystal",
+    "plane-filter"
+   ],
+   "specs": 69,
+   "adjacent_specs": 69,
+   "shared_input_specs": 0,
+   "adjacency_rate": 1.0
+  },
+  {
+   "pair": [
+    "casimir-crystal",
+    "titanium-glass"
+   ],
+   "specs": 69,
+   "adjacent_specs": 0,
+   "shared_input_specs": 0,
+   "adjacency_rate": 0.0
+  }
+ ],
+ "block_candidates": [
+  {
+   "recipes": [
+    "copper-ingot",
+    "magnet",
+    "magnetic-coil"
+   ],
+   "size": 3,
+   "specs": 475,
+   "spec_share": 0.505,
+   "distinct_targets": 55,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 341,
+    "matrix": 25,
+    "matrix10x": 25,
+    "component": 84
+   },
+   "closed": true,
+   "mean_depth": 2.33,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "magnet": {
+     "min": 1,
+     "median": 1,
+     "max": 120
+    },
+    "magnetic-coil": {
+     "min": 1,
+     "median": 1,
+     "max": 40
+    }
+   },
+   "fan_in": {
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "magnet": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnetic-coil": {
+     "inputs": [
+      "copper-ingot",
+      "magnet"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->magnetic-coil",
+    "magnet->magnetic-coil"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "iron-ingot"
+   ],
+   "size": 3,
+   "specs": 490,
+   "spec_share": 0.521,
+   "distinct_targets": 53,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 353,
+    "matrix": 33,
+    "matrix10x": 33,
+    "component": 71
+   },
+   "closed": true,
+   "mean_depth": 2.33,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 24
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 140
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "iron-ingot->circuit-board"
+   ]
+  },
+  {
+   "recipes": [
+    "gear",
+    "iron-ingot"
+   ],
+   "size": 2,
+   "specs": 382,
+   "spec_share": 0.406,
+   "distinct_targets": 48,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 292,
+    "component": 66,
+    "matrix": 12,
+    "matrix10x": 12
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "gear": {
+     "min": 1,
+     "median": 1,
+     "max": 40
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 140
+    }
+   },
+   "fan_in": {
+    "gear": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "iron-ingot->gear"
+   ]
+  },
+  {
+   "recipes": [
+    "copper-ingot",
+    "electric-motor",
+    "gear",
+    "iron-ingot",
+    "magnet",
+    "magnetic-coil"
+   ],
+   "size": 6,
+   "specs": 271,
+   "spec_share": 0.288,
+   "distinct_targets": 38,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 188,
+    "component": 59,
+    "matrix": 12,
+    "matrix10x": 12
+   },
+   "closed": true,
+   "mean_depth": 2.67,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "electric-motor": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "gear": {
+     "min": 1,
+     "median": 1,
+     "max": 40
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 140
+    },
+    "magnet": {
+     "min": 1,
+     "median": 2,
+     "max": 120
+    },
+    "magnetic-coil": {
+     "min": 1,
+     "median": 1,
+     "max": 40
+    }
+   },
+   "fan_in": {
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "electric-motor": {
+     "inputs": [
+      "gear",
+      "iron-ingot",
+      "magnetic-coil"
+     ],
+     "from_outside_block": []
+    },
+    "gear": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnet": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnetic-coil": {
+     "inputs": [
+      "copper-ingot",
+      "magnet"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->magnetic-coil",
+    "gear->electric-motor",
+    "iron-ingot->electric-motor",
+    "iron-ingot->gear",
+    "magnet->magnetic-coil",
+    "magnetic-coil->electric-motor"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "iron-ingot",
+    "magnet",
+    "magnetic-coil"
+   ],
+   "size": 5,
+   "specs": 330,
+   "spec_share": 0.351,
+   "distinct_targets": 36,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 253,
+    "matrix": 23,
+    "matrix10x": 23,
+    "component": 31
+   },
+   "closed": true,
+   "mean_depth": 2.4,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 24
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 140
+    },
+    "magnet": {
+     "min": 1,
+     "median": 1,
+     "max": 68
+    },
+    "magnetic-coil": {
+     "min": 1,
+     "median": 1,
+     "max": 30
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnet": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnetic-coil": {
+     "inputs": [
+      "copper-ingot",
+      "magnet"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "copper-ingot->magnetic-coil",
+    "iron-ingot->circuit-board",
+    "magnet->magnetic-coil"
+   ]
+  },
+  {
+   "recipes": [
+    "energetic-graphite",
+    "graphene"
+   ],
+   "size": 2,
+   "specs": 225,
+   "spec_share": 0.239,
+   "distinct_targets": 35,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "component": 75,
+    "building": 110,
+    "matrix": 20,
+    "matrix10x": 20
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "energetic-graphite": {
+     "min": 1,
+     "median": 3,
+     "max": 165
+    },
+    "graphene": {
+     "min": 1,
+     "median": 1,
+     "max": 53
+    }
+   },
+   "fan_in": {
+    "energetic-graphite": {
+     "inputs": [
+      "coal"
+     ],
+     "from_outside_block": [
+      "coal"
+     ]
+    },
+    "graphene": {
+     "inputs": [
+      "energetic-graphite",
+      "sulfuric-acid"
+     ],
+     "from_outside_block": [
+      "sulfuric-acid"
+     ]
+    }
+   },
+   "internal_edges": [
+    "energetic-graphite->graphene"
+   ]
+  },
+  {
+   "recipes": [
+    "iron-ingot",
+    "steel"
+   ],
+   "size": 2,
+   "specs": 241,
+   "spec_share": 0.256,
+   "distinct_targets": 34,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 190,
+    "component": 51
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "iron-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 140
+    },
+    "steel": {
+     "min": 1,
+     "median": 1,
+     "max": 60
+    }
+   },
+   "fan_in": {
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "steel": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "iron-ingot->steel"
+   ]
+  },
+  {
+   "recipes": [
+    "copper-ingot",
+    "high-purity-silicon",
+    "microcrystalline-component"
+   ],
+   "size": 3,
+   "specs": 247,
+   "spec_share": 0.263,
+   "distinct_targets": 33,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 154,
+    "component": 53,
+    "matrix": 20,
+    "matrix10x": 20
+   },
+   "closed": true,
+   "mean_depth": 2.33,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "high-purity-silicon": {
+     "min": 1,
+     "median": 2,
+     "max": 200
+    },
+    "microcrystalline-component": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    }
+   },
+   "fan_in": {
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "high-purity-silicon": {
+     "inputs": [
+      "silicon-ore"
+     ],
+     "from_outside_block": [
+      "silicon-ore"
+     ]
+    },
+    "microcrystalline-component": {
+     "inputs": [
+      "copper-ingot",
+      "high-purity-silicon"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->microcrystalline-component",
+    "high-purity-silicon->microcrystalline-component"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "high-purity-silicon",
+    "iron-ingot",
+    "microcrystalline-component"
+   ],
+   "size": 5,
+   "specs": 241,
+   "spec_share": 0.256,
+   "distinct_targets": 32,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 154,
+    "component": 47,
+    "matrix": 20,
+    "matrix10x": 20
+   },
+   "closed": true,
+   "mean_depth": 2.4,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 24
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 80
+    },
+    "high-purity-silicon": {
+     "min": 1,
+     "median": 2,
+     "max": 200
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 140
+    },
+    "microcrystalline-component": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "high-purity-silicon": {
+     "inputs": [
+      "silicon-ore"
+     ],
+     "from_outside_block": [
+      "silicon-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "microcrystalline-component": {
+     "inputs": [
+      "copper-ingot",
+      "high-purity-silicon"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "copper-ingot->microcrystalline-component",
+    "high-purity-silicon->microcrystalline-component",
+    "iron-ingot->circuit-board"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "gear",
+    "iron-ingot"
+   ],
+   "size": 4,
+   "specs": 255,
+   "spec_share": 0.271,
+   "distinct_targets": 31,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 216,
+    "component": 19,
+    "matrix": 10,
+    "matrix10x": 10
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 24
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "gear": {
+     "min": 1,
+     "median": 1,
+     "max": 27
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 140
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "gear": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "iron-ingot->circuit-board",
+    "iron-ingot->gear"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "high-purity-silicon",
+    "iron-ingot",
+    "microcrystalline-component",
+    "processor"
+   ],
+   "size": 6,
+   "specs": 229,
+   "spec_share": 0.244,
+   "distinct_targets": 31,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "component": 47,
+    "building": 142,
+    "matrix": 20,
+    "matrix10x": 20
+   },
+   "closed": true,
+   "mean_depth": 2.67,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 24
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 80
+    },
+    "high-purity-silicon": {
+     "min": 1,
+     "median": 2,
+     "max": 200
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 140
+    },
+    "microcrystalline-component": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "processor": {
+     "min": 1,
+     "median": 1,
+     "max": 60
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "high-purity-silicon": {
+     "inputs": [
+      "silicon-ore"
+     ],
+     "from_outside_block": [
+      "silicon-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "microcrystalline-component": {
+     "inputs": [
+      "copper-ingot",
+      "high-purity-silicon"
+     ],
+     "from_outside_block": []
+    },
+    "processor": {
+     "inputs": [
+      "circuit-board",
+      "microcrystalline-component"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "circuit-board->processor",
+    "copper-ingot->circuit-board",
+    "copper-ingot->microcrystalline-component",
+    "high-purity-silicon->microcrystalline-component",
+    "iron-ingot->circuit-board",
+    "microcrystalline-component->processor"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "gear",
+    "iron-ingot",
+    "magnet",
+    "magnetic-coil"
+   ],
+   "size": 6,
+   "specs": 202,
+   "spec_share": 0.215,
+   "distinct_targets": 26,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 163,
+    "component": 19,
+    "matrix": 10,
+    "matrix10x": 10
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 24
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "gear": {
+     "min": 1,
+     "median": 1,
+     "max": 27
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 140
+    },
+    "magnet": {
+     "min": 1,
+     "median": 1,
+     "max": 68
+    },
+    "magnetic-coil": {
+     "min": 1,
+     "median": 1,
+     "max": 30
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "gear": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnet": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnetic-coil": {
+     "inputs": [
+      "copper-ingot",
+      "magnet"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "copper-ingot->magnetic-coil",
+    "iron-ingot->circuit-board",
+    "iron-ingot->gear",
+    "magnet->magnetic-coil"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "iron-ingot",
+    "steel"
+   ],
+   "size": 4,
+   "specs": 190,
+   "spec_share": 0.202,
+   "distinct_targets": 25,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 172,
+    "component": 18
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 10
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 50
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 140
+    },
+    "steel": {
+     "min": 1,
+     "median": 1,
+     "max": 60
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "steel": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "iron-ingot->circuit-board",
+    "iron-ingot->steel"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "iron-ingot",
+    "magnet",
+    "magnetic-coil",
+    "steel"
+   ],
+   "size": 6,
+   "specs": 159,
+   "spec_share": 0.169,
+   "distinct_targets": 21,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 150,
+    "component": 9
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 10
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 50
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 140
+    },
+    "magnet": {
+     "min": 1,
+     "median": 1,
+     "max": 60
+    },
+    "magnetic-coil": {
+     "min": 1,
+     "median": 1,
+     "max": 20
+    },
+    "steel": {
+     "min": 1,
+     "median": 1,
+     "max": 60
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnet": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnetic-coil": {
+     "inputs": [
+      "copper-ingot",
+      "magnet"
+     ],
+     "from_outside_block": []
+    },
+    "steel": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "copper-ingot->magnetic-coil",
+    "iron-ingot->circuit-board",
+    "iron-ingot->steel",
+    "magnet->magnetic-coil"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "high-purity-silicon",
+    "iron-ingot",
+    "microcrystalline-component",
+    "steel"
+   ],
+   "size": 6,
+   "specs": 138,
+   "spec_share": 0.147,
+   "distinct_targets": 20,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 120,
+    "component": 18
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 10
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 50
+    },
+    "high-purity-silicon": {
+     "min": 1,
+     "median": 1,
+     "max": 80
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 140
+    },
+    "microcrystalline-component": {
+     "min": 1,
+     "median": 1,
+     "max": 40
+    },
+    "steel": {
+     "min": 1,
+     "median": 1,
+     "max": 60
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "high-purity-silicon": {
+     "inputs": [
+      "silicon-ore"
+     ],
+     "from_outside_block": [
+      "silicon-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "microcrystalline-component": {
+     "inputs": [
+      "copper-ingot",
+      "high-purity-silicon"
+     ],
+     "from_outside_block": []
+    },
+    "steel": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "copper-ingot->microcrystalline-component",
+    "high-purity-silicon->microcrystalline-component",
+    "iron-ingot->circuit-board",
+    "iron-ingot->steel"
+   ]
+  },
+  {
+   "recipes": [
+    "iron-ingot",
+    "steel",
+    "titanium-alloy",
+    "titanium-ingot"
+   ],
+   "size": 4,
+   "specs": 97,
+   "spec_share": 0.103,
+   "distinct_targets": 18,
+   "tiers": [
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 4,
+   "kinds": {
+    "building": 68,
+    "component": 29
+   },
+   "closed": true,
+   "mean_depth": 2.75,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "iron-ingot": {
+     "min": 1,
+     "median": 3,
+     "max": 140
+    },
+    "steel": {
+     "min": 1,
+     "median": 2,
+     "max": 60
+    },
+    "titanium-alloy": {
+     "min": 1,
+     "median": 1,
+     "max": 60
+    },
+    "titanium-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 40
+    }
+   },
+   "fan_in": {
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "steel": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "titanium-alloy": {
+     "inputs": [
+      "steel",
+      "sulfuric-acid",
+      "titanium-ingot"
+     ],
+     "from_outside_block": [
+      "sulfuric-acid"
+     ]
+    },
+    "titanium-ingot": {
+     "inputs": [
+      "titanium-ore"
+     ],
+     "from_outside_block": [
+      "titanium-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "iron-ingot->steel",
+    "steel->titanium-alloy",
+    "titanium-ingot->titanium-alloy"
+   ]
+  },
+  {
+   "recipes": [
+    "carbon-nanotube",
+    "energetic-graphite",
+    "graphene",
+    "titanium-ingot"
+   ],
+   "size": 4,
+   "specs": 103,
+   "spec_share": 0.11,
+   "distinct_targets": 16,
+   "tiers": [
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 4,
+   "kinds": {
+    "building": 50,
+    "matrix": 12,
+    "matrix10x": 12,
+    "component": 29
+   },
+   "closed": true,
+   "mean_depth": 2.75,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "carbon-nanotube": {
+     "min": 1,
+     "median": 2,
+     "max": 40
+    },
+    "energetic-graphite": {
+     "min": 1,
+     "median": 5,
+     "max": 165
+    },
+    "graphene": {
+     "min": 1,
+     "median": 2,
+     "max": 53
+    },
+    "titanium-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 90
+    }
+   },
+   "fan_in": {
+    "carbon-nanotube": {
+     "inputs": [
+      "graphene",
+      "titanium-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "energetic-graphite": {
+     "inputs": [
+      "coal"
+     ],
+     "from_outside_block": [
+      "coal"
+     ]
+    },
+    "graphene": {
+     "inputs": [
+      "energetic-graphite",
+      "sulfuric-acid"
+     ],
+     "from_outside_block": [
+      "sulfuric-acid"
+     ]
+    },
+    "titanium-ingot": {
+     "inputs": [
+      "titanium-ore"
+     ],
+     "from_outside_block": [
+      "titanium-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "energetic-graphite->graphene",
+    "graphene->carbon-nanotube",
+    "titanium-ingot->carbon-nanotube"
+   ]
+  },
+  {
+   "recipes": [
+    "glass",
+    "prism"
+   ],
+   "size": 2,
+   "specs": 127,
+   "spec_share": 0.135,
+   "distinct_targets": 15,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 98,
+    "component": 29
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "glass": {
+     "min": 1,
+     "median": 1,
+     "max": 17
+    },
+    "prism": {
+     "min": 1,
+     "median": 1,
+     "max": 4
+    }
+   },
+   "fan_in": {
+    "glass": {
+     "inputs": [
+      "stone"
+     ],
+     "from_outside_block": [
+      "stone"
+     ]
+    },
+    "prism": {
+     "inputs": [
+      "glass"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "glass->prism"
+   ]
+  },
+  {
+   "recipes": [
+    "titanium-crystal",
+    "titanium-ingot"
+   ],
+   "size": 2,
+   "specs": 103,
+   "spec_share": 0.11,
+   "distinct_targets": 15,
+   "tiers": [
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 5,
+   "kinds": {
+    "matrix": 20,
+    "matrix10x": 20,
+    "component": 31,
+    "building": 32
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "titanium-crystal": {
+     "min": 1,
+     "median": 3,
+     "max": 54
+    },
+    "titanium-ingot": {
+     "min": 1,
+     "median": 3,
+     "max": 90
+    }
+   },
+   "fan_in": {
+    "titanium-crystal": {
+     "inputs": [
+      "organic-crystal",
+      "titanium-ingot"
+     ],
+     "from_outside_block": [
+      "organic-crystal"
+     ]
+    },
+    "titanium-ingot": {
+     "inputs": [
+      "titanium-ore"
+     ],
+     "from_outside_block": [
+      "titanium-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "titanium-ingot->titanium-crystal"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "iron-ingot",
+    "steel",
+    "titanium-alloy",
+    "titanium-ingot"
+   ],
+   "size": 6,
+   "specs": 73,
+   "spec_share": 0.078,
+   "distinct_targets": 13,
+   "tiers": [
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 4,
+   "kinds": {
+    "building": 60,
+    "component": 13
+   },
+   "closed": true,
+   "mean_depth": 2.67,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 10
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 50
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 4,
+     "max": 140
+    },
+    "steel": {
+     "min": 1,
+     "median": 2,
+     "max": 60
+    },
+    "titanium-alloy": {
+     "min": 1,
+     "median": 1,
+     "max": 60
+    },
+    "titanium-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 40
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "steel": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "titanium-alloy": {
+     "inputs": [
+      "steel",
+      "sulfuric-acid",
+      "titanium-ingot"
+     ],
+     "from_outside_block": [
+      "sulfuric-acid"
+     ]
+    },
+    "titanium-ingot": {
+     "inputs": [
+      "titanium-ore"
+     ],
+     "from_outside_block": [
+      "titanium-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->circuit-board",
+    "iron-ingot->circuit-board",
+    "iron-ingot->steel",
+    "steel->titanium-alloy",
+    "titanium-ingot->titanium-alloy"
+   ]
+  },
+  {
+   "recipes": [
+    "casimir-crystal",
+    "energetic-graphite",
+    "graphene",
+    "titanium-crystal",
+    "titanium-ingot"
+   ],
+   "size": 5,
+   "specs": 73,
+   "spec_share": 0.078,
+   "distinct_targets": 13,
+   "tiers": [
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 4,
+   "kinds": {
+    "component": 21,
+    "building": 32,
+    "matrix": 10,
+    "matrix10x": 10
+   },
+   "closed": true,
+   "mean_depth": 2.8,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "casimir-crystal": {
+     "min": 1,
+     "median": 1,
+     "max": 27
+    },
+    "energetic-graphite": {
+     "min": 1,
+     "median": 3,
+     "max": 165
+    },
+    "graphene": {
+     "min": 1,
+     "median": 2,
+     "max": 53
+    },
+    "titanium-crystal": {
+     "min": 1,
+     "median": 1,
+     "max": 54
+    },
+    "titanium-ingot": {
+     "min": 1,
+     "median": 3,
+     "max": 90
+    }
+   },
+   "fan_in": {
+    "casimir-crystal": {
+     "inputs": [
+      "graphene",
+      "hydrogen",
+      "titanium-crystal"
+     ],
+     "from_outside_block": [
+      "hydrogen"
+     ]
+    },
+    "energetic-graphite": {
+     "inputs": [
+      "coal"
+     ],
+     "from_outside_block": [
+      "coal"
+     ]
+    },
+    "graphene": {
+     "inputs": [
+      "energetic-graphite",
+      "sulfuric-acid"
+     ],
+     "from_outside_block": [
+      "sulfuric-acid"
+     ]
+    },
+    "titanium-crystal": {
+     "inputs": [
+      "organic-crystal",
+      "titanium-ingot"
+     ],
+     "from_outside_block": [
+      "organic-crystal"
+     ]
+    },
+    "titanium-ingot": {
+     "inputs": [
+      "titanium-ore"
+     ],
+     "from_outside_block": [
+      "titanium-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "energetic-graphite->graphene",
+    "graphene->casimir-crystal",
+    "titanium-crystal->casimir-crystal",
+    "titanium-ingot->titanium-crystal"
+   ]
+  },
+  {
+   "recipes": [
+    "glass",
+    "titanium-glass",
+    "titanium-ingot"
+   ],
+   "size": 3,
+   "specs": 73,
+   "spec_share": 0.078,
+   "distinct_targets": 13,
+   "tiers": [
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 4,
+   "kinds": {
+    "component": 21,
+    "building": 32,
+    "matrix": 10,
+    "matrix10x": 10
+   },
+   "closed": true,
+   "mean_depth": 2.33,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "glass": {
+     "min": 1,
+     "median": 1,
+     "max": 20
+    },
+    "titanium-glass": {
+     "min": 1,
+     "median": 2,
+     "max": 34
+    },
+    "titanium-ingot": {
+     "min": 1,
+     "median": 2,
+     "max": 90
+    }
+   },
+   "fan_in": {
+    "glass": {
+     "inputs": [
+      "stone"
+     ],
+     "from_outside_block": [
+      "stone"
+     ]
+    },
+    "titanium-glass": {
+     "inputs": [
+      "glass",
+      "titanium-ingot",
+      "water"
+     ],
+     "from_outside_block": [
+      "water"
+     ]
+    },
+    "titanium-ingot": {
+     "inputs": [
+      "titanium-ore"
+     ],
+     "from_outside_block": [
+      "titanium-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "glass->titanium-glass",
+    "titanium-ingot->titanium-glass"
+   ]
+  },
+  {
+   "recipes": [
+    "diamond",
+    "energetic-graphite"
+   ],
+   "size": 2,
+   "specs": 83,
+   "spec_share": 0.088,
+   "distinct_targets": 9,
+   "tiers": [
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 5,
+   "kinds": {
+    "matrix": 22,
+    "matrix10x": 22,
+    "component": 33,
+    "building": 6
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "diamond": {
+     "min": 1,
+     "median": 2,
+     "max": 40
+    },
+    "energetic-graphite": {
+     "min": 1,
+     "median": 6,
+     "max": 165
+    }
+   },
+   "fan_in": {
+    "diamond": {
+     "inputs": [
+      "energetic-graphite"
+     ],
+     "from_outside_block": []
+    },
+    "energetic-graphite": {
+     "inputs": [
+      "coal"
+     ],
+     "from_outside_block": [
+      "coal"
+     ]
+    }
+   },
+   "internal_edges": [
+    "energetic-graphite->diamond"
+   ]
+  },
+  {
+   "recipes": [
+    "copper-ingot",
+    "glass",
+    "magnet",
+    "magnetic-coil",
+    "plasma-exciter",
+    "prism"
+   ],
+   "size": 6,
+   "specs": 84,
+   "spec_share": 0.089,
+   "distinct_targets": 8,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "building": 78,
+    "component": 6
+   },
+   "closed": true,
+   "mean_depth": 2.67,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 2
+    },
+    "glass": {
+     "min": 1,
+     "median": 1,
+     "max": 6
+    },
+    "magnet": {
+     "min": 1,
+     "median": 1,
+     "max": 6
+    },
+    "magnetic-coil": {
+     "min": 1,
+     "median": 1,
+     "max": 3
+    },
+    "plasma-exciter": {
+     "min": 1,
+     "median": 1,
+     "max": 3
+    },
+    "prism": {
+     "min": 1,
+     "median": 1,
+     "max": 3
+    }
+   },
+   "fan_in": {
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "glass": {
+     "inputs": [
+      "stone"
+     ],
+     "from_outside_block": [
+      "stone"
+     ]
+    },
+    "magnet": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnetic-coil": {
+     "inputs": [
+      "copper-ingot",
+      "magnet"
+     ],
+     "from_outside_block": []
+    },
+    "plasma-exciter": {
+     "inputs": [
+      "magnetic-coil",
+      "prism"
+     ],
+     "from_outside_block": []
+    },
+    "prism": {
+     "inputs": [
+      "glass"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->magnetic-coil",
+    "glass->prism",
+    "magnet->magnetic-coil",
+    "magnetic-coil->plasma-exciter",
+    "prism->plasma-exciter"
+   ]
+  },
+  {
+   "recipes": [
+    "crystal-silicon",
+    "high-purity-silicon"
+   ],
+   "size": 2,
+   "specs": 59,
+   "spec_share": 0.063,
+   "distinct_targets": 8,
+   "tiers": [
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 5,
+   "kinds": {
+    "building": 20,
+    "component": 15,
+    "matrix": 12,
+    "matrix10x": 12
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "crystal-silicon": {
+     "min": 1,
+     "median": 2,
+     "max": 40
+    },
+    "high-purity-silicon": {
+     "min": 1,
+     "median": 5,
+     "max": 200
+    }
+   },
+   "fan_in": {
+    "crystal-silicon": {
+     "inputs": [
+      "high-purity-silicon"
+     ],
+     "from_outside_block": []
+    },
+    "high-purity-silicon": {
+     "inputs": [
+      "silicon-ore"
+     ],
+     "from_outside_block": [
+      "silicon-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "high-purity-silicon->crystal-silicon"
+   ]
+  },
+  {
+   "recipes": [
+    "energetic-graphite",
+    "plasma-refining",
+    "plastic"
+   ],
+   "size": 3,
+   "specs": 51,
+   "spec_share": 0.054,
+   "distinct_targets": 6,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "component": 21,
+    "matrix": 12,
+    "matrix10x": 12,
+    "building": 6
+   },
+   "closed": true,
+   "mean_depth": 2.33,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "energetic-graphite": {
+     "min": 1,
+     "median": 6,
+     "max": 165
+    },
+    "plasma-refining": {
+     "min": 1,
+     "median": 4,
+     "max": 40
+    },
+    "plastic": {
+     "min": 1,
+     "median": 2,
+     "max": 30
+    }
+   },
+   "fan_in": {
+    "energetic-graphite": {
+     "inputs": [
+      "coal"
+     ],
+     "from_outside_block": [
+      "coal"
+     ]
+    },
+    "plasma-refining": {
+     "inputs": [
+      "crude-oil"
+     ],
+     "from_outside_block": [
+      "crude-oil"
+     ]
+    },
+    "plastic": {
+     "inputs": [
+      "energetic-graphite",
+      "refined-oil"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "energetic-graphite->plastic",
+    "plasma-refining->plastic"
+   ]
+  },
+  {
+   "recipes": [
+    "diamond",
+    "energetic-graphite",
+    "graphene"
+   ],
+   "size": 3,
+   "specs": 48,
+   "spec_share": 0.051,
+   "distinct_targets": 6,
+   "tiers": [
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 4,
+   "kinds": {
+    "matrix": 12,
+    "matrix10x": 12,
+    "component": 18,
+    "building": 6
+   },
+   "closed": true,
+   "mean_depth": 2.67,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "product",
+   "machines": {
+    "diamond": {
+     "min": 1,
+     "median": 2,
+     "max": 40
+    },
+    "energetic-graphite": {
+     "min": 1,
+     "median": 9,
+     "max": 165
+    },
+    "graphene": {
+     "min": 1,
+     "median": 3,
+     "max": 53
+    }
+   },
+   "fan_in": {
+    "diamond": {
+     "inputs": [
+      "energetic-graphite"
+     ],
+     "from_outside_block": []
+    },
+    "energetic-graphite": {
+     "inputs": [
+      "coal"
+     ],
+     "from_outside_block": [
+      "coal"
+     ]
+    },
+    "graphene": {
+     "inputs": [
+      "energetic-graphite",
+      "sulfuric-acid"
+     ],
+     "from_outside_block": [
+      "sulfuric-acid"
+     ]
+    }
+   },
+   "internal_edges": [
+    "energetic-graphite->diamond",
+    "energetic-graphite->graphene"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "glass",
+    "iron-ingot",
+    "photon-combiner",
+    "prism"
+   ],
+   "size": 6,
+   "specs": 37,
+   "spec_share": 0.039,
+   "distinct_targets": 6,
+   "tiers": [
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 5,
+   "kinds": {
+    "building": 20,
+    "component": 17
+   },
+   "closed": true,
+   "mean_depth": 2.67,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 8
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 20
+    },
+    "glass": {
+     "min": 1,
+     "median": 1,
+     "max": 17
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 36
+    },
+    "photon-combiner": {
+     "min": 1,
+     "median": 1,
+     "max": 6
+    },
+    "prism": {
+     "min": 1,
+     "median": 1,
+     "max": 4
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "glass": {
+     "inputs": [
+      "stone"
+     ],
+     "from_outside_block": [
+      "stone"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "photon-combiner": {
+     "inputs": [
+      "circuit-board",
+      "prism"
+     ],
+     "from_outside_block": []
+    },
+    "prism": {
+     "inputs": [
+      "glass"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "circuit-board->photon-combiner",
+    "copper-ingot->circuit-board",
+    "glass->prism",
+    "iron-ingot->circuit-board",
+    "prism->photon-combiner"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "iron-ingot",
+    "sorter-1"
+   ],
+   "size": 4,
+   "specs": 43,
+   "spec_share": 0.046,
+   "distinct_targets": 4,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 43
+   },
+   "closed": true,
+   "mean_depth": 2.75,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "sorter-1": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "sorter-1": {
+     "inputs": [
+      "circuit-board",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "circuit-board->sorter-1",
+    "copper-ingot->circuit-board",
+    "iron-ingot->circuit-board",
+    "iron-ingot->sorter-1"
+   ]
+  },
+  {
+   "recipes": [
+    "copper-ingot",
+    "iron-ingot",
+    "magnet",
+    "magnetic-coil",
+    "tesla-tower"
+   ],
+   "size": 5,
+   "specs": 33,
+   "spec_share": 0.035,
+   "distinct_targets": 3,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 33
+   },
+   "closed": true,
+   "mean_depth": 2.6,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 3
+    },
+    "magnet": {
+     "min": 1,
+     "median": 1,
+     "max": 4
+    },
+    "magnetic-coil": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "tesla-tower": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    }
+   },
+   "fan_in": {
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnet": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnetic-coil": {
+     "inputs": [
+      "copper-ingot",
+      "magnet"
+     ],
+     "from_outside_block": []
+    },
+    "tesla-tower": {
+     "inputs": [
+      "iron-ingot",
+      "magnetic-coil"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "copper-ingot->magnetic-coil",
+    "iron-ingot->tesla-tower",
+    "magnet->magnetic-coil",
+    "magnetic-coil->tesla-tower"
+   ]
+  },
+  {
+   "recipes": [
+    "conveyor-belt-1",
+    "gear",
+    "iron-ingot"
+   ],
+   "size": 3,
+   "specs": 33,
+   "spec_share": 0.035,
+   "distinct_targets": 3,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 33
+   },
+   "closed": true,
+   "mean_depth": 3,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "conveyor-belt-1": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "gear": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    }
+   },
+   "fan_in": {
+    "conveyor-belt-1": {
+     "inputs": [
+      "gear",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "gear": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "gear->conveyor-belt-1",
+    "iron-ingot->conveyor-belt-1",
+    "iron-ingot->gear"
+   ]
+  },
+  {
+   "recipes": [
+    "assembling-machine-1",
+    "circuit-board",
+    "copper-ingot",
+    "gear",
+    "iron-ingot"
+   ],
+   "size": 5,
+   "specs": 29,
+   "spec_share": 0.031,
+   "distinct_targets": 3,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "building": 29
+   },
+   "closed": true,
+   "mean_depth": 2.8,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "assembling-machine-1": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "gear": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 1,
+     "max": 1
+    }
+   },
+   "fan_in": {
+    "assembling-machine-1": {
+     "inputs": [
+      "circuit-board",
+      "gear",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "gear": {
+     "inputs": [
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "circuit-board->assembling-machine-1",
+    "copper-ingot->circuit-board",
+    "gear->assembling-machine-1",
+    "iron-ingot->assembling-machine-1",
+    "iron-ingot->circuit-board",
+    "iron-ingot->gear"
+   ]
+  },
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "electromagnetic-matrix",
+    "iron-ingot",
+    "magnet",
+    "magnetic-coil"
+   ],
+   "size": 6,
+   "specs": 43,
+   "spec_share": 0.046,
+   "distinct_targets": 2,
+   "tiers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 7,
+   "kinds": {
+    "matrix": 17,
+    "matrix10x": 17,
+    "component": 9
+   },
+   "closed": true,
+   "mean_depth": 2.67,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "circuit-board": {
+     "min": 1,
+     "median": 1,
+     "max": 24
+    },
+    "copper-ingot": {
+     "min": 1,
+     "median": 3,
+     "max": 80
+    },
+    "electromagnetic-matrix": {
+     "min": 2,
+     "median": 3,
+     "max": 30
+    },
+    "iron-ingot": {
+     "min": 1,
+     "median": 3,
+     "max": 100
+    },
+    "magnet": {
+     "min": 1,
+     "median": 2,
+     "max": 68
+    },
+    "magnetic-coil": {
+     "min": 1,
+     "median": 1,
+     "max": 30
+    }
+   },
+   "fan_in": {
+    "circuit-board": {
+     "inputs": [
+      "copper-ingot",
+      "iron-ingot"
+     ],
+     "from_outside_block": []
+    },
+    "copper-ingot": {
+     "inputs": [
+      "copper-ore"
+     ],
+     "from_outside_block": [
+      "copper-ore"
+     ]
+    },
+    "electromagnetic-matrix": {
+     "inputs": [
+      "circuit-board",
+      "magnetic-coil"
+     ],
+     "from_outside_block": []
+    },
+    "iron-ingot": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnet": {
+     "inputs": [
+      "iron-ore"
+     ],
+     "from_outside_block": [
+      "iron-ore"
+     ]
+    },
+    "magnetic-coil": {
+     "inputs": [
+      "copper-ingot",
+      "magnet"
+     ],
+     "from_outside_block": []
+    }
+   },
+   "internal_edges": [
+    "circuit-board->electromagnetic-matrix",
+    "copper-ingot->circuit-board",
+    "copper-ingot->magnetic-coil",
+    "iron-ingot->circuit-board",
+    "magnet->magnetic-coil",
+    "magnetic-coil->electromagnetic-matrix"
+   ]
+  },
+  {
+   "recipes": [
+    "energetic-graphite",
+    "energy-matrix"
+   ],
+   "size": 2,
+   "specs": 40,
+   "spec_share": 0.043,
+   "distinct_targets": 2,
+   "tiers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 6,
+   "kinds": {
+    "matrix": 16,
+    "matrix10x": 16,
+    "component": 8
+   },
+   "closed": true,
+   "mean_depth": 2.5,
+   "depth_range": [
+    2,
+    3
+   ],
+   "end": "trunk",
+   "machines": {
+    "energetic-graphite": {
+     "min": 2,
+     "median": 9,
+     "max": 165
+    },
+    "energy-matrix": {
+     "min": 4,
+     "median": 6,
+     "max": 60
+    }
+   },
+   "fan_in": {
+    "energetic-graphite": {
+     "inputs": [
+      "coal"
+     ],
+     "from_outside_block": [
+      "coal"
+     ]
+    },
+    "energy-matrix": {
+     "inputs": [
+      "energetic-graphite",
+      "hydrogen"
+     ],
+     "from_outside_block": [
+      "hydrogen"
+     ]
+    }
+   },
+   "internal_edges": [
+    "energetic-graphite->energy-matrix"
+   ]
+  },
+  {
+   "recipes": [
+    "diamond",
+    "energetic-graphite",
+    "structure-matrix",
+    "titanium-crystal",
+    "titanium-ingot"
+   ],
+   "size": 5,
+   "specs": 35,
+   "spec_share": 0.037,
+   "distinct_targets": 2,
+   "tiers": [
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "tier_span": 5,
+   "kinds": {
+    "matrix": 14,
+    "matrix10x": 14,
+    "component": 7
+   },
+   "closed": true,
+   "mean_depth": 2.8,
+   "depth_range": [
+    2,
+    4
+   ],
+   "end": "product",
+   "machines": {
+    "diamond": {
+     "min": 1,
+     "median": 3,
+     "max": 30
+    },
+    "energetic-graphite": {
+     "min": 1,
+     "median": 6,
+     "max": 165
+    },
+    "structure-matrix": {
+     "min": 6,
+     "median": 8,
+     "max": 80
+    },
+    "titanium-crystal": {
+     "min": 2,
+     "median": 6,
+     "max": 54
+    },
+    "titanium-ingot": {
+     "min": 2,
+     "median": 9,
+     "max": 90
+    }
+   },
+   "fan_in": {
+    "diamond": {
+     "inputs": [
+      "energetic-graphite"
+     ],
+     "from_outside_block": []
+    },
+    "energetic-graphite": {
+     "inputs": [
+      "coal"
+     ],
+     "from_outside_block": [
+      "coal"
+     ]
+    },
+    "structure-matrix": {
+     "inputs": [
+      "diamond",
+      "titanium-crystal"
+     ],
+     "from_outside_block": []
+    },
+    "titanium-crystal": {
+     "inputs": [
+      "organic-crystal",
+      "titanium-ingot"
+     ],
+     "from_outside_block": [
+      "organic-crystal"
+     ]
+    },
+    "titanium-ingot": {
+     "inputs": [
+      "titanium-ore"
+     ],
+     "from_outside_block": [
+      "titanium-ore"
+     ]
+    }
+   },
+   "internal_edges": [
+    "diamond->structure-matrix",
+    "energetic-graphite->diamond",
+    "titanium-crystal->structure-matrix",
+    "titanium-ingot->titanium-crystal"
+   ]
+  }
+ ],
+ "greedy_cover": [
+  {
+   "recipes": [
+    "circuit-board",
+    "copper-ingot",
+    "iron-ingot"
+   ],
+   "new_specs_covered": 490,
+   "cumulative_specs": 490,
+   "cumulative_share": 0.521
+  },
+  {
+   "recipes": [
+    "copper-ingot",
+    "magnet",
+    "magnetic-coil"
+   ],
+   "new_specs_covered": 145,
+   "cumulative_specs": 635,
+   "cumulative_share": 0.676
+  },
+  {
+   "recipes": [
+    "diamond",
+    "energetic-graphite"
+   ],
+   "new_specs_covered": 39,
+   "cumulative_specs": 674,
+   "cumulative_share": 0.717
+  },
+  {
+   "recipes": [
+    "iron-ingot",
+    "steel"
+   ],
+   "new_specs_covered": 35,
+   "cumulative_specs": 709,
+   "cumulative_share": 0.754
+  },
+  {
+   "recipes": [
+    "energetic-graphite",
+    "energy-matrix"
+   ],
+   "new_specs_covered": 30,
+   "cumulative_specs": 739,
+   "cumulative_share": 0.786
+  },
+  {
+   "recipes": [
+    "energetic-graphite",
+    "graphene"
+   ],
+   "new_specs_covered": 21,
+   "cumulative_specs": 760,
+   "cumulative_share": 0.809
+  },
+  {
+   "recipes": [
+    "gear",
+    "iron-ingot"
+   ],
+   "new_specs_covered": 20,
+   "cumulative_specs": 780,
+   "cumulative_share": 0.83
+  },
+  {
+   "recipes": [
+    "energetic-graphite",
+    "plasma-refining",
+    "plastic"
+   ],
+   "new_specs_covered": 11,
+   "cumulative_specs": 791,
+   "cumulative_share": 0.841
+  },
+  {
+   "recipes": [
+    "copper-ingot",
+    "high-purity-silicon",
+    "microcrystalline-component"
+   ],
+   "new_specs_covered": 6,
+   "cumulative_specs": 797,
+   "cumulative_share": 0.848
+  },
+  {
+   "recipes": [
+    "glass",
+    "prism"
+   ],
+   "new_specs_covered": 6,
+   "cumulative_specs": 803,
+   "cumulative_share": 0.854
+  },
+  {
+   "recipes": [
+    "titanium-crystal",
+    "titanium-ingot"
+   ],
+   "new_specs_covered": 5,
+   "cumulative_specs": 808,
+   "cumulative_share": 0.86
+  },
+  {
+   "recipes": [
+    "crystal-silicon",
+    "high-purity-silicon"
+   ],
+   "new_specs_covered": 5,
+   "cumulative_specs": 813,
+   "cumulative_share": 0.865
+  },
+  {
+   "recipes": [
+    "glass",
+    "titanium-glass",
+    "titanium-ingot"
+   ],
+   "new_specs_covered": 4,
+   "cumulative_specs": 817,
+   "cumulative_share": 0.869
+  }
+ ]
+}
