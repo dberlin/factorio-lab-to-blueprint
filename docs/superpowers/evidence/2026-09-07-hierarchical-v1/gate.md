@@ -25,7 +25,7 @@ geomean within ±0.11 %.
 | clause | required | measured | |
 | --- | --- | --- | --- |
 | coverage | 5/5 cells CLEAN | **0/5**; all five REFUSE, in both rounds | **FAIL** |
-| unrouted cuts | zero | belt3 composes and the router refuses **8-50** cut lanes; the other cells never reach the router | **FAIL** |
+| unrouted cuts | zero | **not reached on any gated cell**: at the shipped `STRIP_CAP_DEFAULT = 12` all five refuse before composition, so the router never runs and no cut lane is even offered to it. Vacuously not-violated, and therefore no evidence for PASS either — a cell that never composes cannot demonstrate zero unrouted cuts. The router's actual cost on these URLs is visible only off the shipped default, in the cap sweep (§3.2/§3.3, caps 4/6/8: **8-50** refused lanes) and in the failure-site reading (§4). | **FAIL** (not demonstrated) |
 | wall | ≤ 120 s | 26.7-34.1 s — the strategy gives up **early**, it does not time out | PASS |
 | belt3 all-products area | ≤ 1.25 × 12408 = 15510 | **no area** (no blueprint) | **FAIL** |
 | zurl2 area | ≤ 1.0 × 40905 | **no area** (no blueprint) | **FAIL** |
@@ -35,9 +35,14 @@ The prototype, beside it: `belt3-depth-pressure-blocks-only` **1.2292x**
 (15252 tiles, CLEAN, 0 validator errors) and `zurl2-blocks-only` **0.7780x**
 (31824 tiles, CLEAN) — but with **the trunk belts left to the player**, 8-21 of
 them per case (`../2026-09-06-exp-hierarchical/README.md`, table at line 190).
-That is the whole difference. v1 hands the same cuts to the **real** router and
-demands they be wired; that is the "condition" the prototype's GO carried, and
-it is the clause this gate fails on.
+That is the difference in what the two produce. v1 hands the same cuts to the
+**real** router and demands they be wired, which is the "condition" the
+prototype's GO carried — but note that **on the gated runs v1 never got that
+far**: at the shipped cap every cell fails at the block solves, before
+composition. The comparison with the prototype's areas is therefore a
+comparison with a result v1 did not reach by any route, not a like-for-like
+area regression. Where v1 *does* reach the router (the cap sweep, §3.2/§3.3)
+the router refuses the cuts, which is why that is still lever 1 in §6.
 
 ## 2. The five large cells (CLI, two rounds each)
 
@@ -225,11 +230,12 @@ run down rather than waved through:
 
 **(a) CLEAN counts 71 vs 72.** The one differing cell is `sequence-pair
 universe-matrix [1/all-products]`, REFUSED on the **baseline** and CLEAN on the
-candidate. `../2026-09-06-speedups-2-batch3/gate.md` line 8 already characterises
-that exact cell as **a flake — "it refuses once in three rounds"** — and it
-refused there on the candidate side. So this is the known flake landing on the
-other side of the pair, not a change. The clause that matters is intact: **zero
-cells go CLEAN → not CLEAN.**
+candidate. `../2026-09-06-speedups-2-batch3/gate.md` lines 8-9 already
+characterises that exact cell as **a flake**: it "refuses once in three
+dedicated re-runs on the **baseline** tree and never in three on the candidate".
+That is the same side it refuses on here, so this round reproduces batch 3's
+finding rather than contradicting it, and it is not a change introduced by this
+branch. The clause that matters is intact: **zero cells go CLEAN → not CLEAN.**
 
 **(b) freeform per-cell areas are not identical.** Four cells moved. Each was
 re-run once more on **both** trees (`moved-{baseline,candidate}-r2.{jsonl,txt}`,
