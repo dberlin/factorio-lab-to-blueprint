@@ -21642,6 +21642,9 @@ class FreeformLayout:
                                 area=placement.area if placement.frame is not None else None,
                                 belt_tiles=int(placement.stats.get("belt_tiles", 0)),
                                 stranded=stranded_endpoints(result.routing),
+                                no_goods=tuple(
+                                    no_good.strips for no_good in cluster_relation_no_goods
+                                ),
                             )
                         )
                     # Area, then belt count. Two packs of equal area are not equally

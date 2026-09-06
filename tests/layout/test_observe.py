@@ -85,3 +85,16 @@ def test_the_two_sample_intervals_are_fixed_v1_constants() -> None:
     assert TRACE_SAMPLE_INTERVAL_S == 0.25
     assert TRACE_CHILD_SAMPLE_INTERVAL_S == 0.5
     assert SampledObserver(sink=lambda _e: None).min_interval_s == TRACE_SAMPLE_INTERVAL_S
+
+
+def test_overlay_payloads_are_tuples_so_an_event_stays_hashable() -> None:
+    event = SearchEvent(
+        strategy="freeform",
+        candidate="c",
+        phase=SearchPhase.ROUTED,
+        stranded=((0, 0, 4, 4),),
+        no_goods=((3, 7),),
+    )
+    assert isinstance(event.stranded, tuple)
+    assert isinstance(event.no_goods, tuple)
+    hash(event)  # frozen + slots + tuples: an event can key a set.

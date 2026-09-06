@@ -14,7 +14,7 @@ import { traceFrameLabel, traceFrameToBlueprint } from '../model/traceScene';
 import { useBlueprint } from '../state/BlueprintProvider';
 
 export function TracePanel({ jobId, active }: { jobId: string; active: boolean }) {
-  const { loadSnapshot } = useBlueprint();
+  const { loadSnapshot, setTraceFrame, traceShow, setTraceShow } = useBlueprint();
   const [frames, setFrames] = useState<TraceFrame[]>([]);
   const [dropped, setDropped] = useState(0);
   const [tailing, setTailing] = useState(true);
@@ -56,8 +56,14 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
 
   const newest = frames[frames.length - 1];
   useEffect(() => {
-    if (tailing && newest) loadSnapshot(traceFrameToBlueprint(newest), traceFrameLabel(newest));
-  }, [tailing, newest, loadSnapshot]);
+    if (tailing && newest) {
+      loadSnapshot(traceFrameToBlueprint(newest), traceFrameLabel(newest));
+      // Kept alongside the reconstructed Blueprint, not inside it: the
+      // overlays read stranded/no_goods straight off the frame, and a
+      // Blueprint has nowhere to carry either.
+      setTraceFrame(newest);
+    }
+  }, [tailing, newest, loadSnapshot, setTraceFrame]);
 
   if (!newest) {
     return (
@@ -86,6 +92,26 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
             {dropped} frame{dropped === 1 ? '' : 's'} dropped
           </span>
         )}
+      </div>
+      <div className="row">
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={traceShow.stranded}
+            data-testid="trace-show-stranded"
+            onChange={(event) => setTraceShow({ ...traceShow, stranded: event.target.checked })}
+          />
+          Stranded nets
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={traceShow.noGoods}
+            data-testid="trace-show-no-goods"
+            onChange={(event) => setTraceShow({ ...traceShow, noGoods: event.target.checked })}
+          />
+          No-goods
+        </label>
       </div>
       {/* This caption, and only this caption, ever names what is on the
           canvas while a snapshot is showing — there is no other route to a

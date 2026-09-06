@@ -14,6 +14,9 @@ rstest.mock('../../src/state/BlueprintProvider', () => ({
     loadSnapshot: (bp: Blueprint, label: string) => {
       loadSnapshotCalls.push({ bp, label });
     },
+    setTraceFrame: () => {},
+    traceShow: { stranded: true, noGoods: true },
+    setTraceShow: () => {},
   }),
 }));
 
