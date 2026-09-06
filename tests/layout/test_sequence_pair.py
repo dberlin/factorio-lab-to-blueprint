@@ -12,6 +12,8 @@ from typing import cast
 import pytest
 
 import flab2bp.layout.sequence_pair as sequence_pair_module
+from flab2bp.layout import validate
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import DETERMINISTIC_WORKERS
 from flab2bp.layout.freeform import (
     _direct_alignment_targets,
@@ -61,6 +63,7 @@ from flab2bp.layout.sequence_pair import (
     repair_neighbourhood,
     split_stage_boundary,
 )
+from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.layout.strip_variants import (
     StripFamilyId,
     StripInstanceId,
@@ -70,6 +73,8 @@ from flab2bp.layout.strip_variants import (
     variant_with_minimum_pitch,
     variants_for_count,
 )
+from flab2bp.spec import BuildSpec
+from tests.layout.conftest import one_recipe_spec
 from tests.layout.test_freeform import two_stage_spec
 from tests.layout.test_strip_variants import _family, _single_machine_spec
 
@@ -2751,3 +2756,16 @@ def test_anneal_restarts_reports_the_moves_a_cut_stage_actually_made() -> None:
     assert restart_result.result.moves_made == 2 * ANNEAL_DEADLINE_CHECK_MOVES
     assert restart_result.move_count == restart_result.result.moves_made
     assert restart_result.move_count < solver_config.moves_per_stage
+
+
+@pytest.mark.parametrize("count", [5, 6])
+def test_one_recipe_negentropy_block_lays_out_at_five_and_six(
+    mall_all_products: tuple[BuildSpec, bool], count: int
+) -> None:
+    spec, vertical = mall_all_products
+    sub = one_recipe_spec(spec, "copper-ingot", count)
+    layout = SequencePairLayout(
+        belt_vertical_construction=vertical, islands=1, band_policy=BandPolicy.parse("portable")
+    )
+    placement = layout.lay_out(sub, time_budget_s=20.0)
+    assert validate.certify(placement, sub, expect_power=True).ok

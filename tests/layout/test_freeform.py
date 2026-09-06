@@ -141,6 +141,7 @@ from flab2bp.layout.strip_variants import (
     strip_pose_id,
 )
 from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode
+from tests.layout.conftest import one_recipe_spec
 
 type SpecFactory = Callable[[], BuildSpec]
 
@@ -25011,3 +25012,16 @@ def test_port_access_cancellation_before_matching_resolve_aborts() -> None:
             validate=stop_for_resolve,
             cancelled=lambda: stopped,
         )
+
+
+@pytest.mark.parametrize("count", [5, 6])
+def test_one_recipe_negentropy_block_lays_out_at_five_and_six(
+    mall_all_products: tuple[BuildSpec, bool], count: int
+) -> None:
+    spec, vertical = mall_all_products
+    sub = one_recipe_spec(spec, "copper-ingot", count)
+    layout = FreeformLayout(
+        belt_vertical_construction=vertical, band_policy=BandPolicy.parse("portable"), workers=8
+    )
+    placement = layout.lay_out(sub, time_budget_s=20.0)
+    assert validate.certify(placement, sub, expect_power=True).ok
