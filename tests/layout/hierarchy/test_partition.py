@@ -1,6 +1,8 @@
 from fractions import Fraction
 
+from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.hierarchy import partition
+from flab2bp.layout.strip_variants import _logical_strip_plans
 from tests.layout.hierarchy.test_pressure import _chain, _chain_with_external
 
 
@@ -67,6 +69,16 @@ def test_split_block_varies_the_cut_between_attempts():
     assert [sorted(u.recipe for u in b) for b in first] != [
         sorted(u.recipe for u in b) for b in second
     ]
+
+
+def test_strip_count_is_the_packed_count_not_the_logical_plan_count(mall_all_products):
+    spec, _vertical = mall_all_products
+    part = partition.initial_partition(spec, strip_cap=10_000)  # no cap: seed blocks only
+    block = max(part.blocks, key=lambda b: sum(u.count for u in b))
+    logical = len(_logical_strip_plans(partition.sub_spec(spec, block, 0)))
+    packed = partition.strip_count(spec, block)
+    assert packed >= logical
+    assert packed == len(plan_strips(partition.sub_spec(spec, block, 0)))
 
 
 def test_split_block_of_one_unit_splits_the_count():

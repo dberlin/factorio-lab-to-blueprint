@@ -28,7 +28,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from fractions import Fraction
 
-from flab2bp.layout.strip_variants import _logical_strip_plans
 from flab2bp.spec import BuildSpec, MachineGroup
 
 STRIP_CAP_DEFAULT = 12
@@ -441,8 +440,19 @@ def composed_spec(
 
 
 def strip_count(spec: BuildSpec, block: list[Unit]) -> int:
-    """How many strips the placers would build for ``block`` on its own."""
-    return len(_logical_strip_plans(sub_spec(spec, block, 0)))
+    """How many strips freeform actually packs for ``block`` on its own.
+
+    Freeform packs more strips than the logical plan count -- a strip's
+    machines are capped at ``strip_len`` and split further by shared-lane and
+    clearance limits -- so counting logical plans understates what a block
+    costs to lay out and lets oversized blocks slip past ``strip_cap``.
+    Import lazily, the same import-cycle shape ``initial_partition`` uses for
+    ``depth_pressure_blocks``: ``freeform`` is a ~22k-line module and nothing
+    else in this file needs it paid for up front.
+    """
+    from flab2bp.layout.freeform import plan_strips
+
+    return len(plan_strips(sub_spec(spec, block, 0)))
 
 
 def initial_partition(spec: BuildSpec, *, strip_cap: int = STRIP_CAP_DEFAULT) -> Partition:
