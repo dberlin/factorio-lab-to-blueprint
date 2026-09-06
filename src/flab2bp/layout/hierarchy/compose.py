@@ -523,15 +523,16 @@ def compose(
     # handed an empty start set -- a search that expands nothing and so
     # registers no congestion for the negotiation to price.
     #
-    # UNDER THE SAME CLOCK AS THE ROUTE.  The reservation enumerates corridors
-    # per demand and re-probes reachability inside the matcher, which on an
-    # interface-sized net list is seconds of work, not a preamble -- so run it
-    # unbounded and a composition handed an expired deadline burns wall the
-    # caller no longer has.  `_reserve_port_access` takes both a `cancelled`
-    # predicate and a `deadline`, restores the canvas it cleared, and raises
-    # `_PreparationDeadline`; `_prepare_routing_problem` lets that unwind to
-    # whoever owns the budget.  Here the caller wants a REFUSAL, so it is caught
-    # and every cut is reported unwired under the router's own budget word.
+    # UNDER THE SAME CLOCK AS THE ROUTE.  The reservation enumerates every
+    # candidate corridor of every demand and then solves a JOINT MATCHING over
+    # them, so its cost grows with the interface rather than being a fixed
+    # preamble -- run unbounded, a composition handed a spent deadline burns
+    # wall the caller no longer has.  `_reserve_port_access` takes both a
+    # `cancelled` predicate and a `deadline`, puts back the reservations and
+    # corridors it cleared, and raises `_PreparationDeadline`;
+    # `_prepare_routing_problem` lets that unwind to whoever owns the budget.
+    # Here the caller wants a REFUSAL, so it is caught and every cut is reported
+    # unwired under the router's own budget word.
     try:
         reservation = _reserve_port_access(
             canvas,
