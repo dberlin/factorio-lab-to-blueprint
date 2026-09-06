@@ -289,3 +289,58 @@ def test_a_cut_the_router_never_reached_is_reported_under_its_status(
     assert result.routed == 0
     assert len(result.failures) == len(flows)
     assert all(f.endswith(": BUDGET") for f in result.failures)
+
+
+def _chain_belts(cells: list[tuple[int, int]]) -> list[PlacedBuilding]:
+    """A belt run through ``cells`` in path order, linked by ``output_obj``."""
+    return [
+        PlacedBuilding(
+            item_id=catalog.BELT_IDS[0],
+            model_index=catalog.building(catalog.BELT_IDS[0]).model_index,
+            x=x,
+            y=y,
+            output_obj=None if i == len(cells) - 1 else i + 1,
+        )
+        for i, (x, y) in enumerate(cells)
+    ]
+
+
+#: East 3 on row 0, south 2, east 2, north 2 back to row 0, east 2 more.  Row 0
+#: therefore holds TWO disjoint east-west segments of the SAME run -- x 0..2 and
+#: x 4..6 -- which is the shape that raised `lane at 9865 is not one contiguous
+#: row` out of `_port` on belt3.
+_DOUBLE_BACK = [
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (3, 2),
+    (4, 2),
+    (4, 1),
+    (4, 0),
+    (5, 0),
+    (6, 0),
+]
+
+
+def test_lane_takes_the_contiguous_segment_the_port_stands_in():
+    buildings = _chain_belts(_DOUBLE_BACK)
+    xs = lambda tiles: [buildings[i].x for i in tiles]  # noqa: E731
+
+    # The last tile belongs to the segment the run came back to, not to the one
+    # it started on -- even though both are at y == 0 and both are in this run.
+    assert xs(compose._lane(buildings, 10)) == [4, 5, 6]
+    # And the first tile belongs to the segment it starts.
+    assert xs(compose._lane(buildings, 0)) == [0, 1, 2]
+    # A tile in the middle of the far segment picks up the whole of it.
+    assert xs(compose._lane(buildings, 9)) == [4, 5, 6]
+
+
+def test_port_no_longer_asserts_on_a_run_that_doubles_back_to_its_row():
+    """`_Port.at_tile` addresses taps as ``x0 + k``, so the span must be the tiles."""
+    buildings = _chain_belts(_DOUBLE_BACK)
+    for index in (0, 9, 10):
+        port = compose._port(buildings, index, machines=1)
+        assert port.x1 - port.x0 + 1 == len(port.tiles)
+        assert port.belt == index

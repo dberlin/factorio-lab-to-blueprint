@@ -357,15 +357,32 @@ def _lane(buildings: list[PlacedBuilding], index: int) -> tuple[int, ...]:
         if onward is None or not catalog.is_belt(buildings[onward].item_id):
             break
         run.append(onward)
-    # ONE ROW of that run, the port's own.  A boundary lane in a freeform block
-    # is east-west (`_prepare_routing_problem` builds its ports as
-    # `x0 = head.x, x1 = head.x + len(lane) - 1`), but the run reached through
-    # `output_obj` also takes in the north-south sorter drop columns spliced
-    # into it.  `_Port.at_tile` reads the k-th tap off as `x0 + k`, so a tile
-    # list wider than the column span would hand the router a tap at a cell no
-    # belt of this lane stands on.
+    # ONE CONTIGUOUS ROW of that run, the one the port's own tile stands in.
+    # A boundary lane in a freeform block is east-west
+    # (`_prepare_routing_problem` builds its ports as `x0 = head.x,
+    # x1 = head.x + len(lane) - 1`), but the run reached through `output_obj`
+    # also takes in the north-south sorter drop columns spliced into it.
+    # `_Port.at_tile` (freeform ~6033) reads the k-th tap off as `x0 + k` with
+    # `tiles[k]`, so the tile list and the column span have to be the same
+    # cells.
+    #
+    # Filtering to the row is not enough on its own, and that is not
+    # hypothetical: a run that leaves the row and comes back contributes TWO
+    # disjoint east-west segments at the same `y`, and belt3 raised
+    # `AssertionError: lane at 9865 is not one contiguous row` out of `_port`
+    # on exactly that shape. The port belongs to the segment its own tile
+    # stands in; the other segment is a different reach of the same run and its
+    # cells are not addressable as `x0 + k` from here.
     row = buildings[index].y
-    return tuple(sorted((i for i in run if buildings[i].y == row), key=lambda i: buildings[i].x))
+    on_row = sorted((i for i in run if buildings[i].y == row), key=lambda i: buildings[i].x)
+    at = on_row.index(index)
+    low = at
+    while low > 0 and buildings[on_row[low - 1]].x == buildings[on_row[low]].x - 1:
+        low -= 1
+    high = at
+    while high + 1 < len(on_row) and buildings[on_row[high + 1]].x == buildings[on_row[high]].x + 1:
+        high += 1
+    return tuple(on_row[low : high + 1])
 
 
 def _port(buildings: list[PlacedBuilding], index: int, machines: int) -> _Port:
