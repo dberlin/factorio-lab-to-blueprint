@@ -7,24 +7,62 @@ density decomposition (`docs/superpowers/evidence/2026-09-06-density-decompositi
 Framing that binds all of them: coverage and bounded time first, area within a
 10-20 % band of the best-known dense result, never "huge strips at near-zero cost".
 
-## Running now (2026-09-06, four experiments)
+## Experiments run 2026-09-06 (evidence under `docs/superpowers/evidence/2026-09-06-exp-*/`)
 
-1. **Routing-difficulty feature vector.** Per spec: for each item, consumer count
-   x depth span; plus strips, ingredients per strip, coater count, above-one-belt
-   items, both-fed items. Validate against this week's refusal rows. Becomes the
-   orchestrator's dispatch input.
-2. **Hierarchical decomposition prototype.** Rate-weighted min-cut of the recipe
-   DAG into blocks sized for the existing placers, blocks solved independently,
-   placed in topological order along a bus, inter-block trunks routed by the
-   existing router. Measured on the mall, the compressed 436-machine URL and
-   conveyor-belt-3 (coverage, wall, area vs best known). Kill criterion attached.
-3. **Trunk pre-assignment for wide-spread items.** Reserve a bus corridor with
-   taps for the highest-spread item (proliferator on all-products, copper ingot
-   on malls) before placement, as a problem transform in front of both placers.
-4. **Why direct insertion never lands.** Zero realized direct inserts on every
-   corpus build despite hundreds of candidates; diagnose and fix or explain.
+1. **Routing-difficulty feature vector** (`exp-features`, plus experiment 5:
+   live range and cut pressure). Strips and distinct items predict freeform
+   wall better than spread; summed live range is the best wall predictor
+   (rho 0.93 vs 0.88 for strips, inside the data's resolution); items above one
+   belt is the only zero-false-positive refusal signal; coaters is the arm-choice
+   feature. Lane pressure equals item pressure on every corpus cell. Proliferator
+   is never an ingredient (scored from spray lanes). Dispatch key: strips,
+   sum_live_range, items_above_one_belt, coaters. Sequence-pair wall is
+   budget-bound on every corpus cell, so its timing carries no difficulty signal.
+2. **Hierarchical decomposition prototype** (`exp-hierarchical`): GO with
+   conditions. Validator-clean blueprints for belt3, zurl2 and BOTH malls (449
+   and 935 machines, which refuse everywhere today). zurl2 composed at 0.78-0.82x
+   the best known area; belt3 at 1.23x with the cut-pressure partition (1.52x
+   with the size cap: kill criterion fired by 1.2 %). Sum of block areas is
+   1.05x the monolith, so the overage is composition packing. Cut pressure
+   picks where to cut (16 % area, 40 % serial wall on belt3) but does not predict
+   block hardness; strip count does. Conditions: block interfaces are lane
+   contracts (10 of 11 zurl2 cuts mismatch lane counts; the malls go INVALID on
+   one `flow.conservation` when corridors are wired); `_route_all` is not
+   callable on a prepared canvas; finalization is not compositional
+   (`power_too_close`, gap >= 2, latitude bands at 935 machines); 8-21 belt
+   loops left to the player. Side findings: a one-recipe negentropy-smelter spec
+   refuses at 5 and 6 machines on both placers at any budget; a
+   `SequencePairLayout` stage-boundary crash (`sequence_solver.py:2660`).
+3. **Trunk pre-assignment** (`exp-trunk`): dead. 0 refusals rescued, 5 cells
+   broken, area +5 % and belt tiles +8 %. The proliferator supply tree already
+   is a perimeter trunk with taps, and producer sharding has dissolved every
+   internal fan-out. The default-off switch lives only on branch `exp-trunk`
+   (commit e4679db); master carries the evidence.
+4. **Direct insertion** (`exp-direct-insert`): tuning, not a bug. The mechanism
+   validates when forced; a bridge costs 1.5-2.9 tiles of area per belt tile
+   saved, so the packer's width-first objective correctly refuses it. A
+   documented clearance defect in `_direct_clear_columns` (proves clearance
+   only against the bridged lane's own attachments) is unfixed; patch in the
+   README. Block libraries should not assume direct insertion for density.
+
+## Running now
+
+6. **Pressure-driven place and route** (`exp-pressure`): corridor width by lane
+   pressure on the packer side, net order by cut pressure on the router side,
+   each behind a default-off switch, measured on the freeform cells and the
+   large URLs.
 
 ## Backlog (not started)
+
+### From the hierarchical prototype (a production version must solve first)
+- Lane-contract block interfaces: a cut item's out-lanes and in-lanes must match
+  in count and rate on both sides, or the corridor must merge/split.
+- `_route_all` callable on a prepared canvas so composition reuses the real
+  router instead of a corridor router.
+- Compositional finalization: power towers, gap rules and latitude bands checked
+  on the composed placement, not per block.
+- Fix the negentropy-smelter 5-6 machine hole and the sequence-pair
+  stage-boundary crash.
 
 ### Orchestrator and dispatch
 - Anytime dispatch of strategy, budget and islands from the feature vector:
