@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 
 import pytest
 
@@ -100,13 +101,129 @@ def test_no_block_outlives_the_parent_deadline(
     started = time.monotonic()
     layout.lay_out(chain_spec, time_budget_s=30.0)
     assert seen and all(d is not None for d in seen)
-    # And no block gets the parent's WHOLE wall either.  Both backends read
-    # `absolute_deadline` as replacing their own budget rather than bounding it,
-    # so handing one the parent deadline would let the first round spend
-    # everything and leave the re-cut loop unreachable.
-    block_budget = min(
-        strategy.BLOCK_BUDGET_MAX_S,
-        max(strategy.BLOCK_BUDGET_MIN_S, 30.0 * float(strategy.BLOCK_BUDGET_SHARE)),
+    assert all(d is not None and d <= started + 30.0 + 1.0 for d in seen)
+
+
+def test_a_job_is_capped_at_its_own_budget_when_it_starts_not_when_the_round_did(
+    chain_spec: BuildSpec,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wall a job gets is computed IN the worker, at job start.
+
+    The pool runs the round's jobs in waves.  A deadline the parent computed
+    before the pool started is already spent by the time a second-wave job
+    runs, and that job refuses instantly with "deadline exhausted" without
+    searching at all -- so index 5 carries the parent's wall and the worker
+    combines it with the budget itself.
+    """
+    seen: dict[str, float | None] = {}
+
+    class _Stub:
+        def lay_out(
+            self,
+            spec: BuildSpec,
+            *,
+            time_budget_s: float = 15.0,
+            absolute_deadline: float | None = None,
+        ) -> Placement:
+            seen["deadline"] = absolute_deadline
+            raise NoValidLayout("stub")
+
+    monkeypatch.setattr(strategy, "_block_layout", lambda *a, **k: _Stub())
+    started = time.monotonic()
+    # A parent wall ten minutes out, and a three-second job budget.
+    record, placement = strategy._solve_block(
+        (chain_spec, "freeform", 3.0, True, 4, started + 600.0)
     )
-    assert block_budget < 30.0
-    assert all(d is not None and d <= started + block_budget + 1.0 for d in seen)
+    assert placement is None and record["ok"] is False
+    deadline = seen["deadline"]
+    assert deadline is not None
+    assert started + 2.0 <= deadline <= started + 4.0
+
+
+def test_a_budget_too_small_to_fund_one_solve_round_refuses_saying_so(
+    chain_spec: BuildSpec,
+) -> None:
+    with pytest.raises(NoValidLayout, match=r"is under the .*s a block solve is given at all"):
+        _layout().lay_out(chain_spec, time_budget_s=1.0)
+
+
+def test_a_dead_pool_is_a_refusal_not_a_crash(chain_spec: BuildSpec) -> None:
+    """A parent-side pool failure must not escape as a raw exception.
+
+    `Executor.map` re-raises a `BrokenProcessPool`, an unpicklable argument and
+    an interpreter that failed to start, all on the parent side.  Losing the
+    build to one is the mistake `_solve_block`'s own CRASH arm exists to avoid,
+    one level up.
+    """
+
+    class _DeadPool:
+        def __init__(self, max_workers: int) -> None:
+            self.max_workers = max_workers
+
+        def __enter__(self) -> _DeadPool:
+            return self
+
+        def __exit__(self, *exc_info: object) -> bool:
+            return False
+
+        def map(self, fn: object, jobs: object) -> object:
+            raise BrokenProcessPool("a worker process died abruptly")
+
+    layout = _layout()
+    layout._executor_factory = _DeadPool  # type: ignore[assignment]
+    with pytest.raises(NoValidLayout, match="BrokenProcessPool"):
+        layout.lay_out(chain_spec, time_budget_s=30.0)
+
+
+def test_a_composer_crash_is_a_refusal_not_a_traceback(
+    chain_spec: BuildSpec,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`lay_out` promises a `Placement` or a `NoValidLayout`, never a crash.
+
+    The composer reads geometry assembled out of independently solved blocks --
+    shapes no single block showed its own placer -- and `compose._port` asserts
+    on one of them (`lane at N is not one contiguous row`, seen on belt3). That
+    is the same kind of event as a placer crashing inside a block and is handled
+    the same way.
+    """
+
+    def explode(*args: object, **kwargs: object) -> compose_mod.ComposeResult:
+        raise AssertionError("lane at 9865 is not one contiguous row")
+
+    monkeypatch.setattr(strategy.compose_mod, "compose", explode)
+    with pytest.raises(NoValidLayout, match=r"composition crashed: AssertionError: lane at 9865"):
+        _layout().lay_out(chain_spec, time_budget_s=30.0)
+
+
+def test_a_deadline_spent_by_composition_refuses_before_finalization(
+    chain_spec: BuildSpec,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settlement is entered only with wall left to enter it with.
+
+    `assign_sorter_slots` takes no `cancelled` and `certify` is atomic, so a
+    composition that ran the clock out must refuse rather than start them.
+    """
+    real = compose_mod.compose
+
+    def stall(*args: object, **kwargs: object) -> compose_mod.ComposeResult:
+        result = real(*args, **kwargs)  # type: ignore[arg-type]
+        deadline = kwargs["deadline"]
+        assert isinstance(deadline, float)
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+        return result
+
+    monkeypatch.setattr(strategy.compose_mod, "compose", stall)
+    # One arm, so the round is a single wave and a short budget still funds it.
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+        block_strategy="freeform",
+    )
+    with pytest.raises(NoValidLayout, match="deadline exhausted before finalization"):
+        layout.lay_out(chain_spec, time_budget_s=12.0)
