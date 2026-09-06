@@ -49,6 +49,7 @@ from flab2bp.layout.base import (
     SpecInfeasible,
 )
 from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.observe import SearchObserver
 from flab2bp.layout.sequence_solver import SequencePairLayout, _validate_sequence_islands
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.candidates import (
@@ -209,6 +210,7 @@ def _new_layout(
     #: such argument: its sub-solves are pinned at one worker each, so its share
     #: of a split is headroom for its process rather than a solver setting.
     workers: int | None = None,
+    observer: SearchObserver | None = None,
 ) -> FreeformLayout | SequencePairLayout:
     """Construct one explicitly selected layout backend."""
     if strategy == "freeform":
@@ -216,11 +218,13 @@ def _new_layout(
             belt_vertical_construction=belt_vertical_construction,
             band_policy=band_policy,
             workers=workers,
+            observer=observer,
         )
     return SequencePairLayout(
         belt_vertical_construction=belt_vertical_construction,
         islands=sequence_islands,
         band_policy=band_policy,
+        observer=observer,
     )
 
 
@@ -593,6 +597,11 @@ def build(
     fetch_url_validator: UrlValidator | None = None,
     no_proliferator: bool = False,
     on_progress: ProgressSink | None = None,
+    #: Told what the SEARCH is doing, for the trace view.  Distinct from
+    #: `on_progress`, which reports pair boundaries: this reports the interior,
+    #: fires far more often, and is never allowed to raise.  `None` -- the
+    #: default and the shipping path -- costs one `is None` per call site.
+    search_observer: SearchObserver | None = None,
     #: Aggregate solver-worker budget for one build. ``None`` uses at most 16
     #: CPUs from the process affinity set. A serial build gives the whole budget
     #: to its current strategy; concurrent candidate races divide it exactly
@@ -832,6 +841,7 @@ def build(
             sequence_islands=islands,
             band_policy=policy,
             workers=worker_budget,
+            observer=search_observer,
         )
         try:
             return layout.lay_out(candidate, time_budget_s=time_budget_s)

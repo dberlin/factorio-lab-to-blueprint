@@ -100,6 +100,7 @@ from flab2bp.layout.freeform import (
     plan_strips,
     tie_break_cap,
 )
+from flab2bp.layout.observe import SearchEvent, SearchPhase
 from flab2bp.layout.piling import PilerPlan
 from flab2bp.layout.route_feedback import (
     Cell,
@@ -25011,3 +25012,49 @@ def test_port_access_cancellation_before_matching_resolve_aborts() -> None:
             validate=stop_for_resolve,
             cancelled=lambda: stopped,
         )
+
+
+@pytest.fixture
+def small_spec() -> BuildSpec:
+    """A minimal spec: one producer group, laid out in well under a second."""
+    return single_recipe_spec()
+
+
+class _RecordingObserver:
+    """Takes everything, so a test sees every site rather than a sample."""
+
+    def __init__(self) -> None:
+        self.events: list[SearchEvent] = []
+
+    def due(self, phase: SearchPhase, /) -> bool:
+        return True
+
+    def note(self, event: SearchEvent, /) -> None:
+        self.events.append(event)
+
+
+def test_freeform_reports_an_incumbent_to_its_observer(small_spec: BuildSpec) -> None:
+    observer = _RecordingObserver()
+    layout = FreeformLayout(band_policy=BandPolicy.parse("portable"), observer=observer)
+    placement = layout.lay_out(small_spec, time_budget_s=5.0)
+
+    incumbents = [e for e in observer.events if e.phase is SearchPhase.INCUMBENT]
+    assert incumbents, "a completed freeform sweep has at least one incumbent"
+    last = incumbents[-1]
+    assert last.strategy == "freeform"
+    assert last.candidate == small_spec.label
+    assert last.incumbent is True
+    assert last.area == placement.area
+    assert last.height is not None
+    assert last.placement is not None
+
+
+def test_freeform_without_an_observer_is_unchanged(small_spec: BuildSpec) -> None:
+    band = BandPolicy.parse("portable")
+    a = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS).lay_out(
+        small_spec, time_budget_s=5.0
+    )
+    b = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None).lay_out(
+        small_spec, time_budget_s=5.0
+    )
+    assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])

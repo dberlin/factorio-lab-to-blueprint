@@ -88,6 +88,7 @@ from flab2bp.layout.freeform import (
 )
 from flab2bp.layout.freeform import plan_strips as plan_strips
 from flab2bp.layout.global_router import GlobalNetResult, GlobalRouteResult, route_global
+from flab2bp.layout.observe import SearchObserver
 from flab2bp.layout.route_feedback import (
     ClusterRelationNoGood,
     DetailedRouteResult,
@@ -6301,6 +6302,10 @@ class SequencePairLayout:
         islands: int = 1,
         portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
+        #: Accepted here so `pipeline._new_layout` can construct both backends
+        #: identically without drift.  Unused in this task -- Task 7 wires the
+        #: inner sequence-pair call sites to it.
+        observer: SearchObserver | None = None,
     ) -> None:
         if type(strip_len) is not int or strip_len <= 0:
             raise ValueError("strip length must be a positive integer")
@@ -6323,6 +6328,7 @@ class SequencePairLayout:
         #: Called with each placement this search certifies, so the other racer
         #: can use it as a bound.
         self.publish_incumbent = publish_incumbent
+        self.observer = observer
 
     def lay_out(
         self,

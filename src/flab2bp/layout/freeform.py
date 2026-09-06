@@ -105,6 +105,7 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.belt_tiers import retier_belts
 from flab2bp.layout.finalize import ProjectionNoGood
+from flab2bp.layout.observe import SearchEvent, SearchObserver, SearchPhase, stranded_endpoints
 from flab2bp.layout.piling import LaneLoad, MergePlan, PilerPlan, plan_merges
 from flab2bp.layout.route_feedback import (
     Cell,
@@ -19418,6 +19419,14 @@ class FreeformLayout:
         belt_vertical_construction: bool = True,
         portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
+        #: Told what this sweep is doing, for a debugging view.  A SEPARATE
+        #: parameter from `publish_incumbent` on purpose: in the raced child
+        #: that callback runs a full `validate.validate` before publishing
+        #: (strategy_race.py:515-530) because a bound the parent would reject
+        #: must not prune the peer -- a cost a picture must never pay -- and it
+        #: fires only on an improvement, so it cannot express a pack, a refusal,
+        #: or a stranded net.
+        observer: SearchObserver | None = None,
     ) -> None:
         self.band_policy = band_policy
         #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
@@ -19450,6 +19459,7 @@ class FreeformLayout:
         #: Called with each placement this sweep certifies, so the other racer
         #: can use it as a bound.
         self.publish_incumbent = publish_incumbent
+        self.observer = observer
 
     def lay_out(
         self,
@@ -21403,6 +21413,18 @@ class FreeformLayout:
                     )
                     placement = result.placement
                     assert placement is not None
+                    if self.observer is not None and self.observer.due(SearchPhase.PACKED):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.PACKED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                area=placement.area,
+                            )
+                        )
                     # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
                     #
                     # `lay_out` promises a valid `Placement` or `NoValidLayout`, and
@@ -21604,6 +21626,20 @@ class FreeformLayout:
                     # Read BEFORE certification, and `replace` below only rewrites
                     # `completion`, so neither term can move between here and the
                     # comparison that uses it.
+                    if self.observer is not None and self.observer.due(SearchPhase.ROUTED):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.ROUTED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                area=placement.area,
+                                belt_tiles=int(placement.stats.get("belt_tiles", 0)),
+                                stranded=stranded_endpoints(result.routing),
+                            )
+                        )
                     key = (placement.area, float(placement.stats["belt_tiles"]))
                     # L4: certifying a candidate that cannot displace the incumbent
                     # buys nothing -- it is not returnable at any report -- and
@@ -21631,6 +21667,20 @@ class FreeformLayout:
                         continue
                     certify_started = time.monotonic()
                     report = validate.certify(placement, spec, expect_power=True)
+                    if self.observer is not None and self.observer.due(SearchPhase.CERTIFIED):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.CERTIFIED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                area=placement.area,
+                                belt_tiles=int(placement.stats.get("belt_tiles", 0)),
+                                reason=None if not report.errors else report.errors[0].message,
+                            )
+                        )
                     validation_time_s += time.monotonic() - certify_started
                     if (
                         inbound_choice is not None
@@ -21649,6 +21699,22 @@ class FreeformLayout:
                     if report.errors and rejected is not None:
                         for finding in report.errors:
                             _retain_refusal(rejected, finding)
+                    if (
+                        report.errors
+                        and self.observer is not None
+                        and self.observer.due(SearchPhase.REFUSED)
+                    ):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.REFUSED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                reason=report.errors[0].message,
+                            )
+                        )
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
@@ -21673,6 +21739,20 @@ class FreeformLayout:
                         best, best_key = placement, key
                         if self.publish_incumbent is not None:
                             self.publish_incumbent(placement)
+                        if self.observer is not None and self.observer.due(SearchPhase.INCUMBENT):
+                            self.observer.note(
+                                SearchEvent(
+                                    strategy="freeform",
+                                    candidate=spec.label,
+                                    phase=SearchPhase.INCUMBENT,
+                                    placement=placement,
+                                    height=height,
+                                    arrangement=arrangement,
+                                    area=placement.area,
+                                    belt_tiles=int(placement.stats.get("belt_tiles", 0)),
+                                    incumbent=True,
+                                )
+                            )
                 finally:
                     # SPEC 5.7: a queued repair is paid on the metrics THIS
                     # routing pass measured, and `validator_clean` is False for

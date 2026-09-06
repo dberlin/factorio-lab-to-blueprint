@@ -123,3 +123,22 @@ class SampledObserver:
             self.sink(event)
         except Exception:  # noqa: BLE001 -- R3: a view must never kill a build.
             pass
+
+
+def stranded_endpoints(result: object) -> tuple[tuple[int, int, int, int], ...]:
+    """Endpoint pairs for the nets a routing result could not wire.
+
+    Typed ``object`` and read defensively for one reason only: this runs on a
+    debugging path, and a shape change in ``DetailedRouteResult`` must degrade
+    the picture, never the build (observe.SampledObserver's R3 in the caller is
+    the second net, not an excuse to skip this one).
+    """
+    failures = getattr(result, "failures", ())
+    pairs: list[tuple[int, int, int, int]] = []
+    for failure in failures:
+        source = getattr(failure, "source", None)
+        destination = getattr(failure, "destination", None)
+        if source is None or destination is None:
+            continue
+        pairs.append((int(source[0]), int(source[1]), int(destination[0]), int(destination[1])))
+    return tuple(pairs)

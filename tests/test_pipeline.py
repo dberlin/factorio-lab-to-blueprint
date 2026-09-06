@@ -34,6 +34,7 @@ from flab2bp.layout.base import (
     PlacementCompletion,
 )
 from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.observe import SearchObserver
 from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.layout.strip_variants import generate_strip_families
 from flab2bp.rates.candidates import (
@@ -209,6 +210,7 @@ def test_build_defaults_to_one_portable_policy(
         sequence_islands: int = 1,
         band_policy: BandPolicy,
         workers: int | None = None,
+        observer: SearchObserver | None = None,
     ) -> FreeformLayout | SequencePairLayout:
         seen.append(band_policy)
         return original_new_layout(
@@ -217,6 +219,7 @@ def test_build_defaults_to_one_portable_policy(
             sequence_islands=sequence_islands,
             band_policy=band_policy,
             workers=workers,
+            observer=observer,
         )
 
     def validate_spy(
@@ -2231,8 +2234,9 @@ def test_an_explicit_strategy_never_races_even_when_asked_to(
         sequence_islands: int = 1,
         band_policy: BandPolicy,
         workers: int | None = None,
+        observer: SearchObserver | None = None,
     ) -> _Completed:
-        del belt_vertical_construction, sequence_islands, band_policy
+        del belt_vertical_construction, sequence_islands, band_policy, observer
         seen.append(workers)
         return _Completed()
 
@@ -2696,3 +2700,29 @@ def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch: pytest.MonkeyP
         if finding.detail["item"] == "hydrogen"
     ]
     assert not hydrogen
+
+
+class _RecordingObserver:
+    """Enough of ``SearchObserver`` for identity checks: no events recorded."""
+
+    def due(self, phase: object, /) -> bool:
+        return True
+
+    def note(self, event: object, /) -> None:
+        pass
+
+
+def test_build_threads_the_search_observer_to_the_serial_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+    real = pipeline._new_layout
+
+    def spy(*args: object, **kwargs: object) -> object:
+        seen["observer"] = kwargs.get("observer")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_new_layout", spy)
+    observer = _RecordingObserver()
+    pipeline.build(SMALL_URL, strategy="freeform", time_budget_s=2.0, search_observer=observer)
+    assert seen["observer"] is observer
