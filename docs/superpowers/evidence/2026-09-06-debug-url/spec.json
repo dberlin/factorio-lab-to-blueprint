@@ -1,0 +1,885 @@
+{
+  "url": "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+  "parsed": {
+    "beacon_receivers": "None",
+    "beacons": "()",
+    "belt_id": "conveyor-belt-3",
+    "cargo_wagon_id": "None",
+    "checked_item_ids": "None",
+    "checked_objective_ids": "None",
+    "checked_recipe_ids": "None",
+    "costs": "CostSettings(factor=None, machine=None, footprint=None, unproduceable=None, excluded=None, surplus=None, maximize=None, recycling=None)",
+    "default_beacons": "None",
+    "display_rate": "1",
+    "excluded_item_ids": "None",
+    "excluded_recipe_ids": "set()",
+    "flow_rate": "None",
+    "fluid_wagon_id": "None",
+    "fuel_rank_ids": "None",
+    "is_bare": "False",
+    "items": "{}",
+    "location_ids": "None",
+    "machine_rank_ids": "['arc-smelter', 'assembling-machine-2', 'chemical-plant', 'matrix-lab']",
+    "machines": "{}",
+    "maximize_type": "None",
+    "mining_bonus": "None",
+    "mod_id": "dsp",
+    "module_rank_ids": "None",
+    "modules": "()",
+    "net_production_only": "None",
+    "objectives": "(Objective(id='1', target_id='titanium-glass', value=Fraction(500, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Output: 0>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='2', target_id='high-purity-silicon', value=Fraction(100, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='3', target_id='steel', value=Fraction(100, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='4', target_id='refined-oil', value=Fraction(100, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='5', target_id='iron-ingot', value=Fraction(2000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='6', target_id='magnet', value=Fraction(300, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='7', target_id='steel', value=Fraction(200, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='8', target_id='energetic-graphite', value=Fraction(200, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='9', target_id='high-purity-silicon', value=Fraction(250, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='10', target_id='titanium-ingot', value=Fraction(3000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='11', target_id='magnet', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='12', target_id='super-magnetic-ring', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='13', target_id='fire-ice', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='14', target_id='deuterium', value=Fraction(10000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='15', target_id='titanium-alloy', value=Fraction(10000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='16', target_id='copper-ingot', value=Fraction(1999, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='17', target_id='plane-filter', value=Fraction(200, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Output: 0>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='18', target_id='processor', value=Fraction(200, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Output: 0>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='19', target_id='optical-grating-crystal', value=Fraction(10000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None), Objective(id='20', target_id='water', value=Fraction(1000, 1), unit=<ObjectiveUnit.Items: 0>, type=<ObjectiveType.Input: 1>, machine_id=None, modules=None, beacons=None, overclock=None, fuel_id=None))",
+    "overclock": "None",
+    "pipe_id": "None",
+    "preset": "None",
+    "proliferator_spray_id": "None",
+    "recipe_cost_multiplier": "None",
+    "recipes": "{}",
+    "require_machines_output": "None",
+    "research_bonus": "None",
+    "research_productivity": "None",
+    "researched_technology_ids": "None",
+    "source_url": "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+    "stack": "None",
+    "zip_version": "11"
+  },
+  "candidates": [
+    {
+      "label": "no-proliferator",
+      "machines": 172,
+      "groups": 9,
+      "belt": "conveyor-belt-3",
+      "belt_ips": 30.0,
+      "belt_upgrades": [],
+      "belt_stack": 1,
+      "piler_unlocked": true,
+      "external_inputs": {
+        "copper-ingot": 10.0,
+        "fire-ice": 6.6667,
+        "high-purity-silicon": 5.8333,
+        "hydrogen": 36.6667,
+        "iron-ingot": 6.6667,
+        "optical-grating-crystal": 26.6667,
+        "silicon-ore": 15.0,
+        "stone": 30.0,
+        "titanium-ingot": 15.0,
+        "water": 15.0
+      },
+      "outputs": {
+        "plane-filter": 3.3333,
+        "processor": 3.3333,
+        "titanium-glass": 8.3333
+      },
+      "surplus_outputs": {},
+      "spray_lanes": {},
+      "lanes_requiring_split": [],
+      "belt_required_edges": [],
+      "recipes": [
+        {
+          "recipe": "casimir-crystal-advanced",
+          "machine": "assembling-machine-2",
+          "count": 14,
+          "prolif": "none"
+        },
+        {
+          "recipe": "circuit-board",
+          "machine": "assembling-machine-2",
+          "count": 4,
+          "prolif": "none"
+        },
+        {
+          "recipe": "glass",
+          "machine": "arc-smelter",
+          "count": 30,
+          "prolif": "none"
+        },
+        {
+          "recipe": "graphene-advanced",
+          "machine": "chemical-plant",
+          "count": 7,
+          "prolif": "none"
+        },
+        {
+          "recipe": "high-purity-silicon",
+          "machine": "arc-smelter",
+          "count": 15,
+          "prolif": "none"
+        },
+        {
+          "recipe": "microcrystalline-component",
+          "machine": "assembling-machine-2",
+          "count": 14,
+          "prolif": "none"
+        },
+        {
+          "recipe": "plane-filter",
+          "machine": "assembling-machine-2",
+          "count": 40,
+          "prolif": "none"
+        },
+        {
+          "recipe": "processor",
+          "machine": "assembling-machine-2",
+          "count": 10,
+          "prolif": "none"
+        },
+        {
+          "recipe": "titanium-glass",
+          "machine": "assembling-machine-2",
+          "count": 38,
+          "prolif": "none"
+        }
+      ],
+      "lane_capacity": 30.0,
+      "items_above_one_belt": [
+        "hydrogen"
+      ],
+      "strips": {
+        "n": 33,
+        "widest": 3,
+        "mean": 2.0
+      },
+      "strip_machines": [
+        5,
+        5,
+        4,
+        4,
+        6,
+        6,
+        6,
+        6,
+        6,
+        4,
+        3,
+        5,
+        5,
+        5,
+        5,
+        5,
+        4,
+        6,
+        6,
+        6,
+        6,
+        6,
+        5,
+        5,
+        5,
+        5,
+        6,
+        6,
+        6,
+        5,
+        5,
+        5,
+        5
+      ],
+      "strip_recipes": [
+        "casimir-crystal-advanced",
+        "circuit-board",
+        "glass",
+        "graphene-advanced",
+        "high-purity-silicon",
+        "microcrystalline-component",
+        "plane-filter",
+        "processor",
+        "titanium-glass"
+      ],
+      "logical_strip_plans": 9,
+      "features": {
+        "machines": 172,
+        "groups": 9,
+        "recipes": 9,
+        "strips": 33,
+        "distinct_items": 18,
+        "max_ingredients_per_strip": 3,
+        "mean_ingredients_per_strip": 2.0,
+        "coaters": 0,
+        "items_above_one_belt": 1,
+        "both_fed_items": 2,
+        "chain_depth": 2,
+        "max_spread": 2,
+        "sum_spread": 2,
+        "max_consumers": 2,
+        "items_with_3plus_consumers": 0,
+        "top_spread": [
+          [
+            "copper-ingot",
+            2
+          ],
+          [
+            "casimir-crystal",
+            0
+          ],
+          [
+            "circuit-board",
+            0
+          ]
+        ],
+        "proliferator_consumers": 0,
+        "proliferator_span": 0,
+        "proliferator_spread": 0,
+        "max_spread_no_prolif": 2,
+        "sum_spread_no_prolif": 2,
+        "max_live_range": 2,
+        "sum_live_range": 13,
+        "items_live_range_ge3": 0,
+        "top_live_range": [
+          [
+            "circuit-board",
+            2
+          ],
+          [
+            "casimir-crystal",
+            1
+          ],
+          [
+            "copper-ingot",
+            1
+          ]
+        ],
+        "max_pressure": 9,
+        "max_pressure_depth": 0,
+        "max_lane_pressure": 10,
+        "max_lane_pressure_depth": 0,
+        "sum_pressure": 13,
+        "lane_pressure_per_strip": 0.303,
+        "max_pressure_no_spray": 9,
+        "max_lane_pressure_no_spray": 10,
+        "proliferator_live_range": 0,
+        "proliferator_lanes": 0,
+        "items": [
+          "ItemProfile(item_id='copper-ingot', consumers=2, producers=0, earliest_consumer_depth=0, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='casimir-crystal', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='circuit-board', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='fire-ice', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='glass', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=False)",
+          "ItemProfile(item_id='graphene', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=False)",
+          "ItemProfile(item_id='high-purity-silicon', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='hydrogen', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='iron-ingot', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='microcrystalline-component', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='optical-grating-crystal', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='plane-filter', consumers=0, producers=1, earliest_consumer_depth=-1, latest_consumer_depth=-1, external=False)",
+          "ItemProfile(item_id='processor', consumers=0, producers=1, earliest_consumer_depth=-1, latest_consumer_depth=-1, external=False)",
+          "ItemProfile(item_id='silicon-ore', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='stone', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='titanium-glass', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='titanium-ingot', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='water', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)"
+        ],
+        "live_items": [
+          "LiveProfile(item_id='circuit-board', producer_depth=0, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='casimir-crystal', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='copper-ingot', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='glass', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='graphene', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='high-purity-silicon', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='hydrogen', producer_depth=0, last_use_depth=1, live_lanes=2, is_spray=False)",
+          "LiveProfile(item_id='microcrystalline-component', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='optical-grating-crystal', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='titanium-glass', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='titanium-ingot', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='water', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='fire-ice', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='iron-ingot', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='plane-filter', producer_depth=2, last_use_depth=-1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='processor', producer_depth=2, last_use_depth=-1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='silicon-ore', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='stone', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)"
+        ],
+        "pressure_profile": [
+          [
+            0,
+            9,
+            10
+          ],
+          [
+            1,
+            4,
+            4
+          ]
+        ]
+      },
+      "policy": "no-proliferator"
+    },
+    {
+      "label": "all-products",
+      "machines": 116,
+      "groups": 9,
+      "belt": "conveyor-belt-3",
+      "belt_ips": 30.0,
+      "belt_upgrades": [],
+      "belt_stack": 1,
+      "piler_unlocked": true,
+      "external_inputs": {
+        "copper-ingot": 6.4,
+        "fire-ice": 3.4133,
+        "high-purity-silicon": 5.8333,
+        "hydrogen": 23.4667,
+        "iron-ingot": 4.2667,
+        "optical-grating-crystal": 17.0667,
+        "proliferator-3": 2.3804,
+        "silicon-ore": 4.32,
+        "stone": 17.4933,
+        "titanium-ingot": 10.9333,
+        "water": 10.9333
+      },
+      "outputs": {
+        "plane-filter": 3.3333,
+        "processor": 3.3333,
+        "titanium-glass": 8.3333
+      },
+      "surplus_outputs": {},
+      "spray_lanes": {
+        "casimir-crystal": false,
+        "circuit-board": false,
+        "copper-ingot": true,
+        "fire-ice": true,
+        "glass": false,
+        "graphene": false,
+        "high-purity-silicon": false,
+        "hydrogen": false,
+        "iron-ingot": true,
+        "microcrystalline-component": false,
+        "optical-grating-crystal": true,
+        "silicon-ore": true,
+        "stone": true,
+        "titanium-glass": false,
+        "titanium-ingot": true,
+        "water": true
+      },
+      "lanes_requiring_split": [],
+      "belt_required_edges": [
+        [
+          "casimir-crystal-advanced",
+          "plane-filter"
+        ],
+        [
+          "circuit-board",
+          "processor"
+        ],
+        [
+          "glass",
+          "titanium-glass"
+        ],
+        [
+          "graphene-advanced",
+          "casimir-crystal-advanced"
+        ],
+        [
+          "high-purity-silicon",
+          "microcrystalline-component"
+        ],
+        [
+          "microcrystalline-component",
+          "processor"
+        ],
+        [
+          "titanium-glass",
+          "plane-filter"
+        ]
+      ],
+      "recipes": [
+        {
+          "recipe": "casimir-crystal-advanced",
+          "machine": "assembling-machine-2",
+          "count": 9,
+          "prolif": "products"
+        },
+        {
+          "recipe": "circuit-board",
+          "machine": "assembling-machine-2",
+          "count": 3,
+          "prolif": "products"
+        },
+        {
+          "recipe": "glass",
+          "machine": "arc-smelter",
+          "count": 18,
+          "prolif": "products"
+        },
+        {
+          "recipe": "graphene-advanced",
+          "machine": "chemical-plant",
+          "count": 4,
+          "prolif": "products"
+        },
+        {
+          "recipe": "high-purity-silicon",
+          "machine": "arc-smelter",
+          "count": 5,
+          "prolif": "products"
+        },
+        {
+          "recipe": "microcrystalline-component",
+          "machine": "assembling-machine-2",
+          "count": 9,
+          "prolif": "products"
+        },
+        {
+          "recipe": "plane-filter",
+          "machine": "assembling-machine-2",
+          "count": 32,
+          "prolif": "products"
+        },
+        {
+          "recipe": "processor",
+          "machine": "assembling-machine-2",
+          "count": 8,
+          "prolif": "products"
+        },
+        {
+          "recipe": "titanium-glass",
+          "machine": "assembling-machine-2",
+          "count": 28,
+          "prolif": "products"
+        }
+      ],
+      "lane_capacity": 30.0,
+      "items_above_one_belt": [],
+      "strips": {
+        "n": 23,
+        "widest": 3,
+        "mean": 2.087
+      },
+      "strip_machines": [
+        5,
+        4,
+        3,
+        6,
+        6,
+        6,
+        4,
+        5,
+        5,
+        4,
+        6,
+        6,
+        5,
+        5,
+        5,
+        5,
+        4,
+        4,
+        6,
+        6,
+        6,
+        5,
+        5
+      ],
+      "strip_recipes": [
+        "casimir-crystal-advanced",
+        "circuit-board",
+        "glass",
+        "graphene-advanced",
+        "high-purity-silicon",
+        "microcrystalline-component",
+        "plane-filter",
+        "processor",
+        "titanium-glass"
+      ],
+      "logical_strip_plans": 9,
+      "features": {
+        "machines": 116,
+        "groups": 9,
+        "recipes": 9,
+        "strips": 23,
+        "distinct_items": 19,
+        "max_ingredients_per_strip": 3,
+        "mean_ingredients_per_strip": 2.087,
+        "coaters": 16,
+        "items_above_one_belt": 0,
+        "both_fed_items": 2,
+        "chain_depth": 2,
+        "max_spread": 2,
+        "sum_spread": 2,
+        "max_consumers": 2,
+        "items_with_3plus_consumers": 0,
+        "top_spread": [
+          [
+            "copper-ingot",
+            2
+          ],
+          [
+            "casimir-crystal",
+            0
+          ],
+          [
+            "circuit-board",
+            0
+          ]
+        ],
+        "proliferator_consumers": 16,
+        "proliferator_span": 2,
+        "proliferator_spread": 32,
+        "max_spread_no_prolif": 2,
+        "sum_spread_no_prolif": 2,
+        "max_live_range": 2,
+        "sum_live_range": 15,
+        "items_live_range_ge3": 0,
+        "top_live_range": [
+          [
+            "circuit-board",
+            2
+          ],
+          [
+            "proliferator-3",
+            2
+          ],
+          [
+            "casimir-crystal",
+            1
+          ]
+        ],
+        "max_pressure": 10,
+        "max_pressure_depth": 0,
+        "max_lane_pressure": 10,
+        "max_lane_pressure_depth": 0,
+        "sum_pressure": 15,
+        "lane_pressure_per_strip": 0.4348,
+        "max_pressure_no_spray": 9,
+        "max_lane_pressure_no_spray": 9,
+        "proliferator_live_range": 2,
+        "proliferator_lanes": 1,
+        "items": [
+          "ItemProfile(item_id='copper-ingot', consumers=2, producers=0, earliest_consumer_depth=0, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='casimir-crystal', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='circuit-board', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='fire-ice', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='glass', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=False)",
+          "ItemProfile(item_id='graphene', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=False)",
+          "ItemProfile(item_id='high-purity-silicon', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='hydrogen', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='iron-ingot', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='microcrystalline-component', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='optical-grating-crystal', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='plane-filter', consumers=0, producers=1, earliest_consumer_depth=-1, latest_consumer_depth=-1, external=False)",
+          "ItemProfile(item_id='processor', consumers=0, producers=1, earliest_consumer_depth=-1, latest_consumer_depth=-1, external=False)",
+          "ItemProfile(item_id='proliferator-3', consumers=0, producers=0, earliest_consumer_depth=-1, latest_consumer_depth=-1, external=True)",
+          "ItemProfile(item_id='silicon-ore', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='stone', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='titanium-glass', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='titanium-ingot', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='water', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)"
+        ],
+        "live_items": [
+          "LiveProfile(item_id='circuit-board', producer_depth=0, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='proliferator-3', producer_depth=0, last_use_depth=2, live_lanes=1, is_spray=True)",
+          "LiveProfile(item_id='casimir-crystal', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='copper-ingot', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='glass', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='graphene', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='high-purity-silicon', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='hydrogen', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='microcrystalline-component', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='optical-grating-crystal', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='titanium-glass', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='titanium-ingot', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='water', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='fire-ice', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='iron-ingot', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='plane-filter', producer_depth=2, last_use_depth=-1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='processor', producer_depth=2, last_use_depth=-1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='silicon-ore', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='stone', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)"
+        ],
+        "pressure_profile": [
+          [
+            0,
+            10,
+            10
+          ],
+          [
+            1,
+            5,
+            5
+          ]
+        ]
+      },
+      "policy": "all-products"
+    },
+    {
+      "label": "output-products",
+      "machines": 131,
+      "groups": 9,
+      "belt": "conveyor-belt-3",
+      "belt_ips": 30.0,
+      "belt_upgrades": [],
+      "belt_stack": 1,
+      "piler_unlocked": true,
+      "external_inputs": {
+        "copper-ingot": 8.0,
+        "fire-ice": 5.3333,
+        "high-purity-silicon": 5.8333,
+        "hydrogen": 29.3333,
+        "iron-ingot": 5.3333,
+        "optical-grating-crystal": 21.3333,
+        "proliferator-3": 0.8578,
+        "silicon-ore": 9.6667,
+        "stone": 21.8667,
+        "titanium-ingot": 10.9333,
+        "water": 10.9333
+      },
+      "outputs": {
+        "plane-filter": 3.3333,
+        "processor": 3.3333,
+        "titanium-glass": 8.3333
+      },
+      "surplus_outputs": {},
+      "spray_lanes": {
+        "casimir-crystal": false,
+        "circuit-board": false,
+        "glass": false,
+        "microcrystalline-component": false,
+        "titanium-glass": false,
+        "titanium-ingot": true,
+        "water": true
+      },
+      "lanes_requiring_split": [],
+      "belt_required_edges": [
+        [
+          "casimir-crystal-advanced",
+          "plane-filter"
+        ],
+        [
+          "circuit-board",
+          "processor"
+        ],
+        [
+          "glass",
+          "titanium-glass"
+        ],
+        [
+          "microcrystalline-component",
+          "processor"
+        ],
+        [
+          "titanium-glass",
+          "plane-filter"
+        ]
+      ],
+      "recipes": [
+        {
+          "recipe": "casimir-crystal-advanced",
+          "machine": "assembling-machine-2",
+          "count": 11,
+          "prolif": "none"
+        },
+        {
+          "recipe": "circuit-board",
+          "machine": "assembling-machine-2",
+          "count": 3,
+          "prolif": "none"
+        },
+        {
+          "recipe": "glass",
+          "machine": "arc-smelter",
+          "count": 22,
+          "prolif": "none"
+        },
+        {
+          "recipe": "graphene-advanced",
+          "machine": "chemical-plant",
+          "count": 6,
+          "prolif": "none"
+        },
+        {
+          "recipe": "high-purity-silicon",
+          "machine": "arc-smelter",
+          "count": 10,
+          "prolif": "none"
+        },
+        {
+          "recipe": "microcrystalline-component",
+          "machine": "assembling-machine-2",
+          "count": 11,
+          "prolif": "none"
+        },
+        {
+          "recipe": "plane-filter",
+          "machine": "assembling-machine-2",
+          "count": 32,
+          "prolif": "products"
+        },
+        {
+          "recipe": "processor",
+          "machine": "assembling-machine-2",
+          "count": 8,
+          "prolif": "products"
+        },
+        {
+          "recipe": "titanium-glass",
+          "machine": "assembling-machine-2",
+          "count": 28,
+          "prolif": "products"
+        }
+      ],
+      "lane_capacity": 30.0,
+      "items_above_one_belt": [
+        "hydrogen"
+      ],
+      "strips": {
+        "n": 25,
+        "widest": 3,
+        "mean": 2.0
+      },
+      "strip_machines": [
+        6,
+        5,
+        3,
+        6,
+        6,
+        5,
+        5,
+        6,
+        5,
+        5,
+        6,
+        5,
+        6,
+        6,
+        5,
+        5,
+        5,
+        5,
+        4,
+        4,
+        6,
+        6,
+        6,
+        5,
+        5
+      ],
+      "strip_recipes": [
+        "casimir-crystal-advanced",
+        "circuit-board",
+        "glass",
+        "graphene-advanced",
+        "high-purity-silicon",
+        "microcrystalline-component",
+        "plane-filter",
+        "processor",
+        "titanium-glass"
+      ],
+      "logical_strip_plans": 9,
+      "features": {
+        "machines": 131,
+        "groups": 9,
+        "recipes": 9,
+        "strips": 25,
+        "distinct_items": 19,
+        "max_ingredients_per_strip": 3,
+        "mean_ingredients_per_strip": 2.0,
+        "coaters": 7,
+        "items_above_one_belt": 1,
+        "both_fed_items": 2,
+        "chain_depth": 2,
+        "max_spread": 2,
+        "sum_spread": 2,
+        "max_consumers": 2,
+        "items_with_3plus_consumers": 0,
+        "top_spread": [
+          [
+            "copper-ingot",
+            2
+          ],
+          [
+            "casimir-crystal",
+            0
+          ],
+          [
+            "circuit-board",
+            0
+          ]
+        ],
+        "proliferator_consumers": 7,
+        "proliferator_span": 1,
+        "proliferator_spread": 7,
+        "max_spread_no_prolif": 2,
+        "sum_spread_no_prolif": 2,
+        "max_live_range": 2,
+        "sum_live_range": 15,
+        "items_live_range_ge3": 0,
+        "top_live_range": [
+          [
+            "circuit-board",
+            2
+          ],
+          [
+            "proliferator-3",
+            2
+          ],
+          [
+            "casimir-crystal",
+            1
+          ]
+        ],
+        "max_pressure": 10,
+        "max_pressure_depth": 0,
+        "max_lane_pressure": 11,
+        "max_lane_pressure_depth": 0,
+        "sum_pressure": 15,
+        "lane_pressure_per_strip": 0.44,
+        "max_pressure_no_spray": 9,
+        "max_lane_pressure_no_spray": 10,
+        "proliferator_live_range": 2,
+        "proliferator_lanes": 1,
+        "items": [
+          "ItemProfile(item_id='copper-ingot', consumers=2, producers=0, earliest_consumer_depth=0, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='casimir-crystal', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='circuit-board', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='fire-ice', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='glass', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=False)",
+          "ItemProfile(item_id='graphene', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=False)",
+          "ItemProfile(item_id='high-purity-silicon', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='hydrogen', consumers=1, producers=1, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='iron-ingot', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='microcrystalline-component', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='optical-grating-crystal', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='plane-filter', consumers=0, producers=1, earliest_consumer_depth=-1, latest_consumer_depth=-1, external=False)",
+          "ItemProfile(item_id='processor', consumers=0, producers=1, earliest_consumer_depth=-1, latest_consumer_depth=-1, external=False)",
+          "ItemProfile(item_id='proliferator-3', consumers=0, producers=0, earliest_consumer_depth=-1, latest_consumer_depth=-1, external=True)",
+          "ItemProfile(item_id='silicon-ore', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='stone', consumers=1, producers=0, earliest_consumer_depth=0, latest_consumer_depth=0, external=True)",
+          "ItemProfile(item_id='titanium-glass', consumers=1, producers=1, earliest_consumer_depth=2, latest_consumer_depth=2, external=False)",
+          "ItemProfile(item_id='titanium-ingot', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)",
+          "ItemProfile(item_id='water', consumers=1, producers=0, earliest_consumer_depth=1, latest_consumer_depth=1, external=True)"
+        ],
+        "live_items": [
+          "LiveProfile(item_id='circuit-board', producer_depth=0, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='proliferator-3', producer_depth=0, last_use_depth=2, live_lanes=1, is_spray=True)",
+          "LiveProfile(item_id='casimir-crystal', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='copper-ingot', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='glass', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='graphene', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='high-purity-silicon', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='hydrogen', producer_depth=0, last_use_depth=1, live_lanes=2, is_spray=False)",
+          "LiveProfile(item_id='microcrystalline-component', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='optical-grating-crystal', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='titanium-glass', producer_depth=1, last_use_depth=2, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='titanium-ingot', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='water', producer_depth=0, last_use_depth=1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='fire-ice', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='iron-ingot', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='plane-filter', producer_depth=2, last_use_depth=-1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='processor', producer_depth=2, last_use_depth=-1, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='silicon-ore', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)",
+          "LiveProfile(item_id='stone', producer_depth=0, last_use_depth=0, live_lanes=1, is_spray=False)"
+        ],
+        "pressure_profile": [
+          [
+            0,
+            10,
+            11
+          ],
+          [
+            1,
+            5,
+            5
+          ]
+        ]
+      },
+      "policy": "output-products"
+    }
+  ]
+}
