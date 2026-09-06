@@ -1,3 +1,4 @@
+import time
 from fractions import Fraction
 
 from flab2bp.layout.base import PlacedBuilding, Placement
@@ -5,6 +6,7 @@ from flab2bp.layout.observe import SearchEvent, SearchPhase
 from flab2bp.web.trace import (
     TRACE_BUILDING_FIELDS,
     TRACE_MAX_BUILDINGS,
+    TraceCollector,
     TraceRing,
     building_row,
     frame_json,
@@ -129,3 +131,34 @@ def test_ring_evicts_oldest_on_the_byte_bound_and_counts_it() -> None:
     # Oldest frames (0-16) are evicted, newest (17-19) survive.
     assert [f["seq"] for f in frames] == [17, 18, 19]
     assert ring.dropped == 17
+
+
+def test_collector_projects_on_its_own_thread_and_pages_by_cursor() -> None:
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic())
+    collector.start()
+    try:
+        for _ in range(3):
+            collector.observer.note(
+                SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT)
+            )
+        deadline = time.monotonic() + 2.0
+        while collector.ring.since(-1, limit=10)[0].__len__() < 3:
+            assert time.monotonic() < deadline, "the trace thread never drained"
+            time.sleep(0.01)
+    finally:
+        collector.stop()
+
+    frames, nxt = collector.ring.since(-1, limit=2)
+    assert [f["seq"] for f in frames] == [0, 1]
+    assert nxt == 2
+    frames, nxt = collector.ring.since(nxt - 1, limit=2)
+    assert [f["seq"] for f in frames] == [2]
+
+
+def test_collector_drops_and_counts_when_stage_one_overflows() -> None:
+    collector = TraceCollector(TraceRing(), started_at=time.monotonic(), stage1_maxlen=2)
+    for _ in range(10):
+        collector.observer.note(
+            SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT)
+        )
+    assert collector.dropped == 8

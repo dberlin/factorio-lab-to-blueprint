@@ -202,6 +202,21 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if path.startswith("/api/build/") and path.endswith("/trace"):
+            job_id = path.removeprefix("/api/build/").removesuffix("/trace")
+            job = self.builder.get(job_id)
+            if job is None:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "no such job"})
+                return
+            raw_cursor = parse_qs(parsed.query).get("from", ["-1"])[0]
+            try:
+                cursor = int(raw_cursor)
+            except ValueError:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "'from' must be an integer"})
+                return
+            self._json(HTTPStatus.OK, self.builder.trace_page(job, cursor))
+            return
+
         if path.startswith("/api/build/"):
             job = self.builder.get(path.removeprefix("/api/build/"))
             if job is None:

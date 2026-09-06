@@ -37,10 +37,12 @@ from flab2bp.layout.base import (
     NoValidLayout,
     PlacementStats,
 )
+from flab2bp.layout.observe import SearchObserver
 from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
+from flab2bp.web.trace import TraceCollector, TraceRing
 
 State = Literal["queued", "running", "done", "refused", "error"]
 WebStrategyName = Literal["best", "freeform", "sequence-pair"]
@@ -81,6 +83,10 @@ class Options:
     #: Ask the server to drive FactorioLab and capture its CSV export.  This is
     #: allowed only for the validated FactorioLab HTTPS pages.
     fetch_flow: bool = False
+    #: Stream search snapshots to the caller.  OFF by default: a picture of the
+    #: search is a debugging instrument, and every build paying for one is not
+    #: a trade anybody asked for.
+    trace: bool = False
 
     @property
     def effective_candidate_count(self) -> int:
@@ -203,6 +209,7 @@ def parse_options(raw: JsonValue) -> Options:
         "allow_invalid",
         "flow",
         "fetch_flow",
+        "trace",
     }
     unknown = sorted(raw.keys() - allowed)
     if unknown:
@@ -295,6 +302,10 @@ def parse_options(raw: JsonValue) -> Options:
     if fetch_flow:
         _validate_web_fetch_url(url.strip())
 
+    trace = raw.get("trace", False)
+    if not isinstance(trace, bool):
+        raise InvalidOptions("'trace' must be a boolean")
+
     return Options(
         url=url.strip(),
         strategy=web_strategy,
@@ -306,6 +317,7 @@ def parse_options(raw: JsonValue) -> Options:
         allow_invalid=allow_invalid,
         flow=flow.strip(),
         fetch_flow=fetch_flow,
+        trace=trace,
     )
 
 
@@ -334,6 +346,9 @@ class Job:
     #: refused this candidate 40 seconds ago" is worth seeing while the next
     #: one runs, not only in the report at the end.
     settled: list[pipeline.AttemptProgress] = field(default_factory=list)
+    #: The collector for this job's search trace, or ``None`` when trace was
+    #: never asked for.  Set once, under ``_lock``, before the solve starts.
+    trace: TraceCollector | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -347,7 +362,11 @@ class Job:
         return self.state in ("done", "refused", "error")
 
 
-def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.Build:
+def run_build(
+    options: Options,
+    on_progress: pipeline.ProgressSink,
+    search_observer: SearchObserver | None = None,
+) -> pipeline.Build:
     """Run one build through the pipeline's shared CPU-allocation policy.
 
     ``--flow`` arrives as CSV text and goes through ``flow_from_text``'s
@@ -373,6 +392,7 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
         fetch_flow=options.fetch_flow,
         fetch_url_validator=_validate_web_fetch_url if options.fetch_flow else None,
         on_progress=on_progress,
+        search_observer=search_observer,
         race=options.strategy == "best",
     )
 
@@ -380,7 +400,7 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
 #: What a :class:`Builder` runs.  The progress sink is a parameter rather than
 #: something the builder reaches in and sets, so a test can substitute a solve
 #: that reports whatever sequence it wants to see rendered.
-Solve = Callable[[Options, pipeline.ProgressSink], pipeline.Build]
+Solve = Callable[[Options, pipeline.ProgressSink, SearchObserver | None], pipeline.Build]
 
 
 class Builder:
@@ -438,34 +458,48 @@ class Builder:
                 if step.phase != "started":
                     job.settled.append(step)
 
+        collector: TraceCollector | None = None
+        if job.options.trace:
+            collector = TraceCollector(TraceRing(), started_at=time.monotonic())
+            collector.start()
+            with job._lock:
+                job.trace = collector
+
         try:
-            build = self._solve(job.options, note)
-            result = describe(build, allow_invalid=job.options.allow_invalid)
-        except NoValidLayout as exc:
-            # Not an error. A spec nobody can lay out reports which pairs were
-            # tried and why each gave up, and that is the most useful thing on
-            # the screen when it happens.
-            with job._lock:
-                job.state = "refused"
-                job.refusal = refusal(_attempt_failures(exc), message=str(exc))
-                job.finished_at = time.monotonic()
-        except (ValueError, KeyError) as exc:
-            with job._lock:
-                job.state = "error"
-                job.error = str(exc)
-                job.finished_at = time.monotonic()
-        except Exception:
-            # Chromium/CDP failures are ordinary operational failures for a job.
-            # Exception deliberately excludes KeyboardInterrupt and SystemExit.
-            with job._lock:
-                job.state = "error"
-                job.error = "build failed unexpectedly"
-                job.finished_at = time.monotonic()
-        else:
-            with job._lock:
-                job.state = "done"
-                job.result = result
-                job.finished_at = time.monotonic()
+            try:
+                build = self._solve(
+                    job.options, note, None if collector is None else collector.observer
+                )
+                result = describe(build, allow_invalid=job.options.allow_invalid)
+            except NoValidLayout as exc:
+                # Not an error. A spec nobody can lay out reports which pairs
+                # were tried and why each gave up, and that is the most useful
+                # thing on the screen when it happens.
+                with job._lock:
+                    job.state = "refused"
+                    job.refusal = refusal(_attempt_failures(exc), message=str(exc))
+                    job.finished_at = time.monotonic()
+            except (ValueError, KeyError) as exc:
+                with job._lock:
+                    job.state = "error"
+                    job.error = str(exc)
+                    job.finished_at = time.monotonic()
+            except Exception:
+                # Chromium/CDP failures are ordinary operational failures for a
+                # job. Exception deliberately excludes KeyboardInterrupt and
+                # SystemExit.
+                with job._lock:
+                    job.state = "error"
+                    job.error = "build failed unexpectedly"
+                    job.finished_at = time.monotonic()
+            else:
+                with job._lock:
+                    job.state = "done"
+                    job.result = result
+                    job.finished_at = time.monotonic()
+        finally:
+            if collector is not None:
+                collector.stop()
 
     def snapshot(self, job: Job) -> Json:
         """The job as JSON, including where it is if it is not finished."""
@@ -503,6 +537,7 @@ class Builder:
                     # a poller needs, and `result.flow_pinned` is the proof it
                     # was honoured.
                     "flow_supplied": bool(job.options.flow),
+                    "trace": job.options.trace,
                 },
                 "result": job.result,
                 "refusal": job.refusal,
@@ -517,6 +552,21 @@ class Builder:
         if job.state == "queued":
             body["queue_position"] = self.queue_position(job)
         return body
+
+    def trace_page(self, job: Job, cursor: int) -> Json:
+        """The frames after ``cursor``, or an empty page when trace is off."""
+        with job._lock:
+            collector = job.trace
+            done = job.done
+        if collector is None:
+            return {"frames": [], "next": cursor, "dropped": 0, "complete": done}
+        frames, nxt = collector.ring.since(cursor)
+        return {
+            "frames": cast(JsonValue, frames),
+            "next": nxt,
+            "dropped": collector.dropped,
+            "complete": done and not frames,
+        }
 
 
 def _step(step: pipeline.AttemptProgress | None) -> Json | None:

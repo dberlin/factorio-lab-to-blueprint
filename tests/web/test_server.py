@@ -19,6 +19,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from flab2bp import pipeline
+from flab2bp.layout.observe import SearchObserver
 from flab2bp.web.jobs import Builder, Options, Solve, run_build
 from flab2bp.web.payload import Json
 from flab2bp.web.server import serve
@@ -140,7 +141,9 @@ def test_the_post_does_not_wait_for_the_solve(
     """
     release = threading.Event()
 
-    def slow(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+    def slow(
+        _o: Options, _p: pipeline.ProgressSink, _s: SearchObserver | None = None
+    ) -> pipeline.Build:
         release.wait(timeout=20.0)
         return small_build
 
@@ -167,7 +170,9 @@ def test_a_refusal_comes_back_200_not_500(start: Callable[..., Client]) -> None:
     """A spec that cannot be laid out is an answer, and answers are not errors."""
     from flab2bp.layout.base import NoValidLayout
 
-    def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+    def refuse(
+        _o: Options, _p: pipeline.ProgressSink, _s: SearchObserver | None = None
+    ) -> pipeline.Build:
         raise NoValidLayout("freeform/a: too tall", spec_label="a", budget_s=1.0)
 
     client = start(refuse)
@@ -205,7 +210,9 @@ def test_a_bad_body_is_400_with_a_reason(start: Callable[..., Client]) -> None:
 def test_sequence_pair_is_accepted_with_exact_wire_spelling(
     start: Callable[..., Client],
 ) -> None:
-    def not_layout(_options: Options, _progress: pipeline.ProgressSink) -> pipeline.Build:
+    def not_layout(
+        _options: Options, _progress: pipeline.ProgressSink, _search: SearchObserver | None = None
+    ) -> pipeline.Build:
         raise ValueError("layout is not part of this submission-boundary test")
 
     client = start(not_layout)
@@ -219,7 +226,9 @@ def test_a_long_budget_is_submitted_with_a_warning_rather_than_refused(
 ) -> None:
     """The wire says "this will take a while", not "no"."""
 
-    def not_layout(_options: Options, _progress: pipeline.ProgressSink) -> pipeline.Build:
+    def not_layout(
+        _options: Options, _progress: pipeline.ProgressSink, _search: SearchObserver | None = None
+    ) -> pipeline.Build:
         raise ValueError("layout is not part of this submission-boundary test")
 
     client = start(not_layout)
@@ -230,7 +239,9 @@ def test_a_long_budget_is_submitted_with_a_warning_rather_than_refused(
 
 
 def test_a_short_budget_carries_no_warning(start: Callable[..., Client]) -> None:
-    def not_layout(_options: Options, _progress: pipeline.ProgressSink) -> pipeline.Build:
+    def not_layout(
+        _options: Options, _progress: pipeline.ProgressSink, _search: SearchObserver | None = None
+    ) -> pipeline.Build:
         raise ValueError("layout is not part of this submission-boundary test")
 
     client = start(not_layout)
@@ -258,6 +269,52 @@ def test_polling_an_unknown_job_is_404(start: Callable[..., Client]) -> None:
     status, body = start().failing_json("/api/build/deadbeef")
     assert status == 404
     assert _string(body, "error") == "no such job"
+
+
+def test_trace_endpoint_reports_an_empty_page_when_trace_is_off(
+    start: Callable[..., Client],
+) -> None:
+    """Trace off: no collector, so the page is the fixed empty shape.
+
+    The solve is held open on an event -- never released -- rather than run for
+    real, so the job is deterministically still in flight when the trace poll
+    lands and ``complete`` is deterministically ``False``.
+    """
+    release = threading.Event()
+
+    def slow(
+        _o: Options, _p: pipeline.ProgressSink, _s: SearchObserver | None = None
+    ) -> pipeline.Build:
+        release.wait(timeout=20.0)
+        raise ValueError("trace-endpoint test never needs a result")
+
+    client = start(slow)
+    try:
+        status, job = client.post("/api/build", {"url": URL})
+        assert status == 202
+        status, body = client.get_json(f"/api/build/{_string(job, 'id')}/trace?from=-1")
+        assert status == 200
+        assert body == {"frames": [], "next": -1, "dropped": 0, "complete": False}
+    finally:
+        release.set()
+
+
+def test_trace_endpoint_404s_for_an_unknown_job(start: Callable[..., Client]) -> None:
+    status, body = start().failing_json("/api/build/deadbeef/trace?from=-1")
+    assert status == 404
+    assert _string(body, "error") == "no such job"
+
+
+def test_job_snapshot_echoes_the_trace_option(start: Callable[..., Client]) -> None:
+    def not_layout(
+        _options: Options, _progress: pipeline.ProgressSink, _search: SearchObserver | None = None
+    ) -> pipeline.Build:
+        raise ValueError("layout is not part of this submission-boundary test")
+
+    client = start(not_layout)
+    status, job = client.post("/api/build", {"url": URL, "trace": True})
+    assert status == 202
+    assert _object(job, "options")["trace"] is True
 
 
 def test_an_unbuilt_front_end_says_so_rather_than_404ing(start: Callable[..., Client]) -> None:

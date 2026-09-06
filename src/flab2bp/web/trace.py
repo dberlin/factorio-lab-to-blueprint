@@ -14,12 +14,14 @@ as arrays and ~1.1MB as objects, and the server's existing gzip
 
 from __future__ import annotations
 
+import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Final, cast
 
 from flab2bp.layout.base import PlacedBuilding
-from flab2bp.layout.observe import SearchEvent
+from flab2bp.layout.observe import TRACE_SAMPLE_INTERVAL_S, SampledObserver, SearchEvent
 from flab2bp.web.payload import Json
 
 #: The row order.  Positional, so the client decodes with a zod tuple and the
@@ -152,3 +154,73 @@ class TraceRing:
         if page:
             nxt = int(cast(int, page[-1]["seq"])) + 1
         return page, nxt
+
+
+TRACE_DRAIN_INTERVAL_S: Final = 0.1
+TRACE_STAGE1_MAXLEN: Final = 64
+
+
+@dataclass
+class TraceCollector:
+    """Stage 1 plus the thread that turns it into stage 2.
+
+    Stage 1 holds REFERENCES to frozen ``SearchEvent``s and is written by the
+    search; stage 2 holds projected JSON and is written here.  The split is the
+    whole performance argument: ``frame_json`` walks every building, and it must
+    never do so on a thread the search is trying to spend its core on.
+
+    Stage 1 evicts the OLDEST on overflow, because a backlog means this thread is
+    behind and the newest state is the one worth showing.  The ring evicts oldest
+    too, but for the opposite reason: a scrubber wants a contiguous recent
+    window.
+    """
+
+    ring: TraceRing
+    started_at: float
+    stage1_maxlen: int = TRACE_STAGE1_MAXLEN
+    min_interval_s: float = TRACE_SAMPLE_INTERVAL_S
+    _pending: deque[tuple[float, SearchEvent]] = field(init=False)
+    _dropped: int = field(default=0, init=False)
+    _seq: int = field(default=0, init=False)
+    _stop: threading.Event = field(default_factory=threading.Event, init=False)
+    _thread: threading.Thread | None = field(default=None, init=False)
+    observer: SampledObserver = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._pending = deque(maxlen=self.stage1_maxlen)
+        self.observer = SampledObserver(sink=self._offer, min_interval_s=self.min_interval_s)
+
+    @property
+    def dropped(self) -> int:
+        return self._dropped + self.ring.dropped
+
+    def _offer(self, event: SearchEvent) -> None:
+        """The sink.  One deque append; a bounded deque evicts silently, so the
+        eviction is counted here rather than discovered later."""
+        if len(self._pending) == self._pending.maxlen:
+            self._dropped += 1
+        self._pending.append((time.monotonic(), event))
+
+    def drain_once(self) -> None:
+        while self._pending:
+            at, event = self._pending.popleft()
+            self.ring.append(frame_json(self._seq, round(at - self.started_at, 3), event))
+            self._seq += 1
+
+    def start(self) -> None:
+        thread = threading.Thread(target=self._run, name="flab2bp-trace", daemon=True)
+        self._thread = thread
+        thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self.drain_once()
+            self._stop.wait(TRACE_DRAIN_INTERVAL_S)
+        self.drain_once()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        self.drain_once()

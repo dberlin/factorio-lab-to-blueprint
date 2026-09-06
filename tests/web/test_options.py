@@ -308,3 +308,13 @@ class TestFlowIsAnOptionNow:
         # Otherwise an empty textarea would submit a "flow" that parses to
         # nothing and refuses, instead of the derived build the user asked for.
         assert parse_options({"url": URL, "flow": "  \n\t "}).flow == ""
+
+
+def test_trace_defaults_off_and_round_trips() -> None:
+    assert parse_options({"url": URL}).trace is False
+    assert parse_options({"url": URL, "trace": True}).trace is True
+
+
+def test_trace_must_be_a_boolean() -> None:
+    with pytest.raises(InvalidOptions, match="'trace' must be a boolean"):
+        parse_options({"url": URL, "trace": "yes"})
