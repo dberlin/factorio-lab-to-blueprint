@@ -1,0 +1,137 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+baseline : docs/superpowers/evidence/2026-09-07-hierarchical-v2/baseline-round1.jsonl  (72 cells)
+candidate: docs/superpowers/evidence/2026-09-07-hierarchical-v2/candidate-round1.jsonl  (72 cells)
+commits  : baseline 826c9e3  candidate a7118ee
+
+status counts
+  status      baseline  candidate
+  CLEAN             72         72
+
+status counts per arm
+  freeform       CLEAN 36->36
+  sequence-pair  CLEAN 36->36
+
+CLEAN in baseline, not CLEAN in candidate: 0
+
+not CLEAN in baseline, CLEAN in candidate: 0
+
+INVALID/CRASH rows in candidate: 0
+INVALID/CRASH rows in baseline: 0
+
+cells CLEAN in both: 72
+geometric-mean area ratio (candidate/baseline)
+  all            cells  72  gmean area ratio 0.99612  (-0.39 %)  larger 3  smaller 3
+  freeform       cells  36  gmean area ratio 1.00009  (+0.01 %)  larger 2  smaller 1
+  sequence-pair  cells  36  gmean area ratio 0.99217  (-0.78 %)  larger 1  smaller 2
+cells whose area moved at all: 6
+  0.8327  sequence-pair universe-matrix [0/no-proliferator]  21420 -> 17836
+  0.8398  sequence-pair universe-matrix [2/output-products]  19458 -> 16340
+  1.0776  sequence-pair universe-matrix [1/all-products]  31317 -> 33748
+  0.9615  freeform casimir-crystal [2/output-products]  1144 -> 1100
+  1.0250  freeform super-magnetic-ring [0/no-proliferator]  2200 -> 2255
+  1.0179  freeform super-magnetic-ring [2/output-products]  2016 -> 2052
+
+p95 build wall: baseline 31.29 s  candidate 31.56 s
+total build wall: baseline 1423.7 s  candidate 1419.8 s
+
+wall_overshoot_s (already net of each cell's allowance)
+  baseline   rows carrying it  72  max 0.000 s  over-allowance 0
+    distribution  n 72  min 0.000  median 0.000  p95 0.000  max 0.000  mean 0.000
+    freeform       max 0.000 s  over-allowance 0  n 36  min 0.000  median 0.000  p95 0.000  max 0.000  mean 0.000
+    sequence-pair  max 0.000 s  over-allowance 0  n 36  min 0.000  median 0.000  p95 0.000  max 0.000  mean 0.000
+  candidate  rows carrying it  72  max 0.000 s  over-allowance 0
+    distribution  n 72  min 0.000  median 0.000  p95 0.000  max 0.000  mean 0.000
+    freeform       max 0.000 s  over-allowance 0  n 36  min 0.000  median 0.000  p95 0.000  max 0.000  mean 0.000
+    sequence-pair  max 0.000 s  over-allowance 0  n 36  min 0.000  median 0.000  p95 0.000  max 0.000  mean 0.000
+  wall-safety: candidate max 0.000 s vs baseline max 0.000 s -> OK
+
+freeform budget discipline (per cell)
+  cell                                         side  status     wall s   bud  spent%  cands  certskip  unspent  valid s
+  casimir-crystal [0/no-proliferator]          base  CLEAN        4.87    30   16.2%     12        11        0    0.035
+  casimir-crystal [0/no-proliferator]          cand  CLEAN        4.63    30   15.4%     11        10        0    0.031
+  casimir-crystal [1/all-products]             base  CLEAN        9.16    30   30.5%      9         3        0    0.143
+  casimir-crystal [1/all-products]             cand  CLEAN        9.32    30   31.1%      9         3        0    0.142
+  casimir-crystal [2/output-products]          base  CLEAN        8.68    30   28.9%     10         7        0    0.116
+  casimir-crystal [2/output-products]          cand  CLEAN        9.08    30   30.3%     11         7        0    0.149
+  electromagnetic-matrix [0/no-proliferator]   base  CLEAN        1.89    30    6.3%      9         3        0    0.043
+  electromagnetic-matrix [0/no-proliferator]   cand  CLEAN        1.84    30    6.1%      7         2        0    0.058
+  electromagnetic-matrix [1/all-products]      base  CLEAN       14.24    30   47.5%     12         7        0    0.174
+  electromagnetic-matrix [1/all-products]      cand  CLEAN       12.92    30   43.1%     11         7        0    0.225
+  electromagnetic-matrix [2/output-products]   base  CLEAN        3.85    30   12.8%     11         4        0    0.039
+  electromagnetic-matrix [2/output-products]   cand  CLEAN        1.97    30    6.6%      6         2        0    0.018
+  energy-matrix [0/no-proliferator]            base  CLEAN        0.84    30    2.8%      5         3        0    0.021
+  energy-matrix [0/no-proliferator]            cand  CLEAN        0.96    30    3.2%      5         3        0    0.027
+  energy-matrix [1/all-products]               base  CLEAN        2.74    30    9.1%      5         3        0    0.039
+  energy-matrix [1/all-products]               cand  CLEAN        2.03    30    6.8%      5         3        0    0.158
+  energy-matrix [2/output-products]            base  CLEAN        1.65    30    5.5%      5         3        0    0.025
+  energy-matrix [2/output-products]            cand  CLEAN        2.42    30    8.1%      5         3        0    0.034
+  graphene [0/no-proliferator]                 base  CLEAN        1.07    30    3.6%      5         3        0    0.013
+  graphene [0/no-proliferator]                 cand  CLEAN        0.89    30    3.0%      5         3        0    0.012
+  graphene [1/all-products]                    base  CLEAN        2.26    30    7.5%      5         3        0    0.026
+  graphene [1/all-products]                    cand  CLEAN        2.38    30    7.9%      5         3        0    0.026
+  graphene [2/output-products]                 base  CLEAN        1.64    30    5.5%      5         3        0    0.021
+  graphene [2/output-products]                 cand  CLEAN        1.74    30    5.8%      5         3        0    0.022
+  information-matrix [0/no-proliferator]       base  CLEAN       11.68    30   38.9%      5         2        0    1.213
+  information-matrix [0/no-proliferator]       cand  CLEAN       11.68    30   38.9%      5         2        0    1.306
+  information-matrix [1/all-products]          base  CLEAN       27.70    30   92.3%      8         3    2.698    1.963
+  information-matrix [1/all-products]          cand  CLEAN       27.15    30   90.5%      8         3    3.232    1.975
+  information-matrix [2/output-products]       base  CLEAN       25.66    30   85.5%      9         2        0    1.626
+  information-matrix [2/output-products]       cand  CLEAN       25.55    30   85.2%      9         2        0    1.294
+  iron-ingot [0/no-proliferator]               base  CLEAN        0.17    30    0.6%      3         2        0    0.001
+  iron-ingot [0/no-proliferator]               cand  CLEAN        0.26    30    0.9%      3         2        0    0.002
+  iron-ingot [1/all-products]                  base  CLEAN        0.71    30    2.4%      3         2        0    0.003
+  iron-ingot [1/all-products]                  cand  CLEAN        0.72    30    2.4%      3         2        0    0.002
+  iron-ingot [2/output-products]               base  CLEAN        0.77    30    2.6%      3         2        0    0.003
+  iron-ingot [2/output-products]               cand  CLEAN        0.71    30    2.4%      3         2        0    0.003
+  magnetic-coil [0/no-proliferator]            base  CLEAN        0.45    30    1.5%      4         2        0    0.004
+  magnetic-coil [0/no-proliferator]            cand  CLEAN        0.58    30    1.9%      6         3        0    0.007
+  magnetic-coil [1/all-products]               base  CLEAN        4.05    30   13.5%      7         4        0    0.141
+  magnetic-coil [1/all-products]               cand  CLEAN        3.92    30   13.1%      9         6        0    0.021
+  magnetic-coil [2/output-products]            base  CLEAN        2.11    30    7.0%      8         0        0    0.041
+  magnetic-coil [2/output-products]            cand  CLEAN        1.53    30    5.1%      8         2        0    0.014
+  plastic [0/no-proliferator]                  base  CLEAN        1.89    30    6.3%      7         4        0    0.057
+  plastic [0/no-proliferator]                  cand  CLEAN        1.75    30    5.8%      7         4        0    0.049
+  plastic [1/all-products]                     base  CLEAN        5.75    30   19.2%      7         5        0    0.042
+  plastic [1/all-products]                     cand  CLEAN        6.46    30   21.5%      7         5        0    0.042
+  plastic [2/output-products]                  base  CLEAN        5.12    30   17.1%      7         4        0    0.059
+  plastic [2/output-products]                  cand  CLEAN        5.06    30   16.9%      7         4        0     0.06
+  processor [0/no-proliferator]                base  CLEAN        4.29    30   14.3%     10         6        0    0.069
+  processor [0/no-proliferator]                cand  CLEAN        5.18    30   17.3%     11         7        0    0.079
+  processor [1/all-products]                   base  CLEAN       11.19    30   37.3%      9         5        0    0.157
+  processor [1/all-products]                   cand  CLEAN       10.12    30   33.7%      9         5        0    0.183
+  processor [2/output-products]                base  CLEAN        6.77    30   22.6%     11         5        0    0.137
+  processor [2/output-products]                cand  CLEAN        6.60    30   22.0%     11         5        0    0.143
+  quantum-chip [0/no-proliferator]             base  CLEAN        9.66    30   32.2%      5         3        0    0.554
+  quantum-chip [0/no-proliferator]             cand  CLEAN        8.78    30   29.3%      5         3        0     0.53
+  quantum-chip [1/all-products]                base  CLEAN       27.53    30   91.8%     11         5    2.785    1.126
+  quantum-chip [1/all-products]                cand  CLEAN       27.37    30   91.2%     11         5    3.001    1.116
+  quantum-chip [2/output-products]             base  CLEAN       15.53    30   51.8%     10         5        0    0.245
+  quantum-chip [2/output-products]             cand  CLEAN       16.25    30   54.2%     10         5        0    0.306
+  super-magnetic-ring [0/no-proliferator]      base  CLEAN       26.83    30   89.4%      9         5     3.26    0.123
+  super-magnetic-ring [0/no-proliferator]      cand  CLEAN       26.89    30   89.6%      9         2    3.212    0.478
+  super-magnetic-ring [1/all-products]         base  CLEAN       27.49    30   91.6%     10         0    2.704    0.357
+  super-magnetic-ring [1/all-products]         cand  CLEAN       28.08    30   93.6%     10         1    2.079    0.585
+  super-magnetic-ring [2/output-products]      base  CLEAN       29.38    30   97.9%      9         3    0.863    0.563
+  super-magnetic-ring [2/output-products]      cand  CLEAN       26.36    30   87.9%      8         2    3.739    0.351
+  universe-matrix [0/no-proliferator]          base  CLEAN       28.78    30   95.9%      4         0    3.937   10.438
+  universe-matrix [0/no-proliferator]          cand  CLEAN       30.35    30  101.2%      4         0     2.44   11.251
+  universe-matrix [1/all-products]             base  CLEAN       27.35    30   91.2%      3         1    6.336    3.176
+  universe-matrix [1/all-products]             cand  CLEAN       26.62    30   88.7%      3         1    6.705    3.077
+  universe-matrix [2/output-products]          base  CLEAN       30.14    30  100.5%      6         0    2.735    5.774
+  universe-matrix [2/output-products]          cand  CLEAN       28.55    30   95.2%      6         0    4.744    5.916
+
+freeform budget discipline (arm totals)
+  baseline
+    certify_skipped     sum 123.00  mean 3.417  n 36
+    budget_unspent_s    sum 25.32  mean 0.703  n 36
+    candidates attempted (alns_evaluations)  sum 261.00  mean 7.250  n 36
+    validation_time_s   sum 28.57  mean 0.794  n 36
+    budget - attempt_wall_s (unspent by wall) sum 696.26  mean 19.341  n 36
+    budget spent (attempt_wall/budget)  mean 35.5 %  min 0.6 %  max 100.5 %  n 36
+  candidate
+    certify_skipped     sum 122.00  mean 3.389  n 36
+    budget_unspent_s    sum 29.15  mean 0.810  n 36
+    candidates attempted (alns_evaluations)  sum 257.00  mean 7.139  n 36
+    validation_time_s   sum 29.69  mean 0.825  n 36
+    budget - attempt_wall_s (unspent by wall) sum 703.63  mean 19.545  n 36
+    budget spent (attempt_wall/budget)  mean 34.9 %  min 0.9 %  max 101.2 %  n 36
