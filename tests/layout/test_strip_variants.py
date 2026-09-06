@@ -190,6 +190,119 @@ def test_a_both_fed_product_whose_consumers_draw_more_than_a_belt_still_plans() 
     assert {"casimir-crystal#1", "deuterium#2"} <= destinations
 
 
+def _outer_row_overload_spec() -> BuildSpec:
+    """`casimir-crystal-advanced` off the plane-filter URL, in miniature.
+
+    Hydrogen is belted in AND made inside the block, so
+    `_seat_both_fed_outermost` pins its lane to the strip's outer row -- the
+    row whose sorter reaches THREE tiles.  A Pile Sorter sustains 20/3 items/s
+    across three tiles and this machine draws 8/s of hydrogen, so seating every
+    ingredient above starves it no matter which tier is picked.  Seating one
+    ingredient BELOW leaves the hydrogen lane at two tiles, where the same
+    sorter carries 10/s.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="graphene-advanced",
+                machine_item_id="quantum-chemical-plant",
+                count=2,
+                inputs_per_machine={"fire-ice": Fraction(2)},
+                outputs_per_machine={
+                    "graphene": Fraction(4, 3),
+                    "hydrogen": Fraction(2, 3),
+                },
+            ),
+            MachineGroup(
+                recipe_id="casimir-crystal-advanced",
+                machine_item_id="re-composing-assembler",
+                count=4,
+                inputs_per_machine={
+                    "hydrogen": Fraction(8),
+                    "graphene": Fraction(4, 3),
+                    "optical-grating-crystal": Fraction(16, 3),
+                },
+                outputs_per_machine={"casimir-crystal": Fraction(2, 3)},
+            ),
+        ),
+        external_inputs={
+            "fire-ice": Fraction(4),
+            "hydrogen": Fraction(32),
+            "optical-grating-crystal": Fraction(64, 3),
+        },
+        outputs={"casimir-crystal": Fraction(8, 3)},
+        belt_item_id="conveyor-belt-3",
+        belt_items_per_second=Fraction(30),
+    )
+
+
+def _fastest_sorter_rate(spec: BuildSpec, span: int) -> Fraction:
+    tiers = freeform._sorter_tiers_for(spec)
+    return max(catalog.sorter_rate(tier, span) for tier in tiers)
+
+
+def test_a_lane_is_never_seated_on_a_row_no_sorter_tier_can_serve() -> None:
+    """The seating may not hand a lane a span its fastest sorter cannot carry.
+
+    Before this, `_seat_inputs` took the first split that fit by rows and
+    columns -- every ingredient above -- and the both-fed hydrogen lane landed
+    on the three-tile row.  `_pick_sorter` then had no tier left to upgrade to,
+    returned the Pile Sorter anyway, and `flow.sorter_capacity` convicted every
+    packing that wired: a whole budget spent to refuse a spec that seats
+    perfectly well one row closer.
+    """
+    spec = _outer_row_overload_spec()
+    family = next(
+        f for f in generate_strip_families(spec) if f.recipe_id == "casimir-crystal-advanced"
+    )
+    group = freeform._adapt(spec)[family.group_key]
+    variant = default_strip_variant(family)
+    overloaded = [
+        (attachment.item, attachment.span, group.inputs[attachment.item])
+        for plan in variant.attachment_plan
+        if plan.lane.kind == "input"
+        for attachment in plan.attachments
+        if group.inputs[attachment.item] > _fastest_sorter_rate(spec, attachment.span)
+    ]
+    assert not overloaded
+
+
+def test_a_seating_no_row_can_serve_still_plans_and_is_judged_downstream() -> None:
+    """Servability is a PREFERENCE: with no servable split, seat as before.
+
+    25/s of hydrogen is past a Pile Sorter at ONE tile, so no row on this
+    machine carries it and no reordering would.  The planner must still produce
+    the seating it always did -- `flow.sorter_capacity` is what reports an
+    unbuildable lane, and a seating search that raised here instead would turn
+    a precise validator finding into "the spec cannot be planned into strips".
+    """
+    spec = _outer_row_overload_spec()
+    unservable = spec.model_copy(
+        update={
+            "groups": (
+                spec.groups[0],
+                spec.groups[1].model_copy(
+                    update={
+                        "inputs_per_machine": {
+                            **spec.groups[1].inputs_per_machine,
+                            "hydrogen": Fraction(25),
+                        }
+                    }
+                ),
+            )
+        }
+    )
+    family = next(
+        f for f in generate_strip_families(unservable) if f.recipe_id == "casimir-crystal-advanced"
+    )
+    lanes = {lane.lane_id: lane.items for lane in family.input_lanes}
+    assert lanes == {
+        "input:south:0": ("hydrogen",),
+        "input:south:1": ("graphene",),
+        "input:south:2": ("optical-grating-crystal",),
+    }
+
+
 def test_machine_cap_is_the_floor_of_capacity_over_the_largest_single_item_rate() -> None:
     (family,) = generate_strip_families(_rated_spec(Fraction(4)))
     assert family.machine_cap == 7  # floor(30 / 4)
