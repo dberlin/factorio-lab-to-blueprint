@@ -9,15 +9,24 @@ diagnostics go to stderr.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import time
 from collections import Counter
+from itertools import count
 from pathlib import Path
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy
 from flab2bp.layout.base import NoValidLayout
+from flab2bp.layout.observe import (
+    TRACE_SAMPLE_INTERVAL_S,
+    SampledObserver,
+    SearchEvent,
+)
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
+from flab2bp.web.trace import frame_json
 
 
 def _report(build: pipeline.Build, *, verbose: bool) -> None:
@@ -310,6 +319,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="race without exchanging incumbents or no-goods",
     )
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
+    ap.add_argument(
+        "--trace-jsonl",
+        type=Path,
+        metavar="PATH",
+        help="write every search snapshot as one JSON object per line to PATH "
+        "-- the same frames the web transport carries (design §4), the input "
+        "scripts/trace_overhead.py uses, and the offline-analysis path when "
+        "there is no browser. Off by default: no path, no observer, no cost.",
+    )
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
     ap.add_argument("-v", "--verbose", action="store_true", help="show every attempt")
     ap.add_argument(
@@ -347,40 +365,83 @@ def main(argv: list[str] | None = None) -> int:
     # five-worker share, where two is what the share funds.
     sequence_islands = args.sequence_islands
 
-    try:
-        build = pipeline.build(
-            args.url,
-            strategy=args.strategy,
-            band=args.band,
-            candidate_policies=candidate_policies,
-            time_budget_s=args.budget,
-            sequence_islands=sequence_islands,
-            name=args.name,
-            flow=args.flow,
-            fetch_flow=args.fetch_flow,
-            fetch_timeout_s=args.fetch_timeout,
-            browser=args.browser,
-            no_proliferator=args.no_proliferator,
-            workers=args.workers,
-            race=args.race,
-            share=args.share,
-        )
-        _report(build, verbose=args.verbose)
-    except NoValidLayout as exc:
-        # Distinct exit code: "no layout exists" is a different outcome from
-        # "the URL was bad", and per the user a spec that cannot be laid out in
-        # the retry budget is our bug until shown otherwise.
-        print(f"flab2bp: {exc}", file=sys.stderr)
-        for failure in exc.projection_failures[:5]:
-            print(
-                f"  band {failure.band} {failure.check} buildings "
-                f"{failure.buildings}: {failure.detail}",
-                file=sys.stderr,
+    # --trace-jsonl opens its output file here, before any solve starts, so a
+    # bad path (missing directory, no permission, full disk) fails fast at
+    # argument time -- the same place `--sequence-islands` and `--workers`
+    # already fail on a bad value -- rather than surfacing five minutes into a
+    # real build. `ap.error` never returns (argparse types it `NoReturn`), so
+    # `trace_file` is a real, open file for the rest of `main` whenever it is
+    # not `None`.
+    trace_file = None
+    search_observer = None
+    if args.trace_jsonl is not None:
+        try:
+            trace_file = args.trace_jsonl.open("w", encoding="utf-8")
+        except OSError as exc:
+            ap.error(f"--trace-jsonl {args.trace_jsonl}: {exc}")
+        seq = count()
+        t0 = time.monotonic()
+
+        def _write_frame(event: SearchEvent) -> None:
+            # frame_json is the ONE place, web or CLI, that projects a
+            # SearchEvent into the wire shape (web/trace.py, design §4).
+            # `event.monotonic_s` is captured where the event was constructed
+            # (observe.py's default factory), never at whatever later moment
+            # this sink happens to run -- the same relationship
+            # TraceCollector.drain_once uses against its own `started_at`
+            # (web/trace.py), so a CLI trace and a web trace measure `t` the
+            # same way relative to their own start.
+            assert trace_file is not None
+            trace_file.write(
+                json.dumps(frame_json(next(seq), round(event.monotonic_s - t0, 3), event))
             )
-        return 3
-    except (ValueError, KeyError) as exc:
-        print(f"flab2bp: {exc}", file=sys.stderr)
-        return 2
+            trace_file.write("\n")
+
+        search_observer = SampledObserver(sink=_write_frame, min_interval_s=TRACE_SAMPLE_INTERVAL_S)
+
+    try:
+        try:
+            build = pipeline.build(
+                args.url,
+                strategy=args.strategy,
+                band=args.band,
+                candidate_policies=candidate_policies,
+                time_budget_s=args.budget,
+                sequence_islands=sequence_islands,
+                name=args.name,
+                flow=args.flow,
+                fetch_flow=args.fetch_flow,
+                fetch_timeout_s=args.fetch_timeout,
+                browser=args.browser,
+                no_proliferator=args.no_proliferator,
+                workers=args.workers,
+                race=args.race,
+                share=args.share,
+                search_observer=search_observer,
+            )
+            _report(build, verbose=args.verbose)
+        except NoValidLayout as exc:
+            # Distinct exit code: "no layout exists" is a different outcome from
+            # "the URL was bad", and per the user a spec that cannot be laid out in
+            # the retry budget is our bug until shown otherwise.
+            print(f"flab2bp: {exc}", file=sys.stderr)
+            for failure in exc.projection_failures[:5]:
+                print(
+                    f"  band {failure.band} {failure.check} buildings "
+                    f"{failure.buildings}: {failure.detail}",
+                    file=sys.stderr,
+                )
+            return 3
+        except (ValueError, KeyError) as exc:
+            print(f"flab2bp: {exc}", file=sys.stderr)
+            return 2
+    finally:
+        # Every exit path -- success, NoValidLayout, ValueError/KeyError, or
+        # any other exception propagating out of `pipeline.build` -- closes
+        # the file, so a raised build still leaves a complete, readable trace
+        # instead of one truncated by a buffered write that never flushed.
+        if trace_file is not None:
+            trace_file.close()
 
     if build.report.errors and not args.allow_invalid:
         print(

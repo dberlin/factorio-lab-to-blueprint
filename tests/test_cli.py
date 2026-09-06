@@ -8,10 +8,13 @@ one solve rather than one per test.
 from __future__ import annotations
 
 import dataclasses
+import json
+from pathlib import Path
 
 import pytest
 
 from flab2bp import cli, pipeline
+from flab2bp.layout.observe import SearchEvent, SearchPhase
 from flab2bp.rates.candidates import CandidatePolicy
 
 #: The reported deuteron-fuel-rod URL (see ``tests/test_pipeline.py``'s
@@ -100,3 +103,64 @@ def test_cli_reports_an_infeasible_spec_as_a_refusal_not_a_crash(
     err = capsys.readouterr().err
     assert "iron-ore" in err
     assert "Traceback" not in err
+
+
+def test_trace_jsonl_defaults_to_none() -> None:
+    args = cli.build_parser().parse_args(["https://example/x"])
+    assert args.trace_jsonl is None
+
+
+def test_trace_jsonl_parses_to_a_path() -> None:
+    args = cli.build_parser().parse_args(["https://example/x", "--trace-jsonl", "trace.jsonl"])
+    assert args.trace_jsonl == Path("trace.jsonl")
+
+
+def test_without_the_flag_no_observer_is_built(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_build(*_args: object, **kwargs: object) -> pipeline.Build:
+        seen["search_observer"] = kwargs.get("search_observer")
+        # KeyError short-circuits before a real solve; `main` already turns
+        # one into exit code 2 (cli.py:381-383), so no new exception path
+        # is needed here.
+        raise KeyError("short-circuit before a real solve")
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    exit_code = cli.main(["https://example/x"])
+    assert exit_code == 2
+    assert seen["search_observer"] is None
+
+
+def test_main_writes_one_json_object_per_search_event_per_line(
+    deuteron_build: pipeline.Build,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_build(*_args: object, **kwargs: object) -> pipeline.Build:
+        # The same contract every other call site gets: due() gates, note()
+        # records. Exercising it here is what proves the CLI and the web
+        # path share one observer and one frame schema (design §7.4).
+        observer = kwargs["search_observer"]
+        assert observer is not None
+        assert observer.due(SearchPhase.INCUMBENT) is True
+        observer.note(
+            SearchEvent(
+                strategy="freeform",
+                candidate="c",
+                phase=SearchPhase.INCUMBENT,
+                incumbent=True,
+            )
+        )
+        return deuteron_build
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    trace_path = tmp_path / "trace.jsonl"
+    exit_code = cli.main(["https://example/x", "--trace-jsonl", str(trace_path)])
+
+    assert exit_code == 0
+    lines = trace_path.read_text().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["phase"] == "incumbent"
+    assert row["strategy"] == "freeform"
+    assert "blueprint" not in row  # N1: not even the CLI's own copy is pasteable.
