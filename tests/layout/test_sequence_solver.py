@@ -45,6 +45,7 @@ from flab2bp.layout.freeform import (
     plan_strips,
 )
 from flab2bp.layout.global_router import GlobalRouteResult
+from flab2bp.layout.observe import SearchEvent, SearchObserver, SearchPhase
 from flab2bp.layout.piling import PilerPlan
 from flab2bp.layout.route_feedback import (
     ClusterRelationNoGood,
@@ -4396,6 +4397,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
         compact_seed_config: CompactSeedConfig | None = None,
         portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
+        observer: SearchObserver | None = None,
     ) -> Never:
         del (
             band_policy,
@@ -4407,6 +4409,7 @@ def test_serial_layout_uses_a_budgeted_root_compact_seed(
             compact_seed_base_seed,
             portfolio_incumbent,
             publish_incumbent,
+            observer,
         )
         captured["power"] = power
         captured["compact_seed_attempt"] = compact_seed_attempt
@@ -11149,3 +11152,62 @@ def test_the_portable_band_core_boundary_is_the_number_the_helper_is_given() -> 
         )
         <= 154
     )
+
+
+@pytest.fixture
+def small_spec() -> BuildSpec:
+    """A minimal spec: one producer group, laid out in well under a second."""
+    return single_recipe_spec()
+
+
+class _RecordingObserver:
+    """Takes everything, so a test sees every site rather than a sample."""
+
+    def __init__(self) -> None:
+        self.events: list[SearchEvent] = []
+
+    def due(self, phase: SearchPhase, /) -> bool:
+        return True
+
+    def note(self, event: SearchEvent, /) -> None:
+        self.events.append(event)
+
+
+def test_sequence_pair_reports_stage_observations_and_incumbents(small_spec: BuildSpec) -> None:
+    observer = _RecordingObserver()
+    layout = SequencePairLayout(
+        band_policy=BandPolicy.parse("portable"),
+        config=SequenceSolverConfig.test(),
+        islands=1,
+        observer=observer,
+    )
+    layout.lay_out(small_spec, time_budget_s=10.0)
+
+    routed = [e for e in observer.events if e.phase is SearchPhase.ROUTED]
+    assert routed, "a sequence-pair search closes at least one stage"
+    first = routed[0]
+    assert first.strategy == "sequence-pair"
+    assert first.candidate == small_spec.label
+    # Every one of these is already on the StageObservation the search builds
+    # anyway (sequence_solver.py:811-856); the observer copies, never computes.
+    assert first.height is not None
+    assert first.restart is not None
+    assert first.stage is not None
+
+    incumbents = [e for e in observer.events if e.phase is SearchPhase.INCUMBENT]
+    assert incumbents
+    assert incumbents[-1].incumbent is True
+    assert incumbents[-1].placement is not None
+
+
+def test_sequence_pair_islands_report_no_island_index(small_spec: BuildSpec) -> None:
+    # v1 limitation L1: a second spawn level is not traced. The frame says so
+    # with a null rather than implying the merged result is one island's search.
+    observer = _RecordingObserver()
+    SequencePairLayout(
+        band_policy=BandPolicy.parse("portable"),
+        config=SequenceSolverConfig.test(),
+        islands=2,
+        observer=observer,
+    ).lay_out(small_spec, time_budget_s=10.0)
+    assert all(e.island is None for e in observer.events)
