@@ -16,8 +16,15 @@
 # pattern is therefore assembled at run time from two halves that never appear
 # adjacent in any command line, and the matching lines are printed so the
 # number is auditable rather than merely asserted.
+#
+# Usage: run_guard.sh <worktree-root>
+#
+# The root is an ARGUMENT rather than derived from `$0`, because this script is
+# run from a /tmp copy (see above) where `dirname "$0"` points at /tmp and the
+# usual `cd "$(dirname "$0")/../../../.."` lands on `/`.  Passing it explicitly
+# is what makes the /tmp copy and the tracked copy the same program.
 set -eu
-cd "$(dirname "$0")/../../../.." || exit 1
+cd "${1:?usage: run_guard.sh <worktree-root>}" || exit 1
 DIR=docs/superpowers/evidence/2026-09-07-hierarchical-v3
 BASE=1ce8a0d3
 BRANCH=hierarchical-v3
