@@ -11,11 +11,17 @@ from flab2bp.bench.types import Metrics
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
 
+# Supply towers are not production machines. Other power nodes, including
+# Ray Receivers and Energy Exchangers, still produce items and accept sorters.
+_SUPPLY_TOWER_IDS = frozenset(
+    catalog.item_id(lab_id) for lab_id in catalog.POWER_TOWER_CHOICES.values()
+)
+
 
 def _is_machine(b: PlacedBuilding) -> bool:
     if catalog.is_belt(b.item_id) or catalog.is_sorter(b.item_id):
         return False
-    if b.item_id == catalog.SPLITTER_ID or catalog.building(b.item_id).is_power_node:
+    if b.item_id == catalog.SPLITTER_ID or b.item_id in _SUPPLY_TOWER_IDS:
         return False
     try:
         return catalog.building(b.item_id).occupies_tiles
