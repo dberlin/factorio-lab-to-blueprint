@@ -474,18 +474,19 @@ def _lane(buildings: Buildings, index: int) -> tuple[int, ...]:
     row and come back.  What comes back here is one east-west segment -- the one
     ``index``'s own tile stands in.
     """
+    records = buildings.all()
     head = index
     while True:
         predecessors = buildings.by_output_obj(head)
         if not predecessors:
             break
         predecessor = predecessors[-1]
-        if not catalog.is_belt(buildings[predecessor].item_id):
+        if not catalog.is_belt(records[predecessor].item_id):
             break
         head = predecessor
     run = [head]
     while True:
-        onward = buildings[run[-1]].output_obj
+        onward = records[run[-1]].output_obj
         following = buildings.by_index(onward)
         if following is None or not catalog.is_belt(following.item_id):
             break
@@ -495,14 +496,14 @@ def _lane(buildings: Buildings, index: int) -> tuple[int, ...]:
     # A run that leaves the row and comes back contributes two disjoint
     # east-west segments at the same y; the port belongs only to the segment
     # containing its own tile.
-    row = buildings[index].y
-    on_row = sorted((i for i in run if buildings[i].y == row), key=lambda i: buildings[i].x)
+    row = records[index].y
+    on_row = sorted((i for i in run if records[i].y == row), key=lambda i: records[i].x)
     at = on_row.index(index)
     low = at
-    while low > 0 and buildings[on_row[low - 1]].x == buildings[on_row[low]].x - 1:
+    while low > 0 and records[on_row[low - 1]].x == records[on_row[low]].x - 1:
         low -= 1
     high = at
-    while high + 1 < len(on_row) and buildings[on_row[high + 1]].x == buildings[on_row[high]].x + 1:
+    while high + 1 < len(on_row) and records[on_row[high + 1]].x == records[on_row[high]].x + 1:
         high += 1
     return tuple(on_row[low : high + 1])
 
@@ -510,9 +511,10 @@ def _lane(buildings: Buildings, index: int) -> tuple[int, ...]:
 def _port(buildings: Buildings, index: int, machines: int) -> _Port:
     """The router's view of one boundary lane, attached at ``index``."""
     tiles = _lane(buildings, index)
-    b = buildings[index]
-    x0 = buildings[tiles[0]].x
-    x1 = buildings[tiles[-1]].x
+    records = buildings.all()
+    b = records[index]
+    x0 = records[tiles[0]].x
+    x1 = records[tiles[-1]].x
     # `_Port.at_tile` reads the k-th tap off as `x0 + k`, so the column span and
     # the tile list have to be the same lane.
     assert x1 - x0 + 1 == len(tiles), f"lane at {index} is not one contiguous row"
@@ -535,7 +537,8 @@ def _machines_behind(buildings: Buildings, block: BlockPlaced, index: int) -> in
     Keep the exact ``recipe_id != 0`` predicate: the Buildings machine kind is
     deliberately coarser and also contains power nodes and belt addons.
     """
-    strip = buildings[index].owner_strip
+    records = buildings.all()
+    strip = records[index].owner_strip
     stop = block.base + len(block.placement.buildings)
     candidates: Sequence[int]
     if strip is None:
@@ -547,7 +550,7 @@ def _machines_behind(buildings: Buildings, block: BlockPlaced, index: int) -> in
         sum(
             1
             for candidate in candidates
-            if block.base <= candidate < stop and buildings[candidate].recipe_id != 0
+            if block.base <= candidate < stop and records[candidate].recipe_id != 0
         ),
     )
 

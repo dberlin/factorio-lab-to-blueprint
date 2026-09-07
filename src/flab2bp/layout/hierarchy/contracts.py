@@ -22,9 +22,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
 
-from flab2bp.dsp import catalog
 from flab2bp.layout import markers
-from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.base import Placement
 from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.hierarchy.partition import Cut
 from flab2bp.spec import BuildSpec
@@ -62,12 +61,8 @@ def _machines_behind(buildings: Buildings, strip: int) -> int:
     indexed owner-strip bucket: the Buildings kind bucket is deliberately
     coarser and also contains power nodes and belt addons.
     """
-    return sum(1 for i in buildings.by_owner_strip(strip) if buildings[i].recipe_id != 0)
-
-
-def _belt_run(buildings: Buildings, index: int, *, forward: bool) -> set[int]:
-    """Every belt of the run through ``index``, in one direction."""
-    return set(buildings.belt_run(index, forward=forward))
+    records = buildings.all()
+    return sum(1 for i in buildings.by_owner_strip(strip) if records[i].recipe_id != 0)
 
 
 def _machines_on_lane(buildings: Buildings, index: int, *, puts_on: bool) -> int:
@@ -77,11 +72,12 @@ def _machines_on_lane(buildings: Buildings, index: int, *, puts_on: bool) -> int
     scanning every building once per boundary lane.
     """
     run = buildings.belt_run(index, forward=not puts_on)
+    records = buildings.all()
     machines: set[int] = set()
     for belt in run:
         sorters = buildings.sorters_into(belt) if puts_on else buildings.sorters_out_of(belt)
         for sorter_index in sorters:
-            sorter = buildings[sorter_index]
+            sorter = records[sorter_index]
             machine = sorter.input_obj if puts_on else sorter.output_obj
             candidate = buildings.by_index(machine)
             if machine is not None and candidate is not None and candidate.recipe_id != 0:
@@ -117,13 +113,14 @@ def _apportion(
     arithmetic, so the parts always sum back to ``total``.
     """
     n = len(indices)
+    records = buildings.all()
     weights: list[int]
-    if any(buildings[i].owner_strip is None for i in indices):
+    if any(records[i].owner_strip is None for i in indices):
         weights = [_machines_on_lane(buildings, i, puts_on=puts_on) for i in indices]
     else:
         weights = []
         for i in indices:
-            strip = buildings[i].owner_strip
+            strip = records[i].owner_strip
             assert strip is not None  # every lane checked above
             weights.append(_machines_behind(buildings, strip))
     total_weight = sum(weights)
