@@ -1,0 +1,3 @@
+  🔍 Resolving [2/1] [23D[0K  🔍 Resolving [2/1] [23D[0K{"file":"off-freeform-magcoil.bp.txt","buildings":155,"runs":14,"freeInputRuns":11,"freeEnds":21,"icons":10,"endpointIcons":7,"otherIcons":3,"counts":0,"beltSizedIcons":7,"machineSizedIcons":3}
+{"file":"placed-freeform-magcoil.bp.txt","buildings":155,"runs":14,"freeInputRuns":11,"freeEnds":21,"icons":10,"endpointIcons":7,"otherIcons":3,"counts":0,"beltSizedIcons":7,"machineSizedIcons":3}
+{"file":"placed-freeform-all-products.bp.txt","buildings":4262,"runs":133,"freeInputRuns":112,"freeEnds":198,"icons":135,"endpointIcons":85,"otherIcons":50,"counts":52,"beltSizedIcons":85,"machineSizedIcons":50}

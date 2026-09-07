@@ -229,10 +229,15 @@ class BuildSpec(_Frozen):
     #: lane that exists anyway, such as an external input belt.
     spray_lanes: dict[str, bool] = Field(default_factory=dict)
 
-    #: Items whose lane must be physically SPLIT in two, because the same item
-    #: feeds both a proliferated and an unproliferated consumer. Spraying a
-    #: shared lane would proliferate the unproliferated consumer's input too,
-    #: silently over-producing it and desyncing the build from these rates.
+    #: Items where the same lane feeds both a proliferated and an
+    #: unproliferated consumer. This is now a REPORT, not a correctness
+    #: constraint: sharing the lane sprays the unproliferated consumer's
+    #: input too, which over-produces it and desyncs the build from these
+    #: rates -- and the user ruled that acceptable (2026-09-07,
+    #: "over-proliferating is fine if it makes life easier"). A placement
+    #: that shares one of these lanes is no longer refused for it; it is
+    #: still named, in ``prolif.sprayed_cargo_reaches_machines``'s findings,
+    #: as a ``Severity.WARNING``.
     lanes_requiring_split: frozenset[str] = Field(default_factory=frozenset)
 
     #: Startup-liveness certificates derived from exact recipe batches and the

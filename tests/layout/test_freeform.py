@@ -147,6 +147,27 @@ from tests.layout.conftest import one_recipe_spec
 type SpecFactory = Callable[[], BuildSpec]
 
 
+@pytest.fixture
+def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``FLAB2BP_COATER_NODE=off``, the retained pre-2026-09-07 arm.
+
+    The default arm is ``placed``, where the Spray Coater is a free-standing
+    four-tile node beside the consumer lane rather than an addon riding the
+    consumer strip's own widened channel.  Under ``placed`` there is no
+    machine/Coater relation for a strip channel to clear at all --
+    ``_staged_static_clearance_keys`` returns the empty set by construction --
+    so every test of the staged-static clearance machinery, of the on-channel
+    seat, and every recorded pack geometry captured before the flip is a test
+    of the ``off`` arm and says so here.  ``off`` is reachable for one release
+    as the A/B control; ``tests/layout/test_coater_node.py`` covers the
+    ``placed`` node's geometry.
+
+    Deleting this fixture? See the retirement checklist, §14 of
+    ``docs/superpowers/evidence/2026-09-07-coater-placed-gate/README.md``.
+    """
+    monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
+
+
 def _identity_finalizer(
     placement: Placement,
     _policy: BandPolicy,
@@ -2391,6 +2412,7 @@ def _coater_strip_with_variant() -> Strip:
     return next(strip for strip in strips if freeform._staged_static_clearance_keys(strip))
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_clearance_keys_memo_is_transparent() -> None:
     strip = _coater_strip_with_variant()
     # `_coater_strip_with_variant` calls `plan_strips`, which itself populates
@@ -2546,6 +2568,7 @@ def test_direct_alignment_key_classifies_every_candidate_field() -> None:
     assert read & candidate_fields == freeform._DIRECT_ALIGNMENT_KEY_FIELDS
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_clearance_key_classifies_every_strip_field() -> None:
     """Every ``Strip`` field is either in the clearance memo key or declared unread.
 
@@ -8530,6 +8553,7 @@ def _plastic_pack_inputs() -> tuple[
     return strips, height, bound, candidates
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_pack_model_with_no_pinned_strips_is_the_model_pack_built_before_the_split() -> None:
     """The split must not change one byte of the production model.
 
@@ -9902,6 +9926,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     )
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_plan_strips_preselects_projection_risk_clearance_for_direct_preparation() -> None:
     freeform._staged_static_preclearance_proved.cache_clear()
     spec = proliferated_spec()
@@ -9992,6 +10017,7 @@ def test_proved_clean_same_strip_relation_skips_only_its_redundant_projection(
     assert [index for index, _building in retained] == [1, 2]
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_plan_time_projection_risks_are_batched_and_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10024,6 +10050,7 @@ def test_plan_time_projection_risks_are_batched_and_cached(
     assert len(proved) == len(set(proved))
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10062,6 +10089,7 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
     assert strip_pose_id(replacement.physical_variant) == pose_id
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10154,6 +10182,7 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     assert rejected == [failure]
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10787,6 +10816,59 @@ class TestProliferatorIsActuallySupplied:
                 f"one of the sprayed lanes {sorted(spec.spray_lanes)}"
             )
 
+    def test_a_severed_supply_tree_is_convicted_on_a_real_build(self) -> None:
+        """``prolif.coater_supply_is_fed``, mutation-tested on a real placement.
+
+        The clean build is asserted clean first, then ONE link is cut: the belt
+        feeding the coater's approach belt loses its ``output_obj``.  That is
+        precisely a ``_proliferator_supply_tree`` that never reached the node.
+        Both port belts still carry ``proliferator-3`` and still sit where the
+        addon rules want them, so every label-reading check stays clean -- which
+        is why this check had to exist.
+        """
+        spec = proliferated_spec()
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
+        assert not _full_report(p, spec).by_check("prolif.coater_supply_is_fed")
+
+        ctx = validate._context(p, spec, _id_map_for(spec), 256, catalog.DEFAULT_MAX_BELT_Z, True)
+        rides = validate._coater_rides(ctx)
+        assert rides, "fixture must produce at least one coater"
+        coater_index = sorted(rides.values())[0]
+        supply = validate._belt_in_addon_area(ctx, p.buildings[coater_index], area=1)
+        assert supply is not None
+        approach = next(
+            i
+            for i, b in enumerate(p.buildings)
+            if ctx.kinds[i] is validate.Kind.BELT and b.output_obj == supply
+        )
+        feeder = next(
+            i
+            for i, b in enumerate(p.buildings)
+            if ctx.kinds[i] is validate.Kind.BELT and b.output_obj == approach
+        )
+
+        buildings = list(p.buildings)
+        buildings[feeder] = replace(buildings[feeder], output_obj=None)
+        severed = replace(p, buildings=tuple(buildings))
+
+        findings = _full_report(severed, spec).by_check("prolif.coater_supply_is_fed")
+        assert len(findings) == 1, [f.message for f in findings]
+        assert findings[0].severity is validate.Severity.ERROR
+        assert findings[0].detail["coater"] == coater_index
+        assert findings[0].detail["supply_belt"] == supply
+
+        # The gap: the checks that read labels rather than flow stay clean on it.
+        blind = validate.validate(
+            severed,
+            spec,
+            ids=_id_map_for(spec),
+            only={"prolif.coaters_are_supplied", "game.addon_supply", "game.addon_facing"},
+            expect_power=True,
+        )
+        assert not blind.errors, [f.message for f in blind.errors]
+
     def test_no_proliferator_spec_places_no_supply_lane(self) -> None:
         """The machinery must cost nothing when proliferation is off."""
         spec = two_stage_spec()
@@ -10795,6 +10877,61 @@ class TestProliferatorIsActuallySupplied:
         ).lay_out(spec, time_budget_s=0.5)
         assert p.stats["spray_coaters"] == 0
         assert not [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+
+
+#: Every check that judges a Spray Coater.  Task 7's gate greps for the two
+#: ``prolif.coater_*`` names, so they are spelled out here rather than derived.
+COATER_ARBITERS = (
+    "prolif.coater_rides_one_run",
+    "prolif.sprayed_cargo_reaches_machines",
+    "prolif.coaters_are_supplied",
+    "prolif.coater_supply_is_fed",
+    "game.addon_supply",
+    "game.addon_facing",
+    "game.addon_corner",
+)
+
+
+@pytest.mark.parametrize("placer", ["freeform", "sequence-pair"])
+def test_every_coater_arbiter_is_green_on_a_placed_build(placer: str) -> None:
+    """The placed coater node must satisfy every check that judges a coater.
+
+    Asserted on the NAMED checks rather than on ``report.ok``: a broad
+    assertion turns any unrelated regression in either placer into a mystery
+    here, and the point of this test is to say which coater property broke.
+
+    ERROR severity only.  ``prolif.sprayed_cargo_reaches_machines`` has a clause
+    that is downgraded to WARNING later in this plan, and an assertion of "no
+    findings at all" would forbid a change the same plan mandates.
+
+    The coater count is asserted first, because a build with no coater satisfies
+    every one of these checks by having nothing to judge.
+    """
+    from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
+
+    spec = proliferated_spec()
+    if placer == "freeform":
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
+    else:
+        p = SequencePairLayout(
+            band_policy=BandPolicy("portable"),
+            islands=1,
+            config=SequenceSolverConfig.test(),
+        ).lay_out(spec, time_budget_s=2.0)
+
+    coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+    assert coaters, f"{placer} placed no Spray Coater; the arbiters below judge nothing"
+
+    report = _full_report(p, spec)
+    convicted = [
+        f
+        for name in COATER_ARBITERS
+        for f in report.by_check(name)
+        if f.severity is validate.Severity.ERROR
+    ]
+    assert not convicted, "\n".join(f"{f.check}: {f.message}" for f in convicted)
 
 
 class TestSortersCanCarryTheirDemand:
@@ -17704,6 +17841,7 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
         assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)
 
 
+@pytest.mark.usefixtures("off_arm")
 class TestASprayedLaneEitherGetsACoaterOrRefuses:
     """``_place_coaters`` may not ``continue`` past a lane it cannot seat.
 
@@ -18017,7 +18155,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         )
 
     def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
-        """One tile: ``_coater_seat`` has no tile with a lane tile either side."""
+        """One tile: ``_coater_seats`` has no tile with a lane tile either side."""
         canvas, spec, strips, ports = self._fixture(1)
         with pytest.raises(freeform._Unseatable, match="tile"):
             freeform._place_coaters(
@@ -18575,20 +18713,24 @@ def _canvas_with_lane_merge_at(x: int, y: int, z: int) -> tuple[_Canvas, _Port]:
     return canvas, port
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_coater_seat_rejects_a_tile_with_a_belt_merge() -> None:
     """A seat whose body covers a merge is not a seat, however short the lane.
 
-    ``_coater_seat`` used to answer only "is this drop cell free and is the
+    The seat search used to answer only "is this drop cell free and is the
     lane long enough".  The reporting URL seated two coaters over 2-into-1
     merges that way, and `prolif.coater_rides_one_run` now convicts every
-    such placement -- so the seat chooser has to agree with the validator or
-    the strategy refuses at the last step instead of choosing a legal seat.
+    such placement -- so ``_coater_seats``' merge predicate has to agree with
+    the validator on a canvas where the merge already exists.  Pinned to the
+    ``off`` arm: under the default ``placed`` node the candidate window starts
+    one tile later (``1 + half_span``), so a 3-tile control lane offers no
+    seat at all and the clean control below would be vacuous.
     """
     canvas, port = _canvas_with_lane_merge_at(x=53, y=20, z=0)
-    assert freeform._coater_seat(canvas, port) is None
+    assert freeform._coater_seats(canvas, port, west_channel=2) == ()
 
     clean_canvas, clean_port = _canvas_with_straight_lane_at(x=53, y=20, z=0)
-    assert freeform._coater_seat(clean_canvas, clean_port) is not None
+    assert freeform._coater_seats(clean_canvas, clean_port, west_channel=2) == ((53, 20),)
 
 
 # --- belt docked into a building PORT ---------------------------------------
@@ -18926,6 +19068,7 @@ def test_staged_static_effective_anchor_ranges_replace_padding_cross_product(
     assert tuple(anchor for interval in ranges for anchor in interval) == tuple(sorted(reference))
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_projection_risk_uses_one_exact_pair_per_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -19048,6 +19191,7 @@ def band_160_all_products_spec() -> BuildSpec:
     )
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> None:
     policy = BandPolicy("portable")
     spec = band_160_all_products_spec()
@@ -19167,6 +19311,7 @@ def test_all_products_band_160_cold_proof_reaches_a_valid_layout(
     assert validate.certify(placement, spec, expect_power=True).ok
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_plan_strips_batches_all_exact_preclearance_relations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -19209,6 +19354,7 @@ def test_plan_strips_batches_all_exact_preclearance_relations(
     )
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_batched_relation_anchor_collection_cancels_without_caching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -19260,6 +19406,7 @@ def test_batched_relation_anchor_collection_cancels_without_caching(
     assert not freeform._STAGED_STATIC_RELATION_RISK_CACHE
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_preclearance_cancels_inside_cold_proof_without_caching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -25297,6 +25444,7 @@ def test_self_consuming_requested_output_routes_from_late_tail() -> None:
     assert late[0].source.belt == tail_index
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_broke7_boundary_access_rematches_equal_box_pair() -> None:
     spec, strips, formerly_refusing, swapped = _broke7_fixture()
     assert formerly_refusing.width == swapped.width
@@ -25320,6 +25468,7 @@ def test_broke7_boundary_access_rematches_equal_box_pair() -> None:
     )
 
 
+@pytest.mark.usefixtures("off_arm")
 @pytest.mark.parametrize(("height", "width", "origins", "routes"), _BROKE7_RECORDED_PACKS)
 def test_broke7_recorded_pack_outcomes_after_boundary_role_repair(
     height: int,
