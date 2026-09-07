@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Mapping
 from fractions import Fraction
 from typing import cast
 
@@ -151,9 +152,12 @@ def recipe_depths(spec: BuildSpec) -> dict[str, int]:
     return depth
 
 
-def depth_profile(spec: BuildSpec) -> list[dict[str, object]]:
+def depth_profile(
+    spec: BuildSpec, *, depth: Mapping[str, int] | None = None
+) -> list[dict[str, object]]:
     """Pressure of every boundary between depth <= d and depth > d."""
-    depth = recipe_depths(spec)
+    if depth is None:
+        depth = recipe_depths(spec)
     levels = sorted(set(depth.values()))
     rows: list[dict[str, object]] = []
     for d in levels[:-1]:
@@ -191,7 +195,8 @@ def depth_pressure_blocks(
     machines it holds -- that is the whole point of the arm: high-pressure
     regions are solved integrated, and the knife goes where few belts cross.
     """
-    profile = depth_profile(spec)
+    depth = recipe_depths(spec)
+    profile = depth_profile(spec, depth=depth)
     if not profile:
         cut_depths: list[int] = []
     else:
@@ -203,7 +208,6 @@ def depth_pressure_blocks(
             if lanes[k] <= left and lanes[k] <= right:
                 cut_depths.append(cast(int, row["cut_after_depth"]))
 
-    depth = recipe_depths(spec)
     uid = [5_000_000]
     blocks: list[list[Unit]] = []
     bands: list[tuple[int, int]] = []
