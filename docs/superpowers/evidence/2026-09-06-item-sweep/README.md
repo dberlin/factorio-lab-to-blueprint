@@ -77,23 +77,27 @@ all 151.
 |---|---|---|---|---|---|---|---|
 | 1 | 151 | **150** | 1 | 0 | 0 | 5.43 h | master `340f8e01` |
 | 2 | 151 | **151** | 0 | 0 | 0 | 5.33 h | master `840204fc` + the group-1 fix |
+| 3 | 151 | **151** | 0 | 0 | 0 | 5.36 h | master `2e861af0` + the group-1 fix |
 
-**Round 2 is the answer to the question that was asked: every item in the game that a
-factory can make -- all 151 of them -- builds.** 151/151 CLEAN, every one
-cross-validated by the viewer's independent decoder with a valid hash and a matching
-building count, zero validator errors, and not one check landing in `Report.skipped`.
+**Every item in the game that a factory can make -- all 151 of them -- builds.**
+151/151 CLEAN in each of the last two rounds: every one cross-validated by the viewer's
+independent decoder with a valid hash and a matching building count, zero validator
+errors, and not one check landing in `Report.skipped`.
 
-Round 1 ran on master `340f8e01`; the branch was then rebased onto master `840204fc`
-(64 commits of other work had landed meanwhile) and the one refusal was confirmed to
-reproduce there unchanged before anything was fixed.
+Master moved twice under this work, so each round names its own base. Round 1 ran on
+`340f8e01`; the branch was rebased onto `840204fc` (64 commits of other work had landed)
+and the one refusal was confirmed to reproduce there unchanged before anything was fixed;
+round 2 measured the fix on that base. The branch was then rebased again onto `2e861af0`
+(42 more commits) and **round 3 re-swept all 151 from scratch on that base** rather than
+inheriting round 2's verdict -- the merge base is where the claim has to be true.
 
-Round 2 is not slower or bigger for the fix: 127.0 s mean per item against round 1's
-129.4 s, and the geometric mean of round-2 area over round-1 area across the 150 items
-both rounds built is 0.9893, with a median of exactly 1.0000 -- that is, almost every
-block is byte-identical in size and the handful that moved got slightly smaller. CPU
-pressure over the round (five-second mean of `vmstat`'s runnable count, taken before
-each build) averaged 4.5 and peaked at 54.8 on 128 cores, so no timing here was taken
-on a contended box.
+Nothing about it is slower or bigger for the fix. Mean seconds per item: 129.4, 127.0,
+127.8. The geometric mean of round-2 area over round-1 area across the 150 items both
+built is 0.9893 with a median of exactly 1.0000, and round 3 over round 2 is 1.0012 with
+the same median -- almost every block is identical in size, and the handful that move are
+inside the noise the corpus gate itself allows. CPU pressure (five-second mean of
+`vmstat`'s runnable count, taken before each build) averaged 4.5 in round 2 and 9.8 in
+round 3, peaking at 65.4 on 128 cores, so no timing here was taken on a contended box.
 
 "CLEAN" is a strong word here and is meant to be. It requires all four of: the CLI
 exiting 0 (so the validator found no errors, since the CLI refuses to emit an invalid
@@ -182,13 +186,21 @@ Three fail on unmodified master -- `test_the_repair_goes_to_the_lane_that_can_ab
 and `test_a_lane_that_draws_nothing_is_never_belted` (`[(20, 30)]`). The other two pass
 on master and guard behaviour the first version of the fix would have broken.
 
-Guard: `scripts/audit.py --budget 30` gives 72/72 clean before and after
-(`guard-baseline.jsonl`, `guard-shard-lane.jsonl`); `audit_compare.py` reports
-`clean 72 refused 0 invalid 0 crashed 0 paired 72 area ratio 1.0052 p95 31.7s`. It
-prints FAIL on its `p95 > 30 s` arm only -- the baseline compared against ITSELF gives
-31.4 s and the same FAIL, so that arm is a property of the 30 s default at budget 30 and
-not a regression. Area is 0.52 % up, inside the 1.3 % same-arm noise band the script
-itself uses.
+Guard: `scripts/audit.py --budget 30`, run as a paired baseline/candidate on each base
+the branch sat on. Both times the baseline is master's own `freeform.py` restored into
+this worktree, so the pair differs by the fix and nothing else.
+
+| base | baseline | candidate | paired compare |
+|---|---|---|---|
+| `840204fc` | 72/72 clean | 72/72 clean | `paired 72, area ratio 1.0052` |
+| `2e861af0` (merge base) | 72/72 clean | 72/72 clean | `paired 72, area ratio 0.9995` |
+
+Zero refusals, zero invalid, zero crashes, zero unrun cells on either side of either
+pair. `audit_compare.py` prints FAIL on its `p95 > 30 s` arm only, and the baseline
+compared against ITSELF gives 31.4 s and the same FAIL, so that arm is a property of the
+30 s default at budget 30 and not a regression. On the merge base the area ratio is
+0.9995 -- 0.05 % *smaller* -- and on the earlier base 1.0052, both well inside the 1.3 %
+same-arm noise band the script itself uses.
 
 Reproducing the pytest evidence: run it through `uv run` from inside the worktree. A bare
 `pytest` inherits `VIRTUAL_ENV` from the parent checkout, whose editable install points at
@@ -198,13 +210,15 @@ verified by importing `flab2bp.layout.freeform` and printing `__file__`.
 
 ## Genuine limits and non-bugs
 
-No refusal in round 1 was a physical limit at the chosen settings: there was only one
-refusal and it was ours.
+None. There was exactly one refusal across three rounds, and it was ours, not a physical
+limit at the chosen settings. Nothing in this sweep needed the rate lowered, a belt tier
+raised, or a rule bent.
 
 ## Pre-existing test failures, not from this work
 
-These two fail identically with `src/flab2bp/layout/freeform.py` reverted to master
-`840204fc`, so they are neither caused nor fixed here:
+These two fail identically with `src/flab2bp/layout/freeform.py` restored from master --
+checked on both `840204fc` and the merge base `2e861af0` -- so they are neither caused
+nor fixed here:
 
 - `tests/layout/test_sequence_pair.py::test_two_stage_alignment_retains_cp_sat_direct_opportunity`
   (`AssertionError: assert frozenset()`)
