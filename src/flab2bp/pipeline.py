@@ -58,6 +58,7 @@ from flab2bp.rates.candidates import (
     CandidatePolicy,
     _build_candidates_canonical,
 )
+from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.rates.solve import InfeasibleError, UnsupportedObjectiveError, supplied_rates
 from flab2bp.spec import BuildSpec, BuildSpecSet
 
@@ -502,6 +503,20 @@ def _prime_note(spec: BuildSpec, placement: Placement) -> str:
     return "; PRIME ONCE: " + "; ".join(notes)
 
 
+def _machine_rank_note(spec: BuildSpec) -> str:
+    """Describe the non-default machine choice without changing exact output."""
+    if spec.machine_rank != MachineRank.UP_TO.value:
+        return ""
+    if not spec.machine_moves:
+        return "; machines up-to: none moved"
+    moved = " ".join(
+        f"{move.recipe_id} {move.from_machine}->{move.to_machine} "
+        f"{move.count_before}->{move.count_after}"
+        for move in spec.machine_moves
+    )
+    return f"; machines up-to: {moved}"
+
+
 def _id_map(spec: BuildSpec) -> validate.IdMap:
     """Bridge FactorioLab string ids to the DSP numeric ids a Placement uses.
 
@@ -641,6 +656,7 @@ def build(
     candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
+    machine_rank: MachineRank = MachineRank.EXACT,
     #: Legal with ``best`` as well as ``sequence-pair``, because islands live
     #: inside the raced sequence-pair arm. Under ``race=True`` the candidate
     #: batch width is chosen FIRST and each candidate's islands are then
@@ -805,6 +821,7 @@ def build(
             tier=proliferator_tier,
             candidate_policies=candidate_policies,
             flow=selection,
+            machine_rank=machine_rank,
         )
     except (FlowProvenanceError, InfeasibleError, UnsupportedObjectiveError) as exc:
         raise SpecInfeasible(str(exc)) from exc
@@ -1269,6 +1286,7 @@ def build(
                     f"flab2bp {sname} layout, {spec.label} candidate, "
                     f"{spec.machine_count} machines, {placement.area} tiles"
                     f"{_prime_note(spec, marked)}"
+                    f"{_machine_rank_note(spec)}"
                 ),
             )
             phase_started = time.monotonic()
