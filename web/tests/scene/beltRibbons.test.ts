@@ -167,3 +167,30 @@ test('a real blueprint draws every one of its runs', () => {
   expect(scene.arrows.length).toBeGreaterThanOrEqual(sceneModel.beltRuns.length);
   expect(Number.isFinite(scene.positions[0] as number)).toBe(true);
 });
+
+test('arrows point along travel on a straight run, through an L-turn and past a climb', () => {
+  // Straight, then a right turn, then a level change, then straight again --
+  // the three shapes the brief calls out. Direction comes from run order, so
+  // every arrow must agree with the leg it sits on.
+  const path: BuildingInstance[] = [];
+  let index = 0;
+  for (let z = 0; z < 14; z++) path.push(belt(index++, [0, 0.1, z]));
+  for (let x = 1; x < 14; x++) path.push(belt(index++, [x, 0.1, 13]));
+  path.push(belt(index++, [14, 0.6, 13]));
+  for (let x = 15; x < 28; x++) path.push(belt(index++, [x, 0.6, 13]));
+
+  const scene = buildRibbonScene(model(path, [run(path.map((b) => b.index))]));
+  expect(scene.arrows.length).toBeGreaterThan(2);
+  for (const arrow of scene.arrows) {
+    const onFirstLeg = arrow.at[0] < 0.5;
+    if (onFirstLeg) {
+      expect(arrow.dir[2]).toBeCloseTo(1, 6); // travelling +Z
+      expect(arrow.dir[0]).toBeCloseTo(0, 6);
+    } else {
+      expect(arrow.dir[0]).toBeCloseTo(1, 6); // travelling +X, before and after the climb
+      expect(arrow.dir[2]).toBeCloseTo(0, 6);
+    }
+  }
+  // Something is drawn beyond the level change, so the climb does not end the run.
+  expect(scene.arrows.some((a) => a.at[0] > 14)).toBe(true);
+});
