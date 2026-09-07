@@ -1,10 +1,13 @@
 /**
- * Geometry for drawing a belt run as one continuous strip.
+ * Geometry for drawing a belt run as one continuous strip, and for the small
+ * parts that sit on it.
  *
  * Everything here is pure and renderer-free (see architecture.test.ts): it
- * emits plain number arrays that the scene layer hands to three.js. The three
- * shapes it produces are the ribbon itself, the straight stretches along it,
- * and the (number + arrow) blocks laid on those stretches.
+ * emits plain number arrays that the scene layer hands to three.js. The shapes
+ * it produces are the ribbon itself, the straight stretches along it, the
+ * (number + arrow) blocks laid on those stretches, the arrow wedge, and the
+ * oriented box the sorter parts are built from -- all through one triangle
+ * emitter, so the winding rule below holds for every one of them.
  */
 export type Vec3 = [number, number, number];
 
@@ -26,7 +29,10 @@ export const ARROW_SIZE = RIBBON_WIDTH * 0.88;
 /** Extent of the arrow wedge along travel, and the offset of that extent's
     midpoint from the glyph origin (the wedge is not symmetric about it). */
 export const ARROW_LENGTH = ARROW_SIZE * 0.98;
-export const ARROW_MID = ARROW_SIZE * 0.13;
+/** Fraction of a wedge's size by which its extent's midpoint sits forward of
+    its origin; multiply by the size actually used. */
+export const WEDGE_MID_RATIO = 0.13;
+export const ARROW_MID = ARROW_SIZE * WEDGE_MID_RATIO;
 
 /** Space between two blocks, as a multiple of the block's own length. */
 export const GAP_BLOCKS = 2;
@@ -131,6 +137,47 @@ export function arrowWedge(size: number = ARROW_SIZE): RibbonMesh {
   pushQuad(mesh, apex, right, right0, apex0, normalize([0.62, 0, 0.35]));
   pushQuad(mesh, left, right, right0, left0, [0, 0, -1]);
   return mesh;
+}
+
+/**
+ * A box sized (across travel, up, along travel) and turned to face `dir`.
+ *
+ * The sorter's base, legs and head bar are built from this rather than from
+ * three.js BoxGeometry so they go through the same winding-checked emitter as
+ * everything else and can be merged into one buffer without a matrix each.
+ */
+export function orientedBox(
+  centre: Vec3,
+  across: number,
+  up: number,
+  along: number,
+  dir: Vec3,
+): RibbonMesh {
+  const mesh: RibbonMesh = { positions: [], normals: [] };
+  const f: Vec3 = normalize([dir[0], 0, dir[2]]);
+  const s: Vec3 = [f[2], 0, -f[0]];
+  const corner = (sx: number, sy: number, sz: number): Vec3 => [
+    centre[0] + s[0] * (across / 2) * sx + f[0] * (along / 2) * sz,
+    centre[1] + (up / 2) * sy,
+    centre[2] + s[2] * (across / 2) * sx + f[2] * (along / 2) * sz,
+  ];
+  const [a, b, c, d] = [corner(-1, 1, 1), corner(1, 1, 1), corner(1, 1, -1), corner(-1, 1, -1)];
+  const [e, g, h, i] = [corner(-1, -1, 1), corner(1, -1, 1), corner(1, -1, -1), corner(-1, -1, -1)];
+  pushQuad(mesh, a, b, c, d, UP);
+  pushQuad(mesh, e, g, h, i, DOWN);
+  pushQuad(mesh, a, b, g, e, f);
+  pushQuad(mesh, d, c, h, i, negate(f));
+  pushQuad(mesh, b, c, h, g, negate(s));
+  pushQuad(mesh, a, d, i, e, s);
+  return mesh;
+}
+
+/** Appends one mesh's triangles onto another. */
+export function appendMesh(target: RibbonMesh, source: RibbonMesh): void {
+  for (let i = 0; i < source.positions.length; i++) {
+    target.positions.push(source.positions[i] as number);
+    target.normals.push(source.normals[i] as number);
+  }
 }
 
 /**

@@ -115,6 +115,7 @@ const model = (over: Partial<SceneModel['instances'][0]>[]): SceneModel => ({
   beltRuns: [],
   beltHeadings: new Map(),
   unresolvedTagIds: [],
+  sorters: [],
 });
 
 test('places a recipe icon above a producer', () => {

@@ -6,6 +6,7 @@ import {
   computeBeltHeadings,
   inferCarried,
   isBelt,
+  isSorter,
 } from './beltGraph';
 import type { Catalog } from './catalog';
 import { visualScaleFor } from './visualScale';
@@ -23,8 +24,28 @@ export interface BuildingInstance {
   parameters: readonly number[];
 }
 
+/**
+ * A sorter's two ends and what they serve.
+ *
+ * The scene draws a sorter as a base at one end and a head at the other, and
+ * to do that it needs the endpoints and the link indices -- none of which a
+ * `BuildingInstance` carries, since every other building is one box at one
+ * position. `(x,y,z)` is the end the sorter draws FROM and `(x2,y2,z2)` the
+ * end it feeds INTO (see sorterModel.ts, where that convention is asserted
+ * against a real blueprint).
+ */
+export interface SorterLink {
+  index: number;
+  color: number;
+  pick: [number, number, number];
+  drop: [number, number, number];
+  inputIndex: number;
+  outputIndex: number;
+}
+
 export interface SceneModel {
   instances: BuildingInstance[];
+  sorters: SorterLink[];
   bounds: { min: [number, number, number]; max: [number, number, number] };
   center: [number, number, number];
   radius: number;
@@ -43,6 +64,7 @@ const DEG = Math.PI / 180;
  */
 export function buildSceneModel(bp: Blueprint, catalog: Catalog): SceneModel {
   const instances: BuildingInstance[] = [];
+  const sorters: SorterLink[] = [];
   const unknown = new Set<number>();
 
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
@@ -97,6 +119,17 @@ export function buildSceneModel(bp: Blueprint, catalog: Catalog): SceneModel {
     expandBounds(1, position[1], size[1]);
     expandBounds(2, position[2], size[2]);
 
+    if (isSorter(b.itemId)) {
+      sorters.push({
+        index: b.index,
+        color: catalog.item(b.itemId)?.color ?? 0xdddddd,
+        pick: [b.x, b.z, -b.y],
+        drop: [b.x2, b.z2, -b.y2],
+        inputIndex: b.inputObjIdx,
+        outputIndex: b.outputObjIdx,
+      });
+    }
+
     instances.push({
       index: b.index,
       itemId: b.itemId,
@@ -137,6 +170,7 @@ export function buildSceneModel(bp: Blueprint, catalog: Catalog): SceneModel {
   if (instances.length === 0) {
     return {
       instances,
+      sorters,
       bounds: { min: [0, 0, 0], max: [0, 0, 0] },
       center: [0, 0, 0],
       radius: 1,
@@ -156,6 +190,7 @@ export function buildSceneModel(bp: Blueprint, catalog: Catalog): SceneModel {
 
   return {
     instances,
+    sorters,
     bounds: { min, max },
     center,
     radius,
