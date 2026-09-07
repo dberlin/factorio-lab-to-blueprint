@@ -88,6 +88,7 @@ from flab2bp.layout.freeform import (
 )
 from flab2bp.layout.freeform import plan_strips as plan_strips
 from flab2bp.layout.global_router import GlobalNetResult, GlobalRouteResult, route_global
+from flab2bp.layout.observe import SearchEvent, SearchObserver, SearchPhase, stranded_endpoints
 from flab2bp.layout.route_feedback import (
     ClusterRelationNoGood,
     DetailedRouteResult,
@@ -1034,6 +1035,8 @@ class SequenceSolver[PreparedT]:
         band_target_for: Callable[[int, int], int] | None = None,
         portfolio_area: Callable[[], int | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
+        observer: SearchObserver | None = None,
+        candidate_label: str = "",
     ) -> None:
         if (
             not isinstance(heights, tuple)
@@ -1123,6 +1126,10 @@ class SequenceSolver[PreparedT]:
         #: Called with each placement this search certifies, so the other racer
         #: can use it as a bound.
         self.publish_incumbent = publish_incumbent
+        self.observer = observer
+        #: The build's label, forwarded once at construction so a `SearchEvent`
+        #: never has to look it up -- it is copied, never computed.
+        self._candidate_label = candidate_label
 
     def _start_measured_stage(
         self,
@@ -2527,8 +2534,34 @@ class SequenceSolver[PreparedT]:
                     )
                     if self.publish_incumbent is not None:
                         self.publish_incumbent(finalized)
+                    if self.observer is not None and self.observer.due(SearchPhase.INCUMBENT):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="sequence-pair",
+                                candidate=self._candidate_label,
+                                phase=SearchPhase.INCUMBENT,
+                                placement=finalized,
+                                area=exact_key[0],
+                                belt_tiles=exact_key[1],
+                                incumbent=True,
+                            )
+                        )
                 if height_state.exact_key is None or exact_key < height_state.exact_key:
                     height_state.exact_key = exact_key
+            elif self.observer is not None and self.observer.due(SearchPhase.REFUSED):
+                self.observer.note(
+                    SearchEvent(
+                        strategy="sequence-pair",
+                        candidate=self._candidate_label,
+                        phase=SearchPhase.REFUSED,
+                        placement=detailed.placement,
+                        reason=(
+                            "validation budget exhausted before a verdict was reached"
+                            if validation_budget
+                            else "; ".join(verdict.failed_checks) or "validation refused"
+                        ),
+                    )
+                )
         if validation_budget:
             self._record_routing_observation(
                 height_state,
@@ -3022,71 +3055,84 @@ class SequenceSolver[PreparedT]:
             else ()
         )
         restart = observation.restart
-        self._stage_stats.append(
-            StageObservation(
-                height=height_state.height,
-                restart=restart.restart,
-                stage_index=observation.stage_index,
-                seed=restart.seed,
-                accepted_moves=selected.accepted_moves,
-                anneal_stages=selected.anneal_stages,
-                anneal_moves=selected.anneal_moves,
-                anneal_seeds=selected.anneal_seeds,
-                backend=observation.backend,
-                global_routes=global_routes,
-                global_overflow=global_overflow,
-                detailed_status=detailed.routing.status,
-                stranded=detailed.routing.failed_count,
-                expansions=spent,
-                lns_size=lns_size,
-                exact_key=exact_key,
-                prepared_lower_bound=(
-                    None
-                    if detailed.prepared_lower_bound is None
-                    else detailed.prepared_lower_bound[1]
-                ),
-                prepared_lower_key=(
-                    None
-                    if detailed.prepared_lower_bound is None
-                    else (
-                        detailed.prepared_lower_bound[0],
-                        detailed.prepared_lower_bound[1].total,
-                    )
-                ),
-                lower_bound_dominated=detailed.lower_bound_dominated,
-                detailed_skip_reason=detailed.detailed_skip_reason,
-                lower_bound_violation=(
-                    exact_key is not None
-                    and detailed.prepared_lower_bound is not None
-                    and exact_key
-                    < (
-                        detailed.prepared_lower_bound[0],
-                        detailed.prepared_lower_bound[1].total,
-                    )
-                ),
-                validation_failures=validation_failures,
-                projection_failures=projection_failures,
-                pitch_requirement=pitch_requirement,
-                variant_moves=variant_moves,
-                selected_instance_ids=problem.instance_ids,
-                selected_variant_ids=selected_variant_ids,
-                selected_pose_yaws=selected_pose_yaws,
-                split_count=split_count,
-                merge_count=merge_count,
-                candidate_key=selected.key,
-                breakdown=selected.breakdown,
-                archive_categories=selected.archive_categories,
-                preparation_time_s=preparation_time_s,
-                global_route_time_s=global_route_time_s,
-                detailed_route_time_s=detailed_route_time_s,
-                validation_time_s=validation_time_s,
-                objective_mode=height_state.objective_mode,
-                global_skip_reason=global_skip_reason,
-                quality_entered=quality_entered,
-                quality_exited=quality_exited,
-                stagnation_count=height_state.quality_stagnation,
-            )
+        stage = StageObservation(
+            height=height_state.height,
+            restart=restart.restart,
+            stage_index=observation.stage_index,
+            seed=restart.seed,
+            accepted_moves=selected.accepted_moves,
+            anneal_stages=selected.anneal_stages,
+            anneal_moves=selected.anneal_moves,
+            anneal_seeds=selected.anneal_seeds,
+            backend=observation.backend,
+            global_routes=global_routes,
+            global_overflow=global_overflow,
+            detailed_status=detailed.routing.status,
+            stranded=detailed.routing.failed_count,
+            expansions=spent,
+            lns_size=lns_size,
+            exact_key=exact_key,
+            prepared_lower_bound=(
+                None if detailed.prepared_lower_bound is None else detailed.prepared_lower_bound[1]
+            ),
+            prepared_lower_key=(
+                None
+                if detailed.prepared_lower_bound is None
+                else (
+                    detailed.prepared_lower_bound[0],
+                    detailed.prepared_lower_bound[1].total,
+                )
+            ),
+            lower_bound_dominated=detailed.lower_bound_dominated,
+            detailed_skip_reason=detailed.detailed_skip_reason,
+            lower_bound_violation=(
+                exact_key is not None
+                and detailed.prepared_lower_bound is not None
+                and exact_key
+                < (
+                    detailed.prepared_lower_bound[0],
+                    detailed.prepared_lower_bound[1].total,
+                )
+            ),
+            validation_failures=validation_failures,
+            projection_failures=projection_failures,
+            pitch_requirement=pitch_requirement,
+            variant_moves=variant_moves,
+            selected_instance_ids=problem.instance_ids,
+            selected_variant_ids=selected_variant_ids,
+            selected_pose_yaws=selected_pose_yaws,
+            split_count=split_count,
+            merge_count=merge_count,
+            candidate_key=selected.key,
+            breakdown=selected.breakdown,
+            archive_categories=selected.archive_categories,
+            preparation_time_s=preparation_time_s,
+            global_route_time_s=global_route_time_s,
+            detailed_route_time_s=detailed_route_time_s,
+            validation_time_s=validation_time_s,
+            objective_mode=height_state.objective_mode,
+            global_skip_reason=global_skip_reason,
+            quality_entered=quality_entered,
+            quality_exited=quality_exited,
+            stagnation_count=height_state.quality_stagnation,
         )
+        self._stage_stats.append(stage)
+        if self.observer is not None and self.observer.due(SearchPhase.ROUTED):
+            self.observer.note(
+                SearchEvent(
+                    strategy="sequence-pair",
+                    candidate=self._candidate_label,
+                    phase=SearchPhase.ROUTED,
+                    placement=detailed.placement,
+                    height=stage.height,
+                    restart=stage.restart,
+                    stage=stage.stage_index,
+                    area=None if stage.exact_key is None else stage.exact_key[0],
+                    belt_tiles=None if stage.exact_key is None else stage.exact_key[1],
+                    reason=stage.detailed_skip_reason or stage.global_skip_reason,
+                    stranded=stranded_endpoints(detailed.routing),
+                )
+            )
 
 
 def _routing_feedback_substitution(
@@ -4796,6 +4842,7 @@ def _production_run(
     compact_seed_config: CompactSeedConfig | None = None,
     portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
     publish_incumbent: Callable[[Placement], None] | None = None,
+    observer: SearchObserver | None = None,
     prepared_bound_pruning: bool = True,
 ) -> _ProductionRun:
     started = time.monotonic()
@@ -5965,6 +6012,8 @@ def _production_run(
             None if portfolio_incumbent is None else lambda: _area_of(portfolio_incumbent())
         ),
         publish_incumbent=publish_incumbent,
+        observer=observer,
+        candidate_label=spec.label,
     )
     seed_started = time.monotonic()
     seed_deadline = min(
@@ -6316,6 +6365,10 @@ class SequencePairLayout:
         islands: int = 1,
         portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
+        #: Accepted here so `pipeline._new_layout` can construct both backends
+        #: identically without drift.  Forwarded to the inner search, which
+        #: builds and fires every `SearchEvent` (§5.4).
+        observer: SearchObserver | None = None,
     ) -> None:
         if type(strip_len) is not int or strip_len <= 0:
             raise ValueError("strip length must be a positive integer")
@@ -6338,6 +6391,7 @@ class SequencePairLayout:
         #: Called with each placement this search certifies, so the other racer
         #: can use it as a bound.
         self.publish_incumbent = publish_incumbent
+        self.observer = observer
 
     def lay_out(
         self,
@@ -6427,6 +6481,7 @@ class SequencePairLayout:
                 ),
                 portfolio_incumbent=self.portfolio_incumbent,
                 publish_incumbent=self.publish_incumbent,
+                observer=self.observer,
             )
             try:
                 result = run.solver.search(

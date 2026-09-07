@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Default off.** `Options.trace` defaults to `False`; `BuildOptions.trace` defaults to `false`. With trace off, `GET /api/build/<id>` must be byte-identical to today.
+- **Default off.** `Options.trace` defaults to `False`; `BuildOptions.trace` defaults to `false`. With trace off, `GET /api/build/<id>` must be byte-identical to today except the new `options.trace` key, which is echoed unconditionally (the client reads it to gate the trace panel, so it cannot be conditional on trace being on).
 - **Hot-path contract (spec §5.4).** R1: no observer call inside a CP-SAT callback or solver-driven loop — candidate/stage/round/incumbent boundaries only. R2: an observer call never reads, writes, or keys on anything the search reads. R3: `note` never raises. R4: `SearchEvent` is constructed *inside* the `due()` branch.
 - **Never reuse `publish_incumbent`** (`freeform.py:19420`, `sequence_solver.py:6303`) for trace. In the raced child it runs a full `validate.validate` (`strategy_race.py:515-530`). The observer is a separate parameter; both coexist.
 - **A trace frame is never pasteable.** No blueprint string on a frame, no validity claim, `snapshotLabel` non-null while one is shown.

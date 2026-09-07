@@ -1,13 +1,27 @@
 import { useBlueprint } from '../state/BlueprintProvider';
 
 export function Toolbar() {
-  const { blueprint, sceneModel, stale } = useBlueprint();
+  const { blueprint, sceneModel, stale, snapshotLabel } = useBlueprint();
   if (!blueprint) return <header className="toolbar">No blueprint loaded</header>;
 
   const title = blueprint.header.shortDesc || '(untitled)';
   return (
     <header className="toolbar">
-      <strong>{title}</strong>
+      {/* While a search snapshot is on the canvas, THIS is the label -- not
+          the title above. `snapshotLabel` is non-null for exactly as long as
+          the canvas shows a trace frame (BlueprintProvider.loadSnapshot),
+          so replacing rather than merely prefacing the title is what stops
+          a mid-search picture reading as a named result. `role="status"`
+          announces each new caption as the poll updates it. */}
+      {snapshotLabel ? (
+        // `<output>` carries an implicit `status` role, so each new caption
+        // is announced as the poll updates it -- no explicit `role` needed.
+        <output className="trace-live" data-testid="trace-label">
+          {snapshotLabel}
+        </output>
+      ) : (
+        <strong>{title}</strong>
+      )}
       {/* The last build produced no blueprint, so this is the one before it.
           Without this the toolbar names a build that was superseded by a
           refusal, which reads as though the refusal had not happened. */}

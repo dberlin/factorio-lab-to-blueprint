@@ -19,14 +19,15 @@ remains the honest answer: a job that waits says so, with its position.
 from __future__ import annotations
 
 import math
+import multiprocessing
 import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 from flab2bp import pipeline
@@ -37,10 +38,13 @@ from flab2bp.layout.base import (
     NoValidLayout,
     PlacementStats,
 )
+from flab2bp.layout.observe import SearchObserver
+from flab2bp.layout.observe_channel import TRACE_QUEUE_MAXSIZE
 from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
+from flab2bp.web.trace import TraceCollector, TraceRing
 
 State = Literal["queued", "running", "done", "refused", "error"]
 WebStrategyName = Literal["best", "freeform", "sequence-pair", "hierarchical"]
@@ -81,6 +85,10 @@ class Options:
     #: Ask the server to drive FactorioLab and capture its CSV export.  This is
     #: allowed only for the validated FactorioLab HTTPS pages.
     fetch_flow: bool = False
+    #: Stream search snapshots to the caller.  OFF by default: a picture of the
+    #: search is a debugging instrument, and every build paying for one is not
+    #: a trade anybody asked for.
+    trace: bool = False
 
     @property
     def effective_candidate_count(self) -> int:
@@ -203,6 +211,7 @@ def parse_options(raw: JsonValue) -> Options:
         "allow_invalid",
         "flow",
         "fetch_flow",
+        "trace",
     }
     unknown = sorted(raw.keys() - allowed)
     if unknown:
@@ -297,6 +306,10 @@ def parse_options(raw: JsonValue) -> Options:
     if fetch_flow:
         _validate_web_fetch_url(url.strip())
 
+    trace = raw.get("trace", False)
+    if not isinstance(trace, bool):
+        raise InvalidOptions("'trace' must be a boolean")
+
     return Options(
         url=url.strip(),
         strategy=web_strategy,
@@ -308,6 +321,7 @@ def parse_options(raw: JsonValue) -> Options:
         allow_invalid=allow_invalid,
         flow=flow.strip(),
         fetch_flow=fetch_flow,
+        trace=trace,
     )
 
 
@@ -336,6 +350,15 @@ class Job:
     #: refused this candidate 40 seconds ago" is worth seeing while the next
     #: one runs, not only in the report at the end.
     settled: list[pipeline.AttemptProgress] = field(default_factory=list)
+    #: The collector for this job's search trace, or ``None`` when trace was
+    #: never asked for.  Set once, under ``_lock``, before the solve starts.
+    trace: TraceCollector | None = None
+    #: Every raced leg's OWN ``TraceChannel``-side drop count (a transiently
+    #: full queue, or an unpicklable event -- Ruling 4), summed once the build
+    #: settles. ``collector.dropped`` only ever sees the PARENT side (ring and
+    #: stage-1 eviction); without this the web ``dropped`` figure is silently
+    #: half the truth (fix round 1, Important 5).
+    leg_trace_dropped: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -349,7 +372,12 @@ class Job:
         return self.state in ("done", "refused", "error")
 
 
-def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.Build:
+def run_build(
+    options: Options,
+    on_progress: pipeline.ProgressSink,
+    search_observer: SearchObserver | None = None,
+    trace_queue: object | None = None,
+) -> pipeline.Build:
     """Run one build through the pipeline's shared CPU-allocation policy.
 
     ``--flow`` arrives as CSV text and goes through ``flow_from_text``'s
@@ -362,6 +390,11 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
     for it, so it takes ``pipeline.resolve_sequence_islands``' default like any
     other caller that has no opinion.  Passing 1 here would be the one line
     that quietly kept the browser on a single core.
+
+    ``trace_queue`` is ``search_observer``'s companion for a RACED leg (Task 8
+    fix round 1): a raced arm runs in a spawned child and has no in-process
+    observer to call at all, so this is its only route to the parent. The
+    caller (:meth:`Builder._run`) creates and owns it -- see there for why.
     """
     return pipeline.build(
         options.url,
@@ -375,6 +408,8 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
         fetch_flow=options.fetch_flow,
         fetch_url_validator=_validate_web_fetch_url if options.fetch_flow else None,
         on_progress=on_progress,
+        search_observer=search_observer,
+        trace_queue=trace_queue,
         race=options.strategy == "best",
     )
 
@@ -382,7 +417,9 @@ def run_build(options: Options, on_progress: pipeline.ProgressSink) -> pipeline.
 #: What a :class:`Builder` runs.  The progress sink is a parameter rather than
 #: something the builder reaches in and sets, so a test can substitute a solve
 #: that reports whatever sequence it wants to see rendered.
-Solve = Callable[[Options, pipeline.ProgressSink], pipeline.Build]
+Solve = Callable[
+    [Options, pipeline.ProgressSink, SearchObserver | None, object | None], pipeline.Build
+]
 
 
 class Builder:
@@ -440,34 +477,93 @@ class Builder:
                 if step.phase != "started":
                     job.settled.append(step)
 
+        collector: TraceCollector | None = None
+        # The parent's read end of a raced build's child-to-parent trace
+        # queue, or `None` when trace is off. Created and OWNED here (fix
+        # round 1): this is a long-lived web process, so whichever module
+        # creates a `multiprocessing.Queue` must be the one that closes it --
+        # `pipeline.build` no longer creates one itself, precisely so a build
+        # that starts and ends inside one call is never left holding a
+        # resource meant to outlive it. The SAME object is handed to both
+        # `TraceCollector` (which drains it on its own daemon thread, live,
+        # not just when a candidate settles) and `run_build` (which forwards
+        # it to whichever leg actually races).
+        trace_queue: object | None = None
         try:
-            build = self._solve(job.options, note)
-            result = describe(build, allow_invalid=job.options.allow_invalid)
-        except NoValidLayout as exc:
-            # Not an error. A spec nobody can lay out reports which pairs were
-            # tried and why each gave up, and that is the most useful thing on
-            # the screen when it happens.
-            with job._lock:
-                job.state = "refused"
-                job.refusal = refusal(_attempt_failures(exc), message=str(exc))
-                job.finished_at = time.monotonic()
-        except (ValueError, KeyError) as exc:
-            with job._lock:
-                job.state = "error"
-                job.error = str(exc)
-                job.finished_at = time.monotonic()
-        except Exception:
-            # Chromium/CDP failures are ordinary operational failures for a job.
-            # Exception deliberately excludes KeyboardInterrupt and SystemExit.
-            with job._lock:
-                job.state = "error"
-                job.error = "build failed unexpectedly"
-                job.finished_at = time.monotonic()
-        else:
-            with job._lock:
-                job.state = "done"
-                job.result = result
-                job.finished_at = time.monotonic()
+            try:
+                # Constructed and started inside the try: if `collector.start()`
+                # ever raises (e.g. thread exhaustion), the job must still reach
+                # a terminal state rather than getting stuck in "running"
+                # forever with `_run` propagating past its own caller.
+                if job.options.trace:
+                    trace_queue = multiprocessing.get_context("spawn").Queue(
+                        maxsize=TRACE_QUEUE_MAXSIZE
+                    )
+                    collector = TraceCollector(
+                        TraceRing(), started_at=time.monotonic(), queue=trace_queue
+                    )
+                    collector.start()
+                    with job._lock:
+                        job.trace = collector
+                build = self._solve(
+                    job.options,
+                    note,
+                    None if collector is None else collector.observer,
+                    trace_queue,
+                )
+                result = describe(build, allow_invalid=job.options.allow_invalid)
+            except NoValidLayout as exc:
+                # Not an error. A spec nobody can lay out reports which pairs
+                # were tried and why each gave up, and that is the most useful
+                # thing on the screen when it happens.
+                failures = _attempt_failures(exc)
+                with job._lock:
+                    job.state = "refused"
+                    job.refusal = refusal(failures, message=str(exc))
+                    job.leg_trace_dropped = _sum_trace_dropped(f.stats for f in failures)
+                    job.finished_at = time.monotonic()
+            except (ValueError, KeyError) as exc:
+                with job._lock:
+                    job.state = "error"
+                    job.error = str(exc)
+                    job.finished_at = time.monotonic()
+            except Exception:
+                # Chromium/CDP failures are ordinary operational failures for a
+                # job. Exception deliberately excludes KeyboardInterrupt and
+                # SystemExit.
+                with job._lock:
+                    job.state = "error"
+                    job.error = "build failed unexpectedly"
+                    job.finished_at = time.monotonic()
+            else:
+                with job._lock:
+                    job.state = "done"
+                    job.leg_trace_dropped = _sum_trace_dropped(
+                        a.placement.stats for a in build.attempts
+                    ) + _sum_trace_dropped(f.stats for f in build.refused)
+                    job.result = result
+                    job.finished_at = time.monotonic()
+        finally:
+            # `collector.stop()` FIRST: it joins the daemon thread that reads
+            # `trace_queue`, so closing the queue before that thread has
+            # actually stopped risks a race between "stop reading" and
+            # "close the pipe underneath the reader."
+            #
+            # Nested in its own `finally` (fix round, Critical 1): `stop()`
+            # should not raise now that `TraceCollector.start()` only binds
+            # `self._thread` after a successful `thread.start()`, but the
+            # queue release below must run even if it somehow does -- an
+            # unread `multiprocessing.Queue` with buffered data blocks its
+            # process's exit, and a long-lived web process is exactly the
+            # process that must never be left waiting on one.
+            try:
+                if collector is not None:
+                    collector.stop()
+            finally:
+                if trace_queue is not None:
+                    # Owned here because created here (see above).
+                    cast(Any, trace_queue).cancel_join_thread()
+                    cast(Any, trace_queue).close()
 
     def snapshot(self, job: Job) -> Json:
         """The job as JSON, including where it is if it is not finished."""
@@ -505,6 +601,7 @@ class Builder:
                     # a poller needs, and `result.flow_pinned` is the proof it
                     # was honoured.
                     "flow_supplied": bool(job.options.flow),
+                    "trace": job.options.trace,
                 },
                 "result": job.result,
                 "refusal": job.refusal,
@@ -519,6 +616,39 @@ class Builder:
         if job.state == "queued":
             body["queue_position"] = self.queue_position(job)
         return body
+
+    def trace_page(self, job: Job, cursor: int) -> Json:
+        """The frames after ``cursor``, or an empty page when trace is off."""
+        with job._lock:
+            collector = job.trace
+            done = job.done
+        if collector is None:
+            return {"frames": [], "next": cursor, "dropped": 0, "evicted": 0, "complete": done}
+        frames, nxt = collector.ring.since(cursor)
+        return {
+            "frames": cast(JsonValue, frames),
+            "next": nxt,
+            # `collector.dropped` is GENUINE loss only -- stage-1 overflow at
+            # this process -- it knows nothing about a raced leg's OWN
+            # `TraceChannel` dropping a frame before it ever reached this
+            # process. Without `job.leg_trace_dropped`, a saturated queue
+            # (Criticals C1/C2) would report a drop count that is honest but
+            # incomplete, and Ruling 4 is exactly the case where that
+            # difference is a structural failure, not noise.
+            "dropped": collector.dropped + job.leg_trace_dropped,
+            # The ring's OWN eviction (fix round, Important 6): a bounded
+            # window doing its job -- keeping the newest frames -- on any
+            # build past `TRACE_RING_FRAMES`, and reported here as a distinct,
+            # non-alarming figure rather than folded into `dropped` where it
+            # would read as data the search lost.
+            "evicted": collector.ring.dropped,
+            "complete": done and not frames,
+        }
+
+
+def _sum_trace_dropped(stats_sources: Iterable[PlacementStats]) -> int:
+    """Fold every attempt/failure's own ``trace_dropped`` into one total."""
+    return sum(int(stats.get("trace_dropped", 0)) for stats in stats_sources)
 
 
 def _step(step: pipeline.AttemptProgress | None) -> Json | None:

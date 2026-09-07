@@ -182,6 +182,11 @@ const Job = z.object({
   /** A ceiling on solver time, not a promise of a finish time. */
   solver_ceiling_s: z.number(),
   queue_position: z.number().optional(),
+  /** Echoed back from the request that started this job. Only `trace` is
+      read here (whether this job's own build was submitted with tracing on)
+      — the rest of what the server echoes back is unused by this client and
+      zod strips it silently rather than failing on it. */
+  options: z.object({ trace: z.boolean() }),
   /** Null until the first layout starts: the URL parse and the rate solve
       come first, and nothing knows how long those take. */
   progress: Step.nullable(),
@@ -215,6 +220,10 @@ export const BuildOptions = z
     /** A FactorioLab flow export's CSV text. Empty means the recipe selection is
       derived rather than pinned, which the report says out loud. */
     flow: z.string(),
+    /** Streams lightweight search snapshots to the trace endpoint while this
+      build runs. Off by default: it costs an observer call on the solver's
+      hot path, and most builds don't want the extra polling either. */
+    trace: z.boolean(),
   })
   .strict();
 
@@ -238,6 +247,9 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   allow_invalid: false,
   fetch_flow: false,
   flow: '',
+  // Default off, exactly like allow_invalid and fetch_flow: an opt-in
+  // feature that changes the request only when someone ticks it.
+  trace: false,
 };
 
 /** Active production strategies — `pipeline.PRODUCTION_STRATEGY_COUNT`. */

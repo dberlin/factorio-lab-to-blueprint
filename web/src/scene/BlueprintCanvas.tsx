@@ -10,9 +10,10 @@ import { BuildingInstances } from './BuildingInstances';
 import { CameraRig } from './CameraRig';
 import { CountLabels } from './CountLabels';
 import { IconInstances } from './IconInstances';
+import { TraceOverlay } from './TraceOverlay';
 
 export function BlueprintCanvas() {
-  const { sceneModel, selectedIndex, select, catalog } = useBlueprint();
+  const { sceneModel, selectedIndex, select, catalog, traceFrame, traceShow } = useBlueprint();
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [atlasTexture, setAtlasTexture] = useState<Texture | null>(null);
   useEffect(() => {
@@ -84,6 +85,7 @@ export function BlueprintCanvas() {
       <CameraRig model={sceneModel} />
       <BuildingInstances model={sceneModel} selectedIndex={selectedIndex} onSelect={select} />
       <BeltChevrons model={sceneModel} />
+      <TraceOverlay frame={traceFrame} show={traceShow} />
       {atlas && atlasTexture && overlays && (
         <>
           <IconInstances placements={overlays.icons} atlas={atlas} texture={atlasTexture} />

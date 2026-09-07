@@ -34,6 +34,7 @@ from flab2bp.layout.base import (
     PlacementCompletion,
 )
 from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.observe import SearchObserver
 from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.layout.strip_variants import generate_strip_families
 from flab2bp.rates.candidates import (
@@ -209,6 +210,7 @@ def test_build_defaults_to_one_portable_policy(
         sequence_islands: int = 1,
         band_policy: BandPolicy,
         workers: int | None = None,
+        observer: SearchObserver | None = None,
     ) -> FreeformLayout | SequencePairLayout:
         seen.append(band_policy)
         return original_new_layout(
@@ -217,6 +219,7 @@ def test_build_defaults_to_one_portable_policy(
             sequence_islands=sequence_islands,
             band_policy=band_policy,
             workers=workers,
+            observer=observer,
         )
 
     def validate_spy(
@@ -1582,6 +1585,47 @@ def _one_win_one_refusal() -> tuple[strategy_race._StrategyRaceOutcome, ...]:
     )
 
 
+def test_an_untraced_raced_result_never_carries_trace_dropped_in_its_stats() -> None:
+    """Fix round 2, Important 1: with trace off, a raced build's stats dict
+    must be byte-identical to what it was before tracing existed at all --
+    `web/payload.py` and `scripts/audit.py` both serialize it verbatim, so an
+    unconditional `trace_dropped: 0` would perturb both.
+    """
+    completed = strategy_race._StrategyRaceOutcome(
+        "freeform", "completed", placement=_finished(2, 3)
+    )
+    result = pipeline._raced_result(completed, "spec", 10.0)
+    assert isinstance(result, Placement)
+    assert "trace_dropped" not in result.stats
+
+    refused = strategy_race._StrategyRaceOutcome.refused(
+        "sequence-pair", "no arrangement fit the band", "spec", 10.0
+    )
+    refusal = pipeline._raced_result(refused, "spec", 10.0)
+    assert isinstance(refusal, NoValidLayout)
+    assert "trace_dropped" not in refusal.stats
+
+
+def test_a_traced_and_dropped_raced_result_carries_trace_dropped_in_its_stats() -> None:
+    completed = dataclasses.replace(
+        strategy_race._StrategyRaceOutcome("freeform", "completed", placement=_finished(2, 3)),
+        trace_dropped=3,
+    )
+    result = pipeline._raced_result(completed, "spec", 10.0)
+    assert isinstance(result, Placement)
+    assert result.stats["trace_dropped"] == 3
+
+    refused = dataclasses.replace(
+        strategy_race._StrategyRaceOutcome.refused(
+            "sequence-pair", "no arrangement fit the band", "spec", 10.0
+        ),
+        trace_dropped=7,
+    )
+    refusal = pipeline._raced_result(refused, "spec", 10.0)
+    assert isinstance(refusal, NoValidLayout)
+    assert refusal.stats["trace_dropped"] == 7
+
+
 def test_candidate_races_run_concurrently_and_publish_progress_by_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2205,6 +2249,9 @@ def test_racing_forwards_every_knob_the_race_owns(
         "workers": 9,
         "sequence_islands": 2,
         "share": False,
+        # `None`: no `search_observer` was given, so no trace queue is built
+        # (Task 8) -- the untraced, shipping shape of a raced build.
+        "trace_queue": None,
     }
     # Pre-splitting here would split twice: `run_strategy_race` calls
     # `race_worker_split` itself, and (6, 3) is what 9 becomes inside it.
@@ -2231,8 +2278,9 @@ def test_an_explicit_strategy_never_races_even_when_asked_to(
         sequence_islands: int = 1,
         band_policy: BandPolicy,
         workers: int | None = None,
+        observer: SearchObserver | None = None,
     ) -> _Completed:
-        del belt_vertical_construction, sequence_islands, band_policy
+        del belt_vertical_construction, sequence_islands, band_policy, observer
         seen.append(workers)
         return _Completed()
 
@@ -2780,3 +2828,30 @@ def test_a_stacked_url_belts_hydrogen_in_on_one_lane(monkeypatch: pytest.MonkeyP
         if finding.detail["item"] == "hydrogen"
     ]
     assert not hydrogen
+
+
+class _NullObserver:
+    """Enough of ``SearchObserver`` for identity checks: no events recorded."""
+
+    def due(self, phase: object, /) -> bool:
+        return True
+
+    def note(self, event: object, /) -> None:
+        pass
+
+
+@pytest.mark.slow
+def test_build_threads_the_search_observer_to_the_serial_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+    real = pipeline._new_layout
+
+    def spy(*args: object, **kwargs: object) -> object:
+        seen["observer"] = kwargs.get("observer")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_new_layout", spy)
+    observer = _NullObserver()
+    pipeline.build(SMALL_URL, strategy="freeform", time_budget_s=2.0, search_observer=observer)
+    assert seen["observer"] is observer

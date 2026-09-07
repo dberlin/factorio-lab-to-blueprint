@@ -422,6 +422,11 @@ class PlacementStats(TypedDict, total=False):
     topology_beam_wall_time_s: float
     total_time_s: float
     towers: float
+    #: This arm's own `TraceChannel`-side drops (Task 8 fix round 1): a
+    #: transiently full queue OR an unpicklable event, folded in from
+    #: `_StrategyRaceOutcome.trace_dropped` so the web `dropped` figure is not
+    #: only the parent-side (ring/stage-1) half of the truth.
+    trace_dropped: int
     used_height: float
     validation_clean: float
     validation_status: str

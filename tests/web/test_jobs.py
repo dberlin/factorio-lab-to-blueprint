@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import queue
 import threading
 import time
 from pathlib import Path
@@ -17,7 +18,9 @@ from flab2bp.layout.base import (
     NoValidLayout,
     ProjectionFailureRecord,
 )
+from flab2bp.layout.observe import SearchObserver
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
+from flab2bp.web import jobs as jobs_module
 from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
 from flab2bp.web.server import serve
@@ -31,7 +34,11 @@ def test_server_rejects_legacy_power_payload(
     small_build: pipeline.Build,
     tmp_path: Path,
 ) -> None:
-    httpd, builder = serve(port=0, dist=tmp_path, solve=lambda _options, _progress: small_build)
+    httpd, builder = serve(
+        port=0,
+        dist=tmp_path,
+        solve=lambda _options, _progress, _s=None, _t=None: small_build,
+    )
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -65,7 +72,7 @@ def _object(value: JsonValue) -> Json:
 
 
 def test_a_successful_build_reports_done_with_a_result(small_build: pipeline.Build) -> None:
-    builder = Builder(solve=lambda _o, _p: small_build)
+    builder = Builder(solve=lambda _o, _p, _s=None, _t=None: small_build)
     try:
         job = builder.submit(Options(url=URL))
         snap = _settled(builder, job.id)
@@ -88,7 +95,7 @@ def test_unframed_success_finishes_as_controlled_error(
             completion=None,
         ),
     )
-    builder = Builder(solve=lambda _o, _p: unframed)
+    builder = Builder(solve=lambda _o, _p, _s=None, _t=None: unframed)
     try:
         job = builder.submit(Options(url=URL))
         snap = _settled(builder, job.id, timeout_s=1.0)
@@ -105,7 +112,12 @@ def test_unframed_success_finishes_as_controlled_error(
 def test_a_refusal_is_a_result_not_an_error() -> None:
     """``NoValidLayout`` must not land in the same channel as a bad URL."""
 
-    def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+    def refuse(
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         raise NoValidLayout(
             "freeform/no-proliferator: too tall; freeform/max-proliferation: unroutable",
             spec_label="no-proliferator",
@@ -140,7 +152,12 @@ def test_a_refusal_is_a_result_not_an_error() -> None:
 
 
 def test_direct_refusal_without_attempt_strategy_serializes_null_not_an_invalid_name() -> None:
-    def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+    def refuse(
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         raise NoValidLayout(
             "request has no legal layout",
             spec_label="direct-spec",
@@ -196,7 +213,12 @@ def test_projection_evidence_semicolons_stay_structured_inside_attempt_payload()
         },
     )
 
-    def refuse(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+    def refuse(
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         raise NoValidLayout(
             attempt.reason,
             spec_label=attempt.candidate,
@@ -237,7 +259,12 @@ def test_projection_evidence_semicolons_stay_structured_inside_attempt_payload()
 
 
 def test_a_bad_url_is_an_error() -> None:
-    def blow_up(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+    def blow_up(
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         raise ValueError("that is not a FactorioLab URL")
 
     builder = Builder(solve=blow_up)
@@ -251,7 +278,12 @@ def test_a_bad_url_is_an_error() -> None:
 
 
 def test_an_unexpected_operational_failure_finishes_as_error() -> None:
-    def disconnect(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+    def disconnect(
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         raise RuntimeError("CDP connection dropped")
 
     builder = Builder(solve=disconnect)
@@ -264,6 +296,65 @@ def test_an_unexpected_operational_failure_finishes_as_error() -> None:
         current = builder.get(job.id)
         assert current is not None
         assert current.finished_at is not None
+    finally:
+        builder.shutdown()
+
+
+def test_a_collector_whose_start_fails_still_lets_the_queue_close(
+    monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+) -> None:
+    """Critical 1: `TraceCollector.start()` used to bind `self._thread` BEFORE
+    `thread.start()`. If starting the thread ever raised (OS thread
+    exhaustion), `stop()` would then try to join a thread that was never
+    started, which raises `RuntimeError` -- and that raise happened inside
+    `Builder._run`'s `finally`, BEFORE the trace queue's own
+    `cancel_join_thread()`/`close()`. In a long-lived web process, that leaks
+    the spawn-context `multiprocessing.Queue`, its feeder thread, and its
+    pipe fds on every job whose trace collector failed to start.
+
+    Reproduced here by making the REAL `threading.Thread.start()` raise, but
+    only for the trace collector's own thread (named "flab2bp-trace") -- so
+    the fix under test is `TraceCollector.start()`'s actual bind-after-start
+    ordering, not a stand-in for it, and every other thread in the process
+    (the builder's own pool, this test's polling) is untouched.
+    """
+    closed: list[str] = []
+
+    class _TrackingQueue:
+        def get_nowait(self) -> object:
+            raise queue.Empty
+
+        def put_nowait(self, item: object) -> None:
+            raise NotImplementedError
+
+        def cancel_join_thread(self) -> None:
+            closed.append("cancel_join_thread")
+
+        def close(self) -> None:
+            closed.append("close")
+
+    class _FakeContext:
+        def Queue(self, maxsize: int = 0) -> object:
+            return _TrackingQueue()
+
+    monkeypatch.setattr(jobs_module.multiprocessing, "get_context", lambda kind: _FakeContext())
+
+    real_start = threading.Thread.start
+
+    def failing_start(self: threading.Thread) -> None:
+        if self.name == "flab2bp-trace":
+            raise RuntimeError("can't start new thread")
+        real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", failing_start)
+
+    builder = Builder(solve=lambda *_a, **_k: small_build)
+    try:
+        job = builder.submit(Options(url=URL, trace=True))
+        snap = _settled(builder, job.id, timeout_s=2.0)
+
+        assert snap["state"] == "error"
+        assert closed == ["cancel_join_thread", "close"]
     finally:
         builder.shutdown()
 
@@ -298,7 +389,12 @@ def test_a_second_job_queues_behind_the_first(small_build: pipeline.Build) -> No
     """One worker, so the second job waits -- and says how far back it is."""
     release = threading.Event()
 
-    def wait_then_build(_o: Options, _p: pipeline.ProgressSink) -> pipeline.Build:
+    def wait_then_build(
+        _o: Options,
+        _p: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         release.wait(timeout=20.0)
         return small_build
 
@@ -325,7 +421,7 @@ def test_a_second_job_queues_behind_the_first(small_build: pipeline.Build) -> No
 def test_old_finished_jobs_are_evicted_and_running_ones_are_not(
     small_build: pipeline.Build,
 ) -> None:
-    builder = Builder(history=3, solve=lambda _o, _p: small_build)
+    builder = Builder(history=3, solve=lambda _o, _p, _s=None, _t=None: small_build)
     try:
         # One at a time: submitting six at once would have them evicted out from
         # under the poll, which is eviction working, not eviction under test.
@@ -345,7 +441,7 @@ def test_old_finished_jobs_are_evicted_and_running_ones_are_not(
 def test_the_snapshot_carries_the_ceiling_and_the_elapsed_time(
     small_build: pipeline.Build,
 ) -> None:
-    builder = Builder(solve=lambda _o, _p: small_build)
+    builder = Builder(solve=lambda _o, _p, _s=None, _t=None: small_build)
     try:
         options = Options(
             url=URL,
@@ -374,7 +470,12 @@ def test_the_snapshot_carries_the_ceiling_and_the_elapsed_time(
 def test_progress_total_comes_from_the_pipeline(
     small_build: pipeline.Build,
 ) -> None:
-    def solve(_options: Options, note: pipeline.ProgressSink) -> pipeline.Build:
+    def solve(
+        _options: Options,
+        note: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         note(
             pipeline.AttemptProgress(
                 1,
@@ -408,7 +509,12 @@ def test_progress_total_comes_from_the_pipeline(
 def test_filtered_pipeline_total_is_not_replaced_by_the_request_ceiling(
     small_build: pipeline.Build,
 ) -> None:
-    def solve(_options: Options, note: pipeline.ProgressSink) -> pipeline.Build:
+    def solve(
+        _options: Options,
+        note: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         note(
             pipeline.AttemptProgress(
                 1,
@@ -455,7 +561,12 @@ def test_a_running_job_reports_which_pair_it_is_on(small_build: pipeline.Build) 
     )
     release = threading.Event()
 
-    def solve(_o: Options, note: pipeline.ProgressSink) -> pipeline.Build:
+    def solve(
+        _o: Options,
+        note: pipeline.ProgressSink,
+        _s: SearchObserver | None = None,
+        _t: object | None = None,
+    ) -> pipeline.Build:
         note(pipeline.AttemptProgress(1, 2, "no-proliferator", "freeform", "started"))
         note(
             pipeline.AttemptProgress(
@@ -517,7 +628,7 @@ def test_a_job_that_has_not_started_laying_out_claims_no_progress(
     small_build: pipeline.Build,
 ) -> None:
     """Parsing the URL and solving the rates come first and take an unknown time."""
-    builder = Builder(solve=lambda _o, _p: small_build)
+    builder = Builder(solve=lambda _o, _p, _s=None, _t=None: small_build)
     try:
         snap = _settled(builder, builder.submit(Options(url=URL)).id)
         assert snap["progress"] is None
@@ -619,7 +730,7 @@ def test_run_build_delegates_default_cpu_allocation_to_pipeline(
 def test_pinned_flow_snapshot_advertises_one_effective_candidate(
     small_build: pipeline.Build,
 ) -> None:
-    builder = Builder(solve=lambda _o, _p: small_build)
+    builder = Builder(solve=lambda _o, _p, _s=None, _t=None: small_build)
     try:
         options = Options(
             url=URL,
@@ -727,7 +838,7 @@ class TestFlowReachesTheSolver:
         # The CSV itself is not echoed back -- it can be hundreds of kB and the
         # page already has it -- but silence about whether one was used would
         # leave a poller unable to tell a dropped flow from an absent one.
-        builder = Builder(solve=lambda _o, _p: small_build)
+        builder = Builder(solve=lambda _o, _p, _s=None, _t=None: small_build)
         try:
             job = builder.submit(Options(url=URL, flow="Recipes\nid,name\ngraphene,Graphene\n"))
             snap = _settled(builder, job.id)

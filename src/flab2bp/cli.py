@@ -9,15 +9,126 @@ diagnostics go to stderr.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import sys
-from collections import Counter
+import threading
+import time
+from collections import Counter, deque
 from pathlib import Path
+from typing import TextIO
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
 from flab2bp.layout.band_policy import BAND_SELECTIONS, BandPolicy
 from flab2bp.layout.base import NoValidLayout
+from flab2bp.layout.observe import (
+    TRACE_SAMPLE_INTERVAL_S,
+    SampledObserver,
+    SearchEvent,
+)
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
+from flab2bp.web.trace import TRACE_DRAIN_INTERVAL_S, frame_json
+
+
+class _CliTraceWriter:
+    """Buffers frozen ``SearchEvent``s off the search thread; a daemon thread
+    of its own turns them into JSONL.
+
+    Mirrors ``TraceCollector`` (web/trace.py) for exactly the reason that
+    class exists: ``frame_json``'s own docstring says it "runs on the
+    parent's trace thread, never on a search thread" -- before this class,
+    the CLI's sink called it, plus ``json.dumps`` and the file write,
+    SYNCHRONOUSLY on the thread the search was trying to spend its core on
+    (fix round, Important 1). ``offer`` is the O(1) sink ``SampledObserver``
+    calls; projection and I/O happen only in ``_drain_once``, off that
+    thread.
+
+    Unlike ``TraceCollector``'s stage-1 deque, ``_pending`` is unbounded: this
+    is one CLI process tracing one build, not a long-lived server bounding
+    memory across many jobs, and "no frames are lost" is exactly the
+    guarantee a debugging JSONL file promises.
+    """
+
+    def __init__(self, trace_file: TextIO, started_at: float) -> None:
+        self._trace_file = trace_file
+        self._started_at = started_at
+        self._pending: deque[SearchEvent] = deque()
+        self._lock = threading.Lock()
+        self._seq = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def offer(self, event: SearchEvent) -> None:
+        """The sink. One deque append -- O(1), never touches ``placement``."""
+        with self._lock:
+            self._pending.append(event)
+
+    def start(self) -> None:
+        thread = threading.Thread(target=self._run, name="flab2bp-cli-trace", daemon=True)
+        # `start()` BEFORE the assignment -- the same ordering
+        # `TraceCollector.start()` was fixed to use (Critical 1): a failed
+        # `thread.start()` must leave `self._thread` `None` rather than
+        # referencing a Thread that was constructed but never actually
+        # started, so `stop()` below drains directly instead of joining one.
+        thread.start()
+        self._thread = thread
+
+    def _drain_once(self) -> None:
+        # Swap the deque object out under the lock rather than copying it
+        # (Minor, re-review round): `list(self._pending)` was an O(n) copy
+        # held under the same lock `offer()` needs for its O(1) append, so a
+        # long backlog could make the search thread's "O(1)" sink block
+        # behind it. Reassignment is O(1); the old deque is drained below,
+        # outside the lock, and nothing else holds a reference to it.
+        with self._lock:
+            pending, self._pending = self._pending, deque()
+        for event in pending:
+            frame = frame_json(self._seq, round(event.monotonic_s - self._started_at, 3), event)
+            self._seq += 1
+            try:
+                self._trace_file.write(json.dumps(frame))
+                self._trace_file.write("\n")
+            except OSError:
+                # R3: a debugging artefact must never take a real build down
+                # with it. Re-review round: this used to propagate straight
+                # out of `_run`/`stop()` -- on the writer thread that is a
+                # silent thread death (tolerable), but `stop()`'s own final
+                # drain runs on the MAIN thread once the writer thread is
+                # gone, so an `OSError` here (disk full, a broken pipe, an
+                # NFS hiccup) used to reach `cli_main`'s `finally` and kill a
+                # build that had already succeeded -- precisely what R3
+                # forbids, and the same "raise inside a `finally` skips the
+                # resource release" shape as Critical 1, reintroduced here.
+                # Whatever wrote before this point is on disk; a trace file
+                # with a silently truncated tail is the correct trade, same
+                # as the tolerance `trace_file.close()` already gets in
+                # `main()`.
+                return
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._drain_once()
+            self._stop.wait(TRACE_DRAIN_INTERVAL_S)
+        # One last pass after the stop flag is observed: a burst offered
+        # between the previous periodic drain and `stop()` being called must
+        # still reach the file, not be lost (mirrors `TraceCollector._run`).
+        self._drain_once()
+
+    def stop(self) -> None:
+        """Join the writer thread and do one final drain, so every frame
+        offered before this call is on disk before the caller closes the
+        file."""
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        # Only drain here if the daemon thread is gone -- the same race
+        # `TraceCollector.stop()` guards against: a wedged thread could still
+        # be mid-drain, and draining again concurrently from this thread
+        # would race on `self._seq`.
+        if thread is None or not thread.is_alive():
+            self._drain_once()
 
 
 def _report(build: pipeline.Build, *, verbose: bool) -> None:
@@ -314,6 +425,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="race without exchanging incumbents or no-goods",
     )
     ap.add_argument("-o", "--out", type=Path, help="write to a file instead of stdout")
+    ap.add_argument(
+        "--trace-jsonl",
+        type=Path,
+        metavar="PATH",
+        help="write every search snapshot as one JSON object per line to PATH "
+        "-- the same frames the web transport carries (design §4), the input "
+        "scripts/trace_overhead.py uses, and the offline-analysis path when "
+        "there is no browser. Off by default: no path, no observer, no cost.",
+    )
     ap.add_argument("-n", "--name", default="", help="blueprint short description")
     ap.add_argument("-v", "--verbose", action="store_true", help="show every attempt")
     ap.add_argument(
@@ -338,6 +458,24 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--sequence-islands must be from 1 to 16")
     if args.workers is not None and args.workers < 1:
         ap.error("--workers must be a positive integer")
+    if args.trace_jsonl is not None and args.race:
+        # Task 13 fix round 1: a raced arm runs in a spawned child with no
+        # in-process observer to call, and this CLI has no `trace_queue` to
+        # give it one -- so before this check existed, `--trace-jsonl
+        # --race` silently produced a valid-looking, permanently empty
+        # file. That reads as "the search produced nothing," which is a much
+        # worse failure than a build refusing to start. Threading a queue and
+        # a drain thread through here (mirroring `web/jobs.py`'s
+        # `Builder._run`) would fix it properly; refusing the combination
+        # outright is the smaller, safer fix that removes the silent-empty-
+        # file failure mode today. Tracing a raced build is not unsupported
+        # forever, just not wired through this flag yet.
+        ap.error(
+            "--trace-jsonl is not yet supported together with --race: a raced "
+            "arm has no channel to report search events through, so the "
+            "combination would silently write an empty trace file. Drop "
+            "--race, or omit --trace-jsonl."
+        )
     # Islands are ON by default for both `sequence-pair` and `best`, which is
     # every plain `flab2bp <url>` build: four islands measured 13.6 % smaller
     # layouts at the same budget (design doc L1).  The count is deliberately NOT
@@ -351,40 +489,103 @@ def main(argv: list[str] | None = None) -> int:
     # five-worker share, where two is what the share funds.
     sequence_islands = args.sequence_islands
 
+    # --trace-jsonl opens its output file here, before any solve starts, so a
+    # bad path (missing directory, no permission, full disk) fails fast at
+    # argument time -- the same place `--sequence-islands` and `--workers`
+    # already fail on a bad value -- rather than surfacing five minutes into a
+    # real build. `ap.error` never returns (argparse types it `NoReturn`), so
+    # `trace_file` is a real, open file for the rest of `main` whenever it is
+    # not `None`.
+    trace_file = None
+    search_observer = None
+    writer: _CliTraceWriter | None = None
+    if args.trace_jsonl is not None:
+        try:
+            trace_file = args.trace_jsonl.open("w", encoding="utf-8")
+        except OSError as exc:
+            ap.error(f"--trace-jsonl {args.trace_jsonl}: {exc}")
+        # `frame_json` is the ONE place, web or CLI, that projects a
+        # SearchEvent into the wire shape (web/trace.py, design §4), and its
+        # own docstring says it must never run on a search thread. `writer`
+        # is the CLI's side of that: `.offer` (the sink below) is an O(1)
+        # deque append on the search thread, and `frame_json` plus the actual
+        # file write happen only on the writer's own daemon thread (fix
+        # round, Important 1). `event.monotonic_s` is captured where the
+        # event was constructed (observe.py's default factory), never at
+        # whatever later moment the writer thread gets around to it -- the
+        # same relationship `TraceCollector.drain_once` uses against its own
+        # `started_at`, so a CLI trace and a web trace measure `t` the same
+        # way relative to their own start.
+        writer = _CliTraceWriter(trace_file, time.monotonic())
+        writer.start()
+        search_observer = SampledObserver(sink=writer.offer, min_interval_s=TRACE_SAMPLE_INTERVAL_S)
+
     try:
-        build = pipeline.build(
-            args.url,
-            strategy=args.strategy,
-            band=args.band,
-            candidate_policies=candidate_policies,
-            time_budget_s=args.budget,
-            sequence_islands=sequence_islands,
-            name=args.name,
-            flow=args.flow,
-            fetch_flow=args.fetch_flow,
-            fetch_timeout_s=args.fetch_timeout,
-            browser=args.browser,
-            no_proliferator=args.no_proliferator,
-            workers=args.workers,
-            race=args.race,
-            share=args.share,
-        )
-        _report(build, verbose=args.verbose)
-    except NoValidLayout as exc:
-        # Distinct exit code: "no layout exists" is a different outcome from
-        # "the URL was bad", and per the user a spec that cannot be laid out in
-        # the retry budget is our bug until shown otherwise.
-        print(f"flab2bp: {exc}", file=sys.stderr)
-        for failure in exc.projection_failures[:5]:
-            print(
-                f"  band {failure.band} {failure.check} buildings "
-                f"{failure.buildings}: {failure.detail}",
-                file=sys.stderr,
+        try:
+            build = pipeline.build(
+                args.url,
+                strategy=args.strategy,
+                band=args.band,
+                candidate_policies=candidate_policies,
+                time_budget_s=args.budget,
+                sequence_islands=sequence_islands,
+                name=args.name,
+                flow=args.flow,
+                fetch_flow=args.fetch_flow,
+                fetch_timeout_s=args.fetch_timeout,
+                browser=args.browser,
+                no_proliferator=args.no_proliferator,
+                workers=args.workers,
+                race=args.race,
+                share=args.share,
+                search_observer=search_observer,
             )
-        return 3
-    except (ValueError, KeyError) as exc:
-        print(f"flab2bp: {exc}", file=sys.stderr)
-        return 2
+            _report(build, verbose=args.verbose)
+        except NoValidLayout as exc:
+            # Distinct exit code: "no layout exists" is a different outcome from
+            # "the URL was bad", and per the user a spec that cannot be laid out in
+            # the retry budget is our bug until shown otherwise.
+            print(f"flab2bp: {exc}", file=sys.stderr)
+            for failure in exc.projection_failures[:5]:
+                print(
+                    f"  band {failure.band} {failure.check} buildings "
+                    f"{failure.buildings}: {failure.detail}",
+                    file=sys.stderr,
+                )
+            return 3
+        except (ValueError, KeyError) as exc:
+            print(f"flab2bp: {exc}", file=sys.stderr)
+            return 2
+    finally:
+        # `writer.stop()` FIRST: it joins the writer's daemon thread and
+        # performs its final drain, so every frame `offer`ed during the build
+        # is actually on disk before the file below is closed -- the
+        # buffering that makes the sink O(1) (fix round, Important 1) must
+        # never cost a frame at shutdown.
+        #
+        # Nested in its own `finally` (re-review round): `_drain_once`'s own
+        # `OSError` guard should already keep `stop()` from raising, but the
+        # file release below must run even if it somehow still does -- the
+        # same "raise inside a `finally` skips the resource release" shape
+        # Critical 1 fixed in `jobs.py`, reintroduced here by this same wave.
+        try:
+            if writer is not None:
+                writer.stop()
+        finally:
+            # Every exit path -- success, NoValidLayout, ValueError/KeyError,
+            # or any other exception propagating out of `pipeline.build` --
+            # closes the file, so a raised build still leaves a complete,
+            # readable trace instead of one truncated by a buffered write
+            # that never flushed. `close()` itself is guarded: an OS-level
+            # flush failure here (disk filled during the build, permission
+            # revoked, an NFS hiccup) would otherwise raise AFTER a build
+            # that already succeeded, discarding a finished blueprint over a
+            # debugging artefact -- exactly what R3 ("a view must never kill
+            # a build") forbids. A trace file with a silently truncated tail
+            # is the correct trade.
+            if trace_file is not None:
+                with contextlib.suppress(OSError):
+                    trace_file.close()
 
     if build.report.errors and not args.allow_invalid:
         print(

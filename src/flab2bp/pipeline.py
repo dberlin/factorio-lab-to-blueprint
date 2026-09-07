@@ -50,6 +50,7 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.hierarchy import HierarchicalLayout
+from flab2bp.layout.observe import SearchObserver
 from flab2bp.layout.sequence_solver import SequencePairLayout, _validate_sequence_islands
 from flab2bp.rates.adjust import ProliferatorTier
 from flab2bp.rates.candidates import (
@@ -226,8 +227,13 @@ def _new_layout(
     #: such argument: its sub-solves are pinned at one worker each, so its share
     #: of a split is headroom for its process rather than a solver setting.
     workers: int | None = None,
+    observer: SearchObserver | None = None,
 ) -> FreeformLayout | SequencePairLayout | HierarchicalLayout:
-    """Construct one explicitly selected layout backend."""
+    """Construct one explicitly selected layout backend.
+
+    The hierarchical backend takes no observer: its block solves run in child
+    processes and the search-visualization branch deferred that view (G6).
+    """
     if strategy == "hierarchical":
         # No island argument: islands live inside the sequence-pair backend, and
         # the hierarchical one runs its own children with one each.
@@ -241,11 +247,13 @@ def _new_layout(
             belt_vertical_construction=belt_vertical_construction,
             band_policy=band_policy,
             workers=workers,
+            observer=observer,
         )
     return SequencePairLayout(
         belt_vertical_construction=belt_vertical_construction,
         islands=sequence_islands,
         band_policy=band_policy,
+        observer=observer,
     )
 
 
@@ -284,18 +292,36 @@ def _raced_result(
                 "process_peak_rss_kib": outcome.process_peak_rss_kib,
             }
         )
+        # Stamped only when non-zero (fix round 2, Important 1): `total=False`
+        # makes the key's ABSENCE, not a `0`, what "no drop" looked like before
+        # tracing existed, and `web/payload.py`/`scripts/audit.py` both
+        # serialize this whole dict verbatim. An unconditional `0` would make
+        # a trace-OFF raced build's stats byte-different from today's, which
+        # is exactly the guarantee this branch's constraints forbid breaking.
+        # `_sum_trace_dropped`'s own `.get("trace_dropped", 0)` already treats
+        # omission as zero, so leaving it out here is safe by construction.
+        if outcome.trace_dropped:
+            outcome.placement.stats["trace_dropped"] = outcome.trace_dropped
         return outcome.placement
+    #: `dict[str, float]`, not `PlacementStats`: `NoValidLayout.stats` takes a
+    #: plain `Mapping[str, float | str] | None`, and a `PlacementStats`
+    #: TypedDict (whose OTHER fields include `int` and `list[str]`) is not
+    #: structurally one, even though every value actually placed here is a
+    #: float.
+    stats: dict[str, float] = {
+        "process_wall_time_s": outcome.process_wall_time_s,
+        "process_user_cpu_s": outcome.process_user_cpu_s,
+        "process_system_cpu_s": outcome.process_system_cpu_s,
+        "process_peak_rss_kib": outcome.process_peak_rss_kib,
+    }
+    if outcome.trace_dropped:
+        stats["trace_dropped"] = outcome.trace_dropped
     return NoValidLayout(
         outcome.refusal_reason or f"{outcome.strategy} produced nothing",
         spec_label=spec_label,
         budget_s=budget_s,
         projection_failures=outcome.refusal_projection_failures,
-        stats={
-            "process_wall_time_s": outcome.process_wall_time_s,
-            "process_user_cpu_s": outcome.process_user_cpu_s,
-            "process_system_cpu_s": outcome.process_system_cpu_s,
-            "process_peak_rss_kib": outcome.process_peak_rss_kib,
-        },
+        stats=stats,
     )
 
 
@@ -618,6 +644,22 @@ def build(
     fetch_url_validator: UrlValidator | None = None,
     no_proliferator: bool = False,
     on_progress: ProgressSink | None = None,
+    #: Told what the SEARCH is doing, for the trace view.  Distinct from
+    #: `on_progress`, which reports pair boundaries: this reports the interior,
+    #: fires far more often, and is never allowed to raise.  `None` -- the
+    #: default and the shipping path -- costs one `is None` per call site.
+    search_observer: SearchObserver | None = None,
+    #: The parent's read end of a raced build's child-to-parent trace queue, or
+    #: ``None`` when tracing is off. Unlike `search_observer` -- which this
+    #: build also uses directly for a SERIAL leg, in-process, including a raced
+    #: build's own fallback-to-serial path when a race goes unfunded -- a raced
+    #: leg has no in-process observer to call at all, so this is the only way
+    #: its events reach anyone. The CALLER creates and owns this queue (Task 8
+    #: fix round 1): a build born and dying inside one call cannot be the
+    #: owner of a queue meant to outlive it in a long-lived web process, and
+    #: draining it belongs on whichever thread actually consumes the frames --
+    #: which is no longer this function (see below).
+    trace_queue: object | None = None,
     #: Aggregate solver-worker budget for one build. ``None`` uses at most 16
     #: CPUs from the process affinity set. A serial build gives the whole budget
     #: to its current strategy; concurrent candidate races divide it exactly
@@ -872,6 +914,7 @@ def build(
             sequence_islands=islands,
             band_policy=policy,
             workers=workers if sname == "hierarchical" else worker_budget,
+            observer=search_observer,
         )
         try:
             return layout.lay_out(candidate, time_budget_s=time_budget_s)
@@ -925,6 +968,7 @@ def build(
                 sequence_islands,
             ),
             share=share,
+            trace_queue=trace_queue,
         )
         return race_started, time.monotonic(), outcomes
 
@@ -977,6 +1021,20 @@ def build(
                 race_started, race_finished, outcomes = _run_race(spec, worker_budget)
             else:
                 race_started, race_finished, outcomes = candidate_race
+            # Trace events do NOT get forwarded into `search_observer` here.
+            # (Task 8 fix round 1, Criticals C1+C2.) Draining only once a
+            # candidate settles polls `trace_queue` far too coarsely -- a
+            # multi-second race writes continuously while nothing reads, and
+            # the queue saturates faster than a bounded per-settlement drain
+            # can ever clear it -- and re-applying `search_observer.due()` to
+            # a whole settlement's worth of events arriving in one instant
+            # collapses all but one of them (every event but an
+            # ALWAYS_SAMPLE phase fails a 0.25s gate that a burst clears in
+            # microseconds). `TraceCollector.queue` is the live path instead:
+            # its own background thread polls `trace_queue` continuously,
+            # independent of any candidate's settlement, and applies no
+            # second sample gate at all -- sampling happens once, in the
+            # child, at the source.
             by_strategy = {outcome.strategy: outcome for outcome in outcomes}
             if set(by_strategy) != set(wanted):
                 # A lost arm must never read as a complete build: `total_pairs`

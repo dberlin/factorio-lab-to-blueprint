@@ -23,6 +23,7 @@ import {
 } from '../api/build';
 import { useBlueprint } from '../state/BlueprintProvider';
 import { BuildReportPanel, ProjectionFailures, RefusalReport } from './BuildReport';
+import { TracePanel } from './TracePanel';
 
 export function BuildPanel() {
   const { load, markStale } = useBlueprint();
@@ -233,6 +234,15 @@ export function BuildPanel() {
           <option value="3">Mk.III</option>
         </select>
 
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={options.trace}
+            onChange={(event) => set('trace', event.target.checked)}
+          />
+          Trace search (live)
+        </label>
+
         <fieldset className="candidate-policies checkbox">
           <legend>Candidate policies</legend>
           {DEFAULT_OPTIONS.candidate_policies.map((policy) => (
@@ -367,6 +377,20 @@ export function BuildPanel() {
       )}
 
       {busy && job && <Progress job={job} />}
+
+      {/* Gated on the JOB's own `options.trace` (I3), never the live form
+          checkbox above: unticking it mid-build must not disappear the
+          panel for a job that is still tracing, and ticking it during an
+          untraced build must not mount one that polls forever.
+
+          `active` is always `true` here (I4): `jobs.py`'s `finally` drains
+          the collector's LAST frames only after the job is already marked
+          terminal, so gating on `isSettled(job)` tore the panel down before
+          those frames -- and the `complete` handshake they carry
+          (`jobs.py:630`, `TracePanel.tsx`'s own `if (page.complete) return`)
+          -- ever had a chance to arrive. The panel now keeps polling on its
+          own until it observes `complete`, whatever the job's state is. */}
+      {job && job.options.trace && <TracePanel jobId={job.id} active={true} />}
 
       {requestError && (
         <p role="alert" className="error">

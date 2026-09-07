@@ -100,6 +100,7 @@ from flab2bp.layout.freeform import (
     plan_strips,
     tie_break_cap,
 )
+from flab2bp.layout.observe import SearchEvent, SearchPhase
 from flab2bp.layout.piling import PilerPlan
 from flab2bp.layout.route_feedback import (
     Cell,
@@ -25068,3 +25069,63 @@ def test_one_recipe_negentropy_block_lays_out_at_five_and_six(
     )
     placement = layout.lay_out(sub, time_budget_s=20.0)
     assert validate.certify(placement, sub, expect_power=True).ok
+
+
+@pytest.fixture
+def small_spec() -> BuildSpec:
+    """A minimal spec: one producer group, laid out in well under a second."""
+    return single_recipe_spec()
+
+
+class _RecordingObserver:
+    """Takes everything, so a test sees every site rather than a sample."""
+
+    def __init__(self) -> None:
+        self.events: list[SearchEvent] = []
+
+    def due(self, phase: SearchPhase, /) -> bool:
+        return True
+
+    def note(self, event: SearchEvent, /) -> None:
+        self.events.append(event)
+
+
+def test_freeform_reports_an_incumbent_to_its_observer(small_spec: BuildSpec) -> None:
+    observer = _RecordingObserver()
+    layout = FreeformLayout(band_policy=BandPolicy.parse("portable"), observer=observer)
+    placement = layout.lay_out(small_spec, time_budget_s=0.5)
+
+    incumbents = [e for e in observer.events if e.phase is SearchPhase.INCUMBENT]
+    assert incumbents, "a completed freeform sweep has at least one incumbent"
+    last = incumbents[-1]
+    assert last.strategy == "freeform"
+    assert last.candidate == small_spec.label
+    assert last.incumbent is True
+    assert last.area == placement.area
+    assert last.height is not None
+    assert last.placement is not None
+
+
+def test_freeform_with_an_attached_observer_does_not_perturb_the_result(
+    small_spec: BuildSpec,
+) -> None:
+    """Rule P: an observer is read-only.  Attaching one -- and having it actually
+    record events -- must not change what the sweep returns.
+
+    The prior version of this test compared a default-constructed
+    ``FreeformLayout`` against one explicitly passed ``observer=None``: both are
+    the None path, so it asserted a default equals its own default and never
+    exercised an attached observer at all.  This version would fail if an
+    observer call perturbed ``best_key``, read ``FeedbackState``, or otherwise
+    changed which candidate the sweep certifies as its incumbent.
+    """
+    band = BandPolicy.parse("portable")
+    a = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None).lay_out(
+        small_spec, time_budget_s=0.5
+    )
+    observer = _RecordingObserver()
+    b = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=observer).lay_out(
+        small_spec, time_budget_s=0.5
+    )
+    assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])
+    assert observer.events, "an attached observer must actually receive events"

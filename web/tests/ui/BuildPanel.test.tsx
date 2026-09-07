@@ -854,3 +854,125 @@ test('a refusal marks the blueprint on screen as the previous build', async () =
   // Still rendered — and no longer claiming to be the current result.
   await waitFor(() => expect(screen.getByTestId('staleness')).toHaveTextContent('stale'));
 });
+
+// ---- I3 / I4: the trace panel is keyed to the JOB, not the live form ----
+
+const TRACE_CHECKBOX = /trace search/i;
+
+/**
+ * A URL-routed `fetch` stand-in: `serving()` answers a flat sequence
+ * regardless of path, which cannot tell the job poll (`/api/build/:id`) apart
+ * from the trace poll (`/api/build/:id/trace?...`) once `TracePanel` is
+ * mounted alongside `BuildPanel`'s own poll loop. This dispatches on the URL
+ * instead, so the two loops can be scripted independently.
+ */
+function routedFetch(routes: { submit: unknown; polls: unknown[]; tracePages?: unknown[] }): {
+  pollCount: number;
+  tracePollCount: number;
+} {
+  const counts = { pollCount: 0, tracePollCount: 0 };
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (init?.method === 'POST') return json(routes.submit);
+    if (url.includes('/trace?')) {
+      const pages = routes.tracePages ?? [{ frames: [], next: -1, dropped: 0, complete: true }];
+      const page = pages[Math.min(counts.tracePollCount, pages.length - 1)];
+      counts.tracePollCount += 1;
+      return json(page);
+    }
+    const job = routes.polls[Math.min(counts.pollCount, routes.polls.length - 1)];
+    counts.pollCount += 1;
+    return json(job);
+  }) as unknown as typeof fetch;
+  return counts;
+}
+
+test("the trace panel gates on the job's own trace option, not the live form checkbox", async () => {
+  const runningTraced = aJob({ state: 'running', result: null, options: { trace: true } });
+  const doneTraced = aJob({ state: 'done', options: { trace: true } });
+  routedFetch({ submit: runningTraced, polls: [doneTraced] });
+
+  mount();
+  fireEvent.click(screen.getByRole('checkbox', { name: TRACE_CHECKBOX }));
+  build();
+
+  await waitFor(() => expect(screen.getByTestId('trace-panel')).toBeInTheDocument());
+
+  // Untick the live form checkbox mid-build: the job that is actually
+  // running was submitted WITH trace on, so the panel must not vanish just
+  // because the form's own checkbox changed underneath it.
+  fireEvent.click(screen.getByRole('checkbox', { name: TRACE_CHECKBOX }));
+  expect(screen.getByTestId('trace-panel')).toBeInTheDocument();
+});
+
+test('ticking trace mid-build does not mount a panel for a job that was never traced', async () => {
+  const running = aJob({ state: 'running', result: null, options: { trace: false } });
+  const counts = routedFetch({ submit: running, polls: [running] });
+
+  mount();
+  build(); // trace left unticked, so the request — and the job — never traced
+
+  await waitFor(() => expect(screen.getByTestId('progress')).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole('checkbox', { name: TRACE_CHECKBOX }));
+  expect(screen.queryByTestId('trace-panel')).toBeNull();
+  // Never mounted, so it never polled the trace endpoint either.
+  expect(counts.tracePollCount).toBe(0);
+});
+
+test('the trace panel keeps polling past job settlement until it observes complete, so late frames are not lost', async () => {
+  const runningTraced = aJob({ state: 'running', result: null, options: { trace: true } });
+  const doneTraced = aJob({ state: 'done', options: { trace: true } });
+  const FRAME = (seq: number) => ({
+    seq,
+    t: seq * 0.25,
+    strategy: 'freeform',
+    candidate: 'c',
+    phase: 'incumbent',
+    height: null,
+    arrangement: null,
+    restart: null,
+    stage: null,
+    island: null,
+    round: null,
+    block: null,
+    area: null,
+    belt_tiles: null,
+    incumbent: true,
+    reason: null,
+    bounds: [0, 0, 1, 1],
+    buildings: [],
+    truncated: false,
+    stranded: [],
+    no_goods: [],
+  });
+  const counts = routedFetch({
+    submit: runningTraced,
+    // The job settles on the very first poll after submission...
+    polls: [doneTraced],
+    tracePages: [
+      // ...but the collector's final drain (jobs.py: `stop()` runs only
+      // AFTER the job is marked terminal) still has frames left to deliver.
+      { frames: [FRAME(0)], next: 0, dropped: 0, evicted: 0, complete: false },
+      { frames: [FRAME(1)], next: 1, dropped: 0, evicted: 0, complete: false },
+      { frames: [], next: 1, dropped: 0, evicted: 0, complete: true },
+    ],
+  });
+
+  mount();
+  fireEvent.click(screen.getByRole('checkbox', { name: TRACE_CHECKBOX }));
+  build();
+
+  // The job poll settles almost immediately...
+  await waitFor(() => expect(counts.pollCount).toBeGreaterThanOrEqual(1));
+  // ...yet the trace panel must keep polling past that settlement, all the
+  // way to the page that finally says `complete`, and deliver every frame
+  // along the way.
+  await waitFor(() => expect(counts.tracePollCount).toBeGreaterThanOrEqual(3), { timeout: 3000 });
+  expect(screen.getByTestId('trace-count')).toHaveTextContent('2 snapshots seen');
+});

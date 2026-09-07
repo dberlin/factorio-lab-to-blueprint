@@ -20,12 +20,26 @@ from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     LayoutStrategy,
     NoValidLayout,
+    PlacedBuilding,
     Placement,
     PlacementStats,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.compact_seed import CompactSeedConfig
 from flab2bp.layout.freeform import FreeformLayout
+from flab2bp.layout.observe import (
+    TRACE_CHILD_SAMPLE_INTERVAL_S,
+    SampledObserver,
+    SearchEvent,
+    SearchObserver,
+    SearchPhase,
+)
+from flab2bp.layout.observe_channel import (
+    TRACE_QUEUE_MAXSIZE,
+    drain_trace,
+    install_trace_channel,
+    trace_channel,
+)
 from flab2bp.layout.sequence_solver import (
     _MAX_SEQUENCE_ISLANDS,
     SequencePairLayout,
@@ -46,6 +60,7 @@ from flab2bp.layout.strategy_race import (
     RacingLayout,
     _build_layout,
     _channels_for,
+    _install_child_channels,
     _install_race_channels,
     _JoinCancellable,
     _ordered,
@@ -114,6 +129,7 @@ def test_every_request_field_is_read_by_a_racer() -> None:
         "config",
         "compact_seed_config",
         "share",
+        "trace",
     }
 
 
@@ -458,6 +474,7 @@ def _stub_submit(results: dict[str, object]) -> RaceSubmit:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for request in reversed(requests):
@@ -578,6 +595,7 @@ def test_the_race_spends_the_measured_grace_before_it_kills() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {slow: "freeform"}
         quick: Future[_StrategyRaceOutcome] = Future()
@@ -618,6 +636,7 @@ def test_the_requests_carry_the_parents_wall_not_a_budget_to_start_later() -> No
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for request in requests:
@@ -646,6 +665,7 @@ def test_share_false_creates_no_channels() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         seen.append(len(channels))
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
@@ -677,6 +697,7 @@ def test_share_true_wires_the_two_queues_crosswise_and_closes_them() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         captured.update(channels)
         return {}, _NoopExecutor()
@@ -704,6 +725,7 @@ def test_the_queues_are_closed_even_when_the_race_raises() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         captured.update(channels)
         raise RuntimeError("the pool refused to start")
@@ -728,6 +750,7 @@ def test_the_worker_split_reaches_the_requests() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for request in requests:
@@ -1157,8 +1180,12 @@ def test_the_pool_is_spawned_two_wide_and_recycles_every_child(
         assert pool.max_workers == len(RACE_STRATEGIES) == 2
         assert pool.mp_context.get_start_method() == "spawn"
         assert pool.max_tasks_per_child == 1
-        assert pool.initializer is _install_race_channels
-        assert pool.initargs == (to_freeform, to_sequence_pair)
+        # The COMPOSITE initializer, not `_install_race_channels` directly
+        # (Ruling 1, task-8-addendum.md): sharing being on is only one of the
+        # two reasons this branch is taken, and a trace queue must ride the
+        # same `initargs` tuple.  `None` here is the untraced case.
+        assert pool.initializer is _install_child_channels
+        assert pool.initargs == (to_freeform, to_sequence_pair, None)
     finally:
         for one in (to_freeform, to_sequence_pair):
             one.cancel_join_thread()
@@ -1215,6 +1242,7 @@ def test_two_futures_for_one_arm_is_refused_before_the_wait() -> None:
     def submit(
         requests: tuple[_StrategyRaceRequest, ...],
         channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
     ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
         futures: dict[Future[_StrategyRaceOutcome], str] = {}
         for _ in range(2):
@@ -1294,11 +1322,13 @@ class _HookedLayout:
         publish_incumbent: Callable[[Placement], None] | None,
         publish: tuple[Placement, ...] = (),
         refuse: bool = False,
+        observer: SearchObserver | None = None,
     ) -> None:
         self.portfolio_incumbent = portfolio_incumbent
         self.publish_incumbent = publish_incumbent
         self.publish = publish
         self.refuse = refuse
+        self.observer = observer
         self.observed: list[tuple[int, int] | None] = []
 
     def lay_out(
@@ -1339,12 +1369,14 @@ def _hook_layout(
         *,
         portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
+        observer: SearchObserver | None = None,
     ) -> _HookedLayout:
         layout = _HookedLayout(
             portfolio_incumbent=portfolio_incumbent,
             publish_incumbent=publish_incumbent,
             publish=publish,
             refuse=refuse,
+            observer=observer,
         )
         built.append(layout)
         return layout
@@ -1902,3 +1934,407 @@ def test_the_racing_layout_hands_every_knob_to_the_race(
         "sequence_islands": 3,
         "share": False,
     }
+
+
+# --------------------------------------------------------------------------
+# Task 8: trace events from a raced arm, across the spawn boundary.
+#
+# The testing note in task-8-addendum.md is deliberate here: real process
+# spawning is not fast or reliable on this box, so every test below fakes the
+# pool, the queue, or both, EXCEPT ONE -- the real end-to-end test at the
+# bottom, kept to a single `@pytest.mark.slow` case with the same tight
+# ``two_stage_spec`` / 2s / 4-worker budget already proven fast and stable by
+# ``test_the_real_pool_races_both_arms_end_to_end`` above.
+# --------------------------------------------------------------------------
+
+
+class _FakeJoinCancellableQueue:
+    """A ``_MessageQueue`` AND ``_JoinCancellable`` in one plain object.
+
+    ``queue.Queue`` (used elsewhere in this file as a ``_MessageQueue`` stand-
+    in) has no ``cancel_join_thread`` at all, so it cannot prove a channel's
+    ``close()`` actually reached it. A real ``multiprocessing.Queue`` can, but
+    costs a spawn-context queue's feeder thread for a fact that does not need
+    one.
+    """
+
+    def __init__(self) -> None:
+        self.cancelled = False
+        self._items: list[object] = []
+
+    def put_nowait(self, item: object) -> None:
+        self._items.append(item)
+
+    def get_nowait(self) -> object:
+        if not self._items:
+            raise queue.Empty
+        return self._items.pop(0)
+
+    def cancel_join_thread(self) -> None:
+        self.cancelled = True
+
+
+def _reset_child_channels() -> None:
+    strategy_race_module._RACE_CHANNELS = None
+    install_trace_channel(None)
+
+
+# --- `_install_child_channels`: all four (race x trace) combinations -------
+
+
+def test_install_child_channels_installs_nothing_when_everything_is_none() -> None:
+    _reset_child_channels()
+    try:
+        _install_child_channels(None, None, None)
+        assert strategy_race_module._RACE_CHANNELS is None
+        assert trace_channel() is None
+    finally:
+        _reset_child_channels()
+
+
+def test_install_child_channels_installs_only_the_trace_channel_when_sharing_is_off() -> None:
+    """Ruling 1's gap, at the unit closest to the fix: both race ends absent,
+    trace queue present -- the trace channel must still install, or every
+    raced arm silently emits zero frames whenever `share=False`."""
+    _reset_child_channels()
+    trace_queue: queue.Queue[object] = queue.Queue(maxsize=TRACE_QUEUE_MAXSIZE)
+    try:
+        _install_child_channels(None, None, trace_queue)
+        assert strategy_race_module._RACE_CHANNELS is None
+        channel = trace_channel()
+        assert channel is not None
+        assert channel.publish is trace_queue
+    finally:
+        _reset_child_channels()
+
+
+def test_install_child_channels_installs_only_race_channels_when_trace_is_off() -> None:
+    _reset_child_channels()
+    to_freeform: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    to_sequence_pair: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    try:
+        _install_child_channels(to_freeform, to_sequence_pair, None)
+        assert strategy_race_module._RACE_CHANNELS is not None
+        assert trace_channel() is None
+    finally:
+        _reset_child_channels()
+
+
+def test_install_child_channels_installs_both_when_both_are_on() -> None:
+    _reset_child_channels()
+    to_freeform: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    to_sequence_pair: queue.Queue[object] = queue.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    trace_queue: queue.Queue[object] = queue.Queue(maxsize=TRACE_QUEUE_MAXSIZE)
+    try:
+        _install_child_channels(to_freeform, to_sequence_pair, trace_queue)
+        assert strategy_race_module._RACE_CHANNELS is not None
+        channel = trace_channel()
+        assert channel is not None
+        assert channel.publish is trace_queue
+    finally:
+        _reset_child_channels()
+
+
+# --- `_pool_submit`: the composite initializer, all four combinations ------
+
+
+def test_pool_submit_uses_the_composite_initializer_when_trace_is_on_and_sharing_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling 1, task-8-addendum.md: the exact gap the addendum exists to
+    close. A two-branch initializer keyed only on ``channels`` would take the
+    NO-initializer path here (``channels`` is empty), and the trace channel
+    would never install in the child."""
+    _record_pools(monkeypatch)
+    requests = tuple(_request(name) for name in RACE_STRATEGIES)
+    sentinel = object()
+
+    _pool_submit(requests, {}, sentinel)
+
+    pool = _RecordedPool.built[0]
+    assert pool.initializer is _install_child_channels
+    assert pool.initargs == (None, None, sentinel)
+
+
+def test_pool_submit_carries_the_trace_queue_alongside_real_race_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _record_pools(monkeypatch)
+    context = multiprocessing.get_context("spawn")
+    to_freeform = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    to_sequence_pair = context.Queue(maxsize=RACE_QUEUE_MAXSIZE)
+    channels = {
+        "freeform": RaceChannels(publish=to_sequence_pair, consume=to_freeform),
+        "sequence-pair": RaceChannels(publish=to_freeform, consume=to_sequence_pair),
+    }
+    requests = tuple(_request(name) for name in RACE_STRATEGIES)
+    sentinel = object()
+    try:
+        _pool_submit(requests, channels, sentinel)
+        pool = _RecordedPool.built[0]
+        assert pool.initializer is _install_child_channels
+        assert pool.initargs == (to_freeform, to_sequence_pair, sentinel)
+    finally:
+        for one in (to_freeform, to_sequence_pair):
+            one.cancel_join_thread()
+            one.close()
+
+
+def test_pool_submit_still_omits_the_initializer_when_both_trace_and_sharing_are_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one shape Ruling 1 requires to stay byte-for-byte unchanged: the
+    shipping (both off) path never gains an initializer it did not have."""
+    _record_pools(monkeypatch)
+    requests = tuple(_request(name) for name in RACE_STRATEGIES)
+
+    _pool_submit(requests, {}, None)
+
+    pool = _RecordedPool.built[0]
+    assert pool.initializer is None
+    assert pool.initargs == ()
+
+
+# --- `run_strategy_race`: the trace queue reaches the submit seam ----------
+
+
+def test_a_trace_queue_reaches_the_submit_seam_and_marks_every_request() -> None:
+    seen: dict[str, object] = {}
+
+    def submit(
+        requests: tuple[_StrategyRaceRequest, ...],
+        channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
+    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
+        seen["trace_queue"] = trace_queue
+        seen["trace_flags"] = {r.strategy: r.trace for r in requests}
+        futures: dict[Future[_StrategyRaceOutcome], str] = {}
+        for request in requests:
+            future: Future[_StrategyRaceOutcome] = Future()
+            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
+            futures[future] = request.strategy
+        return futures, _NoopExecutor()
+
+    sentinel = object()
+    run_strategy_race(
+        two_stage_spec(),
+        time_budget_s=0.05,
+        band_policy=BandPolicy("portable"),
+        belt_vertical_construction=True,
+        share=False,
+        submit=submit,
+        trace_queue=sentinel,
+    )
+
+    assert seen["trace_queue"] is sentinel
+    assert seen["trace_flags"] == {"freeform": True, "sequence-pair": True}
+
+
+def test_no_trace_queue_still_calls_the_seam_with_three_arguments_and_none() -> None:
+    """M2, fix round 1: the call is unconditionally three arguments -- the
+    seam's third parameter is defaulted, so a two-shape call keyed on
+    `trace_queue` would exist only to serve a test seam, which is backwards.
+    Every request still carries `trace=False` when there is no queue."""
+    seen: dict[str, object] = {}
+
+    def submit(
+        requests: tuple[_StrategyRaceRequest, ...],
+        channels: dict[str, RaceChannels],
+        trace_queue: object | None = None,
+    ) -> tuple[dict[Future[_StrategyRaceOutcome], str], object]:
+        seen["trace_queue"] = trace_queue
+        seen["trace_flags"] = {r.strategy: r.trace for r in requests}
+        futures: dict[Future[_StrategyRaceOutcome], str] = {}
+        for request in requests:
+            future: Future[_StrategyRaceOutcome] = Future()
+            future.set_result(_StrategyRaceOutcome(request.strategy, "refused", refusal_reason="x"))
+            futures[future] = request.strategy
+        return futures, _NoopExecutor()
+
+    run_strategy_race(
+        two_stage_spec(),
+        time_budget_s=0.05,
+        band_policy=BandPolicy("portable"),
+        belt_vertical_construction=True,
+        share=False,
+        submit=submit,
+    )
+
+    assert seen["trace_queue"] is None
+    assert seen["trace_flags"] == {"freeform": False, "sequence-pair": False}
+
+
+# --- `_run_race_leg`: the child observer, its interval, and its teardown --
+
+
+def test_a_traced_leg_builds_a_child_observer_at_the_child_sample_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling 2, task-8-addendum.md: the CHILD interval (0.5s), not the
+    parent's (0.25s) -- the queue's feeder thread pays the pickling cost on
+    THIS process's own CPU, not free parent background work."""
+    layout_of = _hook_layout(monkeypatch)
+    trace_queue: queue.Queue[object] = queue.Queue(maxsize=TRACE_QUEUE_MAXSIZE)
+    install_trace_channel(trace_queue)
+    try:
+        outcome = _run_race_leg(replace(_request("freeform"), trace=True))
+    finally:
+        install_trace_channel(None)
+
+    observer = layout_of().observer
+    assert isinstance(observer, SampledObserver)
+    assert observer.min_interval_s == TRACE_CHILD_SAMPLE_INTERVAL_S
+    assert outcome.trace_dropped == 0
+
+
+def test_an_untraced_leg_builds_no_observer_at_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trace off: `_build_layout` gets `observer=None`, exactly as it always
+    has -- the byte-identical-off contract, at the site that would regress
+    it."""
+    layout_of = _hook_layout(monkeypatch)
+
+    _run_race_leg(_request("freeform"))
+
+    assert layout_of().observer is None
+
+
+def test_a_traced_legs_channel_closes_alongside_race_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruling 5: an unread queue with buffered data blocks its process's exit,
+    so the trace channel's `close()` must run in the leg's teardown too."""
+    _hook_layout(monkeypatch)
+    fake_queue = _FakeJoinCancellableQueue()
+    install_trace_channel(fake_queue)
+    try:
+        _run_race_leg(replace(_request("freeform"), trace=True))
+    finally:
+        install_trace_channel(None)
+
+    assert fake_queue.cancelled is True
+
+
+# --- Ruling 4: a realistic `SearchEvent` actually pickles ------------------
+
+
+def test_a_search_event_carrying_a_real_placement_pickles() -> None:
+    """Ruling 4, task-8-addendum.md: `TraceChannel.offer` catches broad
+    `Exception`, not just `queue.Full`, so an UNPICKLABLE event would join the
+    exact same drop counter a transiently full queue does, with no error
+    anywhere. `Placement` and `PlacedBuilding` being frozen and slotted means
+    they SHOULD pickle -- this proves they DO, both directly and through the
+    real queue machinery `TraceChannel.offer` actually calls.
+    """
+    placement = Placement(
+        buildings=(
+            PlacedBuilding(item_id=2101, model_index=0, x=3, y=4, z=Fraction(1, 2)),
+            PlacedBuilding(
+                item_id=2011,
+                model_index=1,
+                x=5,
+                y=4,
+                width=2,
+                carries_item="iron-ore",
+            ),
+        ),
+        stats=PlacementStats(belt_tiles=12.0),
+    )
+    # The exact guarded shape task-8-addendum.md requires of every `area=`:
+    # `Placement.area` falls through to the (buildings-walking) `bounds` when
+    # `frame` is `None`, and nothing on this hot path may touch `buildings`.
+    event = SearchEvent(
+        strategy="freeform",
+        candidate="two-stage",
+        phase=SearchPhase.INCUMBENT,
+        placement=placement,
+        area=placement.area if placement.frame is not None else None,
+        belt_tiles=12,
+        incumbent=True,
+        stranded=((0, 0, 3, 3),),
+    )
+
+    restored = pickle.loads(pickle.dumps(event))
+    assert restored == event
+    assert restored.placement is not None
+    assert restored.placement.buildings == placement.buildings
+
+    # And across a REAL spawn-context queue: `put_nowait` is what
+    # `TraceChannel.offer` actually calls, and a `multiprocessing.Queue`
+    # pickles on its OWN feeder thread rather than this one -- a fact
+    # `pickle.dumps` alone cannot exercise.
+    context = multiprocessing.get_context("spawn")
+    real_queue: multiprocessing.queues.Queue[object] = context.Queue(maxsize=TRACE_QUEUE_MAXSIZE)
+    try:
+        real_queue.put_nowait(event)
+        # `get`, not `get_nowait`: the feeder thread serializes asynchronously,
+        # and `get_nowait` can legitimately race it and raise `queue.Empty` on
+        # a loaded box.
+        received = real_queue.get(timeout=5.0)
+        assert received == event
+    finally:
+        real_queue.cancel_join_thread()
+        real_queue.close()
+
+
+# --- The one real spawn: proves the whole path end to end ------------------
+
+
+@pytest.mark.slow
+def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
+    """The single real-spawn test this feature needs (testing note,
+    task-8-addendum.md): every test above fakes the queue, the pool, or both.
+    This is the only one proving the request pickles out, a real
+    `SampledObserver` fires inside a really-spawned child, `TraceChannel.offer`
+    puts a real `SearchEvent` on a real `multiprocessing.Queue`, and
+    `drain_trace` reads it back here. Same budget already proven fast and
+    stable by `test_the_real_pool_races_both_arms_end_to_end` above.
+    """
+    context = multiprocessing.get_context("spawn")
+    trace_queue = context.Queue(maxsize=TRACE_QUEUE_MAXSIZE)
+    try:
+        outcomes = run_strategy_race(
+            two_stage_spec(),
+            time_budget_s=2.0,
+            band_policy=BandPolicy("portable"),
+            belt_vertical_construction=True,
+            workers=4,
+            trace_queue=trace_queue,
+        )
+
+        assert {o.strategy for o in outcomes} == set(RACE_STRATEGIES)
+        for outcome in outcomes:
+            assert outcome.status == "completed"
+
+        # `get_nowait` (inside `drain_trace`) can legitimately race a
+        # `multiprocessing.Queue`'s feeder thread on a loaded box: an event
+        # `put_nowait`'d moments ago may not have reached the pipe yet, so a
+        # SINGLE empty batch is not proof nothing more is coming (fix round 2,
+        # Important 2). Stopping on the FIRST empty batch turned this
+        # assertion's `==` into a flaky one; two CONSECUTIVE empty batches, or
+        # a deadline, is what "nothing more is coming" actually requires.
+        events: list[SearchEvent] = []
+        consecutive_empty = 0
+        deadline = time.monotonic() + 5.0
+        while consecutive_empty < 2 and time.monotonic() < deadline:
+            batch = drain_trace(trace_queue)
+            if batch:
+                events.extend(batch)
+                consecutive_empty = 0
+            else:
+                consecutive_empty += 1
+                time.sleep(0.05)
+        # Two arms, one time axis: the UI's side-by-side view depends on the
+        # strategy travelling on every event rather than being inferred, and
+        # every event travelling this whole path proves it made it out of a
+        # REAL spawned child.
+        assert events, "a traced race must deliver at least one event to the parent"
+        # `==`, not `<=`: the test's own name claims BOTH arms deliver, and a
+        # subset check would still pass if only one of them ever did (M1, fix
+        # round 1).
+        assert {e.strategy for e in events} == set(RACE_STRATEGIES)
+        assert all(e.candidate == two_stage_spec().label for e in events)
+    finally:
+        trace_queue.cancel_join_thread()
+        trace_queue.close()

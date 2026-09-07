@@ -105,6 +105,7 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.belt_tiers import retier_belts
 from flab2bp.layout.finalize import ProjectionNoGood
+from flab2bp.layout.observe import SearchEvent, SearchObserver, SearchPhase, stranded_endpoints
 from flab2bp.layout.piling import LaneLoad, MergePlan, PilerPlan, plan_merges
 from flab2bp.layout.route_feedback import (
     Cell,
@@ -19513,6 +19514,14 @@ class FreeformLayout:
         belt_vertical_construction: bool = True,
         portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
+        #: Told what this sweep is doing, for a debugging view.  A SEPARATE
+        #: parameter from `publish_incumbent` on purpose: in the raced child
+        #: that callback runs a full `validate.validate` before publishing
+        #: (strategy_race.py:515-530) because a bound the parent would reject
+        #: must not prune the peer -- a cost a picture must never pay -- and it
+        #: fires only on an improvement, so it cannot express a pack, a refusal,
+        #: or a stranded net.
+        observer: SearchObserver | None = None,
     ) -> None:
         self.band_policy = band_policy
         #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
@@ -19545,6 +19554,7 @@ class FreeformLayout:
         #: Called with each placement this sweep certifies, so the other racer
         #: can use it as a bound.
         self.publish_incumbent = publish_incumbent
+        self.observer = observer
 
     def lay_out(
         self,
@@ -21520,12 +21530,37 @@ class FreeformLayout:
                         continue
                     if result.routing.status is not DetailedRouteStatus.ROUTED:
                         retain_attempt()
+                        if self.observer is not None and self.observer.due(SearchPhase.REFUSED):
+                            self.observer.note(
+                                SearchEvent(
+                                    strategy="freeform",
+                                    candidate=spec.label,
+                                    phase=SearchPhase.REFUSED,
+                                    placement=None,
+                                    height=height,
+                                    arrangement=arrangement,
+                                    reason=f"routing {result.routing.status}",
+                                    stranded=stranded_endpoints(result.routing),
+                                )
+                            )
                         continue
                     assert result.promised_direct == result.realized_direct, (
                         "a routed pack may not retain an unrealized rewarded direct insert"
                     )
                     placement = result.placement
                     assert placement is not None
+                    if self.observer is not None and self.observer.due(SearchPhase.PACKED):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.PACKED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                area=placement.area if placement.frame is not None else None,
+                            )
+                        )
                     # AND THE PLACEMENT HAS TO PASS OUR OWN VALIDATOR BEFORE IT COUNTS.
                     #
                     # `lay_out` promises a valid `Placement` or `NoValidLayout`, and
@@ -21718,6 +21753,23 @@ class FreeformLayout:
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.FINALIZATION)
                         break
+                    if self.observer is not None and self.observer.due(SearchPhase.ROUTED):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.ROUTED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                area=placement.area if placement.frame is not None else None,
+                                belt_tiles=int(placement.stats.get("belt_tiles", 0)),
+                                stranded=stranded_endpoints(result.routing),
+                                no_goods=tuple(
+                                    no_good.strips for no_good in cluster_relation_no_goods
+                                ),
+                            )
+                        )
                     # Area, then belt count. Two packs of equal area are not equally
                     # good: the one with fewer belt tiles is fewer buildings to paste,
                     # and a direct insert shows up here as exactly that. Without the
@@ -21769,9 +21821,39 @@ class FreeformLayout:
                         validation_reserve_s,
                         time.monotonic() - certify_started,
                     )
+                    if self.observer is not None and self.observer.due(SearchPhase.CERTIFIED):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.CERTIFIED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                area=placement.area if placement.frame is not None else None,
+                                belt_tiles=int(placement.stats.get("belt_tiles", 0)),
+                                reason=None if not report.errors else report.errors[0].message,
+                            )
+                        )
                     if report.errors and rejected is not None:
                         for finding in report.errors:
                             _retain_refusal(rejected, finding)
+                    if (
+                        self.observer is not None
+                        and report.errors
+                        and self.observer.due(SearchPhase.REFUSED)
+                    ):
+                        self.observer.note(
+                            SearchEvent(
+                                strategy="freeform",
+                                candidate=spec.label,
+                                phase=SearchPhase.REFUSED,
+                                placement=placement,
+                                height=height,
+                                arrangement=arrangement,
+                                reason=report.errors[0].message,
+                            )
+                        )
                     if _expired(completion_deadline):
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
@@ -21796,6 +21878,20 @@ class FreeformLayout:
                         best, best_key = placement, key
                         if self.publish_incumbent is not None:
                             self.publish_incumbent(placement)
+                        if self.observer is not None and self.observer.due(SearchPhase.INCUMBENT):
+                            self.observer.note(
+                                SearchEvent(
+                                    strategy="freeform",
+                                    candidate=spec.label,
+                                    phase=SearchPhase.INCUMBENT,
+                                    placement=placement,
+                                    height=height,
+                                    arrangement=arrangement,
+                                    area=placement.area if placement.frame is not None else None,
+                                    belt_tiles=int(placement.stats.get("belt_tiles", 0)),
+                                    incumbent=True,
+                                )
+                            )
                 finally:
                     # SPEC 5.7: a queued repair is paid on the metrics THIS
                     # routing pass measured, and `validator_clean` is False for
