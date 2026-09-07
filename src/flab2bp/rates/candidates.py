@@ -26,6 +26,7 @@ from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import logistics_tiers_for_request
 from flab2bp.lab.url import LabRequest
 from flab2bp.rates.adjust import ProliferatorTier
+from flab2bp.rates.machine_choice import MachineMove, MachineRank
 from flab2bp.rates.solve import (
     RateSolution,
     cargo_stack,
@@ -38,6 +39,7 @@ from flab2bp.spec import (
     BuildSpec,
     BuildSpecSet,
     CoproductBufferProof,
+    MachineMoveRecord,
     MachineGroup,
     ProliferatorMode,
     SelfLoopSeed,
@@ -189,6 +191,9 @@ def _to_build_spec(
     request: LabRequest,
     solution: RateSolution,
     label: str,
+    *,
+    machine_rank: MachineRank = MachineRank.EXACT,
+    machine_moves: tuple[MachineMove, ...] = (),
 ) -> BuildSpec:
     """Project a solved plan onto the frozen rates/geometry contract."""
     groups: list[MachineGroup] = []
@@ -245,6 +250,17 @@ def _to_build_spec(
         sorter_pick_stacks=tiers.sorter_pick_stacks,
         sorter_place_stacks=tiers.sorter_place_stacks,
         piler_unlocked=tiers.piler,
+        machine_rank=machine_rank.value,
+        machine_moves=tuple(
+            MachineMoveRecord(
+                recipe_id=move.recipe_id,
+                from_machine=move.from_machine,
+                to_machine=move.to_machine,
+                count_before=move.count_before,
+                count_after=move.count_after,
+            )
+            for move in machine_moves
+        ),
         label=label,
         belt_required_edges=frozenset(belt_required),
         spray_lanes=spray_lanes,
@@ -406,6 +422,7 @@ def _pinned_candidates(
     flow: FlowSelection,
     time_limit_s: float,
     tier: ProliferatorTier | None = None,
+    machine_rank: MachineRank = MachineRank.EXACT,
 ) -> BuildSpecSet:
     """Build the single recipe/mode selection FactorioLab's flow describes.
 
@@ -421,15 +438,26 @@ def _pinned_candidates(
     ``auto`` continues to preserve the flow exactly.
     """
     tier, fixed_modes = _proliferation_modes_from_flow(flow, tier)
+    # A supplied flow pins machines as well as recipes and modes. The public
+    # mode still travels to the spec, but no flow-authored machine is re-chosen.
     plan = solve(
         data,
         request,
         tier=tier,
         fixed_modes=fixed_modes,
+        machine_rank=MachineRank.EXACT,
+        pinned_machines=flow.chosen_recipe_ids,
         time_limit_s=time_limit_s,
     )
     label = "flow-pinned" if tier is ProliferatorTier.NONE else f"flow-pinned-mk{tier.value}"
-    spec = _to_build_spec(data, request, plan, label)
+    spec = _to_build_spec(
+        data,
+        request,
+        plan,
+        label,
+        machine_rank=machine_rank,
+        machine_moves=plan.machine_moves,
+    )
     forbidden = sorted(
         {item_id for item_id in (*spec.outputs, *spec.surplus_outputs) if item_id.startswith("df-")}
         | {group.recipe_id for group in spec.groups if group.recipe_id.startswith("df-")}
@@ -466,6 +494,7 @@ def build_candidates(
     candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
+    machine_rank: MachineRank = MachineRank.EXACT,
 ) -> BuildSpecSet:
     """Canonicalize direct public inputs once, then build the selected policies."""
     return _build_candidates_canonical(
@@ -475,6 +504,7 @@ def build_candidates(
         candidate_policies=candidate_policies,
         time_limit_s=time_limit_s,
         flow=flow,
+        machine_rank=machine_rank,
     )
 
 
@@ -486,6 +516,7 @@ def _build_candidates_canonical(
     candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
+    machine_rank: MachineRank = MachineRank.EXACT,
 ) -> BuildSpecSet:
     """Emit the selected policies in canonical order as complete, valid builds.
 
@@ -522,7 +553,9 @@ def _build_candidates_canonical(
     if flow is not None:
         # A supplied flow fixes recipe and per-recipe mode choices. An explicit
         # tier still wins; None means preserve the flow's own tier exactly.
-        return _pinned_candidates(data, request, flow, time_limit_s, tier)
+        return _pinned_candidates(
+            data, request, flow, time_limit_s, tier, machine_rank=machine_rank
+        )
 
     # A URL that names a proliferator pins the tier; one that does not leaves
     # the frontier free at Mk.III. The sprayed item is belted in from outside,
@@ -537,8 +570,16 @@ def _build_candidates_canonical(
         request,
         mode_policy=ProliferatorMode.NONE,
         time_limit_s=time_limit_s,
+        machine_rank=machine_rank,
     )
-    baseline_spec = _to_build_spec(data, request, baseline, "no-proliferator")
+    baseline_spec = _to_build_spec(
+        data,
+        request,
+        baseline,
+        "no-proliferator",
+        machine_rank=machine_rank,
+        machine_moves=baseline.machine_moves,
+    )
     _refuse_derived_dark_fog(baseline_spec)
     baseline_machines = baseline_spec.machine_count
     specs: list[BuildSpec] = []
@@ -566,6 +607,7 @@ def _build_candidates_canonical(
                     tier=chosen,
                     mode_policy=ProliferatorMode.PRODUCTS,
                     time_limit_s=time_limit_s,
+                    machine_rank=machine_rank,
                 )
             else:
                 plan = solve(
@@ -575,8 +617,16 @@ def _build_candidates_canonical(
                     proliferable=target_producer_ids(data, request),
                     mode_policy=ProliferatorMode.PRODUCTS,
                     time_limit_s=time_limit_s,
+                    machine_rank=machine_rank,
                 )
-            spec = _to_build_spec(data, request, plan, policy.value)
+            spec = _to_build_spec(
+                data,
+                request,
+                plan,
+                policy.value,
+                machine_rank=machine_rank,
+                machine_moves=plan.machine_moves,
+            )
             if _is_runaway(spec, baseline_machines):
                 dropped.append(f"{policy.value} ({spec.machine_count:,} machines)")
                 continue
