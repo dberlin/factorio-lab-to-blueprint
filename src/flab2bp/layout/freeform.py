@@ -12017,6 +12017,7 @@ def _reserve_port_access(
     cancelled: Callable[[], bool] | None = None,
     deadline: float | None = None,
     goals: Mapping[PortAccessDemand, frozenset[Cell]] | None = None,
+    held: Mapping[PortAccessDemand, PortAccessCorridor] | None = None,
 ) -> PortAccessReservation:
     """Enumerate and jointly hold one complete corridor per physical claim.
 
@@ -12028,6 +12029,19 @@ def _reserve_port_access(
     probed at all.  Reservations are cleared before enumeration, so provisional
     choices cannot veto an alternate candidate; nothing is committed until the
     joint matcher has selected every compatible corridor.
+
+    ``held`` is corridors an EARLIER reservation already staked on this canvas,
+    for demands this call is NOT being asked about.  It is what makes a second
+    call a TOP-UP rather than a replacement, and without it a top-up would take
+    the first call's corridors off the canvas the router reads: the clear below
+    wipes ``canvas.reserved`` wholesale, and the finalization REBINDS
+    ``canvas.port_corridors`` from this call's own assignments alone (an empty
+    assignment collapsing it to ``{}``).  A held corridor is re-staked before
+    enumeration so nothing here can pick its cells, is never re-assigned, and is
+    written back on every RETURNING path -- including the one where the joint
+    matcher's own survey cleared the canvas on its way to a wholesale give-up.
+    Every RAISING path restores the entry snapshot, which in a top-up already
+    holds those same corridors.  See `hierarchy.compose._top_up_partial`.
     """
 
     if (cancelled is not None and cancelled()) or _expired(deadline):
@@ -12036,6 +12050,14 @@ def _reserve_port_access(
     saved_corridors = dict(canvas.port_corridors)
     canvas.reserved.clear()
     canvas.port_corridors.clear()
+    # RE-STAKED HERE AND NOT ONLY AT FINALIZATION, because the options below are
+    # built from `canvas.free` and the clear just handed this call every cell
+    # the earlier reservation is holding.  Without this a top-up could run a
+    # corridor straight through the partial it is completing.
+    held_by_demand = dict(held or {})
+    for held_demand, held_corridor in held_by_demand.items():
+        canvas.reserved[held_corridor.access] = held_demand.cell
+        canvas.reserved[held_corridor.exit] = held_demand.cell
 
     def check_cancelled() -> None:
         if not ((cancelled is not None and cancelled()) or _expired(deadline)):
@@ -12307,15 +12329,22 @@ def _reserve_port_access(
         canvas.port_corridors.clear()
         canvas.port_corridors.update(saved_corridors)
         raise
-    assignments = match.assigned
-    # An empty `assignments` stakes nothing below, so there is nothing for this
+    # An empty MATCH stakes nothing new below, so there is nothing for this
     # check to protect -- and `surrender`'s survey may have just spent the
     # remaining deadline finding that out, which would make this re-detect the
     # SAME expiry and turn a give-up `_reserve_port_access` was meant to hand
     # back normally into a raise anyway.  Skip it precisely where staking is a
-    # no-op; a non-empty `assignments` still gets checked before being staked.
-    if assignments:
+    # no-op; a non-empty match still gets checked before being staked.  It is
+    # the MATCH and not `assignments` that is asked, so a top-up whose own
+    # matcher came back empty still returns `held` normally rather than raising
+    # and costing the caller the partial this call was completing.
+    if match.assigned:
         check_cancelled()
+    assignments = dict(match.assigned)
+    # HELD WINS: a demand an earlier reservation already served is never
+    # re-assigned or overwritten.  Its cells were denied above, so this can only
+    # fire for a caller that put a held demand back into `demands`.
+    assignments.update(held_by_demand)
     assigned_by_port: dict[Cell, list[PortAccessCorridor]] = defaultdict(list)
     for demand, corridor in assignments.items():
         canvas.reserved[corridor.access] = demand.cell
@@ -12337,8 +12366,13 @@ def _reserve_port_access(
     }
     missing = tuple(demand for demand in demands if demand not in assignments)
     return PortAccessReservation(
-        assigned=tuple(
-            (demand, assignments[demand]) for demand in demands if demand in assignments
+        assigned=(
+            *held_by_demand.items(),
+            *(
+                (demand, assignments[demand])
+                for demand in demands
+                if demand in assignments and demand not in held_by_demand
+            ),
         ),
         missing=missing,
         evidence=tuple(

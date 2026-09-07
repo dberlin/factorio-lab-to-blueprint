@@ -765,6 +765,81 @@ def _pack_at(
     return _Packing(buildings, blocks, canvas, nets)
 
 
+def _top_up_partial(
+    canvas: _Canvas,
+    committed: PortAccessReservation,
+    *,
+    boundary: Sequence[Cell] | None,
+    bounds: tuple[int, int, int, int] | None,
+    deadline: float | None,
+) -> PortAccessReservation:
+    """Give the demands a partial left missing the local-only oracle's corridor.
+
+    THE PARTIAL IS BETTER GROUND WHERE IT SPEAKS AND STRICTLY WORSE WHERE IT IS
+    SILENT.  Before the matcher committed partials it gave up wholesale, and
+    `pack_with_access` re-asked `_reserve_port_access` WITHOUT `goals` for every
+    demand -- the local-only oracle -- which staked a corridor for each one.
+    Committing a partial deleted that fallback for exactly the demands the
+    partial's own survey convicted, and `_route_all` then met each of them as
+    `no port access corridor (held=0 wants=1)`: one unroutable cut per missing
+    demand, which is how `titanium-glass/all-products` went from wiring all 26
+    of its cut lanes to refusing at the router with 4 unrouted cuts.
+
+    So the partial's corridors are KEPT and the demands it left missing are
+    asked again locally.  Three things this must not do:
+
+    * It must not re-assign a demand the partial already served -- `held` says
+      so, and the union below prefers the partial's own pair either way.
+    * It must not report a VERDICT.  `converged` stays False however complete
+      the merged answer looks, so `reservation_degraded == 0` keeps its single
+      meaning ("the matcher converged") and the rung still counts as both
+      partial and degraded.
+    * It must not cost the caller the partial.  A top-up that runs out of the
+      rung's clock degrades to the partial as it stood: `_reserve_port_access`
+      restores the canvas to its entry snapshot on every raising path, and that
+      snapshot IS the partial, so both the object and the canvas fall back
+      together.
+
+    The canvas union is `_reserve_port_access`'s own `held` contract; see its
+    docstring for why a second call without it would wipe the first's corridors
+    off the canvas the router reads.
+    """
+    if not committed.missing:
+        return committed
+    staked = dict(committed.assigned)
+    try:
+        topped = _reserve_port_access(
+            canvas,
+            committed.missing,
+            boundary=boundary,
+            bounds=bounds,
+            cancelled=partial(_spent, deadline),
+            deadline=deadline,
+            held=staked,
+        )
+    except _PreparationDeadline:
+        return committed
+    return PortAccessReservation(
+        assigned=(
+            *committed.assigned,
+            *((demand, corridor) for demand, corridor in topped.assigned if demand not in staked),
+        ),
+        missing=topped.missing,
+        # BOTH CALLS' EVIDENCE, the goal-driven entry winning a tie: it carries
+        # the trunk probe's `frontier` and its `exhaustive` verdict, and the
+        # local-only call -- unprobed by construction -- would only overwrite
+        # those with an empty wall and `exhaustive=False`.  Read by demand
+        # (`compose`'s `evidence_by_demand`), never as "the missing set", so an
+        # entry surviving for a demand the top-up went on to serve is inert.
+        evidence=tuple(
+            {
+                evidence.demand: evidence for evidence in (*topped.evidence, *committed.evidence)
+            }.values()
+        ),
+        converged=False,
+    )
+
+
 def pack_with_access(
     placements: list[Placement],
     flows: list[LaneFlow],
@@ -945,7 +1020,11 @@ def pack_with_access(
         # up wholesale it hands back the corridors its own survey did not
         # convict, and those are strictly better ground for `_route_all` than
         # the local-only answer -- the corridors are staked where the trunk
-        # probe said they reach.  What a partial is NOT is an answer to the
+        # probe said they reach.  It is better ground only WHERE IT SPEAKS,
+        # though: the demands its survey convicted got no corridor from either
+        # oracle and the router met them as `held=0 wants=1`, so
+        # `_top_up_partial` asks the local-only oracle for exactly those and
+        # merges both answers.  What a partial is NOT is an answer to the
         # ladder's question, so it counts as degraded as well as partial, and
         # `reservation_degraded == 0` keeps its one meaning.  An assignment of
         # NOTHING AT ALL while there were demands is still the wholesale
@@ -960,7 +1039,13 @@ def pack_with_access(
         elif goal_driven is not None and goal_driven.assigned:
             partial_rungs += 1
             degraded += 1
-            reservation = goal_driven
+            reservation = _top_up_partial(
+                packing.canvas,
+                goal_driven,
+                boundary=boundary,
+                bounds=bounds,
+                deadline=rung_deadline,
+            )
         else:
             degraded += 1
             try:
