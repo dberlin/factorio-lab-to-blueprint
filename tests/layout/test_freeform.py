@@ -25322,12 +25322,16 @@ def test_the_matcher_commits_the_partial_when_the_cut_loop_runs_out_of_rounds() 
     options = {demand: _corridors(demand) for demand in demands}
     rounds = 0
 
-    def validate(assigned):
+    def validate(
+        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> tuple[freeform.PortAccessDemand, ...]:
         nonlocal rounds
         rounds += 1
         return (demands[rounds % len(demands)],)
 
-    def survey(assigned):
+    def survey(
+        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> tuple[freeform.PortAccessDemand, ...]:
         # The two the cut loop never satisfied.
         return (demands[0], demands[1])
 
@@ -25384,6 +25388,30 @@ def test_a_matcher_with_no_survey_gives_up_wholesale_as_before() -> None:
 
     match = freeform._match_access_corridors(
         demands, options, validate=lambda assigned: (demands[0],)
+    )
+
+    assert match.converged is False
+    assert match.assigned == {}
+
+
+def test_a_survey_that_raises_the_preparation_deadline_gives_up_wholesale() -> None:
+    # An incomplete survey cannot say which of the untested corridors would
+    # have failed, so a deadline caught while it runs must fall back to the
+    # wholesale give-up -- never propagate, and never commit a partial the
+    # survey never finished looking at.
+    demands = [_demand(i) for i in range(5)]
+    options = {demand: _corridors(demand) for demand in demands}
+
+    def raising_survey(
+        assigned: Mapping[freeform.PortAccessDemand, freeform.PortAccessCorridor],
+    ) -> Collection[freeform.PortAccessDemand]:
+        raise freeform._PreparationDeadline
+
+    match = freeform._match_access_corridors(
+        demands,
+        options,
+        validate=lambda assigned: (demands[0],),
+        survey=raising_survey,
     )
 
     assert match.converged is False

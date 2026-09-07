@@ -11925,10 +11925,23 @@ def _match_access_corridors(
     best_partial: dict[PortAccessDemand, PortAccessCorridor] = {}
 
     def surrender() -> _CorridorMatch:
-        """The largest assignment seen, minus everything the survey convicts."""
+        """The largest assignment seen, minus everything the survey convicts.
+
+        An incomplete survey -- caught here as `_PreparationDeadline` -- cannot
+        say which of the untested corridors would have failed, so it is
+        treated as if there had been no partial at all: the wholesale
+        give-up, exactly what the old code returned on any give-up, and never
+        a propagating exception.  The deadline is still real and still stops
+        the caller -- `_reserve_port_access`'s own checks catch it again on
+        the very next real probe -- this just stops IT from being the thing
+        that turns a give-up into an abandoned rung.
+        """
         if not best_partial or survey is None:
             return _CorridorMatch({}, False)
-        failing = set(survey(best_partial))
+        try:
+            failing = set(survey(best_partial))
+        except _PreparationDeadline:
+            return _CorridorMatch({}, False)
         return _CorridorMatch(
             {
                 demand: corridor
@@ -12255,15 +12268,29 @@ def _reserve_port_access(
         no-good needs.  A partial commit needs the WHOLE failing set: committing
         a corridor the survey never looked at is exactly the wrong half of
         Ruling R7's residual.  This runs ONCE per reservation, on give-up only.
+
+        `_wall_between` shares `check_cancelled` with the validate path, where
+        letting it restore the canvas to the PRE-reservation snapshot and raise
+        is correct -- that call is aborting the whole attempt.  Here it is not:
+        a deadline caught mid-survey is `_match_access_corridors.surrender`'s
+        cue to fall back to the wholesale give-up, which is the ordinary EMPTY
+        outcome, not an aborted one.  So the restore is overwritten with the
+        empty give-up state before the exception is allowed to continue past
+        this function, or the two would disagree about which one happened.
         """
         if not probed or bounds is None:
             return ()
         selected_cells, owner_index, _ = _selection(assigned)
-        return tuple(
-            demand
-            for demand, corridor in assigned.items()
-            if _wall_between(demand, corridor, selected_cells, owner_index) is not None
-        )
+        try:
+            return tuple(
+                demand
+                for demand, corridor in assigned.items()
+                if _wall_between(demand, corridor, selected_cells, owner_index) is not None
+            )
+        except _PreparationDeadline:
+            canvas.reserved.clear()
+            canvas.port_corridors.clear()
+            raise
 
     try:
         match = _match_access_corridors(
@@ -12281,7 +12308,14 @@ def _reserve_port_access(
         canvas.port_corridors.update(saved_corridors)
         raise
     assignments = match.assigned
-    check_cancelled()
+    # An empty `assignments` stakes nothing below, so there is nothing for this
+    # check to protect -- and `surrender`'s survey may have just spent the
+    # remaining deadline finding that out, which would make this re-detect the
+    # SAME expiry and turn a give-up `_reserve_port_access` was meant to hand
+    # back normally into a raise anyway.  Skip it precisely where staking is a
+    # no-op; a non-empty `assignments` still gets checked before being staked.
+    if assignments:
+        check_cancelled()
     assigned_by_port: dict[Cell, list[PortAccessCorridor]] = defaultdict(list)
     for demand, corridor in assignments.items():
         canvas.reserved[corridor.access] = demand.cell
