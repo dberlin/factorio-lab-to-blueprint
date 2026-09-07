@@ -67,7 +67,7 @@ def main() -> None:
     header = (
         f"{'arm':<8} {'cells':>5} {'CLEAN':>6} {'REFUSED':>8} {'INVALID':>8} "
         f"{'CRASH':>6} {'merges':>7} {'coaters':>8} {'areaGM':>9} "
-        f"{'p50 s':>7} {'p95 s':>7}"
+        f"{'rt p50':>7} {'rt p95':>7} {'ripups':>7} {'nets':>7}"
     )
     print(header)
     print("-" * len(header))
@@ -79,16 +79,27 @@ def main() -> None:
         merges = sum(int(r.get("coater_merges", 0)) for r in rows.values())
         coaters = sum(int(r.get("coaters", 0)) for r in rows.values())
         areas = [float(rows[c]["area"]) for c in clean_everywhere]
-        walls = [
-            float(r.get("attempt_wall_s", r["seconds"]))
-            for r in rows.values()
-            if r["status"] == "CLEAN"
-        ]
+
+        def stat(name: str) -> list[float]:
+            return [
+                float(rows[c].get("stats", {}).get(name, 0.0))
+                for c in clean_everywhere
+                if "stats" in rows[c]
+            ]
+
+        route = stat("detailed_route_time_s")
+        ripups = sum(stat("repair_iterations"))
+        nets = sum(stat("nets"))
         print(
             f"{arm:<8} {len(rows):>5} {status['CLEAN']:>6} {status['REFUSED']:>8} "
             f"{status['INVALID']:>8} {status['CRASH']:>6} {merges:>7} {coaters:>8} "
-            f"{geomean(areas):>9.1f} {pct(walls, 0.5):>7.1f} {pct(walls, 0.95):>7.1f}"
+            f"{geomean(areas):>9.1f} {pct(route, 0.5):>7.1f} {pct(route, 0.95):>7.1f} "
+            f"{ripups:>7.0f} {nets:>7.0f}"
         )
+    print(
+        "  (merges/coaters are totals over ALL that arm's cells; areaGM, routing "
+        "seconds, rip-ups and nets are over the cells clean in every arm)"
+    )
 
     print("\nper strategy CLEAN / cells")
     for arm in order:
@@ -132,6 +143,34 @@ def main() -> None:
         gm = geomean([float(arms[arm][c]["area"]) for c in clean_everywhere])
         delta = (gm / base_gm - 1.0) * 100.0 if base_gm else 0.0
         print(f"  {arm:<8} {gm:9.1f}  {delta:+6.2f}%")
+
+    print("\nproliferated cells only (the cells any arm can move)")
+    for arm in order:
+        rows = {c: r for c, r in arms[arm].items() if c[2] != CONTROL}
+        clean = sum(1 for r in rows.values() if r["status"] == "CLEAN")
+        merges = sum(int(r.get("coater_merges", 0)) for r in rows.values())
+        print(f"  {arm:<8} {clean}/{len(rows)} clean, {merges} coater-merge findings")
+
+    print(f"\npairwise area against `{base}`, over the cells clean in BOTH arms")
+    for arm in order:
+        if arm == base:
+            continue
+        both = sorted(
+            cell
+            for cell in set(arms[arm]) & set(arms[base])
+            if arms[arm][cell]["status"] == "CLEAN" and arms[base][cell]["status"] == "CLEAN"
+        )
+        if not both:
+            print(f"  {arm:<8} no shared clean cells")
+            continue
+        mine = geomean([float(arms[arm][c]["area"]) for c in both])
+        theirs = geomean([float(arms[base][c]["area"]) for c in both])
+        bigger = sum(1 for c in both if arms[arm][c]["area"] > arms[base][c]["area"])
+        smaller = sum(1 for c in both if arms[arm][c]["area"] < arms[base][c]["area"])
+        print(
+            f"  {arm:<8} n={len(both):>3}  {theirs:8.1f} -> {mine:8.1f}  "
+            f"{(mine / theirs - 1) * 100:+6.2f}%  ({bigger} larger, {smaller} smaller)"
+        )
 
     print("\nno-proliferator controls (must be identical across arms)")
     controls = sorted(cell for cell in shared if cell[2] == CONTROL)

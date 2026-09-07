@@ -24,7 +24,7 @@ cd "$ROOT"
 {
   echo "=== arm=$ARM round=$ROUND strategy=$STRATEGY ==="
   echo "commit: $(git rev-parse --short HEAD)"
-  echo "uptime before: $(uptime)"
+  echo "cpu pressure before (runnable, 5s mean): $("$HERE/cpu_pressure.sh")"
   date -Is
 } | tee "$OUT/$ARM.log"
 
@@ -35,7 +35,7 @@ AUDIT_EXIT=${PIPESTATUS[0]}
 
 {
   echo "audit exit: $AUDIT_EXIT"
-  echo "uptime after audit: $(uptime)"
+  echo "cpu pressure after audit: $("$HERE/cpu_pressure.sh")"
   date -Is
 } | tee -a "$OUT/$ARM.log"
 
@@ -59,6 +59,6 @@ for S in $REPORTED_STRATEGIES; do
   done
 done
 {
-  echo "uptime after reported: $(uptime)"
+  echo "cpu pressure after reported: $("$HERE/cpu_pressure.sh")"
   date -Is
 } | tee -a "$OUT/$ARM.log"

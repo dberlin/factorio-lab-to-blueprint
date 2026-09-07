@@ -1,0 +1,140 @@
+=== arm=packed round=roundA strategy=freeform jobs=8 ===
+commit: c51d9a5e
+uptime before:  01:00:58 up 22 days,  6:47, 10 users,  load average: 27.32, 35.78, 37.51
+2026-09-07T01:00:58-04:00
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]     2s freeform  trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN      0.5s
+  . [  2/3]     3s freeform  trivial  iron-ingot/all-products power=1 budget=30s           CLEAN      1.2s
+  . [  3/3]     3s freeform  trivial  iron-ingot/output-products power=1 budget=30s        CLEAN      1.2s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+3s wall, 3/3 cells
+  [iron-ingot exit 0]  01:01:03 up 22 days,  6:47, 10 users,  load average: 27.21, 35.61, 37.45
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]     2s freeform  trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN      1.0s
+  . [  2/3]     7s freeform  trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN      6.0s
+  . [  3/3]     8s freeform  trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN      6.6s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+8s wall, 3/3 cells
+  [magnetic-coil exit 0]  01:01:13 up 22 days,  6:47, 10 users,  load average: 32.21, 36.44, 37.70
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]     3s freeform  small    graphene/no-proliferator power=1 budget=30s          CLEAN      1.6s
+  . [  2/3]     6s freeform  small    graphene/output-products power=1 budget=30s          CLEAN      4.6s
+  . [  3/3]     8s freeform  small    graphene/all-products power=1 budget=30s             CLEAN      6.7s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+8s wall, 3/3 cells
+  [graphene exit 0]  01:01:23 up 22 days,  6:47, 10 users,  load average: 34.84, 36.86, 37.82
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]     3s freeform  small    electromagnetic-matrix/no-proliferator power=1 budget=30s CLEAN      2.3s
+  . [  2/3]     8s freeform  small    electromagnetic-matrix/output-products power=1 budget=30s CLEAN      6.4s
+  . [  3/3]    22s freeform  small    electromagnetic-matrix/all-products power=1 budget=30s CLEAN     20.7s  <-- 21s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 21s freeform electromagnetic-matrix/all-products power=1 budget=30s
+
+22s wall, 3/3 cells
+  [electromagnetic-matrix exit 0]  01:01:47 up 22 days,  6:47, 10 users,  load average: 41.85, 38.45, 38.33
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]     3s freeform  small    plastic/no-proliferator power=1 budget=30s           CLEAN      2.1s
+  . [  2/3]     9s freeform  small    plastic/output-products power=1 budget=30s           CLEAN      7.4s
+  . [  3/3]    12s freeform  small    plastic/all-products power=1 budget=30s              CLEAN     11.0s  <-- 11s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 11s freeform plastic/all-products power=1 budget=30s
+
+12s wall, 3/3 cells
+  [plastic exit 0]  01:02:01 up 22 days,  6:48, 10 users,  load average: 41.30, 38.44, 38.32
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]     6s freeform  mid      processor/no-proliferator power=1 budget=30s         CLEAN      5.1s
+  . [  2/3]    11s freeform  mid      processor/output-products power=1 budget=30s         CLEAN     10.0s
+  . [  3/3]    21s freeform  mid      processor/all-products power=1 budget=30s            CLEAN     19.6s  <-- 20s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 20s freeform processor/all-products power=1 budget=30s
+
+21s wall, 3/3 cells
+  [processor exit 0]  01:02:24 up 22 days,  6:48, 10 users,  load average: 41.43, 38.61, 38.38
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]     2s freeform  mid      energy-matrix/no-proliferator power=1 budget=30s     CLEAN      1.2s
+  . [  2/3]     5s freeform  mid      energy-matrix/output-products power=1 budget=30s     CLEAN      3.8s
+  . [  3/3]     6s freeform  mid      energy-matrix/all-products power=1 budget=30s        CLEAN      4.7s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+6s wall, 3/3 cells
+  [energy-matrix exit 0]  01:02:31 up 22 days,  6:48, 10 users,  load average: 38.68, 38.09, 38.21
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]    20s freeform  mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     18.4s  <-- 18s
+  . [  2/3]    29s freeform  mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     27.7s  <-- 28s
+  . [  3/3]    30s freeform  mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     28.8s  <-- 29s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 29s freeform super-magnetic-ring/no-proliferator power=1 budget=30s, 28s freeform super-magnetic-ring/all-products power=1 budget=30s, 18s freeform super-magnetic-ring/output-products power=1 budget=30s
+
+30s wall, 3/3 cells
+  [super-magnetic-ring exit 0]  01:03:02 up 22 days,  6:49, 10 users,  load average: 27.97, 35.47, 37.33
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]     5s freeform  large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN      3.9s
+  . [  2/3]    14s freeform  large    casimir-crystal/output-products power=1 budget=30s   CLEAN     12.9s  <-- 13s
+  . [  3/3]    27s freeform  large    casimir-crystal/all-products power=1 budget=30s      CLEAN     26.1s  <-- 26s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 26s freeform casimir-crystal/all-products power=1 budget=30s, 13s freeform casimir-crystal/output-products power=1 budget=30s
+
+27s wall, 3/3 cells
+  [casimir-crystal exit 0]  01:03:31 up 22 days,  6:49, 10 users,  load average: 23.71, 33.91, 36.77
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]    14s freeform  large    information-matrix/no-proliferator power=1 budget=30s CLEAN     13.0s  <-- 13s
+  . [  2/3]    16s freeform  large    information-matrix/output-products power=1 budget=30s CLEAN     15.0s  <-- 15s
+  . [  3/3]    28s freeform  large    information-matrix/all-products power=1 budget=30s   CLEAN     27.4s  <-- 27s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 27s freeform information-matrix/all-products power=1 budget=30s, 15s freeform information-matrix/output-products power=1 budget=30s, 13s freeform information-matrix/no-proliferator power=1 budget=30s
+
+28s wall, 3/3 cells
+  [information-matrix exit 0]  01:04:01 up 22 days,  6:50, 10 users,  load average: 21.27, 32.49, 36.21
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/3]    10s freeform  stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN      9.4s
+  . [  2/3]    20s freeform  stress   quantum-chip/output-products power=1 budget=30s      CLEAN     18.6s  <-- 19s
+  . [  3/3]    28s freeform  stress   quantum-chip/all-products power=1 budget=30s         CLEAN     26.9s  <-- 27s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 27s freeform quantum-chip/all-products power=1 budget=30s, 19s freeform quantum-chip/output-products power=1 budget=30s
+
+28s wall, 3/3 cells
+  [quantum-chip exit 0]  01:04:31 up 22 days,  6:50, 10 users,  load average: 19.22, 31.08, 35.63
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+3 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  X [  1/3]    27s freeform  stress   universe-matrix/output-products power=1 budget=30s   REFUSED   25.9s  <-- 26s
+  . [  2/3]    32s freeform  stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     30.2s  <-- 30s
+  X [  3/3]    32s freeform  stress   universe-matrix/all-products power=1 budget=30s      REFUSED   30.9s  <-- 31s
+
+=== freeform: 1/3 clean -- NOT CLEAN   (refused 2, invalid 0, crashed 0, not run 0)
+    by check: {'<refused>': 2}
+    REFUSED  universe-matrix/output-products power=1 budget=30s  no packing of 49 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+    REFUSED  universe-matrix/all-products power=1 budget=30s  the 30s deadline passed with no completed packing of 115 strips; 3 packs were routed in that time and the best of them still left 4 nets unrouted (worst 39), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec
+    slowest: 31s freeform universe-matrix/all-products power=1 budget=30s, 30s freeform universe-matrix/no-proliferator power=1 budget=30s, 26s freeform universe-matrix/output-products power=1 budget=30s
+
+32s wall, 3/3 cells
+2 cells completed after their own requested search deadline; the largest completion tail was 0.9s. Emission, detailed routing already in flight, and validation finish atomically.
+
+NOT CLEAN. An INVALID cell is worse than a REFUSED one: refusing emits nothing, while an invalid blueprint pastes and then does not run. Fix the invalid ones first.
+  [universe-matrix exit 1]  01:05:05 up 22 days,  6:51, 10 users,  load average: 14.22, 28.50, 34.60
+ARM packed DONE 2026-09-07T01:05:05-04:00
+ARM packed REPORTED DONE 2026-09-07T01:06:04-04:00
