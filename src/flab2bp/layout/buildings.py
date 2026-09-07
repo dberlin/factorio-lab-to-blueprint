@@ -27,9 +27,11 @@ and ``tests/test_backend_containment.py`` fails if that boundary is breached.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator, Sequence
+import bisect
+from collections.abc import Collection, Iterable, Iterator, Mapping, MutableSequence, Sequence
 from enum import Enum
 from fractions import Fraction
+from typing import overload
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding
@@ -63,73 +65,134 @@ def kind_for(item_id: int) -> Kind:
 _EMPTY: tuple[int, ...] = ()
 
 
-class Buildings:
-    """An immutable indexed view over a building sequence."""
+def _index_one(
+    i: int,
+    b: PlacedBuilding,
+    kinds: list[Kind],
+    by_kind: dict[Kind, list[int]],
+    by_item: dict[int, list[int]],
+    by_recipe: dict[int, list[int]],
+    by_owner_strip: dict[int | None, list[int]],
+    by_carries: dict[str, list[int]],
+    by_output_obj: dict[int, list[int]],
+    by_input_obj: dict[int, list[int]],
+    by_tile: dict[tuple[int, int], list[int]],
+) -> None:
+    """Fold one record's contributions into every bucket, in place, at index ``i``.
 
-    __slots__ = (
-        "_records",
-        "_kinds",
-        "_by_kind",
-        "_by_item",
-        "_by_recipe",
-        "_by_owner_strip",
-        "_by_carries",
-        "_by_output_obj",
-        "_by_input_obj",
-        "_by_tile",
-        "_bounds",
+    Shared by the one-pass constructor build (:func:`_index_all`) and by
+    ``MutableBuildings.append`` -- which calls this directly so an append is
+    O(footprint) rather than a rebuild -- so a record's bucket membership can
+    never be computed two different ways.
+
+    Hand-rolled rather than ``b.tiles()``: that returns ``(x, y, z)`` triples
+    and allocates a fresh list per call, while this index keys on ``(x, y)``
+    alone -- routing every record through ``tiles()`` here would be strictly
+    more allocation for the same tile set.
+    """
+    kind = kind_for(b.item_id)
+    kinds.append(kind)
+    by_kind[kind].append(i)
+    by_item.setdefault(b.item_id, []).append(i)
+    if kind is Kind.MACHINE:
+        by_recipe.setdefault(b.recipe_id, []).append(i)
+    by_owner_strip.setdefault(b.owner_strip, []).append(i)
+    if b.carries_item is not None:
+        by_carries.setdefault(b.carries_item, []).append(i)
+    if b.output_obj is not None:
+        by_output_obj.setdefault(b.output_obj, []).append(i)
+    if b.input_obj is not None:
+        by_input_obj.setdefault(b.input_obj, []).append(i)
+    for dx in range(b.width):
+        for dy in range(b.height):
+            by_tile.setdefault((b.x + dx, b.y + dy), []).append(i)
+
+
+def _index_all(
+    records: Sequence[PlacedBuilding],
+) -> tuple[
+    list[Kind],
+    dict[Kind, list[int]],
+    dict[int, list[int]],
+    dict[int, list[int]],
+    dict[int | None, list[int]],
+    dict[str, list[int]],
+    dict[int, list[int]],
+    dict[int, list[int]],
+    dict[tuple[int, int], list[int]],
+]:
+    """One pass building every list-backed bucket for ``records``.
+
+    ``Buildings.__init__`` freezes the result to tuples afterward;
+    ``MutableBuildings.__init__`` keeps the lists so later ``append`` calls
+    stay O(footprint).
+    """
+    kinds: list[Kind] = []
+    by_kind: dict[Kind, list[int]] = {k: [] for k in Kind}
+    by_item: dict[int, list[int]] = {}
+    by_recipe: dict[int, list[int]] = {}
+    by_owner_strip: dict[int | None, list[int]] = {}
+    by_carries: dict[str, list[int]] = {}
+    by_output_obj: dict[int, list[int]] = {}
+    by_input_obj: dict[int, list[int]] = {}
+    by_tile: dict[tuple[int, int], list[int]] = {}
+    for i, b in enumerate(records):
+        _index_one(
+            i,
+            b,
+            kinds,
+            by_kind,
+            by_item,
+            by_recipe,
+            by_owner_strip,
+            by_carries,
+            by_output_obj,
+            by_input_obj,
+            by_tile,
+        )
+    return (
+        kinds,
+        by_kind,
+        by_item,
+        by_recipe,
+        by_owner_strip,
+        by_carries,
+        by_output_obj,
+        by_input_obj,
+        by_tile,
     )
 
-    def __init__(self, records: Sequence[PlacedBuilding]) -> None:
-        self._records: tuple[PlacedBuilding, ...] = tuple(records)
-        kinds: list[Kind] = []
-        by_kind: dict[Kind, list[int]] = {k: [] for k in Kind}
-        by_item: dict[int, list[int]] = {}
-        by_recipe: dict[int, list[int]] = {}
-        by_owner_strip: dict[int | None, list[int]] = {}
-        by_carries: dict[str, list[int]] = {}
-        by_output_obj: dict[int, list[int]] = {}
-        by_input_obj: dict[int, list[int]] = {}
-        by_tile: dict[tuple[int, int], list[int]] = {}
-        for i, b in enumerate(self._records):
-            kind = kind_for(b.item_id)
-            kinds.append(kind)
-            by_kind[kind].append(i)
-            by_item.setdefault(b.item_id, []).append(i)
-            if kind is Kind.MACHINE:
-                by_recipe.setdefault(b.recipe_id, []).append(i)
-            by_owner_strip.setdefault(b.owner_strip, []).append(i)
-            if b.carries_item is not None:
-                by_carries.setdefault(b.carries_item, []).append(i)
-            if b.output_obj is not None:
-                by_output_obj.setdefault(b.output_obj, []).append(i)
-            if b.input_obj is not None:
-                by_input_obj.setdefault(b.input_obj, []).append(i)
-            # Hand-rolled rather than ``b.tiles()``: that returns ``(x, y, z)``
-            # triples and allocates a fresh list per call, while this index
-            # keys on ``(x, y)`` alone and runs once per record for the life
-            # of this ``Buildings`` instance -- routing every record through
-            # ``tiles()`` here would be strictly more allocation for the same
-            # tile set.
-            for dx in range(b.width):
-                for dy in range(b.height):
-                    by_tile.setdefault((b.x + dx, b.y + dy), []).append(i)
-        self._kinds: tuple[Kind, ...] = tuple(kinds)
-        self._by_kind = {k: tuple(v) for k, v in by_kind.items()}
-        self._by_item = {k: tuple(v) for k, v in by_item.items()}
-        self._by_recipe = {k: tuple(v) for k, v in by_recipe.items()}
-        self._by_owner_strip = {k: tuple(v) for k, v in by_owner_strip.items()}
-        self._by_carries = {k: tuple(v) for k, v in by_carries.items()}
-        self._by_output_obj = {k: tuple(v) for k, v in by_output_obj.items()}
-        self._by_input_obj = {k: tuple(v) for k, v in by_input_obj.items()}
-        self._by_tile = {k: tuple(v) for k, v in by_tile.items()}
-        self._bounds = self._compute_bounds()
 
-    # NOTE: ``Buildings.of(placement)`` is deliberately NOT in this task.  It
-    # needs the ``Placement.buildings_index`` field, which Task 3 adds; writing
-    # it here would not type-check against a field that does not yet exist, and
-    # would require importing ``Placement`` from ``flab2bp.layout.base`` for no
-    # reason this task needs.  Task 3 Step 4 adds both the field and ``of``.
+class _BuildingsQueries:
+    """The query surface shared, verbatim, by ``Buildings`` and ``MutableBuildings``.
+
+    Every method here reads ``self._records``/``self._kinds``/``self._by_*``
+    and never writes them -- ``Buildings`` backs them with tuples, dead after
+    construction; ``MutableBuildings`` backs them with lists a handful of
+    mutation methods update incrementally. Putting the questions in one place
+    the two classes both inherit unchanged is what makes it impossible for
+    the live and frozen answers to drift apart: a divergence between them
+    would break this project's byte-identical-output bar exactly as badly as
+    a wrong answer from either one alone.
+    """
+
+    __slots__ = ()
+
+    # Declared for the two concrete subclasses' benefit (mypy and readers),
+    # never assigned here. Both backings satisfy these read-only shapes;
+    # `MutableBuildings` narrows them to the mutable containers it needs in
+    # its own annotations, which is a legal covariant override.
+    _records: Sequence[PlacedBuilding]
+    _kinds: Sequence[Kind]
+    _by_kind: Mapping[Kind, Sequence[int]]
+    _by_item: Mapping[int, Sequence[int]]
+    _by_recipe: Mapping[int, Sequence[int]]
+    _by_owner_strip: Mapping[int | None, Sequence[int]]
+    _by_carries: Mapping[str, Sequence[int]]
+    _by_output_obj: Mapping[int, Sequence[int]]
+    _by_input_obj: Mapping[int, Sequence[int]]
+    _by_tile: Mapping[tuple[int, int], Sequence[int]]
+    _bounds: tuple[int, int, int, int]
 
     # --- identity / access -------------------------------------------------
 
@@ -140,7 +203,7 @@ class Buildings:
         return iter(self._records)
 
     def all(self) -> tuple[PlacedBuilding, ...]:
-        return self._records
+        return tuple(self._records)
 
     def by_index(self, index: int | None) -> PlacedBuilding | None:
         """The record at ``index``, or ``None`` when it does not name one.
@@ -159,28 +222,28 @@ class Buildings:
     # --- attribute indexes -------------------------------------------------
 
     def by_kind(self, kind: Kind) -> tuple[int, ...]:
-        return self._by_kind.get(kind, _EMPTY)
+        return tuple(self._by_kind.get(kind, _EMPTY))
 
     def machines(self) -> tuple[int, ...]:
-        return self._by_kind[Kind.MACHINE]
+        return tuple(self._by_kind[Kind.MACHINE])
 
     def belts(self) -> tuple[int, ...]:
-        return self._by_kind[Kind.BELT]
+        return tuple(self._by_kind[Kind.BELT])
 
     def sorters(self) -> tuple[int, ...]:
-        return self._by_kind[Kind.SORTER]
+        return tuple(self._by_kind[Kind.SORTER])
 
     def by_item(self, item_id: int) -> tuple[int, ...]:
-        return self._by_item.get(item_id, _EMPTY)
+        return tuple(self._by_item.get(item_id, _EMPTY))
 
     def splitters(self) -> tuple[int, ...]:
-        return self._by_item.get(catalog.SPLITTER_ID, _EMPTY)
+        return tuple(self._by_item.get(catalog.SPLITTER_ID, _EMPTY))
 
     def machines_for_recipe(self, recipe_id: int) -> tuple[int, ...]:
-        return self._by_recipe.get(recipe_id, _EMPTY)
+        return tuple(self._by_recipe.get(recipe_id, _EMPTY))
 
     def by_owner_strip(self, owner_strip: int | None) -> tuple[int, ...]:
-        return self._by_owner_strip.get(owner_strip, _EMPTY)
+        return tuple(self._by_owner_strip.get(owner_strip, _EMPTY))
 
     def machines_for_strip(self, owner_strip: int) -> tuple[int, ...]:
         return tuple(
@@ -190,7 +253,7 @@ class Buildings:
         )
 
     def carrying(self, item_id: str) -> tuple[int, ...]:
-        return self._by_carries.get(item_id, _EMPTY)
+        return tuple(self._by_carries.get(item_id, _EMPTY))
 
     def belts_carrying(self, item_id: str) -> tuple[int, ...]:
         return tuple(
@@ -206,11 +269,11 @@ class Buildings:
 
     def by_output_obj(self, index: int) -> tuple[int, ...]:
         """Every building whose ``output_obj`` names ``index``."""
-        return self._by_output_obj.get(index, _EMPTY)
+        return tuple(self._by_output_obj.get(index, _EMPTY))
 
     def by_input_obj(self, index: int) -> tuple[int, ...]:
         """Every building whose ``input_obj`` names ``index``."""
-        return self._by_input_obj.get(index, _EMPTY)
+        return tuple(self._by_input_obj.get(index, _EMPTY))
 
     def attached_to(self, index: int) -> tuple[int, ...]:
         """Every building linked to ``index`` from either end, ascending."""
@@ -277,15 +340,14 @@ class Buildings:
 
         A splitter/piler names neither neighbour itself: the belts around one
         name IT as their ``input_obj``/``output_obj`` instead (see
-        :class:`~flab2bp.layout.base.PlacedBuilding`). So on this frozen
-        ``Buildings`` a splitter's successors are literally
-        :meth:`by_input_obj` of its own index -- the sequence never changes
-        after construction, so there is nothing to derive beyond that lookup.
-
-        ``MutableBuildings`` (Task 2) must maintain this incrementally rather
-        than memoise it: ``_Canvas.add()`` grows the building list inside the
-        same commit pass that queries a splitter's successors, so a memo
-        keyed on the sequence would answer from before the append.
+        :class:`~flab2bp.layout.base.PlacedBuilding`). So a splitter's
+        successors are literally :meth:`by_input_obj` of its own index --
+        computed fresh from the live bucket on every call, never memoised.
+        That matters on ``MutableBuildings``: ``_Canvas.add()`` grows the
+        building list inside the same commit pass that queries a splitter's
+        successors, so a memo keyed on the sequence would answer from before
+        the append. Delegating straight to ``by_input_obj`` here means there
+        is nothing to go stale.
         """
         return self.by_input_obj(index)
 
@@ -343,7 +405,7 @@ class Buildings:
         """Buildings whose footprint covers ``(x, y)``, optionally at ``z``."""
         hits = self._by_tile.get((x, y), _EMPTY)
         if z is None:
-            return hits
+            return tuple(hits)
         return tuple(i for i in hits if self._records[i].z == z)
 
     def in_box(self, x0: int, y0: int, x1: int, y1: int) -> tuple[int, ...]:
@@ -374,3 +436,334 @@ class Buildings:
 
     def count_by_item(self, item_id: int) -> int:
         return len(self._by_item.get(item_id, _EMPTY))
+
+
+class Buildings(_BuildingsQueries):
+    """An immutable indexed view over a building sequence."""
+
+    __slots__ = (
+        "_records",
+        "_kinds",
+        "_by_kind",
+        "_by_item",
+        "_by_recipe",
+        "_by_owner_strip",
+        "_by_carries",
+        "_by_output_obj",
+        "_by_input_obj",
+        "_by_tile",
+        "_bounds",
+    )
+
+    def __init__(self, records: Sequence[PlacedBuilding]) -> None:
+        self._records = tuple(records)
+        (
+            kinds,
+            by_kind,
+            by_item,
+            by_recipe,
+            by_owner_strip,
+            by_carries,
+            by_output_obj,
+            by_input_obj,
+            by_tile,
+        ) = _index_all(self._records)
+        self._kinds = tuple(kinds)
+        self._by_kind = {k: tuple(v) for k, v in by_kind.items()}
+        self._by_item = {k: tuple(v) for k, v in by_item.items()}
+        self._by_recipe = {k: tuple(v) for k, v in by_recipe.items()}
+        self._by_owner_strip = {k: tuple(v) for k, v in by_owner_strip.items()}
+        self._by_carries = {k: tuple(v) for k, v in by_carries.items()}
+        self._by_output_obj = {k: tuple(v) for k, v in by_output_obj.items()}
+        self._by_input_obj = {k: tuple(v) for k, v in by_input_obj.items()}
+        self._by_tile = {k: tuple(v) for k, v in by_tile.items()}
+        self._bounds = self._compute_bounds()
+
+    # NOTE: ``Buildings.of(placement)`` is deliberately NOT in this task.  It
+    # needs the ``Placement.buildings_index`` field, which Task 3 adds; writing
+    # it here would not type-check against a field that does not yet exist, and
+    # would require importing ``Placement`` from ``flab2bp.layout.base`` for no
+    # reason this task needs.  Task 3 Step 4 adds both the field and ``of``.
+
+
+#: Record fields ``MutableBuildings.__setitem__`` treats as immutable after
+#: insertion. Deliberately excludes ``z``: freeform relinks it in place at two
+#: call sites, and no index here keys on it -- ``at_tile``'s z filter reads
+#: ``self._records[i].z`` live, so a relinked z is correct the moment the
+#: record is stored, with nothing else to update.
+_GEOMETRY_FIELDS: tuple[str, ...] = (
+    "item_id",
+    "model_index",
+    "x",
+    "y",
+    "width",
+    "height",
+    "owner_strip",
+    "recipe_id",
+    "carries_item",
+)
+
+
+def _pop_expect(bucket: list[int], expected: int, *, where: str) -> int:
+    """Pop the tail of ``bucket`` and confirm it was ``expected``; return it.
+
+    ``MutableBuildings`` relies on every bucket staying sorted ascending --
+    ``append`` only ever grows at the high end, and ``__setitem__`` relinks
+    insert via ``bisect.insort`` -- so the index being tail-removed, always
+    the current global maximum, is always the LAST entry of any bucket it
+    belongs to. That lets a tail removal pop every bucket in O(1) instead of
+    searching each one for the value. This checks the invariant rather than
+    trusting it silently: a violation would otherwise corrupt the index
+    without ever raising.
+    """
+    got = bucket.pop()
+    if got != expected:
+        bucket.append(got)
+        raise RuntimeError(
+            f"MutableBuildings: internal invariant violated popping {where} -- "
+            f"expected the tail index {expected}, found {got}"
+        )
+    return got
+
+
+class MutableBuildings(_BuildingsQueries, MutableSequence[PlacedBuilding]):
+    """The live-canvas counterpart to :class:`Buildings`.
+
+    Every query method is inherited from :class:`_BuildingsQueries` unchanged,
+    so the live and frozen answers cannot drift apart. What this class adds is
+    the narrow mutation grammar freeform's canvas actually uses -- tail
+    :meth:`append`, tail :meth:`pop`/:meth:`__delitem__`, and an
+    :meth:`__setitem__` relink that may only change ``input_obj``,
+    ``output_obj`` and/or ``z`` -- and it raises ``ValueError`` on anything
+    else, so a mutation this class was not built for fails loudly instead of
+    silently answering from a stale index.
+
+    The backing buckets are ``dict[key, list[int]]`` rather than
+    ``Buildings``'s ``dict[key, tuple[int, ...]]``, so :meth:`append` can grow
+    them in place -- O(footprint), never a rebuild.
+    """
+
+    __slots__ = (
+        "_records",
+        "_kinds",
+        "_by_kind",
+        "_by_item",
+        "_by_recipe",
+        "_by_owner_strip",
+        "_by_carries",
+        "_by_output_obj",
+        "_by_input_obj",
+        "_by_tile",
+        "_bounds",
+    )
+
+    # Narrows the mixin's read-only ``Sequence``/``Mapping`` declarations to
+    # the concrete mutable containers this class actually stores -- a
+    # covariant override, legal because every one of these types is a subtype
+    # of what the mixin declared. Needed so this class's own mutation methods
+    # (below) type-check calling ``.append``/``.remove``/``bisect.insort`` on
+    # them, not just the read-only ``Buildings`` side.
+    _records: list[PlacedBuilding]
+    _kinds: list[Kind]
+    _by_kind: dict[Kind, list[int]]
+    _by_item: dict[int, list[int]]
+    _by_recipe: dict[int, list[int]]
+    _by_owner_strip: dict[int | None, list[int]]
+    _by_carries: dict[str, list[int]]
+    _by_output_obj: dict[int, list[int]]
+    _by_input_obj: dict[int, list[int]]
+    _by_tile: dict[tuple[int, int], list[int]]
+
+    def __init__(self, records: Sequence[PlacedBuilding] = ()) -> None:
+        self._records = list(records)
+        (
+            kinds,
+            by_kind,
+            by_item,
+            by_recipe,
+            by_owner_strip,
+            by_carries,
+            by_output_obj,
+            by_input_obj,
+            by_tile,
+        ) = _index_all(self._records)
+        self._kinds = kinds
+        self._by_kind = by_kind
+        self._by_item = by_item
+        self._by_recipe = by_recipe
+        self._by_owner_strip = by_owner_strip
+        self._by_carries = by_carries
+        self._by_output_obj = by_output_obj
+        self._by_input_obj = by_input_obj
+        self._by_tile = by_tile
+        self._bounds = self._compute_bounds()
+
+    # --- MutableSequence machinery -------------------------------------------
+
+    @overload
+    def __getitem__(self, index: int) -> PlacedBuilding: ...
+    @overload
+    def __getitem__(self, index: slice) -> list[PlacedBuilding]: ...
+
+    def __getitem__(self, index: int | slice) -> PlacedBuilding | list[PlacedBuilding]:
+        return self._records[index]
+
+    def __setitem__(
+        self, index: int | slice, value: PlacedBuilding | Iterable[PlacedBuilding]
+    ) -> None:
+        """Relink an existing record. Only ``input_obj``/``output_obj``/``z`` may change.
+
+        Any other field differing from the record being replaced raises
+        ``ValueError`` mentioning "geometry" -- geometry is never rewritten
+        after insertion in freeform's actual usage, so a caller that tries is
+        a bug this must not paper over by answering from a stale index.
+        """
+        if isinstance(index, slice) or not isinstance(value, PlacedBuilding):
+            raise ValueError("MutableBuildings: slice assignment is not supported")
+        n = len(self._records)
+        i = index if index >= 0 else index + n
+        if not (0 <= i < n):
+            raise IndexError(f"MutableBuildings: index {index} out of range (len={n})")
+        old = self._records[i]
+        new = value
+        for field_name in _GEOMETRY_FIELDS:
+            old_value = getattr(old, field_name)
+            new_value = getattr(new, field_name)
+            if old_value != new_value:
+                raise ValueError(
+                    "MutableBuildings: geometry is immutable after insertion; "
+                    f"{field_name} changed from {old_value!r} to {new_value!r} at "
+                    f"index {i}. Only input_obj/output_obj/z may change via "
+                    "__setitem__."
+                )
+        if old.output_obj != new.output_obj:
+            self._relink(self._by_output_obj, old.output_obj, new.output_obj, i)
+        if old.input_obj != new.input_obj:
+            self._relink(self._by_input_obj, old.input_obj, new.input_obj, i)
+        self._records[i] = new
+
+    @staticmethod
+    def _relink(
+        bucket_map: dict[int, list[int]], old_link: int | None, new_link: int | None, index: int
+    ) -> None:
+        """Move ``index`` from ``old_link``'s bucket to ``new_link``'s, sorted.
+
+        Insertion via :func:`bisect.insort` (not append) is what keeps every
+        link bucket in ascending order under a relink that may target an
+        index smaller than entries already there -- the same ordering
+        :func:`_pop_expect` later relies on to tail-pop in O(1).
+        """
+        if old_link is not None:
+            bucket_map[old_link].remove(index)
+        if new_link is not None:
+            bisect.insort(bucket_map.setdefault(new_link, []), index)
+
+    def __delitem__(self, index: int | slice) -> None:
+        if isinstance(index, slice):
+            raise ValueError("MutableBuildings: slice deletion is not supported")
+        n = len(self._records)
+        i = index if index >= 0 else index + n
+        if n == 0 or i != n - 1:
+            raise ValueError(
+                f"MutableBuildings: __delitem__ only supports the tail index "
+                f"(len={n}); got {index}. A non-tail delete would renumber "
+                "every positional index that follows it."
+            )
+        self._remove_tail()
+
+    def insert(self, index: int, value: PlacedBuilding) -> None:
+        """Delegates to :meth:`append` at the tail; raises everywhere else.
+
+        A mid-sequence insert would renumber every positional index in the
+        tree, which nothing here (or in freeform) is built to survive.
+        """
+        if index == len(self._records):
+            self.append(value)
+            return
+        raise ValueError(
+            "MutableBuildings: insert only supports the tail position "
+            f"(len={len(self._records)}); got index {index}. A mid-sequence "
+            "insert would renumber every positional index in the tree."
+        )
+
+    def append(self, value: PlacedBuilding) -> None:
+        """The only growth this class supports. O(footprint), never a rebuild."""
+        i = len(self._records)
+        self._records.append(value)
+        _index_one(
+            i,
+            value,
+            self._kinds,
+            self._by_kind,
+            self._by_item,
+            self._by_recipe,
+            self._by_owner_strip,
+            self._by_carries,
+            self._by_output_obj,
+            self._by_input_obj,
+            self._by_tile,
+        )
+        self._widen_bounds(value)
+
+    def pop(self, index: int = -1) -> PlacedBuilding:
+        """Tail-only. Raises ``ValueError`` mentioning "tail" for anything else."""
+        n = len(self._records)
+        if n == 0:
+            raise IndexError("MutableBuildings: pop from an empty sequence")
+        i = index if index >= 0 else index + n
+        if i != n - 1:
+            raise ValueError(
+                f"MutableBuildings: pop only supports the tail index (len={n}); "
+                f"got {index}. A non-tail pop would renumber every positional "
+                "index that follows it."
+            )
+        return self._remove_tail()
+
+    def snapshot(self) -> Buildings:
+        """A frozen :class:`Buildings` view over the records as they stand now."""
+        return Buildings(self._records)
+
+    # --- internal --------------------------------------------------------------
+
+    def _widen_bounds(self, b: PlacedBuilding) -> None:
+        x0, y0 = b.x, b.y
+        x1, y1 = b.x + b.width - 1, b.y + b.height - 1
+        if len(self._records) == 1:
+            # The record just appended was the first one; there was nothing
+            # to widen against.
+            self._bounds = (x0, y0, x1, y1)
+            return
+        min_x, min_y, max_x, max_y = self._bounds
+        self._bounds = (min(min_x, x0), min(min_y, y0), max(max_x, x1), max(max_y, y1))
+
+    def _remove_tail(self) -> PlacedBuilding:
+        """Undo exactly what :func:`_index_one` did for the tail record.
+
+        Every bucket pop here is O(1) via :func:`_pop_expect`, not a search --
+        see that function for the ordering invariant this relies on. Bounds
+        cannot be maintained incrementally on the way down (removing the
+        record that set the max/min leaves no cheap answer), so this always
+        recomputes them from what remains -- acceptable because a pop happens
+        once per rolled-back path prefix, not once per query.
+        """
+        i = len(self._records) - 1
+        b = self._records[i]
+        kind = self._kinds[i]
+        _pop_expect(self._by_kind[kind], i, where="by_kind")
+        _pop_expect(self._by_item[b.item_id], i, where="by_item")
+        if kind is Kind.MACHINE:
+            _pop_expect(self._by_recipe[b.recipe_id], i, where="by_recipe")
+        _pop_expect(self._by_owner_strip[b.owner_strip], i, where="by_owner_strip")
+        if b.carries_item is not None:
+            _pop_expect(self._by_carries[b.carries_item], i, where="by_carries")
+        if b.output_obj is not None:
+            _pop_expect(self._by_output_obj[b.output_obj], i, where="by_output_obj")
+        if b.input_obj is not None:
+            _pop_expect(self._by_input_obj[b.input_obj], i, where="by_input_obj")
+        for dx in range(b.width):
+            for dy in range(b.height):
+                _pop_expect(self._by_tile[(b.x + dx, b.y + dy)], i, where="by_tile")
+        self._kinds.pop()
+        self._records.pop()
+        self._bounds = self._compute_bounds()
+        return b

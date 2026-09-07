@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from fractions import Fraction
+
+import pytest
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding
-from flab2bp.layout.buildings import Buildings, Kind
+from flab2bp.layout.buildings import Buildings, Kind, MutableBuildings, kind_for
 
 
 def _fixture() -> tuple[PlacedBuilding, ...]:
@@ -326,3 +329,236 @@ def test_belt_run_crosses_splitters_and_pilers_and_terminates_on_cycles() -> Non
         for forward in (True, False):
             expected = frozenset(_belt_run(records, start, forward=forward))
             assert index.belt_run(start, forward=forward) == expected
+
+
+# --- MutableBuildings ---------------------------------------------------------
+
+
+def test_append_keeps_every_index_correct() -> None:
+    live = MutableBuildings(_fixture())
+    extra = PlacedBuilding(item_id=2303, model_index=0, x=200, y=7, recipe_id=1)
+    live.append(extra)
+    records = tuple(live)
+    assert live.by_item(2303) == tuple(i for i, b in enumerate(records) if b.item_id == 2303)
+    assert live.machines_for_recipe(1) == tuple(
+        i for i, b in enumerate(records) if b.recipe_id == 1 and kind_for(b.item_id) is Kind.MACHINE
+    )
+    assert live.at_tile(200, 7) == (len(records) - 1,)
+    assert live.bounds() == Buildings(records).bounds()
+
+
+def test_pop_truncates_every_index() -> None:
+    records = _fixture()
+    live = MutableBuildings(records)
+    live.append(PlacedBuilding(item_id=2303, model_index=0, x=200, y=7))
+    live.pop()
+    assert tuple(live) == records
+    assert live.at_tile(200, 7) == ()
+    for item_id in {b.item_id for b in records}:
+        assert live.by_item(item_id) == Buildings(records).by_item(item_id)
+
+
+def test_relink_updates_the_link_indexes_and_nothing_else() -> None:
+    records = _fixture()
+    live = MutableBuildings(records)
+    old = records[1]
+    live[1] = replace(old, output_obj=42)
+    assert 1 not in live.by_output_obj(old.output_obj or -1)
+    assert 1 in live.by_output_obj(42)
+    assert live.by_item(old.item_id) == Buildings(records).by_item(old.item_id)
+
+
+def test_a_geometry_rewrite_raises_rather_than_answering_stale() -> None:
+    live = MutableBuildings(_fixture())
+    with pytest.raises(ValueError, match="geometry"):
+        live[0] = replace(live[0], x=999)
+
+
+def test_a_non_tail_pop_raises() -> None:
+    live = MutableBuildings(_fixture())
+    with pytest.raises(ValueError, match="tail"):
+        live.pop(0)
+
+
+def test_a_non_tail_delitem_raises_and_the_tail_delitem_works() -> None:
+    live = MutableBuildings(_fixture())
+    with pytest.raises(ValueError, match="tail"):
+        del live[0]
+    n = len(live)
+    del live[-1]
+    assert len(live) == n - 1
+
+
+def test_pop_from_an_empty_sequence_raises_index_error() -> None:
+    live = MutableBuildings(())
+    with pytest.raises(IndexError):
+        live.pop()
+
+
+def test_insert_delegates_to_append_at_the_tail_and_raises_elsewhere() -> None:
+    live = MutableBuildings(_fixture())
+    extra = PlacedBuilding(item_id=2303, model_index=0, x=300, y=9)
+    live.insert(len(live), extra)
+    assert live[-1] == extra
+    with pytest.raises(ValueError):
+        live.insert(0, extra)
+
+
+def test_snapshot_is_frozen_and_independent_of_later_mutation() -> None:
+    records = _fixture()
+    live = MutableBuildings(records)
+    snap = live.snapshot()
+    assert isinstance(snap, Buildings)
+    assert tuple(snap) == records
+    live.append(PlacedBuilding(item_id=2303, model_index=0, x=400, y=9))
+    assert len(snap) == len(records)
+    assert len(live) == len(records) + 1
+    assert snap.by_item(2303) == Buildings(records).by_item(2303)
+
+
+def test_slicing_matches_list_semantics() -> None:
+    records = _fixture()
+    live = MutableBuildings(records)
+    assert live[5:10] == list(records[5:10])
+    assert live[50:] == list(records[50:])
+    assert live[-3:] == list(records[-3:])
+    assert list(live) == list(records)
+    assert tuple(live) == records
+    assert len(live) == len(records)
+
+
+def test_setitem_may_change_z_and_at_tile_reflects_the_new_value() -> None:
+    """``z`` is not a geometry field: a relink may change it, and ``at_tile``
+    must answer from the current record rather than a stale z-keyed index."""
+    b0 = PlacedBuilding(item_id=2303, model_index=0, x=5, y=5, z=Fraction(0))
+    b1 = PlacedBuilding(item_id=2303, model_index=0, x=5, y=5, z=Fraction(1, 2))
+    live = MutableBuildings([b0, b1])
+    assert live.at_tile(5, 5, Fraction(0)) == (0,)
+    assert live.at_tile(5, 5, Fraction(1, 2)) == (1,)
+    live[1] = replace(b1, z=Fraction(0))
+    assert live.at_tile(5, 5, Fraction(0)) == (0, 1)
+    assert live.at_tile(5, 5, Fraction(1, 2)) == ()
+    assert live.at_tile(5, 5) == (0, 1)
+
+
+def test_splitter_successors_is_live_within_the_same_append_pass() -> None:
+    """``canvas.add()`` grows the list inside the same commit pass that
+    queries a splitter's successors -- a memo keyed on the old sequence
+    would answer stale here, so this must be recomputed from the live
+    ``by_input_obj`` bucket on every call."""
+    belt = next(iter(catalog.BELT_IDS))
+    live = MutableBuildings([PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=0, x=0, y=0)])
+    assert live.splitter_successors(0) == ()
+    live.append(PlacedBuilding(item_id=belt, model_index=0, x=1, y=0, input_obj=0))
+    assert live.splitter_successors(0) == (1,)
+    live.append(PlacedBuilding(item_id=belt, model_index=0, x=1, y=1, input_obj=0))
+    assert live.splitter_successors(0) == (1, 2)
+
+
+def test_relink_then_tail_pop_keeps_link_buckets_sorted() -> None:
+    """A relink can insert a LOW index into a link bucket that already holds
+    higher ones; a later tail pop must still be popping the bucket's own
+    ascending-order tail, not merely whatever sits at the end of the list."""
+    records = _fixture()
+    live = MutableBuildings(records)
+    assert Buildings(records).by_output_obj(5) == ()  # sanity: nothing points at 5 yet
+    live.append(PlacedBuilding(item_id=2303, model_index=0, x=200, y=9, output_obj=5))
+    tail = len(live) - 1
+    live[2] = replace(live[2], output_obj=5)
+    assert live.by_output_obj(5) == (2, tail)
+    live.pop()
+    assert live.by_output_obj(5) == (2,)
+    assert len(live) == len(records)
+    for i, b in enumerate(records):
+        if i == 2:
+            assert live[i] == replace(b, output_obj=5)
+        else:
+            assert live[i] == b
+
+
+def test_queries_match_a_rebuilt_index_after_a_mutation_sequence() -> None:
+    """The staleness guard: after arbitrary legal mutation, every query agrees
+    with a freshly built index over the same records."""
+    live = MutableBuildings(_fixture())
+    for n in range(20):
+        live.append(
+            PlacedBuilding(
+                item_id=2303 if n % 2 else next(iter(catalog.SORTER_IDS)),
+                model_index=0,
+                x=100 + n,
+                y=9,
+                recipe_id=n % 3,
+                input_obj=n,
+                output_obj=n + 1,
+                carries_item=f"item-{n % 7}",
+            )
+        )
+    for _ in range(5):
+        live.pop()
+    live[3] = replace(live[3], output_obj=11)
+
+    records = tuple(live)
+    fresh = Buildings(records)
+    assert live.bounds() == fresh.bounds()
+    assert live.machines() == fresh.machines()
+    assert live.belts() == fresh.belts()
+    assert live.sorters() == fresh.sorters()
+    for i in range(len(records)):
+        assert live.by_output_obj(i) == fresh.by_output_obj(i)
+        assert live.by_input_obj(i) == fresh.by_input_obj(i)
+    for item_id in {b.item_id for b in records}:
+        assert live.by_item(item_id) == fresh.by_item(item_id)
+    for carried in {b.carries_item for b in records if b.carries_item}:
+        assert live.carrying(carried) == fresh.carrying(carried)
+
+
+def test_queries_match_a_rebuilt_index_on_spatial_link_and_count_methods() -> None:
+    """Extends the staleness guard above to the methods its brief version
+    omits: ``at_tile``, ``in_box``, ``predecessor_of``, ``splitter_successors``,
+    ``belt_run``, ``attached_to``, ``machines_for_strip`` and the counts."""
+    live = MutableBuildings(_fixture())
+    for n in range(20):
+        live.append(
+            PlacedBuilding(
+                item_id=2303 if n % 2 else next(iter(catalog.SORTER_IDS)),
+                model_index=0,
+                x=100 + n,
+                y=9,
+                recipe_id=n % 3,
+                owner_strip=n % 4,
+                input_obj=n,
+                output_obj=n + 1,
+                carries_item=f"item-{n % 7}",
+            )
+        )
+    for _ in range(5):
+        live.pop()
+    live[3] = replace(live[3], output_obj=11)
+
+    records = tuple(live)
+    fresh = Buildings(records)
+    assert live.bounds() == fresh.bounds()
+    assert live.in_box(*fresh.bounds()) == fresh.in_box(*fresh.bounds())
+
+    for i, b in enumerate(records):
+        assert live.at_tile(b.x, b.y) == fresh.at_tile(b.x, b.y)
+        assert live.predecessor_of(i) == fresh.predecessor_of(i)
+        assert live.splitter_successors(i) == fresh.splitter_successors(i)
+        assert live.belt_run(i, forward=True) == fresh.belt_run(i, forward=True)
+        assert live.belt_run(i, forward=False) == fresh.belt_run(i, forward=False)
+        assert live.attached_to(i) == fresh.attached_to(i)
+
+    for strip in {b.owner_strip for b in records}:
+        # `machines_for_strip` is `int`-only by its Task 1 signature; a `None`
+        # owner_strip (unstripped belts/sorters in the fixture) only exercises
+        # `by_owner_strip`, which does accept it.
+        if strip is not None:
+            assert live.machines_for_strip(strip) == fresh.machines_for_strip(strip)
+        assert live.by_owner_strip(strip) == fresh.by_owner_strip(strip)
+
+    for kind in Kind:
+        assert live.count_by_kind(kind) == fresh.count_by_kind(kind)
+        assert live.by_kind(kind) == fresh.by_kind(kind)
+
+    for item_id in {b.item_id for b in records}:
+        assert live.count_by_item(item_id) == fresh.count_by_item(item_id)
