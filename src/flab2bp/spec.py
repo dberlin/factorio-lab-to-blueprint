@@ -20,7 +20,7 @@ from __future__ import annotations
 from enum import StrEnum
 from fractions import Fraction
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # `layout.base` imports only the standard library at runtime -- `BuildSpec`
 # itself is under TYPE_CHECKING there -- so this is not a cycle.  The refusal
@@ -196,6 +196,11 @@ class BuildSpec(_Frozen):
     #: Sorter tiers the save can build, slowest first.  Every tier by default
     #: so a spec built without a request keeps today's behaviour.
     sorter_item_ids: tuple[str, ...] = ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
+    #: The power building every power site places.  A FactorioLab id, resolved
+    #: to a ``catalog.Building`` once by the layout stage.  The default keeps
+    #: the Tesla Tower, so a spec built without a choice lays out exactly as it
+    #: did before the choice existed.
+    power_tower_item_id: str = "tesla-tower"
     #: FactorioLab's belt stack (``ist``): the cargo stack the player's bus
     #: carries.  1 when the URL says nothing.  Never above 4, the game's
     #: largest pile (``catalog.PILER_MAX_STACK``).
@@ -261,6 +266,16 @@ class BuildSpec(_Frozen):
                 "sorter at all cannot feed a machine"
             )
         return self
+
+    @field_validator("power_tower_item_id")
+    @classmethod
+    def _known_power_tower(cls, value: str) -> str:
+        from flab2bp.dsp import catalog
+
+        if value not in catalog.POWER_TOWER_CHOICES.values():
+            allowed = ", ".join(sorted(catalog.POWER_TOWER_CHOICES.values()))
+            raise ValueError(f"power_tower_item_id must be one of {allowed}; got {value!r}")
+        return value
 
     @model_validator(mode="after")
     def _stacks_align(self) -> BuildSpec:
