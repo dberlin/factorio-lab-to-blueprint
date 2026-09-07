@@ -24,9 +24,11 @@ These are fast by construction: one four-recipe solve, everything else parsing.
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -571,7 +573,9 @@ class TestByItemAndByRecipe:
     def test_the_maps_cannot_be_mutated_through_the_public_attribute(self) -> None:
         selection = _selection_fixture()
         try:
-            selection.by_item["invented"] = next(iter(selection.by_item.values()))
+            cast(MutableMapping[str, FlowRow], selection.by_item)["invented"] = next(
+                iter(selection.by_item.values())
+            )
         except TypeError:
             return
         raise AssertionError("by_item must be read-only; a caller mutation would be shared state")
