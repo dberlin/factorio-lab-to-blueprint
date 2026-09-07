@@ -55,6 +55,14 @@ two `no-proliferator` pairs — the specs with no coater at all — the two arms
 placement digests**, `f027ff6f87bf6078` (freeform) and `a3c121b6d2fcae8d` (sequence-pair).
 A spec with nothing to spray is untouched by this branch, byte for byte.
 
+Where a spec does have a coater, `off` is a **geometry** control, not a working fallback: this
+branch's `prolif.coater_rides_one_run` and `prolif.coater_supply_is_fed` checks are unconditional
+on `coater_mode()`, so they judge an `off` build too, and `coater_rides_one_run` convicts exactly
+the merge-under-body defect `off`'s geometry produces. Building the reported URL's
+`all-products` / `output-products` under `off` in this worktree refuses with that finding, where
+the merge base builds them. Do not read `off` as byte-reproducing the merge base's behaviour for
+those specs — only the siting is master's; the validator that judges it is this branch's own.
+
 ## 3. Operating point
 
 Copied from the brief, untuned:

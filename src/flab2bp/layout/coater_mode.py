@@ -6,11 +6,21 @@ beside the consumer lane head, with the addon riding its third tile.  Every
 producer net and external run sinks into the node's IN-PORT, one tile west of
 the body, so a many-to-one merge lands off the body BY CONSTRUCTION.
 
-``off`` -- master's behaviour before 2026-09-07, retained for one release as
-the A/B control.  The addon rides the interior of the consumer strip's own
-widened ``_COATER_WEST_CHANNEL`` channel and its 3x1 body may cover the lane
-head, which is the reported defect: five and nine coater bodies over a belt
-merge on the 72-cell corpus, six on the reported URL.
+``off`` -- a GEOMETRY control, retained for one release as the A/B control.
+It restores the old siting: the addon rides the interior of the consumer
+strip's own widened ``_COATER_WEST_CHANNEL`` channel, and its 3x1 body may
+cover the lane head, which is the reported defect: five and nine coater
+bodies over a belt merge on the 72-cell corpus, six on the reported URL.
+
+``off`` is NOT a working fallback for specs that hit that defect.  This
+branch's ``prolif.coater_rides_one_run`` and ``prolif.coater_supply_is_fed``
+(``validate.py``) are unconditional -- neither is gated on ``coater_mode()``
+-- so both judge an ``off`` build too, and ``coater_rides_one_run`` convicts
+exactly the merge-under-body geometry ``off`` produces. Building the
+reported URL under ``off`` in this tree refuses where the merge base builds
+it.  Do not read ``off`` as reproducing master's behaviour unqualified --
+the geometry is master's, but the validator that judges it is not, and it
+convicts exactly what the geometry does.
 
 Measured, both arms, ``--budget 30``, two rounds, 72 cells
 (``docs/superpowers/evidence/2026-09-07-exp-coater-node/README.md``):
