@@ -113,9 +113,27 @@ def self_loop_prime_heads(placement: Placement, spec: BuildSpec) -> dict[str, in
     from a group machine (``input_obj`` is a group machine) and the loop's
     INPUT sorter feeds directly into one (``output_obj`` is a group machine).
     Only a belt run that starts right after the former and, walking forward
-    tile by tile, ends right at the latter is the loop; a same-item run that
-    starts anywhere else (an external head, another group's output) is passed
-    over even though it carries an identical ``carries_item``.
+    tile by tile, reaches the latter is the loop; a same-item run that starts
+    anywhere else (an external head, another group's output) is passed over
+    even though it carries an identical ``carries_item``.
+
+    "Reaches the latter" covers TWO physical shapes, not one.  A single-machine
+    loop's run is short enough that the belt's own forward chain
+    (``output_obj``) terminates right at the input sorter -- the run ends
+    there because nothing is downstream of it.  A multi-machine group's run
+    does not: design section 1.2 decodes the real corpus case as ONE shared
+    belt collecting from every machine's own output sorter and feeding every
+    machine's own input sorter IN SERIES, each input sorter TAPPING the run at
+    an interior tile (its ``input_obj`` names a belt mid-run) while the run's
+    own forward chain carries on past that tap toward the boundary surplus
+    tail.  A walk that only checked the chain's own terminal ``output_obj``
+    missed every multi-machine loop outright -- measured against the real
+    ``reforming-refine`` corpus case (20 machines): every one of its 20 input
+    sorters taps an interior tile of a chain led by one of the group's own
+    output sorters, so the loop demonstrably closes, and the untapped walk
+    returned no head for it at all.  So the walk also checks, at every tile it
+    visits, whether that tile is one of the group's own input sorters' source
+    -- an interior tap closes the loop exactly as a terminal one does.
     """
     buildings = placement.buildings
     heads: dict[str, int] = {}
@@ -149,6 +167,10 @@ def self_loop_prime_heads(placement: Placement, spec: BuildSpec) -> dict[str, in
         }
         if not output_sorters or not input_sorters:
             continue
+        # Tiles an input sorter draws from directly -- an interior tap on a
+        # shared multi-machine run closes the loop there, not only where the
+        # run's own forward chain happens to terminate.
+        taps = {buildings[i].input_obj for i in input_sorters} - {None}
         for start in output_sorters:
             head = buildings[start].output_obj
             if head is None or not 0 <= head < len(buildings):
@@ -160,6 +182,9 @@ def self_loop_prime_heads(placement: Placement, spec: BuildSpec) -> dict[str, in
             closes_loop = False
             while cursor not in seen:
                 seen.add(cursor)
+                if cursor in taps:
+                    closes_loop = True
+                    break
                 following = buildings[cursor].output_obj
                 if following is None or not 0 <= following < len(buildings):
                     break

@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 import flab2bp.layout.validate as validate_module
+from flab2bp.dsp import catalog, params, rules
 from flab2bp.dsp import colliders as dsp_colliders
-from flab2bp.dsp import params, rules
 from flab2bp.dsp.catalog import (
     DEFAULT_MAX_BELT_Z,
     ENERGY_EXCHANGER_ID,
@@ -49,6 +49,7 @@ from flab2bp.spec import (
     CoproductBufferProof,
     MachineGroup,
     ProliferatorMode,
+    SelfLoopSeed,
 )
 from tests.dsp.test_local_offset import GEOMETRY_CORPUS
 
@@ -6653,3 +6654,110 @@ def test_machine_checks_ignore_pilers() -> None:
     assert not report.findings
     assert set(report.checks_run) == checks
     assert not report.skipped
+
+
+# --- self-loop priming ------------------------------------------------------
+#
+# A block whose only source of an item is itself passed every other check and
+# still deadlocked on paste: `flow.conservation` is a correct steady-state
+# check with no notion of an initial fill, and `flow.coproduct_buffer` is a
+# certificate verifier that yields nothing when no certificate exists.  Loop
+# identification is not re-walked here -- `markers.self_loop_prime_heads`
+# already does it from the sorter graph alone, and these fixtures give it
+# exactly the shape it expects: the group's own output sorter feeding a belt
+# that returns via the group's own input sorter.
+
+SELF_LOOP_RECIPE_ID = catalog.recipe_id("x-ray-cracking")
+
+
+def _self_loop_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="x-ray-cracking",
+                machine_item_id="chemical-plant",
+                count=1,
+            ),
+        ),
+        self_loop_seeds=(
+            SelfLoopSeed(
+                item_id="hydrogen",
+                recipe_id="x-ray-cracking",
+                machine_item_id="chemical-plant",
+                machines=4,
+                consumed_per_craft=Fraction(2),
+                produced_per_craft=Fraction(3),
+                net_per_craft=Fraction(1),
+                seed_items=8,
+            ),
+        ),
+    )
+
+
+def _self_loop_placement(*, closed: bool = True, walled_in: bool = False) -> Placement:
+    """A one-machine hydrogen loop, head at (3, 21).
+
+    Building 1 is the group's own OUTPUT sorter (its ``input_obj`` is the
+    machine) and building 2 is the loop head belt.  Building 3 is the group's
+    own INPUT sorter (its ``output_obj`` is the machine); when ``closed=True``
+    its ``input_obj`` taps the head belt directly, exactly the interior-tap
+    shape ``markers.self_loop_prime_heads`` recognises (a tap need not sit at
+    the belt chain's own terminal ``output_obj`` -- design section 1.2's real
+    corpus case never does).
+
+    ``closed=False`` makes the input sorter tap an unrelated, disconnected
+    belt (building 4) instead, so nothing the walk from the group's own
+    output sorter ever visits is drawn on by a group input sorter -- the loop
+    does not physically close.  ``walled_in=True`` rings the head with plain
+    belts so no free tile touches it -- the same defect
+    ``flow.external_entry_reachable`` catches for an ordinary input.
+    """
+    buildings: list[PlacedBuilding] = [
+        machine(0, 0, item_id=CHEM_PLANT, recipe_id=SELF_LOOP_RECIPE_ID),  # 0
+        sorter(0, 0, 0, 1, inp=0, out=2, carries="hydrogen"),  # 1: OUTPUT sorter
+        belt(3, 21, out=None, carries="hydrogen"),  # 2: loop head
+        belt(50, 50, out=None, carries="hydrogen"),  # 3: disconnected belt (closed=False only)
+        sorter(
+            3, 21, 3, 22, inp=(2 if closed else 3), out=0, carries="hydrogen"
+        ),  # 4: INPUT sorter
+    ]
+    if walled_in:
+        buildings += [belt(x, y) for x, y in ((2, 21), (4, 21), (3, 20), (3, 22))]
+    return Placement(buildings=tuple(buildings))
+
+
+def test_self_loop_lane_that_cannot_be_reached_is_an_error() -> None:
+    """You cannot prime what no belt and no hand can reach.
+
+    An unreachable loop lane is the same class of defect as
+    `flow.external_entry_reachable`'s walled-in input: nothing about the
+    blueprint looks wrong, and it simply never starts.
+    """
+    spec = _self_loop_spec()
+    report = validate(
+        _self_loop_placement(walled_in=True), spec, ids=id_map(spec), expect_power=False
+    )
+    assert "flow.self_loop_primed" in report.checks_run
+    findings = [f for f in report.errors if f.check == "flow.self_loop_primed"]
+    assert findings
+
+
+def test_self_loop_lane_that_can_be_reached_is_a_warning_naming_the_seed() -> None:
+    spec = _self_loop_spec()
+    report = validate(_self_loop_placement(), spec, ids=id_map(spec), expect_power=False)
+    assert "flow.self_loop_primed" in report.checks_run
+    assert not [f for f in report.errors if f.check == "flow.self_loop_primed"]
+    (finding,) = [f for f in report.warnings if f.check == "flow.self_loop_primed"]
+    assert finding.detail["item"] == "hydrogen"
+    assert finding.detail["seed_items"] == 8
+
+
+def test_self_loop_lane_that_does_not_close_is_an_error() -> None:
+    """A declared loop whose output never reaches its own input is not a loop."""
+    spec = _self_loop_spec()
+    report = validate(
+        _self_loop_placement(closed=False), spec, ids=id_map(spec), expect_power=False
+    )
+    assert "flow.self_loop_primed" in report.checks_run
+    findings = [f for f in report.errors if f.check == "flow.self_loop_primed"]
+    assert findings

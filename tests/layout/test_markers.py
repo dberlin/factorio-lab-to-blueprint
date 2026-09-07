@@ -201,3 +201,50 @@ def test_self_loop_lane_head_is_marked() -> None:
     # The unrelated external run feeding the same machine (buildings 4-5) is
     # untouched -- graph position picked the loop, not the item name.
     assert marked.buildings[4].parameters == ()
+
+
+def _self_loop_placement_series_tap() -> Placement:
+    """Two machines fed IN SERIES off one shared belt, head at (3, 21).
+
+    The real corpus shape design section 1.2 decodes: one run collects from
+    every machine's own output sorter and feeds every machine's own input
+    sorter in series, each input sorter TAPPING an interior tile of the run
+    (its ``input_obj`` names a belt mid-run, buildings 7 and 8 below) while
+    the run's own forward chain carries on past both taps to an open surplus
+    tail (building 6's ``output_obj`` is ``None``) -- it never terminates AT
+    a sorter the way the single-machine fixture above does.  Measured against
+    the real ``reforming-refine`` corpus (20 machines): every one of its input
+    sorters taps an interior tile this way, so a walk that only recognised a
+    terminal ``output_obj`` landing on a sorter returned no head for it at
+    all.
+    """
+    x_ray_cracking = catalog.recipe_id("x-ray-cracking")
+    return Placement(
+        buildings=(
+            _machine(x=0, y=0, recipe_id=x_ray_cracking),  # 0
+            _machine(x=0, y=5, recipe_id=x_ray_cracking),  # 1
+            _sorter(source=0, destination=3, item="hydrogen"),  # 2: OUTPUT sorter
+            _belt(3, 21, item="hydrogen", output=4),  # 3: the loop head
+            _belt(3, 22, item="hydrogen", output=5),  # 4: tapped by sorter 7
+            _belt(3, 23, item="hydrogen", output=6),  # 5: tapped by sorter 8
+            _belt(3, 24, item="hydrogen", output=None),  # 6: open surplus tail
+            _sorter(source=4, destination=0, item="hydrogen"),  # 7: INPUT sorter, taps 4
+            _sorter(source=5, destination=1, item="hydrogen"),  # 8: INPUT sorter, taps 5
+        )
+    )
+
+
+def test_self_loop_lane_head_is_found_for_a_multi_machine_series_tap() -> None:
+    """An interior tap closes the loop exactly as a terminal one does.
+
+    Without this, no multi-machine self-loop group -- the shape the design's
+    own real corpus example decodes -- could ever be identified: only a
+    single-machine loop whose run happens to terminate right at the sorter
+    would be found.
+    """
+    placement = _self_loop_placement_series_tap()
+    spec = _self_loop_spec()
+    heads = markers.self_loop_prime_heads(placement, spec)
+    assert set(heads) == {"hydrogen"}
+    head = placement.buildings[heads["hydrogen"]]
+    assert (head.x, head.y) == (3, 21)

@@ -32,7 +32,7 @@ from fractions import Fraction
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import codec, colliders, params, rules, splitter_ports
 from flab2bp.dsp import colliders as dsp_colliders
-from flab2bp.layout import slots
+from flab2bp.layout import markers, slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.spec import BuildSpec, MachineGroup
 
@@ -4722,6 +4722,102 @@ def _coproduct_buffer(ctx: Context) -> Iterable[Finding]:
                     "required_capacity": proof.required_capacity,
                 },
             )
+
+
+@check("flow.self_loop_primed", needs_spec=True, needs_groups=True)
+def _self_loop_primed(ctx: Context) -> Iterable[Finding]:
+    """A loop that feeds itself must close, be reachable, and be priced.
+
+    ``flow.conservation`` answers the steady-state question and answers it
+    correctly: a self-loop item nets to zero and the produced item does reach
+    the taps.  Neither of its clauses has any notion of an INITIAL FILL, and
+    ``flow.coproduct_buffer`` is a certificate verifier that yields nothing when
+    no certificate exists -- so a block whose only hydrogen source is itself
+    passed every check and deadlocked on paste.
+
+    ERROR when the loop lane does not physically close (the group's own output
+    sorter does not reach its own input pickups), and ERROR when every tile of
+    that lane is walled in, which is the same defect
+    ``flow.external_entry_reachable`` catches for an ordinary input.  WARNING
+    otherwise, naming item, ``seed_items`` and the marked tile, so the
+    obligation reaches the report, the CLI and the web payload rather than
+    living only in the blueprint description.
+
+    Loop-lane identification is NOT reimplemented here.
+    ``markers.self_loop_prime_heads`` already walks the sorter graph from a
+    group's own output sorter to its own input pickups -- a reviewer verified
+    it cannot pick a boundary run carrying the same item, since it walks
+    forward only from sorters whose ``input_obj`` is a group machine -- so a
+    second, subtly different walk here would be the one defect most likely to
+    survive review.  A seed absent from its result means exactly "does not
+    close"; a seed present in it names the one tile whose reachability answers
+    the other question.
+    """
+    assert ctx.spec is not None
+    if not ctx.spec.self_loop_seeds:
+        return
+    bs = ctx.placement.buildings
+    heads = markers.self_loop_prime_heads(ctx.placement, ctx.spec)
+    free: dict[Fraction, set[tuple[int, int]]] = {}
+    for seed in ctx.spec.self_loop_seeds:
+        head = heads.get(seed.item_id)
+        if head is None:
+            yield Finding(
+                "flow.self_loop_primed",
+                Severity.ERROR,
+                f"{seed.item_id!r}'s loop lane does not close: {seed.recipe_id}'s "
+                "own output sorter never reaches its own input pickups, so there "
+                "is no lane to prime and the group has no source of it",
+                (),
+                {"item": seed.item_id, "recipe_id": seed.recipe_id},
+            )
+            continue
+
+        run = ctx.runs[ctx.run_of[head]]
+        walled: list[int] = []
+        for i in run.indices:
+            b = bs[i]
+            plane = free.get(b.z)
+            if plane is None:
+                plane = _reachable_from_outside(ctx, b.z)
+                free[b.z] = plane
+            if any((b.x + dx, b.y + dy) in plane for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                break
+            walled.append(i)
+        else:
+            head_b = bs[head]
+            yield Finding(
+                "flow.self_loop_primed",
+                Severity.ERROR,
+                f"{seed.item_id!r}'s loop lane needs a one-off hand prime of "
+                f"{seed.seed_items} items, but all {len(walled)} of its tiles are "
+                "walled in -- no belt and no hand can ever reach it, so the block "
+                "can never start",
+                (head, *walled[:4]),
+                {
+                    "item": seed.item_id,
+                    "seed_items": seed.seed_items,
+                    "head": f"({head_b.x},{head_b.y},{head_b.z})",
+                    "tiles": len(walled),
+                },
+            )
+            continue
+
+        head_b = bs[head]
+        yield Finding(
+            "flow.self_loop_primed",
+            Severity.WARNING,
+            f"{seed.item_id!r}'s loop lane must be hand-primed with "
+            f"{seed.seed_items} items at ({head_b.x},{head_b.y},{head_b.z}) before "
+            f"paste -- a DSP blueprint carries no inventory, and this block's only "
+            f"source of {seed.item_id!r} is itself",
+            (head,),
+            {
+                "item": seed.item_id,
+                "seed_items": seed.seed_items,
+                "head": f"({head_b.x},{head_b.y},{head_b.z})",
+            },
+        )
 
 
 # --- spec conformance ------------------------------------------------------
