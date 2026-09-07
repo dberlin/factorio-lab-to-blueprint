@@ -1333,8 +1333,14 @@ def _staged_static_clearance_keys(
     Memoized on :data:`_STAGED_CLEARANCE_KEYS_MEMO`.
     """
     if coater_mode().is_node:
-        # EXPERIMENT: no addon rides this strip's channel under a node arm, so
-        # there is no machine/Coater relation for the channel to clear.
+        # No addon rides this strip's channel under a node arm, so there is no
+        # machine/Coater relation for the channel to clear.
+        #
+        # This empty return is also what keeps `_COATER_WEST_CHANNEL` and the
+        # freeform channel lift below INERT under `placed` without a further
+        # guard: the lift maxes over these relations and there are none.  Both
+        # stay, because `off` is the retained A/B control for one release and
+        # is the only arm that reaches them.
         return frozenset()
     if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY or strip.physical_variant is None:
         return frozenset()
@@ -5245,6 +5251,12 @@ def _coater_keepout_hits(
     the machine and the paste reports ``Collide with other object``.  Reserve
     the one-cell lateral row around the coater's real oriented 3x1 body; do not
     inflate its long axis, where its predecessor and successor must stand.
+
+    STAYS under a node arm, and is asked TWICE: once from
+    :func:`_coater_node_site_is_clear`, to reject a site whose addon body would
+    clip a machine, and once from :func:`_place_coaters` on the seat it finally
+    commits.  A belt addon's collider reaches machines a belt does not, so
+    "these four tiles are free belt ground" is not the same question.
     """
     width, height = catalog.oriented_footprint(
         catalog.SPRAY_COATER_ID,
@@ -13773,6 +13785,11 @@ class _Unseatable(NoValidLayout):
     it and tries the next, exactly as it does for :class:`_Unpowerable`; if no
     height can seat the coaters the spec is refused, which is the honest answer
     and not the quiet one.
+
+    STAYS under a node arm, and gains a NEW raise site: "no free ground for the
+    ... Spray Coater node near the lane head", when `_coater_node_site` finds
+    no clear 6x3 ring within its radius.  A pack that cannot site a node is not
+    a pack, for exactly the reason a pack that cannot seat a coater is not.
     """
 
     def __init__(
@@ -14730,7 +14747,13 @@ def _projected_coater_junction_bans_by_frame(
     splitter_index: int,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[frozenset[Cell], ...]:
-    """Exact Splitter bans retained separately for each finalizer frame."""
+    """Exact Splitter bans retained separately for each finalizer frame.
+
+    STAYS under a node arm.  Splitter-versus-coater clearance is a pack-level
+    fact about a COMMITTED coater, and `placed` commits coaters -- it moves
+    where they sit, not whether they exist.  Measured on the small proliferated
+    fixture: six calls under `placed`.
+    """
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
     min_x, min_y, max_x, max_y = junction_bounds
@@ -18296,7 +18319,10 @@ def _coater_node_site_is_clear(canvas: _Canvas, ox: int, oy: int) -> bool:
     # reserves, and -- measured -- it is also what keeps the node's belts far
     # enough from a machine for the spherical projection not to convict them:
     # without it `information-matrix/all-products` refused on `geom.collide`
-    # at bands 160 and 200 with the node belts sitting against a machine.
+    # at bands 160 and 200 with the node belts sitting against a machine
+    # (evidence README section 5.2).  DO NOT NARROW THE RING: the first
+    # `placed` implementation demanded only the four belt tiles and the two
+    # level-1 cells, and that is the version those refusals came from.
     for k in range(-1, _COATER_NODE_TILES + 1):
         for dy in (-1, 0, 1):
             if not canvas.free((ox + k, oy + dy, 0)):
@@ -18604,6 +18630,17 @@ def _place_coaters(
             # back to ``WEST_CHANNEL`` because no addon rides it.  The node's
             # whole interior is the candidate set, which under the narrowed
             # seat rule is the single tile 2.
+            #
+            # Everything from here down STAYS UNCHANGED under a node arm -- the
+            # seat search, the projected-static checks, the addon-supply
+            # routing and the splitter certification.  That is the point of
+            # shaping the node like a four-tile lane: every rule that governs a
+            # coater on a strip channel governs it here with no special case.
+            # The arithmetic that yields one candidate is derived, not
+            # hard-coded: `seat_channel = len(port.tiles) - 1 = 3` and
+            # `_coater_seats` starts at `1 + half_span = 2`.  Measured on the
+            # small proliferated fixture: six seat searches, each offering
+            # exactly one candidate.
             seat_channel = len(port.tiles) - 1 if coater_mode().is_node else strip.west_channel
             seats = _coater_seats(
                 canvas,

@@ -35,7 +35,15 @@ _CARDINAL_YAWS = (0.0, 90.0, 180.0, 270.0)
 
 
 class CargoDomain(Enum):
-    """Treatment identity that must remain disjoint while cargo is routed."""
+    """Treatment identity that must remain disjoint while cargo is routed.
+
+    STAYS under a node arm, and is load-bearing there rather than vestigial: it
+    is what types the coater node's two ports, so a producer net into the
+    node's IN-PORT and the node's OUT-PORT net to the consumer lane head are
+    both well-typed and a net that mixed the two would be refused.
+    ``freeform._Net.__post_init__`` raises "net ports must share one cargo
+    domain" on exactly that.
+    """
 
     UNSPRAYED = "unsprayed"
     REQUIRES_SPRAY = "requires-spray"
