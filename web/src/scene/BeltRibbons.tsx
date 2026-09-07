@@ -324,12 +324,16 @@ export function BeltRibbons({
           <meshBasicMaterial />
         </instancedMesh>
       )}
-      {showLabels && digitOf.length > 0 && (
+      {/* Stays mounted and toggles `visible`: unmounting on the switch left a
+          remounted mesh with no instance matrices, because the effect that
+          writes them is keyed on the scene, not on the mount. */}
+      {digitOf.length > 0 && (
         <instancedMesh
           key={`digits-${digitOf.length}`}
           ref={digitRef}
           args={[undefined, undefined, digitOf.length]}
           raycast={() => null}
+          visible={showLabels}
         >
           <planeGeometry args={[1, 1]}>
             <primitive object={offsets} attach="attributes-digitOffset" />

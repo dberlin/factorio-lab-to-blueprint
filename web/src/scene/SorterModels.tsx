@@ -299,18 +299,22 @@ export function SorterModels({
       <mesh geometry={accent} raycast={() => null}>
         <meshStandardMaterial color={ACCENT} roughness={0.6} />
       </mesh>
-      {showTies && scene.markings.length > 0 && (
+      {/* Both stay mounted and toggle `visible`: unmounting on the switch left
+          a remounted mesh with no instance matrices, because the effect that
+          writes them is keyed on the scene, not on the mount. */}
+      {scene.markings.length > 0 && (
         <instancedMesh
           key={`markings-${scene.markings.length}`}
           ref={markingRef}
           args={[wedge, undefined, scene.markings.length]}
           raycast={() => null}
+          visible={showTies}
         >
           <meshBasicMaterial />
         </instancedMesh>
       )}
-      {showTies && scene.ties.length > 0 && (
-        <lineSegments geometry={tieGeometry} raycast={() => null}>
+      {scene.ties.length > 0 && (
+        <lineSegments geometry={tieGeometry} raycast={() => null} visible={showTies}>
           <lineBasicMaterial vertexColors />
         </lineSegments>
       )}
