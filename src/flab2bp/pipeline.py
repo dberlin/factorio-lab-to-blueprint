@@ -796,6 +796,7 @@ def build(
     # Filtered rather than refused outright: the unproliferated candidate is
     # legal and present, so dropping the illegal ones keeps the build while
     # honouring the boundary. If NONE survive we refuse, naming each.
+    flow_external = selection.external_items(data) if selection is not None else None
     if selection is not None:
         exempt = (
             frozenset(
@@ -816,7 +817,9 @@ def build(
         legal: list[tuple[BuildSpec, tuple[str, ...]]] = []
         illegal: list[tuple[BuildSpec, tuple[str, ...]]] = []
         for spec in spec_set.candidates:
-            stray = unsupplied_inputs(selection, data, spec.external_inputs, exempt=exempt)
+            stray = unsupplied_inputs(
+                selection, data, spec.external_inputs, exempt=exempt, external=flow_external
+            )
             (legal if not stray else illegal).append((spec, stray))
         if not legal:
             raise FlowError(
@@ -1377,6 +1380,7 @@ def build(
                 if selection.uses_proliferator
                 else frozenset()
             ),
+            external=flow_external,
         )
         if stray:
             raise FlowError(
@@ -1392,6 +1396,7 @@ def build(
             external_inputs=chosen_spec.external_inputs,
             outputs=chosen_spec.outputs,
             display_rate=request.display_rate,
+            external=flow_external,
         )
 
     return Build(
