@@ -19,6 +19,11 @@ export interface ParamRow {
    * an inference for a recorded setting.
    */
   inferred?: boolean;
+  /**
+   * The inference did not settle on one answer: the value lists every
+   * candidate. Only ever set alongside `inferred`.
+   */
+  ambiguous?: boolean;
 }
 
 const at = (p: readonly number[], i: number): number | undefined => p[i];
@@ -425,7 +430,17 @@ export function describeInferred(
     // for both, so it reports the inference regardless. Where a multi-output
     // recipe feeds the run, the inference can be an honest superset of the
     // player's tag rather than a disagreement with it.
-    rows.push({ label: 'Carries', value: names(run.carried, catalog), inferred: true });
+    // More than one candidate left means the two ends of the lane did not
+    // narrow it to one item (see inferCarried): the value is a shortlist, and
+    // the scene draws only its first entry plus a "+N" badge. Saying so here
+    // is what stops the panel reading as though the blueprint recorded it.
+    const row: ParamRow = {
+      label: 'Carries',
+      value: names(run.carried, catalog),
+      inferred: true,
+    };
+    if (run.carried.length > 1) row.ambiguous = true;
+    rows.push(row);
     return rows;
   }
 

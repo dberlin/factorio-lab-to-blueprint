@@ -25,7 +25,12 @@ const blueprint = {
 // A mutable stand-in for the provider, so different tests in this file can
 // exercise Toolbar against different `snapshotLabel`/`stale` combinations
 // without re-mocking the module per test.
-const view = { beltLabels: true, sorterTies: true, machines: 'ghosted' as const };
+const view = {
+  beltLabels: true,
+  sorterTies: true,
+  endpointIcons: true,
+  machines: 'ghosted' as const,
+};
 
 let mockState: Partial<BlueprintState> = {
   blueprint,
@@ -119,10 +124,18 @@ test('the layer switches report what the viewer should stop drawing', () => {
   fireEvent.click(ties);
   expect(calls[1]).toEqual({ ...view, sorterTies: false });
 
+  // The inferred endpoint icons are a third quietable layer, and the one most
+  // worth quieting: a generated blueprint infers an item at nearly every lane
+  // end, and sometimes the shapes alone are what you want to look at.
+  const endpoints = screen.getByLabelText('endpoint icons') as HTMLInputElement;
+  expect(endpoints.checked).toBe(true);
+  fireEvent.click(endpoints);
+  expect(calls[2]).toEqual({ ...view, endpointIcons: false });
+
   // Machines ghost by default, because at ground level almost everything worth
   // reading is underneath them.
   const machines = screen.getByLabelText('machines') as HTMLSelectElement;
   expect(machines.value).toBe('ghosted');
   fireEvent.change(machines, { target: { value: 'solid' } });
-  expect(calls[2]).toEqual({ ...view, machines: 'solid' });
+  expect(calls[3]).toEqual({ ...view, machines: 'solid' });
 });

@@ -1,4 +1,5 @@
 import { expect, test } from '@rstest/core';
+import { RIBBON_WIDTH } from '../../src/model/beltRibbons';
 import { buildCatalog } from '../../src/model/catalog';
 import type { SceneModel } from '../../src/model/layout';
 import { buildOverlays } from '../../src/model/overlays';
@@ -413,41 +414,6 @@ test('a cyclic run has no free end and so no endpoint icons', () => {
   expect(buildOverlays(model, catalog, atlas).icons.length).toBe(0);
 });
 
-test('several carried items fan out so they do not overlap', () => {
-  const model = {
-    instances: [
-      {
-        index: 0,
-        itemId: 2001,
-        modelIndex: 35,
-        position: [0, 0, 0],
-        size: [1, 1, 1],
-        yawRad: 0,
-        color: 1,
-        recipeId: 0,
-        filterId: 0,
-        parameters: [],
-      },
-    ],
-    beltRuns: [
-      {
-        belts: [0],
-        freeInput: true,
-        freeOutput: false,
-        cyclic: false,
-        carried: [1101, 1104],
-        hasExplicitTag: false,
-      },
-    ],
-    beltHeadings: new Map(),
-    unknownItemIds: [],
-  } as unknown as SceneModel;
-
-  const out = buildOverlays(model, catalog, atlas);
-  expect(out.icons.length).toBe(2);
-  expect(out.icons[0]!.position[0]).not.toBe(out.icons[1]!.position[0]);
-});
-
 test('a single-belt run that is free at both ends draws its icon once, not twice', () => {
   // belts[0] === tail for a single-belt run, so when freeInput and freeOutput
   // are both true, a naive array of "ends" holds the same belt index twice
@@ -483,4 +449,125 @@ test('a single-belt run that is free at both ends draws its icon once, not twice
 
   const out = buildOverlays(model, catalog, atlas);
   expect(out.icons.length).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// One icon per free end, a toggle for the whole layer, and a size cap.
+// ---------------------------------------------------------------------------
+
+/** A one-belt run at the origin, free at the head only. */
+const endpointModel = (carried: number[]): SceneModel =>
+  ({
+    instances: [
+      {
+        index: 0,
+        itemId: 2001,
+        modelIndex: 35,
+        position: [0, 0, 0],
+        size: [1, 1, 1],
+        yawRad: 0,
+        color: 1,
+        recipeId: 0,
+        filterId: 0,
+        parameters: [],
+      },
+    ],
+    beltRuns: [
+      {
+        belts: [0],
+        freeInput: true,
+        freeOutput: false,
+        cyclic: false,
+        carried,
+        carriedFrom: carried.length === 1 ? 'intersection' : 'union',
+        hasExplicitTag: false,
+      },
+    ],
+    beltHeadings: new Map(),
+    unknownItemIds: [],
+  }) as unknown as SceneModel;
+
+test('an ambiguous end draws one icon and a +N badge, not a fan', () => {
+  const out = buildOverlays(endpointModel([1101, 1104]), catalog, atlas);
+  expect(out.icons.length).toBe(1);
+  expect(out.icons[0]!.iconName).toBe('iron-plate');
+  // Centred on the belt: a fan used to offset each candidate sideways.
+  expect(out.icons[0]!.position[0]).toBe(0);
+  // "+1": one further candidate beyond the one drawn.
+  expect(out.counts.length).toBe(1);
+  expect(out.counts[0]!.value).toBe(1);
+  expect(out.counts[0]!.plus).toBe(true);
+});
+
+test('a determined single-item end draws an icon and no badge', () => {
+  const out = buildOverlays(endpointModel([1101]), catalog, atlas);
+  expect(out.icons.length).toBe(1);
+  expect(out.counts.length).toBe(0);
+});
+
+test('the endpoint layer can be switched off without touching the rest', () => {
+  const off = buildOverlays(endpointModel([1101, 1104]), catalog, atlas, { endpointIcons: false });
+  expect(off.icons.length).toBe(0);
+  expect(off.counts.length).toBe(0);
+
+  // A tagged belt is the player's own label, not an inference: the toggle
+  // leaves it alone.
+  const tagged = {
+    instances: [
+      {
+        index: 0,
+        itemId: 2001,
+        modelIndex: 35,
+        position: [0, 0, 0],
+        size: [1, 1, 1],
+        yawRad: 0,
+        color: 1,
+        recipeId: 0,
+        filterId: 0,
+        parameters: [1101, 360],
+      },
+    ],
+    beltRuns: [],
+    beltHeadings: new Map(),
+    unknownItemIds: [],
+  } as unknown as SceneModel;
+  const stillThere = buildOverlays(tagged, catalog, atlas, { endpointIcons: false });
+  expect(stillThere.icons.length).toBe(1);
+  expect(stillThere.counts.length).toBe(1);
+});
+
+test('belt icons are drawn near ribbon width; building icons stay large', () => {
+  // The cap is what stops a two-tile item icon from burying the lane it
+  // describes. Ribbon-relative rather than absolute, so a wider ribbon takes
+  // its icons with it.
+  const cap = RIBBON_WIDTH * 1.5;
+
+  const endpoint = buildOverlays(endpointModel([1101]), catalog, atlas);
+  expect(endpoint.icons[0]!.scale).toBeLessThanOrEqual(cap);
+
+  const tagged = {
+    instances: [
+      {
+        index: 0,
+        itemId: 2001,
+        modelIndex: 35,
+        position: [0, 0, 0],
+        size: [1, 1, 1],
+        yawRad: 0,
+        color: 1,
+        recipeId: 0,
+        filterId: 0,
+        parameters: [1101, 0],
+      },
+    ],
+    beltRuns: [],
+    beltHeadings: new Map(),
+    unknownItemIds: [],
+  } as unknown as SceneModel;
+  expect(buildOverlays(tagged, catalog, atlas).icons[0]!.scale).toBeLessThanOrEqual(cap);
+
+  // A recipe icon sits on top of an assembler, not on a belt, and the cap
+  // would make it unreadable.
+  const producer = buildOverlays(model([{ recipeId: 61 }]), catalog, atlas);
+  expect(producer.icons[0]!.scale).toBeGreaterThan(cap);
 });

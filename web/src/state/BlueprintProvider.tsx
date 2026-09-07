@@ -10,12 +10,14 @@ import { buildSceneModel, type SceneModel } from '../model/layout';
     footprint is machine. Solid is one click away for anyone who wants it. */
 export type MachineLook = 'solid' | 'ghosted' | 'hidden';
 
-/** Layers the viewer can quiet on a busy blueprint. Both default on. */
+/** Layers the viewer can quiet on a busy blueprint. All default on. */
 export interface ViewOptions {
   /** The run number drawn on each strip. */
   beltLabels: boolean;
   /** The sorter direction markings and the tie lines to off-port ends. */
   sorterTies: boolean;
+  /** The inferred item icon at each free belt-run end. */
+  endpointIcons: boolean;
   machines: MachineLook;
 }
 
@@ -77,6 +79,7 @@ export function BlueprintProvider({
   const [view, setView] = useState<ViewOptions>({
     beltLabels: true,
     sorterTies: true,
+    endpointIcons: true,
     machines: 'ghosted',
   });
 

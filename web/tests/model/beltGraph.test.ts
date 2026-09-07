@@ -229,6 +229,18 @@ const testCatalog = buildCatalog({
       resultCounts: [1],
       timeSpend: 60,
     },
+    // Takes 1104 only: a consumer that shares no item with recipe 1's output,
+    // which is how the "the two sides contradict each other" case is built.
+    {
+      id: 54,
+      name: 'Copper Only',
+      iconName: '',
+      items: [1104],
+      itemCounts: [1],
+      results: [1302],
+      resultCounts: [1],
+      timeSpend: 60,
+    },
   ],
 });
 
@@ -436,4 +448,94 @@ test('a battlefield analysis base with a storage type contributes its filters', 
   inferCarried(parsed, runs, stationCatalog);
   // 200000 and the 5101 loadout live past word 70 and must stay out.
   expect(runs[0]!.carried).toEqual([1143]);
+});
+
+// ---------------------------------------------------------------------------
+// Sorter-fed heads, and the two-sided inference that pins a single item.
+// ---------------------------------------------------------------------------
+
+test('a head a sorter drops onto is not a free input', () => {
+  // producer 5 -> sorter 1 -> belt 0 -> belt 2. Nothing else feeds belt 0, so
+  // the belt-to-belt inbound count is 0, but the run is plainly fed.
+  const parsed = bp([belt(0, 2), belt(2, -1), sorter(1, 5, 0), producer(5, 1)]);
+  const run = buildBeltRuns(parsed).find((r) => r.belts[0] === 0);
+  expect(run!.freeInput).toBe(false);
+});
+
+test('a head only DRAINED by a sorter is still a free input', () => {
+  // The sorter takes off belt 0 and delivers into producer 5; nothing puts
+  // anything on the head, so it is genuinely open.
+  const parsed = bp([belt(0, -1), sorter(1, 0, 5), producer(5, 1)]);
+  expect(buildBeltRuns(parsed)[0]!.freeInput).toBe(true);
+});
+
+test('a head nothing touches at all is a free input', () => {
+  const parsed = bp([belt(0, 1), belt(1, -1)]);
+  expect(buildBeltRuns(parsed)[0]!.freeInput).toBe(true);
+});
+
+test('a run fed and drained carries the intersection: one item, not five', () => {
+  // producer 5 (recipe 1) puts its only result 1101 on the belt; the belt
+  // feeds producer 6, whose recipe 53 takes 1101 AND 1104. Only 1101 can be
+  // on this lane -- the union [1101, 1104] would invent the other.
+  const parsed = bp([
+    belt(0, -1),
+    sorter(1, 5, 0),
+    producer(5, 1),
+    sorter(2, 0, 6),
+    producer(6, 53),
+  ]);
+  const runs = buildBeltRuns(parsed);
+  inferCarried(parsed, runs, testCatalog);
+  expect(runs[0]!.carried).toEqual([1101]);
+  expect(runs[0]!.carriedFrom).toBe('intersection');
+});
+
+test('one-sided inference falls back to the union and says so', () => {
+  const parsed = bp([belt(0, -1), sorter(1, 0, 5), producer(5, 53)]);
+  const runs = buildBeltRuns(parsed);
+  inferCarried(parsed, runs, testCatalog);
+  expect(runs[0]!.carried).toEqual([1101, 1104]);
+  expect(runs[0]!.carriedFrom).toBe('union');
+});
+
+test('two sides that share nothing fall back to the union rather than to nothing', () => {
+  // Fed with 1101, drained into a recipe that wants only 1104: the graph
+  // contradicts itself (a mis-set recipe, or a lane we cannot model). Showing
+  // both candidates is honest; showing none would hide the lane entirely.
+  const parsed = bp([
+    belt(0, -1),
+    sorter(1, 5, 0),
+    producer(5, 1),
+    sorter(2, 0, 6),
+    producer(6, 54),
+  ]);
+  const runs = buildBeltRuns(parsed);
+  inferCarried(parsed, runs, testCatalog);
+  expect(runs[0]!.carried).toEqual([1101, 1104]);
+  expect(runs[0]!.carriedFrom).toBe('union');
+});
+
+test('a run no sorter touches records that nothing was inferred', () => {
+  const parsed = bp([belt(0, -1)]);
+  const runs = buildBeltRuns(parsed);
+  inferCarried(parsed, runs, testCatalog);
+  expect(runs[0]!.carried).toEqual([]);
+  expect(runs[0]!.carriedFrom).toBe('none');
+});
+
+test('an explicit sorter filter still wins on both sides', () => {
+  // Feeder filtered to 1104, drain into a recipe that takes 1101 and 1104:
+  // the filter is authoritative, so the intersection is the filtered item.
+  const parsed = bp([
+    belt(0, -1),
+    sorter(1, 5, 0, 1104),
+    producer(5, 1),
+    sorter(2, 0, 6),
+    producer(6, 53),
+  ]);
+  const runs = buildBeltRuns(parsed);
+  inferCarried(parsed, runs, testCatalog);
+  expect(runs[0]!.carried).toEqual([1104]);
+  expect(runs[0]!.carriedFrom).toBe('intersection');
 });

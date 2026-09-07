@@ -1,5 +1,6 @@
 import { expect, test } from '@rstest/core';
 import { layoutDigits } from '../../src/scene/CountLabels';
+import { PLUS_GLYPH } from '../../src/scene/digitAtlas';
 
 test('lays out one quad per digit, centred on the placement', () => {
   const quads = layoutDigits([{ position: [10, 2, 5], value: 360 }]);
@@ -35,4 +36,27 @@ test('a negative value is drawn via Math.abs, as defence in depth', () => {
   // rather than assumed.
   const quads = layoutDigits([{ position: [0, 0, 0], value: -5 }]);
   expect(quads.map((q) => q.digit)).toEqual([5]);
+});
+
+test('a plus-flagged placement gets a leading "+" glyph', () => {
+  const quads = layoutDigits([{ position: [0, 0, 0], value: 2, plus: true }]);
+  expect(quads.length).toBe(2);
+  expect(quads[0]!.digit).toBe(PLUS_GLYPH);
+  expect(quads[1]!.digit).toBe(2);
+  // The "+" leads, so it sits left of the number it qualifies.
+  expect(quads[0]!.position[0]).toBeLessThan(quads[1]!.position[0]);
+});
+
+test('a placement can ask for a smaller glyph than the default', () => {
+  const [big] = layoutDigits([{ position: [0, 0, 0], value: 7 }]);
+  const [small] = layoutDigits([{ position: [0, 0, 0], value: 7, scale: 0.3 }]);
+  expect(small!.scale).toBe(0.3);
+  expect(small!.scale).toBeLessThan(big!.scale);
+});
+
+test('a smaller glyph is spaced proportionally, not at the full-size pitch', () => {
+  const wide = layoutDigits([{ position: [0, 0, 0], value: 42 }]);
+  const tight = layoutDigits([{ position: [0, 0, 0], value: 42, scale: 0.3 }]);
+  const gap = (q: ReturnType<typeof layoutDigits>) => q[1]!.position[0] - q[0]!.position[0];
+  expect(gap(tight)).toBeLessThan(gap(wide));
 });

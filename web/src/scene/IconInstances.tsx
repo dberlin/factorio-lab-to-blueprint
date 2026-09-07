@@ -44,7 +44,9 @@ export function IconInstances({
     placements.forEach((p, i) => {
       dummy.position.set(p.position[0], p.position[1], p.position[2]);
       dummy.rotation.set(-Math.PI / 2, 0, 0); // lie flat, readable from the iso camera
-      dummy.scale.setScalar(1.6);
+      // Per placement, not one size for the layer: an icon on a machine can
+      // be metres across, one on a belt must stay near the ribbon's width.
+      dummy.scale.setScalar(p.scale);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
     });

@@ -44,6 +44,15 @@ const catalog = buildCatalog({
       canBuild: false,
       color: 0xb0a08c,
     },
+    {
+      id: 1104,
+      name: 'Copper Ingot',
+      iconName: 'copper-ingot',
+      gridIndex: 3,
+      modelIndex: 0,
+      canBuild: false,
+      color: 0xc98a5e,
+    },
   ],
   models: {
     '50': { prefab: 'station-2', size: [1, 1, 1], center: [0, 0, 0], buildingType: 'Station' },
@@ -149,6 +158,7 @@ test('an inferred row is marked as inferred in the panel', () => {
       freeOutput: true,
       cyclic: false,
       carried: [1101],
+      carriedFrom: 'intersection',
       hasExplicitTag: false,
     },
   ];
@@ -164,4 +174,32 @@ test('an inferred row is marked as inferred in the panel', () => {
   const dd = screen.getByText('Iron Ingot').closest('dd');
   expect(dd?.className).toContain('inferred');
   expect(dd?.textContent).toContain('(inferred)');
+});
+
+test('a shortlist the graph could not narrow says so in the panel', () => {
+  // Two candidates: the scene draws the first with a "+1" badge, and the
+  // panel is where the rest of the shortlist lives. Marking it merely
+  // "(inferred)" would read as a settled answer.
+  const runs: BeltRun[] = [
+    {
+      belts: [0],
+      freeInput: true,
+      freeOutput: true,
+      cyclic: false,
+      carried: [1101, 1104],
+      carriedFrom: 'union',
+      hasExplicitTag: false,
+    },
+  ];
+
+  current = {
+    blueprint: { buildings: [belt(0)] } as unknown as Blueprint,
+    catalog,
+    selectedIndex: 0,
+    sceneModel: { beltRuns: runs } as unknown as SceneModel,
+  };
+
+  render(<InfoPanel />);
+  const dd = screen.getByText('Iron Ingot, Copper Ingot').closest('dd');
+  expect(dd?.textContent).toContain('(inferred, ambiguous)');
 });

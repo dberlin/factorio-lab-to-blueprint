@@ -35,6 +35,7 @@ function run(belts: number[], extra: Partial<BeltRun> = {}): BeltRun {
     freeOutput: true,
     cyclic: false,
     carried: [],
+    carriedFrom: 'none',
     hasExplicitTag: false,
     ...extra,
   };
