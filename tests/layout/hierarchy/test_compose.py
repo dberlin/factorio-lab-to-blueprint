@@ -990,6 +990,125 @@ def test_a_topped_up_partial_leaves_both_corridor_sets_on_the_canvas(
     )
 
 
+def test_a_top_up_that_expires_mid_enumeration_leaves_the_canvas_as_the_partial(
+    two_solved_blocks: TwoSolvedBlocks,
+) -> None:
+    """REAL GEOMETRY: the deadline degradation the ROUTER sees.
+
+    The object-level version of this is pinned above with a stubbed oracle, but
+    the brief's actual worry is the canvas: losing the partial to a top-up
+    timeout would be strictly worse than never attempting the top-up.  The
+    top-up's entry snapshot IS the partial -- the first call staked it -- so
+    `_reserve_port_access`'s restore puts back exactly that.  The `cancelled`
+    callback below passes the entry guard and fires inside the enumeration, so
+    the RESTORE path runs rather than the cheap pre-snapshot refusal.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    packing = compose._pack_at([left, right], flows, spec, gap=8, ramped=ramped, margin=8)
+    canvas = packing.canvas
+    bounds = canvas.limit
+    demands = list(compose._port_access_inventory(packing.nets).demands)
+    assert len(demands) >= 2
+
+    first = compose._reserve_port_access(canvas, demands[:1], boundary=None, bounds=bounds)
+    assert first.complete
+    staked_corridors = {key: set(corridors) for key, corridors in canvas.port_corridors.items()}
+    staked_reserved = dict(canvas.reserved)
+    assert staked_corridors
+
+    checks = 0
+
+    def spent_after_the_entry_guard() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 1
+
+    with pytest.raises(compose._PreparationDeadline):
+        compose._reserve_port_access(
+            canvas,
+            demands[1:],
+            boundary=None,
+            bounds=bounds,
+            cancelled=spent_after_the_entry_guard,
+            held=dict(first.assigned),
+        )
+
+    assert checks > 1, "the entry guard must have passed, or the restore path never ran"
+    assert {
+        key: set(corridors) for key, corridors in canvas.port_corridors.items()
+    } == staked_corridors, "a timed-out top-up took the partial's corridors off the canvas"
+    assert canvas.reserved == staked_reserved
+
+
+def test_the_topped_up_evidence_takes_each_field_from_the_call_that_knows_it(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both calls' evidence, merged FIELD-WISE rather than one shadowing the other.
+
+    `_reserve_port_access` raises exactly one entry per demand in its own
+    `missing`, so the top-up's demand set is a strict subset of the goal-driven
+    call's: any dict union resolves to one call's entry for every key and drops
+    the other's entirely.  The counts must come from the top-up, which counted
+    on the ground as it now stands; the trunk probe's `frontier`/`exhaustive`
+    must come from the goal-driven call, which is the only one that probes.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    wall = ((7, 7, 0), (7, 8, 0))
+
+    def fake_reserve(canvas, demands, **kwargs):
+        demand_list = list(demands)
+        if kwargs.get("goals"):
+            reservation = _reservation(demand_list, 1, converged=False)
+            return replace(
+                reservation,
+                evidence=tuple(
+                    PortAccessEvidence(
+                        demand=demand,
+                        held=0,
+                        wanted=1,
+                        local_options=12,
+                        reachable_options=9,
+                        exhaustive=True,
+                        frontier=wall,
+                    )
+                    for demand in reservation.missing
+                ),
+            )
+        # The top-up serves nothing, so every demand keeps an evidence entry --
+        # with the poorer, unprobed shape the local-only oracle really produces.
+        reservation = _reservation(demand_list, 0, converged=True)
+        return replace(
+            reservation,
+            evidence=tuple(
+                PortAccessEvidence(
+                    demand=demand,
+                    held=0,
+                    wanted=1,
+                    local_options=3,
+                    reachable_options=3,
+                    exhaustive=False,
+                    frontier=(),
+                )
+                for demand in reservation.missing
+            ),
+        )
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    merged = {evidence.demand: evidence for evidence in packed.reservation.evidence}
+    assert set(merged) == set(packed.reservation.missing)
+    for evidence in merged.values():
+        assert evidence.local_options == 3, (
+            "the printed option count must describe the ground with the partial staked"
+        )
+        assert evidence.reachable_options == 3
+        assert evidence.exhaustive is True, "the trunk probe's verdict must survive the top-up"
+        assert evidence.frontier == wall, "the trunk probe's wall must survive the top-up"
+
+
 def test_compose_reports_the_rung_and_the_reservation_it_committed(
     two_solved_blocks: TwoSolvedBlocks,
 ):

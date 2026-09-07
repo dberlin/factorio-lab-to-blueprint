@@ -12041,7 +12041,16 @@ def _reserve_port_access(
     written back on every RETURNING path -- including the one where the joint
     matcher's own survey cleared the canvas on its way to a wholesale give-up.
     Every RAISING path restores the entry snapshot, which in a top-up already
-    holds those same corridors.  See `hierarchy.compose._top_up_partial`.
+    holds those same corridors.  See `hierarchy.compose._top_up_partial`, which
+    is where the AUTHORITATIVE `assigned` union lives: it recomputes the union
+    from its own partial rather than reading this one, so a change here cannot
+    silently change what a rung commits.
+
+    PASSING ``held`` CHANGES ``assigned``'S ORDER: held pairs come first and the
+    newly assigned follow in ``demands`` order, where with no ``held`` the tuple
+    has always followed ``demands`` order alone.  Harmless today because the one
+    caller that passes ``held`` re-derives the order it wants; a future caller
+    that reads position out of this tuple must not assume otherwise.
     """
 
     if (cancelled is not None and cancelled()) or _expired(deadline):

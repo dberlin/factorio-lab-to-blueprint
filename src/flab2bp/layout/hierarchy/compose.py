@@ -765,6 +765,48 @@ def _pack_at(
     return _Packing(buildings, blocks, canvas, nets)
 
 
+def _merge_access_evidence(
+    goal_driven: Sequence[PortAccessEvidence],
+    topped: Sequence[PortAccessEvidence],
+) -> tuple[PortAccessEvidence, ...]:
+    """One entry per demand, each FIELD taken from the call that can answer it.
+
+    `_reserve_port_access` emits exactly one `PortAccessEvidence` per demand in
+    its own `missing`, so the top-up's demand set is a strict SUBSET of the
+    goal-driven call's -- and a plain dict union would therefore resolve to ONE
+    call's entry for every key and drop the other's wholesale, whichever way it
+    is ordered.  The two calls are authoritative about different fields:
+
+    * ``local_options`` / ``reachable_options`` are the TOP-UP's.  It enumerated
+      on the ground as it now stands, with the partial's corridors staked; the
+      goal-driven call counted on a canvas cleared of every corridor, which is a
+      canvas that no longer exists.  This is also the only field that reaches a
+      reader: `_corridor_evidence` prints `options=<local_options>`.
+    * ``frontier`` / ``exhaustive`` are the GOAL-DRIVEN call's.  They are the
+      trunk probe's findings and the local-only top-up cannot produce them: it
+      runs unprobed, so it reports an empty wall and ``exhaustive=False``, which
+      would read as "nobody looked" rather than "we looked and it is sealed".
+
+    ``held``/``wanted`` are the same constants in both.  An entry only the
+    goal-driven call raised is kept verbatim: that demand is one the top-up
+    SERVED, so there is no fresher count to take and nothing to merge.
+    """
+    fresh = {evidence.demand: evidence for evidence in topped}
+    merged = [
+        replace(
+            entry,
+            local_options=fresh[entry.demand].local_options,
+            reachable_options=fresh[entry.demand].reachable_options,
+        )
+        if entry.demand in fresh
+        else entry
+        for entry in goal_driven
+    ]
+    raised = {entry.demand for entry in goal_driven}
+    merged.extend(entry for entry in topped if entry.demand not in raised)
+    return tuple(merged)
+
+
 def _top_up_partial(
     canvas: _Canvas,
     committed: PortAccessReservation,
@@ -803,6 +845,33 @@ def _top_up_partial(
     The canvas union is `_reserve_port_access`'s own `held` contract; see its
     docstring for why a second call without it would wipe the first's corridors
     off the canvas the router reads.
+
+    THE `assigned` UNION BELOW IS THE AUTHORITATIVE ONE.  `_reserve_port_access`
+    computes its own -- it has to, because the canvas union and the `missing`
+    it derives both depend on it -- but this one is recomputed from
+    `committed.assigned` rather than read off `topped`, so a future change to
+    `held`'s ordering or merge semantics in freeform cannot silently change what
+    the rung commits.  The two are belt and braces, and THIS is the belt.
+
+    A TOPPED-UP RUNG COMPLETES, AND THEREFORE ENDS THE GAP LADDER, at
+    `pack_with_access`'s `if reservation.complete: return candidate`.  That is
+    inherent in the property this function exists for -- an empty `missing` --
+    and it is the pre-Task-1 shape restored: the wholesale local-only fallback
+    also produced a complete reservation and also short-circuited, which is how
+    v3's titanium-glass committed at gap 2 and wired all 26 cut lanes.  The
+    consequence for a reader of the stats line is that `reservation_degraded`
+    and `reservation_partial` are ladder totals over FEWER rungs than before, so
+    a fall from 5 to 1 is the ladder stopping sooner and NOT the matcher
+    converging more often.
+
+    THE TOP-UP IS THE LOCAL-ONLY ORACLE ONLY WHILE `boundary` IS None.
+    `boundary` is forwarded exactly as the wholesale `else` branch forwards it,
+    which is the consistency worth having, and `pack_with_access` computes it as
+    None today because no composed demand answers `reaches_boundary`.  The day
+    the v2 gate's lever 1 gives the composer real boundary ports, `probed`
+    becomes True here too: this call would build a grid and run an A* per
+    option, and it would stop being the cheap unprobed pass the wall budget
+    assumes.  Re-measure the rung cost on that day.
     """
     if not committed.missing:
         return committed
@@ -825,17 +894,7 @@ def _top_up_partial(
             *((demand, corridor) for demand, corridor in topped.assigned if demand not in staked),
         ),
         missing=topped.missing,
-        # BOTH CALLS' EVIDENCE, the goal-driven entry winning a tie: it carries
-        # the trunk probe's `frontier` and its `exhaustive` verdict, and the
-        # local-only call -- unprobed by construction -- would only overwrite
-        # those with an empty wall and `exhaustive=False`.  Read by demand
-        # (`compose`'s `evidence_by_demand`), never as "the missing set", so an
-        # entry surviving for a demand the top-up went on to serve is inert.
-        evidence=tuple(
-            {
-                evidence.demand: evidence for evidence in (*topped.evidence, *committed.evidence)
-            }.values()
-        ),
+        evidence=_merge_access_evidence(committed.evidence, topped.evidence),
         converged=False,
     )
 
@@ -1068,6 +1127,13 @@ def pack_with_access(
             degraded=degraded,
             partial=partial_rungs,
         )
+        # A TOPPED-UP PARTIAL REACHES HERE COMPLETE, so a rung that committed
+        # one ENDS THE LADDER.  That is the pre-Task-1 shape: the wholesale
+        # local-only fallback was complete too and short-circuited the same way.
+        # It does mean `degraded`/`partial_rungs` are totals over fewer rungs
+        # than they were between Task 1 and Task 4b -- a fall in
+        # `reservation_partial` is the ladder stopping sooner, not the matcher
+        # converging more often.  See `_top_up_partial`.
         if reservation.complete:
             return candidate
         # STRICTLY fewer, so the NARROWEST of the equally-bad rungs wins: a
