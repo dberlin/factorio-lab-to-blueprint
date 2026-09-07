@@ -34,6 +34,6 @@ def test_buildings_public_methods_return_domain_types() -> None:
     """No public method may be annotated with a backend library's type."""
     source = OWNER.read_text()
     for backend in BACKENDS:
-        assert f"{backend}." not in source or backend == "networkx", (
+        assert f"{backend}." not in source, (
             f"{backend} type names must not appear in buildings.py's public surface"
         )

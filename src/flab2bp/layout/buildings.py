@@ -27,7 +27,7 @@ and ``tests/test_backend_containment.py`` fails if that boundary is breached.
 
 from __future__ import annotations
 
-from collections.abc import Container, Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from enum import Enum
 from fractions import Fraction
 
@@ -58,8 +58,8 @@ def kind_for(item_id: int) -> Kind:
     return Kind.MACHINE
 
 
-#: Every attribute the survey found a call site filtering on, and the accessor
-#: that reads it.  Adding a key here adds an index; nothing else changes.
+#: Shared empty result, so every ``dict.get(key, _EMPTY)`` below returns the
+#: same immutable tuple rather than allocating a fresh empty one per miss.
 _EMPTY: tuple[int, ...] = ()
 
 
@@ -105,6 +105,12 @@ class Buildings:
                 by_output_obj.setdefault(b.output_obj, []).append(i)
             if b.input_obj is not None:
                 by_input_obj.setdefault(b.input_obj, []).append(i)
+            # Hand-rolled rather than ``b.tiles()``: that returns ``(x, y, z)``
+            # triples and allocates a fresh list per call, while this index
+            # keys on ``(x, y)`` alone and runs once per record for the life
+            # of this ``Buildings`` instance -- routing every record through
+            # ``tiles()`` here would be strictly more allocation for the same
+            # tile set.
             for dx in range(b.width):
                 for dy in range(b.height):
                     by_tile.setdefault((b.x + dx, b.y + dy), []).append(i)
@@ -227,18 +233,109 @@ class Buildings:
             i for i in self._by_input_obj.get(index, _EMPTY) if self._kinds[i] is Kind.SORTER
         )
 
-    def sorters_between(self, sources: Container[int], sinks: Container[int]) -> tuple[int, ...]:
+    def sorters_between(self, sources: Collection[int], sinks: Collection[int]) -> tuple[int, ...]:
         """Sorters picking up in ``sources`` and putting down in ``sinks``.
 
-        Drives off the sorter index rather than off the building list, which is
-        the whole point: the old shape walked every building once per group
-        member, and the group is always the smaller set.
+        Drives off whichever endpoint set is smaller and looks up ITS
+        incident sorters via the link indexes, intersecting against the
+        other set -- rather than scanning every sorter in the building set
+        and testing membership in both.  ``sources``/``sinks`` need
+        ``len()``, hence ``Collection`` rather than the weaker ``Container``.
+        The result is always ascending positional indices, regardless of
+        which branch ran.
         """
-        return tuple(
-            i
-            for i in self._by_kind[Kind.SORTER]
-            if self._records[i].input_obj in sources and self._records[i].output_obj in sinks
-        )
+        if len(sources) <= len(sinks):
+            found = {
+                i
+                for s in sources
+                for i in self.sorters_out_of(s)
+                if self._records[i].output_obj in sinks
+            }
+        else:
+            found = {
+                i
+                for t in sinks
+                for i in self.sorters_into(t)
+                if self._records[i].input_obj in sources
+            }
+        return tuple(sorted(found))
+
+    def predecessor_of(self, index: int) -> int | None:
+        """The unique building whose ``output_obj`` names ``index``.
+
+        ``None`` covers both "nothing points here" and "more than one thing
+        does" -- ambiguous fan-in has no single predecessor to report.
+        Distinct from :meth:`by_output_obj`, which returns every predecessor.
+        """
+        preds = self._by_output_obj.get(index, _EMPTY)
+        if len(preds) == 1:
+            return preds[0]
+        return None
+
+    def splitter_successors(self, index: int) -> tuple[int, ...]:
+        """Every building fed by the splitter (or piler) at ``index``.
+
+        A splitter/piler names neither neighbour itself: the belts around one
+        name IT as their ``input_obj``/``output_obj`` instead (see
+        :class:`~flab2bp.layout.base.PlacedBuilding`). So on this frozen
+        ``Buildings`` a splitter's successors are literally
+        :meth:`by_input_obj` of its own index -- the sequence never changes
+        after construction, so there is nothing to derive beyond that lookup.
+
+        ``MutableBuildings`` (Task 2) must maintain this incrementally rather
+        than memoise it: ``_Canvas.add()`` grows the building list inside the
+        same commit pass that queries a splitter's successors, so a memo
+        keyed on the sequence would answer from before the append.
+        """
+        return self.by_input_obj(index)
+
+    def belt_run(self, index: int, *, forward: bool) -> frozenset[int]:
+        """Every belt of the run through ``index``, in one direction.
+
+        Belt chains are forward-linked, so a tail's run is everything that
+        flows INTO it (``forward=False``) and a head's run is everything it
+        flows into (``forward=True``). Splitters and pilers (``Kind.OTHER``)
+        are crossed rather than stopped at: the belts around one name it as
+        their ``output_obj``/``input_obj`` and the cargo passes through, so
+        ``index`` itself need not be a belt to anchor a run -- only the
+        neighbours actually walked must be. Cycle-safe via a visited set.
+        """
+
+        def forward_of(i: int) -> tuple[int, ...]:
+            link = self._records[i].output_obj
+            if link is None or self.by_index(link) is None:
+                return _EMPTY
+            if self._kinds[link] is Kind.BELT:
+                return (link,)
+            if self._kinds[link] is Kind.OTHER:
+                return tuple(
+                    j for j in self._by_input_obj.get(link, _EMPTY) if self._kinds[j] is Kind.BELT
+                )
+            return _EMPTY
+
+        def backward_of(i: int) -> tuple[int, ...]:
+            preds = self.belts_into(i)
+            link = self._records[i].input_obj
+            if (
+                link is not None
+                and self.by_index(link) is not None
+                and self._kinds[link] is Kind.OTHER
+            ):
+                preds = preds + self.belts_into(link)
+            return preds
+
+        step = forward_of if forward else backward_of
+        seen = {index}
+        stack = [index]
+        while stack:
+            node = stack.pop()
+            if self._kinds[node] is not Kind.BELT:
+                continue
+            for nxt in step(node):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        return frozenset(seen)
 
     # --- spatial -------------------------------------------------------------
 

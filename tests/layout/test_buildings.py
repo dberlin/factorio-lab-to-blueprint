@@ -54,6 +54,17 @@ def _fixture() -> tuple[PlacedBuilding, ...]:
     return tuple(records)
 
 
+def _expected_kind(b: PlacedBuilding) -> Kind:
+    """The classification every kind assertion below is measured against."""
+    if catalog.is_belt(b.item_id):
+        return Kind.BELT
+    if catalog.is_sorter(b.item_id):
+        return Kind.SORTER
+    if b.item_id in (catalog.SPLITTER_ID, catalog.PILER_ID):
+        return Kind.OTHER
+    return Kind.MACHINE
+
+
 def test_by_item_matches_a_brute_force_scan() -> None:
     records = _fixture()
     index = Buildings(records)
@@ -69,9 +80,7 @@ def test_machines_for_recipe_matches_a_brute_force_scan() -> None:
         expected = tuple(
             i
             for i, b in enumerate(records)
-            if b.recipe_id == recipe_id
-            and not catalog.is_belt(b.item_id)
-            and not catalog.is_sorter(b.item_id)
+            if b.recipe_id == recipe_id and _expected_kind(b) is Kind.MACHINE
         )
         assert index.machines_for_recipe(recipe_id) == expected
 
@@ -118,28 +127,43 @@ def test_empty_sequence_is_answerable() -> None:
 def test_kind_of_and_by_kind_match_the_catalog_classification() -> None:
     """Closes the gap: nothing above exercises ``kind_of``/``by_kind`` directly.
 
-    A record is OTHER exactly when it is a splitter or a piler; MACHINE
-    otherwise (the fixture's "every third" branch uses item 2303, an ordinary
-    machine id that is neither a belt nor a sorter).
+    ``_fixture()`` never produces ``Kind.OTHER`` (no splitter or piler record),
+    so this only pins BELT/SORTER/MACHINE; see
+    ``test_by_kind_other_and_machines_for_recipe_exclude_splitters_and_pilers``
+    below for the OTHER branch, which needs its own local records.
     """
     records = _fixture()
     index = Buildings(records)
 
-    def expected_kind(b: PlacedBuilding) -> Kind:
-        if catalog.is_belt(b.item_id):
-            return Kind.BELT
-        if catalog.is_sorter(b.item_id):
-            return Kind.SORTER
-        if b.item_id in (catalog.SPLITTER_ID, catalog.PILER_ID):
-            return Kind.OTHER
-        return Kind.MACHINE
-
     for i, b in enumerate(records):
-        assert index.kind_of(i) == expected_kind(b)
+        assert index.kind_of(i) == _expected_kind(b)
 
     for kind in Kind:
-        expected = tuple(i for i, b in enumerate(records) if expected_kind(b) == kind)
+        expected = tuple(i for i, b in enumerate(records) if _expected_kind(b) == kind)
         assert index.by_kind(kind) == expected
+
+
+def test_by_kind_other_and_machines_for_recipe_exclude_splitters_and_pilers() -> None:
+    """Local records, not the shared ``_fixture()`` -- Task 2 reuses that one.
+
+    Pins a divergence a coincidentally-passing brute-force oracle used to
+    hide: a splitter's or piler's ``recipe_id`` is 0 only because that is the
+    field's default, not because it runs a recipe, so ``machines_for_recipe``
+    must not return one just because ``recipe_id`` happens to match.
+    """
+    records = (
+        PlacedBuilding(item_id=2303, model_index=0, x=0, y=0, recipe_id=0),
+        PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=0, x=1, y=0),
+        PlacedBuilding(item_id=catalog.PILER_ID, model_index=0, x=2, y=0),
+    )
+    index = Buildings(records)
+    assert index.kind_of(0) is Kind.MACHINE
+    assert index.kind_of(1) is Kind.OTHER
+    assert index.kind_of(2) is Kind.OTHER
+    assert index.by_kind(Kind.OTHER) == (1, 2)
+    assert index.splitters() == (1,)
+    assert index.machines() == (0,)
+    assert index.machines_for_recipe(0) == (0,)
 
 
 def test_bounds_matches_a_brute_force_scan_on_a_real_blueprint() -> None:
@@ -200,6 +224,32 @@ def test_sorters_between_drives_off_the_smaller_set() -> None:
     )
 
 
+def test_sorters_between_matches_brute_force_with_differing_set_sizes_and_overlap() -> None:
+    """Exercises both branches of the smaller-set choice, with overlap.
+
+    ``sources`` and ``sinks`` deliberately differ in size and share members,
+    so a sorter whose endpoints land in both sets is exercised regardless of
+    which set the implementation chooses to iterate.
+    """
+    records = _fixture()
+    index = Buildings(records)
+    sources = {i for i in range(0, 60, 3)}  # 20 members
+    sinks = {i for i in range(60) if i % 5 != 0}  # 48 members, overlapping
+    assert len(sources) != len(sinks)
+    assert sources & sinks
+
+    def brute_force(srcs: set[int], sks: set[int]) -> tuple[int, ...]:
+        return tuple(
+            i
+            for i, b in enumerate(records)
+            if catalog.is_sorter(b.item_id) and b.input_obj in srcs and b.output_obj in sks
+        )
+
+    assert index.sorters_between(sources, sinks) == brute_force(sources, sinks)
+    # Mirrored call forces the OTHER branch (now sinks is the smaller set).
+    assert index.sorters_between(sinks, sources) == brute_force(sinks, sources)
+
+
 def test_at_tile_honours_z_when_given() -> None:
     records = (
         PlacedBuilding(item_id=2303, model_index=0, x=0, y=0, z=Fraction(0)),
@@ -210,3 +260,69 @@ def test_at_tile_honours_z_when_given() -> None:
     assert index.at_tile(0, 0, Fraction(0)) == (0,)
     assert index.at_tile(0, 0, Fraction(1, 2)) == (1,)
     assert index.at_tile(0, 0, Fraction(3, 2)) == ()
+
+
+def test_predecessor_of_is_none_for_zero_or_ambiguous_fan_in() -> None:
+    records = _fixture()
+    index = Buildings(records)
+    for i in range(len(records)):
+        preds = index.by_output_obj(i)
+        if len(preds) == 1:
+            assert index.predecessor_of(i) == preds[0]
+        else:
+            assert index.predecessor_of(i) is None
+    assert index.predecessor_of(999_999) is None
+
+
+def test_splitter_successors_matches_by_input_obj() -> None:
+    """A splitter/piler names neither neighbour; its successors pick it up.
+
+    ``splitter_successors`` is what a caller reaches for by name; it must
+    agree with ``by_input_obj`` on the splitter's own index, which is the
+    link a downstream belt actually stores.
+    """
+    records = (
+        PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=0, x=0, y=0),
+        PlacedBuilding(item_id=next(iter(catalog.BELT_IDS)), model_index=0, x=1, y=0, input_obj=0),
+        PlacedBuilding(item_id=next(iter(catalog.BELT_IDS)), model_index=0, x=1, y=1, input_obj=0),
+        PlacedBuilding(item_id=next(iter(catalog.BELT_IDS)), model_index=0, x=2, y=0),
+    )
+    index = Buildings(records)
+    assert index.splitter_successors(0) == (1, 2)
+    assert index.splitter_successors(0) == index.by_input_obj(0)
+    assert index.splitter_successors(999_999) == ()
+
+
+def test_belt_run_crosses_splitters_and_pilers_and_terminates_on_cycles() -> None:
+    """A hand-built chain: belt -> splitter -> {belt, belt} -> piler -> belt,
+    with the piler's output looping back to the start.
+
+    ``0 -> 1 -> SPLITTER(2) -> {3, 4}``; ``3 -> 5`` (a dead end); ``4 ->
+    PILER(6) -> 7``; ``7 -> 0`` closes the cycle back through everything.
+    """
+    belt = next(iter(catalog.BELT_IDS))
+    records = (
+        PlacedBuilding(item_id=belt, model_index=0, x=0, y=0, output_obj=1),  # 0
+        PlacedBuilding(item_id=belt, model_index=0, x=1, y=0, output_obj=2),  # 1
+        PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=0, x=2, y=0),  # 2
+        PlacedBuilding(item_id=belt, model_index=0, x=3, y=0, input_obj=2, output_obj=5),  # 3
+        PlacedBuilding(item_id=belt, model_index=0, x=3, y=1, input_obj=2, output_obj=6),  # 4
+        PlacedBuilding(item_id=belt, model_index=0, x=4, y=0),  # 5 (dead end)
+        PlacedBuilding(item_id=catalog.PILER_ID, model_index=0, x=4, y=1),  # 6
+        PlacedBuilding(item_id=belt, model_index=0, x=5, y=1, input_obj=6, output_obj=0),  # 7
+    )
+    index = Buildings(records)
+    whole_run = frozenset({0, 1, 3, 4, 5, 7})
+
+    assert index.belt_run(0, forward=True) == whole_run
+    assert index.belt_run(5, forward=False) == whole_run
+    # The splitter and piler themselves are crossed, not counted.
+    assert 2 not in index.belt_run(0, forward=True)
+    assert 6 not in index.belt_run(0, forward=True)
+
+    from flab2bp.layout.hierarchy.contracts import _belt_run
+
+    for start in range(len(records)):
+        for forward in (True, False):
+            expected = frozenset(_belt_run(records, start, forward=forward))
+            assert index.belt_run(start, forward=forward) == expected
