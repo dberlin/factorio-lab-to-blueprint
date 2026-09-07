@@ -21,6 +21,12 @@ dependencies = [
     "pydantic>=2.13.4",
     "sympy>=1.14.0",
     "nodriver==0.47.0",
+    # Indexed domain types (`flab2bp.indexed`). Both are PURE PYTHON with no
+    # transitive dependencies, so neither can conflict with the ortools/HiGHS
+    # symbol problem above. They are importable ONLY from `flab2bp.indexed`;
+    # `tests/indexed/test_backend_containment.py` fails on any other import.
+    "littletable>=3.0",
+    "networkx>=3.4",
 ]
 
 [project.scripts]
@@ -106,3 +112,11 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.14"
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["littletable"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["networkx", "networkx.*"]
+ignore_missing_imports = true
