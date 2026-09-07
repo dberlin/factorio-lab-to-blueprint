@@ -7,9 +7,20 @@ is taken at). Merge base: master `1ce8a0d3`. Worktree
 Box: 128 cores, never idle, load is I/O wait. Every timed step has a
 `-load.txt` beside it with `uptime` and one `vmstat 1 3` sample taken
 immediately before the run. At most one layout build ran at a time from this
-plan, and no two audits ever ran at once (`ps -eo args | grep -cE 'scripts/audit\.py'`
-checked before each audit invocation; note that a plain `pgrep -f audit.py`
-matches its OWN command line here and always returns a hit).
+plan, and **no audit of this gate ever ran while another audit was running** —
+checked before each of the four audit invocations, which then WAITED (220–340 s
+on three of the four) rather than racing a sibling worktree.
+
+**A correction to the check the plan prescribes, earned here.** The plan warns
+that `pgrep -f audit.py` matches its OWN command line and prescribes
+`ps -eo args | grep -cE 'scripts/audit\.py'` instead. On this box **that form
+has the same defect**: `ps -eo args` lists the invoking shell's whole command
+line, which contains the pattern, so the count is 2 when nothing is running and
+`n + 2` when `n` audits are. Reading it literally cost one wasted detached
+checkout (recorded in `c3fe8116`). `run_guard.sh` and `run_moved.sh` therefore
+assemble the pattern at run time from two halves that never appear adjacent in
+any command line, exclude their own script name, and **print the matching lines
+next to the count**, so every number in §4 is auditable rather than asserted.
 
 This is the successor to `../2026-09-07-hierarchical-v2/gate.md`, which it
 supersedes. It gates seven tasks: Task 1 the stats carried into every refusal
@@ -82,7 +93,7 @@ directory.
 | (a) every cell that COMPOSES emits a blueprint with zero `certify` errors | a blueprint per composing cell | **5 of 8 cells compose** (belt3 both policies, zurl2, titanium-glass at both budgets). **None emits.** Four die at the router with 18 / 8 / 70 (r2 73) / 6 (r2 2) unrouted cuts; the fifth, `titanium-glass/all-products` at 60 s, wires **every one of its 26 cut lanes** and then fails `certify` with **4 `power.coverage` findings** (§2.3) | **FAIL** |
 | (b) both malls compose — every block placed, the build reaching `compose` | every block placed | **neither composes.** `mall/all-products` refuses with **9 blocks never placed**, `mall/no-proliferator` with **31**, identical in both rounds. `cut_lanes=0`, `port_demands=0`, `compose_gap=0` on both: composition is never entered | **FAIL** |
 | (c) titanium-glass builds at `--budget 15`, emitting a blueprint | a blueprint | **REFUSED**, 6 unrouted cuts (r1: `COMMIT_LINK` 3, `BUDGET` 2, `DYNAMIC_ACCESS` 1) and 2 (r2: `SEALED_POCKET` 1, `BUDGET` 1), with `reservation_missing=0` and `reservation_degraded=1` on both | **FAIL** |
-| (d) corpus guard: zero regressions, 0 INVALID, 0 CRASH | no cell CLEAN on base and not CLEAN on branch | *see §4* | *see §4* |
+| (d) corpus guard: zero regressions, 0 INVALID, 0 CRASH | no cell CLEAN on base and not CLEAN on branch | **72 = 72 CLEAN on both trees** (freeform 36→36, sequence-pair 36→36); **0** regressions, **0** the other way, **0** INVALID, **0** CRASH, 0.000 s wall overshoot both sides. 7 of 72 cells moved in area, **all 7 smaller**; five shown to move on one or both trees by a control pair (§4.1) | **PASS** |
 | — (reported, not gating) belt3 / zurl2 / titanium-glass area | `area / best_known` | **not computable on any cell**: nothing was emitted, so no area exists | not demonstrated |
 | — (reported, not gating) wall within budget + `RACE_COMPLETION_GRACE_S = 6.0` | ≤ 66.0 s and ≤ 21.0 s | the six 60 s cells ran **24.68–60.91 s** in process (largest: zurl2 r2 at 60.91, inside 66.0); the two 15 s cells ran **9.46–15.59 s**, inside 21.0 | PASS |
 
@@ -340,12 +351,14 @@ Per task, citing each implementer's own measurement as theirs:
   `arm_dispatch_freeform=0 / sequence_pair=73` split on no-proliferator. It
   also confirms the implementer's own adverse finding rather than softening
   it: **on `mall/no-proliferator` the one-arm dispatch is worse than racing
-  both arms.** Task 2's both-arms measurement left **6** blocks never placed;
-  Task 3's one-arm dispatch leaves **31**, and this gate measures 31 twice.
+  both arms.** Task 2's both-arms measurement left **6** blocks never placed
+  (that 6 is the implementer's own, and traces to no committed file — see §5's
+  provenance note); Task 3's one-arm dispatch leaves **31**, which is committed
+  in `t3-r5-mall-no-proliferator.log` and which this gate measures twice more.
   The reviewer's explanation is confirmed by the dispatch column itself:
   `arm_dispatch_freeform = 0` on that cell, because the policy creates no spray
   lanes, so `coaters == 0` on every block and `dispatch_arms`
-  (`dispatch.py:109-111`) can only return `(ARM_SEQUENCE_PAIR,)`. §5 weighs
+  (`dispatch.py:110-112`) can only return `(ARM_SEQUENCE_PAIR,)`. §5 weighs
   this; **the rule is not tuned here**, per the plan.
 * **Task 4 (the per-demand reachability goal, `900afa1e`…`8362b22d`)** shipped
   a `goals` parameter and Ruling R6's `_PORT_ACCESS_PROBE_KEEP = 2` scoped to
@@ -393,9 +406,117 @@ Per task, citing each implementer's own measurement as theirs:
   geometry is adequate. §5 lever 1 is the thing that must be fixed before the
   corridor can be judged at all.
 
-## 4. Default-unchanged corpus guard (Step 3)
+## 4. Default-unchanged corpus guard (Step 3): **PASS**
 
-<!-- PLACEHOLDER: filled in after the paired audit ran; see below -->
+Per controller ruling R13, and scripted as `run_guard.sh` so the procedure is
+part of the record: everything committed and `git status --short` empty first,
+`git checkout --detach 1ce8a0d3`, the BASELINE half run there writing to
+`/tmp/v3gate/` (this evidence directory does not exist at the merge base),
+`git checkout hierarchical-v3` immediately, HEAD and cleanliness re-verified,
+then the CANDIDATE half, then the baseline half copied in. **No `git stash`,
+no second worktree.** Baseline `1ce8a0d3`, candidate `c3fe8116` — an evidence
+commit whose `src/` is identical to `bf081859`'s (`git diff bf081859..HEAD --
+src tests` is empty).
+
+Files: `baseline-round1.{jsonl,txt}`, `candidate-round1.{jsonl,txt}`, their
+`-load.txt`, `compare-round1.txt`, `judge-round1.txt`, and `run_guard.sh`.
+
+Condensed from `judge-round1.txt`; every value is copied from it unedited.
+
+```
+commits  : baseline 1ce8a0d  candidate c3fe811
+status counts       baseline  candidate
+  CLEAN                   72         72
+  freeform          CLEAN 36->36
+  sequence-pair     CLEAN 36->36
+CLEAN in baseline, not CLEAN in candidate: 0     <-- no regression
+not CLEAN in baseline, CLEAN in candidate: 0
+INVALID/CRASH rows in candidate: 0
+INVALID/CRASH rows in baseline:  0
+wall-safety: candidate max overshoot 0.000 s vs baseline max 0.000 s -> OK
+gmean area ratio  all 0.99456 (-0.54 %)  freeform 0.99259  seq-pair 0.99654
+cells whose area moved at all: 7 of 72   -- larger 0, SMALLER 7
+total build wall: baseline 1470.2 s, candidate 1463.2 s  (199 s / 198 s wall)
+```
+
+**Clause (d) as declared in §0 requires exactly three things, and all three
+hold: no cell CLEAN on the merge base and not CLEAN on the branch (0), 0
+INVALID, 0 CRASH.** Both trees are 72/72 CLEAN on both arms.
+
+**Two banners that must not be read as the verdict.** `audit.py` prints
+`NOT CLEAN` on any refusal — there were none here, and both halves' own
+summary lines read `36/36 clean` per arm. And **`audit_compare.py` prints
+`FAIL`**, on this line:
+
+```
+clean 72  refused 0  invalid 0  crashed 0  paired 72  area ratio 0.9946  p95 32.2s
+  FAIL p95 wall 32.2s exceeds 30.0s
+```
+
+That is `audit_compare.py`'s own p95-wall clause against its 30 s default, not
+a status regression and not one of §0's three sub-clauses — and the BASELINE's
+p95 is **31.42 s**, also over 30, so the clause fails on the merge base too.
+It is a property of the corpus at a 30 s budget, not of this branch. Read the
+counts, never the banner.
+
+### 4.1 The seven moved cells, run down on both trees
+
+This branch cannot make v2's structural argument, and it is worth saying why
+rather than borrowing it. v2's `src/` diff touched `freeform.py` **not at
+all**, so its gate could say "no line either audited arm executes differs
+between the trees". **This branch changes `freeform.py`**, and the changed
+region is not inert to the default path: the diff has hunks in exactly two
+places — the `_PORT_ACCESS_PROBE_KEEP` constant block and `_reserve_port_access`
+(`freeform.py` ~375 and ~11931-12155, 54 non-comment lines) — and
+`_reserve_port_access` IS reached by freeform's own default path, through
+`_prepare_routing_problem`'s nested `hold_ports` with `boundary=boundary_cells`
+(Task 4 fix round 2, `8362b22d`, which cites those callers by symbol precisely
+because a line number went stale). Ruling R6 scopes the new probe cap to
+demands carrying an explicit goal, so a boundary-probed demand still
+enumerates every option, and that is pinned by a mutation-verified test — but
+that is an argument, and four of the seven moved cells are freeform. So the
+control was run.
+
+`run_moved.sh`, same procedure, `--only` the five url_ids carrying the seven
+cells, 30 cells per half, candidate `c3d9b70c` (again `src`-identical) then
+baseline `1ce8a0d3`. Files `moved-{baseline,candidate}-r2.{jsonl,txt}`, their
+`-load.txt`, `judge-moved-r2.txt`. Both halves 30/30 CLEAN, 0 regressions, 0
+INVALID/CRASH.
+
+| cell | base r1 | base r2 | cand r1 | cand r2 | reading |
+| --- | --- | --- | --- | --- | --- |
+| freeform `universe-matrix [0/no-proliferator]` | 39312 | 39312 | **31898** | **39312** | candidate moves, landing on the baseline's value |
+| sequence-pair `plastic [0/no-proliferator]` | **722** | **684** | **663** | **684** | BOTH trees move, both land on 684 |
+| freeform `super-magnetic-ring [0/no-proliferator]` | **2183** | **2220** | **2124** | **2146** | BOTH trees move, four values |
+| freeform `super-magnetic-ring [2/output-products]` | **2044** | **2052** | **1989** | **2044** | BOTH trees move; candidate r2 = baseline r1 |
+| sequence-pair `magnetic-coil [2/output-products]` | **304** | **299** | 299 | 299 | the BASELINE is the unstable side |
+| sequence-pair `universe-matrix [2/output-products]` | 16720 | 16720 | 16340 | 16340 | **stable on both trees, and different** |
+| freeform `quantum-chip [1/all-products]` | 3840 | 3840 | 3825 | 3825 | **stable on both trees, and different** |
+
+**Five of the seven are demonstrably run-to-run noise** — four move on one or
+both trees between the two rounds, and one (`magnetic-coil`) is unstable on
+the BASELINE side, exactly as v2's control found for its own seventh cell.
+`universe-matrix [0/no-proliferator]` is the sharpest: the candidate produces
+31898 and then 39312, and 39312 is the baseline's value in both rounds. v2's
+control found the same cell moving 31898 → 39312 on ITS baseline
+(`../2026-09-07-hierarchical-v2/gate.md` §5b), so both trees have now produced
+both values across two gates.
+
+**Two are NOT shown to be noise, and this gate does not claim they are.**
+`sequence-pair universe-matrix [2/output-products]` (16720 → 16340, -2.3 %)
+and `freeform quantum-chip [1/all-products]` (3840 → 3825, -0.4 %) each
+reproduced twice on each tree. Both are **smaller on the branch**; neither is
+a status change, neither is INVALID or CRASH, and neither is one of §0's three
+sub-clauses. Two runs per side is not enough to call a 0.4 % difference a
+branch effect rather than a coarser noise floor, and no third round was run —
+so what this gate reports is the measurement, not a conclusion: **clause (d)
+passes on what it declares, and two cells got slightly smaller for a reason
+this gate did not establish.**
+
+Summary: **the guard PASSES** — 0 of 72 cells CLEAN → not CLEAN, 0 INVALID, 0
+CRASH, 0 wall overshoot on either side, **65 of 72 cells bit-identical**, and
+of the 7 that moved every one moved SMALLER, five of them demonstrably on both
+trees.
 
 ## 5. The next three levers, from the measurement
 
@@ -415,10 +536,14 @@ on an empty answer (Ruling R7) and re-asks v2's local-only question, counting
 `reservation_degraded`.
 
 **The number: `reservation_degraded = 1` on all five composing cells in both
-rounds — ten production compositions out of ten.** Tasks 4 and 5 are, on every
+rounds — ten production compositions out of ten.** That is this gate's own
+measurement, off the shipped stats line (§2.1). Tasks 4 and 5 are, on every
 cell this gate composed, computed and discarded. Before Ruling R7's discard
-existed, acting on the empty answer took belt3's `unrouted_cuts` from 28 to
-**126** (Task 5's own measurement); after it, 18. Task 6's `oracle.md` shows
+existed, acting on the empty answer took belt3's `unrouted_cuts` to **126**;
+after it, 18 — and **that 126 is the one number in this section that traces to
+no committed file** (see the provenance note at the end of §5). The 28 it is
+measured against is v2's, from `../2026-09-07-hierarchical-v2/gate.md` §2.1;
+the 18 is this gate's, twice. Task 6's `oracle.md` shows
 the same give-up at *every* rung of the ladder, not only rung 0 — `assigned = 0`
 of 91 on all six belt3 rungs, 0 of 144 on five of six zurl2 rungs, on demands
 each reporting `reachable_options = 2`, i.e. the A\* had **proved two corridors
@@ -458,7 +583,7 @@ producing packs its own router cannot wire"** — the placer convicting itself,
 not a budget. `mall/no-proliferator` refuses with **31 blocks, all 31
 `deadline exhausted`**, and the dispatch column says why the whole cell is on
 one arm: `arm_dispatch_freeform = 0`, because that policy creates no spray
-lanes, `coaters == 0` on every block, and `dispatch.py:109-111` can then only
+lanes, `coaters == 0` on every block, and `dispatch.py:110-112` can then only
 return `(ARM_SEQUENCE_PAIR,)`.
 
 The measured cost of that rule on this cell is **6 blocks never placed under
@@ -470,6 +595,29 @@ a feature vector the evidence does not cover — `coaters == 0` with `strips`
 below `UNCOVERED_STRIPS = 85` is currently indistinguishable from a genuine
 sequence-pair block — and to re-measure both malls under it.
 
+### Provenance note: the two numbers here that no committed file carries
+
+Every other figure in this gate is either measured by it (the `large-*`, the
+`certify-*`, the `*-round1` and `moved-*` artifacts beside this file) or cited
+to a committed one (`oracle.md`, `corridor-spike.md`, the `t3-*` and `t3-r5-*`
+logs, v2's `gate.md`). **Two are not**, and both come from an implementer's own
+task report under `.superpowers/sdd/`, which is gitignored and therefore not
+part of the record:
+
+* **belt3's `unrouted_cuts = 126`** before Ruling R7's discard (lever 1). The
+  before-and-after states either side of it are committed — v2's 28 and this
+  gate's 18 — but the intermediate 126 was measured on a tree that no longer
+  exists and was never written to an evidence file.
+* **`mall/no-proliferator`'s 6 blocks never placed under BOTH arms** (lever 3),
+  from Task 2's Step 5 measurement. Its counterpart, 31 under one arm, IS
+  committed (`t3-r5-mall-no-proliferator.log`) and this gate reproduces it
+  twice; the 6 is what makes the comparison a regression rather than a
+  standalone number, and it rests on that report alone.
+
+Neither carries a gate clause. They are quoted because a levers section that
+dropped them would understate the cost of two shipped decisions, and they are
+flagged here so a reader can weigh them accordingly.
+
 ## 6. The adaptive memories still open, and one residual risk
 
 Neither memory is planned, and each says why. Both are recorded in
@@ -478,9 +626,13 @@ Neither memory is planned, and each says why. Both are recorded in
 * **A cross-build solved-block cache.** Deliberately NOT planned here: related
   work is already planned as the "background compound block cache" (`42c9e0e`)
   and duplicating it would be two designs for one cache. The evidence for it
-  keeps growing — this gate solved the same one-recipe blocks from scratch in
-  all sixteen runs, and `mall/no-proliferator` names 31 refusing blocks in a
-  single refusal, most of them single-recipe.
+  keeps growing, and this gate can put a number on it: `mall/no-proliferator`
+  names **31 refusing blocks in one refusal, 30 of them single-recipe — 9
+  `magnet`, 7 `iron-ingot`, 6 `electric-motor`, 2 each of `copper-ingot`,
+  `magnetic-coil` and `electromagnetic-turbine`** (counted from
+  `large-mall-no-proliferator-b60-r1.json`, identical in r2). Nine separately
+  solved `magnet` blocks in one build, sixteen times over the sixteen runs, is
+  the case for the cache stated as a measurement.
 * **A strip cap that moves with outcomes.** Deliberately NOT attached to the
   `_ShapeNoGood` memo v2 shipped, because it is not cheap to attach:
   `_ShapeNoGood` is consulted BEFORE a block solve and keyed on `(shape, arm)`,
@@ -531,7 +683,7 @@ Which of these are load-bearing for the readings above:
 * **`rounds_left` and `allowed_recut_rounds` are why `blocks_unattempted = 0`
   on all eight cells** (§3, Task 2). They are the whole of Lever A's delivered
   effect, and they are not enough for clause (b).
-* **`dispatch.py:109-111` is why `mall/no-proliferator` runs entirely on
+* **`dispatch.py:110-112` is why `mall/no-proliferator` runs entirely on
   `sequence-pair`** and why it leaves 31 blocks unplaced where both arms left
   6 (§5 lever 3).
 * **`compose.py:899` is why every `reservation_missing = 0` in §2.1 must be
@@ -549,8 +701,13 @@ Which of these are load-bearing for the readings above:
   and their `-load.txt` — the sixteen cell runs of §2
 * `certify_probe.py`, `certify-titanium-glass-all-products.{json,log}` and
   `certify-titanium-glass-load.txt` — the one extra build behind §2.3
-* `baseline-round1.{jsonl,txt}`, `candidate-round1.{jsonl,txt}`, their
-  `-load.txt`, `compare-round1.txt` and `judge-round1.txt` — the guard of §4
+* `run_guard.sh`; `baseline-round1.{jsonl,txt}`, `candidate-round1.{jsonl,txt}`,
+  their `-load.txt`, `compare-round1.txt` and `judge-round1.txt` — the paired
+  guard round of §4
+* `run_moved.sh`; `moved-{baseline,candidate}-r2.{jsonl,txt}`, their
+  `-load.txt` and `judge-moved-r2.txt` — the moved-cell control of §4.1. **No
+  gate clause is read from the control**; clause (d) is decided by the paired
+  round alone, and passes there.
 * Carried in from earlier tasks of this plan and cited above as their authors':
   `oracle.md`, `rung_probe.py`, `rung-{belt3,zurl2}-all-products.{json,log}`
   and their `-load.txt` (Task 6); `corridor-spike.md` (Task 7);

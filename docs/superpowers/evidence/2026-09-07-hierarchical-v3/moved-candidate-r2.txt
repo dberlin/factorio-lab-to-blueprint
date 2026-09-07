@@ -1,0 +1,41 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+30 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 900s
+  . [  1/30]    12s freeform  stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     10.3s  <-- 10s
+  . [  2/30]    19s freeform  stress   quantum-chip/output-products power=1 budget=30s      CLEAN     17.7s  <-- 18s
+  . [  3/30]    26s freeform  stress   universe-matrix/all-products power=1 budget=30s      CLEAN     24.2s  <-- 24s
+  . [  4/30]    27s sequence-pair stress   quantum-chip/all-products power=1 budget=30s         CLEAN     26.0s  <-- 26s
+  . [  5/30]    28s freeform  stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     26.7s  <-- 27s
+  . [  6/30]    31s freeform  stress   quantum-chip/all-products power=1 budget=30s         CLEAN     29.5s  <-- 29s
+  . [  7/30]    32s sequence-pair stress   quantum-chip/output-products power=1 budget=30s      CLEAN     30.2s  <-- 30s
+  . [  8/30]    32s sequence-pair stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     30.8s  <-- 31s
+  . [  9/30]    42s freeform  stress   universe-matrix/output-products power=1 budget=30s   CLEAN     30.3s  <-- 30s
+  . [ 10/30]    53s sequence-pair stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     34.1s  <-- 34s
+  . [ 11/30]    55s freeform  mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     26.7s  <-- 27s
+  . [ 12/30]    57s freeform  small    plastic/no-proliferator power=1 budget=30s           CLEAN      2.4s
+  . [ 13/30]    59s freeform  mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     27.8s  <-- 28s
+  . [ 14/30]    59s sequence-pair stress   universe-matrix/all-products power=1 budget=30s      CLEAN     33.3s  <-- 33s
+  . [ 15/30]    60s sequence-pair stress   universe-matrix/output-products power=1 budget=30s   CLEAN     32.7s  <-- 33s
+  . [ 16/30]    62s sequence-pair mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     29.5s  <-- 30s
+  . [ 17/30]    62s freeform  mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     30.3s  <-- 30s
+  . [ 18/30]    62s freeform  trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN      0.7s
+  . [ 19/30]    64s freeform  small    plastic/all-products power=1 budget=30s              CLEAN      6.5s
+  . [ 20/30]    64s freeform  small    plastic/output-products power=1 budget=30s           CLEAN      5.4s
+  . [ 21/30]    65s freeform  trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN      2.9s
+  . [ 22/30]    66s freeform  trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN      2.1s
+  . [ 23/30]    71s sequence-pair mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     29.2s  <-- 29s
+  . [ 24/30]    83s sequence-pair mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     29.3s  <-- 29s
+  . [ 25/30]    84s sequence-pair trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN     19.7s  <-- 20s
+  . [ 26/30]    90s sequence-pair small    plastic/all-products power=1 budget=30s              CLEAN     29.9s  <-- 30s
+  . [ 27/30]    90s sequence-pair small    plastic/no-proliferator power=1 budget=30s           CLEAN     31.3s  <-- 31s
+  . [ 28/30]    92s sequence-pair small    plastic/output-products power=1 budget=30s           CLEAN     30.4s  <-- 30s
+  . [ 29/30]    96s sequence-pair trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN     30.2s  <-- 30s
+  . [ 30/30]    96s sequence-pair trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN     30.5s  <-- 30s
+
+=== freeform: 15/15 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 30s freeform super-magnetic-ring/output-products power=1 budget=30s, 30s freeform universe-matrix/output-products power=1 budget=30s, 29s freeform quantum-chip/all-products power=1 budget=30s, 28s freeform super-magnetic-ring/all-products power=1 budget=30s, 27s freeform universe-matrix/no-proliferator power=1 budget=30s
+
+=== sequence-pair: 15/15 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 34s sequence-pair universe-matrix/no-proliferator power=1 budget=30s, 33s sequence-pair universe-matrix/all-products power=1 budget=30s, 33s sequence-pair universe-matrix/output-products power=1 budget=30s, 31s sequence-pair plastic/no-proliferator power=1 budget=30s, 31s sequence-pair quantum-chip/no-proliferator power=1 budget=30s
+
+96s wall, 30/30 cells
+11 cells completed after their own requested search deadline; the largest completion tail was 4.1s. Emission, detailed routing already in flight, and validation finish atomically.
