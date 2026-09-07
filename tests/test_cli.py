@@ -275,3 +275,56 @@ def test_a_failing_close_does_not_change_mains_exit_code(
 
     assert exit_code == 0
     assert trace_path.read_text().splitlines()  # the write before the failed close survived
+
+
+def test_a_writer_thread_write_failure_does_not_change_mains_exit_code_or_skip_the_close(
+    deuteron_build: pipeline.Build,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Re-review round, I1 regression: before this fix, a write failure
+    (disk full, a broken pipe, an NFS hiccup) inside the CLI's trace writer
+    thread was unguarded. `_run`'s own drain could die silently, but
+    `stop()`'s FINAL drain runs on the MAIN thread once the writer thread is
+    gone -- so the same error resurfaced there, propagated out of
+    `cli_main`'s `finally` BEFORE `trace_file.close()`, and killed a build
+    that had already succeeded. That is the identical "raise inside a
+    `finally` skips the resource release" shape Critical 1 fixed in
+    `jobs.py`, reintroduced here by the same fix wave -- and a real
+    regression, since before I1 existed `SampledObserver.note` swallowed
+    sink exceptions and this same disk error was a harmless no-op.
+
+    Model: `test_a_failing_close_does_not_change_mains_exit_code` above, but
+    the fake file's `write()` itself raises rather than only its `close()`.
+    """
+    trace_path = tmp_path / "trace.jsonl"
+    closed: list[bool] = []
+    real_open = Path.open
+
+    def flaky_open(self: Path, *args: object, **kwargs: object) -> object:
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if self != trace_path or mode != "w":
+            return real_open(self, *args, **kwargs)
+
+        class _RaisingWrite:
+            def write(self, data: str) -> int:
+                raise OSError("disk full")
+
+            def close(self) -> None:
+                closed.append(True)
+
+        return _RaisingWrite()
+
+    monkeypatch.setattr(Path, "open", flaky_open)
+
+    def fake_build(*_args: object, **kwargs: object) -> pipeline.Build:
+        observer = kwargs["search_observer"]
+        assert observer is not None
+        observer.note(SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT))
+        return deuteron_build
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    exit_code = cli.main(["https://example/x", "--trace-jsonl", str(trace_path)])
+
+    assert exit_code == 0
+    assert closed == [True]  # the file was still closed despite the write failure

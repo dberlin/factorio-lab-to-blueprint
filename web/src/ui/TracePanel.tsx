@@ -19,10 +19,10 @@ import { pollTrace, TRACE_POLL_MS, type TraceFrame } from '../api/trace';
 import { traceFrameLabel, traceFrameToBlueprint } from '../model/traceScene';
 import { useBlueprint } from '../state/BlueprintProvider';
 
-/** I5: how many CONSECUTIVE poll failures in a row before the live tail
-    actually gives up, rather than retrying forever. A single 500 or network
-    blip must not end it; enough in a row that retrying no longer looks
-    transient should. */
+/** I5: the loop gives up once CONSECUTIVE poll failures exceed this many in a
+    row (so a 4th failure right after 3 in a row is what actually ends it),
+    rather than retrying forever. A single 500 or network blip must not end
+    it; enough in a row that retrying no longer looks transient should. */
 const MAX_CONSECUTIVE_POLL_FAILURES = 3;
 
 /** Backoff cap for a failed poll, as a multiple of {@link TRACE_POLL_MS}. */
@@ -36,9 +36,9 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
   // separately from `dropped` (genuine stage-1/channel loss) so a reader is
   // never told a healthy build lost data.
   const [evicted, setEvicted] = useState(0);
-  // I5: set once the poll loop gives up after `MAX_CONSECUTIVE_POLL_FAILURES`
-  // in a row, so the UI says so instead of silently freezing while still
-  // reading "Live tail".
+  // I5: set once the poll loop gives up -- more than
+  // `MAX_CONSECUTIVE_POLL_FAILURES` consecutive failures -- so the UI says so
+  // instead of silently freezing while still reading "Live tail".
   const [pollError, setPollError] = useState<string | null>(null);
   const [tailing, setTailing] = useState(true);
   // The frame the scrubber is pinned to while `tailing` is false, tracked by

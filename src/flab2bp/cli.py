@@ -75,14 +75,36 @@ class _CliTraceWriter:
         self._thread = thread
 
     def _drain_once(self) -> None:
+        # Swap the deque object out under the lock rather than copying it
+        # (Minor, re-review round): `list(self._pending)` was an O(n) copy
+        # held under the same lock `offer()` needs for its O(1) append, so a
+        # long backlog could make the search thread's "O(1)" sink block
+        # behind it. Reassignment is O(1); the old deque is drained below,
+        # outside the lock, and nothing else holds a reference to it.
         with self._lock:
-            pending = list(self._pending)
-            self._pending.clear()
+            pending, self._pending = self._pending, deque()
         for event in pending:
             frame = frame_json(self._seq, round(event.monotonic_s - self._started_at, 3), event)
             self._seq += 1
-            self._trace_file.write(json.dumps(frame))
-            self._trace_file.write("\n")
+            try:
+                self._trace_file.write(json.dumps(frame))
+                self._trace_file.write("\n")
+            except OSError:
+                # R3: a debugging artefact must never take a real build down
+                # with it. Re-review round: this used to propagate straight
+                # out of `_run`/`stop()` -- on the writer thread that is a
+                # silent thread death (tolerable), but `stop()`'s own final
+                # drain runs on the MAIN thread once the writer thread is
+                # gone, so an `OSError` here (disk full, a broken pipe, an
+                # NFS hiccup) used to reach `cli_main`'s `finally` and kill a
+                # build that had already succeeded -- precisely what R3
+                # forbids, and the same "raise inside a `finally` skips the
+                # resource release" shape as Critical 1, reintroduced here.
+                # Whatever wrote before this point is on disk; a trace file
+                # with a silently truncated tail is the correct trade, same
+                # as the tolerance `trace_file.close()` already gets in
+                # `main()`.
+                return
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -536,21 +558,30 @@ def main(argv: list[str] | None = None) -> int:
         # is actually on disk before the file below is closed -- the
         # buffering that makes the sink O(1) (fix round, Important 1) must
         # never cost a frame at shutdown.
-        if writer is not None:
-            writer.stop()
-        # Every exit path -- success, NoValidLayout, ValueError/KeyError, or
-        # any other exception propagating out of `pipeline.build` -- closes
-        # the file, so a raised build still leaves a complete, readable trace
-        # instead of one truncated by a buffered write that never flushed.
-        # `close()` itself is guarded: an OS-level flush failure here (disk
-        # filled during the build, permission revoked, an NFS hiccup) would
-        # otherwise raise AFTER a build that already succeeded, discarding a
-        # finished blueprint over a debugging artefact -- exactly what R3
-        # ("a view must never kill a build") forbids. A trace file with a
-        # silently truncated tail is the correct trade.
-        if trace_file is not None:
-            with contextlib.suppress(OSError):
-                trace_file.close()
+        #
+        # Nested in its own `finally` (re-review round): `_drain_once`'s own
+        # `OSError` guard should already keep `stop()` from raising, but the
+        # file release below must run even if it somehow still does -- the
+        # same "raise inside a `finally` skips the resource release" shape
+        # Critical 1 fixed in `jobs.py`, reintroduced here by this same wave.
+        try:
+            if writer is not None:
+                writer.stop()
+        finally:
+            # Every exit path -- success, NoValidLayout, ValueError/KeyError,
+            # or any other exception propagating out of `pipeline.build` --
+            # closes the file, so a raised build still leaves a complete,
+            # readable trace instead of one truncated by a buffered write
+            # that never flushed. `close()` itself is guarded: an OS-level
+            # flush failure here (disk filled during the build, permission
+            # revoked, an NFS hiccup) would otherwise raise AFTER a build
+            # that already succeeded, discarding a finished blueprint over a
+            # debugging artefact -- exactly what R3 ("a view must never kill
+            # a build") forbids. A trace file with a silently truncated tail
+            # is the correct trade.
+            if trace_file is not None:
+                with contextlib.suppress(OSError):
+                    trace_file.close()
 
     if build.report.errors and not args.allow_invalid:
         print(
