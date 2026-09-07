@@ -1695,6 +1695,91 @@ def test_game_addon_supply_rejects_a_sorter_targeting_a_coater() -> None:
     assert any("sorter" in finding.message for finding in report.by_check("game.addon_supply"))
 
 
+def _coater_spec() -> BuildSpec:
+    """One proliferated group whose single ingredient rides a sprayed lane."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                proliferator_mode=ProliferatorMode.PRODUCTS,
+                inputs_per_machine={"iron-ingot": Fraction(1)},
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+        ),
+        external_inputs={"iron-ingot": Fraction(1), "proliferator-2": Fraction(1, 10)},
+        outputs={"gear": Fraction(1)},
+        spray_lanes={"iron-ingot": True},
+    )
+
+
+def _coater_placement(
+    *,
+    merge_under_body: bool,
+    second_belt_in_supply_area: bool = False,
+) -> Placement:
+    """A coater at yaw 90 riding a straight lane, optionally spoiled.
+
+    ``merge_under_body`` adds a second belt chain whose tail points at the tile
+    one step upstream of the coater origin (9, 5, 0) -- a tile the 1x3 body
+    covers, since the body runs from (9, 5, 0) to (11, 5, 0) at yaw 90.
+    ``second_belt_in_supply_area`` adds two belts near addon area 1's centre
+    (8.75, 5, 1) -- one 0.3142 and one 0.9425 world units off it, both inside
+    ``ADDON_AREA_RADIUS`` -- so which one the game would attach is a rotation
+    convention the emitted geometry never decided.
+    """
+    buildings: list[PlacedBuilding] = [
+        belt(7, 5, out=1),
+        belt(8, 5, out=2),
+        belt(9, 5, out=3),  # body tile (dx=-1): the merge target when spoiled
+        belt(10, 5, out=4),  # the coater's own ridden tile (dx=0)
+        belt(11, 5, out=5),  # body tile (dx=+1)
+        belt(12, 5),
+        _coater(10, 5, 0, yaw=90.0),
+    ]
+    if merge_under_body:
+        buildings.append(belt(9, 4, out=2))  # tail of a second chain, merges onto index 2
+    if second_belt_in_supply_area:
+        buildings.append(belt(9, 5, 1))
+        buildings.append(belt(8, 5, 1))
+    return Placement(buildings=tuple(buildings))
+
+
+def test_coater_over_a_belt_merge_is_convicted() -> None:
+    """Two belt runs merging on a tile the coater's body covers is not a lane.
+
+    A Spray Coater is a belt addon that rides ONE belt.  Two chains pointing at
+    a tile under its body is the geometry that reads in game as belts inserted
+    into the coater, and it is exactly the interleaving hazard a mixed lane has.
+    """
+    placement = _coater_placement(merge_under_body=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert findings, [f.check for f in report.errors]
+    assert "merge" in findings[0].message
+
+
+def test_coater_on_a_single_run_is_clean() -> None:
+    placement = _coater_placement(merge_under_body=False)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    assert not [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+
+
+def test_coater_supply_area_with_two_belts_is_convicted() -> None:
+    """Which belt supplies a coater must not depend on a rotation convention.
+
+    Measured on the reported URL: coater#768's addon area 1 had the proliferator
+    lane at (53,20,1) and a CARGO lane at (55,20,1), both exactly 0.250 from the
+    area centre and both inside ADDON_AREA_RADIUS = 1.0.
+    """
+    placement = _coater_placement(merge_under_body=False, second_belt_in_supply_area=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert findings
+    assert "addon area 1" in findings[0].message
+
+
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
     """A Chemical Plant is nine wide and takes a sorter on four of its columns.
 

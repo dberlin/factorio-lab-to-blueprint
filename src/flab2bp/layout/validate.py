@@ -4917,6 +4917,148 @@ def _coater_rides(ctx: Context) -> dict[int, int]:
     return out
 
 
+def _coater_body_tiles(ctx: Context, index: int) -> set[tuple[int, int, Fraction]]:
+    """The tiles a Spray Coater's 1x3 body covers, at its own altitude.
+
+    ``range(-(width // 2), width // 2 + 1)`` centres exactly only for an ODD
+    footprint.  The Spray Coater's 1x3 always is one, at either orientation
+    ``oriented_footprint`` returns, so this is correct as written here.  It
+    does NOT generalise: a future belt addon with an EVEN footprint would need
+    a different centring rule, not this one reused as-is.
+    """
+    b = ctx.placement.buildings[index]
+    width, height = cat.oriented_footprint(cat.SPRAY_COATER_ID, b.yaw)
+    return {
+        (b.x + dx, b.y + dy, b.z)
+        for dx in range(-(width // 2), width // 2 + 1)
+        for dy in range(-(height // 2), height // 2 + 1)
+    }
+
+
+def _coater_belt_predecessor_counts(ctx: Context) -> Mapping[int, int]:
+    """How many BELT buildings feed each belt, via ``output_obj``.
+
+    ``_build_runs`` already asks the same question -- a belt whose count here
+    is anything but 1 becomes the head of a new run -- but it throws the count
+    itself away, keeping only the boundary.  ``prolif.coater_rides_one_run``
+    needs the count, to tell "no predecessor" (a run head, unremarkable) from
+    "two or more" (a native DSP merge) on a tile a coater's body covers.
+    """
+    bs = ctx.placement.buildings
+    counts: dict[int, int] = defaultdict(int)
+    for _i, b in ctx.of_kind(Kind.BELT):
+        o = b.output_obj
+        if o is None or not 0 <= o < len(bs) or ctx.kinds[o] is not Kind.BELT:
+            continue
+        counts[o] += 1
+    return counts
+
+
+def _coater_supply_area_candidates(
+    ctx: Context, coater: PlacedBuilding, *, area: int
+) -> tuple[int, ...]:
+    """Every belt within :data:`~flab2bp.dsp.rules.ADDON_AREA_RADIUS` of one coater addon area.
+
+    Mirrors the broadphase :func:`_belt_in_addon_area` runs to pick the belt
+    the game attaches, but keeps every match within radius instead of only the
+    nearest one: ``prolif.coater_rides_one_run`` convicts having more than one
+    candidate at all, because which one the game would actually select then
+    comes down to a rotation convention, not the geometry emitted.
+    """
+    want = slots.addon_supply_position(
+        coater.item_id,
+        x=coater.x,
+        y=coater.y,
+        z=coater.z,
+        yaw=coater.yaw,
+        area=area,
+    )
+    reach = math.ceil(rules.ADDON_AREA_RADIUS / colliders.GRID_ARC)
+    anchor_x = math.floor(float(want[0]))
+    anchor_y = math.floor(float(want[1]))
+    by_tile = _belts_by_tile(ctx)
+    candidates: list[int] = []
+    for x in range(anchor_x - reach, anchor_x + reach + 1):
+        for y in range(anchor_y - reach, anchor_y + reach + 1):
+            for i in by_tile.get((x, y), ()):
+                belt = ctx.placement.buildings[i]
+                distance = slots.world_gap(
+                    float(want[0] - belt.x),
+                    float(want[1] - belt.y),
+                    float(want[2] - belt.z),
+                )
+                if distance < rules.ADDON_AREA_RADIUS:
+                    candidates.append(i)
+    return tuple(candidates)
+
+
+@check("prolif.coater_rides_one_run", needs_spec=True)
+def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
+    """A Spray Coater rides one belt run, with no merge under its body.
+
+    A coater carries no connection of its own -- the game finds its belts by
+    position (``game.addon_supply``) -- so nothing in the record says which lane
+    it is on beyond where the belts are.  Two chains pointing at one tile is a
+    legal DSP merge in general (``belt.acyclic`` says so), but under a coater it
+    is not a lane: the three flows it joins must arrive interleaved in the
+    recipe's exact proportion or one of them fills the belt and starves the
+    others, and nothing arranges that.
+
+    Measured on the reporting URL: belt#0 at (53,20,0) had predecessors
+    [817, 1872] and sat under coater#768's body; belt#19 at (53,26,0) had
+    predecessors [830, 2037] under coater#771.  Both blueprints validated clean.
+
+    The second clause is narrower and just as unfixable downstream: two belts
+    inside ``rules.ADDON_AREA_RADIUS`` of addon area 1 means which one supplies
+    the coater is decided by a rotation convention rather than by the geometry
+    we emitted.
+    """
+    bs = ctx.placement.buildings
+    predecessor_counts = _coater_belt_predecessor_counts(ctx)
+    for ride, coater_index in _coater_rides(ctx).items():
+        coater = bs[coater_index]
+        body_tiles = _coater_body_tiles(ctx, coater_index)
+        body_belts = tuple(
+            sorted(i for i, b in ctx.of_kind(Kind.BELT) if (b.x, b.y, b.z) in body_tiles)
+        )
+        merged = tuple(i for i in body_belts if predecessor_counts.get(i, 0) >= 2)
+        distinct_runs = {ctx.run_of[i] for i in body_belts if i in ctx.run_of}
+        if merged or len(distinct_runs) >= 2:
+            extra = (
+                f", and its body tiles carry {len(distinct_runs)} distinct belt runs"
+                if len(distinct_runs) >= 2
+                else ""
+            )
+            yield Finding(
+                "prolif.coater_rides_one_run",
+                Severity.ERROR,
+                f"coater {coater_index} rides a belt merge under its body: "
+                f"belt(s) {list(merged)} on its body tiles have two or more "
+                f"predecessors{extra}; a coater carries no connection of its "
+                "own and needs one lane, not a merge whose joined flows have no "
+                "arrangement that keeps its recipe's proportion",
+                (coater_index, *body_belts),
+                {
+                    "ride": ride,
+                    "merged_belts": list(merged),
+                    "distinct_runs": sorted(distinct_runs),
+                },
+            )
+        candidates = _coater_supply_area_candidates(ctx, coater, area=1)
+        if len(candidates) > 1:
+            sorted_candidates = sorted(candidates)
+            yield Finding(
+                "prolif.coater_rides_one_run",
+                Severity.ERROR,
+                f"coater {coater_index}'s addon area 1 has {len(candidates)} "
+                f"belts within {rules.ADDON_AREA_RADIUS} world units of it: "
+                f"{sorted_candidates}; which one the game attaches is a "
+                "rotation convention, not the geometry we emitted",
+                (coater_index, *sorted_candidates),
+                {"area": 1, "candidates": sorted_candidates},
+            )
+
+
 def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
     """Belt tiles ``item`` can reach WITHOUT having passed a Spray Coater.
 
