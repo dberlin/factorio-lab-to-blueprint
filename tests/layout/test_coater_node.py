@@ -214,14 +214,16 @@ def test_off_buys_the_wide_channel_and_placed_does_not(
 # --- the ban ---------------------------------------------------------------
 
 
-def test_placed_bans_the_body_level_and_the_area_one_rival(
+def test_placed_bans_the_area_one_rival(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Design §5.2, measured on the reported geometry.
 
-    Coater at ``(54, 20, 0)`` with its drop at ``(53, 20, 1)``: the body's own
-    level goes onto ``{53, 54, 55}`` and the rival ``(55, 20)`` -- the cell
-    mirroring the drop across the seat -- loses level 1.
+    Coater at ``(54, 20, 0)`` with its drop at ``(53, 20, 1)``: the rival
+    ``(55, 20)`` -- the cell mirroring the drop across the seat -- loses
+    level 1.  The body's own level is NOT banned: that clause was retired on
+    the measurement in
+    ``test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_there``.
     """
     belt_item = catalog.item_id("conveyor-belt-2")
     belt_model = catalog.building(belt_item).model_index
@@ -269,8 +271,9 @@ def test_placed_bans_the_body_level_and_the_area_one_rival(
     on = ban("placed")
     for x in (53, 54, 55):
         assert 0 not in off.get((x, 20), set())
-        assert 0 in on[(x, 20)], f"body tile {x} keeps its own level under `placed`"
+        assert 0 not in on.get((x, 20), set()), f"body tile {x} keeps its own level, unbanned"
     assert 1 in on[(55, 20)], "the area-1 rival keeps the drop's level"
+    assert 1 not in off.get((55, 20), set()), "the rival ban is a node-arm rule only"
 
 
 # --- end to end ------------------------------------------------------------
@@ -323,6 +326,52 @@ def test_a_node_arm_emits_a_four_tile_run_with_the_addon_on_its_third_tile(
         assert bs[at[in_cell]].output_obj == at[west]
         # The proliferator drop, one level up over the tile behind the seat.
         assert (west[0], west[1], F(1)) in at
+
+
+def test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The measurement that retired the body-level clause of the coater ban.
+
+    ``_reserve_staged_coater_belt_ban`` used to add the body's own level across
+    ``[-body_half, +body_half]`` under a node arm.  A* can never step onto an
+    occupied belt, so the only thing that ban could buy is stopping
+    ``_merge_frontier`` from OFFERING a body tile as a merge goal -- and the
+    frontier offers only cells ``_Canvas.free`` accepts.  So the clause can
+    change a routing decision only for a body cell that is free at the moment
+    the ban is written.
+
+    None is.  Every body tile is one of the node's own four belts, committed to
+    the canvas during emission and therefore long before the coater is staged.
+    The clause was a no-op, and this is the proof standing in its place.
+    """
+    seen: list[tuple[tuple[int, int, int], bool, bool]] = []
+    original = freeform._reserve_staged_coater_belt_ban
+
+    def spy(canvas: _Canvas, staged: freeform._StagedCoater, belt_model: int) -> None:
+        half = freeform._coater_body_half_span(staged.port.yaw)
+        cx, cy, cz = staged.port.host_x, staged.port.host_y, staged.port.host_z
+        for dx in range(-half, half + 1):
+            cell = (cx + dx, cy, cz)
+            carries_belt = any(
+                is_belt(building.item_id)
+                and (building.x, building.y, building.z) == (*cell[:2], F(cz))
+                for building in canvas.buildings
+            )
+            seen.append((cell, canvas.free(cell), carries_belt))
+        original(canvas, staged, belt_model)
+
+    monkeypatch.setattr(freeform, "_reserve_staged_coater_belt_ban", spy)
+    _build("placed", monkeypatch)
+
+    assert seen, "the fixture stopped committing a coater"
+    assert [cell for cell, free, _ in seen if free] == [], (
+        "a node body tile was free when the ban was written -- clause (a) is "
+        "load-bearing again and must be restored"
+    )
+    assert all(carries_belt for _cell, _free, carries_belt in seen), (
+        "a node body tile is occupied by something other than the node's belt"
+    )
 
 
 def test_no_coater_body_covers_a_belt_merge(

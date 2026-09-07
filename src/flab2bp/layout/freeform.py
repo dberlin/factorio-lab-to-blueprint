@@ -18448,21 +18448,25 @@ def _reserve_staged_coater_belt_ban(
     body_half = _coater_body_half_span(staged.port.yaw)
     span = body_half + 1
     if coater_mode().is_node:
-        # The body's OWN level, and the area-1 rival cell.
+        # The area-1 rival cell -- and only that.  DO NOT delete this along
+        # with the body-level clause that used to stand beside it: the rival is
+        # a LEVEL-1 cell that is not part of the node at all, so nothing about
+        # the node being a free-standing run makes it structural.  It is the
+        # cell mirroring the drop across the seat, at the drop's own level, and
+        # it is exactly the reported area-1 ambiguity: coater#768 with the drop
+        # at (53,20,1) and a cargo lane at (55,20,1), both inside the 1.0
+        # radius on opposite sides of the seat at (54,20,0).
         #
-        # The body tiles are occupied lane belts, so A* could never step onto
-        # them; what this stops is `_merge_frontier` OFFERING one as a goal,
-        # which is the one remaining path by which a second predecessor could
-        # arrive on a cell the coater covers.  `_Canvas.free` consults
-        # `belt_ban`, and the frontier offers only free cells, so the ban is
-        # the goal ban.
-        #
-        # The rival is the cell mirroring the drop across the seat, at the
-        # drop's own level: the reported area-1 ambiguity was coater#768 with
-        # the drop at (53,20,1) and a cargo lane at (55,20,1), both inside the
-        # 1.0 radius on opposite sides of the seat at (54,20,0).
-        for dx in range(-body_half, body_half + 1):
-            canvas.belt_ban.setdefault((cx + dx, cy), set()).add(staged.port.host_z)
+        # The body's OWN level was banned here too, to stop `_merge_frontier`
+        # OFFERING a body tile as a merge goal -- the one path by which a
+        # second predecessor could reach a cell the coater covers, since A*
+        # cannot step onto an occupied belt.  The frontier offers only cells
+        # `_Canvas.free` accepts, so that ban could only bite on a body cell
+        # that was free when it was written.  Measured over three proliferated
+        # specs and 60 committed body cells: 0 were free and 60 carried the
+        # node's own belt, already on the canvas by staging time.  The clause
+        # could not change a routing decision, so it is gone.  See
+        # `test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_there`.
         rival = (2 * cx - staged.port.x, 2 * cy - staged.port.y)
         canvas.belt_ban.setdefault(rival, set()).add(staged.port.z)
     for dx in range(-span, span + 1):
