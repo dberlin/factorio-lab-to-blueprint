@@ -15,6 +15,7 @@ import {
   BuildRequestError,
   DEFAULT_OPTIONS,
   type Job,
+  MachineRank,
   ProliferatorTier,
   projectSolve,
   RequestStrategy,
@@ -42,6 +43,7 @@ export function BuildPanel() {
   const bandId = useId();
   const budgetId = useId();
   const proliferatorTierId = useId();
+  const machineRankId = useId();
   const flowId = useId();
 
   // A build outlives the panel if the page changes under it; aborting on
@@ -232,6 +234,19 @@ export function BuildPanel() {
           <option value="1">Mk.I</option>
           <option value="2">Mk.II</option>
           <option value="3">Mk.III</option>
+        </select>
+
+        <label htmlFor={machineRankId}>Machine ranking</label>
+        <select
+          id={machineRankId}
+          value={options.machine_rank}
+          onChange={(event) => {
+            const rank = MachineRank.safeParse(event.target.value);
+            if (rank.success) set('machine_rank', rank.data);
+          }}
+        >
+          <option value="exact">Exact (the URL&rsquo;s machine)</option>
+          <option value="up-to">Up to (fewest machines at or below it)</option>
         </select>
 
         <label className="checkbox">
