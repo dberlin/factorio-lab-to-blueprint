@@ -1719,6 +1719,7 @@ def _coater_placement(
     merge_under_body: bool,
     second_belt_in_supply_area: bool = False,
     one_run_two_belts_in_supply_area: bool = False,
+    body_spans_two_runs: bool = False,
 ) -> Placement:
     """A coater at yaw 90 riding a straight lane, optionally spoiled.
 
@@ -1739,11 +1740,27 @@ def _coater_placement(
     (``output_obj`` from the far one to the near one).  Same positions, same
     radius membership, but one run carries one item, so there is no rotation
     ambiguity and the clause must NOT fire.
+
+    ``body_spans_two_runs`` is the RUNS-ONLY clause on the BODY tiles, with NO
+    merge anywhere: it severs (9, 5, 0)'s link into (10, 5, 0) by dropping its
+    ``out``, so ``_build_runs`` starts a fresh run at (10, 5, 0) for lack of
+    any predecessor -- not because two chains point at it.  (9, 5, 0) keeps
+    its own single predecessor from (8, 5, 0), so no belt anywhere gets a
+    second predecessor and ``merged`` stays empty. The two runs still meet: one
+    covers body tile (9, 5, 0), the other covers body tiles (10, 5, 0) and
+    (11, 5, 0), so ``distinct_runs`` over the body is exactly 2. This is the
+    fixture for the message-construction bug (spec review I2): with ``merged``
+    empty, the old message read "rides a belt merge under its body: belt(s)
+    [] ... have two or more predecessors, and its body tiles carry 2 distinct
+    belt runs" -- a merge diagnosis with no evidence, for a defect that is not
+    a merge.
     """
     buildings: list[PlacedBuilding] = [
         belt(7, 5, out=1),
         belt(8, 5, out=2),
-        belt(9, 5, out=3),  # body tile (dx=-1): the merge target when spoiled
+        # body tile (dx=-1): the merge target when spoiled by `merge_under_body`;
+        # its own link onward is severed instead when `body_spans_two_runs`.
+        belt(9, 5, out=None if body_spans_two_runs else 3),
         belt(10, 5, out=4),  # the coater's own ridden tile (dx=0)
         belt(11, 5, out=5),  # body tile (dx=+1)
         belt(12, 5),
@@ -1821,6 +1838,32 @@ def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None
     report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
     findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
     assert not findings, [f.message for f in findings]
+
+
+def test_coater_body_spans_two_runs_with_no_merge_is_convicted() -> None:
+    """The runs-only body clause, fired with ``merged`` EMPTY.
+
+    Final-review finding I2: the message construction used to assume
+    ``merged`` was non-empty, so when only this clause fired it read "rides a
+    belt merge under its body: belt(s) [] on its body tiles have two or more
+    predecessors, and its body tiles carry 2 distinct belt runs" -- a merge
+    diagnosis with an empty evidence list, for a defect that is not a merge.
+    ``test_coater_supply_area_with_two_belts_of_two_runs_is_convicted`` above
+    exercises the ADDON-AREA runs clause, not this one; this fixture severs a
+    BODY-internal link instead (see ``_coater_placement``'s
+    ``body_spans_two_runs`` docstring) so no belt anywhere has two
+    predecessors and only the body-runs clause can fire.
+    """
+    placement = _coater_placement(merge_under_body=False, body_spans_two_runs=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert findings, [f.check for f in report.errors]
+    assert len(findings) == 1, [f.message for f in findings]
+    message = findings[0].message
+    assert "has a body spanning more than one belt run" in message
+    assert "rides a belt merge" not in message
+    assert not findings[0].detail["merged_belts"]
+    assert len(findings[0].detail["distinct_runs"]) >= 2
 
 
 def _fed_coater_node(*, severed: bool) -> Placement:
