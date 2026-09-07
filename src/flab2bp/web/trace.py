@@ -15,6 +15,7 @@ as arrays and ~1.1MB as objects, and the server's existing gzip
 from __future__ import annotations
 
 import threading
+from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Final, cast
@@ -156,8 +157,11 @@ class TraceRing:
         """
         with self._lock:
             held = [frame for frame, _size in self._frames]
-        fresh = [frame for frame in held if int(cast(int, frame["seq"])) > cursor]
-        page = fresh[:limit]
+        # The collector assigns monotonically increasing sequence numbers.
+        start = bisect_right(held, cursor, key=lambda frame: int(cast(int, frame["seq"])))
+        # Preserve slice semantics even for zero and negative page limits.
+        stop = start + limit if limit >= 0 else limit
+        page = held[start:stop]
         if not page:
             return [], cursor
         return page, int(cast(int, page[-1]["seq"]))

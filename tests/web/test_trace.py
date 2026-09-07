@@ -167,6 +167,20 @@ def test_ring_evicts_oldest_on_the_byte_bound_and_counts_it() -> None:
     assert ring.dropped == 17
 
 
+def test_ring_bisect_preserves_evicted_cursor_and_slice_boundaries() -> None:
+    ring = TraceRing(max_frames=4)
+    for seq in (1, 3, 5, 7, 9, 11):
+        ring.append({"seq": seq, "buildings": []})
+    retained = [5, 7, 9, 11]
+    for cursor in (-1, 5, 6, 9, 11, 100):
+        for limit in (-10, -1, 0, 1, 8):
+            expected = [seq for seq in retained if seq > cursor][:limit]
+            page, next_cursor = ring.since(cursor, limit=limit)
+            assert [frame["seq"] for frame in page] == expected
+            assert next_cursor == (expected[-1] if expected else cursor)
+    assert TraceRing().since(17) == ([], 17)
+
+
 def test_ring_append_and_since_from_different_threads_never_raise() -> None:
     """``append`` (the trace daemon) and ``since`` (an HTTP handler) run on
 
