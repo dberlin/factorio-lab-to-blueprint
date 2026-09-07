@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
 
 import pytest
@@ -8,7 +9,7 @@ from flab2bp.dsp import catalog
 from flab2bp.lab import params as P
 from flab2bp.lab import techs
 from flab2bp.lab.data import load_vendored, load_vendored_hash_index
-from flab2bp.lab.schema import Dataset
+from flab2bp.lab.schema import Dataset, Item
 from flab2bp.lab.url import parse_url
 
 
@@ -90,6 +91,27 @@ def test_no_technology_set_unlocks_every_belt_and_sorter_above_the_floor() -> No
     assert tiers.belt_item_ids == ("conveyor-belt-2", "conveyor-belt-3")
     assert tiers.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
     assert tiers.from_url is False
+
+
+def test_logistics_tiers_for_request_scans_dataset_items_once() -> None:
+    """The technology/belt/sorter classification was three independent full
+    passes over `dataset.items`; they are now fused into one."""
+
+    class _CountedItems(tuple[Item, ...]):
+        def __iter__(self) -> Iterator[Item]:
+            counts.append(1)
+            return super().__iter__()
+
+    data = load_vendored()
+    counts: list[int] = []
+    counted = replace(data, items=_CountedItems(data.items))
+    counts.clear()  # drop the __post_init__ index-building pass
+
+    request = parse_url(
+        "https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe=conveyor-belt-2&v=11"
+    )
+    techs.logistics_tiers_for_request(request, counted)
+    assert len(counts) == 1
 
 
 def test_belt_one_floor_lists_every_belt() -> None:

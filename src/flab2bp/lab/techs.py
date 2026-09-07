@@ -24,7 +24,7 @@ from functools import lru_cache
 
 from flab2bp.dsp import catalog
 from flab2bp.lab.data import load_vendored
-from flab2bp.lab.schema import Dataset
+from flab2bp.lab.schema import Dataset, Item
 from flab2bp.lab.url import LabRequest, parse_url
 
 __all__ = ["belt_rules_for_url", "logistics_tiers_for_request"]
@@ -75,7 +75,24 @@ def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalo
     ``("sorter-1",)``: it cannot build belts either, and refusing every build
     over it would help nobody.
     """
-    technology_items = [item for item in dataset.items if item.technology is not None]
+    # Three independent full passes over `dataset.items` fused into one: which
+    # `unlocked` items are even ELIGIBLE (has a technology / is a belt / is a
+    # sorter with a known rate) does not depend on `unlocked` itself, only the
+    # FINAL filtering below does -- and `unlocked` cannot be known until every
+    # technology item has been seen, so that filtering stays a second step
+    # over these much smaller candidate lists rather than over `dataset.items`
+    # again. Predicates copied byte-for-byte from what they replace.
+    technology_items: list[Item] = []
+    belt_candidates: list[Item] = []
+    sorter_candidates: list[Item] = []
+    for item in dataset.items:
+        if item.technology is not None:
+            technology_items.append(item)
+        if item.belt is not None:
+            belt_candidates.append(item)
+        if catalog.get_item_id(item.id) in catalog.SORTER_RATE_AT_1:
+            sorter_candidates.append(item)
+
     researched = request.researched_technology_ids
     unlocked: set[str] = set()
     for item in technology_items:
@@ -85,23 +102,25 @@ def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalo
 
     floor_id = request.belt_id or "conveyor-belt-1"
     floor_speed = dataset.belt_speed(floor_id)
-    belts = {
-        item.id
-        for item in dataset.items
-        if item.belt is not None
-        and item.id in unlocked
-        # Strictly faster than the floor: a belt at the SAME speed is not an
-        # "upgrade".  `_to_build_spec` would list it in `belt_upgrades`
-        # anyway, and `BuildSpec._tiers_are_ordered` requires each upgrade to
-        # be strictly faster than the one before, so admitting a same-speed
-        # belt here would crash there instead of harmlessly deduplicating.
-        and item.belt.speed > floor_speed
-    }
+    belts = set()
+    for item in belt_candidates:
+        assert item.belt is not None
+        if (
+            item.id in unlocked
+            # Strictly faster than the floor: a belt at the SAME speed is not
+            # an "upgrade".  `_to_build_spec` would list it in
+            # `belt_upgrades` anyway, and `BuildSpec._tiers_are_ordered`
+            # requires each upgrade to be strictly faster than the one
+            # before, so admitting a same-speed belt here would crash there
+            # instead of harmlessly deduplicating.
+            and item.belt.speed > floor_speed
+        ):
+            belts.add(item.id)
     belts.add(floor_id)
     belt_item_ids = tuple(sorted(belts, key=lambda item_id: (dataset.belt_speed(item_id), item_id)))
 
     sorter_rates: dict[str, Fraction] = {}
-    for item in dataset.items:
+    for item in sorter_candidates:
         numeric = catalog.get_item_id(item.id)
         if numeric in catalog.SORTER_RATE_AT_1 and item.id in unlocked:
             sorter_rates[item.id] = catalog.SORTER_RATE_AT_1[numeric]
