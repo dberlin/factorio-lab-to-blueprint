@@ -1483,3 +1483,34 @@ def test_a_zero_limit_on_a_raw_input_refuses_the_solve(data: Dataset) -> None:
     """Nothing here crafts iron ore, so the block cannot honour the limit."""
     with pytest.raises(InfeasibleError, match="iron-ore is limited to zero as an input"):
         solve(data, _with_limit("iron-ore", 0))
+
+
+def test_up_to_changes_machine_ids_without_changing_counts_or_flows(data: Dataset) -> None:
+    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.lab.flow import canonicalize_request
+    from flab2bp.rates.machine_choice import MachineRank
+
+    url = next(entry.url for entry in URL_CORPUS if entry.url_id == "quantum-chip")
+    request = canonicalize_request(parse_url(url))
+    exact = solve(data, request, machine_rank=MachineRank.EXACT)
+    up_to = solve(data, request, machine_rank=MachineRank.UP_TO)
+
+    assert {group.recipe_id: group.machines for group in up_to.groups} == {
+        group.recipe_id: group.machines for group in exact.groups
+    }
+    assert {group.recipe_id: dict(group.inputs) for group in up_to.groups} == {
+        group.recipe_id: dict(group.inputs) for group in exact.groups
+    }
+    assert {group.recipe_id: dict(group.outputs) for group in up_to.groups} == {
+        group.recipe_id: dict(group.outputs) for group in exact.groups
+    }
+    moved = {
+        move.recipe_id: (move.from_machine, move.to_machine)
+        for move in up_to.machine_moves
+    }
+    assert moved
+    assert all(move.count_before == move.count_after for move in up_to.machine_moves)
+    for group in up_to.groups:
+        if group.recipe_id in moved:
+            assert group.machine_item_id == moved[group.recipe_id][1]
+            assert group.adjusted.machine_item_id == group.machine_item_id
