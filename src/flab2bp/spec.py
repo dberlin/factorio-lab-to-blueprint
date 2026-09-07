@@ -20,7 +20,7 @@ from __future__ import annotations
 from enum import StrEnum
 from fractions import Fraction
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # `layout.base` imports only the standard library at runtime -- `BuildSpec`
 # itself is under TYPE_CHECKING there -- so this is not a cycle.  The refusal
@@ -160,6 +160,16 @@ class SelfLoopSeed(_Frozen):
         return self
 
 
+class MachineMoveRecord(_Frozen):
+    """One recipe the ``up-to`` rule moved to a lower-tier machine."""
+
+    recipe_id: str
+    from_machine: str
+    to_machine: str
+    count_before: int = Field(gt=0)
+    count_after: int = Field(gt=0)
+
+
 class BuildSpec(_Frozen):
     """One complete, self-consistent thing to build.
 
@@ -196,6 +206,10 @@ class BuildSpec(_Frozen):
     #: Sorter tiers the save can build, slowest first.  Every tier by default
     #: so a spec built without a request keeps today's behaviour.
     sorter_item_ids: tuple[str, ...] = ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
+    #: How FactorioLab's machine rank was read for this candidate.
+    machine_rank: str = "exact"
+    #: Under ``up-to``, every recipe whose machine moved down a tier.
+    machine_moves: tuple[MachineMoveRecord, ...] = ()
     #: FactorioLab's belt stack (``ist``): the cargo stack the player's bus
     #: carries.  1 when the URL says nothing.  Never above 4, the game's
     #: largest pile (``catalog.PILER_MAX_STACK``).
@@ -247,6 +261,18 @@ class BuildSpec(_Frozen):
     #: Items a group both consumes and produces.  Steady-state correct and dead
     #: on paste until primed; see :class:`SelfLoopSeed`.
     self_loop_seeds: tuple[SelfLoopSeed, ...] = ()
+
+    @field_validator("machine_rank")
+    @classmethod
+    def _known_machine_rank(cls, value: str) -> str:
+        from flab2bp.rates.machine_choice import MachineRank
+
+        allowed = tuple(rank.value for rank in MachineRank)
+        if value not in allowed:
+            raise ValueError(
+                f"machine_rank must be one of {', '.join(allowed)}; got {value!r}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _tiers_are_ordered(self) -> BuildSpec:
