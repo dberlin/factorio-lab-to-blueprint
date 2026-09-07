@@ -28,6 +28,18 @@ every one of these is a deviation from the brief's assumed shapes:
 * ``CandidatePolicy`` lives in ``flab2bp.rates.candidates``, not
   ``flab2bp.spec`` (which holds ``BuildSpec`` et al., not the policy enum).
 * ``Unit``'s recipe attribute is ``.recipe``, not ``.recipe_id``.
+
+Fix round 1 (review, 2026-09-07) also caught that ``Placement`` DOES have an
+``.area`` property (``base.py:555-561`` -- it falls back to building-bounds
+area when ``frame`` is ``None``, which is strictly more informative than the
+frame-only computation this script used to do by hand); it is used directly
+below. And that ``belt_vertical_construction`` -- left at
+``SequencePairLayout``'s default of ``True`` in the first pass -- is derived
+here from the swept URL exactly as production does
+(``pipeline.py:913``: ``belt_vertical_construction=belt_rules.vertical_construction``,
+via ``lab.techs.belt_rules_for_url``), rather than assumed, so a future
+re-measure on a URL whose technology list changes that flag will not silently
+diverge from the build it claims to reproduce.
 """
 
 from __future__ import annotations
@@ -38,6 +50,7 @@ import time
 from pathlib import Path
 
 from flab2bp.lab.data import load_vendored
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout
@@ -59,6 +72,7 @@ def main(argv: list[str]) -> int:
         parse_url(url),
         candidate_policies=(CandidatePolicy[policy_name],),
     ).candidates[0]
+    belt_rules = belt_rules_for_url(url)
     partitioned = initial_partition(spec)
     block = partitioned.blocks[block_index]
     sub = sub_spec(spec, block, block_index)
@@ -70,7 +84,9 @@ def main(argv: list[str]) -> int:
     }
     try:
         placement = SequencePairLayout(
-            band_policy=BandPolicy.parse("portable"), islands=1
+            band_policy=BandPolicy.parse("portable"),
+            belt_vertical_construction=belt_rules.vertical_construction,
+            islands=1,
         ).lay_out(sub, time_budget_s=budget_s)
         record |= {
             "ok": True,
@@ -79,11 +95,7 @@ def main(argv: list[str]) -> int:
                 if placement.frame is None
                 else {"width": placement.frame.width, "height": placement.frame.height}
             ),
-            "area": (
-                None
-                if placement.frame is None
-                else placement.frame.width * placement.frame.height
-            ),
+            "area": placement.area,
         }
     except NoValidLayout as refusal:
         record |= {"ok": False, "verdict": str(refusal)[:600]}

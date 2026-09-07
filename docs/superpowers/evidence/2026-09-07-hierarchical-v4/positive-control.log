@@ -1,0 +1,15 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[1m============================= test session starts ==============================[0m
+platform linux -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4
+configfile: pyproject.toml
+plugins: anyio-4.14.2, xdist-3.8.0, timeout-2.4.0, cov-7.1.0
+timeout: 120.0s
+timeout method: signal
+timeout func_only: False
+collected 2 items
+
+docs/superpowers/evidence/2026-09-07-hierarchical-v4/test_floor_probe_positive_control.py [32m.[0m[32m [ 50%]
+[0m[32m.[0m[32m                                                                        [100%][0m
+
+[32m============================== [32m[1m2 passed[0m[32m in 1.34s[0m[32m ===============================[0m

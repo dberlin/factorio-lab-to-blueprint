@@ -76,8 +76,14 @@ not an identical re-run of it.
 
 URL: `https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11`
 (`large-mall`, `NO_PROLIFERATOR`), the same URL v3's gate used. `-load.txt` recorded once
-per block row, immediately before that row's first run (five rows), per the constraints'
-row-level relaxation.
+per block row, immediately before that row's first run (five rows) -- a deliberate
+deviation from `constraints.md`'s "Record CPU pressure beside EVERY timing", NOT something
+`constraints.md` itself grants. The controller's Task 6 dispatch message authorised it in
+these words: "A `-load.txt` per sweep cell is a lot of files; that is fine -- evidence is
+never too large here. If you prefer, one load file per block-row is acceptable provided
+you say so and take it immediately before that row's first run." (Fix round 1, Finding 2:
+this citation was wrongly attributed to `constraints.md` in the first pass; corrected
+here and in `task-6-report.md`.)
 
 Loads (`runnable_5s_mean`, vmstat, under 64 on all rows):
 
@@ -153,6 +159,22 @@ such a block to `sequence-pair` alone, on this evidence, is expected to produce 
 layout. (This measurement covers five specific block shapes at one URL; it is evidence
 for the rule, not a proof that no coater-free block anywhere can ever clear 20.0s -- the
 same caveat the `UNCOVERED_*` thresholds' own docstring carries.)
+
+**This is stronger than "no budget up to 20.0s happened to work" for three of the five
+shapes.** 15 of the 25 cells -- every budget swept for `magnet`, `iron-ingot`, and
+`electric-motor` -- refused via **expansion budget exhausted**
+(`sequence_solver.py:1603`, `self.budget.shared_left == 0`): the search exhausted its own
+candidate space on its own accounting, a termination independent of the wall clock (wall
+stayed ~2-4s at every budget from 5.0s to 20.0s -- see the grid above). For those three
+shapes, NO per-block budget -- not merely none up to 20.0s -- would be expected to help;
+raising the budget only extends a clock the search was not waiting on. Only the other 10
+cells (`super-magnetic-ring`, block 20, and the multi-recipe block, block 21) refused via
+the wall-clock **deadline exhausted** (`sequence_solver.py:1602`,
+`self.deadline_reached()`, wall scaling with the swept budget up to 18.3s / 17.7s at
+20.0s), where a larger budget is at least the right KIND of lever, even though none swept
+here reached one. So the abstain this constant drives is not merely "we didn't measure
+far enough" for most of the measured shapes -- it is "more time would not have changed
+the outcome".
 
 ## Step 5: the constant
 
@@ -258,10 +280,66 @@ This is the commit that takes
 `tests/test_pipeline.py::test_all_products_sequence_pair_honours_the_exact_layout_deadline`
 off the branch's known-reds list.
 
+## Fix round 1 (review, 2026-09-07)
+
+The review re-derived both `SEQUENCE_PAIR_EXACT_FLOOR_S = 21.0` and the deadline test's
+ceiling (1.25s) / new budget (1.0s) independently from the raw cells and logs and confirmed
+both stand. **Neither the 25-cell sweep nor the 18-run deadline grid was re-run**; the fixes
+below are to the doc-comment, this file's citations, `floor_probe.py` itself, and one added
+test file -- not to any measured number.
+
+- **Finding 1** (both refusal mechanisms named): `dispatch.py`'s doc-comment and this file's
+  "Deriving `SEQUENCE_PAIR_EXACT_FLOOR_S`" section were expanded to name BOTH refusal
+  reasons the 25 cells actually show -- "deadline exhausted" (`sequence_solver.py:1602`,
+  10 of 25 cells: blocks 20/21) and "expansion budget exhausted"
+  (`sequence_solver.py:1603`, 15 of 25 cells: blocks 1/4/17) -- and to say plainly that for
+  the three `expansion budget exhausted` shapes, no per-block budget at all is expected to
+  help (the search exhausted its own candidate space, not the wall). Verified against the
+  committed JSONs directly (`grep`-style pass over all 25 `floor-b*.json` files' `verdict`
+  fields), reproducing the reviewer's 15/25 split exactly.
+- **Finding 2** (citation): the per-row `-load.txt` cadence is a real, authorised deviation
+  from `constraints.md`'s "beside EVERY timing" rule, but it was mis-cited to
+  `constraints.md` itself in the first pass. Corrected here (above, Step 3) and in
+  `task-6-report.md` to attribute it to the controller's Task 6 dispatch message, quoted
+  verbatim, rather than to a rule that does not say this.
+- **Finding 3** (`Placement.area` exists): `base.py:555-561` defines `Placement.area` as a
+  property (`frame.width * frame.height` when `frame` is set, else a building-bounds
+  fallback) -- the first pass's report claimed no such attribute existed, which was wrong;
+  confirmed by reading `base.py` directly this round. `floor_probe.py` now records
+  `placement.area` instead of hand-computing `frame.width * frame.height`, which is
+  strictly more correct (it also covers `frame is None`, which the hand-rolled version
+  could not). This code path was never exercised by the real sweep (no cell succeeded), so
+  the wrong version shipped inert -- which is exactly what Finding 4 closes.
+- **Finding 4** (positive control): `test_floor_probe_positive_control.py` (new, in this
+  directory) drives `floor_probe.main`'s SUCCESS branch with every collaborator stubbed
+  (`build_candidates`, `belt_rules_for_url`, `initial_partition`, `sub_spec`,
+  `SequencePairLayout.lay_out`, `parse_url`, `load_vendored`) and a real `Placement` built
+  with an `AreaFrame`, and asserts the JSON record shows `ok: true` and `area` equal to
+  `Placement.area`'s computed value (80, from a 10x8 frame) -- not a hand-rolled figure. A
+  second test in the same file drives the refusal branch (the one the real sweep exercised
+  25/25 times), so both of `main`'s only two outcomes are covered by one file.
+  `uv run pytest docs/superpowers/evidence/2026-09-07-hierarchical-v4/test_floor_probe_positive_control.py -v`
+  -> exit 0, 2 passed (load `runnable_5s_mean` recorded in
+  `positive-control-load.txt`; full output in `positive-control.log`).
+- **Finding 5** (`belt_vertical_construction`): `floor_probe.py` derived it from
+  `SequencePairLayout`'s default (`True`) rather than from the swept URL in the first pass,
+  while production derives it per-URL (`pipeline.py:913`,
+  `belt_rules.vertical_construction` via `lab.techs.belt_rules_for_url`). Fixed to derive
+  it properly: `floor_probe.py` now calls `belt_rules_for_url(url)` and passes
+  `belt_vertical_construction=belt_rules.vertical_construction` to `SequencePairLayout`,
+  exactly as `pipeline.py` does. Checked directly against the swept URL:
+  `belt_rules_for_url(<swept URL>).vertical_construction == True` -- the same value the
+  unpatched default already produced, so this measurement's numbers are unaffected; only a
+  future re-measure on a URL with a different technology list would have silently diverged
+  without this fix.
+
 ## Files in this directory from this task
 
 - `floor_probe.py` -- the probe script, with its deviations from the brief documented in its
-  own module docstring.
+  own module docstring (updated in fix round 1: `Placement.area`, real
+  `belt_vertical_construction`).
+- `test_floor_probe_positive_control.py` -- fix round 1's positive control (Finding 4).
+- `positive-control.log` / `-load.txt` -- the positive-control test run.
 - `floor-b{1,4,17,20,21}-{5.0,7.5,10.0,15.0,20.0}.json` / `.log` -- 25 sweep cells.
 - `floor-b{1,4,17,20,21}-row-load.txt` -- five row-level loads.
 - `deadline-{0.4,0.6,0.8,1.0,1.25,1.5}-run{1,2,3}.log` / `-load.txt` -- 18 deadline-test runs.

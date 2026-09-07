@@ -45,10 +45,19 @@ UNCOVERED_STRIPS = 85
 #: The smallest per-block budget at which `sequence-pair` produced an exact
 #: layout for EVERY coater-free mall block measured in
 #: `docs/superpowers/evidence/2026-09-07-hierarchical-v4/exact-floor.md`.
-#: Below it, the arm's own exact preparation is cancelled mid-flight and the
-#: block comes back "deadline exhausted before finding an exact layout"
-#: (`sequence_solver.py:1602`) -- which is what 31 of `mall/no-proliferator`'s
-#: 54 blocks did in the v3 gate, on an arm the rule had chosen for them.
+#: Below it, the arm gives up in one of TWO ways, both terminal for the
+#: block's OWN preparation, not just for the wall it was given:
+#:   * "deadline exhausted before finding an exact layout"
+#:     (`sequence_solver.py:1602`, `deadline_reached()`) -- the search was
+#:     still finding new candidates when the wall ran out; a longer budget
+#:     COULD have helped.
+#:   * "expansion budget exhausted before finding an exact layout"
+#:     (`sequence_solver.py:1603`, `self.budget.shared_left == 0`) -- the
+#:     search exhausted its own candidate space on its own accounting, a
+#:     termination independent of the wall clock. A longer budget CANNOT
+#:     help here: nothing was still running when it gave up.
+#: 31 of `mall/no-proliferator`'s 54 blocks hit one of these two in the v3
+#: gate, on an arm the rule had chosen for them.
 #:
 #: THIS IS A MEASUREMENT, NOT A TUNING KNOB.  Re-measure it with
 #: `floor_probe.py` before changing it; a value picked to make a cell pass is
@@ -58,9 +67,17 @@ UNCOVERED_STRIPS = 85
 #: `magnet`, `iron-ingot`, `electric-motor`, `super-magnetic-ring`, and the
 #: `circuit-board`/`processor`/`sorter-1`/`sorter-2`/`sorter-3` block)
 #: produced an exact layout at ANY swept budget from `BLOCK_BUDGET_MIN_S`
-#: (5.0s) through `BLOCK_BUDGET_MAX_S` (20.0s) -- all 25 cells refused. So per
-#: the stated rule this is `BLOCK_BUDGET_MAX_S + 1.0`: no per-block budget the
-#: funding rule can ever hand a coater-free block is above this floor.
+#: (5.0s) through `BLOCK_BUDGET_MAX_S` (20.0s) -- all 25 cells refused. 15 of
+#: those 25 (`magnet`, `iron-ingot`, `electric-motor` -- three of the five
+#: shapes, at every swept budget) refused via EXPANSION BUDGET EXHAUSTED, so
+#: for those three shapes no per-block budget at all -- not just none up to
+#: 20.0s -- is expected to help; only the other 10 (`super-magnetic-ring` and
+#: the multi-recipe block) refused via the wall clock. So per the stated rule
+#: this is `BLOCK_BUDGET_MAX_S + 1.0`: no per-block budget the funding rule
+#: can ever hand a coater-free block is above this floor, and for the
+#: majority of the measured shapes that is true independent of the floor's
+#: exact value -- which makes the abstain this constant drives STRONGER, not
+#: weaker, than "raise the budget and it will eventually work" would suggest.
 SEQUENCE_PAIR_EXACT_FLOOR_S = 21.0
 
 
