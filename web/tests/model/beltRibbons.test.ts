@@ -2,6 +2,8 @@ import { expect, test } from '@rstest/core';
 import {
   ARROW_LENGTH,
   arrowIsDark,
+  arrowWedge,
+  extendEnds,
   blockLength,
   CORNER_RADIUS,
   labelLength,
@@ -241,4 +243,57 @@ test('run colours are deterministic and well separated', () => {
 test('arrow contrast follows the ribbon it sits on', () => {
   expect(arrowIsDark(0xf3ec8a)).toBe(true); // pale yellow run
   expect(arrowIsDark(0x2a2f8f)).toBe(false); // navy run
+});
+
+// ------------------------------------------------------------- run extents
+
+test('a run is grown half a tile at each end so junctions meet flush', () => {
+  const grown = extendEnds([
+    [0, 0.1, 0],
+    [0, 0.1, 1],
+    [0, 0.1, 2],
+  ]);
+  expect(grown.length).toBe(3);
+  expect((grown[0] as Vec3)[2]).toBeCloseTo(-0.5, 6);
+  expect((grown[2] as Vec3)[2]).toBeCloseTo(2.5, 6);
+  // the interior is untouched
+  expect(grown[1]).toEqual([0, 0.1, 1]);
+});
+
+test('a one-belt run becomes a tile-long strip along its own heading', () => {
+  const grown = extendEnds([[3, 0.1, -2]], Math.PI / 2); // heading +X
+  expect(grown.length).toBe(2);
+  expect((grown[0] as Vec3)[0]).toBeLessThan(3);
+  expect((grown[1] as Vec3)[0]).toBeGreaterThan(3);
+  expect((grown[0] as Vec3)[2]).toBeCloseTo(-2, 6);
+  // With no heading there is no direction to extend along, so nothing is drawn.
+  expect(extendEnds([[3, 0.1, -2]])).toEqual([]);
+});
+
+test('the arrow wedge points along travel and is wound to match its normals', () => {
+  const { positions, normals } = arrowWedge();
+  let maxZ = -Infinity;
+  let minZ = Infinity;
+  for (let i = 0; i < positions.length; i += 3) {
+    maxZ = Math.max(maxZ, positions[i + 2] as number);
+    minZ = Math.min(minZ, positions[i + 2] as number);
+  }
+  // The apex is at +Z: the glyph's local +Z is travel.
+  expect(maxZ).toBeGreaterThan(-minZ);
+  expect(maxZ - minZ).toBeCloseTo(ARROW_LENGTH, 5);
+
+  for (let i = 0; i < positions.length; i += 9) {
+    const a = positions.slice(i, i + 3) as number[];
+    const b = positions.slice(i + 3, i + 6) as number[];
+    const c = positions.slice(i + 6, i + 9) as number[];
+    const u = [b[0]! - a[0]!, b[1]! - a[1]!, b[2]! - a[2]!];
+    const v = [c[0]! - a[0]!, c[1]! - a[1]!, c[2]! - a[2]!];
+    const g = [
+      u[1]! * v[2]! - u[2]! * v[1]!,
+      u[2]! * v[0]! - u[0]! * v[2]!,
+      u[0]! * v[1]! - u[1]! * v[0]!,
+    ];
+    const dot = g[0]! * normals[i]! + g[1]! * normals[i + 1]! + g[2]! * normals[i + 2]!;
+    if (Math.hypot(g[0]!, g[1]!, g[2]!) > 1e-9) expect(dot).toBeGreaterThan(0);
+  }
 });

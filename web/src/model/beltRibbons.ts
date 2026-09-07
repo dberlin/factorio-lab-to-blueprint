@@ -68,6 +68,72 @@ export function runPolyline(
 }
 
 /**
+ * Grows a run by half a tile at each end.
+ *
+ * The polyline runs between tile CENTRES, so a strip drawn straight from it
+ * stops half a tile short at both ends. Two consequences, both visible: a run
+ * that merges into another leaves a gap at the junction instead of arriving
+ * flush at the tile it feeds, and a one-belt run has no length at all and
+ * would vanish. A single belt is extended along its own heading, which is the
+ * only direction information it has.
+ */
+export function extendEnds(points: readonly Vec3[], heading?: number): Vec3[] {
+  if (points.length === 0) return [];
+  if (points.length === 1) {
+    if (heading === undefined) return [];
+    const p = points[0] as Vec3;
+    const dir: Vec3 = [Math.sin(heading), 0, Math.cos(heading)];
+    return [
+      [p[0] - dir[0] * SINGLETON_HALF, p[1], p[2] - dir[2] * SINGLETON_HALF],
+      [p[0] + dir[0] * SINGLETON_HALF, p[1], p[2] + dir[2] * SINGLETON_HALF],
+    ];
+  }
+  const out = points.map(copy);
+  const head = out[0] as Vec3;
+  const afterHead = out[1] as Vec3;
+  const tail = out[out.length - 1] as Vec3;
+  const beforeTail = out[out.length - 2] as Vec3;
+  out[0] = grow(head, afterHead);
+  out[out.length - 1] = grow(tail, beforeTail);
+  return out;
+}
+
+const SINGLETON_HALF = 0.45;
+const MAX_END_PAD = 0.5;
+
+/** Moves `from` away from `toward` by half their separation, capped. */
+function grow(from: Vec3, toward: Vec3): Vec3 {
+  const d = sub(from, toward);
+  const l = length(d);
+  if (l < 1e-6) return from;
+  const pad = Math.min(MAX_END_PAD, l / 2);
+  return add(from, scale(d, pad / l));
+}
+
+/**
+ * The direction arrow: a low triangular wedge that sits proud of the strip.
+ *
+ * Raised rather than flat so it still reads when the camera is low and a flat
+ * glyph would be edge-on, and open underneath because it is always drawn
+ * sitting on a strip.
+ */
+export function arrowWedge(size: number = ARROW_SIZE): RibbonMesh {
+  const mesh: RibbonMesh = { positions: [], normals: [] };
+  const h = size * 0.25;
+  const apex: Vec3 = [0, h, 0.62 * size];
+  const left: Vec3 = [-0.46 * size, h, -0.36 * size];
+  const right: Vec3 = [0.46 * size, h, -0.36 * size];
+  const apex0: Vec3 = [0, 0, 0.62 * size];
+  const left0: Vec3 = [-0.46 * size, 0, -0.36 * size];
+  const right0: Vec3 = [0.46 * size, 0, -0.36 * size];
+  pushTri(mesh, apex, left, right, UP);
+  pushQuad(mesh, apex, left, left0, apex0, normalize([-0.62, 0, 0.35]));
+  pushQuad(mesh, apex, right, right0, apex0, normalize([0.62, 0, 0.35]));
+  pushQuad(mesh, left, right, right0, left0, [0, 0, -1]);
+  return mesh;
+}
+
+/**
  * Turns each altitude change into a short, very steep riser instead of a long
  * ramp, so a level change reads as a step up rather than a slope.
  *
