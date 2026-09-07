@@ -137,7 +137,9 @@ def block_features(sub: BuildSpec) -> BlockFeatures:
     )
 
 
-def dispatch_arms(features: BlockFeatures, arms: tuple[str, ...]) -> tuple[str, ...]:
+def dispatch_arms(
+    features: BlockFeatures, arms: tuple[str, ...], *, budget_s: float | None = None
+) -> tuple[str, ...]:
     """The arms this block is offered THIS round, narrowest first.
 
     THE ANSWER IS ALWAYS A SUBSET OF ``arms``.  The rule below names
@@ -150,6 +152,18 @@ def dispatch_arms(features: BlockFeatures, arms: tuple[str, ...]) -> tuple[str, 
     not on offer falls back to racing the whole offered set -- the same honest
     answer the two `UNCOVERED_*` branches give when the evidence does not
     cover the block.
+
+    A THIRD UNCOVERED REGION, AND IT IS ABOUT THE CLOCK RATHER THAN THE SHAPE.
+    The cross-tab above is a ratio between two arms that both FINISHED.  A
+    coater-free block funded below `SEQUENCE_PAIR_EXACT_FLOOR_S` has no such
+    ratio, because the sequence-pair arm does not finish: it is cancelled
+    inside exact preparation and refuses "deadline exhausted before finding an
+    exact layout".  The v3 gate measured 31 of `mall/no-proliferator`'s 54
+    blocks doing exactly that, against 6 unplaced when both arms were raced.
+    So an underfunded coater-free block is evidence the cross-tab does not
+    cover, and it gets the same answer the other two uncovered regions get.
+    ``budget_s=None`` means "no budget was supplied", which keeps v3's answer
+    for every caller that does not pass one.
     """
     if len(arms) < 2:
         return arms
@@ -160,6 +174,12 @@ def dispatch_arms(features: BlockFeatures, arms: tuple[str, ...]) -> tuple[str, 
     if features.coaters > 0 and features.strips <= ARM_SMALL_STRIPS:
         chosen = ARM_FREEFORM
     else:
+        if (
+            features.coaters == 0
+            and budget_s is not None
+            and budget_s < SEQUENCE_PAIR_EXACT_FLOOR_S
+        ):
+            return arms
         chosen = ARM_SEQUENCE_PAIR
     return (chosen,) if chosen in arms else arms
 

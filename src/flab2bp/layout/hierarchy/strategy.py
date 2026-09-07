@@ -566,10 +566,22 @@ class HierarchicalLayout:
         # THIS CALL'S OWN no-good memo -- see `_ShapeNoGood`'s docstring for
         # why it is a local rather than `self._nogood`.
         nogood = _ShapeNoGood()
-        # THIS CALL'S OWN arm-dispatch cache, keyed on `ShapeKey`: see
+        # THIS CALL'S OWN arm-dispatch cache, keyed on `(ShapeKey, budget)`: see
         # `_arms_for`'s docstring for why two same-shaped blocks share an
-        # answer, and `_ShapeNoGood`'s docstring for why this is a local too.
-        arm_cache: dict[ShapeKey, tuple[str, ...]] = {}
+        # answer (but only at the same budget), and `_ShapeNoGood`'s
+        # docstring for why this is a local too.
+        arm_cache: dict[tuple[ShapeKey, float], tuple[str, ...]] = {}
+        # Seeded before the first round has computed its own `block_budget`
+        # (below, from `share`): the round loop needs SOME budget to offer
+        # `_arms_for` before it can size itself off `_arms_for`'s own answer.
+        # `BLOCK_BUDGET_MIN_S` is a fine seed because it changes nothing that
+        # matters -- every real per-block budget this rule can ever produce
+        # is below `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S` anyway
+        # (`BLOCK_BUDGET_MAX_S` is a whole second under it), so the abstain
+        # branch is unconditional either way. From round 2 on this holds the
+        # PRIOR round's real `block_budget`, computed below and never
+        # recomputed here.
+        block_budget = BLOCK_BUDGET_MIN_S
         # ONE POOL FOR THE WHOLE BUILD, not one per round: a re-cut starts a
         # new round with more (smaller) blocks, and building a fresh pool for
         # it would pay a spawned process pool's own start-up again for jobs
@@ -610,7 +622,10 @@ class HierarchicalLayout:
                 todo = [index for index, entry in enumerate(entries) if entry.placement is None]
                 if not todo:
                     break
-                jobs = sum(len(self._arms_for(spec, entries[index], arm_cache)) for index in todo)
+                jobs = sum(
+                    len(self._arms_for(spec, entries[index], arm_cache, block_budget=block_budget))
+                    for index in todo
+                )
                 # COUNTED HERE, NOT AFTER `_solve_round` RETURNS (v3 Task 3,
                 # Ruling P3): by then `_solve_round` has already widened
                 # `entries[index].arms_tried`, so `_arms_for`'s widening
@@ -622,7 +637,9 @@ class HierarchicalLayout:
                 # identical once-per-block-per-round numbers with the correct
                 # attribution.
                 for index in todo:
-                    chosen = self._arms_for(spec, entries[index], arm_cache)
+                    chosen = self._arms_for(
+                        spec, entries[index], arm_cache, block_budget=block_budget
+                    )
                     if len(chosen) > 1:
                         stats.arm_dispatch_both += 1.0
                     elif chosen[0] == dispatch.ARM_FREEFORM:
@@ -855,14 +872,28 @@ class HierarchicalLayout:
         return (self.block_strategy,)
 
     def _arms_for(
-        self, spec: BuildSpec, entry: _Entry, cache: dict[ShapeKey, tuple[str, ...]]
+        self,
+        spec: BuildSpec,
+        entry: _Entry,
+        cache: dict[tuple[ShapeKey, float], tuple[str, ...]],
+        *,
+        block_budget: float,
     ) -> tuple[str, ...]:
         """Which arms this block is offered this round.
 
-        Cached on `ShapeKey` for the build: `sub_spec` is a pure function of
-        the units (its `index` argument reaches only a diagnostic label -- see
-        `_solve_round`'s docstring), so two same-shaped blocks score the same
-        features, and `plan_strips` is the only expensive thing here.
+        Cached on `(ShapeKey, block_budget)` for the build: `sub_spec` is a
+        pure function of the units (its `index` argument reaches only a
+        diagnostic label -- see `_solve_round`'s docstring), so two
+        same-shaped blocks funded at the same budget score the same features,
+        and `plan_strips` is the only expensive thing here.
+
+        THE CACHE KEY CARRIES THE BUDGET.  Two rounds of one build hand the
+        same shape different per-block budgets (`clamp(remaining / rounds_left
+        / waves, 5, 20)`), and the answer legitimately differs across
+        `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S` -- so a shape-only key would
+        serve a later, better-funded round with an earlier round's answer.
+        `plan_strips` still runs at most once per (shape, budget), which is
+        what the cache is for.
 
         A block that has already been offered its dispatched arm and refused
         gets the FULL set.
@@ -883,12 +914,14 @@ class HierarchicalLayout:
         arms = self._arms()
         if len(arms) < 2:
             return arms
-        key = shape_key(entry.units)
+        key = (shape_key(entry.units), block_budget)
         chosen = cache.get(key)
         if chosen is None:
             try:
                 chosen = dispatch.dispatch_arms(
-                    dispatch.block_features(sub_spec(spec, entry.units, 0)), arms
+                    dispatch.block_features(sub_spec(spec, entry.units, 0)),
+                    arms,
+                    budget_s=block_budget,
                 )
             except Exception:  # noqa: BLE001 - a crashed feature vector races both arms, not an abort
                 chosen = arms
@@ -920,7 +953,7 @@ class HierarchicalLayout:
         block_budget: float,
         deadline: float,
         nogood: _ShapeNoGood,
-        arm_cache: dict[ShapeKey, tuple[str, ...]],
+        arm_cache: dict[tuple[ShapeKey, float], tuple[str, ...]],
     ) -> int:
         """Solve every block in ``todo`` with every arm; smallest valid wins.
 
@@ -952,7 +985,10 @@ class HierarchicalLayout:
         ``(block, arm)`` pairs this round did NOT hand to a placer -- a
         remembered no-good or a same-round duplicate.
         """
-        arms_by_slot = [self._arms_for(spec, entries[index], arm_cache) for index in todo]
+        arms_by_slot = [
+            self._arms_for(spec, entries[index], arm_cache, block_budget=block_budget)
+            for index in todo
+        ]
         shapes = [shape_key(entries[index].units) for index in todo]
         # `(shape, arm) -> todo-slots that need this exact question answered`,
         # insertion-ordered so the FIRST slot to need a key is the one whose

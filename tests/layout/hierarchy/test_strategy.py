@@ -920,7 +920,16 @@ def test_an_unregistered_arm_raises_rather_than_being_solved_by_sequence_pair() 
         strategy._block_layout("block-library", vertical=True, workers=2)
 
 
-def test_a_dispatched_block_is_offered_one_arm_not_two(chain_spec, monkeypatch):
+def test_a_dispatched_block_is_offered_both_arms_below_the_exact_floor(chain_spec, monkeypatch):
+    """`chain_spec`'s blocks are coater-free, and `lay_out` never hands a
+    block a per-block budget at or above `BLOCK_BUDGET_MAX_S` (20.0s) --
+    itself a whole second under `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S`
+    (21.0s, Task 6).  So Task 7's abstain fires unconditionally here: BOTH
+    arms are funded for every block, not just the one the v3 cross-tab
+    would have preferred.  See `dispatch.dispatch_arms`'s own docstring for
+    why that is the intended outcome, not a regression -- this test used to
+    assert the opposite (`arm_dispatch_both == 0`) before Task 7.
+    """
     arms: list[str] = []
     real = strategy._solve_block
 
@@ -937,16 +946,28 @@ def test_a_dispatched_block_is_offered_one_arm_not_two(chain_spec, monkeypatch):
     )
     layout._executor_factory = ThreadPoolExecutor
     placement = layout.lay_out(chain_spec, time_budget_s=40.0)
-    assert len(set(arms)) == 1, f"both arms were funded: {sorted(set(arms))}"
-    dispatched = (
-        placement.stats["arm_dispatch_freeform"] + placement.stats["arm_dispatch_sequence_pair"]
+    assert set(arms) == {"freeform", "sequence-pair"}, (
+        f"expected both arms, got {sorted(set(arms))}"
     )
-    assert dispatched == placement.stats["blocks"]
-    assert placement.stats["arm_dispatch_both"] == 0.0
+    assert placement.stats["arm_dispatch_both"] == placement.stats["blocks"]
+    assert placement.stats["arm_dispatch_freeform"] == 0.0
+    assert placement.stats["arm_dispatch_sequence_pair"] == 0.0
 
 
 def test_a_refused_block_is_offered_the_other_arm_before_it_is_cut(chain_spec, monkeypatch):
-    """Widening the arms is cheaper than growing the block list."""
+    """Widening the arms is cheaper than growing the block list.
+
+    `chain_spec`'s blocks are coater-free, so left unpatched
+    `dispatch.dispatch_arms` now abstains for them from round 1 (Task 7,
+    see `test_a_dispatched_block_is_offered_both_arms_below_the_exact_floor`)
+    -- both arms would already be offered together, leaving nothing left to
+    widen TO once both refuse.  That is a different, already-covered
+    concern; pinning `dispatch_arms` to v3's old single-arm answer here
+    isolates the widen-before-cut escalation this test exists to check.
+    """
+    monkeypatch.setattr(
+        strategy.dispatch, "dispatch_arms", lambda features, arms, **kwargs: ("sequence-pair",)
+    )
     cut = []
     real_next_cut = strategy._next_cut
 
@@ -998,7 +1019,7 @@ def test_a_crashing_feature_computation_falls_back_to_racing_both_arms(chain_spe
     monkeypatch.setattr(strategy.dispatch, "block_features", boom)
     layout = _layout()
     entries = [_Entry(list(block)) for block in initial_partition(chain_spec, strip_cap=2).blocks]
-    arms = layout._arms_for(chain_spec, entries[0], {})
+    arms = layout._arms_for(chain_spec, entries[0], {}, block_budget=20.0)
     assert arms == ("freeform", "sequence-pair")
 
     # And the round loop itself must still complete a real build rather than
@@ -1006,3 +1027,35 @@ def test_a_crashing_feature_computation_falls_back_to_racing_both_arms(chain_spe
     layout._executor_factory = ThreadPoolExecutor
     placement = layout.lay_out(chain_spec, time_budget_s=40.0)
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+
+
+def test_the_arm_cache_is_keyed_on_the_budget_as_well_as_the_shape(
+    monkeypatch: pytest.MonkeyPatch, chain_spec: BuildSpec
+) -> None:
+    # Two rounds of the same build hand the same shape different budgets, and
+    # the answer legitimately differs across the floor. A shape-only key would
+    # serve round 2 with round 1's answer.
+    seen: list[float | None] = []
+
+    def spy(features, arms, *, budget_s=None):
+        seen.append(budget_s)
+        return arms
+
+    monkeypatch.setattr(strategy.dispatch, "dispatch_arms", spy)
+    layout = _layout()
+    cache: dict[tuple[ShapeKey, float], tuple[str, ...]] = {}
+    ingot = MachineGroup(
+        recipe_id="iron-ingot",
+        machine_item_id="arc-smelter",
+        count=1,
+        inputs_per_machine={"iron-ore": Fraction(1)},
+        outputs_per_machine={"iron-ingot": Fraction(1)},
+    )
+    entry = _Entry([Unit(0, ingot, 6)])
+
+    layout._arms_for(chain_spec, entry, cache, block_budget=5.0)
+    layout._arms_for(chain_spec, entry, cache, block_budget=5.0)
+    layout._arms_for(chain_spec, entry, cache, block_budget=20.0)
+
+    assert seen == [5.0, 20.0]
+    assert len(cache) == 2
