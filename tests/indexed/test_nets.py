@@ -3,14 +3,17 @@
 The plan's line anchors (freeform.py:12111-12129 for `matches_demand`,
 :9425 for `net_by_id`, :9372 for `role_members`) are stale at HEAD (Ruling
 P-2) -- see `nets.py`'s module docstring for the real anchors this module was
-built against, and the task-10 report for what moved.
+built against, and the task-10 report (fix round 1) for what moved and what
+the first round of review found wrong.
 
 `matches_demand(candidate, demand)` -- item, kind and cell equality -- is
 asked with a `next()` over EVERY prepared net, inside a comprehension over
-every missing demand: O(missing x all_prepared_nets). The same collection
-family is separately keyed by id (`net_by_id`, two call sites) and by role
-(`role_members`, one call site), which is why one table with three indexes
-replaces three hand-built dicts rather than adding a fourth.
+every missing demand: O(missing x all_prepared_nets). Two more collections
+carry a `net_by_id`-shaped dict, and one of those two also carries
+`role_members`, keyed by the COMPOSITE `(cell, role)` (freeform.py:9368,
+queried at :9889) -- NOT a bare role, which is why `in_role` here takes
+both. One table with three indexes replaces these hand-built dicts rather
+than adding a fourth.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ def _fixture(seed: int, count: int) -> list[tuple[int, str, str, tuple[int, int,
     rng = random.Random(seed)
     items = ("iron-ingot", "gear", "circuit")
     kinds = ("input", "output")
-    roles = ("producer", "consumer", "external")
+    roles = ("src", "dst")
     return [
         (
             i,
@@ -60,19 +63,62 @@ def test_by_id_equals_the_net_by_id_dict_and_answers_none_when_absent() -> None:
     assert index.by_id(9999) is None
 
 
-def test_in_role_equals_the_role_members_grouping_in_input_order() -> None:
+def test_in_role_equals_the_role_members_composite_grouping_in_input_order() -> None:
+    """`role_members[cell, role]` is a composite key (freeform.py:9368-9376, :9889).
+
+    A bare-role query cannot express this -- two different cells sharing a
+    role must not be conflated, which is exactly what the first review round
+    found the pre-fix `in_role(role)` got wrong.
+    """
     rows = _fixture(seed=83, count=200)
     index = Nets.of(rows)
-    for role in ("producer", "consumer", "external", "absent"):
-        brute = tuple(i for i, _it, _kd, _cl, r, _payload in rows if r == role)
-        assert index.in_role(role) == brute, role
+    cells = ((0, 0, 0), (3, 4, 0), (7, 7, 0))
+    for role in ("src", "dst", "absent"):
+        for cell in cells:
+            brute = tuple(i for i, _it, _kd, cl, r, _payload in rows if r == role and cl == cell)
+            assert index.in_role(cell, role) == brute, (cell, role)
+
+
+def test_in_role_does_not_conflate_two_cells_sharing_a_role() -> None:
+    """A regression pin for the exact defect the first review round found.
+
+    `in_role("src")` on the pre-fix accessor would have returned every net
+    in role "src" across every cell; the composite accessor must scope to
+    one cell.
+    """
+    rows = [
+        (1, "gear", "input", (0, 0, 0), "src", "net-1"),
+        (2, "gear", "input", (5, 5, 0), "src", "net-2"),
+    ]
+    index = Nets.of(rows)
+    assert index.in_role((0, 0, 0), "src") == (1,)
+    assert index.in_role((5, 5, 0), "src") == (2,)
+
+
+def test_a_net_in_two_roles_shares_one_id_and_one_payload_across_two_rows() -> None:
+    """`role_members` gives every net a "dst" row and, if `net.src` is not
+    None, a SECOND "src" row at a different cell (freeform.py:9370-9376) --
+    so one net_id can legitimately appear on two rows sharing one payload.
+    `ids()` must still answer that net_id once, not twice, and `by_id` must
+    still answer the (identical) payload.
+    """
+    rows = [
+        (7, "gear", "input", (1, 1, 0), "src", "net-7"),
+        (7, "gear", "input", (2, 2, 0), "dst", "net-7"),
+        (9, "circuit", "output", (3, 3, 0), "dst", "net-9"),
+    ]
+    index = Nets.of(rows)
+    assert index.ids() == (7, 9)
+    assert index.by_id(7) == "net-7"
+    assert index.in_role((1, 1, 0), "src") == (7,)
+    assert index.in_role((2, 2, 0), "dst") == (7,)
 
 
 def test_an_empty_collection_answers_empty() -> None:
     index = Nets.of(())
     assert index.ids() == ()
     assert index.matching_demand("gear", "input", (0, 0, 0)) == ()
-    assert index.in_role("producer") == ()
+    assert index.in_role((0, 0, 0), "src") == ()
 
 
 def test_ids_reflects_insertion_order_not_ascending_net_id() -> None:
@@ -84,10 +130,10 @@ def test_ids_reflects_insertion_order_not_ascending_net_id() -> None:
     blueprint.
     """
     rows = [
-        (5, "gear", "input", (0, 0, 0), "producer", "net-5"),
-        (1, "gear", "input", (0, 0, 0), "producer", "net-1"),
-        (3, "gear", "input", (0, 0, 0), "producer", "net-3"),
+        (5, "gear", "input", (0, 0, 0), "src", "net-5"),
+        (1, "gear", "input", (0, 0, 0), "src", "net-1"),
+        (3, "gear", "input", (0, 0, 0), "src", "net-3"),
     ]
     index = Nets.of(rows)
     assert index.ids() == (5, 1, 3)
-    assert index.in_role("producer") == (5, 1, 3)
+    assert index.in_role((0, 0, 0), "src") == (5, 1, 3)
