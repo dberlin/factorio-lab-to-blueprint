@@ -28,10 +28,14 @@ TwoSolvedBlocks = tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]
 def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin ``FLAB2BP_COATER_NODE=off``, the retained pre-2026-09-07 arm.
 
-    See the fixture of the same name in ``tests/layout/test_freeform.py``.  The
-    ``placed`` default adds the Coater body's OWN level to ``belt_ban`` -- that
-    is the whole point of the narrowed seat -- so "every banned level is at or
-    above 1" is an ``off``-arm statement about the ban's shape.
+    See the fixture of the same name in ``tests/layout/test_freeform.py``.  A
+    coater riding the consumer strip's widened west channel (``off``) is a
+    different placement from ``placed``'s free-standing four-tile node beside
+    the lane, so this test's recorded geometry is an ``off``-arm fact -- it is
+    pinned, not re-recorded, per the checklist below.  (Not the body-level
+    belt ban: ``ed3c1eb2`` retired that on measurement -- 0 of 60 body cells
+    were free at ban time, 60 of 60 already carried a committed belt, so it
+    was proved unable to fire.)
 
     Deleting this fixture? See the retirement checklist, §14 of
     ``docs/superpowers/evidence/2026-09-07-coater-placed-gate/README.md``.

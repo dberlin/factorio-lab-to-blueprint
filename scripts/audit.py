@@ -513,11 +513,12 @@ def _coater_census(placement: object) -> tuple[int, int, int]:
     ``FLAB2BP_COATER_NODE``.  The middle number is the reported
     defect measured directly rather than inferred: a Spray Coater's oriented
     3x1 body covers three tiles, and a belt on one of them with more than one
-    predecessor is a 2-into-1 merge under the addon.  Nothing in
-    ``layout/validate.py`` convicts it -- ``game.addon_supply`` asks only
-    whether *a* belt is in each area and ``belt.acyclic`` explicitly accepts
-    many-to-one -- so an arm comparison that did not count it here could not
-    see the thing the arms exist to remove.
+    predecessor is a 2-into-1 merge under the addon.  ``layout/validate.py``'s
+    ``prolif.coater_rides_one_run`` now convicts exactly this -- but this
+    census still counts it directly, rather than inferring it from that
+    check's findings, so an arm comparison run against a placement that never
+    reached the validator (or against an older build predating that check)
+    still sees the thing the arms exist to remove.
     """
     from collections import defaultdict as _dd
 
