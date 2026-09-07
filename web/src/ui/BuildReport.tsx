@@ -81,6 +81,8 @@ export function BuildReportPanel({
   // provenance, belt rules, refusals) stay on `result` regardless.
   const shown: AttemptDetail = selectedAttempt?.detail ?? {
     machines: result.machines,
+    machine_rank: result.machine_rank,
+    machine_moves: result.machine_moves,
     buildings: result.buildings,
     primary_band: result.primary_band,
     certified_bands: result.certified_bands,
@@ -113,6 +115,20 @@ export function BuildReportPanel({
         </dd>
         <dt>Machines</dt>
         <dd>{shown.machines}</dd>
+        <dt>Machine ranking</dt>
+        <dd>
+          {shown.machine_rank === 'up-to' ? 'Up to' : 'Exact'}
+          {shown.machine_moves.length > 0 && (
+            <ul className="machine-moves">
+              {shown.machine_moves.map((move) => (
+                <li key={move.recipe_id}>
+                  {move.recipe_id}: {move.from_machine} &rarr; {move.to_machine} (
+                  {move.count_before} &rarr; {move.count_after})
+                </li>
+              ))}
+            </ul>
+          )}
+        </dd>
         <dt>Area</dt>
         <dd>{area} tiles</dd>
         <dt>primary_band</dt>
