@@ -12472,10 +12472,11 @@ def _commit_paths(
     cells as goals; handing the answer to the linker is all this does.
 
     A belt tile has ONE ``output_obj``.  When a lane serves several consumers,
-    each of them taps a different tile of it (see ``_Port.at_tile``), and a tap
-    partway along a lane is a JUNCTION: the lane has to keep flowing east *and*
-    hand items to the branch.  ``_tap_source`` builds that as a splitter, which
-    is what the game uses and what the fixture corpus shows.
+    the later nets branch off a sibling's committed path (``_route``'s
+    ``same_src``) rather than off a further lane tile, and that branch point is
+    a JUNCTION: the lane has to keep flowing east *and* hand items to the
+    branch.  ``_tap_source`` builds that as a splitter, which is what the game
+    uses and what the fixture corpus shows.
 
     Before splitters existed, every such net rewrote the same lane-end tile and
     the last to commit won silently.  The earlier paths stayed on the grid as
@@ -20446,10 +20447,10 @@ class FreeformLayout:
         # generic routing miss. Structural failures are named before the one
         # requested-budget sweep instead.
         #
-        # A machine no sorter can attach to is refused FIRST, because it is not
-        # a question about the packing at all: `_emit_strip` crashes on the
-        # empty lane it implies, so every later stage would be reporting a
-        # symptom of this one.
+        # A machine no sorter can attach to is the one structural refusal named
+        # before the sweep, because it is not a question about the packing at
+        # all: `_emit_strip` crashes on the empty lane it implies, so every
+        # later stage would be reporting a symptom of this one.
         unreachable = _machines_without_poses(strips)
         if unreachable:
             raise NoValidLayout(

@@ -13055,6 +13055,7 @@ class TestOneLaneCanServeSeveralDestinations:
         ).lay_out(spec, time_budget_s=8.0)
         report = _full_report(p, spec)
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
+        assert p.stats["route_failures"] == 0.0
 
 
 class TestPowerClaimsItsGroundBeforeRouting:
