@@ -615,16 +615,53 @@ def test_queries_match_a_rebuilt_index_on_kind_filtered_and_between_methods() ->
     records = tuple(live)
     fresh = Buildings(records)
 
+    # `splitters()` takes no key, so its own non-emptiness is the check: this
+    # fixture appends exactly one live splitter, so a vacuous `() == ()` here
+    # would mean the append or the index silently lost it.
     assert live.splitters() == fresh.splitters()
+    assert live.splitters()
+
+    # The per-key loops below are driven by keys genuinely PRESENT in the
+    # mutated records (every recipe_id/item/index that appears at least
+    # once), so an individual key legitimately CAN come back empty (e.g. a
+    # `recipe_id` shared with a non-machine record). What must not happen is
+    # every comparison in a loop being a vacuous `() == ()`; `any(...)` after
+    # each loop turns that spot-check into a guarantee.
+    recipe_results = []
     for recipe_id in {b.recipe_id for b in records}:
-        assert live.machines_for_recipe(recipe_id) == fresh.machines_for_recipe(recipe_id)
+        got = live.machines_for_recipe(recipe_id)
+        assert got == fresh.machines_for_recipe(recipe_id)
+        recipe_results.append(got)
+    assert any(recipe_results)
+
+    belts_carrying_results = []
+    sorters_carrying_results = []
     for carried in {b.carries_item for b in records if b.carries_item}:
-        assert live.belts_carrying(carried) == fresh.belts_carrying(carried)
-        assert live.sorters_carrying(carried) == fresh.sorters_carrying(carried)
+        got_belts = live.belts_carrying(carried)
+        got_sorters = live.sorters_carrying(carried)
+        assert got_belts == fresh.belts_carrying(carried)
+        assert got_sorters == fresh.sorters_carrying(carried)
+        belts_carrying_results.append(got_belts)
+        sorters_carrying_results.append(got_sorters)
+    assert any(belts_carrying_results)
+    assert any(sorters_carrying_results)
+
+    belts_into_results = []
+    sorters_into_results = []
+    sorters_out_of_results = []
     for i in range(len(records)):
-        assert live.belts_into(i) == fresh.belts_into(i)
-        assert live.sorters_into(i) == fresh.sorters_into(i)
-        assert live.sorters_out_of(i) == fresh.sorters_out_of(i)
+        got_belts_into = live.belts_into(i)
+        got_sorters_into = live.sorters_into(i)
+        got_sorters_out_of = live.sorters_out_of(i)
+        assert got_belts_into == fresh.belts_into(i)
+        assert got_sorters_into == fresh.sorters_into(i)
+        assert got_sorters_out_of == fresh.sorters_out_of(i)
+        belts_into_results.append(got_belts_into)
+        sorters_into_results.append(got_sorters_into)
+        sorters_out_of_results.append(got_sorters_out_of)
+    assert any(belts_into_results)
+    assert any(sorters_into_results)
+    assert any(sorters_out_of_results)
 
     def brute_force_sorters_between(srcs: set[int], sks: set[int]) -> tuple[int, ...]:
         return tuple(
@@ -633,15 +670,42 @@ def test_queries_match_a_rebuilt_index_on_kind_filtered_and_between_methods() ->
             if catalog.is_sorter(b.item_id) and b.input_obj in srcs and b.output_obj in sks
         )
 
-    # Differing sizes drive both branches of `sorters_between`'s
-    # smaller-set choice; the multiples-of-6 overlap exercises a sorter
-    # whose endpoints land in both sets regardless of which branch runs.
-    sources = {i for i in range(len(records)) if i % 3 == 0}
-    sinks = {i for i in range(len(records)) if i % 2 == 0}
+    # `i % 3 == 0` / `i % 2 == 0` (this test's previous sets) are VACUOUS for
+    # the forward call by construction, not by bad luck: every surviving
+    # sorter's `input_obj` is either `i - 1` for a fixture sorter at index
+    # `i` (`i % 3 == 2`, so `input_obj % 3 == 1`) or one of the loop's
+    # `{2, 5, 8, 11, 14}` (`% 3 == 2`) -- never `% 3 == 0` -- so no sorter's
+    # `input_obj` could ever land in an `i % 3 == 0` set, whatever the pop
+    # and relink above do. Picking two REAL sorters and seeding each set from
+    # their actual endpoints (rather than a congruence class) guarantees a
+    # genuine match in EACH directional call instead.
+    sorter_indices = [i for i, b in enumerate(records) if catalog.is_sorter(b.item_id)]
+    assert len(sorter_indices) >= 2
+    first_sorter = records[sorter_indices[0]]
+    last_sorter = records[sorter_indices[-1]]
+    assert first_sorter.input_obj is not None and first_sorter.output_obj is not None
+    assert last_sorter.input_obj is not None and last_sorter.output_obj is not None
+
+    # Padded to differing sizes so the two directional calls still drive both
+    # branches of `sorters_between`'s smaller-set choice, same as before.
+    sources = {first_sorter.input_obj, last_sorter.output_obj} | {
+        i for i in range(len(records)) if i % 7 == 0
+    }
+    sinks = {first_sorter.output_obj, last_sorter.input_obj} | {
+        i for i in range(len(records)) if i % 2 == 0
+    }
     assert len(sources) != len(sinks)
-    assert sources & sinks
-    assert live.sorters_between(sources, sinks) == brute_force_sorters_between(sources, sinks)
-    assert live.sorters_between(sinks, sources) == brute_force_sorters_between(sinks, sources)
+
+    expected_forward = brute_force_sorters_between(sources, sinks)
+    expected_reverse = brute_force_sorters_between(sinks, sources)
+    # Non-vacuousness, asserted explicitly rather than left to the equality
+    # check alone: `sorter_indices[0]` must satisfy the forward direction
+    # (its own input_obj/output_obj seeded `sources`/`sinks`) and
+    # `sorter_indices[-1]` must satisfy the reverse one.
+    assert expected_forward
+    assert expected_reverse
+    assert live.sorters_between(sources, sinks) == expected_forward
+    assert live.sorters_between(sinks, sources) == expected_reverse
 
 
 def test_bounds_after_append_to_an_initially_empty_sequence_matches_a_fresh_index() -> None:
