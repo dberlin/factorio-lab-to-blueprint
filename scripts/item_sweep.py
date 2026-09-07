@@ -77,9 +77,16 @@ BOX DISCIPLINE
 --------------
 One build at a time, never in parallel, and before each build the sweep waits
 for any ``trace_overhead.py`` timing gate to finish, because that gate measures
-wall clock and a CP-SAT solve next to it corrupts the measurement.  ``uptime``
-is recorded beside every timing: load on this box is disk I/O, so a slow build
-is a fact about the hour, not about the item.
+wall clock and a CP-SAT solve next to it corrupts the measurement.
+
+CPU pressure is recorded on both sides of every build as ``runq_before`` /
+``runq_after``: the five-second mean of ``vmstat``'s runnable-process count.
+Load average is deliberately NOT used -- load on this box is dominated by I/O
+wait, so ``uptime`` reads high while every core is idle, and a wall time read
+against it would be judged contended when it was not.  Below 64 runnable on
+these 128 cores is uncontended.  (Rows recorded before 2026-09-07 carry
+``uptime_before``/``uptime_after`` instead; they are left as they were
+measured.)
 
 Resumable: rows already in the round's JSONL are skipped, so an interrupted
 sweep restarts where it stopped.
@@ -254,13 +261,33 @@ def plans(data: Dataset) -> list[Plan]:
 # ---------------------------------------------------------------------------
 
 
-def uptime() -> str:
+def cpu_pressure() -> float | None:
+    """Runnable processes, averaged over five one-second samples.
+
+    NOT load average.  Load on this box is dominated by I/O wait -- ``uptime``
+    can read 12 while every one of the 128 cores is idle -- so a load figure
+    says nothing about whether a build got the CPU it asked for.  ``vmstat``'s
+    ``r`` column counts processes actually *runnable*, which is the number that
+    answers "was this timing contended?".  Below 64 on 128 cores is fine.
+
+    The first ``vmstat`` row is a since-boot average and is dropped; the five
+    that follow are the live samples.  ``None`` if ``vmstat`` is unavailable --
+    a missing measurement must read as missing, never as zero.
+    """
     try:
-        return subprocess.run(  # noqa: S603
-            ["uptime"], capture_output=True, text=True, check=False, timeout=10
-        ).stdout.strip()
-    except Exception as exc:  # pragma: no cover - diagnostics only
-        return f"<uptime failed: {exc}>"
+        proc = subprocess.run(  # noqa: S603
+            ["vmstat", "1", "6"], capture_output=True, text=True, check=False, timeout=30
+        )
+    except Exception:  # pragma: no cover - diagnostics only
+        return None
+    samples: list[int] = []
+    for line in proc.stdout.splitlines()[-5:]:
+        fields = line.split()
+        if fields and fields[0].isdigit():
+            samples.append(int(fields[0]))
+    if len(samples) != 5:
+        return None
+    return sum(samples) / 5
 
 
 def wait_for_timing_gate(*, poll_s: float = 60.0, max_polls: int = 120) -> int:
@@ -374,7 +401,7 @@ def run_one(plan: Plan, out_dir: Path, *, budget: float, timeout_s: float) -> di
     bp_path = out_dir / f"bp-{plan.item_id}.txt"
     log_path = out_dir / f"build-{plan.item_id}.log"
     argv = ["uv", "run", "flab2bp", plan.url, "--budget", str(budget), "-v", "-o", str(bp_path)]
-    before = uptime()
+    before = cpu_pressure()
     started = time.monotonic()
     timed_out = False
     try:
@@ -421,8 +448,8 @@ def run_one(plan: Plan, out_dir: Path, *, budget: float, timeout_s: float) -> di
         "exit_code": exit_code,
         "timed_out": timed_out,
         "wall_s": round(wall_s, 2),
-        "uptime_before": before,
-        "uptime_after": uptime(),
+        "runq_before": before,
+        "runq_after": cpu_pressure(),
         "cross": cross,
         "stderr_tail": combined[-2000:],
         **parsed,

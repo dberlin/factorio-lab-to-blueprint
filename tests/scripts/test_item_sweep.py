@@ -118,6 +118,38 @@ def test_outcome_classification_separates_the_four_failure_kinds() -> None:
     )
 
 
+def test_cpu_pressure_is_the_runnable_mean_not_the_load_average(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Load average on this box is I/O wait; only `vmstat`'s `r` column says
+    whether a build was actually competing for CPU."""
+    stdout = (
+        "procs -----------memory---------- ---swap-- -----io----\n"
+        " r  b   swpd   free   buff  cache   si   so    bi    bo\n"
+        "12  0      0  1000      0      0    0    0     0     0\n"  # since boot: dropped
+        " 4  1      0  1000      0      0    0    0     0     0\n"
+        " 6  0      0  1000      0      0    0    0     0     0\n"
+        " 5  0      0  1000      0      0    0    0     0     0\n"
+        " 5  0      0  1000      0      0    0    0     0     0\n"
+        "10  0      0  1000      0      0    0    0     0     0\n"
+    )
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.stdout = stdout
+
+    monkeypatch.setattr(item_sweep.subprocess, "run", lambda *a, **k: _Proc())
+    assert item_sweep.cpu_pressure() == 6.0
+
+
+def test_cpu_pressure_is_none_when_it_could_not_be_measured(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A missing measurement must read as missing, never as an idle box."""
+
+    def _boom(*a: object, **k: object) -> object:
+        raise FileNotFoundError("vmstat")
+
+    monkeypatch.setattr(item_sweep.subprocess, "run", _boom)
+    assert item_sweep.cpu_pressure() is None
+
+
 def test_gate_pattern_matches_the_run_and_not_the_watchers() -> None:
     """Every agent waiting for this gate runs a shell whose command line
     contains the script name, so a bare filename pattern deadlocks the sweep on
