@@ -75,8 +75,10 @@ def main() -> int:
         print("try: uv run --with littletable --with polars python", __file__)
         return 2
 
-    print("| fixture | N | build dict | build littletable | build polars "
-          "| scan | littletable | polars | dict |")
+    print(
+        "| fixture | N | build dict | build littletable | build polars "
+        "| scan | littletable | polars | dict |"
+    )
     print("|---|---|---|---|---|---|---|---|---|")
     for name in CASES:
         rows = decode((FIXTURES / name).read_text()).buildings
@@ -100,12 +102,21 @@ def main() -> int:
         frame = polars.DataFrame([{k: getattr(r, k) for k in (*KEYS, "index")} for r in rows])
         pl_build = (time.perf_counter() - start) * 1e3
 
-        scan = _time(lambda: tuple(r.index for r in rows if r.recipe_id == probe))
-        lt_q = _time(lambda: tuple(r.index for r in table.by.recipe_id[probe]))
-        pl_q = _time(
-            lambda: frame.filter(polars.col("recipe_id") == probe)["index"].to_list()
+        # Each lambda binds what it reads as a default argument: ruff's B023
+        # is right that a bare closure over a loop variable is a trap, even
+        # though these are all called before the next iteration rebinds it.
+        scan = _time(
+            lambda rows=rows, probe=probe: tuple(r.index for r in rows if r.recipe_id == probe)
         )
-        dict_q = _time(lambda: groups["recipe_id"].get(probe, ()))
+        lt_q = _time(
+            lambda table=table, probe=probe: tuple(r.index for r in table.by.recipe_id[probe])
+        )
+        pl_q = _time(
+            lambda frame=frame, probe=probe: frame.filter(polars.col("recipe_id") == probe)[
+                "index"
+            ].to_list()
+        )
+        dict_q = _time(lambda groups=groups, probe=probe: groups["recipe_id"].get(probe, ()))
 
         print(
             f"| {name[:44]} | {len(rows)} | {dict_build:.2f} ms | {lt_build:.2f} ms "

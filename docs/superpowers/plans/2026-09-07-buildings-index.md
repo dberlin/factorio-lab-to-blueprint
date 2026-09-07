@@ -73,13 +73,41 @@ Every task's requirements implicitly include this section.
   reflect the current sequence. `MutableBuildings` maintains its indexes on
   every mutation; `Buildings` is built from an immutable sequence. Task 1 and
   Task 2 each prove this with a test.
-- **Verification at every task:** `uv run ruff check`, `uv run ruff format
-  --check`, `uv run mypy`, and the full `uv run pytest` suite judged by EXIT
-  CODE — pytest prints no summary line in this environment, and a 120 s
-  pytest-timeout backstop hard-kills any hung test. Two tests are RED on master
+- **Verification at every task.** The brief called for green ruff and mypy.
+  **Master is not green**, measured at `2e861af0` on the main checkout:
+
+  | gate | master's baseline |
+  |---|---|
+  | `uv run ruff check` | **107 errors** |
+  | `uv run ruff format --check` | **45 files would be reformatted** |
+  | `uv run mypy` | **331 errors in 19 files** |
+  | `uv run pytest` | EXIT=1, two known-red tests |
+
+  So the achievable gate is **no NEW error attributable to this branch**, and
+  the way to prove it is per-file, not by a whole-tree count:
+
+  ```bash
+  uv run ruff check <the files your task touched>          # must be "All checks passed!"
+  uv run ruff format --check <the files your task touched> # must be "N files already formatted"
+  uv run mypy <the files your task touched>                # must be "Success: no issues found"
+  uv run pytest > /tmp/suite.log 2>&1; echo "EXIT=$?"      # judge by EXIT CODE
+  ```
+
+  A whole-tree count is worthless as a gate here: it is dominated by
+  pre-existing errors, and comparing totals hides a swap (one of yours in, one
+  of theirs out). Run the per-file commands and paste their real output.
+- The full suite prints **no summary line** in this environment — judge it by
+  EXIT CODE. A 120 s pytest-timeout backstop hard-kills any hung test; if that
+  fires, say so rather than counting it as a pass. Two tests are RED on master
   and stay red; they are not your regression:
   `test_two_stage_alignment_retains_cp_sat_direct_opportunity` and
-  `test_all_products_sequence_pair_honours_the_exact_layout_deadline`.
+  `test_all_products_sequence_pair_honours_the_exact_layout_deadline`. **A third
+  failure is yours.**
+- **Never background a test run.** Run every verification command in the
+  foreground and read its output, however long it takes. Task 1's first
+  implementer armed a background monitor on the suite, the process exited before
+  the monitor observed it, and the agent deadlocked for 124k tokens without
+  committing.
 - **Worktree hygiene:** work in
   `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/buildings-index`.
   Run `uv sync` and confirm `uv run python -c "import flab2bp;
