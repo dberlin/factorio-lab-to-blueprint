@@ -25031,7 +25031,11 @@ def test_a_boundary_probed_demand_still_enumerates_every_reachable_option(
     """
     recorded = _recorded_reachable_options(monkeypatch)
     canvas, demand = _open_access_demand(freeform.PortAccessKind.BOUNDARY_ARRIVAL)
-    reservation = _reserve_port_access(canvas, [demand], boundary=((0, 3, 0),))
+    # `bounds` explicitly, never left to `bounds = bounds or canvas.limit`: with
+    # no bounds this test would take the unprobed early-out and record all
+    # twelve options WITHOUT probing, so it would pass under the very mutation
+    # it exists to catch.
+    reservation = _reserve_port_access(canvas, [demand], boundary=((0, 3, 0),), bounds=canvas.limit)
     assert reservation.complete
     assert len(recorded[demand]) == 12 > freeform._PORT_ACCESS_PROBE_KEEP
 
@@ -25042,9 +25046,31 @@ def test_a_goal_probed_demand_stops_at_the_probe_keep_cap(
     """The same head, the same open ground, probed towards an explicit goal."""
     recorded = _recorded_reachable_options(monkeypatch)
     canvas, demand = _open_access_demand(freeform.PortAccessKind.INTERNAL_ARRIVAL)
-    reservation = _reserve_port_access(canvas, [demand], goals={demand: frozenset({(0, 3, 0)})})
+    reservation = _reserve_port_access(
+        canvas, [demand], bounds=canvas.limit, goals={demand: frozenset({(0, 3, 0)})}
+    )
     assert reservation.complete
     assert len(recorded[demand]) == freeform._PORT_ACCESS_PROBE_KEEP
+
+
+def test_an_empty_explicit_goal_set_is_no_goal_at_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty `goals` entry must not probe towards nowhere and then cap.
+
+    Membership in `goals` and "`_goal_for` returned a set" have to be the same
+    question.  If an empty set survived into `goal_by_demand` they would
+    diverge: every option would fail the probe, land in the non-sealed arm, be
+    admitted anyway, and the cap would hand the matcher two of twelve corridors
+    with `exhaustive` False -- from what is only a caller mistake.
+    """
+    recorded = _recorded_reachable_options(monkeypatch)
+    canvas, demand = _open_access_demand(freeform.PortAccessKind.INTERNAL_ARRIVAL)
+    reservation = _reserve_port_access(
+        canvas, [demand], bounds=canvas.limit, goals={demand: frozenset()}
+    )
+    assert reservation.complete
+    assert len(recorded[demand]) == 12
 
 
 def test_boundary_corner_claim_already_on_perimeter_remains_reachable() -> None:

@@ -11967,12 +11967,24 @@ def _reserve_port_access(
     exhaustive: dict[PortAccessDemand, bool] = {}
     frontiers: dict[PortAccessDemand, set[Cell]] = defaultdict(set)
     boundary_set = set(boundary or ())
-    goal_by_demand = dict(goals or {})
+    # AN EMPTY GOAL SET IS NO GOAL, dropped here rather than handled at each
+    # use, so that "has an explicit goal" has ONE spelling.  `_goal_for` asks
+    # whether the lookup returned a set and the probe cap below asks whether
+    # the demand is a key; leaving an empty set in would make those two
+    # disagree, and the demand would be probed towards nowhere -- every option
+    # failing `DYNAMIC_ACCESS`, the cap firing on the wreckage.
+    goal_by_demand = {demand: goal for demand, goal in (goals or {}).items() if goal}
     # WHETHER ANY PROBE RUNS AT ALL.  With neither a boundary nor a goal this
     # function is the purely LOCAL oracle it has always been: every free
     # (access, exit) pair is admitted unprobed, `exhaustive` is False, and no
-    # grid is built.  That is the path every freeform caller takes today and
-    # it is unchanged.
+    # grid is built.
+    #
+    # Which caller takes which path, because the answer is NOT "all of them
+    # take the local one" and a reader who assumes it is will conclude the
+    # boundary probe is dead code: `freeform.py:9507` passes neither and is
+    # local; `freeform.py:16709` passes a `boundary` and IS probed, so the
+    # boundary path is freeform's own default path; `hierarchy/compose.py:714`
+    # passes a `boundary` that it computes as `None` today.
     probed = boundary is not None or bool(goal_by_demand)
 
     def _goal_for(demand: PortAccessDemand) -> set[Cell] | None:
