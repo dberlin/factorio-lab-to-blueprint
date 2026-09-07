@@ -241,6 +241,10 @@ class PlacementStats(TypedDict, total=False):
     #: block solves cost (a wall, not a CPU sum -- the blocks run concurrently).
     block_wall_s: float
     blocks: float
+    #: Hierarchical strategy: blocks that never reached a placer at all --
+    #: `_Entry.verdicts` still empty when the build refused.  Distinct from
+    #: "never placed", which includes blocks a placer looked at and refused.
+    blocks_unattempted: float
     boundary_belts_removed: float
     boundary_cleanup_time_s: float
     box_area: float
@@ -387,6 +391,30 @@ class PlacementStats(TypedDict, total=False):
     nogood_skips: float
     #: Hierarchical strategy: rounds in which a refusing block was re-cut.
     resplits: float
+    #: Hierarchical strategy: how each block's arm was chosen.  `_both` counts
+    #: the blocks raced on every arm because the feature vector fell outside
+    #: what `2026-09-06-exp-features` covers, or because the dispatched arm
+    #: refused and there was wall left to try the other.
+    arm_dispatch_both: float
+    arm_dispatch_freeform: float
+    arm_dispatch_sequence_pair: float
+    #: Hierarchical strategy: the `GAP_LADDER` rung the composition committed.
+    compose_gap: float
+    #: Hierarchical strategy: (block, item) entry heads left to the player
+    #: under the both-fed lane contract.
+    player_fed: float
+    #: Hierarchical strategy: port-access demands the composed canvas raised.
+    port_demands: float
+    #: Hierarchical strategy: re-cut ROUNDS this build spent, bounded by
+    #: `strategy.MAX_RECUT_ROUNDS`.  `resplits` counts the same rounds and is
+    #: kept for continuity with the v1/v2 gates.
+    recut_rounds: float
+    #: Hierarchical strategy: demands the committed rung could not give a
+    #: corridor to.  0 with a non-zero `unrouted_cuts` is the v2 finding: the
+    #: oracle says every port is satisfiable and the router still refuses.
+    reservation_missing: float
+    #: Hierarchical strategy: cut lanes `compose` reported unwired.
+    unrouted_cuts: float
     restarts: float
     riser_columns: float
     risers: float

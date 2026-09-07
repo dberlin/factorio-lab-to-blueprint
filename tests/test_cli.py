@@ -8,10 +8,12 @@ one solve rather than one per test.
 from __future__ import annotations
 
 import dataclasses
+from typing import cast
 
 import pytest
 
 from flab2bp import cli, pipeline
+from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout, PlacementStats
 from flab2bp.rates.candidates import CandidatePolicy
 
 #: The reported deuteron-fuel-rod URL (see ``tests/test_pipeline.py``'s
@@ -100,3 +102,32 @@ def test_cli_reports_an_infeasible_spec_as_a_refusal_not_a_crash(
     err = capsys.readouterr().err
     assert "iron-ore" in err
     assert "Traceback" not in err
+
+
+def test_the_cli_prints_the_stats_of_every_refused_attempt(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A refusal with no numbers is a refusal no gate can attribute."""
+    failure = LayoutAttemptFailure(
+        candidate="all-products",
+        strategy="hierarchical",
+        reason="22 block(s) never placed",
+        stats=cast(PlacementStats, {"blocks_unattempted": 22.0, "recut_rounds": 2.0}),
+    )
+
+    def refuse(*args: object, **kwargs: object) -> pipeline.Build:
+        raise NoValidLayout(
+            "every strategy refused every candidate",
+            spec_label="mall",
+            budget_s=60.0,
+            attempt_failures=(failure,),
+        )
+
+    monkeypatch.setattr(cli.pipeline, "build", refuse)
+    exit_code = cli.main(
+        ["https://factoriolab.github.io/dsp/flow?o=iron-ingot*60&v=11", "--budget", "1"]
+    )
+    assert exit_code == 3
+    err = capsys.readouterr().err
+    assert "blocks_unattempted=22" in err
+    assert "recut_rounds=2" in err

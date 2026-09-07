@@ -108,7 +108,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Literal, cast
 
 from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
@@ -116,6 +116,7 @@ from flab2bp.layout.base import (
     NoValidLayout,
     Placement,
     PlacementCompletion,
+    PlacementStats,
 )
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.hierarchy import compose as compose_mod
@@ -194,6 +195,47 @@ _POOL_CAP = 32
 
 BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
 
+# THE SUB-SOLVER SEAM.  `hierarchical` is the ORCHESTRATOR (design
+# §3.2-§3.3): it decides WHICH solver sees a block, at WHAT budget, and it
+# composes the answers.  Everything a solver has to satisfy to be dispatched
+# a block is on this page, and nothing in `partition`, `contracts` or
+# `compose` needs to change to add one.
+#
+#   _BlockJob = (spec, arm, budget_s, vertical, workers, parent_deadline)
+#     0 spec            a self-contained BuildSpec from `partition.sub_spec`:
+#                       boundary items are `external_inputs`/`outputs`, belt
+#                       tiers / sorter ladder / stack / piler travel verbatim,
+#                       and `spray_lanes` is RECOMPUTED for the block.
+#     1 arm             the solver's name, one of `BlockStrategyName`.
+#     2 budget_s        the round's per-block wall, in seconds.
+#     3 vertical        `belt_vertical_construction`; the composer's `ramped`
+#                       is its negation.
+#     4 workers         `_BLOCK_WORKERS` CP-SAT search workers for THIS block.
+#     5 parent_deadline absolute `time.monotonic()` deadline, or None.  The
+#                       WORKER combines it: `min(parent, start + budget_s)`.
+#
+#   _solve_block(job) -> (record, Placement | None)
+#     record["strategy"] : str   the arm, echoed back
+#     record["verdict"]  : str   "OK" | "REFUSED: ..." | "CRASH: ..."
+#                                | "POOL FAILED: ..."  -- ONLY "REFUSED: " is
+#                                remembered by `_ShapeNoGood`, because a crash
+#                                or a dead pool says nothing about the SHAPE.
+#     record["ok"]       : bool
+#     record["wall_s"]   : float what the job actually spent (the memo records
+#                                a refusal at THIS, not at the nominal budget)
+#     record["area"]     : float on the OK path only
+#     A refusal and a crash are RESULTS, not aborts: one block must never take
+#     the other nine with it.
+#
+#   _block_layout(arm, *, vertical, workers) -> LayoutStrategy
+#     THE REGISTRY POINT (design §3.2).  A new solver is added HERE, named in
+#     `BlockStrategyName`, and given an arm-choice rule in
+#     `hierarchy.dispatch`.  It must implement
+#     `lay_out(spec, *, time_budget_s, absolute_deadline) -> Placement` and
+#     raise `NoValidLayout` rather than return something invalid, and its
+#     `Placement` must pickle (it crosses a spawn boundary).  Candidates
+#     already named in `docs/speedup-idea-backlog.md`: the pre-generated block
+#     library, a revived `spine`, coater-composite strips.
 #: One block solve: ``(sub-spec, backend, budget, vertical construction, search
 #: workers, absolute deadline)``.  A plain tuple because it crosses a process
 #: boundary, and every member of it pickles.
@@ -447,17 +489,17 @@ class HierarchicalLayout:
         deadline = (
             absolute_deadline if absolute_deadline is not None else started_at + time_budget_s
         )
+        stats = _StrategyStats()
         # The wall this call ACTUALLY has, which is not `time_budget_s` when a
         # parent handed down a deadline: a refusal that quoted the nominal
         # budget would name a number nobody spent.
-        refuse = _refuser(spec, max(0.0, deadline - started_at))
+        refuse = _refuser(spec, max(0.0, deadline - started_at), stats)
         reserve = settlement_reserve_s(time_budget_s)
 
         partition = initial_partition(spec, strip_cap=self.strip_cap)
         entries = [_Entry(list(block)) for block in partition.blocks]
+        stats.blocks = float(len(entries))
         block_wall = 0.0
-        resplits = 0
-        nogood_skips = 0
         # THIS CALL'S OWN no-good memo -- see `_ShapeNoGood`'s docstring for
         # why it is a local rather than `self._nogood`.
         nogood = _ShapeNoGood()
@@ -497,6 +539,7 @@ class HierarchicalLayout:
                 # through it.
                 order, cuts = derive_cuts([entry.units for entry in entries])
                 entries = [entries[index] for index in order]
+                stats.blocks = float(len(entries))
                 todo = [index for index, entry in enumerate(entries) if entry.placement is None]
                 if not todo:
                     break
@@ -505,6 +548,9 @@ class HierarchicalLayout:
                 remaining = deadline - time.monotonic() - reserve
                 share = remaining / waves
                 if share < BLOCK_BUDGET_MIN_S:
+                    stats.blocks_unattempted = float(
+                        sum(1 for entry in entries if not entry.verdicts)
+                    )
                     raise refuse(
                         _block_refusal(
                             entries,
@@ -517,7 +563,7 @@ class HierarchicalLayout:
                     )
                 block_budget = min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, share))
                 started = time.monotonic()
-                nogood_skips += self._solve_round(
+                stats.nogood_skips += self._solve_round(
                     spec,
                     entries,
                     todo,
@@ -534,9 +580,12 @@ class HierarchicalLayout:
                     entries, still, nogood=nogood, arms=self._arms(), budget_s=block_budget
                 )
                 if not progress:
+                    stats.blocks_unattempted = float(
+                        sum(1 for entry in entries if not entry.verdicts)
+                    )
                     raise refuse(_block_refusal(entries, still, why="out of re-cut attempts"))
                 entries = grown
-                resplits += 1
+                stats.resplits += 1
 
         blocks = [entry.units for entry in entries]
         solved = [entry.placement for entry in entries if entry.placement is not None]
@@ -574,6 +623,8 @@ class HierarchicalLayout:
                 sub = sub_spec(spec, entry.units, index)
                 tails[index], heads[index] = boundary_lanes(placement, sub, index)
             allocation = allocate_cuts(spec, cuts, tails, heads)
+            stats.player_fed = float(len(allocation.player_fed))
+            stats.cut_lanes = float(len(allocation.flows))
             composition = compose_mod.compose(
                 solved,
                 allocation.flows,
@@ -590,6 +641,7 @@ class HierarchicalLayout:
         except Exception as exc:  # noqa: BLE001 - a composer CRASH is a refusal
             raise refuse(f"composition crashed: {type(exc).__name__}: {exc}"[:400]) from exc
         compose_wall = time.monotonic() - started
+        stats.unrouted_cuts = float(len(composition.failures))
         if composition.failures:
             raise refuse("unrouted cut(s): " + "; ".join(composition.failures))
 
@@ -651,14 +703,14 @@ class HierarchicalLayout:
         # sum) and `_recut`'s children were never counted at all, so a
         # faithful `strips_max` over the FINAL blocks could only be recomputed.
         placement.stats.update(
-            {
-                "blocks": float(len(blocks)),
-                "block_wall_s": round(block_wall, 3),
-                "compose_wall_s": round(compose_wall, 3),
-                "cut_lanes": float(len(allocation.flows)),
-                "resplits": float(resplits),
-                "nogood_skips": float(nogood_skips),
-            }
+            cast(
+                PlacementStats,
+                {
+                    **stats.as_stats(),
+                    "block_wall_s": round(block_wall, 3),
+                    "compose_wall_s": round(compose_wall, 3),
+                },
+            )
         )
         return replace(placement, completion=PlacementCompletion.COMPACTED_AND_FINALIZED)
 
@@ -900,10 +952,40 @@ def _block_refusal(entries: list[_Entry], still: list[int], *, why: str) -> str:
     return f"{len(still)} block(s) never placed, {why}: " + "; ".join(parts)
 
 
-def _refuser(spec: BuildSpec, budget_s: float) -> Callable[[str], NoValidLayout]:
-    """One place that knows how this strategy's refusals are labelled."""
+@dataclass
+class _StrategyStats:
+    """Every number the gate reads, accumulated as the build runs.
 
+    Carried into the `NoValidLayout` of EVERY refusal, not just written onto
+    a successful `Placement`: the v2 gate refused on all sixteen runs and
+    could therefore read none of these from a shipped surface.
+    """
+
+    blocks: float = 0.0
+    blocks_unattempted: float = 0.0
+    recut_rounds: float = 0.0
+    resplits: float = 0.0
+    nogood_skips: float = 0.0
+    player_fed: float = 0.0
+    cut_lanes: float = 0.0
+    compose_gap: float = 0.0
+    port_demands: float = 0.0
+    reservation_missing: float = 0.0
+    unrouted_cuts: float = 0.0
+    arm_dispatch_freeform: float = 0.0
+    arm_dispatch_sequence_pair: float = 0.0
+    arm_dispatch_both: float = 0.0
+
+    def as_stats(self) -> dict[str, float]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+def _refuser(
+    spec: BuildSpec, budget_s: float, stats: _StrategyStats
+) -> Callable[[str], NoValidLayout]:
     def refuse(reason: str) -> NoValidLayout:
-        return NoValidLayout(reason, spec_label=spec.label, budget_s=budget_s)
+        return NoValidLayout(
+            reason, spec_label=spec.label, budget_s=budget_s, stats=stats.as_stats()
+        )
 
     return refuse

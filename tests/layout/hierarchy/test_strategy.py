@@ -722,3 +722,32 @@ def test_a_deadline_spent_by_composition_refuses_before_finalization(
     monkeypatch.setattr(strategy.compose_mod, "compose", stall)
     with pytest.raises(NoValidLayout, match="deadline exhausted before finalization"):
         _layout().lay_out(chain_spec, time_budget_s=30.0)
+
+
+def test_a_refusal_carries_the_strategy_stats(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A build that never places a block still reports what it did."""
+
+    def always_refuse(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        return (
+            {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+            None,
+        )
+
+    monkeypatch.setattr(strategy, "_solve_block", always_refuse)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    with pytest.raises(NoValidLayout) as caught:
+        layout.lay_out(chain_spec, time_budget_s=40.0)
+    stats = caught.value.stats
+    assert stats["blocks"] >= 2.0
+    assert "blocks_unattempted" in stats
+    assert "recut_rounds" in stats
+    assert "nogood_skips" in stats
+    assert "player_fed" in stats
