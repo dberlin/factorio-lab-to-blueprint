@@ -562,3 +562,105 @@ def test_queries_match_a_rebuilt_index_on_spatial_link_and_count_methods() -> No
 
     for item_id in {b.item_id for b in records}:
         assert live.count_by_item(item_id) == fresh.count_by_item(item_id)
+
+
+def test_queries_match_a_rebuilt_index_on_kind_filtered_and_between_methods() -> None:
+    """Extends the staleness guard to the eight kind-filtered / relational
+    query methods the two guards above never call: ``splitters``,
+    ``machines_for_recipe``, ``belts_carrying``, ``sorters_carrying``,
+    ``belts_into``, ``sorters_into``, ``sorters_out_of`` and
+    ``sorters_between`` -- the last of which drives the whole refactor (the
+    user's own words: "it also should be walking group_machines, which is
+    the smaller set anyway") and had no ``MutableBuildings`` coverage at all
+    before this.
+    """
+    belt = next(iter(catalog.BELT_IDS))
+    sorter = next(iter(catalog.SORTER_IDS))
+    live = MutableBuildings(_fixture())
+    live.append(PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=0, x=200, y=20))
+    live.append(PlacedBuilding(item_id=catalog.PILER_ID, model_index=0, x=201, y=20))
+    for n in range(20):
+        kind_pick = n % 3
+        if kind_pick == 0:
+            live.append(
+                PlacedBuilding(item_id=2303, model_index=0, x=100 + n, y=9, recipe_id=n % 3)
+            )
+        elif kind_pick == 1:
+            live.append(
+                PlacedBuilding(
+                    item_id=belt,
+                    model_index=0,
+                    x=100 + n,
+                    y=9,
+                    output_obj=n + 1,
+                    carries_item=f"item-{n % 7}",
+                )
+            )
+        else:
+            live.append(
+                PlacedBuilding(
+                    item_id=sorter,
+                    model_index=0,
+                    x=100 + n,
+                    y=9,
+                    input_obj=n,
+                    output_obj=n + 1,
+                    carries_item=f"item-{n % 7}",
+                )
+            )
+    for _ in range(5):
+        live.pop()
+    live[3] = replace(live[3], output_obj=11)
+
+    records = tuple(live)
+    fresh = Buildings(records)
+
+    assert live.splitters() == fresh.splitters()
+    for recipe_id in {b.recipe_id for b in records}:
+        assert live.machines_for_recipe(recipe_id) == fresh.machines_for_recipe(recipe_id)
+    for carried in {b.carries_item for b in records if b.carries_item}:
+        assert live.belts_carrying(carried) == fresh.belts_carrying(carried)
+        assert live.sorters_carrying(carried) == fresh.sorters_carrying(carried)
+    for i in range(len(records)):
+        assert live.belts_into(i) == fresh.belts_into(i)
+        assert live.sorters_into(i) == fresh.sorters_into(i)
+        assert live.sorters_out_of(i) == fresh.sorters_out_of(i)
+
+    def brute_force_sorters_between(srcs: set[int], sks: set[int]) -> tuple[int, ...]:
+        return tuple(
+            i
+            for i, b in enumerate(records)
+            if catalog.is_sorter(b.item_id) and b.input_obj in srcs and b.output_obj in sks
+        )
+
+    # Differing sizes drive both branches of `sorters_between`'s
+    # smaller-set choice; the multiples-of-6 overlap exercises a sorter
+    # whose endpoints land in both sets regardless of which branch runs.
+    sources = {i for i in range(len(records)) if i % 3 == 0}
+    sinks = {i for i in range(len(records)) if i % 2 == 0}
+    assert len(sources) != len(sinks)
+    assert sources & sinks
+    assert live.sorters_between(sources, sinks) == brute_force_sorters_between(sources, sinks)
+    assert live.sorters_between(sinks, sources) == brute_force_sorters_between(sinks, sources)
+
+
+def test_bounds_after_append_to_an_initially_empty_sequence_matches_a_fresh_index() -> None:
+    """Pins the one branch of ``_widen_bounds`` the constructor path never
+    reaches: the very first append into an empty ``MutableBuildings``."""
+    live = MutableBuildings(())
+    b = PlacedBuilding(item_id=2303, model_index=0, x=7, y=11, width=3, height=2)
+    live.append(b)
+    assert live.bounds() == Buildings([b]).bounds()
+    assert live.bounds() == (7, 11, 9, 12)
+
+
+def test_setitem_with_a_slice_raises() -> None:
+    live = MutableBuildings(_fixture())
+    with pytest.raises(ValueError):
+        live[0:2] = [live[0], live[1]]
+
+
+def test_delitem_with_a_slice_raises() -> None:
+    live = MutableBuildings(_fixture())
+    with pytest.raises(ValueError):
+        del live[0:2]
