@@ -14,5 +14,6 @@ from flab2bp.indexed.cells import Cells
 from flab2bp.indexed.reference_graph import ReferenceGraph
 from flab2bp.indexed.sorters import Sorters
 from flab2bp.indexed.stages import Stages
+from flab2bp.indexed.strip_positions import StripPositions
 
-__all__: tuple[str, ...] = ("Cells", "ReferenceGraph", "Sorters", "Stages")
+__all__: tuple[str, ...] = ("Cells", "ReferenceGraph", "Sorters", "Stages", "StripPositions")
