@@ -2260,9 +2260,15 @@ def _seat_inputs(
     a refusal, and the audit says REFUSED, which is the truth.  The alternative
     is worse and not cheaper: an emitted mixed lane is an ERROR under
     ``flow.lane_single_item``, so the cell would come back INVALID having paid a
-    full routing pass to discover it.  This is the discipline the coater seat
-    chooser gets from ``prolif.coater_rides_one_run`` -- the emitter agrees with
-    the validator rather than racing it.
+    full routing pass to discover it.  Here the emitter really does agree with
+    the validator rather than race it, because a lane's items are settled at
+    seating time and nothing downstream adds one.
+
+    That is NOT true of the coater seat chooser this used to be compared to.
+    ``prolif.coater_rides_one_run`` has two clauses and :func:`_coater_seats`
+    enforces only the second; the first convicts a belt merge the ROUTER makes,
+    long after the seat is chosen, so no pre-routing filter can agree with it
+    (spec §9 R9).  Do not cite the coater path as the model for this one.
 
     A ``lane_fits`` per-lane rate predicate went with them, and deliberately was
     not kept as a seam for single-item lanes: it summed the WHOLE group's
@@ -18123,6 +18129,20 @@ def _bridge(
     return None
 
 
+def _coater_seat_candidate_indices(port: _Port, west_channel: int) -> tuple[int, ...]:
+    """The straight interior tiles a coater could ride, BEFORE any predicate.
+
+    Split out of :func:`_coater_seats` so the refusal it feeds can tell the two
+    reasons for an empty seat list apart: a lane too short to hold a straight
+    seat at all (this returns nothing) versus a perfectly long lane every one of
+    whose candidates a predicate skipped (this returns tiles and
+    ``_coater_seats`` still returns none).  Duplicating the arithmetic at the
+    call site instead is how those two drift apart.
+    """
+    stop = min(len(port.tiles) - 1, west_channel)
+    return tuple(port.tiles[1:stop])
+
+
 def _coater_seats(
     canvas: _Canvas,
     port: _Port,
@@ -18141,18 +18161,27 @@ def _coater_seats(
     **This is the path production seats coaters from** -- ``_place_coaters``
     calls this, not :func:`_coater_seat` (spec section 9 R7: a predicate added
     only to ``_coater_seat`` is dead code, since nothing in ``src/`` calls it).
-    A candidate is therefore skipped, not merely offered, when it would ride a
-    belt merge under the coater's body
-    (:func:`_coater_candidate_rides_a_merge`) or have an ambiguous addon-area-1
-    supply (:func:`_coater_candidate_has_ambiguous_supply`) -- the same two
-    clauses ``prolif.coater_rides_one_run`` convicts.  ``_place_coaters``
-    already treats an empty result exactly as it treats a lane with no legal
-    seat at all: an :class:`_Unseatable` refusal, never a silently skipped
-    coater.
+
+    **Only ONE of ``prolif.coater_rides_one_run``'s two clauses is actually
+    enforced here** (spec section 9 R9).  A candidate is skipped when it would
+    have an ambiguous addon-area-1 supply
+    (:func:`_coater_candidate_has_ambiguous_supply`, the validator's second
+    clause) -- and that predicate is STRICTER than the validator, so it can
+    only cost seats, never miss one.  :func:`_coater_candidate_rides_a_merge`,
+    the first clause, is called but **filters nothing**: ``_place_coaters``
+    runs BEFORE routing, and the merges that clause convicts are made by the
+    ROUTER afterwards.  At seat time no candidate body tile carries a belt with
+    two predecessors, so it returns ``False`` every time.  Filtering before
+    routing can never catch a merge routing has not created yet; the validator
+    stays the only thing that catches clause 1, and it catches it after a whole
+    build has been spent.  The next lever is named in section 9 R9.
+
+    ``_place_coaters`` treats an empty result exactly as it treats a lane with
+    no legal seat at all: an :class:`_Unseatable` refusal, never a silently
+    skipped coater.
     """
-    stop = min(len(port.tiles) - 1, west_channel)
     seats: list[tuple[int, int]] = []
-    for index in port.tiles[1:stop]:
+    for index in _coater_seat_candidate_indices(port, west_channel):
         x, y = canvas.buildings[index].x, canvas.buildings[index].y
         if _coater_candidate_rides_a_merge(canvas, x, y, port.z):
             continue
@@ -18170,14 +18199,33 @@ def _coater_candidate_rides_a_merge(canvas: _Canvas, x: int, y: int, z: int) -> 
     a belt on a tile the coater's ``Facing.EAST`` 1x3 body would cover is a
     merge when two or more BELT buildings feed it via ``output_obj``.
 
-    LOOSER than ``prolif.coater_rides_one_run``'s first clause, by controller
-    ruling (fix round 1, task 2): that check also convicts a body spanning two
-    DISTINCT ``ctx.run_of`` values with no single merged tile among them,
-    which needs the validator's whole-graph run assignment.  The canvas has no
-    such map at seat-selection time, and building one here was ruled out
-    rather than invented for one candidate at a time.  A seat that passes this
-    check but whose body straddles two clean runs is still caught downstream
-    by the validator, which stays the backstop for exactly that gap.
+    **In production this returns ``False`` for every candidate, and therefore
+    filters nothing** (spec section 9 R9).  ``_place_coaters`` seats coaters
+    BEFORE routing -- it has to, because each coater needs a proliferator net
+    routed to its drop belt -- and a belt merge is something the ROUTER makes
+    afterwards.  At seat time no candidate's body tiles carry a belt with two
+    belt predecessors, so the ``any(...)`` below is never satisfied.  The
+    reported URL's decode shows it directly: the merge point is ``belt#0`` --
+    index 0, laid down with the strips -- and its two predecessors are ``817``
+    and ``1872``, neither of which existed when its seat was picked
+    (``evidence/2026-09-06-selfloop/gate/coater-amm-master.txt:12``).
+
+    It is kept, not deleted, because it is the honest statement of what clause
+    1 means and it costs one cheap scan; it would start biting the moment
+    seating moves after routing.  Do not read a passing candidate as evidence
+    that clause 1 holds.
+
+    Separately, and even if it did run late enough to bite, it is LOOSER than
+    ``prolif.coater_rides_one_run``'s first clause, by controller ruling (fix
+    round 1, task 2): that check also convicts a body spanning two DISTINCT
+    ``ctx.run_of`` values with no single merged tile among them, which needs
+    the validator's whole-graph run assignment.  The canvas has no such map at
+    seat-selection time, and building one here was ruled out rather than
+    invented for one candidate at a time.
+
+    The validator is the ONLY thing that enforces clause 1, and it does so
+    after a whole build has been spent.  The next lever -- enforcing it where
+    the merge is created -- is named in spec section 9 R9.
     """
     width, height = catalog.oriented_footprint(catalog.SPRAY_COATER_ID, Facing.EAST.value)
     body_tiles = {
@@ -18300,13 +18348,16 @@ def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
     west into the channel -- so the drop cell is the same tile it always was,
     one level above the new head.
 
-    ``_coater_seats`` already excludes a candidate that fails either clause
-    ``prolif.coater_rides_one_run`` convicts -- a belt merge under the
-    coater's body, or more than one belt near its addon area 1 -- so this
-    picks the first of what remains.  A layout that seated one anyway and
-    routed it would be caught only at the validator, after the whole build
-    was spent; this and the live ``_place_coaters`` path (spec section 9 R7)
-    both go through ``_coater_seats``, so neither can put that miss back.
+    ``_coater_seats`` excludes a candidate with more than one belt near its
+    addon area 1 -- ``prolif.coater_rides_one_run``'s SECOND clause -- and this
+    picks the first of what remains.  It does **not** exclude a candidate that
+    would ride a belt merge, the first clause: that merge does not exist yet
+    when the seat is chosen, because coaters are seated before routing and the
+    router makes the merge (spec section 9 R9).  Clause 1 is caught only at the
+    validator, after the whole build was spent.  This and the live
+    ``_place_coaters`` path (spec section 9 R7) both go through
+    ``_coater_seats``, so the two agree with each other -- but neither agrees
+    with the validator on clause 1, and no filter placed before routing can.
     """
     seats = _coater_seats(
         canvas,
@@ -18467,10 +18518,25 @@ def _place_coaters(
                 west_channel=strip.west_channel,
             )
             if not seats:
+                # An empty seat list has TWO causes and they want different
+                # fixes, so the refusal must not blame the wrong one.  Before
+                # the seat predicates existed only the first was possible.
+                offered = _coater_seat_candidate_indices(port, strip.west_channel)
+                if not offered:
+                    raise _Unseatable(
+                        f"the {item} lane at ({port.x}, {port.y}) is "
+                        f"{len(port.tiles)} tile(s) long, and a coater needs a "
+                        f"tile with a lane tile on both sides of it to ride "
+                        f"straight"
+                    )
                 raise _Unseatable(
                     f"the {item} lane at ({port.x}, {port.y}) is "
-                    f"{len(port.tiles)} tile(s) long, and a coater needs a tile "
-                    f"with a lane tile on both sides of it to ride straight"
+                    f"{len(port.tiles)} tile(s) long and offers {len(offered)} "
+                    f"straight seat(s), but a coater at every one of them would "
+                    f"have more than one belt near its addon area 1 or ride a "
+                    f"belt merge under its body -- the two things "
+                    f"prolif.coater_rides_one_run convicts, so seating one here "
+                    f"would build a layout our own validator rejects"
                 )
             failure_reasons: list[str] = []
             projected_failures: list[

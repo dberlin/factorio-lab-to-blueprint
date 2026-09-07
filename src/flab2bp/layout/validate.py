@@ -5139,19 +5139,41 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
         merged = tuple(i for i in body_belts if predecessor_counts.get(i, 0) >= 2)
         distinct_runs = {ctx.run_of[i] for i in body_belts if i in ctx.run_of}
         if merged or len(distinct_runs) >= 2:
-            extra = (
-                f", and its body tiles carry {len(distinct_runs)} distinct belt runs"
-                if len(distinct_runs) >= 2
-                else ""
-            )
+            # Name ONLY the clause that fired -- lead, reason and rationale
+            # alike.  Either half convicts on its own, so the message must not
+            # assert the other: with `merged` empty it used to read "coater N
+            # rides a belt merge under its body: belt(s) [] ... have two or more
+            # predecessors, and its body tiles carry 2 distinct belt runs",
+            # which contradicts itself twice over and sends the reader hunting
+            # for a merge that is not there.
+            reasons = []
+            if merged:
+                reasons.append(
+                    f"belt(s) {list(merged)} on its body tiles have two or more predecessors"
+                )
+            if len(distinct_runs) >= 2:
+                reasons.append(
+                    f"its body tiles carry {len(distinct_runs)} distinct belt "
+                    f"runs {sorted(distinct_runs)} on belt(s) {list(body_belts)}"
+                )
+            if merged:
+                lead = "rides a belt merge under its body"
+                why = (
+                    "a coater carries no connection of its own and needs one "
+                    "lane, not a merge whose joined flows have no arrangement "
+                    "that keeps its recipe's proportion"
+                )
+            else:
+                lead = "has a body spanning more than one belt run"
+                why = (
+                    "a coater carries no connection of its own and rides "
+                    "whichever run the game attaches it to, so a body straddling "
+                    "two runs leaves what it sprays to a rotation convention"
+                )
             yield Finding(
                 "prolif.coater_rides_one_run",
                 Severity.ERROR,
-                f"coater {coater_index} rides a belt merge under its body: "
-                f"belt(s) {list(merged)} on its body tiles have two or more "
-                f"predecessors{extra}; a coater carries no connection of its "
-                "own and needs one lane, not a merge whose joined flows have no "
-                "arrangement that keeps its recipe's proportion",
+                f"coater {coater_index} {lead}: {', and '.join(reasons)}; {why}",
                 (coater_index, *body_belts),
                 {
                     "ride": ride,

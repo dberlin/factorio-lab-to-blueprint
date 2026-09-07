@@ -1720,6 +1720,7 @@ def _coater_placement(
     merge_under_body: bool,
     second_belt_in_supply_area: bool = False,
     one_run_two_belts_in_supply_area: bool = False,
+    two_runs_under_body: bool = False,
 ) -> Placement:
     """A coater at yaw 90 riding a straight lane, optionally spoiled.
 
@@ -1740,11 +1741,19 @@ def _coater_placement(
     (``output_obj`` from the far one to the near one).  Same positions, same
     radius membership, but one run carries one item, so there is no rotation
     ambiguity and the clause must NOT fire.
+
+    ``two_runs_under_body`` CUTS the link from the body tile at (9, 5) to the
+    ridden tile at (10, 5).  Nothing merges anywhere, so no belt has two
+    predecessors, but the body now spans two distinct runs -- the other half of
+    the first clause, which is what ``len(distinct_runs) >= 2`` convicts on its
+    own.
     """
     buildings: list[PlacedBuilding] = [
         belt(7, 5, out=1),
         belt(8, 5, out=2),
-        belt(9, 5, out=3),  # body tile (dx=-1): the merge target when spoiled
+        # Body tile (dx=-1): the merge target when spoiled, and the cut point
+        # when the body is made to span two runs.
+        belt(9, 5) if two_runs_under_body else belt(9, 5, out=3),
         belt(10, 5, out=4),  # the coater's own ridden tile (dx=0)
         belt(11, 5, out=5),  # body tile (dx=+1)
         belt(12, 5),
@@ -1774,6 +1783,37 @@ def test_coater_over_a_belt_merge_is_convicted() -> None:
     findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
     assert findings, [f.check for f in report.errors]
     assert "merge" in findings[0].message
+
+
+def test_coater_body_spanning_two_runs_without_a_merge_is_convicted() -> None:
+    """The untested half of the first clause, and the message it must produce.
+
+    ``_coater_rides_one_run``'s first clause fires on ``merged or
+    len(distinct_runs) >= 2``.  Every existing test drives the ``merged`` half;
+    the Task 1 review flagged the run half as shipped-but-unexercised, and it is
+    the half that actually convicts on the reported URL's freeform builds.
+
+    Here two belts under the coater's 1x3 body belong to different runs and
+    NOTHING merges -- ``merged`` is empty.  The clause must still fire, and the
+    message must name only the reason that fired.  It used to name both
+    unconditionally and read "belt(s) ``[]`` on its body tiles have two or more
+    predecessors, and its body tiles carry 2 distinct belt runs", which
+    contradicts itself: an empty list cannot have two predecessors.  A refusal
+    that names a merge the reader will not find is worse than no detail at all.
+    """
+    placement = _coater_placement(merge_under_body=False, two_runs_under_body=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert findings, [f.check for f in report.errors]
+    message = findings[0].message
+    assert "distinct belt runs" in message, message
+    assert findings[0].detail["merged_belts"] == [], findings[0].detail
+    # The clause that did NOT fire must not be asserted -- not in the reason,
+    # not in the lead, and not in the rationale.  All three used to claim a
+    # merge unconditionally.
+    assert "belt(s) [] " not in message, message
+    assert "have two or more predecessors" not in message, message
+    assert "merge" not in message, message
 
 
 def test_coater_on_a_single_run_is_clean() -> None:
