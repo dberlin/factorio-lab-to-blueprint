@@ -10825,6 +10825,61 @@ class TestProliferatorIsActuallySupplied:
         assert not [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
 
 
+#: Every check that judges a Spray Coater.  Task 7's gate greps for the two
+#: ``prolif.coater_*`` names, so they are spelled out here rather than derived.
+COATER_ARBITERS = (
+    "prolif.coater_rides_one_run",
+    "prolif.sprayed_cargo_reaches_machines",
+    "prolif.coaters_are_supplied",
+    "prolif.coater_supply_is_fed",
+    "game.addon_supply",
+    "game.addon_facing",
+    "game.addon_corner",
+)
+
+
+@pytest.mark.parametrize("placer", ["freeform", "sequence-pair"])
+def test_every_coater_arbiter_is_green_on_a_placed_build(placer: str) -> None:
+    """The placed coater node must satisfy every check that judges a coater.
+
+    Asserted on the NAMED checks rather than on ``report.ok``: a broad
+    assertion turns any unrelated regression in either placer into a mystery
+    here, and the point of this test is to say which coater property broke.
+
+    ERROR severity only.  ``prolif.sprayed_cargo_reaches_machines`` has a clause
+    that is downgraded to WARNING later in this plan, and an assertion of "no
+    findings at all" would forbid a change the same plan mandates.
+
+    The coater count is asserted first, because a build with no coater satisfies
+    every one of these checks by having nothing to judge.
+    """
+    from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
+
+    spec = proliferated_spec()
+    if placer == "freeform":
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
+    else:
+        p = SequencePairLayout(
+            band_policy=BandPolicy("portable"),
+            islands=1,
+            config=SequenceSolverConfig.test(),
+        ).lay_out(spec, time_budget_s=2.0)
+
+    coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+    assert coaters, f"{placer} placed no Spray Coater; the arbiters below judge nothing"
+
+    report = _full_report(p, spec)
+    convicted = [
+        f
+        for name in COATER_ARBITERS
+        for f in report.by_check(name)
+        if f.severity is validate.Severity.ERROR
+    ]
+    assert not convicted, "\n".join(f"{f.check}: {f.message}" for f in convicted)
+
+
 class TestSortersCanCarryTheirDemand:
     def test_sorter_tiers_are_chosen_for_the_span_they_actually_span(self) -> None:
         """Tier selection must use the validator's demand basis, not its own.
