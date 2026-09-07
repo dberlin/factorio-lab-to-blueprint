@@ -57,12 +57,28 @@ budget flag here, because two budgets that can disagree is a measurement nobody
 can read.  180 s is not any gate's number and no gate clause may be read off
 these runs.  Six rungs share ``PROBE_SHARE`` of the composition's remaining
 wall, so each rung's ``_route_all`` runs on roughly a sixth of the clock a
-single production composition would have had: ``unrouted`` here is an UPPER
-bound on a full-clock route, which is why ``unrouted_by_kind`` and
-``unrouted_geometric`` are reported beside it and ``rung_deadline_s`` says how
-many seconds each rung actually had when it started.  Unused clock flows
-FORWARD, so a cheap narrow rung funds a wide one; a rung the share never
-reaches is recorded with ``judged: false`` rather than dropped.
+single production composition would have had: on a cell whose router is
+clock-bound, ``unrouted`` here is an UPPER bound, which is why
+``unrouted_by_kind`` and ``unrouted_geometric`` are reported beside it and
+``rung_deadline_s`` says how many seconds each rung actually had when it
+started.  A rung whose ``route_status`` is ``STRANDED`` was NOT clock-bound --
+``_route_all`` returns that only with no ``budget_exhausted`` and no
+BUDGET-kind failure -- and its count is the router's real answer.  Note also
+that ``route_iterations`` of 1 is not this clock: ``_route_all`` sets
+``round_limit = 1`` at or above ``_SINGLE_ROUND_NETS = 64`` nets, which both
+large cells are.  Unused clock flows FORWARD, so a cheap narrow rung funds a
+wide one; a rung the share never reaches is recorded with ``judged: false``
+rather than dropped.
+
+WHERE THE PROBE IS STRICTER THAN PRODUCTION, DELIBERATELY.  ``RESERVE_SHARE``
+is applied to EVERY rung here, whereas ``pack_with_access`` caps only rung 0
+with ``RESERVE_WALL_SHARE`` and lets later rungs spend their whole ladder
+slice.  A reader comparing the two must know this, even though it bound
+nothing in the runs committed beside this file: reserve walls there were
+0.45-4.17 s against caps of roughly 5-14 s, and no rung recorded
+``verdict: timeout``.  It is spelled this way so that every rung is asked the
+oracle on the same proportion of its own clock, which is what makes the rungs
+comparable WITH EACH OTHER -- the comparison this measurement exists for.
 
     uv run python rung_probe.py <sidecar.json> -- <the exact flab2bp argv>
 """

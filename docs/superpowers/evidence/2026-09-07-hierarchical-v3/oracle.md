@@ -115,9 +115,13 @@ and the ladder returns on the first complete rung.
 
 * belt3: the rung with the fewest `missing` is a **six-way tie at 91** —
   `missing` is CONSTANT across the whole ladder and carries zero rung-ordering
-  information. The rung with the fewest `unrouted` is **gap 16, at 3**, and
-  the router's own ordering (15, 16, 7, 9, 6, 3) improves by 5× from rung 2 to
-  rung 16. They are not the same rung, because one of them is not a rung.
+  information. The rung with the fewest `unrouted` is **gap 16, at 3**. The
+  router's own ordering is **15, 16, 7, 9, 6, 3** — improving 5× end to end
+  but NOT monotone: gap 4 is worse than gap 2, and gap 8 worse than gap 6.
+  It is nonetheless a REAL ordering rather than a first-pass artifact, because
+  one round is shipped policy at 77 nets and every belt3 rung returned
+  STRANDED with all 77 nets decided. They are not the same rung, because one
+  of them is not a rung.
 * zurl2: the rung with the fewest `missing` is **gap 16, at 0** — the only
   complete reservation in the measurement. The rung with the fewest `unrouted`
   is **gap 2, at 101**. They are not the same rung; they are opposite ends of
@@ -135,11 +139,24 @@ at every rung of it.
 
 Two cells, one candidate policy, one round each, at a budget no gate uses.
 The routing column is a single `_route_all` per rung on roughly a sixth of one
-composition's wall — `route_iterations` is **1** on all twelve rungs, so the
-router's negotiation never got past its first pass anywhere in this
-measurement, and both cells' `unrouted` counts are upper bounds on what a
-full-clock router would refuse. zurl2's counts are additionally BUDGET-bound
-and should not be read as geometry at all. The cells' final CLI verdicts
+composition's wall.
+
+**`route_iterations` = 1 on all twelve rungs is SHIPPED POLICY, not this
+probe's clock.** `freeform._route_all` sets `round_limit = 1 if len(nets) >=
+_SINGLE_ROUND_NETS else RRR_MAX`, with `_SINGLE_ROUND_NETS = 64`; belt3 has 77
+cut nets and zurl2 127, so production routes these two canvases in one round
+too. Nothing here was starved out of a second rip-up pass. Combined with
+belt3's `route_status` being **STRANDED on all six of its rungs** — a status
+`_route_all` returns only when neither `budget_exhausted` nor any BUDGET-kind
+failure is present — and with `routed + unrouted = 77` exactly on every belt3
+rung (no net left undecided), belt3's six routing rows are
+**production-equivalent single-round routing on those canvases**, not
+first-pass upper bounds.
+
+zurl2's are not: its six rows are BUDGET-bound (100–107 of each rung's
+unrouted count) at 16–22 s of routing, and should not be read as geometry at
+all. That is a clock limit and it is this probe's — six rungs sharing one
+composition's wall — not a policy one. The cells' final CLI verdicts
 (both exit 3, refusing with unrouted cuts) are probe artifacts: the six-rung
 probe spends 90 % of the composition's own deadline, so the shipped
 `pack_with_access` ran afterwards on a nearly spent clock. Nothing in this
@@ -165,8 +182,13 @@ Task 7 runs only if BOTH clauses hold.
   geometry is impossible. A `missing` of 91 or 144 is not a sealed-trunk
   rejection however large it is.
 * **Clause 2 — the widest rung judged still leaves at least one unrouted cut:
-  HOLDS.** belt3 gap 16 leaves 3 unrouted (2 DYNAMIC_ACCESS, 1 SEALED_POCKET,
-  0 BUDGET); zurl2 gap 16 leaves 108 (107 BUDGET, 1 DYNAMIC_ACCESS).
+  HOLDS, and holds on geometry rather than on clock.** belt3 gap 16 leaves 3
+  unrouted (2 DYNAMIC_ACCESS, 1 SEALED_POCKET, **0 BUDGET**, status STRANDED,
+  all 77 nets decided). Because one round is what `_route_all` does on a
+  77-net problem by policy, those 3 cuts are the real single-round answer for
+  that canvas and not an artifact of the probe's wall. zurl2 gap 16 leaves 108
+  (107 BUDGET, 1 DYNAMIC_ACCESS) and satisfies the clause only on its clock,
+  so belt3 is what carries it.
 
 **LEVER C: SKIPPED, because the reservation rejected no rung on either cell
 for a sealed-trunk reason — `missing_sealed` is 0 on all twelve judged rungs,
@@ -184,8 +206,10 @@ size of the number behind it:
    zurl2's rung 16 proves the matcher CAN complete on a composed canvas, so
    this is a matcher-scaling problem with a worked counterexample, not a wall.
 2. **More ground does route more cuts, and the ladder never asks for it.**
-   belt3's router goes 15 → 3 unrouted from gap 2 to gap 16 with no BUDGET
-   refusals anywhere, while the shipped ladder commits gap 2 because the
+   belt3's router goes 15, 16, 7, 9, 6, 3 unrouted across the ladder — 5×
+   better at gap 16 than at gap 2, though not monotone — with no BUDGET
+   refusals anywhere and at the round count production itself uses, so this is
+   a real ordering. Meanwhile the shipped ladder commits gap 2 because the
    local-only oracle it degrades to answers `complete` there. A ladder that
    could see the router's own number would take rung 16 on this cell.
 3. **zurl2 is clock-bound before it is ground-bound.** 107 of 108 refusals at
