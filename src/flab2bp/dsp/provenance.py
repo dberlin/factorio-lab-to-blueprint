@@ -512,20 +512,27 @@ def hardcoding_readers(graph: Graph | None = None) -> dict[str, tuple[str, ...]]
     A reader of one of these consults the rule *at an assumed tech level*, which
     the plan's tech clause distinguishes from consulting it properly.
     """
-    # Deferred: flab2bp.indexed.reference_graph imports `Graph` from this
-    # module, so a module-level import here would be circular.
-    from flab2bp.indexed import ReferenceGraph
-
-    index = ReferenceGraph.of(graph if graph is not None else build_graph())
-    modules = (*STRATEGY_MODULES, VALIDATE_MODULE)
-    # Hoisted out of the entry loop -- exactly what `consultation()` already
-    # does at :429-430, and the one thing :527 did not.
-    per_module_reach = index.module_reach(modules)
+    # NOT converted to ReferenceGraph.module_reach: measured and reverted, see
+    # the "hardcoding_readers" note in this task's report. `nodes_in(module)`
+    # is the seed set here, and for a module like `flab2bp.layout.freeform`
+    # (438 top-level definitions) `ReferenceGraph.reachable_from` calls
+    # `nx.descendants` ONCE PER SEED -- O(seeds x graph size) -- instead of one
+    # multi-source traversal, which made the "hoisted" form ~9x SLOWER than
+    # this hand-rolled version in the realistic call pattern (both this
+    # function and `frozen_captures` called on one graph, as
+    # `scripts/rule_report.py` does). `Graph.closure` seeds its single stack
+    # with the whole root set at once and stays fast regardless of module size.
+    g = graph if graph is not None else build_graph()
     out: dict[str, tuple[str, ...]] = {}
     for entry in registry.ENTRIES:
         if not entry.hardcodes:
             continue
-        out[entry.symbol] = tuple(sorted(m for m in modules if entry.dotted in per_module_reach[m]))
+        readers = [
+            m
+            for m in (*STRATEGY_MODULES, VALIDATE_MODULE)
+            if entry.dotted in g.closure(g.nodes_in(m))
+        ]
+        out[entry.symbol] = tuple(sorted(readers))
     return out
 
 

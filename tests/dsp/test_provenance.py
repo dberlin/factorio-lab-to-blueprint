@@ -1,16 +1,28 @@
-"""`ReferenceGraph`-backed provenance mechanisms: `frozen_captures`, `hardcoding_readers`.
+"""`ReferenceGraph`-backed provenance mechanisms.
 
-`frozen_captures` and `hardcoding_readers` (`dsp/provenance.py:478-530`) both used to
-rewalk `Graph` by hand on every call -- the first inverting a per-node capture map
-built inline, the second recomputing `closure(nodes_in(m))` once per
-(entry, module) pair. Both now go through `ReferenceGraph` (`flab2bp.indexed`),
-which memoizes the same walks: `holders_of` for the first, `module_reach` hoisted
-out of the entry loop for the second.
+`frozen_captures` (`dsp/provenance.py`) used to build its `captured` map once
+(`g.closure` per import-time node -- that part was never the defect) and then,
+for EACH of the ~126 registry rules, linear-scan `captured.items()` looking for
+holders: O(rules x captured-map-size). It now goes through `ReferenceGraph`
+(`flab2bp.indexed`), whose `holders_of` answers the same question from a map
+(`_holders`, a `cached_property`) inverted once and then looked up by key --
+O(rules) dict lookups after one O(captured-map-size) build.
+
+`hardcoding_readers` was ALSO converted to `ReferenceGraph.module_reach` in a
+first pass, then reverted -- see the note on that function in
+`src/flab2bp/dsp/provenance.py` and this task's report. `module_reach` seeds
+`reachable_from` with `nodes_in(module)`, and `ReferenceGraph.reachable_from`
+calls `nx.descendants` once PER SEED rather than doing one multi-source
+traversal; for a module like `flab2bp.layout.freeform` (438 top-level
+definitions) that made the "hoisted" form ~9x slower than the hand-rolled
+`Graph.closure` version it was meant to replace, measured on the realistic
+call pattern (`frozen_captures` and `hardcoding_readers` both called on one
+graph, as `scripts/rule_report.py` does). `hardcoding_readers` therefore keeps
+its master-identical body; its behaviour is already covered by
+`tests/rules/test_rule_registry.py::test_a_rule_consulted_only_at_a_hardcoded_tech_level_is_reported`.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from flab2bp.dsp import provenance
 
@@ -18,9 +30,11 @@ from flab2bp.dsp import provenance
 def test_frozen_captures_is_unchanged_by_the_index() -> None:
     """The converted body answers exactly what the scan answered.
 
-    provenance.py:507 rescanned every import-time node's reach ONCE PER
-    REGISTRY RULE (~126 of them). The captured map is the same for every rule,
-    so inverting it once is the same answer with one pass instead of 126.
+    This reproduces master's `frozen_captures` body verbatim as the oracle: it
+    builds `captured` the same way (one `g.closure` per import-time node) and
+    then answers each rule from it by the same linear scan master used, so a
+    divergence in `ReferenceGraph.holders_of`'s answer -- not merely its
+    algorithmic cost -- would show up as a value mismatch here.
     """
     g = provenance.build_graph()
     captured: dict[str, frozenset[str]] = {}
@@ -35,44 +49,3 @@ def test_frozen_captures_is_unchanged_by_the_index() -> None:
         if holders:
             expected[entry.symbol] = tuple(sorted(holders))
     assert provenance.frozen_captures(g) == expected
-
-
-def test_hardcoding_readers_is_unchanged_by_the_hoist() -> None:
-    """provenance.py:527 recomputed `closure(nodes_in(m))` inside the entry loop."""
-    modules = (*provenance.STRATEGY_MODULES, provenance.VALIDATE_MODULE)
-    g = provenance.build_graph()
-    expected: dict[str, tuple[str, ...]] = {}
-    for entry in provenance.registry.ENTRIES:
-        if not entry.hardcodes:
-            continue
-        expected[entry.symbol] = tuple(
-            sorted(m for m in modules if entry.dotted in g.closure(g.nodes_in(m)))
-        )
-    assert provenance.hardcoding_readers(g) == expected
-
-
-def test_hardcoding_readers_stops_calling_graph_closure_per_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The hoist is the point: before it, every hardcoding entry called
-    `Graph.closure` once per module (:527); after it, `hardcoding_readers`
-    never calls `Graph.closure` at all -- it reads `ReferenceGraph.module_reach`,
-    computed once for the whole loop.
-
-    This is a corrected replacement for the plan's own counter test (which
-    counted calls to `ReferenceGraph.reachable_from` and could not fail: that
-    method is never invoked by the pre-conversion body, so the assertion
-    `len(calls) <= len(modules)` holds trivially both before and after -- 0 is
-    always <= len(modules)). Counting `Graph.closure` calls instead actually
-    distinguishes the two implementations.
-    """
-    calls: list[str] = []
-    original = provenance.Graph.closure
-
-    def counting(self, roots, *, block=()):  # type: ignore[no-untyped-def]
-        calls.append("closure")
-        return original(self, roots, block=block)
-
-    monkeypatch.setattr(provenance.Graph, "closure", counting)
-    provenance.hardcoding_readers(provenance.build_graph())
-    assert calls == []
