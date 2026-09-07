@@ -392,6 +392,137 @@ def test_a_floor_above_every_rung_is_itself_the_only_rung(
     assert len(rungs) == 1
 
 
+def test_trunk_goals_point_each_lane_head_at_its_partners_doorstep(
+    two_solved_blocks: TwoSolvedBlocks,
+):
+    """A cut lane's goal is the far end of its own trunk, never the rim.
+
+    This is also the standing proof that every goal cell is inside the `bounds`
+    the reservation is given: `_free_doorstep` admits a neighbour only through
+    `_Canvas.free`, which refuses anything outside `canvas.limit` -- and
+    `pack_with_access` passes that same `canvas.limit` as `bounds`.  A goal
+    outside `bounds` would be silently unreachable in `_astar` (only START
+    cells are exempt from the box), turning a geometry question into a false
+    `missing`.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    packing = compose._pack_at([left, right], flows, spec, gap=2, ramped=ramped, margin=8)
+    goals = compose._trunk_goals(packing)
+    assert goals, "every cut lane must raise a goal"
+    net = packing.nets[0]
+    src_cell = (net.src.x, net.src.y, net.src.z)
+    dst_cell = (net.dst.x, net.dst.y, net.dst.z)
+    departure = next(d for d in goals if d.cell == src_cell)
+    # The departure's goal is the ARRIVAL's free neighbours, not the rim -- and
+    # a lane head that is the end of SEVERAL nets is aimed at the union of its
+    # partners' doorsteps, which is the "at least one of them" the docstring
+    # calls deliberately weaker than routing.
+    partners: set[tuple[int, int, int]] = set()
+    for other in packing.nets:
+        if other.prelinked or other.src is None:
+            continue
+        ends = ((other.src.x, other.src.y, other.src.z), (other.dst.x, other.dst.y, other.dst.z))
+        if src_cell in ends:
+            partners.update(ends)
+    partners.discard(src_cell)
+    assert goals[departure] <= {
+        (px + dx, py + dy, pz) for px, py, pz in partners for dx, dy in compose._NEIGHBOURS
+    }, "a goal cell that touches no partner lane head is the rim creeping back in"
+    assert goals[departure] >= {
+        cell
+        for dx, dy in compose._NEIGHBOURS
+        for cell in ((dst_cell[0] + dx, dst_cell[1] + dy, dst_cell[2]),)
+        if packing.canvas.free(cell)
+    }, "this net's own far end must be among the doorsteps its departure is aimed at"
+    assert all(packing.canvas.free(cell) for cell in goals[departure])
+    x0, y0, x1, y1 = packing.canvas.limit
+    assert all(x0 <= x <= x1 and y0 <= y <= y1 for cells in goals.values() for x, y, _z in cells), (
+        "a goal outside `bounds` is unreachable in `_astar` and would refuse for the wrong reason"
+    )
+
+
+def test_pack_with_access_hands_the_reservation_the_trunk_goals(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """The oracle is asked the router's question, not the local-only one."""
+    left, right, flows, spec, ramped = two_solved_blocks
+    captured: dict[str, object] = {}
+    real = compose._reserve_port_access
+
+    def spy(canvas, demands, **kw):
+        captured.setdefault("goals", kw.get("goals"))
+        return real(canvas, demands, **kw)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", spy)
+    compose.pack_with_access([left, right], flows, spec, ramped=ramped, deadline=None, margin=8)
+    assert captured["goals"], "the reservation was still asked the local-only question"
+
+
+def test_a_walled_in_trunk_rejects_the_narrow_rung(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """The upper rungs must become reachable: today rung 0 always commits."""
+    left, right, flows, spec, ramped = two_solved_blocks
+    real = compose._reserve_port_access
+    # The ladder walks narrowest-first, so the FIRST call's box is the
+    # narrowest packing's; every later rung is strictly wider.
+    narrowest: dict[str, int] = {}
+
+    def scripted(canvas, demands, **kw):
+        reservation = real(canvas, demands, **kw)
+        width = kw["bounds"][2] - kw["bounds"][0]
+        narrowest.setdefault("width", width)
+        if width == narrowest["width"]:  # the narrowest packing
+            return replace(reservation, missing=demands[:1], assigned=reservation.assigned[1:])
+        return reservation
+
+    monkeypatch.setattr(compose, "_reserve_port_access", scripted)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+    assert packed.gap > compose.GAP_LADDER[0]
+    assert packed.reservation.complete
+
+
+def test_rung_zero_falls_back_to_the_local_oracle_on_its_own_deadline(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """A slow trunk probe must not cost the router its wall."""
+    left, right, flows, spec, ramped = two_solved_blocks
+    calls: list[object] = []
+    real = compose._reserve_port_access
+
+    def slow_first(canvas, demands, **kw):
+        calls.append(kw.get("goals"))
+        if len(calls) == 1:
+            raise compose._PreparationDeadline
+        return real(canvas, demands, **kw)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", slow_first)
+    packed = compose.pack_with_access(
+        [left, right],
+        flows,
+        spec,
+        ramped=ramped,
+        deadline=time.monotonic() + 30.0,
+        margin=8,
+    )
+    assert len(calls) == 2
+    assert calls[0] is not None and calls[1] is None, "the retry must drop the goals"
+    assert packed.gap == compose.GAP_LADDER[0]
+
+
+def test_compose_reports_the_rung_and_the_reservation_it_committed(
+    two_solved_blocks: TwoSolvedBlocks,
+):
+    left, right, flows, spec, ramped = two_solved_blocks
+    result = compose.compose([left, right], flows, spec, gap=2, ramped=ramped, deadline=None)
+    assert result.gap in compose.GAP_LADDER
+    assert result.port_demands > 0
+    assert result.reservation_missing == 0
+    assert result.failures == () and result.routed == len(flows)
+
+
 def test_compose_still_routes_both_cuts_on_the_chain(two_solved_blocks: TwoSolvedBlocks):
     """The ladder, floored at today's gap, does not change today's outcome.
 

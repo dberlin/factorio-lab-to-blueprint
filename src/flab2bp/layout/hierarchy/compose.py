@@ -34,6 +34,7 @@ from flab2bp.layout import junction, slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.freeform import (
     CoaterSupplyPort,
+    PortAccessDemand,
     PortAccessEvidence,
     PortAccessReservation,
     _Canvas,
@@ -100,6 +101,18 @@ GAP_LADDER = (2, 4, 6, 8, 12, 16)
 #: them on.
 LADDER_WALL_SHARE = 0.4
 
+#: The share of the wall on entry that rung 0's RESERVATION may spend.
+#:
+#: Rung 0 used to run on the caller's own clock because its reservation was
+#: the local-only oracle and cost almost nothing.  With trunk goals it runs
+#: an A* per option per demand, so an unbounded rung 0 could spend the wall
+#: `_route_all` needs and refuse on BUDGET the cuts a cheaper oracle would
+#: have wired -- the same trade `LADDER_WALL_SHARE` exists for one rung up.
+#: On its own expiry rung 0 is RE-JUDGED with the local-only oracle
+#: (`goals=None`) on the caller's full clock, so the degradation is to v2's
+#: behaviour rather than to a refusal.
+RESERVE_WALL_SHARE = 0.25
+
 
 @dataclass
 class BlockPlaced:
@@ -128,6 +141,12 @@ class ComposeResult:
     #: quietly dropped -- an unwired entry lane is a block that starves, and the
     #: validator convicts it several errors later with no way back to the cause.
     failures: tuple[str, ...]
+    #: The `GAP_LADDER` rung the composition committed.
+    gap: int = 0
+    #: Port-access demands the committed rung raised, and how many of them the
+    #: reservation could not give a corridor to.
+    port_demands: int = 0
+    reservation_missing: int = 0
 
 
 class _Packing(NamedTuple):
@@ -571,6 +590,82 @@ def _outer_ring(bounds: tuple[int, int, int, int]) -> list[Cell]:
     return ring
 
 
+#: The four von Neumann neighbours, spelled here rather than imported from
+#: `freeform._STEPS`: this module already imports eleven freeform privates and
+#: a two-line constant is not worth a twelfth.
+_NEIGHBOURS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+
+def _free_doorstep(canvas: _Canvas, cell: Cell) -> frozenset[Cell]:
+    """The free cells a belt can stand on beside ``cell``.
+
+    The lane head's OWN tile is occupied -- it is a belt -- so a goal set
+    naming it would be a goal no search can settle.  What a trunk actually has
+    to reach is a free cell touching it, which is exactly the `access_cells`
+    set `_reserve_port_access` enumerates for that demand.
+
+    Filtering through :meth:`_Canvas.free` is also what keeps every goal inside
+    the reservation's ``bounds``: `free` refuses any cell outside
+    ``canvas.limit``, and `pack_with_access` passes that same ``canvas.limit``
+    as ``bounds``.  `_astar` exempts only its START cells from the box, so a
+    goal outside it would be silently unreachable and would convict a demand
+    for geometry it does not have.
+    """
+    return frozenset(
+        neighbour
+        for dx, dy in _NEIGHBOURS
+        for neighbour in ((cell[0] + dx, cell[1] + dy, cell[2]),)
+        if canvas.free(neighbour)
+    )
+
+
+def _trunk_goals(packing: _Packing) -> dict[PortAccessDemand, frozenset[Cell]]:
+    """Each cut lane's demand, pointed at the doorstep of its own partners.
+
+    THIS IS WHAT MAKES THE ORACLE ABLE TO SAY NO.  Every demand
+    `_port_access_inventory` builds from a composed packing is an
+    `INTERNAL_DEPARTURE` or an `INTERNAL_ARRIVAL`, both `reaches_boundary`
+    False, so `_reserve_port_access` admits every local option unprobed and
+    `assignment_boundary_cut` returns `None` on every assignment -- the v2
+    gate committed rung 0 with `missing` 0 on all five composing cells while
+    the router refused up to 28 cut lanes on the same canvas
+    (`docs/superpowers/evidence/2026-09-07-hierarchical-v2/gate.md` §6).
+
+    The question this asks instead is the one the router answers: can this
+    lane head's corridor reach the far end of the trunk it is an end of.
+
+    WHAT IS DELIBERATELY WEAKER THAN ROUTING.  A demand is deduplicated by
+    `(cell, kind)`, so one lane head can be the end of several nets; the goal
+    is the UNION of its partners' doorsteps, which asks "can it reach AT LEAST
+    ONE of them" rather than all of them.  That is a necessary condition, not
+    a sufficient one: it can still admit a rung the router then refuses, but
+    it can no longer admit a rung on which a lane head is sealed away from
+    every partner it has.  Probing per partner would multiply the A* count by
+    the fan-out for a claim the router re-checks anyway.
+    """
+    demands = _port_access_inventory(packing.nets).demands
+    by_cell: dict[Cell, list[PortAccessDemand]] = {}
+    for demand in demands:
+        by_cell.setdefault(demand.cell, []).append(demand)
+    goals: dict[PortAccessDemand, set[Cell]] = {demand: set() for demand in demands}
+    for net in packing.nets:
+        if net.prelinked or net.src is None:
+            continue
+        src_cell = (net.src.x, net.src.y, net.src.z)
+        dst_cell = (net.dst.x, net.dst.y, net.dst.z)
+        src_door = _free_doorstep(packing.canvas, src_cell)
+        dst_door = _free_doorstep(packing.canvas, dst_cell)
+        for demand in by_cell.get(src_cell, ()):
+            goals[demand].update(dst_door)
+        for demand in by_cell.get(dst_cell, ()):
+            goals[demand].update(src_door)
+    # A demand whose every partner is walled in raises no goal rather than an
+    # EMPTY one: an empty goal set is a search that can never settle, which
+    # would convict the demand for its PARTNER's pocket.  The router names
+    # that lane itself, with the class that actually stopped it.
+    return {demand: frozenset(cells) for demand, cells in goals.items() if cells}
+
+
 def _pack_at(
     placements: list[Placement],
     flows: list[LaneFlow],
@@ -655,11 +750,15 @@ def pack_with_access(
     every candidate corridor of every demand and then solves a JOINT MATCHING
     over them, so its cost grows with the interface rather than being a fixed
     preamble; a ladder multiplies that by its rungs.  The FIRST rung is what a
-    ladderless composer would have done and runs on ``deadline`` itself; every
-    rung after it is speculative and is funded out of :data:`LADDER_WALL_SHARE`
-    of the wall left on entry, so that ``_route_all`` is never handed a clock
-    the search for a wider canvas has already spent.  The ladder stops the
-    moment that share runs out:
+    ladderless composer would have done and runs on ``deadline`` itself -- all
+    but its RESERVATION, which is capped at :data:`RESERVE_WALL_SHARE` because
+    the trunk goals turned that reservation into an A* per option per demand,
+    and which degrades to the local-only oracle on the caller's full clock
+    rather than refusing when that cap bites.  Every rung after the first is
+    speculative and is funded out of :data:`LADDER_WALL_SHARE` of the wall left
+    on entry, so that ``_route_all`` is never handed a clock the search for a
+    wider canvas has already spent.  The ladder stops the moment that share
+    runs out:
 
     * with a rung already judged, the best one in hand is returned -- it is a
       real packing with a real verdict, and spending the router's wall to find
@@ -693,39 +792,73 @@ def pack_with_access(
         bounds = packing.canvas.limit
         assert bounds is not None  # canvas_for always sets it
         demands = _port_access_inventory(packing.nets).demands
-        # THE BOUNDARY IS PASSED ONLY WHEN SOME DEMAND COULD USE IT.  Every
-        # demand `_port_access_inventory` builds from `_Packing.nets` is an
-        # `INTERNAL_DEPARTURE` or an `INTERNAL_ARRIVAL` (compose has no
+        # THE BOUNDARY IS STILL PASSED ONLY WHEN SOME DEMAND'S KIND COULD USE
+        # IT.  Every demand `_port_access_inventory` builds from `_Packing.nets`
+        # is an `INTERNAL_DEPARTURE` or an `INTERNAL_ARRIVAL` (compose has no
         # boundary ports of its own), and both answer `reaches_boundary` False
-        # -- so the reachability probe is skipped for every one of them and no
-        # demand can ever be moved into `missing` by it.  Handing
+        # -- so `_goal_for` would never hand the rim to one of them and no
+        # demand could ever be moved into `missing` by it.  Handing
         # `_reserve_port_access` a boundary anyway is pure cost on a clock the
         # gate shows binding (BUDGET-class refusals on titanium-glass and
-        # zurl2): it builds a `_Grid` over the whole route box PER LADDER RUNG
-        # for probes that never run, and installs an `assignment_boundary_cut`
-        # validate callback that `_match_access_corridors` re-invokes on every
-        # candidate assignment only to `continue` past every demand and return
-        # `None`.  The `any` is kept rather than the argument deleted so that
-        # the day compose's demands become boundary-aware -- the v2 gate's §6
-        # lever 1, "give the composer real boundary ports" -- the probe and its
-        # shared grid light up again on their own.
+        # zurl2): the rim's cells would widen the shared `_Grid`'s span for
+        # probes that never run, and the `assignment_boundary_cut` validate
+        # callback that `_match_access_corridors` re-invokes on every candidate
+        # assignment would walk every demand only to `continue` past it.  The
+        # `any` is kept rather than the argument deleted so that the day
+        # compose's demands become boundary-aware -- the v2 gate's §6 lever 1,
+        # "give the composer real boundary ports" -- the rim lights up again on
+        # its own.
+        #
+        # `goals` now carries the question that DOES apply to a cut lane: each
+        # demand's own trunk partners, probed whatever the demand's kind says.
+        # That is what the probe and its shared grid now run FOR -- and what
+        # makes the ladder able to reject a rung for the reason the router
+        # refuses on it.  See `_trunk_goals`.
         boundary = _outer_ring(bounds) if any(d.kind.reaches_boundary for d in demands) else None
+        goals = _trunk_goals(packing)
+        # Rung 0's reservation is funded out of `RESERVE_WALL_SHARE` and
+        # DEGRADES rather than refusing: see the constant's docstring.
+        reserve_deadline = (
+            rung_deadline
+            if not first or rung_deadline is None
+            else min(
+                rung_deadline,
+                entered + (rung_deadline - entered) * RESERVE_WALL_SHARE,
+            )
+        )
         try:
             reservation = _reserve_port_access(
                 packing.canvas,
                 demands,
                 boundary=boundary,
                 bounds=bounds,
-                # `partial` rather than a lambda: `rung_deadline` is a loop
+                # `partial` rather than a lambda: `reserve_deadline` is a loop
                 # variable, and a closure over it would read whichever rung ran
                 # last rather than the one that asked.
-                cancelled=partial(_spent, rung_deadline),
-                deadline=rung_deadline,
+                cancelled=partial(_spent, reserve_deadline),
+                deadline=reserve_deadline,
+                goals=goals,
             )
         except _PreparationDeadline:
-            if best is None:
+            if not first:
+                if best is None:
+                    raise _PackingDeadline(packing) from None
+                break
+            # RUNG 0 ONLY: the trunk probe outran its own share, so ask the
+            # LOCAL-ONLY question on the caller's full clock.  That is exactly
+            # v2's oracle, so the worst case of this whole lever is v2's
+            # behaviour rather than a refusal on BUDGET.
+            try:
+                reservation = _reserve_port_access(
+                    packing.canvas,
+                    demands,
+                    boundary=boundary,
+                    bounds=bounds,
+                    cancelled=partial(_spent, rung_deadline),
+                    deadline=rung_deadline,
+                )
+            except _PreparationDeadline:
                 raise _PackingDeadline(packing) from None
-            break
         candidate = PackedCanvas(*packing, reservation=reservation, gap=rung)
         if reservation.complete:
             return candidate
@@ -840,6 +973,9 @@ def compose(
         blocks,
         len(result.routed),
         tuple(failures),
+        gap=packed.gap,
+        port_demands=len(reservation.assigned) + len(reservation.missing),
+        reservation_missing=len(reservation.missing),
     )
 
 

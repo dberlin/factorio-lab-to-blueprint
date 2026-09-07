@@ -736,6 +736,9 @@ class HierarchicalLayout:
         except Exception as exc:  # noqa: BLE001 - a composer CRASH is a refusal
             raise refuse(f"composition crashed: {type(exc).__name__}: {exc}"[:400]) from exc
         compose_wall = time.monotonic() - started
+        stats.compose_gap = float(composition.gap)
+        stats.port_demands = float(composition.port_demands)
+        stats.reservation_missing = float(composition.reservation_missing)
         stats.unrouted_cuts = float(len(composition.failures))
         if composition.failures:
             raise refuse("unrouted cut(s): " + "; ".join(composition.failures))
