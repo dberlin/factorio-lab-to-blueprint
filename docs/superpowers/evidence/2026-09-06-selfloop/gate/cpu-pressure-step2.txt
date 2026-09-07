@@ -1,0 +1,4 @@
+cpu_pressure BEFORE step2 pytest:
+23.4
+cpu_pressure AFTER step2 pytest:
+10.4

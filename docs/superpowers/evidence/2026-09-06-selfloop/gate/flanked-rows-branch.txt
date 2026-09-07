@@ -1,0 +1,32 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+== no-proliferator ==
+strips 69  tallest box_height 12  total box_height 565
+flanked strips 15
+  x15 identical:
+  universe-matrix#37 machines=1 box_height=12 width=6 drain_outermost=True
+    in_above 3 lane(s): [['antimatter'], ['electromagnetic-matrix'], ['energy-matrix']]
+    in_below 3 lane(s): [['gravity-matrix'], ['information-matrix'], ['structure-matrix']]
+    out_lanes 1
+
+== all-products ==
+strips 56  tallest box_height 12  total box_height 466
+flanked strips 12
+  x12 identical:
+  universe-matrix#37 machines=1 box_height=12 width=6 drain_outermost=True
+    in_above 3 lane(s): [['antimatter'], ['electromagnetic-matrix'], ['energy-matrix']]
+    in_below 3 lane(s): [['gravity-matrix'], ['information-matrix'], ['structure-matrix']]
+    out_lanes 1
+
+== output-products ==
+strips 63  tallest box_height 12  total box_height 512
+flanked strips 12
+  x12 identical:
+  universe-matrix#37 machines=1 box_height=12 width=6 drain_outermost=True
+    in_above 3 lane(s): [['antimatter'], ['electromagnetic-matrix'], ['energy-matrix']]
+    in_below 3 lane(s): [['gravity-matrix'], ['information-matrix'], ['structure-matrix']]
+    out_lanes 1
+
+== counterfactual: the drain row's own contribution ==
+_side_lane_caps(2901, 0.0, 5) = (3, 3)
+  drain OUTERMOST (branch): below_cap=3 -> above 3 lane(s) [['antimatter'], ['electromagnetic-matrix'], ['energy-matrix']], below 3 lane(s) [['gravity-matrix'], ['information-matrix'], ['structure-matrix']], mixed lanes 0
+  drain innermost (master's rationing): below_cap=2 -> REFUSES: 6 ingredients cannot be seated with the product leaving east: 3 lane(s) above and 2 below, each carrying ONE item, over a face that offers 3 insert pose(s) per side, leaves no room for 6 ingredient sorter(s) and the output lane. A machine slot holds one connection, so two sorters cannot share a column, and spec §9 R1 forbids merging two items onto one belt to save a row -- nothing controls the interleaving and the machines starve
