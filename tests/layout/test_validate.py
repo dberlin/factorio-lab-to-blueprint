@@ -3179,9 +3179,7 @@ def test_mixed_item_input_lane_is_convicted() -> None:
     across items and was satisfied; nothing asked whether they could interleave.
     """
     placement = _two_items_on_one_input_lane()
-    report = validate(
-        placement, _two_ingredient_spec(), ids=TWO_CONSUMER_IDS, expect_power=False
-    )
+    report = validate(placement, _two_ingredient_spec(), ids=TWO_CONSUMER_IDS, expect_power=False)
     findings = [f for f in report.errors if f.check == "flow.lane_single_item"]
     assert findings, [f.check for f in report.errors]
     assert findings[0].detail["items"] == ["copper-ingot", "iron-ingot"]
@@ -3314,7 +3312,7 @@ MATRIX_LAB_IDS = IdMap(
 
 
 def test_forced_mixed_lane_is_still_convicted() -> None:
-    """"The machine's faces left no alternative" is not a defence (spec Sec 9 R1).
+    """ "The machine's faces left no alternative" is not a defence (spec Sec 9 R1).
 
     A Matrix Lab offers three insert columns per face, and before Task 3 that
     made `freeform._seat_inputs` seat `universe-matrix`'s six ingredients as
