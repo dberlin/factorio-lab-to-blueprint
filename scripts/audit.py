@@ -216,6 +216,12 @@ class Result:
     #: fact from a refusal under Cython, and a JSONL that cannot tell them apart
     #: cannot be compared against one taken with the other backend.
     route_backend: str = field(default_factory=route_kernel.selected_backend)
+    #: EXPERIMENT (``FLAB2BP_COATER_NODE``): coaters placed, coater bodies
+    #: sitting over a belt with two predecessors, and belt tiles.  Zero on a
+    #: row with no placement.
+    coaters: int = 0
+    coater_merges: int = 0
+    belt_tiles: int = 0
     #: Wall of the ATTEMPT -- the solve plus the compaction, projection and
     #: validation charged to nobody else -- and how far past ``budget + grace``
     #: it ran, clamped at zero, where ``grace`` is
@@ -452,6 +458,7 @@ def run_cell(job: Job) -> Result:
         0.0,
         attempt_wall_s - job.budget - grace,
     )
+    coaters, coater_merges, belt_tiles = _coater_census(placement)
     skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
     if report.ok and not skipped_power:
         return Result(
@@ -470,6 +477,9 @@ def run_cell(job: Job) -> Result:
             attempt_wall_s=attempt_wall_s,
             wall_overshoot_s=wall_overshoot_s,
             stats=_scalar_stats(placement.stats),
+            coaters=coaters,
+            coater_merges=coater_merges,
+            belt_tiles=belt_tiles,
         )
     checks = tuple(sorted({f.check for f in report.errors})) + tuple(
         f"unchecked:{check}" for check in skipped_power
@@ -490,7 +500,46 @@ def run_cell(job: Job) -> Result:
         attempt_wall_s=attempt_wall_s,
         wall_overshoot_s=wall_overshoot_s,
         stats=_scalar_stats(placement.stats),
+        coaters=coaters,
+        coater_merges=coater_merges,
+        belt_tiles=belt_tiles,
     )
+
+
+def _coater_census(placement: object) -> tuple[int, int, int]:
+    """``(coaters, bodies over a belt merge, belt tiles)`` for one placement.
+
+    EXPERIMENT (``FLAB2BP_COATER_NODE``).  The middle number is the reported
+    defect measured directly rather than inferred: a Spray Coater's oriented
+    3x1 body covers three tiles, and a belt on one of them with more than one
+    predecessor is a 2-into-1 merge under the addon.  Nothing in
+    ``layout/validate.py`` convicts it -- ``game.addon_supply`` asks only
+    whether *a* belt is in each area and ``belt.acyclic`` explicitly accepts
+    many-to-one -- so an arm comparison that did not count it here could not
+    see the thing the arms exist to remove.
+    """
+    from collections import defaultdict as _dd
+
+    bs = placement.buildings  # type: ignore[attr-defined]
+    belts = {(b.x, b.y, b.z): i for i, b in enumerate(bs) if catalog.is_belt(b.item_id)}
+    pred: dict[int, int] = _dd(int)
+    for b in bs:
+        if not catalog.is_belt(b.item_id):
+            continue
+        if b.output_obj is not None and 0 <= b.output_obj < len(bs):
+            pred[b.output_obj] += 1
+    merges = 0
+    coaters = 0
+    for c in bs:
+        if c.item_id != catalog.SPRAY_COATER_ID:
+            continue
+        coaters += 1
+        half = (catalog.oriented_footprint(catalog.SPRAY_COATER_ID, c.yaw)[0] - 1) // 2
+        for dx in range(-half, half + 1):
+            belt = belts.get((c.x + dx, c.y, c.z))
+            if belt is not None and pred[belt] > 1:
+                merges += 1
+    return coaters, merges, len(belts)
 
 
 @dataclass
@@ -646,6 +695,10 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
         "projection_collider_pairs": r.projection_collider_pairs,
         "projection_power_pairs": r.projection_power_pairs,
         "projection_sorters": r.projection_sorters,
+        "coater_arm": os.environ.get("FLAB2BP_COATER_NODE", "off"),
+        "coaters": r.coaters,
+        "coater_merges": r.coater_merges,
+        "belt_tiles": r.belt_tiles,
         "attempt_failures": tuple(asdict(failure) for failure in r.attempt_failures),
         "projection_failures": tuple(asdict(failure) for failure in r.projection_failures),
         "detail": r.detail,

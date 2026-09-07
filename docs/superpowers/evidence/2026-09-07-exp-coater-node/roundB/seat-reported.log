@@ -1,0 +1,46 @@
+### seat freeform no-proliferator
+arm=seat cell=reported/no-proliferator strategy=freeform
+wall=8.2s buildings=2472 coaters=0 belts=2239 coater_merges=0
+area=4125.0 belt_tiles=2239
+  WARNING belt.termination: belt run 1 (head building 7 at (3,8), carrying 'advanced-mining-machine') runs 11 of its 16 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 64 at (14,11), carrying 'assembling-machine-3') runs 15 of its 17 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 447 at (78,20), carrying 'plane-smelter') runs 7 of its 8 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 21 (head building 609 at (120,19), carrying 're-composing-assembler') runs 8 of its 9 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 26 (head building 748 at (134,10), carrying 'hydrogen') runs 7 of its 98 tiles past its last tap and then stops; those tiles serve nothing
+digest=f027ff6f87bf6078
+### seat freeform all-products
+arm=seat cell=reported/all-products strategy=freeform
+REFUSED/CRASH NoValidLayout: no valid layout for all-products after 30s: every packing that wired was rejected by our own validator (geom.collide, prolif.sprayed_cargo_reaches_machines; findings: band 200 geom.collide (30, 763): build colliders intersect; band 200 geom.collide (163, 799): build colliders intersect; band 160 geom.collide (30, 763): build colliders intersect; band 200 geom.collide (115, 784): build colliders intersect; band 200 geom.collide (73, 775): build colliders intersect; band 200 geom.collide (142, 793): build colliders intersect; band 200 geom.collide (417, 826): build colliders intersect); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+### seat freeform output-products
+arm=seat cell=reported/output-products strategy=freeform
+wall=14.2s buildings=2018 coaters=2 belts=1803 coater_merges=0
+area=3306.0 belt_tiles=1803
+  WARNING belt.termination: belt run 1 (head building 11 at (12,26), carrying 'advanced-mining-machine') runs 31 of its 36 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 72 at (50,29), carrying 'assembling-machine-3') runs 5 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 408 at (15,43), carrying 'plane-smelter') runs 19 of its 20 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 22 (head building 575 at (3,53), carrying 're-composing-assembler') runs 7 of its 8 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 62 (head building 1986 at (0,27), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=fbb8aebe148c9ac0
+### seat sequence-pair no-proliferator
+arm=seat cell=reported/no-proliferator strategy=sequence-pair
+wall=26.7s buildings=2042 coaters=0 belts=1823 coater_merges=0
+area=2700.0 belt_tiles=1823
+  WARNING belt.termination: belt run 1 (head building 7 at (47,26), carrying 'advanced-mining-machine') runs 8 of its 13 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 64 at (3,11), carrying 'assembling-machine-3') runs 10 of its 12 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 447 at (27,29), carrying 'plane-smelter') runs 20 of its 21 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 21 (head building 609 at (53,10), carrying 're-composing-assembler') runs 6 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+digest=a3c121b6d2fcae8d
+### seat sequence-pair all-products
+arm=seat cell=reported/all-products strategy=sequence-pair
+REFUSED/CRASH NoValidLayout: no valid layout for all-products after 30s: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+### seat sequence-pair output-products
+arm=seat cell=reported/output-products strategy=sequence-pair
+wall=25.6s buildings=1980 coaters=2 belts=1767 coater_merges=0
+area=2769.0 belt_tiles=1767
+  WARNING belt.termination: belt run 1 (head building 11 at (53,8), carrying 'advanced-mining-machine') runs 11 of its 16 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 72 at (41,30), carrying 'assembling-machine-3') runs 10 of its 12 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 408 at (64,21), carrying 'plane-smelter') runs 6 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 22 (head building 575 at (64,11), carrying 're-composing-assembler') runs 6 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 27 (head building 714 at (28,20), carrying 'hydrogen') runs 16 of its 107 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 63 (head building 1937 at (0,9), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=26e0b4e26846731f
