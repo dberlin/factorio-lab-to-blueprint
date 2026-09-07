@@ -1718,16 +1718,27 @@ def _coater_placement(
     *,
     merge_under_body: bool,
     second_belt_in_supply_area: bool = False,
+    one_run_two_belts_in_supply_area: bool = False,
 ) -> Placement:
     """A coater at yaw 90 riding a straight lane, optionally spoiled.
 
     ``merge_under_body`` adds a second belt chain whose tail points at the tile
     one step upstream of the coater origin (9, 5, 0) -- a tile the 1x3 body
     covers, since the body runs from (9, 5, 0) to (11, 5, 0) at yaw 90.
-    ``second_belt_in_supply_area`` adds two belts near addon area 1's centre
-    (8.75, 5, 1) -- one 0.3142 and one 0.9425 world units off it, both inside
-    ``ADDON_AREA_RADIUS`` -- so which one the game would attach is a rotation
-    convention the emitted geometry never decided.
+
+    ``second_belt_in_supply_area`` adds two UNLINKED belts near addon area 1's
+    centre (8.75, 5, 1) -- one 0.3142 and one 0.9425 world units off it, both
+    inside ``ADDON_AREA_RADIUS``.  Neither has an ``output_obj``, so
+    ``_build_runs`` gives each its own run: this is the two-DISTINCT-RUNS case
+    ``prolif.coater_rides_one_run``'s narrowed second clause (spec section 9
+    R6) convicts -- which one the game would attach is a rotation convention
+    the emitted geometry never decided.
+
+    ``one_run_two_belts_in_supply_area`` is the regression guard for that same
+    narrowing: it chains the identical two belts into ONE run
+    (``output_obj`` from the far one to the near one).  Same positions, same
+    radius membership, but one run carries one item, so there is no rotation
+    ambiguity and the clause must NOT fire.
     """
     buildings: list[PlacedBuilding] = [
         belt(7, 5, out=1),
@@ -1742,6 +1753,10 @@ def _coater_placement(
         buildings.append(belt(9, 4, out=2))  # tail of a second chain, merges onto index 2
     if second_belt_in_supply_area:
         buildings.append(belt(9, 5, 1))
+        buildings.append(belt(8, 5, 1))
+    if one_run_two_belts_in_supply_area:
+        near_index = len(buildings) + 1
+        buildings.append(belt(9, 5, 1, out=near_index))
         buildings.append(belt(8, 5, 1))
     return Placement(buildings=tuple(buildings))
 
@@ -1766,18 +1781,44 @@ def test_coater_on_a_single_run_is_clean() -> None:
     assert not [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
 
 
-def test_coater_supply_area_with_two_belts_is_convicted() -> None:
+def test_coater_supply_area_with_two_belts_of_two_runs_is_convicted() -> None:
     """Which belt supplies a coater must not depend on a rotation convention.
 
     Measured on the reported URL: coater#768's addon area 1 had the proliferator
-    lane at (53,20,1) and a CARGO lane at (55,20,1), both exactly 0.250 from the
-    area centre and both inside ADDON_AREA_RADIUS = 1.0.
+    RUN 59 tail at (53,20,1) and a CARGO lane, RUN 27, at (55,20,1), both exactly
+    0.250 from the area centre and both inside ADDON_AREA_RADIUS = 1.0.
+
+    Renamed from ``test_coater_supply_area_with_two_belts_is_convicted`` (spec
+    section 9 R6): the clause is narrowed from "a second belt" to "a second
+    RUN", so the name and this docstring now say what actually convicts. The
+    fixture is unchanged -- its two belts were already unlinked, hence already
+    two distinct runs -- only the assertions below were sharpened to check the
+    run count the narrowed clause actually reports.
     """
     placement = _coater_placement(merge_under_body=False, second_belt_in_supply_area=True)
     report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
     findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
     assert findings
     assert "addon area 1" in findings[0].message
+    assert "distinct belt runs" in findings[0].message
+    assert len(findings[0].detail["runs"]) >= 2
+
+
+def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None:
+    """The regression this narrowing (spec section 9 R6) exists to prevent.
+
+    Same two positions and the same radius membership as the two-runs case
+    above, but chained into ONE run.  ``freeform._place_coaters`` feeds every
+    coater exactly this way -- a ``supply`` belt and an ``approach`` belt, one
+    run, one item -- and landing the clause without this exemption convicted
+    every coater the tool has ever placed (19 ``tests/layout/test_freeform.py``
+    builds went to ``NoValidLayout``).  One run carries one item, so there is
+    no rotation ambiguity for the game to resolve either way.
+    """
+    placement = _coater_placement(merge_under_body=False, one_run_two_belts_in_supply_area=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert not findings, [f.message for f in findings]
 
 
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:

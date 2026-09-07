@@ -18030,11 +18030,115 @@ def _coater_seats(
     take unsprayed cargo before it reaches the Coater.  Index zero is the routing
     turn and the last tile has no successor; only the bounded interior channel
     offsets between them are candidates.
+
+    **This is the path production seats coaters from** -- ``_place_coaters``
+    calls this, not :func:`_coater_seat` (spec section 9 R7: a predicate added
+    only to ``_coater_seat`` is dead code, since nothing in ``src/`` calls it).
+    A candidate is therefore skipped, not merely offered, when it would ride a
+    belt merge under the coater's body
+    (:func:`_coater_candidate_rides_a_merge`) or have an ambiguous addon-area-1
+    supply (:func:`_coater_candidate_has_ambiguous_supply`) -- the same two
+    clauses ``prolif.coater_rides_one_run`` convicts.  ``_place_coaters``
+    already treats an empty result exactly as it treats a lane with no legal
+    seat at all: an :class:`_Unseatable` refusal, never a silently skipped
+    coater.
     """
     stop = min(len(port.tiles) - 1, west_channel)
-    return tuple(
-        (canvas.buildings[index].x, canvas.buildings[index].y) for index in port.tiles[1:stop]
+    seats: list[tuple[int, int]] = []
+    for index in port.tiles[1:stop]:
+        x, y = canvas.buildings[index].x, canvas.buildings[index].y
+        if _coater_candidate_rides_a_merge(canvas, x, y, port.z):
+            continue
+        if _coater_candidate_has_ambiguous_supply(canvas, x, y, port.z):
+            continue
+        seats.append((x, y))
+    return tuple(seats)
+
+
+def _coater_candidate_rides_a_merge(canvas: _Canvas, x: int, y: int, z: int) -> bool:
+    """Would a coater seated at ``(x, y, z)`` ride a belt merge under its body?
+
+    Mirrors ``validate._coater_body_tiles`` and
+    ``validate._coater_belt_predecessor_counts``, for a coater not yet placed:
+    a belt on a tile the coater's ``Facing.EAST`` 1x3 body would cover is a
+    merge when two or more BELT buildings feed it via ``output_obj``.
+
+    LOOSER than ``prolif.coater_rides_one_run``'s first clause, by controller
+    ruling (fix round 1, task 2): that check also convicts a body spanning two
+    DISTINCT ``ctx.run_of`` values with no single merged tile among them,
+    which needs the validator's whole-graph run assignment.  The canvas has no
+    such map at seat-selection time, and building one here was ruled out
+    rather than invented for one candidate at a time.  A seat that passes this
+    check but whose body straddles two clean runs is still caught downstream
+    by the validator, which stays the backstop for exactly that gap.
+    """
+    width, height = catalog.oriented_footprint(catalog.SPRAY_COATER_ID, Facing.EAST.value)
+    body_tiles = {
+        (x + dx, y + dy)
+        for dx in range(-(width // 2), width // 2 + 1)
+        for dy in range(-(height // 2), height // 2 + 1)
+    }
+    bs = canvas.buildings
+    predecessor_counts: dict[int, int] = defaultdict(int)
+    for b in bs:
+        if not catalog.is_belt(b.item_id):
+            continue
+        o = b.output_obj
+        if o is None or not 0 <= o < len(bs) or not catalog.is_belt(bs[o].item_id):
+            continue
+        predecessor_counts[o] += 1
+    return any(
+        catalog.is_belt(b.item_id) and b.z == z and (b.x, b.y) in body_tiles
+        for i, b in enumerate(bs)
+        if predecessor_counts.get(i, 0) >= 2
     )
+
+
+def _coater_candidate_has_ambiguous_supply(canvas: _Canvas, x: int, y: int, z: int) -> bool:
+    """Would a coater seated at ``(x, y, z)`` have >1 belt near its addon area 1?
+
+    Mirrors ``validate._coater_supply_area_candidates`` for a coater not yet
+    placed: every belt within :data:`~flab2bp.dsp.rules.ADDON_AREA_RADIUS` of
+    the addon area 1 position, at ``Facing.EAST``.
+
+    STRICTER than ``prolif.coater_rides_one_run``'s second clause, which
+    convicts only when those belts span two or more DISTINCT ``ctx.run_of``
+    values (spec section 9 R6) -- the same whole-graph run map this module
+    does not build at seat-selection time (see
+    :func:`_coater_candidate_rides_a_merge`).  This candidate never sees the
+    coater's own future ``approach``/``supply`` pair -- ``_place_coaters``
+    creates those belts AFTER a seat is chosen, so R6's fix does not need
+    reproducing here at all -- but a pre-existing belt pair that happens to be
+    one clean run (which the validator would clear) is still refused as a
+    seat here.  The safe direction: never offers a seat the validator would
+    convict, at the cost of occasionally declining one it would accept.  R7's
+    own cost note is this exact trade; the gate counts it.
+    """
+    want = slots.addon_supply_position(
+        catalog.SPRAY_COATER_ID,
+        x=x,
+        y=y,
+        z=Fraction(z),
+        yaw=Facing.EAST.value,
+        area=1,
+    )
+    reach = math.ceil(rules.ADDON_AREA_RADIUS / colliders.GRID_ARC)
+    anchor_x = math.floor(float(want[0]))
+    anchor_y = math.floor(float(want[1]))
+    candidates = 0
+    for b in canvas.buildings:
+        if not catalog.is_belt(b.item_id):
+            continue
+        if not (anchor_x - reach <= b.x <= anchor_x + reach):
+            continue
+        if not (anchor_y - reach <= b.y <= anchor_y + reach):
+            continue
+        distance = rules.world_gap(float(want[0] - b.x), float(want[1] - b.y), float(want[2] - b.z))
+        if distance < rules.ADDON_AREA_RADIUS:
+            candidates += 1
+            if candidates > 1:
+                return True
+    return False
 
 
 def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
@@ -18088,6 +18192,14 @@ def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
     -- it still rides column 0 of the strip; what moved is the lane's HEAD,
     west into the channel -- so the drop cell is the same tile it always was,
     one level above the new head.
+
+    ``_coater_seats`` already excludes a candidate that fails either clause
+    ``prolif.coater_rides_one_run`` convicts -- a belt merge under the
+    coater's body, or more than one belt near its addon area 1 -- so this
+    picks the first of what remains.  A layout that seated one anyway and
+    routed it would be caught only at the validator, after the whole build
+    was spent; this and the live ``_place_coaters`` path (spec section 9 R7)
+    both go through ``_coater_seats``, so neither can put that miss back.
     """
     seats = _coater_seats(
         canvas,

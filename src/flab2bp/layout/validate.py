@@ -4961,9 +4961,11 @@ def _coater_supply_area_candidates(
 
     Mirrors the broadphase :func:`_belt_in_addon_area` runs to pick the belt
     the game attaches, but keeps every match within radius instead of only the
-    nearest one: ``prolif.coater_rides_one_run`` convicts having more than one
-    candidate at all, because which one the game would actually select then
-    comes down to a rotation convention, not the geometry emitted.
+    nearest one: ``prolif.coater_rides_one_run`` convicts these candidates
+    spanning two or more distinct ``ctx.run_of`` values, because which one the
+    game would actually select then comes down to a rotation convention, not
+    the geometry emitted.  Candidates of one run are NOT convicted here --
+    see that check's docstring for why.
     """
     want = slots.addon_supply_position(
         coater.item_id,
@@ -5008,10 +5010,27 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
     [817, 1872] and sat under coater#768's body; belt#19 at (53,26,0) had
     predecessors [830, 2037] under coater#771.  Both blueprints validated clean.
 
-    The second clause is narrower and just as unfixable downstream: two belts
-    inside ``rules.ADDON_AREA_RADIUS`` of addon area 1 means which one supplies
-    the coater is decided by a rotation convention rather than by the geometry
-    we emitted.
+    The second clause fires when belts of two or more DISTINCT RUNS lie within
+    ``rules.ADDON_AREA_RADIUS`` of addon area 1: which one the game attaches is
+    then a rotation convention, not something the geometry we emitted decides.
+
+    Narrowed from "a second belt" to "a second RUN" on 2026-09-07 (controller
+    ruling, spec section 9 R6) after landing the literal rule convicted every
+    coater this tool has ever placed: ``freeform._place_coaters`` always feeds
+    a coater with two belts of its OWN making -- a ``supply`` belt on
+    ``slots.addon_supply_cell(..., area=1)`` and an ``approach`` belt one tile
+    further out that feeds it -- and at the Spray Coater's fixed addon pose
+    with ``Facing.EAST`` those sit ``0.314`` and ``0.942`` world units from the
+    area-1 centre, both inside the radius of ``1.0``.  Landing the literal rule
+    took 19 ``tests/layout/test_freeform.py`` builds to ``NoValidLayout``, on
+    ``proliferated_spec``, ``all-products``, ``output-products`` and the
+    negentropy block, every finding naming the coater's own approach/supply
+    pair.  Two belts of ONE run carry one item, so which of them the game
+    attaches cannot change what supplies the coater -- there is no ambiguity to
+    convict.  Two RUNS is exactly the originally reported defect:
+    coater#768's area 1 held the proliferator run 59 tail at (53,20,1) and a
+    cargo lane, run 27, at (55,20,1), both at ``0.250``, separated only by the
+    yaw convention.
     """
     bs = ctx.placement.buildings
     predecessor_counts = _coater_belt_predecessor_counts(ctx)
@@ -5045,17 +5064,20 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
                 },
             )
         candidates = _coater_supply_area_candidates(ctx, coater, area=1)
-        if len(candidates) > 1:
+        candidate_runs = {ctx.run_of[i] for i in candidates if i in ctx.run_of}
+        if len(candidate_runs) >= 2:
             sorted_candidates = sorted(candidates)
+            sorted_runs = sorted(candidate_runs)
             yield Finding(
                 "prolif.coater_rides_one_run",
                 Severity.ERROR,
                 f"coater {coater_index}'s addon area 1 has {len(candidates)} "
-                f"belts within {rules.ADDON_AREA_RADIUS} world units of it: "
+                f"belts within {rules.ADDON_AREA_RADIUS} world units of it, "
+                f"from {len(candidate_runs)} distinct belt runs: "
                 f"{sorted_candidates}; which one the game attaches is a "
                 "rotation convention, not the geometry we emitted",
                 (coater_index, *sorted_candidates),
-                {"area": 1, "candidates": sorted_candidates},
+                {"area": 1, "candidates": sorted_candidates, "runs": sorted_runs},
             )
 
 

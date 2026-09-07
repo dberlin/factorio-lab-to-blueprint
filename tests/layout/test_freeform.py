@@ -18420,6 +18420,75 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             )
 
 
+def _canvas_with_straight_lane_at(x: int, y: int, z: int) -> tuple[_Canvas, _Port]:
+    """A clean 3-tile lane whose middle tile is the coater's second-tile seat.
+
+    ``_coater_seats`` returns ``port.tiles[1]`` as the sole interior seat of a
+    3-tile lane, and a Spray Coater's 1x3 body at ``Facing.EAST`` covers
+    exactly the lane's three tiles -- ``(x - 1, y)``, ``(x, y)``, ``(x + 1,
+    y)`` -- see ``catalog.oriented_footprint``.  Nothing here feeds the head
+    from more than one predecessor, so this is the control the merged fixture
+    below is measured against.
+    """
+    canvas = _Canvas()
+    head = canvas.add(_belt(x - 1, y, item="iron-ingot"))
+    mid = canvas.add(_belt(x, y, item="iron-ingot"))
+    tail = canvas.add(_belt(x + 1, y, item="iron-ingot"))
+    canvas.buildings[head] = replace(canvas.buildings[head], z=F(z), output_obj=mid)
+    canvas.buildings[mid] = replace(canvas.buildings[mid], z=F(z), output_obj=tail)
+    canvas.buildings[tail] = replace(canvas.buildings[tail], z=F(z))
+    port = _Port(
+        head,
+        x - 1,
+        y,
+        x - 1,
+        x + 1,
+        (head, mid, tail),
+        1,
+        z,
+        cargo_domain=CargoDomain.REQUIRES_SPRAY,
+    )
+    return canvas, port
+
+
+def _canvas_with_lane_merge_at(x: int, y: int, z: int) -> tuple[_Canvas, _Port]:
+    """The same lane, with two predecessors feeding its head belt.
+
+    Mirrors the reporting URL's measured case in
+    ``validate._coater_rides_one_run``: belt#0 at ``(53, 20, 0)`` had
+    predecessors ``[817, 1872]`` and sat under coater#768's body.  The head
+    tile here is ``(x - 1, y)``, one of the coater's three body tiles, so a
+    seat chooser that does not check for a merge would seat a coater on it.
+    """
+    canvas, port = _canvas_with_straight_lane_at(x, y, z)
+    head = port.tiles[0]
+    predecessor_a = canvas.add(_belt(x - 2, y - 1, item="iron-ingot"))
+    predecessor_b = canvas.add(_belt(x - 2, y + 1, item="iron-ingot"))
+    canvas.buildings[predecessor_a] = replace(
+        canvas.buildings[predecessor_a], z=F(z), output_obj=head
+    )
+    canvas.buildings[predecessor_b] = replace(
+        canvas.buildings[predecessor_b], z=F(z), output_obj=head
+    )
+    return canvas, port
+
+
+def test_coater_seat_rejects_a_tile_with_a_belt_merge() -> None:
+    """A seat whose body covers a merge is not a seat, however short the lane.
+
+    ``_coater_seat`` used to answer only "is this drop cell free and is the
+    lane long enough".  The reporting URL seated two coaters over 2-into-1
+    merges that way, and `prolif.coater_rides_one_run` now convicts every
+    such placement -- so the seat chooser has to agree with the validator or
+    the strategy refuses at the last step instead of choosing a legal seat.
+    """
+    canvas, port = _canvas_with_lane_merge_at(x=53, y=20, z=0)
+    assert freeform._coater_seat(canvas, port) is None
+
+    clean_canvas, clean_port = _canvas_with_straight_lane_at(x=53, y=20, z=0)
+    assert freeform._coater_seat(clean_canvas, clean_port) is not None
+
+
 # --- belt docked into a building PORT ---------------------------------------
 
 

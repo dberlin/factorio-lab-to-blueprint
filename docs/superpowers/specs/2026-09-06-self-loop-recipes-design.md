@@ -455,9 +455,12 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
     (``catalog.oriented_footprint(SPRAY_COATER_ID, yaw)`` about its origin) has
     two or more belt predecessors, or when belts of two different runs occupy
     those tiles at the coater's own altitude.
-    ERROR when a second belt lies within ``rules.ADDON_AREA_RADIUS`` of addon
-    area 1: which belt supplies the coater must not depend on a rotation
-    convention.
+    ERROR when belts of two or more DISTINCT RUNS lie within
+    ``rules.ADDON_AREA_RADIUS`` of addon area 1: which belt supplies the coater
+    must not depend on a rotation convention.  (Narrowed from "a second belt"
+    on 2026-09-07 — see §9 R6.  Our own ``_place_coaters`` always puts the
+    coater's approach and supply belts inside that radius, and they are one run
+    carrying one item, so the convention cannot change the answer that matters.)
     """
 ```
 
@@ -694,6 +697,50 @@ rule that is currently absolute and cheap to reason about.
 
 *Cost if wrong:* the player must prime at the marked head rather than anywhere
 on the lane. Nothing to change beyond recording it.
+
+### R6 — Coater addon area 1: two RUNS, not two belts (controller ruling, 2026-09-07)
+
+Not a user answer — a defect in §5.4 as designed, found while implementing it,
+and corrected here rather than worked around in the code.
+
+§5.4's second coater clause said "ERROR when a second belt lies within
+`ADDON_AREA_RADIUS` of addon area 1". Measured on this branch, that convicts
+**every coater this tool has ever placed**: `freeform._place_coaters` feeds a
+coater with two belts of its own making — a `supply` belt on
+`slots.addon_supply_cell(..., area=1)` and an `approach` belt one tile further
+out that feeds it — and at the Spray Coater's fixed addon pose with
+`Facing.EAST` they sit `0.314` and `0.942` world units from the area-1 centre,
+both inside the radius of `1.0`. Landing the literal rule took 19
+`tests/layout/test_freeform.py` builds to `NoValidLayout`, on
+`proliferated_spec`, `all-products`, `output-products` and the negentropy
+block, with the finding naming the coater's own approach/supply pair.
+
+*Decision:* the clause fires when the belts within the radius belong to two or
+more **distinct runs**. Two belts of ONE run carry one item, so which of them
+the game attaches cannot change what the coater is supplied with — there is no
+ambiguity to convict. Two runs is exactly the reported defect: §1.5 measured
+coater#768's area 1 holding the proliferator **run 59** tail at `(53,20,1)` and
+a cargo lane, **run 27**, at `(55,20,1)`, both at `0.250`, separated only by the
+yaw convention. The stated reason for the rule is preserved exactly; only the
+test that implements it changes.
+
+*Cost if wrong:* an ambiguity between two same-run belts carrying different
+items would go unconvicted — impossible by the definition of a run — or a
+future coater geometry that legitimately needs two runs nearby would be refused.
+The gate's per-arm CLEAN/REFUSED counts are where that would show up.
+
+### R7 — The coater seat predicate must sit on the path production uses
+
+Also a controller ruling, same investigation. §5.5 F2 and the plan named
+`freeform._coater_seat` as the seat chooser to harden. `_coater_seat` is called
+by **nothing in `src/`** — only by tests; production goes through
+`_coater_seats` from inside `_place_coaters`. A predicate added only to
+`_coater_seat` is dead code, and the emitter would have gone on seating coaters
+the validator convicts. The predicate belongs on both: `_coater_seat` (so the
+tests that pin it keep meaning something) and the live `_coater_seats` path.
+
+*Cost if wrong:* filtering the live path can refuse a seat the validator would
+have accepted, costing coverage; the gate counts it per arm.
 
 ### R5 — The Pile Sorter rule stays retracted
 

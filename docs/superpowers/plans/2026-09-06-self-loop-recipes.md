@@ -1358,8 +1358,12 @@ PASS requires all four:
 1. `build-amm-after.log` reports `errors 0` for the winning cell.
 2. `decode-amm-after.txt` contains **no** `SHARED-INPUT-RUN` line.
 3. `coater-amm-after.txt` contains **no** `MERGE POINT` line on a tile the
-   coater body covers, and each coater's addon area 1 resolves to exactly one
-   belt within `ADDON_AREA_RADIUS`.
+   coater body covers, and each coater's addon area 1 resolves to belts of
+   **exactly one run** within `ADDON_AREA_RADIUS`. (Amended per spec §9 R6:
+   "exactly one belt" was the original wording and is unsatisfiable — every
+   coater `_place_coaters` emits has its own approach and supply belts inside
+   that radius, at 0.942 and 0.314 world units. One run is the property that
+   actually removes the ambiguity.)
 4. `build-amm-after.log` contains
    `prime once (self-loop): hydrogen 8 items`.
 
