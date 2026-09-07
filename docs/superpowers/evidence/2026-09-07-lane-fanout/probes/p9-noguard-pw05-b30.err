@@ -1,0 +1,31 @@
+PROBE attempts=2 failed_counts=[30, 254]
+PROBE failed=30 by (item, kind): [(('antimatter', 'dynamic-access'), 12), (('proliferator-3', 'dynamic-access'), 10), (('proliferator-3', 'sealed-pocket'), 5), (('carbon-nanotube', 'dynamic-access'), 1), (('energetic-graphite', 'sealed-pocket'), 1), (('gravity-matrix', 'commit-link'), 1)]
+PROBE   (src_strip,dst_strip): [((None, 9), 2), ((None, 28), 2), ((0, 28), 1), ((13, 17), 1), ((19, 47), 1), ((26, 41), 1), ((26, 42), 1), ((26, 43), 1), ((26, 44), 1), ((26, 45), 1), ((26, 46), 1), ((26, 47), 1)]
+PROBE failed=254 by (item, kind): [(('proliferator-3', 'budget'), 120), (('electromagnetic-matrix', 'budget'), 12), (('energy-matrix', 'budget'), 12), (('gravity-matrix', 'budget'), 12), (('information-matrix', 'budget'), 12), (('antimatter', 'budget'), 12), (('structure-matrix', 'budget'), 12), (('hydrogen', 'budget'), 7), (('copper-ingot', 'budget'), 5), (('energetic-graphite', 'budget'), 5), (('iron-ingot', 'budget'), 5), (('graphene', 'budget'), 3)]
+PROBE   (src_strip,dst_strip): [((None, 43), 6), ((None, 44), 6), ((None, 45), 6), ((None, 46), 6), ((None, 47), 6), ((None, 48), 6), ((None, 49), 6), ((None, 50), 6), ((None, 51), 6), ((None, 42), 5), ((None, 41), 4), ((None, 36), 3)]
+flab2bp: no valid layout for all-products after 30s: freeform/all-products: the 30s deadline passed with no completed packing of 53 strips; 2 packs were routed in that time and the best of them still left 30 nets unrouted (worst 254), so a longer clock alone would not have wired this spec. This is a REFUSAL and not a verdict on the spec. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+  stats freeform/all-products: alns_applied=1 alns_choices=1 alns_encode_errors=0 alns_evaluations=2 alns_operators=destroy:failed-endpoints:1|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:1 alns_routing_seconds=5.10495 alns_skipped_no_goods=0 alns_window_accepted=1 alns_window_seconds=0.229122 alns_window_solves=1 attempts=2 budget_unspent_s=0 certify_skipped=0 compaction_time_s=0 detailed_route_time_s=18.6916 distinct_assignments=2 evaluations=2 finalization_time_s=0 pack_cp_deterministic_time_s=0.0627774 pack_cp_feasible=1 pack_cp_infeasible=0 pack_cp_last_best_bound=1.15193e+11 pack_cp_last_objective=1.15193e+11 pack_cp_last_status=OPTIMAL pack_cp_model_invalid=0 pack_cp_optimal=1 pack_cp_solves=2 pack_cp_unknown=0 pack_cp_wall_time_s=0.412624 pack_time_s=0.208158 pack_window_distinct_submodels=1 pack_window_feasible=0 pack_window_infeasible=0 pack_window_model_invalid=0 pack_window_optimal=1 pack_window_repeated_submodel_seconds=0 pack_window_repeated_submodels=0 pack_window_solves=1 pack_window_unknown=0 preparation_time_s=9.73775 skipped_heights=0 stale_draws=0 stale_stop=0 validation_time_s=0 window_accepted=1 window_solves=1
+Command exited with non-zero status 3
+	Command being timed: "uv run --project /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/lane-fanout flab2bp https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11 --budget 30 --candidate-policy all-products --strategy freeform -v -o /tmp/bp-um-p9.txt"
+	User time (seconds): 40.04
+	System time (seconds): 0.59
+	Percent of CPU this job got: 126%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:32.18
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 215772
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 353683
+	Voluntary context switches: 100
+	Involuntary context switches: 217
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 5
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 3

@@ -1,0 +1,26 @@
+flab2bp: no valid layout for all-products after 300s: freeform/all-products: no pack of 53 strips was ever produced at any candidate height; all 5 pack solves ended UNKNOWN rather than INFEASIBLE, inside the 0.02-unit deterministic work bound a pack of 53 strips is given, so the SOLVE gave up before the packing was shown impossible, and 299.1s of the 300s ceiling went unspent; the sweep stopped after 5 draws that produced no new packing. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+  stats freeform/all-products: alns_applied=0 alns_choices=0 alns_encode_errors=0 alns_evaluations=0 alns_operators=destroy:failed-endpoints:0|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:0 alns_routing_seconds=0 alns_skipped_no_goods=0 alns_window_accepted=0 alns_window_seconds=0 alns_window_solves=0 attempts=0 budget_unspent_s=0 certify_skipped=0 compaction_time_s=0 detailed_route_time_s=0 distinct_assignments=0 evaluations=0 finalization_time_s=0 pack_cp_deterministic_time_s=0.100477 pack_cp_feasible=0 pack_cp_infeasible=0 pack_cp_last_best_bound=nan pack_cp_last_objective=nan pack_cp_last_status=UNKNOWN pack_cp_model_invalid=0 pack_cp_optimal=0 pack_cp_solves=5 pack_cp_unknown=5 pack_cp_wall_time_s=0.33949 pack_time_s=0.377904 pack_window_distinct_submodels=0 pack_window_feasible=0 pack_window_infeasible=0 pack_window_model_invalid=0 pack_window_optimal=0 pack_window_repeated_submodel_seconds=0 pack_window_repeated_submodels=0 pack_window_solves=0 pack_window_unknown=0 preparation_time_s=0 skipped_heights=0 stale_draws=5 stale_stop=1 validation_time_s=0 window_accepted=0 window_solves=0
+Command exited with non-zero status 3
+	Command being timed: "uv run --project /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/lane-fanout flab2bp https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11 --budget 300 --candidate-policy all-products --strategy freeform -v -o /tmp/bp-um-p2.txt"
+	User time (seconds): 10.79
+	System time (seconds): 0.26
+	Percent of CPU this job got: 427%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:02.58
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 156616
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 55887
+	Voluntary context switches: 112
+	Involuntary context switches: 104
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 3
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 3

@@ -1,0 +1,190 @@
+url_id,candidate,item,src_group,dest_group,domain,n_src,n_sink,per_lane,src_tiles,src_widths,sink_widths,offends
+universe-matrix,no-proliferator,antimatter,mass-energy-storage#23,universe-matrix#37,unsprayed,1,15,15,10,"[10]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",YES
+universe-matrix,no-proliferator,carbon-nanotube,carbon-nanotube#0,particle-broadband#25,unsprayed,1,1,1,16,"[16]","[24]",no
+universe-matrix,no-proliferator,casimir-crystal,casimir-crystal#1,plane-filter#27,unsprayed,1,2,2,12,"[12]","[16, 16]",no
+universe-matrix,no-proliferator,circuit-board,circuit-board#2,electromagnetic-matrix#9,unsprayed,1,1,1,12,"[12]","[18]",no
+universe-matrix,no-proliferator,circuit-board,circuit-board#2,processor#30,unsprayed,1,1,1,12,"[12]","[24]",no
+universe-matrix,no-proliferator,copper-ingot,copper-ingot#3,circuit-board#2,unsprayed,1,1,1,12,"[12]","[12]",no
+universe-matrix,no-proliferator,copper-ingot,copper-ingot#3,magnetic-coil#22,unsprayed,1,2,2,12,"[12]","[4, 8]",no
+universe-matrix,no-proliferator,copper-ingot,copper-ingot#3,microcrystalline-component#24,unsprayed,1,2,2,12,"[12]","[16, 16]",no
+universe-matrix,no-proliferator,copper-ingot,copper-ingot#3,particle-container#26,unsprayed,1,1,1,12,"[12]","[12]",no
+universe-matrix,no-proliferator,critical-photon,critical-photon#4,mass-energy-storage#23,unsprayed,2,1,1,45,"[45, 45]","[10]",no
+universe-matrix,no-proliferator,crystal-silicon,crystal-silicon#5,particle-broadband#25,unsprayed,1,1,1,6,"[6]","[24]",no
+universe-matrix,no-proliferator,deuterium,deuterium#6,strange-matter#32,unsprayed,1,1,1,30,"[30]","[40]",no
+universe-matrix,no-proliferator,diamond,diamond#7,graviton-lens#16,unsprayed,1,1,1,9,"[9]","[8]",no
+universe-matrix,no-proliferator,diamond,diamond#7,structure-matrix#33,unsprayed,1,2,2,9,"[9]","[24, 24]",no
+universe-matrix,no-proliferator,electric-motor,electric-motor#8,electromagnetic-turbine#10,unsprayed,1,1,1,24,"[24]","[12]",no
+universe-matrix,no-proliferator,electromagnetic-matrix,electromagnetic-matrix#9,universe-matrix#37,unsprayed,1,15,15,18,"[18]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,no-proliferator,electromagnetic-turbine,electromagnetic-turbine#10,particle-container#26,unsprayed,1,1,1,12,"[12]","[12]",no
+universe-matrix,no-proliferator,energetic-graphite,energetic-graphite#11,diamond#7,unsprayed,1,1,1,18,"[18]","[9]",no
+universe-matrix,no-proliferator,energetic-graphite,energetic-graphite#11,energy-matrix#12,unsprayed,1,1,1,18,"[18]","[36]",no
+universe-matrix,no-proliferator,energetic-graphite,energetic-graphite#11,graphene#15,unsprayed,2,1,1,15,"[15, 18]","[48]",no
+universe-matrix,no-proliferator,energetic-graphite,energetic-graphite#11,plastic#29,unsprayed,2,1,1,15,"[15, 18]","[16]",no
+universe-matrix,no-proliferator,energy-matrix,energy-matrix#12,universe-matrix#37,unsprayed,1,15,15,36,"[36]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,no-proliferator,gear,gear#13,electric-motor#8,unsprayed,1,1,1,12,"[12]","[24]",no
+universe-matrix,no-proliferator,glass,glass#14,titanium-glass#35,unsprayed,1,1,1,6,"[6]","[16]",no
+universe-matrix,no-proliferator,graphene,graphene#15,carbon-nanotube#0,unsprayed,1,1,1,48,"[48]","[16]",no
+universe-matrix,no-proliferator,graphene,graphene#15,casimir-crystal#1,unsprayed,1,1,1,48,"[48]","[12]",no
+universe-matrix,no-proliferator,graphene,graphene#15,particle-container#26,unsprayed,1,1,1,48,"[48]","[12]",no
+universe-matrix,no-proliferator,graviton-lens,graviton-lens#16,gravity-matrix#17,unsprayed,1,2,2,8,"[8]","[36, 36]",no
+universe-matrix,no-proliferator,gravity-matrix,gravity-matrix#17,universe-matrix#37,unsprayed,2,15,8,36,"[36, 36]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,no-proliferator,high-purity-silicon,high-purity-silicon#18,crystal-silicon#5,unsprayed,3,1,1,12,"[12, 15, 15]","[6]",no
+universe-matrix,no-proliferator,high-purity-silicon,high-purity-silicon#18,microcrystalline-component#24,unsprayed,3,2,1,12,"[12, 15, 15]","[16, 16]",no
+universe-matrix,no-proliferator,hydrogen,mass-energy-storage#23,casimir-crystal#1,unsprayed,1,1,1,10,"[10]","[12]",no
+universe-matrix,no-proliferator,hydrogen,mass-energy-storage#23,deuterium#6,unsprayed,1,1,1,10,"[10]","[30]",no
+universe-matrix,no-proliferator,hydrogen,mass-energy-storage#23,energy-matrix#12,unsprayed,1,1,1,10,"[10]","[36]",no
+universe-matrix,no-proliferator,hydrogen,plasma-refining#28,casimir-crystal#1,unsprayed,1,1,1,14,"[14]","[12]",no
+universe-matrix,no-proliferator,hydrogen,plasma-refining#28,deuterium#6,unsprayed,1,1,1,14,"[14]","[30]",no
+universe-matrix,no-proliferator,hydrogen,plasma-refining#28,energy-matrix#12,unsprayed,1,1,1,14,"[14]","[36]",no
+universe-matrix,no-proliferator,information-matrix,information-matrix#19,universe-matrix#37,unsprayed,2,15,8,30,"[30, 30]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,no-proliferator,iron-ingot,iron-ingot#20,circuit-board#2,unsprayed,2,1,1,9,"[9, 12]","[12]",no
+universe-matrix,no-proliferator,iron-ingot,iron-ingot#20,electric-motor#8,unsprayed,2,1,1,9,"[9, 12]","[24]",no
+universe-matrix,no-proliferator,iron-ingot,iron-ingot#20,gear#13,unsprayed,1,1,1,9,"[9]","[12]",no
+universe-matrix,no-proliferator,iron-ingot,iron-ingot#20,strange-matter#32,unsprayed,1,1,1,9,"[9]","[40]",no
+universe-matrix,no-proliferator,magnet,magnet#21,magnetic-coil#22,unsprayed,2,2,1,9,"[9, 12]","[4, 8]",no
+universe-matrix,no-proliferator,magnetic-coil,magnetic-coil#22,electric-motor#8,unsprayed,1,1,1,8,"[8]","[24]",no
+universe-matrix,no-proliferator,magnetic-coil,magnetic-coil#22,electromagnetic-matrix#9,unsprayed,1,1,1,8,"[8]","[18]",no
+universe-matrix,no-proliferator,magnetic-coil,magnetic-coil#22,electromagnetic-turbine#10,unsprayed,1,1,1,4,"[4]","[12]",no
+universe-matrix,no-proliferator,microcrystalline-component,microcrystalline-component#24,processor#30,unsprayed,2,1,1,16,"[16, 16]","[24]",no
+universe-matrix,no-proliferator,particle-broadband,particle-broadband#25,information-matrix#19,unsprayed,1,2,2,24,"[24]","[30, 30]",no
+universe-matrix,no-proliferator,particle-container,particle-container#26,strange-matter#32,unsprayed,1,1,1,12,"[12]","[40]",no
+universe-matrix,no-proliferator,plane-filter,plane-filter#27,quantum-chip#31,unsprayed,2,1,1,16,"[16, 16]","[8]",no
+universe-matrix,no-proliferator,plastic,plastic#29,particle-broadband#25,unsprayed,1,1,1,16,"[16]","[24]",no
+universe-matrix,no-proliferator,processor,processor#30,information-matrix#19,unsprayed,1,2,2,24,"[24]","[30, 30]",no
+universe-matrix,no-proliferator,processor,processor#30,quantum-chip#31,unsprayed,1,1,1,24,"[24]","[8]",no
+universe-matrix,no-proliferator,quantum-chip,quantum-chip#31,gravity-matrix#17,unsprayed,1,2,2,8,"[8]","[36, 36]",no
+universe-matrix,no-proliferator,refined-oil,plasma-refining#28,plastic#29,unsprayed,2,1,1,14,"[14, 14]","[16]",no
+universe-matrix,no-proliferator,strange-matter,strange-matter#32,graviton-lens#16,unsprayed,1,1,1,40,"[40]","[8]",no
+universe-matrix,no-proliferator,structure-matrix,structure-matrix#33,universe-matrix#37,unsprayed,2,15,8,24,"[24, 24]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,no-proliferator,titanium-crystal,titanium-crystal#34,casimir-crystal#1,unsprayed,1,1,1,24,"[24]","[12]",no
+universe-matrix,no-proliferator,titanium-crystal,titanium-crystal#34,structure-matrix#33,unsprayed,1,2,2,24,"[24]","[24, 24]",no
+universe-matrix,no-proliferator,titanium-glass,titanium-glass#35,plane-filter#27,unsprayed,1,2,2,16,"[16]","[16, 16]",no
+universe-matrix,no-proliferator,titanium-ingot,titanium-ingot#36,carbon-nanotube#0,unsprayed,2,1,1,12,"[12, 15]","[16]",no
+universe-matrix,no-proliferator,titanium-ingot,titanium-ingot#36,titanium-crystal#34,unsprayed,2,1,1,12,"[12, 15]","[24]",no
+universe-matrix,no-proliferator,titanium-ingot,titanium-ingot#36,titanium-glass#35,unsprayed,2,1,1,12,"[12, 15]","[16]",no
+universe-matrix,all-products,antimatter,mass-energy-storage#23,universe-matrix#37,requires-spray,1,12,12,10,"[10]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",YES
+universe-matrix,all-products,carbon-nanotube,carbon-nanotube#0,particle-broadband#25,requires-spray,1,1,1,7,"[7]","[12]",no
+universe-matrix,all-products,casimir-crystal,casimir-crystal#1,plane-filter#27,requires-spray,1,1,1,4,"[4]","[16]",no
+universe-matrix,all-products,circuit-board,circuit-board#2,electromagnetic-matrix#9,requires-spray,1,1,1,4,"[4]","[12]",no
+universe-matrix,all-products,circuit-board,circuit-board#2,processor#30,requires-spray,1,1,1,4,"[4]","[12]",no
+universe-matrix,all-products,copper-ingot,copper-ingot#3,circuit-board#2,requires-spray,1,1,1,3,"[3]","[4]",no
+universe-matrix,all-products,copper-ingot,copper-ingot#3,magnetic-coil#22,requires-spray,1,1,1,3,"[3]","[4]",no
+universe-matrix,all-products,copper-ingot,copper-ingot#3,microcrystalline-component#24,requires-spray,1,1,1,6,"[6]","[16]",no
+universe-matrix,all-products,copper-ingot,copper-ingot#3,particle-container#26,requires-spray,1,1,1,6,"[6]","[4]",no
+universe-matrix,all-products,critical-photon,critical-photon#4,mass-energy-storage#23,unsprayed,2,1,1,36,"[36, 36]","[10]",no
+universe-matrix,all-products,crystal-silicon,crystal-silicon#5,particle-broadband#25,requires-spray,1,1,1,3,"[3]","[12]",no
+universe-matrix,all-products,deuterium,deuterium#6,strange-matter#32,requires-spray,1,1,1,10,"[10]","[20]",no
+universe-matrix,all-products,diamond,diamond#7,graviton-lens#16,requires-spray,1,1,1,6,"[6]","[8]",no
+universe-matrix,all-products,diamond,diamond#7,structure-matrix#33,requires-spray,1,1,1,6,"[6]","[36]",no
+universe-matrix,all-products,electric-motor,electric-motor#8,electromagnetic-turbine#10,requires-spray,1,1,1,8,"[8]","[4]",no
+universe-matrix,all-products,electromagnetic-matrix,electromagnetic-matrix#9,universe-matrix#37,requires-spray,1,12,12,12,"[12]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,all-products,electromagnetic-turbine,electromagnetic-turbine#10,particle-container#26,requires-spray,1,1,1,4,"[4]","[4]",no
+universe-matrix,all-products,energetic-graphite,energetic-graphite#11,diamond#7,requires-spray,1,1,1,6,"[6]","[6]",no
+universe-matrix,all-products,energetic-graphite,energetic-graphite#11,energy-matrix#12,requires-spray,1,1,1,6,"[6]","[24]",no
+universe-matrix,all-products,energetic-graphite,energetic-graphite#11,graphene#15,requires-spray,1,1,1,9,"[9]","[16]",no
+universe-matrix,all-products,energetic-graphite,energetic-graphite#11,plastic#29,requires-spray,1,1,1,9,"[9]","[7]",no
+universe-matrix,all-products,energy-matrix,energy-matrix#12,universe-matrix#37,requires-spray,1,12,12,24,"[24]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,all-products,gear,gear#13,electric-motor#8,requires-spray,1,1,1,4,"[4]","[8]",no
+universe-matrix,all-products,glass,glass#14,titanium-glass#35,requires-spray,1,1,1,3,"[3]","[8]",no
+universe-matrix,all-products,graphene,graphene#15,carbon-nanotube#0,requires-spray,1,1,1,16,"[16]","[7]",no
+universe-matrix,all-products,graphene,graphene#15,casimir-crystal#1,requires-spray,1,1,1,16,"[16]","[4]",no
+universe-matrix,all-products,graphene,graphene#15,particle-container#26,requires-spray,1,1,1,16,"[16]","[4]",no
+universe-matrix,all-products,graviton-lens,graviton-lens#16,gravity-matrix#17,requires-spray,1,2,2,8,"[8]","[24, 24]",no
+universe-matrix,all-products,gravity-matrix,gravity-matrix#17,universe-matrix#37,requires-spray,2,12,6,24,"[24, 24]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,all-products,high-purity-silicon,high-purity-silicon#18,crystal-silicon#5,requires-spray,1,1,1,15,"[15]","[3]",no
+universe-matrix,all-products,high-purity-silicon,high-purity-silicon#18,microcrystalline-component#24,requires-spray,1,1,1,15,"[15]","[16]",no
+universe-matrix,all-products,hydrogen,mass-energy-storage#23,casimir-crystal#1,requires-spray,1,1,1,10,"[10]","[4]",no
+universe-matrix,all-products,hydrogen,mass-energy-storage#23,deuterium#6,unsprayed,1,1,1,10,"[10]","[10]",no
+universe-matrix,all-products,hydrogen,mass-energy-storage#23,energy-matrix#12,requires-spray,1,1,1,10,"[10]","[24]",no
+universe-matrix,all-products,hydrogen,plasma-refining#28,casimir-crystal#1,requires-spray,1,1,1,7,"[7]","[4]",no
+universe-matrix,all-products,hydrogen,plasma-refining#28,deuterium#6,unsprayed,2,1,1,7,"[7, 7]","[10]",no
+universe-matrix,all-products,hydrogen,plasma-refining#28,energy-matrix#12,requires-spray,1,1,1,7,"[7]","[24]",no
+universe-matrix,all-products,information-matrix,information-matrix#19,universe-matrix#37,requires-spray,2,12,6,18,"[18, 24]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,all-products,iron-ingot,iron-ingot#20,circuit-board#2,requires-spray,1,1,1,6,"[6]","[4]",no
+universe-matrix,all-products,iron-ingot,iron-ingot#20,electric-motor#8,requires-spray,1,1,1,6,"[6]","[8]",no
+universe-matrix,all-products,iron-ingot,iron-ingot#20,gear#13,requires-spray,1,1,1,3,"[3]","[4]",no
+universe-matrix,all-products,iron-ingot,iron-ingot#20,strange-matter#32,requires-spray,1,1,1,3,"[3]","[20]",no
+universe-matrix,all-products,magnet,magnet#21,magnetic-coil#22,requires-spray,1,1,1,6,"[6]","[4]",no
+universe-matrix,all-products,magnetic-coil,magnetic-coil#22,electric-motor#8,requires-spray,1,1,1,4,"[4]","[8]",no
+universe-matrix,all-products,magnetic-coil,magnetic-coil#22,electromagnetic-matrix#9,requires-spray,1,1,1,4,"[4]","[12]",no
+universe-matrix,all-products,magnetic-coil,magnetic-coil#22,electromagnetic-turbine#10,requires-spray,1,1,1,4,"[4]","[4]",no
+universe-matrix,all-products,microcrystalline-component,microcrystalline-component#24,processor#30,requires-spray,1,1,1,16,"[16]","[12]",no
+universe-matrix,all-products,particle-broadband,particle-broadband#25,information-matrix#19,requires-spray,1,2,2,12,"[12]","[18, 24]",no
+universe-matrix,all-products,particle-container,particle-container#26,strange-matter#32,requires-spray,1,1,1,4,"[4]","[20]",no
+universe-matrix,all-products,plane-filter,plane-filter#27,quantum-chip#31,requires-spray,1,1,1,16,"[16]","[8]",no
+universe-matrix,all-products,plastic,plastic#29,particle-broadband#25,requires-spray,1,1,1,7,"[7]","[12]",no
+universe-matrix,all-products,processor,processor#30,information-matrix#19,requires-spray,1,2,2,12,"[12]","[18, 24]",no
+universe-matrix,all-products,processor,processor#30,quantum-chip#31,requires-spray,1,1,1,12,"[12]","[8]",no
+universe-matrix,all-products,quantum-chip,quantum-chip#31,gravity-matrix#17,requires-spray,1,2,2,8,"[8]","[24, 24]",no
+universe-matrix,all-products,refined-oil,plasma-refining#28,plastic#29,requires-spray,2,1,1,7,"[7, 7]","[7]",no
+universe-matrix,all-products,strange-matter,strange-matter#32,graviton-lens#16,requires-spray,1,1,1,20,"[20]","[8]",no
+universe-matrix,all-products,structure-matrix,structure-matrix#33,universe-matrix#37,requires-spray,1,12,12,36,"[36]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,all-products,titanium-crystal,titanium-crystal#34,casimir-crystal#1,requires-spray,1,1,1,12,"[12]","[4]",no
+universe-matrix,all-products,titanium-crystal,titanium-crystal#34,structure-matrix#33,requires-spray,1,1,1,12,"[12]","[36]",no
+universe-matrix,all-products,titanium-glass,titanium-glass#35,plane-filter#27,requires-spray,1,1,1,8,"[8]","[16]",no
+universe-matrix,all-products,titanium-ingot,titanium-ingot#36,carbon-nanotube#0,requires-spray,1,1,1,9,"[9]","[7]",no
+universe-matrix,all-products,titanium-ingot,titanium-ingot#36,titanium-crystal#34,requires-spray,1,1,1,9,"[9]","[12]",no
+universe-matrix,all-products,titanium-ingot,titanium-ingot#36,titanium-glass#35,requires-spray,1,1,1,9,"[9]","[8]",no
+universe-matrix,output-products,antimatter,mass-energy-storage#23,universe-matrix#37,requires-spray,1,12,12,10,"[10]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",YES
+universe-matrix,output-products,carbon-nanotube,carbon-nanotube#0,particle-broadband#25,unsprayed,1,1,1,16,"[16]","[20]",no
+universe-matrix,output-products,casimir-crystal,casimir-crystal#1,plane-filter#27,unsprayed,1,2,2,12,"[12]","[12, 16]",no
+universe-matrix,output-products,circuit-board,circuit-board#2,electromagnetic-matrix#9,unsprayed,1,1,1,8,"[8]","[18]",no
+universe-matrix,output-products,circuit-board,circuit-board#2,processor#30,unsprayed,1,1,1,8,"[8]","[20]",no
+universe-matrix,output-products,copper-ingot,copper-ingot#3,circuit-board#2,unsprayed,1,1,1,12,"[12]","[8]",no
+universe-matrix,output-products,copper-ingot,copper-ingot#3,magnetic-coil#22,unsprayed,1,2,2,12,"[12]","[4, 8]",no
+universe-matrix,output-products,copper-ingot,copper-ingot#3,microcrystalline-component#24,unsprayed,1,2,2,9,"[9]","[12, 16]",no
+universe-matrix,output-products,copper-ingot,copper-ingot#3,particle-container#26,unsprayed,1,1,1,9,"[9]","[12]",no
+universe-matrix,output-products,critical-photon,critical-photon#4,mass-energy-storage#23,unsprayed,2,1,1,36,"[36, 36]","[10]",no
+universe-matrix,output-products,crystal-silicon,crystal-silicon#5,particle-broadband#25,unsprayed,1,1,1,6,"[6]","[20]",no
+universe-matrix,output-products,deuterium,deuterium#6,strange-matter#32,unsprayed,1,1,1,20,"[20]","[40]",no
+universe-matrix,output-products,diamond,diamond#7,graviton-lens#16,unsprayed,1,1,1,9,"[9]","[8]",no
+universe-matrix,output-products,diamond,diamond#7,structure-matrix#33,unsprayed,1,2,2,9,"[9]","[18, 24]",no
+universe-matrix,output-products,electric-motor,electric-motor#8,electromagnetic-turbine#10,unsprayed,1,1,1,20,"[20]","[12]",no
+universe-matrix,output-products,electromagnetic-matrix,electromagnetic-matrix#9,universe-matrix#37,requires-spray,1,12,12,18,"[18]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,output-products,electromagnetic-turbine,electromagnetic-turbine#10,particle-container#26,unsprayed,1,1,1,12,"[12]","[12]",no
+universe-matrix,output-products,energetic-graphite,energetic-graphite#11,diamond#7,unsprayed,1,1,1,15,"[15]","[9]",no
+universe-matrix,output-products,energetic-graphite,energetic-graphite#11,energy-matrix#12,unsprayed,1,1,1,15,"[15]","[30]",no
+universe-matrix,output-products,energetic-graphite,energetic-graphite#11,graphene#15,unsprayed,2,1,1,12,"[12, 15]","[40]",no
+universe-matrix,output-products,energetic-graphite,energetic-graphite#11,plastic#29,unsprayed,2,1,1,12,"[12, 15]","[16]",no
+universe-matrix,output-products,energy-matrix,energy-matrix#12,universe-matrix#37,requires-spray,1,12,12,30,"[30]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,output-products,gear,gear#13,electric-motor#8,unsprayed,1,1,1,12,"[12]","[20]",no
+universe-matrix,output-products,glass,glass#14,titanium-glass#35,unsprayed,1,1,1,6,"[6]","[12]",no
+universe-matrix,output-products,graphene,graphene#15,carbon-nanotube#0,unsprayed,1,1,1,40,"[40]","[16]",no
+universe-matrix,output-products,graphene,graphene#15,casimir-crystal#1,unsprayed,1,1,1,40,"[40]","[12]",no
+universe-matrix,output-products,graphene,graphene#15,particle-container#26,unsprayed,1,1,1,40,"[40]","[12]",no
+universe-matrix,output-products,graviton-lens,graviton-lens#16,gravity-matrix#17,unsprayed,1,2,2,8,"[8]","[30, 30]",no
+universe-matrix,output-products,gravity-matrix,gravity-matrix#17,universe-matrix#37,requires-spray,2,12,6,30,"[30, 30]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,output-products,high-purity-silicon,high-purity-silicon#18,crystal-silicon#5,unsprayed,2,1,1,18,"[18, 18]","[6]",no
+universe-matrix,output-products,high-purity-silicon,high-purity-silicon#18,microcrystalline-component#24,unsprayed,2,2,1,18,"[18, 18]","[12, 16]",no
+universe-matrix,output-products,hydrogen,mass-energy-storage#23,casimir-crystal#1,unsprayed,1,1,1,10,"[10]","[12]",no
+universe-matrix,output-products,hydrogen,mass-energy-storage#23,deuterium#6,unsprayed,1,1,1,10,"[10]","[20]",no
+universe-matrix,output-products,hydrogen,mass-energy-storage#23,energy-matrix#12,unsprayed,1,1,1,10,"[10]","[30]",no
+universe-matrix,output-products,hydrogen,plasma-refining#28,casimir-crystal#1,unsprayed,1,1,1,14,"[14]","[12]",no
+universe-matrix,output-products,hydrogen,plasma-refining#28,deuterium#6,unsprayed,1,1,1,14,"[14]","[20]",no
+universe-matrix,output-products,hydrogen,plasma-refining#28,energy-matrix#12,unsprayed,1,1,1,14,"[14]","[30]",no
+universe-matrix,output-products,information-matrix,information-matrix#19,universe-matrix#37,requires-spray,2,12,6,24,"[24, 24]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,output-products,iron-ingot,iron-ingot#20,circuit-board#2,unsprayed,1,1,1,18,"[18]","[8]",no
+universe-matrix,output-products,iron-ingot,iron-ingot#20,electric-motor#8,unsprayed,1,1,1,18,"[18]","[20]",no
+universe-matrix,output-products,iron-ingot,iron-ingot#20,gear#13,unsprayed,1,1,1,6,"[6]","[12]",no
+universe-matrix,output-products,iron-ingot,iron-ingot#20,strange-matter#32,unsprayed,1,1,1,6,"[6]","[40]",no
+universe-matrix,output-products,magnet,magnet#21,magnetic-coil#22,unsprayed,1,2,2,18,"[18]","[4, 8]",no
+universe-matrix,output-products,magnetic-coil,magnetic-coil#22,electric-motor#8,unsprayed,1,1,1,8,"[8]","[20]",no
+universe-matrix,output-products,magnetic-coil,magnetic-coil#22,electromagnetic-matrix#9,unsprayed,1,1,1,8,"[8]","[18]",no
+universe-matrix,output-products,magnetic-coil,magnetic-coil#22,electromagnetic-turbine#10,unsprayed,1,1,1,4,"[4]","[12]",no
+universe-matrix,output-products,microcrystalline-component,microcrystalline-component#24,processor#30,unsprayed,2,1,1,12,"[12, 16]","[20]",no
+universe-matrix,output-products,particle-broadband,particle-broadband#25,information-matrix#19,unsprayed,1,2,2,20,"[20]","[24, 24]",no
+universe-matrix,output-products,particle-container,particle-container#26,strange-matter#32,unsprayed,1,1,1,12,"[12]","[40]",no
+universe-matrix,output-products,plane-filter,plane-filter#27,quantum-chip#31,unsprayed,2,1,1,12,"[12, 16]","[8]",no
+universe-matrix,output-products,plastic,plastic#29,particle-broadband#25,unsprayed,1,1,1,16,"[16]","[20]",no
+universe-matrix,output-products,processor,processor#30,information-matrix#19,unsprayed,1,2,2,20,"[20]","[24, 24]",no
+universe-matrix,output-products,processor,processor#30,quantum-chip#31,unsprayed,1,1,1,20,"[20]","[8]",no
+universe-matrix,output-products,quantum-chip,quantum-chip#31,gravity-matrix#17,unsprayed,1,2,2,8,"[8]","[30, 30]",no
+universe-matrix,output-products,refined-oil,plasma-refining#28,plastic#29,unsprayed,2,1,1,14,"[14, 14]","[16]",no
+universe-matrix,output-products,strange-matter,strange-matter#32,graviton-lens#16,unsprayed,1,1,1,40,"[40]","[8]",no
+universe-matrix,output-products,structure-matrix,structure-matrix#33,universe-matrix#37,requires-spray,2,12,6,18,"[18, 24]","[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]",no
+universe-matrix,output-products,titanium-crystal,titanium-crystal#34,casimir-crystal#1,unsprayed,1,1,1,20,"[20]","[12]",no
+universe-matrix,output-products,titanium-crystal,titanium-crystal#34,structure-matrix#33,unsprayed,1,2,2,20,"[20]","[18, 24]",no
+universe-matrix,output-products,titanium-glass,titanium-glass#35,plane-filter#27,unsprayed,1,2,2,12,"[12]","[12, 16]",no
+universe-matrix,output-products,titanium-ingot,titanium-ingot#36,carbon-nanotube#0,unsprayed,2,1,1,12,"[12, 12]","[16]",no
+universe-matrix,output-products,titanium-ingot,titanium-ingot#36,titanium-crystal#34,unsprayed,2,1,1,12,"[12, 12]","[20]",no
+universe-matrix,output-products,titanium-ingot,titanium-ingot#36,titanium-glass#35,unsprayed,2,1,1,12,"[12, 12]","[12]",no
