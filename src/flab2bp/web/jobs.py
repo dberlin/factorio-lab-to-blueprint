@@ -546,15 +546,22 @@ class Builder:
             # `trace_queue`, so closing the queue before that thread has
             # actually stopped risks a race between "stop reading" and
             # "close the pipe underneath the reader."
-            if collector is not None:
-                collector.stop()
-            if trace_queue is not None:
-                # Owned here because created here (see above): an unread
-                # `multiprocessing.Queue` with buffered data blocks its
-                # process's exit, and a long-lived web process is exactly the
-                # process that must never be left waiting on one.
-                cast(Any, trace_queue).cancel_join_thread()
-                cast(Any, trace_queue).close()
+            #
+            # Nested in its own `finally` (fix round, Critical 1): `stop()`
+            # should not raise now that `TraceCollector.start()` only binds
+            # `self._thread` after a successful `thread.start()`, but the
+            # queue release below must run even if it somehow does -- an
+            # unread `multiprocessing.Queue` with buffered data blocks its
+            # process's exit, and a long-lived web process is exactly the
+            # process that must never be left waiting on one.
+            try:
+                if collector is not None:
+                    collector.stop()
+            finally:
+                if trace_queue is not None:
+                    # Owned here because created here (see above).
+                    cast(Any, trace_queue).cancel_join_thread()
+                    cast(Any, trace_queue).close()
 
     def snapshot(self, job: Job) -> Json:
         """The job as JSON, including where it is if it is not finished."""
@@ -614,19 +621,25 @@ class Builder:
             collector = job.trace
             done = job.done
         if collector is None:
-            return {"frames": [], "next": cursor, "dropped": 0, "complete": done}
+            return {"frames": [], "next": cursor, "dropped": 0, "evicted": 0, "complete": done}
         frames, nxt = collector.ring.since(cursor)
         return {
             "frames": cast(JsonValue, frames),
             "next": nxt,
-            # `collector.dropped` is only the PARENT side (ring eviction, and
-            # stage-1 overflow) -- it knows nothing about a raced leg's OWN
+            # `collector.dropped` is GENUINE loss only -- stage-1 overflow at
+            # this process -- it knows nothing about a raced leg's OWN
             # `TraceChannel` dropping a frame before it ever reached this
             # process. Without `job.leg_trace_dropped`, a saturated queue
             # (Criticals C1/C2) would report a drop count that is honest but
             # incomplete, and Ruling 4 is exactly the case where that
             # difference is a structural failure, not noise.
             "dropped": collector.dropped + job.leg_trace_dropped,
+            # The ring's OWN eviction (fix round, Important 6): a bounded
+            # window doing its job -- keeping the newest frames -- on any
+            # build past `TRACE_RING_FRAMES`, and reported here as a distinct,
+            # non-alarming figure rather than folded into `dropped` where it
+            # would read as data the search lost.
+            "evicted": collector.ring.dropped,
             "complete": done and not frames,
         }
 

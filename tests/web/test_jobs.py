@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import queue
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.observe import SearchObserver
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
+from flab2bp.web import jobs as jobs_module
 from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
 from flab2bp.web.server import serve
@@ -294,6 +296,65 @@ def test_an_unexpected_operational_failure_finishes_as_error() -> None:
         current = builder.get(job.id)
         assert current is not None
         assert current.finished_at is not None
+    finally:
+        builder.shutdown()
+
+
+def test_a_collector_whose_start_fails_still_lets_the_queue_close(
+    monkeypatch: pytest.MonkeyPatch, small_build: pipeline.Build
+) -> None:
+    """Critical 1: `TraceCollector.start()` used to bind `self._thread` BEFORE
+    `thread.start()`. If starting the thread ever raised (OS thread
+    exhaustion), `stop()` would then try to join a thread that was never
+    started, which raises `RuntimeError` -- and that raise happened inside
+    `Builder._run`'s `finally`, BEFORE the trace queue's own
+    `cancel_join_thread()`/`close()`. In a long-lived web process, that leaks
+    the spawn-context `multiprocessing.Queue`, its feeder thread, and its
+    pipe fds on every job whose trace collector failed to start.
+
+    Reproduced here by making the REAL `threading.Thread.start()` raise, but
+    only for the trace collector's own thread (named "flab2bp-trace") -- so
+    the fix under test is `TraceCollector.start()`'s actual bind-after-start
+    ordering, not a stand-in for it, and every other thread in the process
+    (the builder's own pool, this test's polling) is untouched.
+    """
+    closed: list[str] = []
+
+    class _TrackingQueue:
+        def get_nowait(self) -> object:
+            raise queue.Empty
+
+        def put_nowait(self, item: object) -> None:
+            raise NotImplementedError
+
+        def cancel_join_thread(self) -> None:
+            closed.append("cancel_join_thread")
+
+        def close(self) -> None:
+            closed.append("close")
+
+    class _FakeContext:
+        def Queue(self, maxsize: int = 0) -> object:
+            return _TrackingQueue()
+
+    monkeypatch.setattr(jobs_module.multiprocessing, "get_context", lambda kind: _FakeContext())
+
+    real_start = threading.Thread.start
+
+    def failing_start(self: threading.Thread) -> None:
+        if self.name == "flab2bp-trace":
+            raise RuntimeError("can't start new thread")
+        real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", failing_start)
+
+    builder = Builder(solve=lambda *_a, **_k: small_build)
+    try:
+        job = builder.submit(Options(url=URL, trace=True))
+        snap = _settled(builder, job.id, timeout_s=2.0)
+
+        assert snap["state"] == "error"
+        assert closed == ["cancel_join_thread", "close"]
     finally:
         builder.shutdown()
 

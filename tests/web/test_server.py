@@ -312,7 +312,13 @@ def test_trace_endpoint_reports_an_empty_page_when_trace_is_off(
         assert status == 202
         status, body = client.get_json(f"/api/build/{_string(job, 'id')}/trace?from=-1")
         assert status == 200
-        assert body == {"frames": [], "next": -1, "dropped": 0, "complete": False}
+        assert body == {
+            "frames": [],
+            "next": -1,
+            "dropped": 0,
+            "evicted": 0,
+            "complete": False,
+        }
     finally:
         release.set()
 
@@ -430,6 +436,7 @@ def test_trace_endpoint_pages_frames_from_a_live_collector(
         time.sleep(0.02)
     assert page["frames"] == []
     assert page["dropped"] == 0
+    assert page["evicted"] == 0
 
 
 def test_an_unbuilt_front_end_says_so_rather_than_404ing(start: Callable[..., Client]) -> None:

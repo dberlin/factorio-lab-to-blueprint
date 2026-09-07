@@ -12,10 +12,11 @@ import argparse
 import contextlib
 import json
 import sys
+import threading
 import time
-from collections import Counter
-from itertools import count
+from collections import Counter, deque
 from pathlib import Path
+from typing import TextIO
 
 from flab2bp import pipeline
 from flab2bp.layout import markers
@@ -27,7 +28,85 @@ from flab2bp.layout.observe import (
     SearchEvent,
 )
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
-from flab2bp.web.trace import frame_json
+from flab2bp.web.trace import TRACE_DRAIN_INTERVAL_S, frame_json
+
+
+class _CliTraceWriter:
+    """Buffers frozen ``SearchEvent``s off the search thread; a daemon thread
+    of its own turns them into JSONL.
+
+    Mirrors ``TraceCollector`` (web/trace.py) for exactly the reason that
+    class exists: ``frame_json``'s own docstring says it "runs on the
+    parent's trace thread, never on a search thread" -- before this class,
+    the CLI's sink called it, plus ``json.dumps`` and the file write,
+    SYNCHRONOUSLY on the thread the search was trying to spend its core on
+    (fix round, Important 1). ``offer`` is the O(1) sink ``SampledObserver``
+    calls; projection and I/O happen only in ``_drain_once``, off that
+    thread.
+
+    Unlike ``TraceCollector``'s stage-1 deque, ``_pending`` is unbounded: this
+    is one CLI process tracing one build, not a long-lived server bounding
+    memory across many jobs, and "no frames are lost" is exactly the
+    guarantee a debugging JSONL file promises.
+    """
+
+    def __init__(self, trace_file: TextIO, started_at: float) -> None:
+        self._trace_file = trace_file
+        self._started_at = started_at
+        self._pending: deque[SearchEvent] = deque()
+        self._lock = threading.Lock()
+        self._seq = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def offer(self, event: SearchEvent) -> None:
+        """The sink. One deque append -- O(1), never touches ``placement``."""
+        with self._lock:
+            self._pending.append(event)
+
+    def start(self) -> None:
+        thread = threading.Thread(target=self._run, name="flab2bp-cli-trace", daemon=True)
+        # `start()` BEFORE the assignment -- the same ordering
+        # `TraceCollector.start()` was fixed to use (Critical 1): a failed
+        # `thread.start()` must leave `self._thread` `None` rather than
+        # referencing a Thread that was constructed but never actually
+        # started, so `stop()` below drains directly instead of joining one.
+        thread.start()
+        self._thread = thread
+
+    def _drain_once(self) -> None:
+        with self._lock:
+            pending = list(self._pending)
+            self._pending.clear()
+        for event in pending:
+            frame = frame_json(self._seq, round(event.monotonic_s - self._started_at, 3), event)
+            self._seq += 1
+            self._trace_file.write(json.dumps(frame))
+            self._trace_file.write("\n")
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._drain_once()
+            self._stop.wait(TRACE_DRAIN_INTERVAL_S)
+        # One last pass after the stop flag is observed: a burst offered
+        # between the previous periodic drain and `stop()` being called must
+        # still reach the file, not be lost (mirrors `TraceCollector._run`).
+        self._drain_once()
+
+    def stop(self) -> None:
+        """Join the writer thread and do one final drain, so every frame
+        offered before this call is on disk before the caller closes the
+        file."""
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        # Only drain here if the daemon thread is gone -- the same race
+        # `TraceCollector.stop()` guards against: a wedged thread could still
+        # be mid-drain, and draining again concurrently from this thread
+        # would race on `self._seq`.
+        if thread is None or not thread.is_alive():
+            self._drain_once()
 
 
 def _report(build: pipeline.Build, *, verbose: bool) -> None:
@@ -393,30 +472,27 @@ def main(argv: list[str] | None = None) -> int:
     # not `None`.
     trace_file = None
     search_observer = None
+    writer: _CliTraceWriter | None = None
     if args.trace_jsonl is not None:
         try:
             trace_file = args.trace_jsonl.open("w", encoding="utf-8")
         except OSError as exc:
             ap.error(f"--trace-jsonl {args.trace_jsonl}: {exc}")
-        seq = count()
-        t0 = time.monotonic()
-
-        def _write_frame(event: SearchEvent) -> None:
-            # frame_json is the ONE place, web or CLI, that projects a
-            # SearchEvent into the wire shape (web/trace.py, design §4).
-            # `event.monotonic_s` is captured where the event was constructed
-            # (observe.py's default factory), never at whatever later moment
-            # this sink happens to run -- the same relationship
-            # TraceCollector.drain_once uses against its own `started_at`
-            # (web/trace.py), so a CLI trace and a web trace measure `t` the
-            # same way relative to their own start.
-            assert trace_file is not None
-            trace_file.write(
-                json.dumps(frame_json(next(seq), round(event.monotonic_s - t0, 3), event))
-            )
-            trace_file.write("\n")
-
-        search_observer = SampledObserver(sink=_write_frame, min_interval_s=TRACE_SAMPLE_INTERVAL_S)
+        # `frame_json` is the ONE place, web or CLI, that projects a
+        # SearchEvent into the wire shape (web/trace.py, design §4), and its
+        # own docstring says it must never run on a search thread. `writer`
+        # is the CLI's side of that: `.offer` (the sink below) is an O(1)
+        # deque append on the search thread, and `frame_json` plus the actual
+        # file write happen only on the writer's own daemon thread (fix
+        # round, Important 1). `event.monotonic_s` is captured where the
+        # event was constructed (observe.py's default factory), never at
+        # whatever later moment the writer thread gets around to it -- the
+        # same relationship `TraceCollector.drain_once` uses against its own
+        # `started_at`, so a CLI trace and a web trace measure `t` the same
+        # way relative to their own start.
+        writer = _CliTraceWriter(trace_file, time.monotonic())
+        writer.start()
+        search_observer = SampledObserver(sink=writer.offer, min_interval_s=TRACE_SAMPLE_INTERVAL_S)
 
     try:
         try:
@@ -455,6 +531,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"flab2bp: {exc}", file=sys.stderr)
             return 2
     finally:
+        # `writer.stop()` FIRST: it joins the writer's daemon thread and
+        # performs its final drain, so every frame `offer`ed during the build
+        # is actually on disk before the file below is closed -- the
+        # buffering that makes the sink O(1) (fix round, Important 1) must
+        # never cost a frame at shutdown.
+        if writer is not None:
+            writer.stop()
         # Every exit path -- success, NoValidLayout, ValueError/KeyError, or
         # any other exception propagating out of `pipeline.build` -- closes
         # the file, so a raised build still leaves a complete, readable trace

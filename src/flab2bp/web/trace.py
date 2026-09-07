@@ -204,7 +204,15 @@ class TraceCollector:
 
     @property
     def dropped(self) -> int:
-        return self._dropped + self.ring.dropped
+        """Genuine loss: stage-1 overflow only.
+
+        The ring's own eviction (:attr:`TraceRing.dropped`) is a bounded
+        window doing exactly what it is for -- keeping the newest frames --
+        and is reported separately (``jobs.py``'s ``trace_page``, wire field
+        ``evicted``) so a reader is never told a healthy build lost data
+        (fix round, Important 6).
+        """
+        return self._dropped
 
     def _offer(self, event: SearchEvent) -> None:
         """The sink.  One deque append; a bounded deque evicts silently, so the
@@ -238,8 +246,18 @@ class TraceCollector:
 
     def start(self) -> None:
         thread = threading.Thread(target=self._run, name="flab2bp-trace", daemon=True)
-        self._thread = thread
+        # `thread.start()` BEFORE the assignment (fix round, Critical 1): if
+        # starting ever raises (OS thread exhaustion), `self._thread` must stay
+        # `None` -- the dataclass default -- rather than referencing a Thread
+        # that was constructed but never actually started. `stop()` below
+        # already treats `None` as "nothing to join, just drain"; getting the
+        # order backwards here made `stop()` call `.join()` on a
+        # never-started thread instead, which raises `RuntimeError: cannot
+        # join thread before it is started` -- in a caller's `finally`
+        # (`web/jobs.py`'s `Builder._run`), ahead of the trace queue's own
+        # cleanup, leaking it.
         thread.start()
+        self._thread = thread
 
     def _run(self) -> None:
         while not self._stop.is_set():

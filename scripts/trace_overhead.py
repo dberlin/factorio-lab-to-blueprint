@@ -410,7 +410,11 @@ def _run_direct(
         collector.stop()
         frame_count = collector._seq  # noqa: SLF001 -- the harness's own frame count, by design
         if evidence_path is not None:
-            frames, _next = collector.ring.since(0, limit=collector.ring.max_frames)
+            # `-1`, not `0`: `since`'s cursor is EXCLUSIVE (web/trace.py), so a
+            # `0` cursor drops frame `seq=0` from every evidence file (fix
+            # round, Minor 5). `-1` is the sentinel used everywhere else a
+            # caller wants every frame the ring still holds.
+            frames, _next = collector.ring.since(-1, limit=collector.ring.max_frames)
             evidence_path.write_text("\n".join(json.dumps(frame) for frame in frames) + "\n")
     if trace_queue is not None:
         cast(Any, trace_queue).cancel_join_thread()

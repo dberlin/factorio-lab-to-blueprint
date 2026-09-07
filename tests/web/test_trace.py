@@ -239,6 +239,25 @@ def test_collector_drops_and_counts_when_stage_one_overflows() -> None:
     assert collector.dropped == 8
 
 
+def test_collector_dropped_excludes_the_rings_own_eviction() -> None:
+    """Fix round, Important 6: the ring evicting its OLDEST frames past its
+    bound is a rolling window doing exactly its job, not genuine loss -- it
+    must not be folded into `collector.dropped`, which is reserved for
+    stage-1 overflow (a real backlog signal). Otherwise any build past the
+    ring's frame bound (256 in production; `belt3` in the overhead gate
+    produced 293) reports "data lost" on a build that lost nothing."""
+    ring = TraceRing(max_frames=2)
+    collector = TraceCollector(ring, started_at=time.monotonic())
+    for _ in range(5):
+        collector.observer.note(
+            SearchEvent(strategy="freeform", candidate="c", phase=SearchPhase.INCUMBENT)
+        )
+    collector.drain_once()
+
+    assert ring.dropped == 3  # the ring evicted three of the five frames...
+    assert collector.dropped == 0  # ...which is not a genuine drop.
+
+
 def test_collector_drains_a_raced_builds_queue_alongside_its_in_process_deque() -> None:
     """Task 8: a raced arm's events arrive on a queue, not through `.note()` --
     ``drain_once`` must pull from both sources in the same pass."""
