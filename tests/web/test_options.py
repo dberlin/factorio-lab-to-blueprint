@@ -10,6 +10,7 @@ import pytest
 
 from flab2bp import pipeline
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
+from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.web.jobs import WARN_TOTAL_SECONDS, InvalidOptions, Options, parse_options
 from flab2bp.web.payload import JsonValue
 
@@ -82,6 +83,17 @@ def test_defaults_match_the_cli() -> None:
     assert not hasattr(options, "power")
     # The CLI refuses to emit an invalid blueprint unless asked; so does this.
     assert options.allow_invalid is False
+
+
+def test_machine_rank_defaults_to_exact_and_accepts_up_to() -> None:
+    assert parse_options({"url": URL}).machine_rank is MachineRank.EXACT
+    assert parse_options({"url": URL, "machine_rank": "exact"}).machine_rank is MachineRank.EXACT
+    assert parse_options({"url": URL, "machine_rank": "up-to"}).machine_rank is MachineRank.UP_TO
+
+
+def test_machine_rank_rejects_unknown_spelling() -> None:
+    with pytest.raises(InvalidOptions, match="machine_rank"):
+        parse_options({"url": URL, "machine_rank": "upto"})
 
 
 @pytest.mark.parametrize(
