@@ -41,6 +41,22 @@ the corridor matcher.
 Both cells refused (`exit=3`) in all four runs; there is no successful build
 to report area/buildings/validator numbers for.
 
+### CPU load at each run (rules out load as a confound for the regression)
+
+| cell | when | `-load.txt` file | runnable_5s_mean |
+|---|---|---|---:|
+| belt3 | before | `probe-belt3-all-products-before-load.txt` | 57.2 |
+| belt3 | after  | `probe-belt3-all-products-after-load.txt`  | 50.0 |
+| zurl2 | before | `probe-zurl2-all-products-before-load.txt` | 23.6 |
+| zurl2 | after  | `probe-zurl2-all-products-after-load.txt`  | 12.8 |
+
+**Both AFTER runs ran at lower CPU pressure than their BEFORE runs (belt3
+57.2 -> 50.0, zurl2 23.6 -> 12.8) and still produced worse routing outcomes
+(`unrouted_cuts` 18 -> 32 and 71 -> 100 respectively).** Load therefore does
+not explain the regression reported above -- if anything, the AFTER runs had
+more headroom, not less. This rules load out as the explanation; it does not
+by itself prove what the mechanism is.
+
 ### zurl2's unrouted-cuts breakdown by failure class
 
 The brief's caveat: zurl2's refusals were 69/70 and 71/73 `BUDGET` at 60s in
@@ -154,15 +170,25 @@ implied:
    distinction matters for how Task 9 should read this result and is
    carried forward plainly rather than left implicit in the direction test.
 
-**Discrepancy worth flagging, not resolved here**: v3 gate §5 describes
-belt3's `missing` as constant at 91. This measurement's belt3 BEFORE
-`reservation_missing` is 0, not 91, at `--budget 60 --band portable
---candidate-policy all-products`. The two numbers do not need to match --
-v3's 91 may come from a different point on its budget ladder, a different
-candidate policy, or a differently-scoped aggregate -- but this document
-does not have the v3 raw data in hand to reconcile them, and does not
-invent an explanation. Task 9, which has the full v3 ladder, is the right
-place to reconcile it.
+**The belt3 `missing=91` discrepancy, reconciled**: v3 gate §5 describes
+belt3's `missing` as constant at 91, while this measurement's belt3 BEFORE
+`reservation_missing` is 0. The two figures come from different instruments
+at different budgets, not from a contradiction. v3's own `gate.md` (the
+Task 5 discussion) records the production 60s-budget belt3 cell as
+`reservation_missing=0 reservation_degraded=1 unrouted_cuts=18` -- which
+matches this document's belt3 BEFORE row exactly (see the table above). The
+`91` comes from a different instrument entirely: Task 6's `oracle.md`, a
+bespoke 180s rung-walking probe that wraps `pack_with_access` directly and
+walks every rung of `compose.GAP_LADDER` itself ("Every belt3 rung is a
+wholesale give-up: 0 of 91 demands assigned, on all six"). `oracle.md`
+itself states "180 s is a MEASUREMENT budget and not a gate budget; no gate
+clause may be read from these two runs," and v3's `gate.md` explicitly
+disclaims it as non-gating: "`oracle.md` is explicit that its cells' final
+CLI verdicts are probe artifacts, and no gate clause is read from it -- it
+is cited for the rung-level mechanism only." So the 91 is real, but it is
+Task 6's 180s rung-mechanism probe, not the gate's own 60s production
+measurement -- which is the same instrument and the same budget this
+document uses, and which already agreed with 0 before Task 1/2 landed.
 
 **Verdict**: `missing` and `unrouted` moved in the same direction on both
 cells, satisfying the brief's directional test as literally stated. Lever 1
