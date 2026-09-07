@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from fractions import Fraction
+from functools import cache
 from pathlib import Path
 from typing import Final
 
@@ -226,8 +227,16 @@ def load_hash_index(
     return HashIndex.parse(_parse_json(text))
 
 
+@cache
 def load_vendored() -> Dataset:
-    """Load the in-repo copy directly, bypassing cache and network."""
+    """Load the in-repo copy directly, bypassing cache and network.
+
+    `@cache`d because `bench/runner.py` calls it TWICE per corpus URL --
+    `specs_for` and `belt_rules_for_url` -- so a 12-URL run re-read and
+    re-parsed an unchanged `data.json` 24 times and rebuilt
+    `Dataset.__post_init__`'s indexes 24 times. `Dataset` is
+    `@dataclass(frozen=True, slots=True)`, so sharing one instance is safe.
+    """
     return Dataset.parse(_parse_json((VENDORED_DIR / "data.json").read_text(encoding="utf-8")))
 
 

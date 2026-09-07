@@ -53,6 +53,18 @@ def test_dataset_counts(ds: Dataset) -> None:
     assert len(ds.categories) == 4
 
 
+def test_load_vendored_parses_the_dataset_once() -> None:
+    """bench/runner.py calls it twice per corpus URL (specs_for, belt_rules_for_url).
+
+    Twelve URLs meant 24 full re-reads and re-parses of an unchanged file, plus
+    24 rebuilds of `Dataset.__post_init__`'s indexes. `Dataset` is
+    `@dataclass(frozen=True, slots=True)`, so sharing one instance is safe.
+    """
+    load_vendored.cache_clear()
+    assert load_vendored() is load_vendored()
+    assert load_vendored.cache_info().hits == 1
+
+
 def test_load_dataset_offline_falls_back_to_vendored() -> None:
     """With the network forbidden and no cache, we still get a dataset."""
     ds = load_dataset(allow_network=False, cache_dir=Path("/nonexistent-cache-dir"))
