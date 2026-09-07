@@ -17,6 +17,7 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
 )
 from flab2bp.layout.validate import Finding, Severity
+from flab2bp.spec import MachineMoveRecord
 from flab2bp.web.payload import Json, describe, refusal
 
 _JSON_ADAPTER: Final[TypeAdapter[Json]] = TypeAdapter(Json)
@@ -35,6 +36,23 @@ def test_the_blueprint_and_the_shape_of_the_build(small_build: pipeline.Build) -
     assert body["candidate"] == small_build.spec.label
     assert body["machines"] == small_build.spec.machine_count
     assert body["area"] == small_build.placement.area
+
+
+def test_payload_reports_the_mode_and_every_move(small_build: pipeline.Build) -> None:
+    move = MachineMoveRecord(
+        recipe_id="iron-ingot",
+        from_machine="plane-smelter",
+        to_machine="arc-smelter",
+        count_before=2,
+        count_after=2,
+    )
+    spec = small_build.spec.model_copy(
+        update={"machine_rank": "up-to", "machine_moves": (move,)}
+    )
+    body = describe(dataclasses.replace(small_build, spec=spec))
+
+    assert body["machine_rank"] == "up-to"
+    assert body["machine_moves"] == [move.model_dump()]
 
 
 def test_each_built_attempt_carries_its_real_blueprint(
