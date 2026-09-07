@@ -19876,6 +19876,78 @@ def _port_seating_refusal(attempts: Sequence[PackAttempt]) -> str | None:
     )
 
 
+def _routing_failure_bound(attempts: Sequence[PackAttempt]) -> str | None:
+    """Name what the retained routing attempts prove, without blaming all packing.
+
+    A packer's coordinates move between candidate heights, but logical recipe
+    edges survive repacking.  Recurring failures identify a net-level target;
+    changing failures identify the searched assignments, not a proof that the
+    spec is impossible.  BUDGET stays separate from geometry evidence.
+
+    This is deliberately a diagnostic bound, not a new search rule.  The
+    archived mall/all-products block-20 evidence proves that routed packs were
+    refused, but did not retain their per-attempt identities or failure kinds.
+    Widening the sweep around an unnamed invariant would therefore be tuning.
+    """
+    routed = tuple(
+        attempt
+        for attempt in attempts
+        if attempt.routing.failures
+        and attempt.budget_stage is not _BuildBudgetStage.PREPARATION
+    )
+    if not routed:
+        return None
+
+    kind_counts: dict[RouteFailureKind, int] = defaultdict(int)
+    logical_by_attempt: list[set[LogicalNetId]] = []
+    for attempt in routed:
+        logical_by_attempt.append({failure.net_id.logical for failure in attempt.routing.failures})
+        for failure in attempt.routing.failures:
+            kind_counts[failure.kind] += 1
+    kinds = ", ".join(
+        f"{kind.value}={count}"
+        for kind, count in sorted(kind_counts.items(), key=lambda pair: pair[0].value)
+    )
+    heights = ", ".join(str(height) for height in sorted({attempt.height for attempt in routed}))
+    evidence = (
+        f"route evidence from {len(routed)} packs at candidate heights {heights}: "
+        f"failure kinds {kinds}; "
+    )
+    if set(kind_counts) == {RouteFailureKind.BUDGET}:
+        return (
+            evidence
+            + "every failure is BUDGET, so this is a ROUTING-CLOCK bound and not "
+            "a verdict on the packing"
+        )
+    if RouteFailureKind.BUDGET in kind_counts:
+        return (
+            evidence
+            + "BUDGET and non-budget failures coexist; the routing clock must "
+            "be separated from geometry before assigning a cause"
+        )
+    if len(routed) == 1:
+        return (
+            evidence
+            + "one routed pack is insufficient to distinguish a recurring net "
+            "from a density/search-space defect"
+        )
+
+    common = set.intersection(*logical_by_attempt)
+    if common:
+        logical = min(common, key=repr)
+        return (
+            evidence
+            + f"the same logical net {logical.item}/{logical.role.value} failed "
+            "in every retained pack; investigate that NET-LEVEL routing constraint, "
+            "not a wholesale packing impossibility"
+        )
+    return (
+        evidence
+        + "no logical net failed in every retained pack; investigate the "
+        "DENSITY/SEARCH-SPACE explored, not a proved impossibility"
+    )
+
+
 def _refusal_summary(rejected: Sequence[_RefusalFinding]) -> str:
     """List concise checks first, then the structured records that explain them."""
     checks: list[str] = []
@@ -20374,11 +20446,10 @@ class FreeformLayout:
         # candidate that reached it was skipped; otherwise stay neutral and let
         # `over_band` supply whatever skip count there was.
         if attempts:
-            base = (
+            bound = _routing_failure_bound(attempts)
+            base = bound or (
                 f"no packing of {len(strips)} strips could be wired at any candidate "
-                "height; every pack the sweep produced left nets unrouted. That is a "
-                "PACKER defect -- it is producing packs its own router cannot wire -- "
-                "and it is reported rather than papered over with a looser packing"
+                "height; retained attempts contain no classifiable routing evidence"
             )
         elif skipped_heights and len(skipped_heights) == len(
             _band_policy_candidate_heights(strips, self.band_policy)

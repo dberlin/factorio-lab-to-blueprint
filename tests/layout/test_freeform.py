@@ -24072,19 +24072,19 @@ def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
     assert "PACKER" not in message
 
 
-def test_lay_out_still_names_the_packer_defect_for_a_routed_attempt(
+def test_lay_out_bounds_a_routed_refusal_to_the_recurring_net(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A retained attempt whose router actually ran and left nets unrouted is
+    """A stable failing net is a diagnostic target, not proof against all packing.
 
-    the ORIGINAL failure mode this refusal names: `_port_seating_refusal`
-    returns `None` for it (a SEALED_POCKET failure is not STATIC_ACCESS-only),
-    so the PACKER-defect wording must still fire.
+    This is the distinction Task 8 needs for the archived mall block 20
+    refusal.  Reverting to the old generic PACKER sentence would erase both
+    the repeated logical net and the failure kind, and this test would fail.
     """
     spec = two_stage_spec()
     strips = plan_strips(spec)
 
-    def report_one_stranded_attempt(
+    def report_two_stranded_attempts(
         self: FreeformLayout,
         _spec: BuildSpec,
         _strips: list[Strip],
@@ -24097,19 +24097,61 @@ def test_lay_out_still_names_the_packer_defect_for_a_routed_attempt(
         **_kwargs: object,
     ) -> Placement | None:
         if attempts is not None:
-            attempts.append(
-                _proof_attempt(_routing_failures(RouteFailureKind.SEALED_POCKET), strips)
+            first = _proof_attempt(
+                _routing_failures(RouteFailureKind.SEALED_POCKET),
+                strips,
             )
+            attempts.extend((first, replace(first, height=24)))
         return None
 
-    monkeypatch.setattr(FreeformLayout, "_sweep", report_one_stranded_attempt)
+    monkeypatch.setattr(FreeformLayout, "_sweep", report_two_stranded_attempts)
 
     with pytest.raises(NoValidLayout) as caught:
         FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=1.0)
 
     message = str(caught.value)
-    assert "PACKER defect" in message
-    assert "every pack the sweep produced left nets unrouted" in message
+    assert "route evidence from 2 packs at candidate heights 20, 24" in message
+    assert "sealed-pocket=2" in message
+    assert "the same logical net" in message
+    assert "NET-LEVEL routing constraint" in message
+    assert "That is a PACKER defect" not in message
+
+
+@pytest.mark.parametrize(
+    ("kinds", "expected"),
+    (
+        ((RouteFailureKind.BUDGET,), "ROUTING-CLOCK bound"),
+        (
+            (RouteFailureKind.BUDGET, RouteFailureKind.SEALED_POCKET),
+            "BUDGET and non-budget failures coexist",
+        ),
+    ),
+)
+def test_routing_clock_evidence_cannot_convict_geometry(
+    kinds: tuple[RouteFailureKind, ...], expected: str
+) -> None:
+    """Even repeated logical failures cannot establish geometry if work ran out."""
+    first = _proof_attempt(_routing_failures(*kinds), plan_strips(two_stage_spec()))
+    bound = freeform._routing_failure_bound((first, replace(first, height=24)))
+
+    assert bound is not None
+    assert expected in bound
+    assert "NET-LEVEL" not in bound
+    assert "DENSITY/SEARCH-SPACE" not in bound
+
+
+def test_different_logical_failures_bound_the_searched_space_not_one_net() -> None:
+    strips = plan_strips(two_stage_spec())
+    attempts = (
+        _proof_attempt(_routing_failures(RouteFailureKind.SEALED_POCKET), strips),
+        replace(_proof_attempt(_feedback_bearing_routing(), strips), height=24),
+    )
+
+    bound = freeform._routing_failure_bound(attempts)
+
+    assert bound is not None
+    assert "DENSITY/SEARCH-SPACE" in bound
+    assert "NET-LEVEL" not in bound
 
 
 def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
@@ -25520,3 +25562,74 @@ def test_a_survey_that_raises_the_preparation_deadline_gives_up_wholesale() -> N
 
     assert match.converged is False
     assert match.assigned == {}
+
+
+def _mall_task8_spec() -> tuple[BuildSpec, str]:
+    """The archived mall URL through the same rates entry point as production."""
+    from flab2bp.lab.data import load_vendored
+    from flab2bp.lab.url import parse_url
+    from flab2bp.rates.candidates import CandidatePolicy, build_candidates
+
+    urls = (
+        Path(__file__).resolve().parents[2]
+        / "docs/superpowers/evidence/2026-09-05-speedups-2/large-urls/urls.txt"
+    ).read_text()
+    url = next(line.split("\t", 1)[1] for line in urls.splitlines() if line.startswith("mall\t"))
+    spec = next(
+        candidate
+        for candidate in build_candidates(
+            load_vendored(),
+            parse_url(url),
+            candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
+        ).candidates
+        if candidate.label == "all-products"
+    )
+    return spec, url
+
+
+@pytest.mark.slow
+def test_the_mall_block_the_packer_convicted_is_placed_or_names_the_cause() -> None:
+    """Block 20 may be fixed or bounded, but may never regress to generic blame.
+
+    The archived v3 gate records this exact block as the smallest of seven
+    mall/all-products blocks rejected by the generic "PACKER defect" sentence.
+    A bound is consumer-visible behavior: the live refusal must retain the
+    logical-net stability and failure kinds that identify the next subsystem.
+    """
+    from flab2bp.lab.techs import belt_rules_for_url
+    from flab2bp.layout.hierarchy.partition import Unit, sub_spec
+    from flab2bp.layout.hierarchy.strategy import _BLOCK_WORKERS
+
+    spec, url = _mall_task8_spec()
+    # The gate names a RE-CUT entry, not initial_partition(spec).blocks[20].
+    # Exact real round-2 units: block-20-hierarchy-capture-r1.json.
+    block = [
+        Unit(2_000_002, spec.groups[29], 11),
+        Unit(2_000_003, spec.groups[31], 6),
+    ]
+    assert sorted({unit.recipe for unit in block}) == ["steel", "titanium-alloy"]
+    block_spec = sub_spec(spec, block, 20)
+
+    try:
+        placement = FreeformLayout(
+            band_policy=BandPolicy.parse("portable"),
+            belt_vertical_construction=belt_rules_for_url(url).vertical_construction,
+            workers=_BLOCK_WORKERS,
+        ).lay_out(block_spec, time_budget_s=60.0)
+    except NoValidLayout as refusal:
+        reason = str(refusal)
+        assert "route evidence from" in reason
+        assert any(
+            cause in reason
+            for cause in (
+                "NET-LEVEL routing constraint",
+                "DENSITY/SEARCH-SPACE",
+                "ROUTING-CLOCK bound",
+                "insufficient to distinguish",
+                "BUDGET and non-budget failures coexist",
+            )
+        )
+        assert "That is a PACKER defect" not in reason
+    else:
+        report = validate.certify(placement, block_spec, expect_power=True)
+        assert report.ok, report.errors
