@@ -337,7 +337,7 @@ fails is that the placers refuse the blocks, not that the rounds were unfunded:
 
 `titanium-glass / all-products` at 60 s is the first hierarchical build in
 three gates to compose, route **all 26 of its cut lanes** and reach
-`validate.certify` (`strategy.py:787`). It then refuses. Because the CLI
+`validate.certify` (`strategy.py:807`). It then refuses. Because the CLI
 truncates to `report.errors[:3]` and names buildings by index, one extra build
 was run through `certify_probe.py` — a read-only wrapper on `validate.certify`,
 same argv, `certify-titanium-glass-all-products.{json,log}` and its
@@ -416,7 +416,7 @@ Per task, citing each implementer's own measurement as theirs:
   The reviewer's explanation is confirmed by the dispatch column itself:
   `arm_dispatch_freeform = 0` on that cell, because the policy creates no spray
   lanes, so `coaters == 0` on every block and `dispatch_arms`
-  (`dispatch.py:110-112`) can only return `(ARM_SEQUENCE_PAIR,)`. §5 weighs
+  (`dispatch.py:123-126`) can only return `(ARM_SEQUENCE_PAIR,)`. §5 weighs
   this; **the rule is not tuned here**, per the plan.
 * **Task 4 (the per-demand reachability goal, `900afa1e`…`8362b22d`)** shipped
   a `goals` parameter and Ruling R6's `_PORT_ACCESS_PROBE_KEEP = 2` scoped to
@@ -653,7 +653,7 @@ across the ladder, all geometric, at the round count production itself uses).
 ### Lever 2: power the ground COMPOSITION adds — 4 splitters of 80, and it is the last thing between this branch and its first blueprint
 
 Evidence: §2.3. `titanium-glass/all-products` at 60 s composes, wires all 26
-cut lanes, and fails `validate.certify` (`strategy.py:787`) with
+cut lanes, and fails `validate.certify` (`strategy.py:807`) with
 `errors_by_check == {power.coverage: 4}` — **one check, four findings, nothing
 else wrong with the placement**. All four are splitters (`dsp/catalog.py:219`,
 item 2020) at two tiles, convicted by `validate.py:3714-3720`. The canvas has
@@ -676,7 +676,7 @@ producing packs its own router cannot wire"** — the placer convicting itself,
 not a budget. `mall/no-proliferator` refuses with **31 blocks, all 31
 `deadline exhausted`**, and the dispatch column says why the whole cell is on
 one arm: `arm_dispatch_freeform = 0`, because that policy creates no spray
-lanes, `coaters == 0` on every block, and `dispatch.py:110-112` can then only
+lanes, `coaters == 0` on every block, and `dispatch.py:123-126` can then only
 return `(ARM_SEQUENCE_PAIR,)`.
 
 The measured cost of that rule on this cell is **6 blocks never placed under
@@ -776,12 +776,12 @@ this branch are marked.
 | --- | --- | --- | --- |
 | Settlement reserve | `min(40, max(5, 0.4 * budget))` | same | `settlement_reserve_s`, `SETTLEMENT_RESERVE_{MIN,MAX}_S = 5.0/40.0`, `_SHARE = 0.4` |
 | Pool width | `max(1, min(32, (workers or _available_cpu_count()) // 4))` | same | `_pool_width`, `_POOL_CAP = 32`, `_BLOCK_WORKERS = 4` |
-| Per-round block budget | **`clamp(remaining / rounds_left / waves, 5, 20)`** | `clamp(remaining / waves, 5, 20)` | `lay_out` ~618-642, `BLOCK_BUDGET_{MIN,MAX}_S = 5.0/20.0` |
-| `rounds_left` | **`1 + allowed_recuts - recut_rounds`**, so a round can never spend the wall the next round needs | absent | `strategy.py:618` |
-| Global re-cut bound | **`MAX_RECUT_ROUNDS = 2`**, floored by **`allowed_recut_rounds(rounds_wall) = min(2, max(0, int(wall // 5) - 1))`** — **0 at the web UI's 15 s** | **no global round bound at all** | `strategy.py:195`, `:285-294` |
+| Per-round block budget | **`clamp(remaining / rounds_left / waves, 5, 20)`** | `clamp(remaining / waves, 5, 20)` | `lay_out` ~638-662, `BLOCK_BUDGET_{MIN,MAX}_S = 5.0/20.0` |
+| `rounds_left` | **`1 + allowed_recuts - recut_rounds`**, so a round can never spend the wall the next round needs | absent | `strategy.py:638` |
+| Global re-cut bound | **`MAX_RECUT_ROUNDS = 2`**, floored by **`allowed_recut_rounds(rounds_wall) = min(2, max(0, int(wall // 5) - 1))`** — **0 at the web UI's 15 s** | **no global round bound at all** | `strategy.py:205`, `:295-304` |
 | Re-cut attempts | `MAX_RESPLIT_ATTEMPTS = 4`, per BLOCK | same | `_recut` |
-| `rounds_wall` | computed ONCE before `initial_partition` (Ruling R3), so a slow round cannot re-argue its own budget | absent | `strategy.py:537` |
-| Arm dispatch | **one arm per block from `dispatch_arms(features, arms)`**, with widen-before-cut | **both arms raced on every block** | `dispatch.py:101-111` |
+| `rounds_wall` | computed ONCE before `initial_partition` (Ruling R3), so a slow round cannot re-argue its own budget | absent | `strategy.py:558` |
+| Arm dispatch | **one arm per block from `dispatch_arms(features, arms)`**, with widen-before-cut — **which is structurally unreachable at the web UI's 15 s default**: `_recut` is the only caller of the widening branch and the round loop raises on `recut_rounds >= allowed_recuts` *before* reaching it, with `allowed_recut_rounds(~8.7) = 0`, so a 15 s build ships the one-arm rule with no escalation at all (§2.1 measures `arm_dispatch_both = 0` on both 15 s cells) | **both arms raced on every block** | `dispatch.py:102-126` |
 | Dispatch thresholds | **`ARM_SMALL_STRIPS = 6`, `UNCOVERED_ITEMS_ABOVE_ONE_BELT = 8`, `UNCOVERED_STRIPS = 85`**; `coaters > 0 and strips <= 6` → freeform, else sequence-pair, and both arms whenever the vector is outside what the evidence covers | absent | `dispatch.py:41-43` |
 | Strip cap | `STRIP_CAP_DEFAULT = 12`, counting packed strips | same | `partition.STRIP_CAP_DEFAULT` |
 | Composition gap | a searched rung of `GAP_LADDER = (2, 4, 6, 8, 12, 16)` under `LADDER_WALL_SHARE = 0.4`, `MIN_GAP = 2` | same | `compose.py:68, 87, 103` |
@@ -796,7 +796,7 @@ Which of these are load-bearing for the readings above:
 * **`rounds_left` and `allowed_recut_rounds` are why `blocks_unattempted = 0`
   on all eight cells** (§3, Task 2). They are the whole of Lever A's delivered
   effect, and they are not enough for clause (b).
-* **`dispatch.py:110-112` is why `mall/no-proliferator` runs entirely on
+* **`dispatch.py:123-126` is why `mall/no-proliferator` runs entirely on
   `sequence-pair`** and why it leaves 31 blocks unplaced where both arms left
   6 (§5 lever 3).
 * **`compose.py:899` is why every `reservation_missing = 0` in §2.1 must be
@@ -805,7 +805,12 @@ Which of these are load-bearing for the readings above:
 ## 8. Files
 
 * `gate.md` (this file). §0 was written and committed at `58023a0e`, **before
-  any cell ran**, and is unamended.
+  any cell ran**, and is unamended. **That claim is about §0 alone, not about
+  this file.** Everything else here was written after the runs, and the
+  PROLOGUE above §0 was additionally amended POST-HOC twice — the load
+  convention and the `pgrep` correction, both of which say so in their own
+  paragraphs. A reader skimming for "unamended" should read it as a statement
+  about the pre-registered rule and nothing more.
 * `run_large.sh`, `run_cell.py` (this gate's harness — no monkeypatching; see
   §2), `judge.py` (copied **byte-identical** from
   `../2026-09-07-hierarchical-v2/`, inherited lint findings and all, so both
@@ -828,3 +833,39 @@ Which of these are load-bearing for the readings above:
   measurements under three round-accounting rules)
 
 No blueprint file is present: every run refused, so `-o` was never written.
+
+### 8.1 `src` and `tests` CHANGED AFTER THIS GATE WAS MEASURED — read this before trusting a number here
+
+**`src` and `tests` were byte-identical from `58023a0e` — the commit that
+pre-registered §0's PASS/FAIL rule — through every measurement in this file and
+through `82aabc9f`.** `git diff --stat 58023a0e 82aabc9f -- src tests` is empty.
+That is what made "the tree that was measured is the tree that ships" a
+checkable claim rather than an assurance, and it is no longer true of HEAD.
+
+**The final whole-branch review's fix wave changed both, at `0af741ed`**, after
+the measurements. Diff it yourself: `git diff 82aabc9f 0af741ed`. What it
+contains, and why none of it can move a number above:
+
+| change | why it cannot move a measured number |
+| --- | --- |
+| `base.py`: `resplits`, `recut_rounds`, `compose_gap`, `port_demands`, `arm_dispatch_*` TypedDict comments | comments on a `TypedDict` field list; no field added, removed or renamed, no code |
+| `strategy.py`: module-docstring paragraph on widen-before-cut, `_refuser` docstring restored, one wrong clause deleted from the arm-dispatch comment | docstrings and comments only |
+| `dispatch.py`: `dispatch_arms` narrows only to an arm that is a member of `arms` | `dispatch_arms` is reached only from `strategy._arms_for`, which returns early unless `len(arms) >= 2`, and `arms` is always `HierarchicalLayout._arms()` — `("freeform", "sequence-pair")` at `block_strategy="best"`, a 1-tuple otherwise. So the new branch is taken only if `ARM_FREEFORM` or `ARM_SEQUENCE_PAIR` is not in `("freeform", "sequence-pair")`. **Unreachable at HEAD.** |
+| `strategy.py`: `_block_layout` raises on an unregistered arm instead of falling through to sequence-pair | `_block_layout`'s only caller is `_solve_block`, whose arm is `_BlockJob[1]`, built in `_solve_round` from `_arms_for` — a subset of the same two names. **Unreachable at HEAD**, and it is the same two-name set that makes the old fall-through correct today |
+| `tests/layout/hierarchy/{test_dispatch,test_strategy,test_compose}.py`: two new tests for those guards, one added refusal-message assertion, one write-only accumulator turned into an assertion, one pinned constant equality | tests exercise no production code path a cell run takes; no `src` behaviour is reached that was not reached before |
+
+**Do not read this as "the measurements are still valid."** What is claimed is
+narrower and checkable: **the measurements in this file were taken at
+`82aabc9f` and have NOT been re-run**, and the diff to `0af741ed` consists of
+comments, docstrings, tests, and two guards on branches no call at `82aabc9f`
+or at `0af741ed` can reach. Whether that is enough to carry the verdict forward
+is the reader's judgement, not this file's assertion.
+
+**§7's `file:line` references were re-pointed** in the same wave, because the
+`strategy.py` and `dispatch.py` docstring additions shifted them. They now name
+lines in the SHIPPED tree, not in `82aabc9f`. The constants, thresholds and
+expressions they point at are unchanged; only the line numbers moved. §7's
+`dispatch.py` arm-dispatch row also carried a wrong span before this
+(`101-111`; line 101 was blank and `def dispatch_arms` was at 102).
+
+**§0 is untouched by all of this** and remains byte-identical to `58023a0e`.
