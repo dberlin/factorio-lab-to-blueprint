@@ -27,6 +27,7 @@ from flab2bp.rates.candidates import (
     lanes_requiring_split,
     proliferator_from_request,
 )
+from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.rates.solve import RateSolution, SolvedGroup
 from flab2bp.spec import BuildSpec, BuildSpecSet, ProliferatorMode
 
@@ -725,3 +726,40 @@ def test_output_products_builds_a_url_that_nets_a_supplied_intermediate() -> Non
     assert "copper-ingot" in {group.recipe_id for group in spec.groups}
     assert spec.external_inputs["copper-ingot"] == Fraction(5, 6)
     assert spec.external_inputs["copper-ore"] > 0
+
+
+def test_up_to_reaches_every_spec_and_records_count_preserving_moves(data: Dataset) -> None:
+    exact = build_candidates(data, parse_url(EXAMPLE_URL), machine_rank=MachineRank.EXACT)
+    up_to = build_candidates(data, parse_url(EXAMPLE_URL), machine_rank=MachineRank.UP_TO)
+
+    assert {spec.label: spec.machine_count for spec in up_to.candidates} == {
+        spec.label: spec.machine_count for spec in exact.candidates
+    }
+    assert all(spec.machine_rank == "exact" and not spec.machine_moves for spec in exact.candidates)
+    assert any(spec.machine_moves for spec in up_to.candidates)
+    for spec in up_to.candidates:
+        assert spec.machine_rank == "up-to"
+        assert all(move.count_before == move.count_after for move in spec.machine_moves)
+
+
+def test_a_supplied_flow_pins_machine_ranking_to_exact(data: Dataset) -> None:
+    from pathlib import Path
+
+    from flab2bp.lab.flow import load_flow, pin_request
+
+    url = (
+        "https://factoriolab.github.io/dsp/list?o=graphene*60&ibe=conveyor-belt-2"
+        "&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11"
+    )
+    path = Path(__file__).parent.parent / "fixtures" / "flow_graphene_advanced.csv"
+    flow = load_flow(path, url=url)
+    request = pin_request(parse_url(url), data, flow)
+    (spec,) = build_candidates(
+        data,
+        request,
+        flow=flow,
+        machine_rank=MachineRank.UP_TO,
+    ).candidates
+
+    assert spec.machine_rank == "up-to"
+    assert spec.machine_moves == ()
