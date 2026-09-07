@@ -1,5 +1,12 @@
 import type { Blueprint, BlueprintBuilding } from '../format';
-import { type BeltRun, isBelt, isSorter, runForBelt, sorterContents } from './beltGraph';
+import {
+  type BeltRun,
+  isBelt,
+  isSorter,
+  runForBelt,
+  runIndexForBelt,
+  sorterContents,
+} from './beltGraph';
 import type { BuildingType, Catalog } from './catalog';
 import { IO_DIR, LOGISTIC_STORAGE, parseStationParams } from './stationParams';
 
@@ -398,15 +405,28 @@ export function describeInferred(
   catalog: Catalog,
 ): ParamRow[] {
   if (isBelt(b.itemId)) {
+    const rows: ParamRow[] = [];
+    // The run's index, which is also the number drawn on its strip in the
+    // scene. Reported first and unmarked: it is not an inference about the
+    // game, it is the identifier the picture uses, and the panel agreeing
+    // with the canvas is the whole point of showing it.
+    const runIndex = runIndexForBelt(b.index, runs);
+    const own = runIndex === null ? undefined : runs[runIndex];
+    if (runIndex !== null && own) {
+      const plural = own.belts.length === 1 ? '' : 's';
+      rows.push({ label: 'Belt run', value: `#${runIndex} · ${own.belts.length} belt${plural}` });
+    }
+
     const run = runForBelt(b.index, runs);
-    if (!run || run.carried.length === 0) return [];
+    if (!run || run.carried.length === 0) return rows;
     // Deliberate divergence from overlays.ts, which suppresses the inferred
     // icon in the 3D scene when run.hasExplicitTag is set: the scene has one
     // icon slot to spend, so an explicit tag wins there. This panel has room
     // for both, so it reports the inference regardless. Where a multi-output
     // recipe feeds the run, the inference can be an honest superset of the
     // player's tag rather than a disagreement with it.
-    return [{ label: 'Carries', value: names(run.carried, catalog), inferred: true }];
+    rows.push({ label: 'Carries', value: names(run.carried, catalog), inferred: true });
+    return rows;
   }
 
   if (isSorter(b.itemId)) {
