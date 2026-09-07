@@ -10727,9 +10727,20 @@ def test_the_infill_refuses_a_site_inside_another_nodes_keepout() -> None:
     # `game.power_too_close`: two power nodes closer than 3.5 world units are
     # refused by the paste, and a Tesla Tower has no build collider, so
     # nothing else in this file could see it.
+    #
+    # The splitter sits at x=31, not the nearest free column: the keepout disc
+    # has `max|dx| == 2` (measured off `power_node_keepout_offsets`), so with
+    # the tower at (20,0) the cell (21,0) -- one tile off the tower, the
+    # greedy's preferred site because it is closest to both the tower it must
+    # link to and the splitter it must cover -- is INSIDE the keepout and
+    # (21,3) is not. A splitter further out (x=33, tried first) lets the
+    # greedy's own distance preference land it on (23,0) regardless of whether
+    # the keepout rule runs at all, which asserts nothing: proved below by
+    # actually disabling the rule and watching this assertion fail only at
+    # x=31.
     canvas = _canvas_with_limit((0, 0, 60, 20))
     _stand_tower(canvas, 20, 0)
-    _stand_splitter(canvas, 33, 0)
+    _stand_splitter(canvas, 31, 0)
 
     sites, uncovered = freeform.plan_power_infill(canvas)
 
@@ -10741,6 +10752,7 @@ def test_the_infill_refuses_a_site_inside_another_nodes_keepout() -> None:
         )
         if dz == 0
     }
+    assert (21, 0) in keepout, "the scenario must actually pin a keepout cell the greedy prefers"
     assert not set(sites) & keepout
 
 

@@ -763,9 +763,21 @@ class HierarchicalLayout:
         stats.power_infill_towers = float(composition.power_infill)
         stats.power_uncovered_tiles = float(composition.power_uncovered)
         stats.reservation_missing = float(composition.reservation_missing)
-        stats.unrouted_cuts = float(len(composition.failures))
+        # `composition.unrouted_cuts` is the router/reservation prefix of
+        # `failures`, counted BEFORE the power infill's per-tile findings are
+        # appended -- not `len(composition.failures)`, which would let four
+        # dark splitter tiles read as four unrouted cuts even though nothing
+        # failed to route.  Ruling: this column stays comparable across the
+        # v2/v3/v4 gates (Task 9 §2.1), so power infill's own count
+        # (`power_uncovered_tiles`, above) never leaks into it.
+        stats.unrouted_cuts = float(composition.unrouted_cuts)
         if composition.failures:
-            raise refuse("unrouted cut(s): " + "; ".join(composition.failures))
+            # The 400-char cap matches the composer-crash message just above:
+            # a large refusal (measured: 900 uncovered tiles from one 2500-tile
+            # blob) must not turn into a ~90 KB message.  The FULL detail stays
+            # in `composition.failures` and in the stats above -- only this
+            # joined, human-readable string is capped.
+            raise refuse(("unrouted cut(s): " + "; ".join(composition.failures))[:400])
 
         # The spec the composition is JUDGED against is the one re-derived from
         # the blocks, not the one that was asked for: splitting rounds machine

@@ -15,6 +15,7 @@ from flab2bp.layout.freeform import (
     PortAccessEvidence,
     PortAccessKind,
     PortAccessReservation,
+    _Canvas,
 )
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
@@ -840,13 +841,49 @@ def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: Two
 def test_composition_reports_a_tile_it_could_not_power_as_a_named_cut(
     two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(compose, "plan_power_infill", lambda canvas, **kwargs: ([], ((63, 3),)))
+    """Also pins Property 1: the infill sees the ROUTED canvas, not a pre-routing one.
+
+    A stub that never looked at its `canvas` argument would pass identically
+    whether `plan_power_infill` ran before or after `_route_all` -- the two
+    positions are observationally different only in what the canvas holds.
+    Measured on this fixture (`chain_build_spec`'s two solved blocks, one cut,
+    two flows): the blocks carry 23 and 29 buildings and ZERO Splitters
+    between them; the canvas the stub is actually handed carries 82 buildings
+    and exactly one Splitter, which `_route_all`'s tap (`_tap_source`) is the
+    only thing in this pipeline that could have put there. Both checks below
+    are that evidence, not a guess about which is more robust.
+    """
+    captured: list[_Canvas] = []
+
+    def spy(
+        canvas: _Canvas, **kwargs: object
+    ) -> tuple[list[tuple[int, int]], tuple[tuple[int, int], ...]]:
+        captured.append(canvas)
+        return [], ((63, 3),)
+
+    monkeypatch.setattr(compose, "plan_power_infill", spy)
 
     left, right, flows, spec, ramped = two_solved_blocks
+    pre_routing_buildings = len(left.buildings) + len(right.buildings)
+    pre_routing_splitters = sum(
+        b.item_id == catalog.SPLITTER_ID for b in (*left.buildings, *right.buildings)
+    )
     result = compose.compose([left, right], flows, spec, gap=2, ramped=ramped, deadline=None)
 
     assert result.power_uncovered == 1
     assert any("power.coverage" in failure and "(63,3)" in failure for failure in result.failures)
+
+    assert len(captured) == 1, "plan_power_infill must be called exactly once"
+    routed_canvas = captured[0]
+    assert len(routed_canvas.buildings) > pre_routing_buildings, (
+        "the canvas plan_power_infill received must already carry the router's own "
+        "belts -- a pre-routing canvas would hold only the two blocks' own buildings"
+    )
+    routed_splitters = sum(b.item_id == catalog.SPLITTER_ID for b in routed_canvas.buildings)
+    assert routed_splitters > pre_routing_splitters, (
+        "the canvas must carry a Splitter the ROUTER created at a tap between the two "
+        "blocks -- neither block's own solved layout contains one"
+    )
 
 
 def test_compose_reports_an_unwired_cut_instead_of_handing_it_back(

@@ -162,6 +162,12 @@ class ComposeResult:
     #: always accompanied by one `failures` entry per tile.
     power_infill: int = 0
     power_uncovered: int = 0
+    #: Cuts the ROUTER (or the port-access reservation) could not wire -- the
+    #: prefix of `failures` recorded before power infill runs.  `strategy.py`'s
+    #: `unrouted_cuts` reads THIS, not `len(failures)`, so the per-tile power
+    #: infill findings above never inflate a number Task 9 compares across
+    #: gates: those tiles are already counted in `power_uncovered`.
+    unrouted_cuts: int = 0
 
 
 class _Packing(NamedTuple):
@@ -1004,18 +1010,22 @@ def _budget_refusal(packing: _Packing) -> ComposeResult:
     instead -- an unwired entry lane the composer swallowed is a block that
     starves, convicted many stages later with no way back.
     """
+    budget_failures = tuple(
+        f"{net.item}: block {net.net_id.source_strip} -> "
+        f"block {net.net_id.destination_strip}: {DetailedRouteStatus.BUDGET.name}"
+        for net in packing.nets
+        if net.net_id is not None
+    )
     return ComposeResult(
         Placement(
             buildings=tuple(packing.canvas.buildings), description="hierarchical composition"
         ),
         packing.blocks,
         0,
-        tuple(
-            f"{net.item}: block {net.net_id.source_strip} -> "
-            f"block {net.net_id.destination_strip}: {DetailedRouteStatus.BUDGET.name}"
-            for net in packing.nets
-            if net.net_id is not None
-        ),
+        budget_failures,
+        # Power infill never runs on this path -- the ladder expired before
+        # `_route_all` did -- so every one of these IS an unrouted cut.
+        unrouted_cuts=len(budget_failures),
     )
 
 
@@ -1091,26 +1101,50 @@ def compose(
         for net in nets
         if net.net_id is not None and net.net_id not in accounted
     )
+    #: Cuts the ROUTER could not wire, counted before any power-infill entry
+    #: is appended below.  `strategy.py`'s `unrouted_cuts` derives from this
+    #: rather than from `len(failures)`, so a refusal naming four dark tiles
+    #: does not inflate the number Task 9 compares across gates -- those
+    #: tiles are already counted in `power_uncovered`.
+    routing_failures = len(failures)
 
     # THE GROUND THE COMPOSITION OPENED IS NOT POWERED BY ANY BLOCK'S PLAN.
     # Each block brought towers sized for its own footprint; the Splitters the
     # router just created at taps between blocks stand on ground none of them
     # reaches.  v3 gate.md §2.3: 76 of 80 covered, 4 not, and those 4 were the
     # ONLY thing wrong with the first placement this strategy ever composed.
-    infill_sites, unpowered = plan_power_infill(canvas, cancelled=partial(_spent, deadline))
+    #
+    # `cancelled` is handed the PARENT's wall, the same one `_route_all` just
+    # ran on -- so on a budget-exhausted composition (the common case for a
+    # large cell) `plan_power_infill`'s very first `cancelled()` check raises
+    # `_PreparationDeadline` immediately.  That is caught HERE, not let
+    # propagate: this runs after the router, so `failures` already names every
+    # net the router left unaccounted, and losing that list to an uncaught
+    # exception -- which `strategy.py`'s broad `except Exception` would turn
+    # into a message-less "composition crashed: _PreparationDeadline: " --
+    # would destroy the very refusal this pass exists to improve.
     try:
-        _place_power(canvas, infill_sites)
-    except _Unpowerable as exc:
-        # A planned site taken between the plan and the stand is a reservation
-        # bug, and it is REPORTED here rather than raised: this runs after the
-        # router, so there is a composed placement worth naming a cut on.
-        infill_sites = []
-        failures.append(f"composition power infill: {exc}")
-    failures.extend(
-        f"power.coverage: composed tile ({tx},{ty}) is outside every tower's supply "
-        "radius and no free, linked, legal site can cover it"
-        for tx, ty in unpowered
-    )
+        infill_sites, unpowered = plan_power_infill(canvas, cancelled=partial(_spent, deadline))
+    except _PreparationDeadline:
+        infill_sites, unpowered = [], ()
+        failures.append(
+            "composition power infill: did not run, the composition's wall was "
+            "already spent before it could start"
+        )
+    else:
+        try:
+            _place_power(canvas, infill_sites)
+        except _Unpowerable as exc:
+            # A planned site taken between the plan and the stand is a reservation
+            # bug, and it is REPORTED here rather than raised: this runs after the
+            # router, so there is a composed placement worth naming a cut on.
+            infill_sites = []
+            failures.append(f"composition power infill: {exc}")
+        failures.extend(
+            f"power.coverage: composed tile ({tx},{ty}) is outside every tower's supply "
+            "radius and no free, linked, legal site can cover it"
+            for tx, ty in unpowered
+        )
 
     return ComposeResult(
         Placement(buildings=tuple(canvas.buildings), description="hierarchical composition"),
@@ -1124,6 +1158,7 @@ def compose(
         reservation_partial=packed.partial,
         power_infill=len(infill_sites),
         power_uncovered=len(unpowered),
+        unrouted_cuts=routing_failures,
     )
 
 
