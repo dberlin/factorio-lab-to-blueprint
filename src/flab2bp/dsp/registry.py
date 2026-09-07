@@ -217,6 +217,16 @@ _CATALOG: tuple[Entry, ...] = (
     _e("catalog.SPRAY_COATER_ID", Kind.DATA),
     _e("catalog.FRACTIONATOR_ID", Kind.DATA),
     _e("catalog.TESLA_TOWER_ID", Kind.DATA),
+    _e(
+        "catalog.POWER_TOWER_CHOICES",
+        Kind.DATA,
+        note="Lab ids for the power buildings a build may choose between.",
+    ),
+    _e(
+        "catalog.DEFAULT_POWER_TOWER",
+        Kind.DATA,
+        note="The power building a build gets when nothing chooses one.",
+    ),
     _e("catalog.STORAGE_STACK_IDS", Kind.DATA),
     _e("catalog.MATRIX_LAB_IDS", Kind.DATA),
     _e("catalog.ENERGY_EXCHANGER_ID", Kind.DATA),

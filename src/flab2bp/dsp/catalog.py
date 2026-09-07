@@ -227,6 +227,21 @@ SPLITTER_MODEL_INDICES = frozenset((38, 39, 40))
 SPRAY_COATER_ID = 2313
 FRACTIONATOR_ID = 2314
 TESLA_TOWER_ID = 2201
+
+#: The power buildings a build may choose between, keyed by the name the CLI,
+#: the web UI and ``BuildSpec`` use.  The values are FactorioLab ids, resolved
+#: through :func:`get_item_id` like every other id the spec carries.
+POWER_TOWER_CHOICES: dict[str, str] = {
+    "tesla": "tesla-tower",
+    "substation": "satellite-substation",
+    "wireless": "wireless-power-tower",
+}
+
+#: The choice a build gets when nothing says otherwise.  Keeping this the Tesla
+#: Tower is what makes the default arm byte-identical to the era before the
+#: choice existed.
+DEFAULT_POWER_TOWER: str = "tesla-tower"
+
 MATRIX_LAB_IDS = (2901, 2902)
 STORAGE_STACK_IDS = (2020, 2101, 2102, 2106)
 
@@ -1729,6 +1744,23 @@ def building(item_id: int) -> Building:
         return _load()[item_id]
     except KeyError:
         raise KeyError(f"no DSP building with item id {item_id}") from None
+
+
+def power_tower_building(factoriolab_id: str) -> Building:
+    """Resolve a power-building lab id to its catalog record.
+
+    The record carries everything a power site needs -- item id, model index,
+    footprint, cover radius, link distance and the ``power_node`` view the
+    ``PowerTooClose`` tier consumes -- so no caller needs a second record and
+    no caller needs a radius constant of its own.
+    """
+    item_id = get_item_id(factoriolab_id)
+    if item_id is None:
+        raise ValueError(f"unknown power building: {factoriolab_id!r}")
+    info = building(item_id)
+    if not info.is_power_node:
+        raise ValueError(f"{factoriolab_id!r} is not a power node")
+    return info
 
 
 def footprint(item_id: int) -> tuple[int, int]:
