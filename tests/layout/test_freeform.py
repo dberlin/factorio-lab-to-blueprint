@@ -25473,3 +25473,108 @@ def test_freeform_with_an_attached_observer_does_not_perturb_the_result(
     )
     assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])
     assert observer.events, "an attached observer must actually receive events"
+
+
+class TestThePowerBuildingIsTheSpecsChoice:
+    """The power planner stands the building the spec chose, not a constant.
+
+    Every radius, footprint and link test in ``_power_plan`` / ``_place_power``
+    was already generic over a :class:`catalog.Building`; what was fixed was
+    WHICH record they read.  These tests pin the record to ``_Canvas`` and the
+    canvas to ``BuildSpec.power_tower_item_id``, and they pin the default arm --
+    a canvas built without a choice -- to the Tesla Tower it has always used.
+    """
+
+    @staticmethod
+    def _machine(x: int, y: int) -> PlacedBuilding:
+        """A 3x3 powered building -- an assembler, as far as coverage cares."""
+        return PlacedBuilding(item_id=2303, model_index=65, x=x, y=y, width=3, height=3)
+
+    def _planned(
+        self,
+        power_building: catalog.Building | None = None,
+    ) -> tuple[_Canvas, list[tuple[int, int]]]:
+        """A field of machines, powered by whichever building was asked for."""
+        extra = {} if power_building is None else {"power_building": power_building}
+        canvas = _Canvas(limit=(0, 0, 60, 60), **extra)
+        for x in range(2, 50, 6):
+            for y in range(2, 50, 6):
+                canvas.add(self._machine(x, y), solid=True)
+        sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
+        assert sites, "a powered building must be given at least one power site"
+        return canvas, sites
+
+    @staticmethod
+    def _placed_power(canvas: _Canvas, sites: list[tuple[int, int]]) -> list[PlacedBuilding]:
+        """Stand the planned sites and hand back only what went in as power."""
+        before = len(canvas.buildings)
+        canvas.keep_out.clear()
+        freeform._place_power(canvas, sites)
+        return canvas.buildings[before:]
+
+    def test_the_default_still_places_tesla_towers(self) -> None:
+        canvas, sites = self._planned()
+        power = self._placed_power(canvas, sites)
+
+        assert power
+        assert {b.item_id for b in power} == {catalog.TESLA_TOWER_ID}
+        assert all((b.width, b.height) == (1, 1) for b in power)
+
+    def test_power_sites_use_the_chosen_power_building(self) -> None:
+        substation = catalog.power_tower_building("satellite-substation")
+        canvas, sites = self._planned(substation)
+        power = self._placed_power(canvas, sites)
+
+        assert power
+        assert {b.item_id for b in power} == {2212}
+        assert all((b.width, b.height) == (5, 5) for b in power)
+
+    def test_a_wireless_build_places_wireless_towers(self) -> None:
+        wireless = catalog.power_tower_building("wireless-power-tower")
+        canvas, sites = self._planned(wireless)
+        power = self._placed_power(canvas, sites)
+
+        assert power
+        assert {b.item_id for b in power} == {2202}
+
+    def test_a_substation_build_needs_far_fewer_power_sites(self) -> None:
+        """A 26.5-tile cover radius must buy fewer sites than a 10.5-tile one."""
+        _tesla_canvas, tesla_sites = self._planned()
+        _sub_canvas, sub_sites = self._planned(catalog.power_tower_building("satellite-substation"))
+
+        assert len(sub_sites) < len(tesla_sites), (len(tesla_sites), len(sub_sites))
+
+    def test_the_chosen_building_reaches_the_junction_ban_and_the_discs(self) -> None:
+        """The two helpers that take the record explicitly get the chosen one."""
+        substation = catalog.power_tower_building("satellite-substation")
+        tesla = catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
+
+        tesla_discs = freeform._power_coverage_discs((), ((0, 0),), tower=tesla)
+        sub_discs = freeform._power_coverage_discs((), ((0, 0),), tower=substation)
+        assert freeform._power_coverage_discs((), ((0, 0),)) == tesla_discs
+        assert sub_discs[0][2] > tesla_discs[0][2]
+
+        tesla_ban = freeform._prepared_junction_ban((), ((0, 0),), tower=tesla)
+        sub_ban = freeform._prepared_junction_ban((), ((0, 0),), tower=substation)
+        assert freeform._prepared_junction_ban((), ((0, 0),)) == tesla_ban
+        #: Not a superset: the two colliders differ in height as well as in
+        #: footprint, so each denies cells the other does not.  What matters is
+        #: that the reservation is computed from the record it was handed.
+        assert sub_ban and sub_ban != tesla_ban
+
+    def test_prepare_routing_problem_carries_the_specs_power_building(self) -> None:
+        """The spec's lab id is resolved once and reaches every workspace canvas."""
+        spec = two_stage_spec()
+        strips = plan_strips(spec)
+        pack = _greedy_pack(strips, _height_seed(strips))
+
+        base = _prepare_routing_problem(spec, strips, pack, power=True, policy=BandPolicy("160"))
+        assert base.power_building.item_id == catalog.TESLA_TOWER_ID
+        assert base.new_workspace().canvas.power_building.item_id == catalog.TESLA_TOWER_ID
+
+        chosen = spec.model_copy(update={"power_tower_item_id": "satellite-substation"})
+        prepared = _prepare_routing_problem(
+            chosen, strips, pack, power=True, policy=BandPolicy("160")
+        )
+        assert prepared.power_building.item_id == 2212
+        assert prepared.new_workspace().canvas.power_building.item_id == 2212

@@ -5553,9 +5553,17 @@ def _splitter_stack_geometry(
 def _power_coverage_discs(
     buildings: Sequence[PlacedBuilding],
     tesla_sites: Sequence[tuple[int, int]],
+    *,
+    tower: catalog.Building | None = None,
 ) -> tuple[tuple[int, int, int], ...]:
-    """Exact doubled-coordinate power discs available during detailed routing."""
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    """Exact doubled-coordinate power discs available during detailed routing.
+
+    ``tower`` is the build's chosen power building -- ``canvas.power_building``
+    at every caller inside a layout run.  It defaults to the Tesla Tower so a
+    caller that has no canvas reads exactly the radius it always read.
+    """
+    if tower is None:
+        tower = catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
     discs = [
         (
             2 * x + tower.width,
@@ -5729,21 +5737,28 @@ def _prepared_junction_ban(
     junction_bounds: tuple[int, int, int, int] | None = None,
     cancelled: Callable[[], bool] | None = None,
     cache: _StagedStaticCache | None = None,
+    tower: catalog.Building | None = None,
 ) -> frozenset[Cell]:
-    """Precompute exact flat and projected Splitter refusals."""
+    """Precompute exact flat and projected Splitter refusals.
+
+    ``tower`` is the build's chosen power building, so the reserved sites are
+    given the footprint that will actually stand on them.  It defaults to the
+    Tesla Tower for callers outside a layout run.
+    """
+    if tower is None:
+        tower = catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
     obstacles: list[PlacedBuilding] = []
     for building in buildings:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         if not catalog.is_belt(building.item_id) and not catalog.is_sorter(building.item_id):
             obstacles.append(building)
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
     for x, y in power_sites:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         obstacles.append(
             PlacedBuilding(
-                item_id=catalog.TESLA_TOWER_ID,
+                item_id=tower.item_id,
                 model_index=tower.model_index,
                 x=x,
                 y=y,
@@ -5880,6 +5895,19 @@ class _Canvas:
     #: The stack each item's lanes are planned at, so an emitter can ask for a
     #: sorter that keeps the promise the plan made (design 5.3).
     lane_stacks: _LaneStacks = _NO_LANE_STACKS
+    #: The power building this build stands on every planned power site.
+    #:
+    #: One record, resolved once from ``BuildSpec.power_tower_item_id`` in
+    #: :func:`_prepare_routing_problem`, carries everything the power passes
+    #: ask: item id, model index, footprint, ``cover_radius`` and
+    #: ``connect_distance``.  The planner's arithmetic was already generic over
+    #: those; only WHICH record it read was fixed.  The default is the Tesla
+    #: Tower, so a canvas built without a spec -- every synthetic test canvas,
+    #: and the hierarchy composer's -- behaves exactly as it did before the
+    #: choice existed.
+    power_building: catalog.Building = field(
+        default_factory=lambda: catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
+    )
 
     buildings: list[PlacedBuilding] = field(default_factory=list)
     #: ``(x, y, level)`` -> building index, for cells that block routing.
@@ -6123,6 +6151,7 @@ class _Canvas:
             sorter_tiers=self.sorter_tiers,
             sorter_stacks=self.sorter_stacks,
             lane_stacks=self.lane_stacks,
+            power_building=self.power_building,
             buildings=list(self.buildings),
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
@@ -8949,6 +8978,12 @@ class _PreparedRoutingProblem:
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
     sorter_stacks: _SorterStacks = _NO_SORTER_STACKS
     lane_stacks: _LaneStacks = _NO_LANE_STACKS
+    #: The power building the spec chose, carried so every workspace canvas --
+    #: and so :func:`_place_power`, which runs on one -- stands the same
+    #: building the plan reserved ground for.
+    power_building: catalog.Building = field(
+        default_factory=lambda: catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER)
+    )
 
     def new_workspace(self) -> _RoutingWorkspace:
         buildings = list(self.building_templates)
@@ -8957,6 +8992,7 @@ class _PreparedRoutingProblem:
             sorter_tiers=self.sorter_tiers,
             sorter_stacks=self.sorter_stacks,
             lane_stacks=self.lane_stacks,
+            power_building=self.power_building,
             buildings=buildings,
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
@@ -9466,7 +9502,11 @@ def _route_all(
     power_discs = (
         None
         if planned_power_sites is None
-        else _power_coverage_discs(canvas.buildings, planned_power_sites)
+        else _power_coverage_discs(
+            canvas.buildings,
+            planned_power_sites,
+            tower=canvas.power_building,
+        )
     )
     history: dict[tuple[int, int, int], float] = defaultdict(float)
     #: The live routing -- net index to path -- and the same cells the other way
@@ -15470,7 +15510,7 @@ def _power_plan(
         staged_static_cache = _StagedStaticCache()
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    tower = canvas.power_building
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
     link2 = math.floor((2 * tower.connect_distance) ** 2)
     demand_x0, demand_y0, demand_x1, demand_y1 = demand
@@ -15553,7 +15593,10 @@ def _power_plan(
     for b in canvas.buildings:
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
+        # The chosen tower's id, NOT "any power node": a recipe set may legitimately
+        # build other power buildings, and treating one of those as a site this
+        # planner already placed would leave its tiles uncovered.
+        if catalog.is_belt(b.item_id) or b.item_id == tower.item_id:
             continue
         for tx, ty, _ in b.tiles():
             gx, gy = tx - min_x + pad, ty - min_y + pad
@@ -15834,7 +15877,7 @@ def _power_plan(
         candidate = (
             len(canvas.buildings) + len(sites),
             PlacedBuilding(
-                item_id=catalog.TESLA_TOWER_ID,
+                item_id=tower.item_id,
                 model_index=tower.model_index,
                 x=site[0],
                 y=site[1],
@@ -16048,14 +16091,14 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     """
     if not canvas.buildings:
         return 0
-    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    tower = canvas.power_building
     placed = 0
     for cx, cy in sites:
         if not canvas.free((cx, cy, 0)) or (cx, cy) in canvas.solid:
             raise _Unpowerable(f"planned tower site {(cx, cy)} was taken during routing")
         canvas.add(
             PlacedBuilding(
-                item_id=catalog.TESLA_TOWER_ID,
+                item_id=tower.item_id,
                 model_index=tower.model_index,
                 x=cx,
                 y=cy,
@@ -16566,11 +16609,13 @@ def _prepare_routing_problem(
     """Build immutable exact geometry shared by both routing engines."""
     belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
     belt_model = catalog.building(belt_id).model_index
+    power_building = catalog.power_tower_building(spec.power_tower_item_id)
     canvas = _Canvas(
         ramped=ramped,
         sorter_tiers=_sorter_tiers_for(spec),
         sorter_stacks=_sorter_stacks_for(spec),
         lane_stacks=_lane_stacks_for(spec),
+        power_building=power_building,
     )
     if staged_static_cache is None:
         staged_static_cache = _StagedStaticCache()
@@ -17551,6 +17596,7 @@ def _prepare_routing_problem(
             power_sites,
             cancelled=cancelled,
             cache=staged_static_cache,
+            tower=canvas.power_building,
         )
         if junction_possible or power_sites
         else frozenset()
@@ -17609,6 +17655,7 @@ def _prepare_routing_problem(
         sorter_tiers=canvas.sorter_tiers,
         sorter_stacks=canvas.sorter_stacks,
         lane_stacks=canvas.lane_stacks,
+        power_building=canvas.power_building,
         world_taken=frozenset(canvas.world_taken),
         belt_ban=tuple(
             sorted((cell, frozenset(levels)) for cell, levels in canvas.belt_ban.items())
