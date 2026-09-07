@@ -362,7 +362,20 @@ _RELATION_STRIP_PAIR = 2
 #: routing failed exact validation.  0.02 deterministic units reaches the same
 #: routable incumbent well inside its 0.6s wall allowance; 0.005 stopped before
 #: that incumbent existed.  The wall limit remains armed as the hard deadline.
-_DETERMINISTIC_PACK_WORK = 0.02
+#:
+#: IT SCALES WITH THE PACK, and the fixed constant was a defect.  0.02 was
+#: calibrated on fifteen strips and was handed unchanged to a 53-strip
+#: `universe-matrix` pack, which returned UNKNOWN on all five solves and
+#: produced no incumbent at all -- giving up in 2.58s with 299s of a 300s
+#: budget unspent.  See docs/superpowers/specs/2026-09-07-lane-fanout-design.md
+#: section 4.1.
+_DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE = 0.02
+
+
+def _deterministic_pack_work(strip_count: int) -> float:
+    """Deterministic CP-SAT units a pack of ``strip_count`` strips may spend."""
+    scale = max(1, strip_count) / _DETERMINISTIC_PACK_STRIPS
+    return _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE * scale
 
 #: Deterministic work allowed only for choosing among already rank-optimal port
 #: access assignments. The ranked solution remains the safe fallback; this
@@ -4402,7 +4415,7 @@ C_WINDOW_SECONDS = 1.0
 #: but no such guarantee, and is expected to close a small model, so it gets
 #: twenty-five times that allowance.  On an idle box this is the limit that
 #: fires; under `--jobs 16` the wall limit above fires first.
-C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK
+C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE
 #: One CP-SAT worker per window.  `pyproject.toml` records that a single solve
 #: already runs at ~700% CPU; a window must not race the packer for cores.
 C_WINDOW_WORKERS = 1
@@ -5334,7 +5347,7 @@ def _pack(
         # above remains the hard deadline if the machine cannot finish it.
         solver.parameters.max_deterministic_time = min(
             time_budget_s,
-            _DETERMINISTIC_PACK_WORK,
+            _deterministic_pack_work(len(strips)),
         )
     # A FUNCTION of `arrangement`, never a clock or a counter: two runs of the
     # same sweep must ask for the same arrangements in the same order, or the
@@ -20709,8 +20722,8 @@ class FreeformLayout:
             if solves and unknown == solves:
                 unspent = max(0.0, budgets[-1] - (time.monotonic() - started))
                 work = (
-                    f", inside the {_DETERMINISTIC_PACK_WORK:g}-unit deterministic work "
-                    f"bound a pack of {len(strips)} strips is given"
+                    f", inside the {_deterministic_pack_work(len(strips)):g}-unit "
+                    f"deterministic work bound a pack of {len(strips)} strips is given"
                     if len(strips) >= _DETERMINISTIC_PACK_STRIPS
                     else ""
                 )

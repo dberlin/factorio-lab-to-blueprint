@@ -39,6 +39,7 @@ from flab2bp.layout.base import (
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.freeform import (
     _BLAME_MAX_WALL,
+    _DETERMINISTIC_PACK_STRIPS,
     _ENTRY_RING,
     _LEVEL_TOLL,
     _ROUTE_RING,
@@ -60,6 +61,7 @@ from flab2bp.layout.freeform import (
     _commit_paths,
     _connect_short_cuts,
     _dests,
+    _deterministic_pack_work,
     _direct_column_deltas,
     _direct_net_candidates,
     _direct_origin_deltas,
@@ -3149,6 +3151,31 @@ def test_greedy_seed_adds_only_requested_routing_clearance() -> None:
     assert freeform._routing_seed_clearance(large, sprayed_lanes=0) == 1
     assert freeform._routing_seed_clearance(large[:-1], sprayed_lanes=0) == 0
     assert freeform._routing_seed_clearance(large, sprayed_lanes=1) == 0
+
+
+class TestThePackWorkBoundScalesWithThePack:
+    """A 53-strip pack cannot have the same work bound as a 15-strip one.
+
+    Measured on `universe-matrix` (spec 2026-09-07-lane-fanout-design.md
+    section 4.1): at the fixed 0.02 units the 53-strip pack returned UNKNOWN
+    five solves out of five and produced no incumbent at all, giving up in
+    2.58s with 299s of a 300s budget unspent.
+    """
+
+    def test_the_calibrated_size_keeps_its_calibrated_bound(self) -> None:
+        assert _deterministic_pack_work(_DETERMINISTIC_PACK_STRIPS) == 0.02
+
+    def test_a_smaller_pack_is_not_given_more_work(self) -> None:
+        assert _deterministic_pack_work(4) <= 0.02
+
+    def test_a_much_larger_pack_is_given_proportionally_more(self) -> None:
+        small = _deterministic_pack_work(_DETERMINISTIC_PACK_STRIPS)
+        large = _deterministic_pack_work(53)
+        assert large > small, "a 53-strip pack must get more work than a 15-strip one"
+        assert large / small >= 53 / _DETERMINISTIC_PACK_STRIPS, (
+            "the bound must grow at least linearly in the strip count: a pack's "
+            "CP-SAT model grows at least that fast"
+        )
 
 
 # --- fallback --------------------------------------------------------------
@@ -8603,7 +8630,7 @@ def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
         fixed_at={},
         seed=None,
         time_budget_s=5.0,
-        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE,
     )
     assert outcome is not None
     windowed = outcome.pack
@@ -8624,7 +8651,7 @@ def test_pack_window_reports_its_exact_cp_sat_outcome() -> None:
         fixed_at={},
         seed=None,
         time_budget_s=5.0,
-        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE,
     )
     assert outcome is not None
     assert outcome.status == "OPTIMAL"
