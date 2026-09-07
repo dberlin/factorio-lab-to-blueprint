@@ -7,6 +7,7 @@ import pytest
 
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset
+from flab2bp.lab.url import LabRequest
 from flab2bp.rates.adjust import ProliferatorTier, adjust
 from flab2bp.rates.machine_choice import (
     MachineRank,
@@ -14,6 +15,7 @@ from flab2bp.rates.machine_choice import (
     choose_machine,
     machine_speed,
     machines_needed,
+    rechoose_columns,
 )
 from flab2bp.spec import ProliferatorMode
 
@@ -204,3 +206,62 @@ def _is_placeable_for_test(machine_id: str) -> bool:
         return catalog.get_item_id(machine_id) is not None
     except KeyError, ValueError:
         return False
+
+
+def _request_all_techs() -> LabRequest:
+    return LabRequest(mod_id="dsp", objectives=(), researched_technology_ids=None)
+
+
+def test_exact_preserves_every_column_object(data) -> None:
+    columns = [adjust(data, data.recipe("iron-ingot"), "negentropy-smelter")]
+    out, moves = rechoose_columns(
+        data,
+        _request_all_techs(),
+        columns,
+        [Fraction(1, 2)],
+        machine_rank=MachineRank.EXACT,
+        tier=ProliferatorTier.NONE,
+    )
+
+    assert all(a is b for a, b in zip(out, columns, strict=True))
+    assert moves == ()
+
+
+def test_up_to_rebuilds_only_a_column_whose_machine_moves(data) -> None:
+    original = adjust(data, data.recipe("iron-ingot"), "negentropy-smelter")
+    out, moves = rechoose_columns(
+        data,
+        _request_all_techs(),
+        [original],
+        [Fraction(1, 2)],
+        machine_rank=MachineRank.UP_TO,
+        tier=ProliferatorTier.NONE,
+    )
+
+    assert out[0].machine_item_id == "arc-smelter"
+    assert out[0].inputs_per_craft == original.inputs_per_craft
+    assert out[0].outputs_per_craft == original.outputs_per_craft
+    assert [
+        (move.recipe_id, move.from_machine, move.to_machine, move.count_before, move.count_after)
+        for move in moves
+    ] == [("iron-ingot", "negentropy-smelter", "arc-smelter", 1, 1)]
+
+
+@pytest.mark.parametrize(
+    ("craft_rate", "pinned"),
+    ((Fraction(0), frozenset()), (Fraction(1, 2), frozenset({"iron-ingot"}))),
+)
+def test_zero_rate_and_flow_pinned_columns_are_not_rechosen(data, craft_rate, pinned) -> None:
+    original = adjust(data, data.recipe("iron-ingot"), "negentropy-smelter")
+    out, moves = rechoose_columns(
+        data,
+        _request_all_techs(),
+        [original],
+        [craft_rate],
+        machine_rank=MachineRank.UP_TO,
+        tier=ProliferatorTier.NONE,
+        pinned=pinned,
+    )
+
+    assert out[0] is original
+    assert moves == ()
