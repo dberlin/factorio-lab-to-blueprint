@@ -36,6 +36,7 @@ import hashlib
 import pickle
 import sys
 import time
+from collections import Counter, deque
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -43,7 +44,7 @@ from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from flab2bp.bench.corpus import URL_CORPUS  # noqa: E402
+from flab2bp.bench.corpus import entry as corpus_entry  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import freeform, last_mile  # noqa: E402
@@ -98,7 +99,7 @@ def capture(
     out: Path,
     policy: CandidatePolicy = CandidatePolicy.NO_PROLIFERATOR,
 ) -> None:
-    entry = next(e for e in URL_CORPUS if e.url_id == url_id)
+    entry = corpus_entry(url_id)
     spec = build_candidates(
         load_vendored(),
         parse_url(entry.url),
@@ -199,7 +200,7 @@ def capture_clusters(
     state Phase B cares about only exists at the moment `_route_all` would give
     up, and that is the one call that sees it.
     """
-    entry = next(e for e in URL_CORPUS if e.url_id == url_id)
+    entry = corpus_entry(url_id)
     spec = build_candidates(
         load_vendored(),
         parse_url(entry.url),
@@ -207,7 +208,7 @@ def capture_clusters(
     ).candidates[0]
 
     cases: list[dict[str, Any]] = []
-    pending: list[dict[str, Any]] = []
+    pending: deque[dict[str, Any]] = deque()
 
     def sink(shot: last_mile.ClusterCapture) -> None:
         if len(cases) + len(pending) >= cap:
@@ -247,7 +248,7 @@ def capture_clusters(
         result = orig_solve(problem, environment)
         # `CAPTURE` fires before the solve, so the pending shot is this one's.
         while pending:
-            shot = pending.pop(0)
+            shot = pending.popleft()
             shot["result"] = result
             cases.append(shot)
         return result
@@ -265,15 +266,15 @@ def capture_clusters(
         last_mile.CAPTURE = None
         last_mile.solve_cluster = orig_solve
     out.write_bytes(pickle.dumps(cases, protocol=5))
-    outcomes = [case["result"].outcome.value for case in cases]
-    bounds_hit = [case["result"].bound.value for case in cases]
+    outcomes = Counter(case["result"].outcome.value for case in cases)
+    bounds_hit = Counter(case["result"].bound.value for case in cases)
     print(
         f"captured {len(cases)} cluster searches -> {out} "
         f"({out.stat().st_size / 1e6:.1f} MB); "
-        + ", ".join(f"{value}={outcomes.count(value)}" for value in sorted(set(outcomes)))
+        + ", ".join(f"{value}={outcomes[value]}" for value in sorted(outcomes))
         + "; bounds "
         + ", ".join(
-            f"{value or 'none'}={bounds_hit.count(value)}" for value in sorted(set(bounds_hit))
+            f"{value or 'none'}={bounds_hit[value]}" for value in sorted(bounds_hit)
         )
     )
 
