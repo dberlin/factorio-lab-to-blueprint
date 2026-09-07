@@ -1583,6 +1583,11 @@ git commit -m "docs: profile and corpus guard for the buildings index"
 
 ## Follow-ups (not this branch)
 
+- **`selfloop` merged at `a1401518` while this branch was in flight**, adding
+  building scans of its own that are NOT on this branch's merge base
+  (`2e861af0`) and therefore cannot be converted here: the `markers.py` sites
+  below, and freeform's `_coater_candidate_rides_a_merge`. Convert both in the
+  follow-up pass, after this branch rebases.
 - **`selfloop`'s marker sites.** The example the user was actually looking at —
   three list comprehensions over `enumerate(buildings)` inside a per-seed loop
   in `src/flab2bp/layout/markers.py`, filtering on `recipe_id`,
