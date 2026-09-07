@@ -1801,7 +1801,9 @@ def test_coater_supply_area_with_two_belts_of_two_runs_is_convicted() -> None:
     assert findings
     assert "addon area 1" in findings[0].message
     assert "distinct belt runs" in findings[0].message
-    assert len(findings[0].detail["runs"]) >= 2
+    runs = findings[0].detail["runs"]
+    assert isinstance(runs, list)
+    assert len(runs) >= 2
 
 
 def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None:
@@ -1819,6 +1821,94 @@ def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None
     report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
     findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
     assert not findings, [f.message for f in findings]
+
+
+def _fed_coater_node(*, severed: bool) -> Placement:
+    """A Spray Coater node whose proliferator port is fed, or is a stub.
+
+    The geometry is the placed node's, measured on a real ``proliferated_spec``
+    build: the coater rides a host belt, its supply belt sits on
+    ``slots.addon_supply_cell(..., area=1)`` one tile west and one level up, and
+    an approach belt one tile further out feeds it.  ``freeform``'s
+    ``_proliferator_supply_tree`` then joins the approach to the proliferator
+    entry, which is the belt at ``(-3, 0, 1)`` here.
+
+    ``severed`` cuts exactly that join -- the entry belt's ``output_obj`` goes
+    to ``None`` -- which is what a build whose supply tree never routed looks
+    like.  Nothing else moves: both port belts still CARRY ``proliferator-3``,
+    which is why ``prolif.coaters_are_supplied`` and ``game.addon_supply`` still
+    pass on it.
+    """
+    return place(
+        belt(0, 0, carries="ore"),
+        belt(-3, 0, 1, out=None if severed else 2, carries="proliferator-3"),
+        belt(-2, 0, 1, out=3, carries="proliferator-3"),
+        belt(-1, 0, 1, carries="proliferator-3"),
+        _coater(0, 0),
+    )
+
+
+def _coater_node_context(placement: Placement) -> Context:
+    return _context(placement, COATER_SPEC, IdMap(), 256, DEFAULT_MAX_BELT_Z, True)
+
+
+def test_coater_supply_is_fed_clean_when_the_supply_tree_reaches_the_node() -> None:
+    """The fed node passes -- and the check actually looked at a coater.
+
+    The second assertion is the vacuity guard.  ``prolif.coater_supply_is_fed``
+    iterates the coaters that exist, so "no findings" alone is equally
+    consistent with "there was no coater here to judge"; asserting
+    ``_coater_rides`` is non-empty on the SAME context separates "everything it
+    looked at was fine" from "it looked at nothing".
+    """
+    placement = _fed_coater_node(severed=False)
+    report = validate(
+        placement,
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"prolif.coater_supply_is_fed"},
+        expect_power=False,
+    )
+    assert not report.errors, [f.message for f in report.errors]
+    assert validate_module._coater_rides(_coater_node_context(placement))
+
+
+def test_coater_supply_is_fed_convicts_a_node_whose_port_is_a_stub() -> None:
+    """Severing the supply tree's last link must convict exactly that coater."""
+    placement = _fed_coater_node(severed=True)
+    report = validate(
+        placement,
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"prolif.coater_supply_is_fed"},
+        expect_power=False,
+    )
+    findings = [
+        f
+        for f in report.errors
+        if f.check == "prolif.coater_supply_is_fed" and f.severity is Severity.ERROR
+    ]
+    assert len(findings) == 1, [f.message for f in report.errors]
+    assert findings[0].detail["coater"] == 4
+    assert findings[0].detail["supply_belt"] == 3
+    assert "4" in findings[0].message
+
+
+def test_coater_supply_stub_still_passes_the_checks_that_cannot_see_it() -> None:
+    """The gap this check closes, stated as a test.
+
+    A severed node's two port belts still CARRY proliferator and still sit where
+    the addon rules want them, so the label-reading checks are clean on a coater
+    that will never spray anything.
+    """
+    report = validate(
+        _fed_coater_node(severed=True),
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"prolif.coaters_are_supplied", "game.addon_supply", "game.addon_facing"},
+        expect_power=False,
+    )
+    assert not report.errors, [f.message for f in report.errors]
 
 
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:

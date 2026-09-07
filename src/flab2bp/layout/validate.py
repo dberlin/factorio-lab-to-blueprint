@@ -5090,6 +5090,108 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
             )
 
 
+def _coater_port_belts(ctx: Context) -> frozenset[int]:
+    """The belts a Spray Coater node made for its OWN proliferator port.
+
+    Two per coater: the supply belt the game attaches, on
+    ``slots.addon_supply_cell(..., area=1)``, and whatever belt feeds it -- the
+    approach belt, one tile further out.  ``_belt_in_addon_area`` picks the
+    supply belt by exactly the rule ``game.addon_supply`` and
+    ``prolif.coaters_are_supplied`` pick it by, so all three name the same tile.
+
+    These are collected because they are the belts whose ``carries_item`` label
+    must NOT be taken as evidence that the player fills them; see
+    :func:`_coater_supply_is_fed`.
+    """
+    port: set[int] = set()
+    for _ride, coater_index in _coater_rides(ctx).items():
+        supply = _belt_in_addon_area(ctx, ctx.placement.buildings[coater_index], area=1)
+        if supply is None:
+            continue
+        port.add(supply)
+        port.update(i for i, b in ctx.of_kind(Kind.BELT) if b.output_obj == supply and i != supply)
+    return frozenset(port)
+
+
+@check("prolif.coater_supply_is_fed", needs_spec=True)
+def _coater_supply_is_fed(ctx: Context) -> Iterable[Finding]:
+    """The belt in a coater's addon area 1 must be fed by something.
+
+    ``prolif.coaters_are_supplied`` asks whether a belt CARRYING proliferator
+    sits in area 1.  It cannot ask whether anything ever puts proliferator on
+    that belt, because ``carries_item`` is a label the emitter writes, not a
+    flow.  A Spray Coater node's proliferator port is two belts of the node's
+    own making -- the supply belt on ``slots.addon_supply_cell(..., area=1)``
+    and the approach belt one tile further out -- and the run they form is
+    joined to the external proliferator entry by
+    ``freeform._proliferator_supply_tree``.  If that join is missing, the node
+    is a coater with a two-belt stub beside it: it pastes, the machines run,
+    the recipe runs unproliferated, and every other check passes.
+
+    Sourcedness is asked the same way ``flow.lane_sourced`` asks it, over the
+    same run graph and the same junction closure, so the two cannot disagree
+    about what "fed" means.
+
+    ONE NARROWING, and without it this check has no content.  ``flow.lane_sourced``
+    exempts any run carrying an external input, on the ground that the player
+    fills it from outside.  Proliferator IS an external input, and both port
+    belts are labelled with it, so a severed stub inherits that exemption and
+    reads as fed -- MEASURED on a ``proliferated_spec`` build: severing the
+    entry's link to the approach belt left the port on its own two-tile run,
+    still ``_external_item``-exempt, and the whole placement still validated
+    with zero errors.  So the exemption is asked of the run's tiles OTHER than
+    the node's own port belts.  On the same build unsevered, the port shares a
+    seven-tile run with the entry belt at ``(0, 9, 0)``, which carries
+    ``proliferator-3`` and is not a port belt, so the exemption is earned and
+    the coater is clean.  Nothing else about sourcedness changes: internal
+    seeds, run-to-run feeding and the junction closure are ``flow.lane_sourced``'s
+    verbatim.
+
+    The narrowing is exactly the difference between "labelled proliferator" and
+    "reachable from a proliferator source", which is the difference this check
+    exists to state.  A run that is only two belts a coater put beside itself is
+    not somewhere the player can belt into: it is one tile from the coater body,
+    inside the block, and the tool -- not the player -- chose the cell.
+    """
+    assert ctx.spec is not None
+    bs = ctx.placement.buildings
+    rides = _coater_rides(ctx)
+    if not rides:
+        return
+
+    external = set(ctx.spec.external_inputs)
+    port_belts = _coater_port_belts(ctx)
+    _drains, seeds = _internal_seeds(ctx)
+    for r, run in enumerate(ctx.runs):
+        rest = tuple(i for i in run.indices if i not in port_belts)
+        if not rest:
+            continue
+        outside_the_port = BeltRun(indices=rest, tier_item_id=run.tier_item_id)
+        if _external_item(ctx, outside_the_port, external) is not None:
+            seeds.add(r)
+    sourced = _close_over_junctions(ctx, seeds)
+
+    for _ride, coater_index in sorted(rides.items()):
+        supply = _belt_in_addon_area(ctx, bs[coater_index], area=1)
+        if supply is None:
+            continue  # no belt there at all: game.addon_supply's finding, not this one
+        run_index = ctx.run_of.get(supply)
+        if run_index is not None and run_index in sourced:
+            continue
+        b = bs[supply]
+        yield Finding(
+            "prolif.coater_supply_is_fed",
+            Severity.ERROR,
+            f"coater {coater_index}'s proliferator supply belt {supply} at "
+            f"({b.x},{b.y},{b.z}) is on belt run {run_index}, which is reachable "
+            "from no source: nothing inside the blueprint puts proliferator onto "
+            "it and no run outside the node's own two port belts brings it in, so "
+            "the coater sprays nothing and its lane runs unproliferated",
+            (coater_index, supply),
+            {"coater": coater_index, "supply_belt": supply, "run": run_index},
+        )
+
+
 def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
     """Belt tiles ``item`` can reach WITHOUT having passed a Spray Coater.
 

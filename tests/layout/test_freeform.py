@@ -10762,6 +10762,59 @@ class TestProliferatorIsActuallySupplied:
                 f"one of the sprayed lanes {sorted(spec.spray_lanes)}"
             )
 
+    def test_a_severed_supply_tree_is_convicted_on_a_real_build(self) -> None:
+        """``prolif.coater_supply_is_fed``, mutation-tested on a real placement.
+
+        The clean build is asserted clean first, then ONE link is cut: the belt
+        feeding the coater's approach belt loses its ``output_obj``.  That is
+        precisely a ``_proliferator_supply_tree`` that never reached the node.
+        Both port belts still carry ``proliferator-3`` and still sit where the
+        addon rules want them, so every label-reading check stays clean -- which
+        is why this check had to exist.
+        """
+        spec = proliferated_spec()
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
+        assert not _full_report(p, spec).by_check("prolif.coater_supply_is_fed")
+
+        ctx = validate._context(p, spec, _id_map_for(spec), 256, catalog.DEFAULT_MAX_BELT_Z, True)
+        rides = validate._coater_rides(ctx)
+        assert rides, "fixture must produce at least one coater"
+        coater_index = sorted(rides.values())[0]
+        supply = validate._belt_in_addon_area(ctx, p.buildings[coater_index], area=1)
+        assert supply is not None
+        approach = next(
+            i
+            for i, b in enumerate(p.buildings)
+            if ctx.kinds[i] is validate.Kind.BELT and b.output_obj == supply
+        )
+        feeder = next(
+            i
+            for i, b in enumerate(p.buildings)
+            if ctx.kinds[i] is validate.Kind.BELT and b.output_obj == approach
+        )
+
+        buildings = list(p.buildings)
+        buildings[feeder] = replace(buildings[feeder], output_obj=None)
+        severed = replace(p, buildings=tuple(buildings))
+
+        findings = _full_report(severed, spec).by_check("prolif.coater_supply_is_fed")
+        assert len(findings) == 1, [f.message for f in findings]
+        assert findings[0].severity is validate.Severity.ERROR
+        assert findings[0].detail["coater"] == coater_index
+        assert findings[0].detail["supply_belt"] == supply
+
+        # The gap: the checks that read labels rather than flow stay clean on it.
+        blind = validate.validate(
+            severed,
+            spec,
+            ids=_id_map_for(spec),
+            only={"prolif.coaters_are_supplied", "game.addon_supply", "game.addon_facing"},
+            expect_power=True,
+        )
+        assert not blind.errors, [f.message for f in blind.errors]
+
     def test_no_proliferator_spec_places_no_supply_lane(self) -> None:
         """The machinery must cost nothing when proliferation is off."""
         spec = two_stage_spec()
