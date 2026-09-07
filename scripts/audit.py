@@ -110,6 +110,7 @@ from flab2bp.rates import (  # noqa: E402
     CandidatePolicy,
     build_candidates,
 )
+from flab2bp.rates.machine_choice import MachineRank  # noqa: E402
 from flab2bp.spec import BuildSpec  # noqa: E402
 
 _TIER_ORDER = (Tier.TRIVIAL, Tier.SMALL, Tier.MID, Tier.LARGE, Tier.STRESS)
@@ -176,6 +177,7 @@ class Job:
     candidate_policies: tuple[CandidatePolicy, ...]
     budget: float
     workers: int
+    machine_rank: str = MachineRank.EXACT.value
     #: Constant historical-schema metadata. Current audit cells are always powered.
     power: bool = field(init=False, default=True)
     #: Arrangements per height for freeform, or ``None`` for its own default.
@@ -286,7 +288,7 @@ def _scalar_stats(mapping: Mapping[str, object]) -> dict[str, float | str]:
 # rate solver six times per URL; a worker handles several cells of the same URL,
 # so caching here pays for itself and cannot skew the layout timings.
 _SPECS: dict[
-    tuple[str, tuple[CandidatePolicy, ...]],
+    tuple[str, tuple[CandidatePolicy, ...], MachineRank],
     tuple[BuildSpec, ...],
 ] = {}
 
@@ -294,13 +296,15 @@ _SPECS: dict[
 def _specs_for(
     url: str,
     candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
+    machine_rank: MachineRank = MachineRank.EXACT,
 ) -> tuple[BuildSpec, ...]:
-    key = (url, candidate_policies)
+    key = (url, candidate_policies, machine_rank)
     if key not in _SPECS:
         _SPECS[key] = build_candidates(
             load_vendored(),
             parse_url(url),
             candidate_policies=candidate_policies,
+            machine_rank=machine_rank,
         ).candidates
     return _SPECS[key]
 
@@ -325,7 +329,11 @@ def run_cell(job: Job) -> Result:
     """Lay one cell out and judge it. Runs in a worker process."""
     t0 = time.monotonic()
     try:
-        specs = _specs_for(job.url, job.candidate_policies)
+        specs = _specs_for(
+            job.url,
+            job.candidate_policies,
+            MachineRank(job.machine_rank),
+        )
     except Exception as exc:  # noqa: BLE001
         return Result(job, "SPEC", "?", f"{type(exc).__name__}: {exc}", (), time.monotonic() - t0)
     if job.spec_index >= len(specs):
@@ -605,6 +613,7 @@ def build_jobs(
     only: set[str] | None = None,
     skip: set[str] | None = None,
     arrangements: int | None = None,
+    machine_rank: str = MachineRank.EXACT.value,
 ) -> list[Job]:
     """Every cell, hardest tier first so the pool does not end on a long tail."""
     entries = [e for e in URL_CORPUS if e.tier in tiers]
@@ -628,6 +637,7 @@ def build_jobs(
                             candidate_policies=candidate_policies,
                             budget=budget,
                             workers=workers,
+                            machine_rank=machine_rank,
                             arrangements=arrangements,
                         )
                     )
@@ -688,6 +698,7 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
         "spec_label": r.spec_label,
         "power": r.job.power,
         "budget": r.job.budget,
+        "machine_rank": r.job.machine_rank,
         "status": r.status,
         "area": r.area,
         "seconds": r.seconds,
@@ -750,6 +761,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="comma-separated solver budgets in seconds; sweeping is the point",
     )
     add_candidate_policy_argument(ap)
+    ap.add_argument(
+        "--machine-rank",
+        choices=[rank.value for rank in MachineRank],
+        default=MachineRank.EXACT.value,
+        help="how to read the URL's machine rank (default: exact)",
+    )
     ap.add_argument(
         "--strategy",
         default="both",
@@ -825,6 +842,7 @@ def main() -> int:
         budgets,
         per_cell_workers,
         candidate_policies=candidate_policies,
+        machine_rank=args.machine_rank,
         only=only,
         skip=skip,
         arrangements=args.arrangements,
