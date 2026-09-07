@@ -3,11 +3,15 @@
 `apply_move`'s SWAP_BOTH does `negative.index(first_strip)` and
 `negative.index(second_strip)` (sequence_pair.py:1479-1480) once per move inside
 `anneal_stage`'s per-move loop (sequence_pair.py:1656) -- two O(N) scans on the
-hottest Python loop in the solver. `swapped()` in
-`_projection_feedback_stage_update` (sequence_solver.py:3489-3491) does the same
-thing up to 32 times per call, and `merge_stage_boundary`
-(sequence_pair.py:1902-1905) and `transform_stage` (sequence_solver.py:5646) do
-it once each.
+hottest Python loop in the solver. `swapped()` (sequence_solver.py:3484-3496,
+used by `_projection_feedback_stage_update`) does the same
+`values.index(left)` / `values.index(right)` lookup on a permutation, and
+`merge_stage_boundary` (sequence_pair.py:1902-1905) does it once via
+`permutation.index(left_strip)`. `transform_stage`'s own `.index()` call
+(sequence_solver.py:5646) is `problem.instance_ids.index(requirement.instance_id)`
+-- scanning a tuple of instance-id objects for a matching instance ID, not a
+strip-permutation position lookup by int -- so it is not a fourth site for this
+type.
 """
 
 from __future__ import annotations
