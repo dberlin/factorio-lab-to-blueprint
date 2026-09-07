@@ -139,9 +139,14 @@ def bench(path: Path, rounds: int, check: bool) -> int:
     counts = {outcome.value: 0 for outcome in last_mile.ClusterOutcome}
     for result in got:
         counts[result.outcome.value] += 1
-    sizes = [len(case["problem"].nets) for case in replayable]
-    truncated = sum(1 for case in replayable if case["problem"].truncated)
-    runs = {run: sum(1 for case in replayable if case["run"] == run) for run in (1, 2)}
+    sizes: list[int] = []
+    truncated = 0
+    runs = {1: 0, 2: 0}
+    for case in replayable:
+        sizes.append(len(case["problem"].nets))
+        truncated += bool(case["problem"].truncated)
+        if case["run"] in runs:
+            runs[case["run"]] += 1
     print(
         f"BEST {dt:.3f}s  {len(replayable)} clusters  "
         f"(run1={runs[1]} run2={runs[2]}, skipped {skipped} wall-bounded)  "
