@@ -1,0 +1,18 @@
+# Task 4 Step 2 -- new tests run BEFORE any source change
+# branch power-tower @ 263538df (Task 3 head)
+# command: uv run pytest tests/layout/test_freeform.py -k TestALargePowerBuildingClaimsItsWholeFootprint -q -rA
+
+exit code: 1
+
+PASSED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_a_tesla_field_is_unchanged_by_the_footprint_rule
+PASSED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_an_end_to_end_substation_build_places_only_substations
+PASSED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_a_substation_build_certifies_clean
+FAILED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_a_planned_substation_holds_every_tile_it_will_stand_on - AssertionError: substation at (26, 30) left (26, 31) unreserved
+FAILED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_a_substation_site_never_overlaps_another_building - AssertionError: substation at (26, 30) overlaps item 2303 at (26, 34)
+FAILED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_a_field_with_no_room_for_a_substation_is_refused - Failed: DID NOT RAISE _Unpowerable
+FAILED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_no_belt_or_sorter_tile_sits_inside_a_substation - AssertionError: belt/sorter tile (1, 11) inside substation at (-1, 10)
+FAILED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_no_machine_tile_sits_inside_a_substation - AssertionError: substation at (-1, 10) overlaps a building at (1, 11)
+
+--- failure headlines ---
+E       Failed: DID NOT RAISE _Unpowerable
+FAILED tests/layout/test_freeform.py::TestALargePowerBuildingClaimsItsWholeFootprint::test_a_field_with_no_room_for_a_substation_is_refused - Failed: DID NOT RAISE _Unpowerable

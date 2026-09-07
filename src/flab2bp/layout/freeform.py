@@ -6111,6 +6111,29 @@ class _Canvas:
         port = self.reserved.get(cell)
         return port is None or port in self.routing_ports
 
+    def fits(self, x: int, y: int, width: int, height: int) -> bool:
+        """Is EVERY tile of the footprint anchored at ``(x, y)`` free ground?
+
+        The canvas's own occupancy model asked about a RECTANGLE instead of a
+        cell.  It is not a second model and it is not a new question: it is
+        exactly the pair every ground-standing placer has always asked about
+        its anchor -- ``free`` for the lattice cell and ``solid`` for the tile
+        -- quantified over the tiles ``add`` will actually mark.
+
+        Both terms are needed and neither implies the other.  ``free``
+        deliberately ignores ``solid``, because a machine sells the levels
+        above its collider and a belt may cross it; a building standing ON the
+        ground may not.
+
+        A 1x1 tower makes this the single-cell test it replaces, tile for
+        tile, which is why the default arm cannot move.
+        """
+        return all(
+            self.free((tx, ty, 0)) and (tx, ty) not in self.solid
+            for tx in range(x, x + width)
+            for ty in range(y, y + height)
+        )
+
     def free_owned_guard(self, cell: Cell) -> bool:
         """Is ``cell`` blocked only by a junction guard this route owns?
 
@@ -15547,7 +15570,7 @@ def _power_plan(
     # columns answers the same question once, for the whole fill.
     blocked_columns = {(bx, by) for (bx, by, _level) in canvas.blocked}
 
-    free = np.zeros(shape, dtype=bool)
+    open_ground = np.zeros(shape, dtype=bool)
     for x in range(min_x, max_x + 1):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
@@ -15560,7 +15583,39 @@ def _power_plan(
                 continue
             if (x, y) in blocked_columns:
                 continue
-            free[x - min_x + pad, y - min_y + pad] = True
+            open_ground[x - min_x + pad, y - min_y + pad] = True
+
+    # A SITE IS A FOOTPRINT, NOT A CELL.
+    #
+    # `free` is the set of ANCHORS a tower may stand on, and `open_ground` is
+    # the ground itself.  For the 1x1 Tesla Tower the two are the same array and
+    # the loop below never runs, which is why the default arm cannot move.  For
+    # a 5x5 Satellite Substation they are not remotely the same: a three-wide
+    # gap between two machine rows is open ground with no anchor in it at all,
+    # and asking only about the anchor cell is what let the greedy plan a
+    # substation whose other twenty-four tiles landed on four machines and a
+    # belt -- measured end to end on `two-stage`, a substation at (-1, 10)
+    # swallowing the belt at (1, 11), and `certify` could not see it because
+    # 2212 is in `catalog.LOW_CONFIDENCE_FOOTPRINTS` and its belt-collision
+    # findings are suppressed.
+    #
+    # This is :meth:`_Canvas.fits` written as a mask rather than a second
+    # occupancy model: eroding by the footprint asks `free`/`solid` of every
+    # tile of the rectangle, which is that predicate's own definition, and
+    # `_place_power` guards the same rectangle with the method itself.  The
+    # erosion is a mask because this is the hot path -- one shifted `&` per
+    # footprint tile against a per-cell Python call for each of ~29k cells on
+    # `universe-matrix`.
+    free = open_ground.copy()
+    for footprint_dx in range(tower.width):
+        for footprint_dy in range(tower.height):
+            if not footprint_dx and not footprint_dy:
+                continue
+            shifted = np.zeros(shape, dtype=bool)
+            shifted[: shape[0] - footprint_dx, : shape[1] - footprint_dy] = open_ground[
+                footprint_dx:, footprint_dy:
+            ]
+            free &= shifted
 
     in_demand = np.zeros(shape, dtype=bool)
     in_demand[
@@ -15754,11 +15809,16 @@ def _power_plan(
 
     # How many free neighbours each cell has, for the tie-break. Taken once, on
     # the ground as packed: a tie-break does not need to track its own effects.
+    #
+    # `open_ground`, not `free`: the question this asks is "would taking this
+    # cell out of play cut a routing channel", which is about the GROUND, not
+    # about where a footprint happens to fit.  Identical arrays on the 1x1
+    # default.
     openness = np.zeros(shape, dtype=np.int32)
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-        openness[max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)] += free[
-            max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)
-        ]
+        openness[max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)] += (
+            open_ground[max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)]
+        )
 
     remaining = dark.copy()
     # `score` is maintained incrementally. Rebuilding it every round is the same
@@ -16061,8 +16121,15 @@ def _power_plan(
             exact_retry_evidence=projected_retry_evidence,
         )
 
-    for site in sites:
-        canvas.keep_out.add(site)
+    # THE RESERVATION IS THE FOOTPRINT, because what `_place_power` will mark
+    # solid is the footprint.  Holding only the anchor is an invitation the
+    # router accepts: it lays a belt through the other twenty-four tiles of a
+    # substation, `keep_out` reports nothing amiss, and `_place_power` then
+    # stands the building on top of the belt.
+    for site_x, site_y in sites:
+        for footprint_dx in range(tower.width):
+            for footprint_dy in range(tower.height):
+                canvas.keep_out.add((site_x + footprint_dx, site_y + footprint_dy))
     return sites
 
 
@@ -16094,7 +16161,10 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     tower = canvas.power_building
     placed = 0
     for cx, cy in sites:
-        if not canvas.free((cx, cy, 0)) or (cx, cy) in canvas.solid:
+        # The whole FOOTPRINT, not the anchor: `canvas.add` below marks
+        # `tower.width x tower.height` tiles solid, so those are the tiles the
+        # reservation had to hold and those are the tiles this verifies it did.
+        if not canvas.fits(cx, cy, tower.width, tower.height):
             raise _Unpowerable(f"planned tower site {(cx, cy)} was taken during routing")
         canvas.add(
             PlacedBuilding(

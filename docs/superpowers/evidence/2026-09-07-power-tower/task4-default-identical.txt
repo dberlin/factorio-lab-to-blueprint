@@ -1,0 +1,71 @@
+task 4 -- Step 5 default-arm byte-identity proof
+
+Ruling R4: the control is the BRANCH HEAD BEFORE THIS TASK (263538df, task 3's
+commit), reached with `git stash`, not master.  `git stash` cannot revert
+committed work, so a stash-based comparison can only ever answer "did MY
+uncommitted change move the default arm".  The against-master control is the
+later 72-cell corpus gate.
+
+method: the DSP blueprint string is `BLUEPRINT:<header fields>,"<base64
+        payload>"<MD5>`.  Header field 8 is a wall-clock .NET tick stamped at
+        emit time (codec.py:376) and the trailing MD5 covers it, so two runs of
+        the SAME tree differ in exactly those bytes.  What is compared is the
+        base64 LAYOUT PAYLOAD -- the entire placement -- plus the header with
+        field 8 masked.
+
+command: uv run flab2bp "$URL" --strategy freeform --budget 30
+
+================================================================
+URL A (the one task 3 used, so the two proofs are comparable)
+  https://factoriolab.github.io/dsp/list?o=iron-ingot*60&ibe=conveyor-belt-2&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11
+  1 machine, 63 tiles
+
+base (263538df, via git stash)
+  file sha256    : bef2d2ef21560f0d8144c0b87dc8cd98518f747cd05ef78eef23885a6ca6c3d7
+  layout payload : 690d3fc033d6066ef9497db542d96b5e7f8345870e93ea0e59cdb17f77b470a8
+  header ts      : 639244018838976768
+  trailing md5   : 9879FC743800653E2435BD54C629F599
+
+head (task 4 working tree)
+  file sha256    : 98f2baae282b4aa1d1dba7a8f601d848352efae39a5ff53c2af82901865b4387
+  layout payload : 690d3fc033d6066ef9497db542d96b5e7f8345870e93ea0e59cdb17f77b470a8
+  header ts      : 639244018711210752
+  trailing md5   : 7DDC156974E79617F4B4E74CB3CB8087
+
+head2 (task 4 working tree, second run -- the clock control)
+  file sha256    : dd670e54b4e0e1c0676cac8301528f8949125753619cc66758f4bcd7210be1ee
+  layout payload : 690d3fc033d6066ef9497db542d96b5e7f8345870e93ea0e59cdb17f77b470a8
+  header ts      : 639244018920437376
+  trailing md5   : E3FAC1CA579F1A2F286E5FE39487293F
+
+  base payload == head payload           : True
+  head payload == head2 payload          : True
+  base header (minus timestamp) == head  : True
+  three timestamps, three different values, same tree included -- which is
+  what proves the differing bytes are the clock and not this change.
+
+  NOTE: this payload hash 690d3fc0... is the SAME value task 3's Step 7
+  evidence recorded.  The default arm has therefore not moved across task 3
+  AND task 4, not merely across task 4.
+
+================================================================
+URL B (added by task 4: URL A is a one-machine build and is a weak control)
+  https://factoriolab.github.io/dsp/list?o=titanium-glass*60&ibe=conveyor-belt-2&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11
+
+  head run 1 payload : 69abe119e9690fe366c38dcb14c1d77b1f027706ad30f077663ecc32e59acedc
+  head run 2 payload : 69abe119e9690fe366c38dcb14c1d77b1f027706ad30f077663ecc32e59acedc
+  base     payload   : 69abe119e9690fe366c38dcb14c1d77b1f027706ad30f077663ecc32e59acedc
+
+  The two head runs were taken FIRST, to establish that this URL is
+  run-to-run deterministic at --budget 30 before the comparison was allowed
+  to mean anything.
+
+================================================================
+VERDICT
+
+  BYTE IDENTICAL on both URLs (layout payload; the header timestamp is
+  wall-clock by design and differs between two runs of one tree).
+
+  This is the expected result: the change is a footprint erosion that is a
+  no-op at width == height == 1, and `_Canvas.fits(x, y, 1, 1)` is the
+  single-cell test it replaces, tile for tile.
