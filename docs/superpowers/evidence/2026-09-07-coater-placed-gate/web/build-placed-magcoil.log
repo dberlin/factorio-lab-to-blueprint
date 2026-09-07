@@ -1,0 +1,6 @@
+arm=off cell=magnetic-coil/all-products strategy=freeform
+wall=2.7s buildings=155 coaters=4 belts=134 coater_merges=0
+area=336.0 belt_tiles=134
+  WARNING belt.termination: belt run 2 (head building 17 at (8,17), carrying 'magnetic-coil') runs 6 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 10 (head building 147 at (0,17), carrying 'proliferator-3') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=1968e4eaec6fda33
