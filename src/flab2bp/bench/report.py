@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from flab2bp.bench.scoring import compare, geometric_mean
+from flab2bp.bench.scoring import _best_per_url, compare, geometric_mean
 from flab2bp.bench.types import CellResult
 
 
@@ -41,23 +41,12 @@ def _is_proliferated(cell: CellResult) -> bool:
     return cell.candidate != "no-proliferator"
 
 
-def _best(cells: Sequence[CellResult], strategy: str) -> dict[str, CellResult]:
-    best: dict[str, CellResult] = {}
-    for c in cells:
-        if c.strategy != strategy or not c.valid:
-            continue
-        cur = best.get(c.url_id)
-        if cur is None or c.area < cur.area:
-            best[c.url_id] = c
-    return best
-
-
 def matrix_report(cells: Sequence[CellResult], baseline: str, challenger: str) -> MatrixReport:
     out: dict[bool, MatrixCell] = {}
     for proliferated in (True, False):
         subset = [c for c in cells if c.power is True and _is_proliferated(c) is proliferated]
-        a = _best(subset, baseline)
-        b = _best(subset, challenger)
+        a = _best_per_url(subset, baseline)
+        b = _best_per_url(subset, challenger)
         shared = sorted(set(a) & set(b))
         ratios = [b[u].area / a[u].area for u in shared if a[u].area]
 
@@ -142,14 +131,17 @@ def _winning_candidates(cells: Sequence[CellResult]) -> list[str]:
         "| url | strategy | candidate | area |",
         "|---|---|---|---:|",
     ]
-    best: dict[tuple[str, str], CellResult] = {}
-    for c in cells:
-        if not c.valid:
-            continue
-        key = (c.url_id, c.strategy)
-        cur = best.get(key)
-        if cur is None or c.area < cur.area:
-            best[key] = c
+    by_strategy = {
+        strategy: _best_per_url(cells, strategy)
+        for strategy in dict.fromkeys(c.strategy for c in cells)
+    }
+    # Preserve first eligible (URL, strategy) order for the printed tally;
+    # grouping by strategy alone would reorder its candidate names.
+    best = {
+        (c.url_id, c.strategy): by_strategy[c.strategy][c.url_id]
+        for c in cells
+        if c.valid
+    }
     for (url_id, strategy), c in sorted(best.items()):
         lines.append(f"| {url_id} | {strategy} | {c.candidate} | {c.area} |")
 
