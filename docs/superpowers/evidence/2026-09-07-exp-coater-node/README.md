@@ -9,12 +9,18 @@ code switches stay on the branch.**
 > coater node, and see what *actually* happens. It may be a horrible idea, but
 > if so, the evidence you are making is a *really* weak case against it."
 
+**The design's seat fix (A) is a major loss to BOTH node arms: 48 of 72 cells
+clean in both rounds, against 72/72 for the placed node and 34/36 for the packed
+one, and it is the only arm that is worse than doing nothing.**
+
 It is not a horrible idea, and the design's own recommendation is the arm that
 loses. **The separately placed node (C) is a win: 72/72 clean in both rounds,
-zero coater-merge findings against master's 5 and 9, at +2.7% area.** The
-packed node (B) builds and is clean on everything it packs, but the packer runs
-out of clock on the corpus's largest cell and it buys 50% more belt. The
-design's seat fix (A) loses **24 of 72 cells**.
+zero coater-merge findings against master's 5 and 9, at +2.7% area.** The packed
+node (B) builds and is clean on everything it packs, but the packer runs out of
+clock on the corpus's largest cell. One line of pack objective — the node's
+out-net joining `_nets_between` (`packed-hpwl`) — **halves B's area cost, from
++4.1/+4.9% to +1.7/+1.9%, and does not rescue either refused cell**; it is
+reported beside `packed` as first measured throughout.
 
 ---
 
@@ -38,6 +44,12 @@ run per sprayed input lane with the addon on its third tile, handed to CP-SAT as
 its own 6x3 rectangle; three ports (item-in west, item-out east,
 proliferator-in at the drop). The consumer's lane reverts to an ordinary
 `WEST_CHANNEL = 1` lane with no addon and no keep-out.
+
+**`packed-hpwl` — B plus one line of pack objective.** Identical in every other
+respect; the node/consumer pair joins `_nets_between`, so the wirelength term
+can see the node's out-net (which under `packed` contributes nothing at all —
+§5.3). Added AFTER `packed` was measured, kept as a separate arm so `packed`'s
+numbers stay exactly as first taken.
 
 **`placed` — variant C, the same node sited after the pack.** Identical node,
 identical nets, identical ports; the site is a ring search on free ground beside
@@ -106,8 +118,8 @@ run one after another and why every arm uses the same `--jobs`. CPU pressure
 (five-second mean of runnable processes, `cpu_pressure.sh`) ran 3.6–31 through
 the rounds, well under the 64 that would matter on this box.
 
-`packed` is freeform-only — sequence-pair refuses a packed node before it packs
-anything (§5.1) — so its cell count is 36, not 72.
+Both `packed` arms are freeform-only — sequence-pair refuses a packed node before
+it packs anything (§5.1) — so their cell count is 36, not 72.
 
 **Round A**
 
@@ -116,6 +128,7 @@ anything (§5.1) — so its cell count is 36, not 72.
 | `off` | 72 | **71** | 1 | 0 | 0 | **5** | 343 | 0.2 s | 6.5 s | 22 |
 | `seat` | 72 | **48** | 24 | 0 | 0 | 0 | 85 | 0.1 s | 4.4 s | 24 |
 | `packed` | 36 | **34** | 2 | 0 | 0 | 0 | 133 | 0.1 s | 5.6 s | 18 |
+| `packed-hpwl` | 36 | **34** | 2 | 0 | 0 | 0 | 133 | 0.2 s | 4.8 s | 20 |
 | `placed` | 72 | **72** | 0 | 0 | 0 | 0 | 428 | 0.1 s | 6.1 s | 24 |
 
 **Round B**
@@ -125,6 +138,7 @@ anything (§5.1) — so its cell count is 36, not 72.
 | `off` | 72 | **72** | 0 | 0 | 0 | **9** | 412 | 0.2 s | 5.9 s | 21 |
 | `seat` | 72 | **48** | 24 | 0 | 0 | 0 | 85 | 0.1 s | 4.2 s | 21 |
 | `packed` | 36 | **34** | 2 | 0 | 0 | 0 | 133 | 0.2 s | 4.5 s | 19 |
+| `packed-hpwl` | 36 | **34** | 2 | 0 | 0 | 0 | 133 | 0.1 s | 5.0 s | 20 |
 | `placed` | 72 | **72** | 0 | 0 | 0 | 0 | 428 | 0.1 s | 5.0 s | 22 |
 
 Coater-merge findings and coater counts are totals over that arm's own cells;
@@ -139,6 +153,7 @@ and a refused cell places nothing.
 | `off` | 47/48 | 48/48 | 5 / 9 |
 | `seat` | 24/48 | 24/48 | 0 / 0 |
 | `packed` | 22/24 | 22/24 | 0 / 0 |
+| `packed-hpwl` | 22/24 | 22/24 | 0 / 0 |
 | `placed` | 48/48 | 48/48 | 0 / 0 |
 
 ### Area, and the rest of the cost
@@ -151,7 +166,8 @@ cells.
 |---|---|---|---|
 | `seat` | +4.67% (n=48) | +3.97% (n=48) | 14 larger, 4 smaller |
 | `packed` | +4.08% (n=34) | +4.85% (n=34) | 16 larger, 8 smaller |
-| `placed` | +2.89% (n=71) | **+2.74%** (n=72) | 37 larger, 7 smaller |
+| `packed-hpwl` | **+1.72%** (n=34) | **+1.89%** (n=34) | 11 larger, 10 smaller |
+| `placed` | +2.89% (n=71) | +2.74% (n=72) | 37 larger, 7 smaller |
 
 Nets and belt tiles, over the **proliferated** cells clean in both that arm and
 `off` — this is where the node's real price shows:
@@ -162,13 +178,15 @@ Nets and belt tiles, over the **proliferated** cells clean in both that arm and
 | `placed` | B | 48 | 1027 → 1471 (**+43.2%**) | 80 682 → 81 778 (**+1.4%**) |
 | `packed` | A | 22 | 313 → 433 (**+38.3%**) | 16 634 → 24 946 (**+50.0%**) |
 | `packed` | B | 22 | 313 → 433 (**+38.3%**) | 16 516 → 24 963 (**+51.1%**) |
+| `packed-hpwl` | A | 22 | 313 → 433 (**+38.3%**) | 16 634 → 24 495 (**+47.3%**) |
+| `packed-hpwl` | B | 22 | 313 → 433 (**+38.3%**) | 16 516 → 24 488 (**+48.3%**) |
 
 The net cost is the one the design predicted (§6.2: +55% input-side nets on
 proliferated specs, +35% against all input lanes). Measured: **+38–43%**, and it
-is the same for both node arms because it is the same node and the same nets.
+is the same for every node arm because it is the same node and the same nets.
 
-**The belt cost is not the same, and the difference is the whole story of B
-versus C.** See §5.3.
+**The belt cost is not the same, and the difference is the story of B versus C.
+The obvious explanation for it turned out to be wrong.** See §5.3.
 
 ---
 
@@ -227,6 +245,21 @@ runs out of clock because the node arm hands it 3.6x the rectangles. The
 design's §6.3 prediction (+233 packed objects corpus-wide, +42 on this cell) is
 confirmed in exactly the shape the packer feels it.
 
+**`packed-hpwl` — the same 2 cells, both rounds.** The pack-objective fix does
+not rescue either, and on `all-products` it makes the refusal *more* explicit:
+
+```
+packed       "the 30s deadline passed with no completed packing of 115 strips;
+              3 packs were routed in that time ..."
+packed-hpwl  "no pack of 115 strips was ever produced at any candidate height;
+              all 5 pack solves ended UNKNOWN rather than ..."
+```
+
+— which is what an extra 27–83 wirelength pairs on an already-saturated model
+does. `output-products` refuses identically in both (*"no packing of 49 strips
+could be wired"*). **The fix is an area lever, not a coverage one**, and it was
+checked on these two cells first for exactly that reason.
+
 **`placed` — 0 cells lost in either round; +1 gained in round A**
 (`sequence-pair/universe-matrix/all-products`, which `off` refused in that round
 and built in the next — i.e. a flake in `off`, not a real gain, and it is
@@ -245,6 +278,7 @@ candidate policies x two strategies, `--budget 30`. Identical in both rounds.
 | `seat` | 4 / 6 | 0 |
 | `placed` | **6 / 6** | **0** |
 | `packed` | 2 / 3 (freeform only) | 0 |
+| `packed-hpwl` | 2 / 3 (freeform only) | 0 |
 
 Master reproduces the reported defect exactly, on the same building indices the
 self-loop evidence named:
@@ -266,9 +300,11 @@ freeform/all-products:
 arms and the seat arm all take it to zero; only `placed` takes it to zero
 *while still building every cell*.
 
-`seat` refuses `all-products` on both strategies. `packed` refuses
-`freeform/all-products` (*"no packing of 53 strips could be wired at any
-candidate height"*).
+`seat` refuses `all-products` on both strategies. Both packed arms refuse
+`freeform/all-products` with the same message (*"no packing of 53 strips could
+be wired at any candidate height"*), which is the corpus result in miniature:
+the pack-objective fix changes the geometry of the packs that succeed and not
+which ones do.
 
 ---
 
@@ -314,22 +350,65 @@ at high bands. Requiring the full 6x3 ring fixed it and the same cell went CLEAN
 at **area 4292 against `off`'s 4760**. The addon's collider, not the belts', is
 what sets the node's footprint.
 
-### 5.3 CP-SAT has no reason to put a node near the consumer it feeds
+### 5.3 CP-SAT has no reason to put a node near the consumer it feeds — and fixing that buys area, not belt
 
-This is why B buys **+50% belt tiles** where C buys +1.4%.
+`_pack_model`'s wirelength term is built from `_nets_between(strips)`, which
+derives strip pairs from `strip.out_lanes` → destination `group_key`. A coater
+node has `out_lanes = ()` and its consumer is not reachable from it, so **a node
+contributes zero HPWL terms**. Width is lexicographically above HPWL anyway, so
+under `packed` the packer fits each node wherever the width objective is
+happiest.
 
-`_pack_model`'s wirelength term is built from `_nets_between(strips)`
-(`freeform.py:3979-3991`), which derives strip pairs from
-`strip.out_lanes` → destination `group_key`. A coater node has
-`out_lanes = ()` and its consumer is not reachable from it, so **a node
-contributes zero HPWL terms**. Width is lexicographically above HPWL anyway
-(`freeform.py:4658-4678`), so the packer fits each node wherever the width
-objective is happiest and the router then pays for a long out-net.
+The fix is one `if` in `_nets_between`: add the `(node, consumer)` pair. It is
+real and it does something — on `information-matrix/all-products` the pair count
+goes **21 → 48** with 27 nodes — and **19 of the 22 shared clean cells move**.
 
-To make B competitive one would have to put the node→consumer relation into
-`_nets_between` (or a parallel term), which is a change to the pack objective
-and not merely to the object model. **That is the specific missing piece, and
-it is a smaller change than the sequence-pair one.**
+**But it does not buy what this section originally predicted.** The prediction
+written here before it was measured was "belt tiles falling from +50% toward
+C's +1.4%". Measured:
+
+| | `packed` | `packed-hpwl` |
+|---|---|---|
+| belt tiles vs `off` (A / B) | +50.0% / +51.1% | **+47.3% / +48.3%** |
+| area vs `off` (A / B) | +4.08% / +4.85% | **+1.72% / +1.89%** |
+| cells clean | 34/36 | 34/36 |
+
+**The area cost more than halves; the belt cost barely moves.** So the node's
+belt is not mostly the distance CP-SAT scattered it over — the four tiles of
+node itself are only ~3% of the belt on these cells, and the rest is out-nets
+that stay long even when the boxes are adjacent, because HPWL is measured
+between box ORIGINS while the net runs from the node's east tile to the
+consumer's lane head across the consumer's whole width. Getting B's belt down
+to C's needs the node's ground to be *chosen against the lane head*, which is
+precisely what C's ring search does and what a rectangle in a width-first pack
+cannot express.
+
+The prediction is left standing above with its correction beside it, because a
+wrong prediction that was then measured is worth more to the next reader than a
+tidy one.
+
+**What was NOT tested, stated so the next reader does not assume it was.**
+`packed-hpwl` injects the `(node, consumer)` pair into `_nets_between`'s
+*result*. It does **not** give the node real `out_lanes` / `in_above` — that is,
+it does not make the node a first-class producer and consumer in the pack's own
+vocabulary. Those are different changes and they differ in two measurable ways:
+
+1. `_nets_between` resolves an `out_lane`'s destination through
+   `by_group[group_key]`, which names **every shard of the consumer's group**,
+   not the one shard this node feeds. Real `out_lanes` would therefore add a
+   pair per shard where the injected pair adds exactly one — more terms, and
+   more diffuse ones.
+2. Real `in_above` would additionally put the **producer→node** pair in the
+   objective. The injected fix deliberately leaves the producer standing on its
+   existing producer↔consumer pair (see the docstring), so that lever is
+   untested.
+
+Neither is likely to move the two refused cells in the right direction: the
+`all-products` refusal is the pack solver failing to produce *any* pack of 115
+rectangles, and adding objective terms made that message go from "3 packs were
+routed" to "all 5 pack solves ended UNKNOWN". More terms is the direction that
+already hurt. But that is an argument, not a measurement, and it is labelled as
+one.
 
 ### 5.4 The packer's object model *can* express a three-port belt object
 
@@ -398,18 +477,21 @@ a native crash costs one URL and a re-run finishes the arm. Worth fixing in
 > coater-merge findings, at any area cost.
 > B is a LOSS if it loses clean cells that A keeps, or crashes the packer.
 
-**B (`packed`) is neither, and is reported as measured.** It has zero
-coater-merge findings and it is clean on 34 of the 36 freeform cells. It does
-**not** crash the packer. It loses two cells master keeps —
+**B (`packed`, and `packed-hpwl`) is neither, and is reported as measured, both
+ways.** It has zero coater-merge findings and it is clean on 34 of the 36
+freeform cells in both rounds and both variants. It does **not** crash the
+packer. It loses two cells master keeps —
 `freeform/universe-matrix/{all,output}-products` — and it does **not** lose a
 cell A keeps: A loses both of those too, and seventeen more besides. So B beats
-A decisively and loses to master by two cells, at +4.9% area and +50% belt.
-Its two failures share one cause (the packer's clock against 115 rectangles) and
-one fix that is *not* the object model (§5.3).
+A decisively and loses to master by two cells, at +1.9% area (`packed-hpwl`) or
++4.9% (`packed`) and ~+48% belt either way. Its two failures share one cause —
+the packer's clock against 115 rectangles — and the pack-objective fix does not
+touch it.
 
-**A (`seat`) is a clear LOSS**: 48/72 in both rounds, 24 named cells, zero
-gained, and the mechanism is a seat rule that removes the only candidate that
-clears the machine band.
+**A (`seat`) is a clear LOSS, and a major loss to both node arms**: 48/72 in
+both rounds against 72/72 and 34/36, 24 named cells, zero gained, and the
+mechanism is a seat rule that removes the only candidate that clears the machine
+band.
 
 **C (`placed`) is a WIN on every clause of B's criterion** — clean on at least
 as many cells as master (72/72 vs 71 and 72) and as A (72 vs 48), zero
@@ -433,14 +515,17 @@ Two things follow from that and should be decided rather than assumed:
    in-port, one tile west of the body, by construction and not by a seat index —
    so `prolif.coater_rides_one_run` becomes a regression test rather than the
    fix, which is what the design wanted from A and did not get.
-2. **B is worth one more measurement, not a rewrite.** Its only real cost is
-   §5.3: the node contributes no HPWL term, so CP-SAT scatters the nodes. Adding
-   the node→consumer pair to `_nets_between` is a small change with a specific
-   prediction (belt tiles falling from +50% toward C's +1.4%), and if it also
-   clears `universe-matrix` then B beats C on area (+4.9% is measured against
-   `off` on a 34-cell set that excludes exactly the cells B refuses, so the two
-   are not directly comparable until B is clean on the same set). The
-   sequence-pair work in §5.1 should not be started before that measurement.
+2. **B has now had its one extra measurement and it did not change the
+   verdict.** `packed-hpwl` halves the area cost and leaves the coverage and the
+   belt where they were (§5.3). B's remaining gap to C is two cells on
+   `universe-matrix`, caused by handing the packer 3.6x the rectangles, and
+   nothing in the pack objective addresses that. The sequence-pair work in §5.1
+   should not be started for B.
+
+   B's `+1.9%` area against C's `+2.7%` is **not** a reason to prefer B: the two
+   are measured on different cell sets (34 freeform cells for B, 72 across both
+   strategies for C), because B's set excludes exactly the cells B refuses. They
+   are not comparable until B is clean on the same set, and it is not.
 
 ---
 
@@ -451,8 +536,10 @@ git checkout exp-coater-node
 cd docs/superpowers/evidence/2026-09-07-exp-coater-node
 ./run_round.sh roundA          # every arm, 72 cells, --budget 30 --jobs 8
 ./run_round.sh roundB          # the second round, for flake detection
+./run_packed_hpwl.sh           # the B fix, on the same cells and both rounds
 ./run_controls.sh              # the harness's own PASS condition, --workers 1
-uv run python analyse.py roundB/*.jsonl
+uv run python analyse.py roundB/off.jsonl roundB/seat.jsonl \
+    roundB/packed.jsonl roundB/packed-hpwl.jsonl roundB/placed.jsonl
 ```
 
 `FLAB2BP_COATER_TRACE=1` prints every `_Unseatable` message to stderr, which is

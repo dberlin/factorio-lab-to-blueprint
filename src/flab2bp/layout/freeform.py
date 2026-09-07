@@ -106,7 +106,7 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
 )
 from flab2bp.layout.belt_tiers import retier_belts
-from flab2bp.layout.coater_mode import CoaterMode, coater_mode
+from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.observe import SearchEvent, SearchObserver, SearchPhase, stranded_endpoints
 from flab2bp.layout.piling import LaneLoad, MergePlan, PilerPlan, plan_merges
@@ -2721,7 +2721,7 @@ def plan_strips(
         for strip, relations in zip(strips, clearance_keys, strict=True)
     ]
     piled = _plan_strip_pilers(spec, groups, planned)
-    if coater_mode() is CoaterMode.PACKED:
+    if coater_mode().packs_nodes:
         piled = piled + _packed_coater_node_strips(piled)
     return piled
 
@@ -3977,7 +3977,27 @@ def _staged_static_clearance_requirement(
 
 
 def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
-    """Strip index pairs that will need a belt route."""
+    """Strip index pairs that will need a belt route.
+
+    **EXPERIMENT (``FLAB2BP_COATER_NODE=packed-hpwl``): a packed Spray Coater
+    node's out-net counts here too.**
+
+    The pairs come off ``out_lanes`` -> destination group key, and a coater node
+    has no ``out_lanes`` and no group its consumer belongs to.  So under
+    ``packed`` a node contributes ZERO wirelength terms: width is
+    lexicographically above HPWL anyway (see the objective below), and with no
+    term at all the packer fits each node wherever the width objective is
+    happiest.  Measured, that is not a rounding error -- ``packed`` bought
+    **+50% belt tiles** on the proliferated corpus against ``placed``'s +1.4%
+    for the same node and the same nets, because ``placed``'s post-pack search
+    puts the node beside the lane head it feeds and CP-SAT had no reason to.
+
+    One pair per node fixes the asymmetry: the node and the consumer strip it
+    feeds are exactly the two boxes the new net runs between.  The
+    producer-to-node net is left standing on the producer/consumer pair the loop
+    below already emits -- the producer still wants to be near that consumer,
+    and splitting it per item is not something an index pair can express.
+    """
     by_group: dict[str, list[int]] = defaultdict(list)
     for i, s in enumerate(strips):
         by_group[s.group_key].append(i)
@@ -3988,6 +4008,13 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
                 for j in by_group.get(group_key, []):
                     if i != j:
                         nets.add((i, j))
+    if coater_mode().node_wirelength:
+        for i, strip in enumerate(strips):
+            if strip.coater_node is None:
+                continue
+            consumer = strip.coater_node[0]
+            if consumer != i and 0 <= consumer < len(strips):
+                nets.add((min(i, consumer), max(i, consumer)))
     return sorted(nets)
 
 

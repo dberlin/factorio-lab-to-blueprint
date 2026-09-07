@@ -13,12 +13,13 @@ the same tree rather than argued about:
     The design's fix: seats start at ``1 + half_span``, and the body's own
     level plus the area-1 rival cell join ``belt_ban``.
 
-``packed`` / ``placed``
+``packed`` / ``packed-hpwl`` / ``placed``
     The Spray Coater as a real node: a four-tile belt run with the addon on
     its third tile, its in-port and out-port off the body, placed by CP-SAT as
-    its own rectangle (``packed``) or by a post-pack free-ground pass
-    (``placed``).  The consumer's lane goes back to an ordinary
-    ``WEST_CHANNEL`` lane with no coater on it at all.
+    its own rectangle (``packed``, and ``packed-hpwl`` with the node's out-net
+    in the pack objective) or by a post-pack free-ground pass (``placed``).
+    The consumer's lane goes back to an ordinary ``WEST_CHANNEL`` lane with no
+    coater on it at all.
 
 Every test here sets the environment variable rather than a parameter,
 because that is how the arm is selected in production code and a test that
@@ -146,7 +147,7 @@ def test_off_offers_a_seat_whose_body_covers_the_lane_head(
     assert seats[0][0] - half == port.x, "the first seat's body covers the head"
 
 
-@pytest.mark.parametrize("arm", ["seat", "packed", "placed"])
+@pytest.mark.parametrize("arm", ["seat", "packed", "packed-hpwl", "placed"])
 def test_a_narrowed_seat_never_covers_its_own_in_port(
     monkeypatch: pytest.MonkeyPatch,
     arm: str,
@@ -168,7 +169,7 @@ def test_off_and_seat_buy_the_wide_channel_and_the_node_arms_do_not(
 ) -> None:
     """The node's ground is bought back from the consumer strip, per arm."""
     widths: dict[str, set[int]] = {}
-    for arm in ("off", "seat", "packed", "placed"):
+    for arm in ("off", "seat", "packed", "packed-hpwl", "placed"):
         monkeypatch.setenv("FLAB2BP_COATER_NODE", arm)
         strips = [
             s
@@ -183,6 +184,7 @@ def test_off_and_seat_buy_the_wide_channel_and_the_node_arms_do_not(
     assert min(widths["off"]) >= _COATER_WEST_CHANNEL
     assert min(widths["seat"]) >= _COATER_WEST_CHANNEL
     assert widths["packed"] == {WEST_CHANNEL}
+    assert widths["packed-hpwl"] == {WEST_CHANNEL}
     assert widths["placed"] == {WEST_CHANNEL}
 
 
@@ -213,6 +215,32 @@ def test_packed_gives_the_packer_one_rectangle_per_sprayed_lane(
 def test_off_plans_no_coater_node_strips(monkeypatch: pytest.MonkeyPatch) -> None:
     _arm(monkeypatch, "off")
     assert all(s.coater_node is None for s in plan_strips(_spec()))
+
+
+def test_only_packed_hpwl_puts_the_node_out_net_in_the_pack_objective(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one line that separates `packed` from `packed-hpwl`.
+
+    ``_nets_between`` derives its pairs from ``out_lanes`` -> destination group
+    key, and a node has neither, so under ``packed`` a node contributes NO
+    wirelength term and CP-SAT fits it wherever the width objective is happiest.
+    Measured, that cost +50% belt tiles against ``placed``'s +1.4% for the same
+    node and the same nets.  ``packed`` is kept exactly as first measured so the
+    evidence can report B both ways.
+    """
+    _arm(monkeypatch, "packed")
+    strips = plan_strips(_spec())
+    nodes = [(i, s) for i, s in enumerate(strips) if s.coater_node is not None]
+    assert nodes, "the fixture stopped asking for a packed node"
+    plain = set(freeform._nets_between(strips))
+    assert not any((min(i, s.coater_node[0]), max(i, s.coater_node[0])) in plain for i, s in nodes)
+
+    _arm(monkeypatch, "packed-hpwl")
+    with_node = set(freeform._nets_between(strips))
+    added = {(min(i, s.coater_node[0]), max(i, s.coater_node[0])) for i, s in nodes}
+    assert with_node == plain | added
+    assert added - plain, "the fix has to add a pair, not restate one"
 
 
 # --- the ban ---------------------------------------------------------------
@@ -297,7 +325,7 @@ def _coater_bodies(placement: object) -> list[tuple[int, list[tuple[int, int, F]
     return out
 
 
-@pytest.mark.parametrize("arm", ["packed", "placed"])
+@pytest.mark.parametrize("arm", ["packed", "packed-hpwl", "placed"])
 def test_a_node_arm_emits_a_four_tile_run_with_the_addon_on_its_third_tile(
     monkeypatch: pytest.MonkeyPatch,
     arm: str,
@@ -331,7 +359,7 @@ def test_a_node_arm_emits_a_four_tile_run_with_the_addon_on_its_third_tile(
         assert (west[0], west[1], F(1)) in at
 
 
-@pytest.mark.parametrize("arm", ["seat", "packed", "placed"])
+@pytest.mark.parametrize("arm", ["seat", "packed", "packed-hpwl", "placed"])
 def test_no_coater_body_covers_a_belt_merge(
     monkeypatch: pytest.MonkeyPatch,
     arm: str,
@@ -354,7 +382,7 @@ def test_no_coater_body_covers_a_belt_merge(
             assert predecessors.get(belt, 0) <= 1, f"{arm}: merge under the body at {cell}"
 
 
-@pytest.mark.parametrize("arm", ["packed", "placed"])
+@pytest.mark.parametrize("arm", ["packed", "packed-hpwl", "placed"])
 def test_a_node_arm_leaves_the_consumer_lane_ordinary(
     monkeypatch: pytest.MonkeyPatch,
     arm: str,

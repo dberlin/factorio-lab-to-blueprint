@@ -21,6 +21,17 @@ reads it when the switch is off, which is the default.  Four arms:
     rectangle, with three ports (item-in, item-out, proliferator-in).  The
     consumer strip's lane reverts to an ordinary ``WEST_CHANNEL`` lane.
 
+``packed-hpwl``
+    Variant B plus ONE line of pack objective: the node/consumer pair joins
+    ``_nets_between``, so the wirelength term can see the node's out-net.
+    Measured because ``packed`` bought +50% belt tiles against ``placed``'s
+    +1.4% for the same nets, and the reason is exactly that a node contributes
+    no HPWL term -- ``_nets_between`` derives its pairs from ``out_lanes`` and a
+    node has none, so CP-SAT fits each node wherever the width objective is
+    happiest and the router pays for the distance.  A separate arm rather than a
+    change to ``packed`` so the evidence can report B both ways on the same
+    cells.
+
 ``placed``
     Variant C: the same node, placed by a post-pack pass on free ground beside
     the consumer strip rather than by CP-SAT.  The packer is untouched.
@@ -44,12 +55,27 @@ class CoaterMode(StrEnum):
     OFF = "off"
     SEAT = "seat"
     PACKED = "packed"
+    PACKED_HPWL = "packed-hpwl"
     PLACED = "placed"
 
     @property
     def is_node(self) -> bool:
         """Does this arm build a free-standing coater node?"""
-        return self in (CoaterMode.PACKED, CoaterMode.PLACED)
+        return self in (CoaterMode.PACKED, CoaterMode.PACKED_HPWL, CoaterMode.PLACED)
+
+    @property
+    def packs_nodes(self) -> bool:
+        """Does CP-SAT own the node's ground, rather than a post-pack search?"""
+        return self in (CoaterMode.PACKED, CoaterMode.PACKED_HPWL)
+
+    @property
+    def node_wirelength(self) -> bool:
+        """Does the pack objective see the node's out-net?
+
+        Only ``packed-hpwl``.  ``packed`` is kept exactly as first measured so
+        the evidence can report what this one line buys.
+        """
+        return self is CoaterMode.PACKED_HPWL
 
     @property
     def narrow_seats(self) -> bool:
