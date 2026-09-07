@@ -4,12 +4,31 @@ Branch `hierarchical-v3` at `bf081859` (the code HEAD every measurement below
 is taken at). Merge base: master `1ce8a0d3`. Worktree
 `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v3`.
 
-Box: 128 cores, never idle, load is I/O wait. Every timed step has a
-`-load.txt` beside it with `uptime` and one `vmstat 1 3` sample taken
-immediately before the run. At most one layout build ran at a time from this
-plan, and **no audit of this gate ever ran while another audit was running** —
-checked before each of the four audit invocations, which then WAITED (220–340 s
-on three of the four) rather than racing a sibling worktree.
+Box: 128 cores, never idle, and its load is I/O wait. Every timed step has a
+`-load.txt` beside it, taken immediately before the run. At most one layout
+build ran at a time from this plan, and **no audit of this gate ever ran while
+another audit was running** — checked before each of the four audit
+invocations, which then WAITED (220–340 s on three of the four) rather than
+racing a sibling worktree.
+
+**The load convention changed after these runs, and the committed files were
+NOT re-measured.** CPU pressure on this box is now recorded as the five-second
+mean of RUNNABLE processes —
+`vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}'`, under 64 being
+fine on 128 cores — because load average here is dominated by I/O wait and so
+measures the wrong thing. `run_large.sh`, `run_guard.sh` and `run_moved.sh` now
+write that. **Every `-load.txt` in this directory predates the change and holds
+the OLD form**: an `uptime` line plus one `vmstat 1 3 | tail -1` line. Nothing
+was re-run and nothing was backdated.
+
+The old form is not useless, because its `vmstat` line's first column is `r`,
+the run queue — **a single SAMPLE, not a five-second mean**, and not the new
+metric. Read across the 30 old-form files in this directory: load average
+ranges **7.29–64.99** while the runnable sample ranges **3–75**, and the two
+disagree in exactly the direction the new convention exists for — the highest
+load average recorded here, 64.99 beside Task 6's belt3 rung probe, sat against
+**19** runnable. That is the case for the change, made from this gate's own
+files rather than asserted.
 
 **A correction to the check the plan prescribes, and it runs the OTHER way
 round.** The plan warned that `pgrep -f audit.py` "matches its OWN command line

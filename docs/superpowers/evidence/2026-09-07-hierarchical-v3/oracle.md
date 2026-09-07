@@ -22,8 +22,21 @@ no gate clause may be read from these two runs.
 
 | cell | shell wall | compose wall on entry | rungs judged | exit | load sample |
 | --- | --- | --- | --- | --- | --- |
-| belt3 / all-products | 139.66 s | 139.41 s | **6 of 6** | 3 | `rung-belt3-all-products-load.txt` — load avg 64.99, 89 % idle, 0 % iowait |
-| zurl2 / all-products | 182.51 s | 157.46 s | **6 of 6** | 3 | `rung-zurl2-all-products-load.txt` — load avg 13.38, 90 % idle, 0 % iowait |
+| belt3 / all-products | 139.66 s | 139.41 s | **6 of 6** | 3 | `rung-belt3-all-products-load.txt` — load avg 64.99, **19 runnable**, 89 % idle, 0 % iowait |
+| zurl2 / all-products | 182.51 s | 157.46 s | **6 of 6** | 3 | `rung-zurl2-all-products-load.txt` — load avg 13.38, **4 runnable**, 90 % idle, 0 % iowait |
+
+**Load-convention note, added after these runs; neither was re-measured or
+backdated.** This repo now records CPU pressure as the five-second mean of
+RUNNABLE processes (`vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}'`,
+under 64 being fine on 128 cores), because load average on this box is
+dominated by I/O wait. The two `-load.txt` files above predate that and hold
+the old `uptime` + `vmstat 1 3 | tail -1` form. The **runnable** figures now
+shown in the table are that line's first column read back out of the committed
+files — **a single sample, not a five-second mean, and therefore not the new
+metric**. They are given because belt3's row is the clearest case for the
+change anywhere in this plan: a load average of 64.99 against 19 runnable on a
+128-core box. The wall figures and every rung number in this document are
+untouched.
 
 Every rung of both cells was judged and routed; nothing is truncated. Each
 rung's `_route_all` ran on roughly a sixth of the composition's wall

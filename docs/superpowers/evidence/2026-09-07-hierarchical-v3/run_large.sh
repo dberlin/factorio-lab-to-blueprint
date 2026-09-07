@@ -25,10 +25,26 @@ ZURL2='https://factoriolab.github.io/dsp/list?z=eJwVxTEKgDAMBdDbZPhTO1hcsiSom6gg
 MALL='https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11'
 TITANIUM='https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11'
 
+# CPU pressure as the five-second mean of RUNNABLE processes, not load average.
+# On this box load average is dominated by I/O wait, so `uptime` measures the
+# wrong thing: a load average of 40 here is usually disk, not contention for
+# the cores a build needs.  `vmstat`'s first column is `r`, the run queue.
+# Under 64 is fine on these 128 cores.  This is RECORDED, never WAITED ON.
+load_sample() {  # <path>
+  local mean
+  mean=$(vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}')
+  printf '%s\n' \
+    "runnable_5s_mean=$mean" \
+    "# mean of vmstat's r column over 5 one-second samples (vmstat 1 6, first discarded)." \
+    "# CPU pressure, not load average: this box's load average is mostly I/O wait." \
+    "# Under 64 is fine on these 128 cores.  Recorded, never waited on." \
+    > "$1" 2>&1
+}
+
 run() {  # label url policy budget
   local label="$1" url="$2" policy="$3" budget="$4"
   local stem="$DIR/large-$label-$policy-b$budget-r$R"
-  (uptime; vmstat 1 3 | tail -1) > "$stem-load.txt" 2>&1
+  load_sample "$stem-load.txt"
   local t0 t1
   t0=$(date +%s.%N)
   uv run python "$DIR/run_cell.py" "$stem.json" -- \

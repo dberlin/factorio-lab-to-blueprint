@@ -19,7 +19,8 @@
 - **Exact arithmetic** everywhere rates appear (`Fraction`, never `float`).
 - **ONE LAYOUT BUILD AT A TIME on this box, and never two audits at once.** Other agents run builds in sibling worktrees. Check `pgrep -fc '[s]cripts/audit\.py'` before each audit invocation — the `[s]` bracket makes the pattern unable to match any command line that merely CONTAINS it (a check command's own text reads `[s]cripts/...`, which the regex does not accept), which is what stops an enclosing `bash -c "… pattern …"` from counting itself. `--budget 30` for single corpus builds; the gate's 60 s and 15 s as Task 8 states them.
   - **Correction, measured on this box (Task 8).** An earlier revision of this bullet warned that `pgrep -f` "matches its OWN command line and always returns a hit" and prescribed `ps -eo args | grep -cE 'scripts/audit\.py'` instead. **That is backwards.** `pgrep` excludes its own PID (procps-ng 4.0.6 here, as do the BSDs), so it never self-matches; the only false positive it can produce is an *enclosing* shell whose argv contains the pattern, which the `[s]` form removes. What genuinely self-matches is the prescribed replacement, because `ps -eo args` lists the pipeline's own `grep`. Reading it literally cost Task 8 a wasted detached checkout. Verified here: with 9 real audit processes running, `pgrep -af 'scripts/audit\.py'` returned exactly those 9 and did not include the invoking shell. Avoid `pgrep -fc 'python[0-9.]* +[^ ]*scripts/audit\.py'` as the primary form: it is also self-match-proof but it matched only 2 of those 9, missing the forkserver children.
-- **Record `(uptime; vmstat 1 3 | tail -1)` into a `-load.txt` beside EVERY timing.** The box is 128 cores, never idle, and the load is I/O wait; never wait for an idle box.
+- **Record CPU pressure into a `-load.txt` beside EVERY timing, as the five-second mean of RUNNABLE processes:** `vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}'`. Under **64** is fine on these 128 cores. **Never wait for it to fall** — that discipline is unchanged, and this metric makes the reason plainer.
+  - **Why not `uptime`.** An earlier revision of this bullet recorded `(uptime; vmstat 1 3 | tail -1)`. Load average on this box is dominated by I/O wait, so it measures the wrong thing: a load average of 40 here is usually disk, not contention for the cores a build needs. `vmstat`'s first column is `r`, the run queue, which is the quantity that actually competes with a build. **`-load.txt` files written before this change use the OLD form** — a single `vmstat 1 3 | tail -1` line whose first column is one runnable-process SAMPLE, not a mean, preceded by an `uptime` line. They were not re-measured and must not be read as the new metric.
 - **Reading code: use Serena's symbolic tools** — `mcp__serena__get_symbols_overview` and `mcp__serena__find_symbol` to read a symbol instead of paging a 22k-line file, `mcp__serena__find_referencing_symbols` to find call sites (grep misses them). **Editing: use Read/Edit, NOT Serena's editing tools.** Serena is a shared last-activation-wins server on this box and other agents are working in sibling worktrees; a Serena write from here can land in the wrong worktree.
 - **Process discipline:** work in `.claude/worktrees/hierarchical-v3` on branch `hierarchical-v3`; never `git stash`; never commit anything under `.superpowers/`; evidence goes to `docs/superpowers/evidence/2026-09-07-hierarchical-v3/`, any size — file size is never a reason to shrink or omit committed evidence. `git diff` is wired to difftastic: use `--no-ext-diff` for patches.
 - **Verification per code change:** `uv run ruff check` 0, `uv run ruff format --check` 0, `uv run mypy src` 0, and the touched test files exit 0.
@@ -312,7 +313,7 @@ Run: `uv run ruff check && uv run ruff format --check && uv run mypy src` — al
 Then, one build, load sample first:
 
 ```bash
-(uptime; vmstat 1 3 | tail -1) > /tmp/v3-t1-load.txt
+vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > /tmp/v3-t1-load.txt
 uv run flab2bp "<mall url>" --strategy hierarchical --budget 60 \
     --candidate-policy all-products --band portable 2>&1 | tail -20
 ```
@@ -591,7 +592,7 @@ One build at a time, each with its load sample:
 ```bash
 for cell in "mall all-products 60" "mall no-proliferator 60" "titanium-glass all-products 15"; do
   set -- $cell
-  (uptime; vmstat 1 3 | tail -1) > /tmp/v3-t2-$1-$2-$3-load.txt
+  vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > /tmp/v3-t2-$1-$2-$3-load.txt
   uv run flab2bp "<url for $1>" --strategy hierarchical --budget $3 \
       --candidate-policy $2 --band portable > /dev/null 2> /tmp/v3-t2-$1-$2-$3.log
 done
@@ -1071,7 +1072,7 @@ Then `uv run ruff check && uv run ruff format --check && uv run mypy src` — al
 ```bash
 for cell in "mall all-products" "mall no-proliferator"; do
   set -- $cell
-  (uptime; vmstat 1 3 | tail -1) > /tmp/v3-t3-$1-$2-load.txt
+  vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > /tmp/v3-t3-$1-$2-load.txt
   uv run flab2bp "<url for $1>" --strategy hierarchical --budget 60 \
       --candidate-policy $2 --band portable > /dev/null 2> /tmp/v3-t3-$1-$2.log
 done
@@ -1629,7 +1630,7 @@ Then `uv run ruff check && uv run ruff format --check && uv run mypy src` — al
 - [ ] **Step 6: One build, to see whether the ladder now moves**
 
 ```bash
-(uptime; vmstat 1 3 | tail -1) > /tmp/v3-t5-load.txt
+vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > /tmp/v3-t5-load.txt
 uv run flab2bp "<belt3 url>" --strategy hierarchical --budget 60 \
     --candidate-policy all-products --band portable > /dev/null 2> /tmp/v3-t5-belt3.log
 ```
@@ -1685,7 +1686,7 @@ Model it on `docs/superpowers/evidence/2026-09-07-hierarchical-v2/ladder_probe.p
 
 ```bash
 cd docs/superpowers/evidence/2026-09-07-hierarchical-v3
-(uptime; vmstat 1 3 | tail -1) > rung-belt3-all-products-load.txt
+vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > rung-belt3-all-products-load.txt
 uv run python rung_probe.py rung-belt3-all-products.json -- "<belt3 url>" \
     --strategy hierarchical --budget 180 --band portable \
     --candidate-policy all-products 2>&1 | tee rung-belt3-all-products.log
@@ -1694,7 +1695,7 @@ uv run python rung_probe.py rung-belt3-all-products.json -- "<belt3 url>" \
 - [ ] **Step 3: Run it on zurl2, one build, after belt3 has finished**
 
 ```bash
-(uptime; vmstat 1 3 | tail -1) > rung-zurl2-all-products-load.txt
+vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > rung-zurl2-all-products-load.txt
 uv run python rung_probe.py rung-zurl2-all-products.json -- "<zurl2 url>" \
     --strategy hierarchical --budget 180 --band portable \
     --candidate-policy all-products 2>&1 | tee rung-zurl2-all-products.log
@@ -1782,7 +1783,7 @@ Then `uv run ruff check && uv run ruff format --check && uv run mypy src` — al
 - [ ] **Step 5: The kill-criterion build**
 
 ```bash
-(uptime; vmstat 1 3 | tail -1) > docs/superpowers/evidence/2026-09-07-hierarchical-v3/corridor-load.txt
+vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > docs/superpowers/evidence/2026-09-07-hierarchical-v3/corridor-load.txt
 uv run flab2bp "<belt3 url>" --strategy hierarchical --budget 60 \
     --candidate-policy all-products --band portable \
     > /dev/null 2> docs/superpowers/evidence/2026-09-07-hierarchical-v3/corridor-belt3.log
@@ -1841,7 +1842,7 @@ uv run python run_cell.py <stem>.json -- "<url>" --strategy hierarchical \
     --budget <60|15> --band portable --candidate-policy <policy> -o <stem>.blueprint.txt
 ```
 
-Beside each run, a `-load.txt` with `uptime` and one `vmstat 1 3` sample taken immediately before it. Record per cell: verdict, in-process wall AND shell wall, area, `area / best_known`, validator errors by class, and the whole stats line — `blocks`, `blocks_unattempted`, `recut_rounds`, `nogood_skips`, `player_fed`, `cut_lanes`, `arm_dispatch_*`, `compose_gap`, `port_demands`, `reservation_missing`, `unrouted_cuts`. **Both rounds' numbers go in the table**, r1 quoted with r2 in parentheses wherever they differ, as v2's §2 did.
+Beside each run, a `-load.txt` carrying the runnable-process five-second mean (`vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}'`, under 64 is fine on these 128 cores), taken immediately before it and recorded rather than waited on. Record per cell: verdict, in-process wall AND shell wall, area, `area / best_known`, validator errors by class, and the whole stats line — `blocks`, `blocks_unattempted`, `recut_rounds`, `nogood_skips`, `player_fed`, `cut_lanes`, `arm_dispatch_*`, `compose_gap`, `port_demands`, `reservation_missing`, `unrouted_cuts`. **Both rounds' numbers go in the table**, r1 quoted with r2 in parentheses wherever they differ, as v2's §2 did.
 
 - [ ] **Step 3: The default-unchanged corpus guard**
 
@@ -1849,7 +1850,7 @@ Everything committed, `git status --short` empty. Then, exactly as v2's §5 ran 
 
 ```bash
 pgrep -fc '[s]cripts/audit\.py'                 # must be 0 before EACH invocation
-(uptime; vmstat 1 3 | tail -1) > <half>-round1-load.txt
+vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > <half>-round1-load.txt
 uv run python scripts/audit.py --budget 30 --json <half>-round1.jsonl > <half>-round1.txt 2>&1
 ```
 

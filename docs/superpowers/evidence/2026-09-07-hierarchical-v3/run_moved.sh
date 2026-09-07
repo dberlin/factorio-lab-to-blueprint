@@ -52,6 +52,22 @@ audits_running() {
   pgrep -af '[s]cripts/audit\.py' || true
 }
 
+# CPU pressure as the five-second mean of RUNNABLE processes, not load average.
+# On this box load average is dominated by I/O wait, so `uptime` measures the
+# wrong thing: a load average of 40 here is usually disk, not contention for
+# the cores a build needs.  `vmstat`'s first column is `r`, the run queue.
+# Under 64 is fine on these 128 cores.  This is RECORDED, never WAITED ON.
+load_sample() {  # <path>
+  local mean
+  mean=$(vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}')
+  printf '%s\n' \
+    "runnable_5s_mean=$mean" \
+    "# mean of vmstat's r column over 5 one-second samples (vmstat 1 6, first discarded)." \
+    "# CPU pressure, not load average: this box's load average is mostly I/O wait." \
+    "# Under 64 is fine on these 128 cores.  Recorded, never waited on." \
+    > "$1" 2>&1
+}
+
 restore_branch() {
   local code=$?
   if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
@@ -83,7 +99,7 @@ half() {  # <name> <outdir>
   mkdir -p "$out"
   rm -f "$out/moved-$name-r2.jsonl"
   wait_for_slot
-  (uptime; vmstat 1 3 | tail -1) > "$out/moved-$name-r2-load.txt" 2>&1
+  load_sample "$out/moved-$name-r2-load.txt"
   echo "=== moved $name half: HEAD $(git rev-parse --short HEAD) ==="
   uv run python scripts/audit.py --budget 30 --only "$ONLY" --json "$out/moved-$name-r2.jsonl" \
       > "$out/moved-$name-r2.txt" 2>&1 || true
