@@ -2821,6 +2821,25 @@ class TestPlanStrips:
     def test_shared_proliferation_preference_leaves_wide_lab_plan_unchanged(
         self,
     ) -> None:
+        """The preference was inert here only while BOTH ladders mixed.
+
+        RE-DERIVED 2026-09-07 (spec §9 R2, the drain-row task).  This asserted
+        `preferred == ordinary`, and it held because the wide lab seated three
+        ingredients on one belt above and three on one below WHICHEVER ladder
+        ran: the ordinary one climbed to a mix of three because five south rows
+        could not carry six lanes, and the shared one started there.
+
+        Freeing the sixth row splits them.  The ordinary ladder now stops at one
+        item per lane -- six single-item lanes, which is the seating §9 R1
+        requires -- while `prefer_shared` still starts at the widest mix and
+        still finds the three-and-three, so the two plans genuinely differ.
+
+        THE DIVERGENCE IS TRANSIENT AND IS PINNED SO THAT IT CANNOT BE
+        FORGOTTEN.  §9 R1's executor corollary collapses `_seat_inputs`' mixing
+        ladder to one item per lane outright; when that lands, `prefer_shared`
+        has nothing left to reverse, the two plans agree again, and the
+        inequality below must go back to `preferred == ordinary`.
+        """
         ingredients = (
             "antimatter",
             "electromagnetic-matrix",
@@ -2851,7 +2870,19 @@ class TestPlanStrips:
             prefer_shared_proliferation=True,
         )
 
-        assert preferred == ordinary
+        (wide,) = [family for family in ordinary if family.flank_outputs]
+        assert [lane.items for lane in wide.input_lanes] == [(item,) for item in ingredients]
+        (shared,) = [family for family in preferred if family.flank_outputs]
+        assert [lane.items for lane in shared.input_lanes] == [
+            ingredients[:3],
+            ingredients[3:],
+        ]
+        # TRIPWIRE FOR THE MIXING-LADDER TASK (spec §9 R1's executor corollary):
+        # when `_seat_inputs` stops mixing at all, `prefer_shared` has nothing
+        # left to reverse and this line goes red.  Deleting it and restoring
+        # `assert preferred == ordinary` is the correct response -- along with
+        # the two assertions above, which then describe the same plan twice.
+        assert preferred != ordinary
 
     def test_a_four_input_recipe_lays_out_and_validates(self) -> None:
         """Planning it is not enough -- it has to emit and pass the neutral judge.
@@ -2974,6 +3005,25 @@ class TestPlanStrips:
         """
         with pytest.raises(NoValidLayout, match="cannot be seated"):
             plan_strips(self._many_input_spec(13), strip_len=6)
+
+
+def test_seat_inputs_uses_the_freed_south_row_only_when_flanked() -> None:
+    """The drain-row waiver is scoped to the flanked path and nothing else.
+
+    A flanked output's drain lane carries NO sorter -- ``_flank_lane`` puts the
+    only sorter on the machine's east face and runs a gap belt south into the
+    lane -- so the row it takes need not be one a sorter can reach, and the
+    seating search may spend all ``below_cap`` reachable rows on inputs.
+    Unflanked, the output lane really does need a sorter-reachable row under the
+    band, so the reservation still binds and six ingredients still refuse.
+    """
+    six = ("a", "b", "c", "d", "e", "f")
+    above, below = freeform._seat_inputs(
+        six, 1, 3, 3, max_per_lane=5, columns=3, flank_outputs=True
+    )
+    assert [len(lane) for lane in (*above, *below)] == [1, 1, 1, 1, 1, 1]
+    with pytest.raises(ValueError, match="cannot be seated"):
+        freeform._seat_inputs(six, 1, 3, 3, max_per_lane=5, columns=3)
 
 
 class TestASideCarriesAsManyLanesAsItsPosesAllow:
@@ -24086,10 +24136,18 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
     `(125, 160, 100, 80, 60)`, with height 160's greedy seed 258 wide, dying at
     the pre-pack seed gate while `_minimum_pack_width` (92) let it through.
     Task 2's strip re-seating (77898a9) changed this cell to 57 strips: its
-    tallest candidate height is now 161, not 160, and that height's real greedy
-    seed is 139 wide, not 258 -- well under the ~200 width where
-    `envelope.frame_candidates` starts refusing height 161 (measured directly:
-    empty at width 200, non-empty at width 150).  A corpus-wide scan (every
+    tallest candidate height was then 161, not 160.  THE DRAIN-ROW TASK (spec
+    §9 R2) MOVES IT AGAIN, and only the height keyed below moves: this cell is
+    69 strips now, up from 57, because a flanked strip whose drain has moved out
+    past sorter reach is CAPPED AT ONE MACHINE -- `_flank_lane`'s gap belt would
+    otherwise cross the south input lanes -- so the one flanked Matrix Lab
+    family became 15 one-machine strips of 6x12 where it was 3 of 30x8.  It
+    schedules `(166, 130, 104, 83, 62)` unmodified and
+    `(130, 104, 83, 154, 62)` with the seed widened, so the tallest height is
+    166 and the boundary height it yields to is still 154.  That height's real
+    greedy seed is 138 wide, not 258 -- well under the ~200 width where
+    `envelope.frame_candidates` starts refusing the tallest height (measured
+    directly at 161: empty at width 200, non-empty at width 150).  A corpus-wide scan (every
     ``URL_CORPUS`` entry, every ``CandidatePolicy``, 36 buildable candidates)
     found the fix changes `_band_policy_candidate_heights`'s output for NONE
     of them post-Task-2: this specific defect no longer reproduces live
@@ -24101,7 +24159,7 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
     height whose seed narrowed under Task 2, holding every other height's real,
     unmodified seed.  That is the minimal patch that makes the historical defect
     observable again: with only `_minimum_pack_width` (64) as witness, height
-    161 survives; with `max(_minimum_pack_width, realised_width)` (258) it dies
+    166 survives; with `max(_minimum_pack_width, realised_width)` (258) it dies
     at `frame_candidates` and boundary height 154 takes its slot -- R1's §2/§3
     mechanism, on real strips, with one real historical number substituted for
     a value the corpus no longer produces.
@@ -24121,9 +24179,9 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
 
     real_greedy_pack = freeform._greedy_pack
 
-    def widened_seed_at_161(strips_: list[Strip], height: int) -> freeform._Pack:
+    def widened_seed_at_the_tallest(strips_: list[Strip], height: int) -> freeform._Pack:
         pack = real_greedy_pack(strips_, height)
-        if height != 161:
+        if height != 166:
             return pack
         box_rights = {
             index: pack.at[index][0] - strip.west_channel + _box(strip)[0]
@@ -24140,11 +24198,11 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
         at[rightmost] = (x + added_width, y)
         return replace(pack, at=at, width=pack.width + added_width)
 
-    monkeypatch.setattr(freeform, "_greedy_pack", widened_seed_at_161)
+    monkeypatch.setattr(freeform, "_greedy_pack", widened_seed_at_the_tallest)
 
     heights = freeform._band_policy_candidate_heights(strips, BandPolicy("portable"))
 
-    assert 161 not in heights
+    assert 166 not in heights
     assert 154 in heights
 
 

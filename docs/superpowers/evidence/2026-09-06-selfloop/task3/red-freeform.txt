@@ -1,0 +1,29 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[31mF[0m[31m                                                                        [100%][0m
+=================================== FAILURES ===================================
+[31m[1m_________ test_seat_inputs_uses_the_freed_south_row_only_when_flanked __________[0m
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_seat_inputs_uses_the_freed_south_row_only_when_flanked[39;49;00m() -> [94mNone[39;49;00m:[90m[39;49;00m
+    [90m    [39;49;00m[33m"""The drain-row waiver is scoped to the flanked path and nothing else.[39;49;00m
+    [33m[39;49;00m
+    [33m    A flanked output's drain lane carries NO sorter -- ``_flank_lane`` puts the[39;49;00m
+    [33m    only sorter on the machine's east face and runs a gap belt south into the[39;49;00m
+    [33m    lane -- so the row it takes need not be one a sorter can reach, and the[39;49;00m
+    [33m    seating search may spend all ``below_cap`` reachable rows on inputs.[39;49;00m
+    [33m    Unflanked, the output lane really does need a sorter-reachable row under the[39;49;00m
+    [33m    band, so the reservation still binds and six ingredients still refuse.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        six = ([33m"[39;49;00m[33ma[39;49;00m[33m"[39;49;00m, [33m"[39;49;00m[33mb[39;49;00m[33m"[39;49;00m, [33m"[39;49;00m[33mc[39;49;00m[33m"[39;49;00m, [33m"[39;49;00m[33md[39;49;00m[33m"[39;49;00m, [33m"[39;49;00m[33me[39;49;00m[33m"[39;49;00m, [33m"[39;49;00m[33mf[39;49;00m[33m"[39;49;00m)[90m[39;49;00m
+        above, below = freeform._seat_inputs([90m[39;49;00m
+            six, [94m1[39;49;00m, [94m3[39;49;00m, [94m3[39;49;00m, max_per_lane=[94m5[39;49;00m, columns=[94m3[39;49;00m, flank_outputs=[94mTrue[39;49;00m[90m[39;49;00m
+        )[90m[39;49;00m
+>       [94massert[39;49;00m [[96mlen[39;49;00m(lane) [94mfor[39;49;00m lane [95min[39;49;00m (*above, *below)] == [[94m1[39;49;00m, [94m1[39;49;00m, [94m1[39;49;00m, [94m1[39;49;00m, [94m1[39;49;00m, [94m1[39;49;00m][90m[39;49;00m
+[1m[31mE       assert [3, 3] == [1, 1, 1, 1, 1, 1][0m
+[1m[31mE         [0m
+[1m[31mE         At index 0 diff: [0m[94m3[39;49;00m[90m[39;49;00m != [0m[94m1[39;49;00m[90m[39;49;00m[0m
+[1m[31mE         Right contains 4 more items, first extra item: [0m[94m1[39;49;00m[90m[39;49;00m[0m
+[1m[31mE         Use -v to get more diff[0m
+
+[1m[31mtests/layout/test_freeform.py[0m:2993: AssertionError
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m tests/layout/test_freeform.py::[1mtest_seat_inputs_uses_the_freed_south_row_only_when_flanked[0m - assert [3, 3] == [1, 1, 1, 1, 1, 1]

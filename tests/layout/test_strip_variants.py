@@ -1829,6 +1829,95 @@ def test_the_seating_rule_changes_no_strip_dimension() -> None:
     assert (strips["energy-matrix#12"].box_height, strips["energy-matrix#12"].width) == (8, 36)
 
 
+def _universe_matrix_spec() -> BuildSpec:
+    """The corpus's deepest chain, whose Matrix Lab takes six ingredients."""
+    return _corpus_spec("universe-matrix", CandidatePolicy.NO_PROLIFERATOR)
+
+
+def _six_ingredient_assembler_spec() -> BuildSpec:
+    """A flanked spec whose south side does NOT fill every reachable row.
+
+    An Assembling Machine reserves four rows for a three-row footprint, so
+    `_side_lane_caps` gives it two rows below, not three; six ingredients seat
+    three-and-three across two lanes and `in_below` holds one of them.  That is
+    a flanked strip with a spare reachable row below -- the case the drain move
+    must leave byte-identical.
+    """
+    import string
+
+    return BuildSpec(
+        groups=(
+            _group(
+                "impossible",
+                "assembling-machine-2",
+                1,
+                {k: Fraction(1) for k in string.ascii_lowercase[:6]},
+                {"out": Fraction(1)},
+            ),
+        )
+    )
+
+
+def _flanked_strip_for(spec: BuildSpec) -> freeform.Strip:
+    return next(strip for strip in plan_strips(spec, strip_len=6) if strip.flank_outputs)
+
+
+def test_a_matrix_lab_seats_six_ingredients_as_six_single_item_lanes() -> None:
+    """`universe-matrix` stops needing a mixed belt (spec §9 R2).
+
+    A Matrix Lab is 5x5 with three insert columns per face, and
+    `_side_lane_caps` returns (3, 3) at its band height: six reachable rows for
+    six ingredients.  The seating was one row short only because the flanked
+    output's drain lane was charged a row INSIDE sorter reach, even though the
+    drain carries no sorter -- `_flank_lane` puts the only sorter on the east
+    face and runs a gap belt south into the lane.  Moving the drain to the
+    outermost south row costs one strip row on this family and frees the third
+    south row for an input.
+
+    Measured on master before this change: `(('antimatter',
+    'electromagnetic-matrix', 'energy-matrix'),)` above and `(('gravity-matrix',
+    'information-matrix', 'structure-matrix'),)` below -- two mixed belts, which
+    spec §9 R1 bans outright.
+    """
+    plans = strip_variants_module._logical_strip_plans(_universe_matrix_spec())
+    (plan,) = [p for p in plans if p.flank_outputs]
+    lanes = (*plan.in_above, *plan.in_below)
+    assert len(lanes) == 6, lanes
+    assert all(len(lane) == 1 for lane in lanes), lanes
+
+
+def test_the_flanked_drain_lane_sits_past_sorter_reach_when_it_moved() -> None:
+    """The row it moved to is one no sorter could have used anyway.
+
+    `_side_lane_caps` counts CONTIGUOUS reachable rows outward from the band, so
+    row `below_cap` is the first row with no `attachable_columns` at all.  That
+    is precisely why the drain may have it and an input may not.
+    """
+    strip = _flanked_strip_for(_universe_matrix_spec())
+    assert strip.drain_outermost
+    drain_row = strip.row_of_output(0)
+    assert strip.sorter_span(drain_row) == 0
+    assert drain_row == strip.first_row_below_band + len(strip.in_below)
+    for index, lane in enumerate(strip.in_below):
+        row = strip.row_of_input(lane[0])
+        assert row == strip.first_row_below_band + index
+        assert 1 <= strip.sorter_span(row) <= catalog.SORTER_MAX_REACH
+
+
+def test_a_flanked_strip_that_never_needed_the_row_is_unchanged() -> None:
+    """No other spec's area moves (the user's ruling, spec §9 R2).
+
+    A flanked group whose south inputs do not fill every reachable row keeps the
+    pre-2026-09-07 map exactly: drain innermost, inputs pushed out by
+    `len(out_lanes)`.  Pinned as byte-identical row indices, not as a shrug.
+    """
+    strip = _flanked_strip_for(_six_ingredient_assembler_spec())
+    assert not strip.drain_outermost
+    assert len(strip.in_below) == 1
+    assert strip.row_of_output(0) == strip.first_row_below_band
+    assert strip.row_of_input(strip.in_below[0][0]) == strip.first_row_below_band + 1
+
+
 def test_every_both_fed_ingredient_is_seated_on_its_side_s_outermost_row() -> None:
     """The invariant, over every corpus spec.
 

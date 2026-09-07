@@ -665,6 +665,36 @@ quietly absorbed:*
   is what the user asked for. The gate reports them separately and nets
   nothing.
 
+**R2's premise is INCOMPLETE — measured 2026-09-07 while implementing it, and
+this is the finding the user most needs.** Freeing the row makes the *seating*
+work exactly as R2 predicted: a Matrix Lab seats six single-item lanes and
+`box_height` goes 8 → 12. It does not make the *emission* work for a strip with
+more than one machine. `freeform._flank_lane` runs each machine's gap belt down
+the belt column immediately east of **its own** machine, from that machine's
+east pose south to the output lane. While the drain sat innermost that column
+crossed nothing. Once the drain moves outward, that column has to cross all
+three south input lanes, and `geom.belt_single_occupancy` forbids it — three
+cells, one column. Only the LAST machine in a strip has a clear gap column, so
+the moved drain is legal only on a one-machine strip. Mirroring the drain to the
+north gives the same picture; elevating the crossing does not fit the ramp
+length.
+
+Capping a flanked strip at one machine when the drain has moved makes the
+geometry valid and is what shipped (controller ruling, below), but it turns
+`universe-matrix#37` into 15 strips and the block then refuses for an unrelated
+reason — a producer lane cannot fan out that far:
+
+```
+antimatter: mass-energy-storage#23 lane is 10 tile(s) wide
+but must tap 15 consumer lane(s)
+```
+
+*So: `universe-matrix` does NOT keep building.* R1's absolute ban costs that
+cell for now. The gate reports it as a FAIL with that exact message. The next
+lever is the producer-lane fan-out, which is a bus/junction problem and not
+strip geometry; it is not in this plan's scope and is named here so it can be
+scoped as its own piece of work.
+
 Confirmed as measured: `_side_lane_caps(2901, 0.0, 5) == (3, 3)`;
 `attachable_columns` is three columns at the first three rows on each side and
 **empty at the fourth**, so the drain's new row is one no sorter could have

@@ -934,6 +934,37 @@ class Strip:
     #: when this is set, and the extra column is the belt's.  Clearance is what
     #: the collider needs, so a belt inside it would paste as a collision.
     flank_outputs: bool = False
+    #: Has the flanked output's drain lane been pushed to the OUTERMOST south
+    #: row, past sorter reach, because the south INPUT lanes filled every
+    #: sorter-reachable row?
+    #:
+    #: True moves the drain to ``first_row_below_band + len(in_below)`` and
+    #: starts the south inputs at offset 0; False keeps the pre-2026-09-07 map
+    #: exactly -- drain innermost, inputs pushed out by ``len(out_lanes)``.
+    #:
+    #: The drain may have that row because it carries NO SORTER: ``_flank_lane``
+    #: puts the only sorter on the machine's east face and runs a gap belt south
+    #: into the lane.  ``_side_lane_caps`` counts a CONTIGUOUS run outward from
+    #: the band, so the row past ``below_cap`` has no ``attachable_columns`` at
+    #: all -- fine for a drain, useless to an input.  ``sorter_span`` therefore
+    #: returns 0 for it BY DESIGN, and ``_machines_without_poses`` already skips
+    #: flanked strips.
+    #:
+    #: Derived once, in ``_logical_strip_plans``, as
+    #: ``flank_outputs and len(in_below) == below_cap``: a spec that never
+    #: needed the freed row keeps today's seating and today's area, which is the
+    #: user's ruling in spec §9 R2.
+    #:
+    #: IT ALSO CAPS THE FAMILY AT ONE MACHINE PER STRIP, in
+    #: ``generate_strip_families``, and the reason is a belt column rather than
+    #: a rate: ``_flank_lane``'s gap belt runs down the column east of its OWN
+    #: machine, so with the drain outermost it crosses every south input lane
+    #: and ``geom.belt_single_occupancy`` convicts the result.  Only the last
+    #: machine in a strip has a clear gap column.  That cap is why
+    #: ``universe-matrix`` refuses today -- 15 one-machine strips out-fan the
+    #: ``antimatter`` producer's lane -- and spec §9 R2 records the measurement
+    #: and names the next lever.
+    drain_outermost: bool = False
     family_id: StripFamilyId | None = None
     machine_start: int = 0
     west_channel: int = WEST_CHANNEL
@@ -996,6 +1027,19 @@ class Strip:
     def first_row_below_band(self) -> int:
         """Row index of the first lane under the machine band."""
         return self.machine_row + self.band_rows
+
+    @property
+    def _south_input_offset(self) -> int:
+        """Rows between the band and the first south INPUT lane.
+
+        The output lanes sit between the two unless :attr:`drain_outermost` has
+        moved the flanked drain past them, in which case the inputs start
+        against the band and the drain takes the row after the last of them.
+        The two halves of that swap are here and in :meth:`row_of_output`, and
+        they must move together or a sorter is drawn to a row the belt is not
+        on.
+        """
+        return 0 if self.drain_outermost else len(self.out_lanes)
 
     def sorter_span(self, row: int) -> int:
         """Tiles a sorter crosses between lane ``row`` and the machine it serves.
@@ -1111,7 +1155,7 @@ class Strip:
             side_index = index
         else:
             index = self.in_below.index(lane)
-            row = self.first_row_below_band + len(self.out_lanes) + index
+            row = self.first_row_below_band + self._south_input_offset + index
             side = "north"
             side_index = len(self.out_lanes) + index
         offset = self.column_offset(lane)
@@ -1168,7 +1212,7 @@ class Strip:
             lane = self.lane_of_input(item)
             if lane in self.in_above:
                 return self.in_above.index(lane)
-            return self.first_row_below_band + len(self.out_lanes) + self.in_below.index(lane)
+            return self.first_row_below_band + self._south_input_offset + self.in_below.index(lane)
         return self.machine_row + self._input_attachment_plan(item).lane_y
 
     def row_of_output(self, k: int) -> int:
@@ -1184,7 +1228,12 @@ class Strip:
         if planned is not None:
             return self.machine_row + planned.lane_y
         if self.flank_outputs or self.takes_belt_ports:
-            return self.first_row_below_band + k
+            # `drain_outermost` is set only on a FLANKED strip, so a belt-port
+            # host keeps `first_row_below_band + k` whatever its lane counts:
+            # its dock run is drawn from the machine's own port and does not get
+            # to sit past a sorter's reach.
+            drain_offset = len(self.in_below) if self.drain_outermost else 0
+            return self.first_row_below_band + drain_offset + k
         return self.machine_row + self._output_attachment_plan(k).lane_y
 
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
@@ -1304,6 +1353,9 @@ _UNREAD_BY_STAGED_CLEARANCE: frozenset[str] = frozenset(
         "port_dock_plan",
         "mode_params",
         "flank_outputs",
+        # Read only by the row map's FLANKED branch, and a flanked strip has no
+        # `physical_variant` -- the gate above returns before any key is built.
+        "drain_outermost",
         "family_id",
         "machine_start",
         "tail_extension",
@@ -2216,12 +2268,23 @@ def _seat_inputs(
     left to surface downstream as an unfed machine.
 
     ``flank_outputs`` says the product leaves by the machines' EAST face, so the
-    output lane costs a ROW below the band and no COLUMN on it.  That is the one
-    degree of freedom that seats seven connections on a building that offers six
-    per pair of faces, and it is why ``universe-matrix`` seats at all: three
-    ingredients mixed onto one lane above, three onto one below, and the product
-    out east.  It changes only the column arithmetic here -- the rows, the reach
-    caps and the mixing ladder are the same for both.
+    output lane costs no COLUMN on the south face, and the ROW it costs need not
+    be one a sorter can reach.  That is the one degree of freedom that seats
+    seven connections on a building that offers six per pair of faces, and it is
+    why ``universe-matrix`` seats at all: a Matrix Lab carries all six
+    ingredients on six SINGLE-ITEM lanes, three above and three below, with the
+    product out east.
+
+    The drain row is where that sixth lane comes from.  A flanked output's lane
+    carries no sorter at all -- ``_flank_lane`` puts the only one on the east
+    face and runs a gap belt south into the lane -- so the drain can sit on the
+    row PAST ``below_cap``, which is the first row with no ``attachable_columns``
+    and therefore useless to an input.  ``below_cap`` still bounds the input
+    lanes above (an input lane may never sit past reach); only the output's
+    reservation is waived, and only when flanked.  Spec §9 R2 records the
+    ruling, and §9 R1 is why it had to be made: the seating this replaced put
+    three ingredients on one belt above and three on one below, and a belt
+    carrying two items into a machine starves it however the sorters filter.
 
     ``seating_fits`` judges a whole candidate split rather than one lane: it is
     where the caller asks whether the ROWS this split implies can be served at
@@ -2235,8 +2298,12 @@ def _seat_inputs(
     Returns ``(above, below)``.  ``below`` shares the south side with the output
     lanes, so it is kept as small as possible.
     """
-    # The output lane still needs its ROW under the band even when flanked -- the
-    # gap belts drain into it -- so only the column charge goes away.
+    # The output lane still needs its ROW under the band even when flanked --
+    # the gap belts drain into it -- but that row need not be one a SORTER can
+    # reach, because the drain carries no sorter.  So the column charge goes
+    # away entirely and the row charge moves outward, past `below_cap`, where
+    # `Strip.row_of_output` seats it once `drain_outermost` says the inputs
+    # took every reachable row.
     out_columns = 0 if flank_outputs else (1 if n_sinks else 0)
     n = len(items)
     if n == 0:
@@ -2265,7 +2332,7 @@ def _seat_inputs(
                 above, below = tuple(lanes[:a]), tuple(lanes[a:])
                 if len(below) > below_cap:
                     continue  # more lanes than that side can hold; mix harder
-                if n_sinks and below_cap - len(below) <= 0:
+                if n_sinks and not flank_outputs and below_cap - len(below) <= 0:
                     continue  # no room left below for an output lane
                 if sum(len(lane) for lane in above) > columns:
                     continue  # more sorters than the north face has slots
@@ -2641,6 +2708,7 @@ def plan_strips(
                 physical_variant=physical_variant,
                 mode_params=family.mode_params,
                 flank_outputs=family.flank_outputs,
+                drain_outermost=family.drain_outermost,
                 family_id=family.family_id,
                 machine_start=machine_start,
                 west_channel=west_channel,
@@ -2957,6 +3025,10 @@ _UNREAD_BY_DIRECT_GEOMETRY: frozenset[str] = frozenset(
         "model_index",
         "mw",
         "mh",
+        # `drain_outermost` moves rows only on a FLANKED strip, and a flanked
+        # strip has no `physical_variant`, so `_direct_geometry_key` returns
+        # `None` for it and no two strips this memo keys can disagree about it.
+        "drain_outermost",
         "box_height",
         "physical_variant",
         "port_dock_plan",
@@ -3174,6 +3246,10 @@ _UNREAD_BY_DIRECT_CANDIDATE: frozenset[str] = frozenset(
         "model_index",
         "mw",
         "mh",
+        # Same argument as in :data:`_UNREAD_BY_DIRECT_GEOMETRY`: the pair key
+        # inherits that key's `None` gate, so a flanked strip -- the only kind
+        # whose drain row can move -- never reaches this memo.
+        "drain_outermost",
         "box_height",
         "mode_params",
         "family_id",

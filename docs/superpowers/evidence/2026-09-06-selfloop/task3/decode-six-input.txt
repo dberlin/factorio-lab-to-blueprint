@@ -1,0 +1,49 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+== bp-six-input.txt: 138 buildings, hash_valid=True
+short_desc: six-input
+description: flab2bp freeform layout (six-input)
+
+== census ==
+    119  conveyor-belt-3
+      8  sorter-2
+      6  sorter-1
+      3  tesla-tower
+      2  matrix-lab
+
+== 16 belt runs ==
+  run   0:  10 belts (3.0,14.0) -> (7.0,17.0) items=[] TERMINATES
+  run   1:   5 belts (8.0,9.0) -> (8.0,13.0) items=['(no filter)'] -> run 0
+  run   2:   9 belts (11.0,14.0) -> (19.0,14.0) items=[] TERMINATES
+  run   3:   5 belts (16.0,9.0) -> (16.0,13.0) items=['(no filter)'] -> run 2
+  run   4:   5 belts (0.0,3.0) -> (4.0,3.0) items=['(no filter)'] TERMINATES
+  run   5:   6 belts (0.0,4.0) -> (5.0,4.0) items=['(no filter)'] TERMINATES
+  run   6:   7 belts (0.0,5.0) -> (6.0,5.0) items=['(no filter)'] TERMINATES
+  run   7:   5 belts (0.0,11.0) -> (4.0,11.0) items=['(no filter)'] TERMINATES
+  run   8:   6 belts (0.0,12.0) -> (5.0,12.0) items=['(no filter)'] TERMINATES
+  run   9:   7 belts (0.0,13.0) -> (6.0,13.0) items=['(no filter)'] TERMINATES
+  run  10:   5 belts (11.0,0.0) -> (12.0,3.0) items=['(no filter)'] TERMINATES
+  run  11:   8 belts (10.0,0.0) -> (13.0,4.0) items=['(no filter)'] TERMINATES
+  run  12:  11 belts (9.0,0.0) -> (14.0,5.0) items=['(no filter)'] TERMINATES
+  run  13:   9 belts (10.0,17.0) -> (12.0,11.0) items=['(no filter)'] TERMINATES
+  run  14:  10 belts (9.0,17.0) -> (13.0,12.0) items=['(no filter)'] TERMINATES
+  run  15:  11 belts (12.0,17.0) -> (14.0,13.0) items=['(no filter)'] TERMINATES
+
+== machines and their sorters ==
+  matrix-lab#24 at (5.0,8.0) recipe=universe-matrix in_sorters=6 out_sorters=1
+      from run 4: ['(no filter)']
+      from run 5: ['(no filter)']
+      from run 6: ['(no filter)']
+      from run 7: ['(no filter)']
+      from run 8: ['(no filter)']
+      from run 9: ['(no filter)']
+      out -> run 1: (no filter)
+  matrix-lab#61 at (13.0,8.0) recipe=universe-matrix in_sorters=6 out_sorters=1
+      from run 10: ['(no filter)']
+      from run 11: ['(no filter)']
+      from run 12: ['(no filter)']
+      from run 13: ['(no filter)']
+      from run 14: ['(no filter)']
+      from run 15: ['(no filter)']
+      out -> run 3: (no filter)
+
+== spray coaters ==
