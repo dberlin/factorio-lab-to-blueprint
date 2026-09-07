@@ -640,25 +640,12 @@ def scan_source(
     tree = ast.parse(source)
     owners = _owner_by_line(tree)
     out: list[LiteralViolation] = []
-    # A float match is by tolerance, not equality, so an exact dict cannot
-    # replace the scan -- but a rounded bucket can narrow it: a value within
-    # `math.isclose`'s default relative tolerance of a needle rounds to that
-    # needle's key or to one of its two neighbours.
-    by_key: dict[int, list[tuple[float, tuple[str, ...]]]] = {}
-    for needle, symbols in hunted.items():
-        by_key.setdefault(round(needle * 1_000_000), []).append((needle, symbols))
     for node in ast.walk(tree):
         value = _literal_value(node)
         if value is None:
             continue
         lineno = getattr(node, "lineno", 0)
-        probe = round(value * 1_000_000)
-        candidates = (
-            *by_key.get(probe - 1, ()),
-            *by_key.get(probe, ()),
-            *by_key.get(probe + 1, ()),
-        )
-        for needle, symbols in candidates:
+        for needle, symbols in hunted.items():
             if math.isclose(value, needle, rel_tol=1e-9, abs_tol=1e-12):
                 out.append(
                     LiteralViolation(
