@@ -377,7 +377,11 @@ _ACCESS_CUT_ROUNDS = 8
 #: Reachable options a probe stops after.  The joint matcher assigns ONE
 #: corridor per demand and only needs a second to have something to swap to
 #: under a cut; proving a third buys nothing and costs an A* per rung per
-#: demand.
+#: demand.  This bounds GOAL-DRIVEN probes ONLY: a demand probed against the
+#: `boundary` still enumerates every option, because that is pre-existing
+#: behaviour the per-demand goal was added without disturbing, and truncating
+#: its option list would hand the joint matcher fewer corridors to swap
+#: between on a canvas that used to be given all of them.
 _PORT_ACCESS_PROBE_KEEP = 2
 
 
@@ -12045,16 +12049,19 @@ def _reserve_port_access(
             reachable_options[demand] = options
             exhaustive[demand] = False
             continue
+        # STOP ONCE TWO OPTIONS ARE PROVEN, BUT ONLY FOR A GOAL-DRIVEN PROBE.
+        # The joint matcher needs alternatives, not every alternative, and
+        # probing all twelve options of every satisfiable demand is what would
+        # spend the router's wall to re-confirm what the first probe already
+        # said.  A demand that is genuinely walled in still probes every
+        # option, which is the case worth paying for.  A demand probed against
+        # the `boundary` is exempt: it enumerated every option before this
+        # parameter existed and must keep doing so.
+        probe_cap = _PORT_ACCESS_PROBE_KEEP if demand in goal_by_demand else None
         candidates: list[tuple[Cell, Cell]] = []
         complete = True
         for access, exit_cell in options:
-            # STOP ONCE TWO OPTIONS ARE PROVEN.  The joint matcher needs
-            # alternatives, not every alternative, and probing all twelve
-            # options of every satisfiable demand is what would spend the
-            # router's wall to re-confirm what the first probe already said.
-            # A demand that is genuinely walled in still probes every option,
-            # which is the case worth paying for.
-            if len(candidates) >= _PORT_ACCESS_PROBE_KEEP:
+            if probe_cap is not None and len(candidates) >= probe_cap:
                 complete = False
                 break
             result = _astar(

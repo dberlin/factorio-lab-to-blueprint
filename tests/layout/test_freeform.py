@@ -24982,6 +24982,71 @@ def test_a_demand_with_no_goal_keeps_todays_local_only_behaviour() -> None:
     assert other in dict(reservation.assigned)
 
 
+def _open_access_demand(kind: freeform.PortAccessKind) -> tuple[_Canvas, freeform.PortAccessDemand]:
+    """A lane head standing in open ground, with twelve local options.
+
+    All four `_STEPS` neighbours of ``(3, 3, 0)`` are free and each offers three
+    exits, so every option is reachable and the option count is well clear of
+    `_PORT_ACCESS_PROBE_KEEP`.
+    """
+    canvas = _Canvas(limit=(0, 0, 8, 6))
+    port = canvas.add(_belt(3, 3))
+    canvas.keep_out.add((3, 3))
+    return canvas, _access_demand((3, 3, 0), kind, belt=port)
+
+
+def _recorded_reachable_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]]:
+    """Capture the option sets `_reserve_port_access` hands the joint matcher.
+
+    The reservation only reports an option count for a MISSING demand, so a
+    satisfied demand's enumeration has to be read on its way into the matcher.
+    """
+    recorded: dict[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]] = {}
+    real_match = freeform._match_access_corridors
+
+    def capturing_match(
+        demands: Sequence[freeform.PortAccessDemand],
+        options: Mapping[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]],
+        **kwargs: object,
+    ) -> dict[freeform.PortAccessDemand, freeform.PortAccessCorridor]:
+        recorded.update(options)
+        return real_match(demands, options, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(freeform, "_match_access_corridors", capturing_match)
+    return recorded
+
+
+def test_a_boundary_probed_demand_still_enumerates_every_reachable_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_PORT_ACCESS_PROBE_KEEP` must never reach the boundary oracle.
+
+    The per-demand goal was added without disturbing what `boundary` already
+    did, and capping the boundary path would hand the joint matcher two
+    corridors where it used to get twelve -- fewer swaps under a cut, on the
+    default freeform path.  Re-applying the cap here would drop this count to
+    `_PORT_ACCESS_PROBE_KEEP`.
+    """
+    recorded = _recorded_reachable_options(monkeypatch)
+    canvas, demand = _open_access_demand(freeform.PortAccessKind.BOUNDARY_ARRIVAL)
+    reservation = _reserve_port_access(canvas, [demand], boundary=((0, 3, 0),))
+    assert reservation.complete
+    assert len(recorded[demand]) == 12 > freeform._PORT_ACCESS_PROBE_KEEP
+
+
+def test_a_goal_probed_demand_stops_at_the_probe_keep_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same head, the same open ground, probed towards an explicit goal."""
+    recorded = _recorded_reachable_options(monkeypatch)
+    canvas, demand = _open_access_demand(freeform.PortAccessKind.INTERNAL_ARRIVAL)
+    reservation = _reserve_port_access(canvas, [demand], goals={demand: frozenset({(0, 3, 0)})})
+    assert reservation.complete
+    assert len(recorded[demand]) == freeform._PORT_ACCESS_PROBE_KEEP
+
+
 def test_boundary_corner_claim_already_on_perimeter_remains_reachable() -> None:
     canvas = _Canvas(limit=(0, 0, 4, 4))
     belt = canvas.add(_belt(1, 1))
