@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import cProfile
+import heapq
 import io
 import json
 import pstats
@@ -34,7 +35,7 @@ from typing import Any, Protocol, TypedDict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from flab2bp.bench.corpus import URL_CORPUS  # noqa: E402
+from flab2bp.bench.corpus import entry as corpus_entry  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import (  # noqa: E402
@@ -91,7 +92,7 @@ def _strategy(name: str) -> _Strategy:
 
 
 def _spec(url_id: str, candidate_policy: CandidatePolicy) -> BuildSpec:
-    entry = next(e for e in URL_CORPUS if e.url_id == url_id)
+    entry = corpus_entry(url_id)
     return build_candidates(
         load_vendored(),
         parse_url(entry.url),
@@ -672,15 +673,24 @@ def main() -> int:
             )
         # WHERE THE EXPANSIONS GO -- a search that finds nothing still spends
         # them, and a cap-sized failure spends `_MAX_EXPANSIONS` of them.
-        found = [c for c in tally.calls if c[2] >= 0]
-        missed = [c for c in tally.calls if c[2] < 0]
-        for name, rows in (("found", found), ("none ", missed)):
-            if not rows:
+        found: list[tuple[int, float, int]] = []
+        counts = [0, 0]
+        expansions = [0, 0]
+        seconds = [0.0, 0.0]
+        for call in tally.calls:
+            bucket = 0 if call[2] >= 0 else 1
+            counts[bucket] += 1
+            expansions[bucket] += call[0]
+            seconds[bucket] += call[1]
+            if bucket == 0:
+                found.append(call)
+        for bucket, name in enumerate(("found", "none ")):
+            if not counts[bucket]:
                 continue
-            exp = sum(r[0] for r in rows)
-            sec = sum(r[1] for r in rows)
+            exp = expansions[bucket]
+            sec = seconds[bucket]
             print(
-                f"      {name}: n={len(rows):<5} {exp:>10,} exp "
+                f"      {name}: n={counts[bucket]:<5} {exp:>10,} exp "
                 f"({100 * exp / max(tally.expansions, 1):4.1f}%)  {sec:6.2f}s "
                 f"({100 * sec / max(inner, 1e-9):4.1f}%)"
             )
@@ -693,7 +703,7 @@ def main() -> int:
                 f"{exps[int(0.9 * len(exps))]:,}, max {exps[-1]:,}; "
                 f"median exp/cell {ratio[mid]:.1f}"
             )
-        top = sorted(tally.calls, key=lambda r: -r[0])[:10]
+        top = heapq.nsmallest(10, tally.calls, key=lambda r: -r[0])
         print(
             "      ten dearest searches (exp, s, len): "
             + ", ".join(f"({e:,},{s:.2f},{n})" for e, s, n in top)
