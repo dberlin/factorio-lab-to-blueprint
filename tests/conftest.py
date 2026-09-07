@@ -14,6 +14,7 @@ monkeypatch solver internals disable the memo automatically.
 from __future__ import annotations
 
 import functools
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
@@ -31,6 +32,37 @@ from flab2bp.spec import BuildSpec
 
 _REFINED_OIL_FLOW = Path(__file__).parent / "fixtures" / "flow_refined_oil_self_feedback.csv"
 _REFINED_OIL_URL = "https://factoriolab.github.io/dsp/list?z=eJxFxrEKgzAUBdC.yXCnxCpOb7mhuEkVW8hadSgqQqRil.ftYqn0TGcWBlysNbOwRZpZwB3..J8jsb8-kGTnSbjzzdHvX89eaGK.yQ0BHQa8wRK8g4NyBBf4Ar5SX5tpihKUetXKrOLcDk0nJEA_&v=11"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Pop ``FLAB2BP_COATER_NODE`` once, at session start, so it can't leak in.
+
+    The variable selects the Spray Coater placement arm (``off``/``placed``,
+    see ``flab2bp.layout.coater_mode``) and is read straight from the shell
+    environment. Several tests -- ``test_every_coater_arbiter_is_green_on_a_
+    placed_build``, the ``test_coater_*`` checks in ``test_validate.py``, and
+    others -- rely on it being UNSET to mean "the placed default", and on
+    this box the variable leaks from the shell of whoever is running pytest.
+    Popping it here means a developer's exported override can no longer
+    silently make a "placed" test measure "off" instead; the gate's own
+    scripts already run both arms under ``env -u FLAB2BP_COATER_NODE`` for
+    exactly this reason.
+
+    This is a `pytest_configure` hook and NOT an autouse fixture on purpose:
+    ``_layout_memo_policy`` below branches on ``"monkeypatch" in
+    request.fixturenames`` to decide whether to disable the layout memo for
+    a test. An autouse fixture that took a ``monkeypatch`` parameter (or used
+    ``monkeypatch.delenv``) would put ``"monkeypatch"`` in every test's
+    fixturenames and silently disable that memo for the WHOLE suite. Do not
+    "improve" this into a fixture.
+
+    ``off_arm`` (this file has no copy; see ``test_freeform.py``,
+    ``test_sequence_solver.py`` and ``hierarchy/test_compose.py``) and
+    ``tests/layout/test_coater_node.py`` set the variable per-test with
+    ``monkeypatch.setenv``, which runs after this hook, once per test -- they
+    are unaffected by a one-time pop at session start.
+    """
+    os.environ.pop("FLAB2BP_COATER_NODE", None)
 
 
 @pytest.fixture(scope="session")
