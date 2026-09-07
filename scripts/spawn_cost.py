@@ -75,12 +75,12 @@ def crossed_holding_a_placement(spec: BuildSpec) -> tuple[float, Placement]:
 
 
 def _spec() -> BuildSpec:
-    from flab2bp.bench.corpus import URL_CORPUS
+    from flab2bp.bench.corpus import entry as corpus_entry
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
     from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, build_candidates
 
-    entry = next(item for item in URL_CORPUS if item.url_id == CELL)
+    entry = corpus_entry(CELL)
     return build_candidates(
         load_vendored(),
         parse_url(entry.url),
