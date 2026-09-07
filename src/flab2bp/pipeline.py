@@ -479,6 +479,29 @@ def _generated_title(spec: BuildSpec) -> str:
     return _ellipsize_utf16(title)
 
 
+def _prime_note(spec: BuildSpec, placement: Placement) -> str:
+    """``"; PRIME ONCE: 8 hydrogen onto the marked belt at (3,21)"``, or ``""``.
+
+    A player who pastes and never reads the description sees a block that
+    looks broken -- a self-loop recipe holds zero items at t=0, since a
+    blueprint carries no inventory (design §9 R3). This is the mitigation the
+    ruling allows: an instruction on the description itself, not a permanent
+    external input lane and not a rate change.
+    """
+    if not spec.self_loop_seeds:
+        return ""
+    heads = markers.self_loop_prime_heads(placement, spec)
+    notes = []
+    for seed in spec.self_loop_seeds:
+        head = heads.get(seed.item_id)
+        where = ""
+        if head is not None:
+            tile = placement.buildings[head]
+            where = f" at ({tile.x},{tile.y})"
+        notes.append(f"{seed.seed_items} {seed.item_id} onto the marked belt{where}")
+    return "; PRIME ONCE: " + "; ".join(notes)
+
+
 def _id_map(spec: BuildSpec) -> validate.IdMap:
     """Bridge FactorioLab string ids to the DSP numeric ids a Placement uses.
 
@@ -1245,6 +1268,7 @@ def build(
                 description=(
                     f"flab2bp {sname} layout, {spec.label} candidate, "
                     f"{spec.machine_count} machines, {placement.area} tiles"
+                    f"{_prime_note(spec, marked)}"
                 ),
             )
             phase_started = time.monotonic()

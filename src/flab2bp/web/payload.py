@@ -61,6 +61,24 @@ def _rates(values: dict[str, Fraction]) -> Json:
     return result
 
 
+def _self_loop_seeds(spec: BuildSpec) -> Json:
+    """The one-off prime every self-loop item needs, keyed by item.
+
+    Never a permanent external input (design §9 R3) -- this is the same
+    ``spec.self_loop_seeds`` the CLI's ``prime once (self-loop):`` line and
+    the blueprint description's ``PRIME ONCE`` note read, serialised for the
+    UI to show the same instruction.
+    """
+    return {
+        s.item_id: {
+            "seed_items": s.seed_items,
+            "recipe": s.recipe_id,
+            "machines": s.machines,
+        }
+        for s in spec.self_loop_seeds
+    }
+
+
 def _report_block(report: validate.Report) -> Json:
     """A validation report as JSON, identical shape for the winner and losers."""
     return {
@@ -122,6 +140,7 @@ def _attempt_detail(attempt: pipeline.Attempt) -> Json:
         "title": attempt.placement.short_desc,
         "outputs": _rates(dict(spec.outputs)),
         "external_inputs": _rates(dict(spec.external_inputs)),
+        "self_loop_seeds": _self_loop_seeds(spec),
         "input_markers": int(attempt.placement.stats.get("input_markers", 0)),
         "unmarked_inputs": _array(sorted(unmarked)),
         "belt_tiers": _belt_tiers(spec, attempt.placement, attempt.report),
@@ -210,6 +229,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "description": build.placement.description,
         "outputs": _rates(dict(build.spec.outputs)),
         "external_inputs": _rates(dict(build.spec.external_inputs)),
+        "self_loop_seeds": _self_loop_seeds(build.spec),
         "input_markers": int(build.placement.stats.get("input_markers", 0)),
         "unmarked_inputs": _array(sorted(unmarked)),
         "flow_pinned": build.flow_pinned,
