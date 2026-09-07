@@ -152,6 +152,8 @@ URL_CORPUS: tuple[CorpusEntry, ...] = (
     ),
 )
 
+_BY_URL_ID = {item.url_id: item for item in URL_CORPUS}
+
 
 def entries_for(*tiers: Tier) -> tuple[CorpusEntry, ...]:
     wanted = set(tiers)
@@ -159,7 +161,7 @@ def entries_for(*tiers: Tier) -> tuple[CorpusEntry, ...]:
 
 
 def entry(url_id: str) -> CorpusEntry:
-    for e in URL_CORPUS:
-        if e.url_id == url_id:
-            return e
-    raise KeyError(f"no corpus entry {url_id!r}")
+    try:
+        return _BY_URL_ID[url_id]
+    except KeyError:
+        raise KeyError(f"no corpus entry {url_id!r}") from None
