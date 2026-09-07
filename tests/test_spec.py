@@ -31,6 +31,18 @@ def test_no_upgrades_means_the_floor_is_the_ceiling() -> None:
     assert spec.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
 
 
+def test_a_spec_defaults_to_exact_machine_ranking() -> None:
+    spec = BuildSpec(groups=(_group(),))
+
+    assert spec.machine_rank == "exact"
+    assert spec.machine_moves == ()
+
+
+def test_a_spec_rejects_an_unknown_machine_rank() -> None:
+    with pytest.raises(ValidationError, match="machine_rank"):
+        BuildSpec(groups=(_group(),), machine_rank="whatever")
+
+
 def test_upgrades_follow_the_floor_and_raise_the_capacity() -> None:
     spec = BuildSpec(
         groups=(_group(),),
