@@ -17942,7 +17942,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         )
 
     def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
-        """One tile: ``_coater_seat`` has no tile with a lane tile either side."""
+        """One tile: ``_coater_seats`` has no tile with a lane tile either side."""
         canvas, spec, strips, ports = self._fixture(1)
         with pytest.raises(freeform._Unseatable, match="tile"):
             freeform._place_coaters(

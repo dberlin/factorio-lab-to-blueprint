@@ -18398,72 +18398,42 @@ def _coater_seats(
     defect (``belt#0 (53,20,0) pred=[817, 1872]`` on coater#771's body).  At
     ``west_channel = 3`` this leaves exactly one candidate, ``ox - 1``; the
     staged-static clearance lift to 4 leaves two.
+
+    Index zero is excluded for a second reason as well: the game reads BOTH
+    ends of the belt an addon rides and refuses the addon when either
+    disagrees with its axis, so a seat needs a lane tile either side of it.
+    See :func:`flab2bp.dsp.rules.addon_ride_is_straight`.
+
+    **Why the seat is upstream of every sorter.**  A coater sprays what passes
+    THROUGH it, so everything a machine takes has to reach the coater first.
+    An input lane is emitted west to east and linked the same way --
+    ``_emit_strip`` chains ``indices[k].output_obj = indices[k + 1]`` -- and
+    the feeding net sinks into ``lane_idx[row][0]``, which is why ``_Port.x``
+    is the lane's WEST end.  So an input lane flows west to east, its head is
+    ``port.x``, and every sorter on it draws from a tile at or after the head.
+    A seat after the first machine-facing tile would let that consumer take
+    unsprayed cargo, which is why ``stop`` is ``west_channel``.
+
+    **The measurement that made this rule.**  The seat used to be ``port.x1``,
+    the lane's east end, on the reasoning that it is nearest the east margin
+    the drop belt lived in.  That is the DOWNSTREAM end: the last belt of the
+    chain, with no ``output_obj`` and nothing after it.  Measured over five
+    clean proliferated freeform placements (``energy-matrix``, ``graphene``,
+    ``plastic``, ``processor``, ``magnetic-coil``), **all 12 coaters were the
+    last belt of their own chain and all 12 had zero pickups anywhere
+    downstream of them** -- every sorter on every sprayed lane drew from a tile
+    the cargo reached before the coater.  The spray was applied to cargo
+    dead-ended at the end of a belt.  Spine on the same five specs seats 0 of
+    12 at the tail.  So the blueprint pasted, the coaters were supplied,
+    ``prolif.coaters_are_supplied`` passed -- and not one proliferated recipe
+    would have run proliferated.  That is the failure this ordering prevents,
+    and it is the reason the rule is not a matter of taste.
     """
     stop = min(len(port.tiles) - 1, west_channel)
     start = 1 + _coater_body_half_span(yaw) if coater_mode().is_node else 1
     return tuple(
         (canvas.buildings[index].x, canvas.buildings[index].y) for index in port.tiles[start:stop]
     )
-
-
-def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
-    """The lane tile a Spray Coater rides: its SECOND, one east of the head.
-
-    THE SECOND TILE IS THE FIRST ONE WITH A LANE TILE ON BOTH SIDES, and that is
-    the whole of why it is not the first.  A sprayed lane is emitted starting one
-    column west of the strip (see ``_emit_strip``), so its head is the tile the
-    router sinks into and its second tile is column 0 of the strip -- upstream of
-    every sorter, exactly where the head used to be, and with a predecessor that
-    is a lane tile running east rather than whatever direction the router
-    happened to arrive from.
-
-    The predecessor is the half that was missing.  The game reads BOTH ends of
-    the belt an addon rides -- ``GetBeltInputBeltPose`` and
-    ``GetBeltOutputBeltPose``, each tested against the addon's axis -- and
-    refuses the addon when either disagrees.  Six of the twenty coaters on the
-    blueprint the user pasted arrived from the south and left to the east on the
-    coater's own tile.  See :func:`flab2bp.dsp.rules.addon_ride_is_straight`.
-
-    ``None`` when the lane is too short to offer such a tile, which a caller
-    must treat as "no coater here" rather than seating one anyway.
-
-    **A coater sprays what passes THROUGH it, so everything a machine takes has
-    to reach the coater first.**  An input lane is emitted west to east and
-    linked the same way -- ``_emit_strip`` chains ``indices[k].output_obj =
-    indices[k + 1]`` -- and the feeding net sinks into ``lane_idx[row][0]``,
-    which is why ``_Port.x`` is the lane's WEST end.  So an input lane flows
-    west to east, its head is ``port.x``, and every sorter on it draws from a
-    tile at or after the head.
-
-    This used to seat the coater at ``port.x1``, the lane's east end, on the
-    reasoning that it is nearest the east margin the drop belt lived in.  That
-    is the DOWNSTREAM end: the last belt of the chain, with no ``output_obj``
-    and nothing after it.  Measured over five clean proliferated freeform
-    placements (``energy-matrix``, ``graphene``, ``plastic``, ``processor``,
-    ``magnetic-coil``), **all 12 coaters were the last belt of their own chain
-    and all 12 had zero pickups anywhere downstream of them** -- every sorter on
-    every sprayed lane drew from a tile the cargo reached before the coater.
-    The spray was applied to cargo dead-ended at the end of a belt.  Spine on
-    the same five specs seats 0 of 12 at the tail.  So the blueprint pasted, the
-    coaters were supplied, ``prolif.coaters_are_supplied`` passed -- and not one
-    proliferated recipe would have run proliferated.
-
-    The routing follows the correctness.  At ``Facing.EAST`` the drop belt is
-    one tile BEHIND the coater, so a tail seat put the drop *inside* the lane,
-    hemmed between the machine band and the neighbouring lanes' coater bans; a
-    head seat puts it one tile west of the strip, in the ``WEST_CHANNEL``
-    column, which is reserved corridor at level 0 and empty at level 1.  The
-    second-tile seat keeps that cell exactly.  The coater has not moved at all
-    -- it still rides column 0 of the strip; what moved is the lane's HEAD,
-    west into the channel -- so the drop cell is the same tile it always was,
-    one level above the new head.
-    """
-    seats = _coater_seats(
-        canvas,
-        port,
-        west_channel=max(0, len(port.tiles) - 1),
-    )
-    return seats[0] if seats else None
 
 
 def _reserve_staged_coater_belt_ban(
@@ -18549,7 +18519,8 @@ def _place_coaters(
       while looking perfectly healthy.  Each coater gets a one-tile ``drop``
       belt one tile behind it, which a proliferator net is routed to.
     * **It must sit at the lane's HEAD, where the items arrive.**  See
-      :func:`_coater_seat`.
+      :func:`_coater_seats`, whose docstring carries the measurement that made
+      that rule.
     * **Only ``REQUIRES_SPRAY`` lanes are coated.**  The destination-derived
       cargo domain is authoritative even for uniform sprayed demand; the
       item-level split set merely records coexistence.
