@@ -954,16 +954,6 @@ class Strip:
     tail_extension: int = 0
     #: Per-output-lane Automatic Piler plans owned by this strip.
     pilers: tuple[PilerPlan, ...] = ()
-    #: EXPERIMENT (``FLAB2BP_COATER_NODE=packed``): this "strip" is not a run of
-    #: machines at all -- it is one packed Spray Coater NODE, a four-tile belt
-    #: run with the addon riding its third tile, given to the CP-SAT packer as
-    #: its own rectangle so ordinary no-overlap rules seat it.
-    #:
-    #: ``(consumer strip index, item)``.  ``machines`` is the tile count and
-    #: ``pw`` is 1, so ``_box`` sizes it exactly; ``_emit_strip`` is never
-    #: called for it -- ``_prepare_routing_problem`` branches to
-    #: :func:`_emit_coater_node` on this field being set.
-    coater_node: tuple[int, str] | None = None
 
     @property
     def staged_static_variant_id(self) -> StagedStaticVariantId | None:
@@ -1313,9 +1303,6 @@ _STAGED_CLEARANCE_KEY_FIELDS: frozenset[str] = frozenset(
 )
 _UNREAD_BY_STAGED_CLEARANCE: frozenset[str] = frozenset(
     {
-        # EXPERIMENT: a packed Spray Coater node is not a run of machines;
-        # nothing it carries is read here.
-        "coater_node",
         "group_key",
         "recipe_id",
         "cargo_domain",
@@ -2730,61 +2717,7 @@ def plan_strips(
         )
         for strip, relations in zip(strips, clearance_keys, strict=True)
     ]
-    piled = _plan_strip_pilers(spec, groups, planned)
-    if coater_mode().packs_nodes:
-        piled = piled + _packed_coater_node_strips(piled)
-    return piled
-
-
-def _packed_coater_node_strips(strips: Sequence[Strip]) -> list[Strip]:
-    """EXPERIMENT: one packed Spray Coater node per sprayed input lane.
-
-    A node is given to the packer as a rectangle six wide and three tall: the
-    four belt tiles of :data:`_COATER_NODE_TILES` in the middle row, with one
-    free cell on every side.  That ring is not padding -- it is exactly what
-    ``_coater_keepout_hits`` reserves (the oriented 3x1 body plus one lateral
-    cell), so a node whose rectangle the packer keeps clear is a node whose
-    addon clears every machine BY CONSTRUCTION rather than by a projected
-    check that can fail after the pack.
-
-    The rectangle is expressed in the existing ``Strip`` vocabulary rather
-    than as a second kind of packable object: ``machines`` is the tile count
-    and ``pw`` is 1, so ``_box`` sizes it with no special case, and
-    ``add_no_overlap_2d`` then does the whole of the seating argument.
-    ``cargo_domain`` is ``UNSPRAYED`` so nothing tries to seat a coater on the
-    node's own (empty) lane set; the node's port is registered against its
-    CONSUMER strip.
-    """
-    coater = catalog.building(catalog.SPRAY_COATER_ID)
-    nodes: list[Strip] = []
-    for index, strip in enumerate(strips):
-        if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
-            continue
-        for item in dict.fromkeys(strip.in_lanes):
-            nodes.append(
-                Strip(
-                    group_key=f"__coater_node__{index}:{item}",
-                    recipe_id="",
-                    item_id=catalog.SPRAY_COATER_ID,
-                    model_index=coater.model_index,
-                    cargo_domain=CargoDomain.UNSPRAYED,
-                    machines=_COATER_NODE_TILES,
-                    mw=1,
-                    mh=1,
-                    yaw=Facing.EAST.value,
-                    pw=1,
-                    ph=1,
-                    in_above=(),
-                    out_lanes=(),
-                    in_below=(),
-                    lane_plan=None,
-                    attachment_plan=(),
-                    box_height=2,
-                    west_channel=1,
-                    coater_node=(index, item),
-                )
-            )
-    return nodes
+    return _plan_strip_pilers(spec, groups, planned)
 
 
 _COARSE_STRIP_THRESHOLD = 40
@@ -3039,9 +2972,6 @@ _DIRECT_GEOMETRY_KEY_FIELDS: frozenset[str] = frozenset(
 )
 _UNREAD_BY_DIRECT_GEOMETRY: frozenset[str] = frozenset(
     {
-        # EXPERIMENT: a packed Spray Coater node is not a run of machines;
-        # nothing it carries is read here.
-        "coater_node",
         "group_key",
         "recipe_id",
         "model_index",
@@ -3270,9 +3200,6 @@ _UNREAD_BY_DIRECT_CANDIDATE: frozenset[str] = frozenset(
         "machine_start",
         "west_channel",
         "tail_extension",
-        # EXPERIMENT: a packed Spray Coater node carries no lane a sorter can
-        # reach, so it can never be either end of a direct-insert candidate.
-        "coater_node",
     }
 )
 
@@ -3989,24 +3916,7 @@ def _staged_static_clearance_requirement(
 def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
     """Strip index pairs that will need a belt route.
 
-    **EXPERIMENT (``FLAB2BP_COATER_NODE=packed-hpwl``): a packed Spray Coater
-    node's out-net counts here too.**
-
-    The pairs come off ``out_lanes`` -> destination group key, and a coater node
-    has no ``out_lanes`` and no group its consumer belongs to.  So under
-    ``packed`` a node contributes ZERO wirelength terms: width is
-    lexicographically above HPWL anyway (see the objective below), and with no
-    term at all the packer fits each node wherever the width objective is
-    happiest.  Measured, that is not a rounding error -- ``packed`` bought
-    **+50% belt tiles** on the proliferated corpus against ``placed``'s +1.4%
-    for the same node and the same nets, because ``placed``'s post-pack search
-    puts the node beside the lane head it feeds and CP-SAT had no reason to.
-
-    One pair per node fixes the asymmetry: the node and the consumer strip it
-    feeds are exactly the two boxes the new net runs between.  The
-    producer-to-node net is left standing on the producer/consumer pair the loop
-    below already emits -- the producer still wants to be near that consumer,
-    and splitting it per item is not something an index pair can express.
+    The pairs come off ``out_lanes`` -> destination group key.
     """
     by_group: dict[str, list[int]] = defaultdict(list)
     for i, s in enumerate(strips):
@@ -4018,13 +3928,6 @@ def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
                 for j in by_group.get(group_key, []):
                     if i != j:
                         nets.add((i, j))
-    if coater_mode().node_wirelength:
-        for i, strip in enumerate(strips):
-            if strip.coater_node is None:
-                continue
-            consumer = strip.coater_node[0]
-            if consumer != i and 0 <= consumer < len(strips):
-                nets.add((min(i, consumer), max(i, consumer)))
     return sorted(nets)
 
 
@@ -16531,21 +16434,10 @@ def _prepare_routing_problem(
     output_lane_id_by_belt: dict[int, str] = {}
     piler_nets: list[_Net] = []
     sorters = 0
-    #: EXPERIMENT (``packed``): where CP-SAT put each Spray Coater node.
-    packed_node_sites: dict[tuple[int, str], tuple[int, int]] = {}
     for i, s in enumerate(strips):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         ox, oy = pack.at[i]
-        if s.coater_node is not None:
-            # A packed coater node is not a run of machines, so `_emit_strip`
-            # is not the emitter for it.  Record the ground the packer bought
-            # and lay the run once every consumer lane exists, below.  The
-            # belt row is the MIDDLE of the three-row box, which is what puts
-            # the addon's lateral keep-out inside the rectangle.
-            packed_node_sites[s.coater_node] = (ox, oy + 1)
-            strip_in_ports.append({})
-            continue
         ins, outs, placed, strip_piler_nets = _emit_strip(
             canvas,
             s,
@@ -16602,7 +16494,8 @@ def _prepare_routing_problem(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
-    # EXPERIMENT (``FLAB2BP_COATER_NODE``): the Spray Coater as a real node.
+    # The Spray Coater as a real node (``FLAB2BP_COATER_NODE=placed``, the
+    # default; ``off`` is the one-release A/B control).
     #
     # One node per sprayed input lane -- a four-tile belt run with the addon on
     # its third tile (see `_COATER_NODE_TILES`) -- emitted here and then seated
@@ -16621,27 +16514,18 @@ def _prepare_routing_problem(
     #     which is an ordinary unsprayed lane geometrically: no widened
     #     channel, no prepended head, no coater keep-out, no west-channel lift.
     #
-    # `packed` takes the node's ground from CP-SAT (its own rectangle in the
-    # pack); `placed` searches free ground beside the lane head after the
-    # pack, so the packer is untouched and only the router sees the extra net.
+    # `placed` searches free ground beside the lane head after the pack, so the
+    # packer is untouched and only the router sees the extra net.
     coater_node_links: list[tuple[str, _Port, _Port]] = []
     if coater_mode().is_node:
         for strip_index, s in enumerate(strips):
-            if s.coater_node is not None or s.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
+            if s.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
                 continue
             for item in dict.fromkeys(s.in_lanes):
                 consumer_port = strip_in_ports[strip_index].get(item)
                 if consumer_port is None:
                     continue
-                site = packed_node_sites.get((strip_index, item))
-                if site is not None and not _coater_node_site_is_clear(canvas, *site):
-                    raise _Unseatable(
-                        f"the packed {item} Spray Coater node at {site} is not "
-                        "clear: its four belt tiles, its drop and approach "
-                        "cells, or its addon body keep-out is taken"
-                    )
-                if site is None:
-                    site = _coater_node_site(canvas, (consumer_port.x, consumer_port.y))
+                site = _coater_node_site(canvas, (consumer_port.x, consumer_port.y))
                 if site is None:
                     raise _Unseatable(
                         f"no free ground for the {item} Spray Coater node near "
@@ -18507,17 +18391,16 @@ def _coater_seats(
     turn and the last tile has no successor; only the bounded interior channel
     offsets between them are candidates.
 
-    **EXPERIMENT (``FLAB2BP_COATER_NODE``).**  With the switch on, the first
-    candidate index is ``1 + half_span`` rather than ``1``: index 0 is the lane
-    HEAD, the one cell of the lane a router path can reach and therefore the
-    cell every many-to-one merge lands on, and a seat at index ``half_span`` or
-    less puts the 3x1 body over it.  That is the reported defect
-    (``belt#0 (53,20,0) pred=[817, 1872]`` on coater#771's body).  At
+    Under a node arm the first candidate index is ``1 + half_span`` rather than
+    ``1``: index 0 is the lane HEAD, the one cell of the lane a router path can
+    reach and therefore the cell every many-to-one merge lands on, and a seat at
+    index ``half_span`` or less puts the 3x1 body over it.  That is the reported
+    defect (``belt#0 (53,20,0) pred=[817, 1872]`` on coater#771's body).  At
     ``west_channel = 3`` this leaves exactly one candidate, ``ox - 1``; the
     staged-static clearance lift to 4 leaves two.
     """
     stop = min(len(port.tiles) - 1, west_channel)
-    start = 1 + _coater_body_half_span(yaw) if coater_mode().narrow_seats else 1
+    start = 1 + _coater_body_half_span(yaw) if coater_mode().is_node else 1
     return tuple(
         (canvas.buildings[index].x, canvas.buildings[index].y) for index in port.tiles[start:stop]
     )
@@ -18594,8 +18477,8 @@ def _reserve_staged_coater_belt_ban(
     need = colliders.belt_crossing_height(staged.coater.model_index)
     body_half = _coater_body_half_span(staged.port.yaw)
     span = body_half + 1
-    if coater_mode().narrow_seats:
-        # EXPERIMENT: the body's OWN level, and the area-1 rival cell.
+    if coater_mode().is_node:
+        # The body's OWN level, and the area-1 rival cell.
         #
         # The body tiles are occupied lane belts, so A* could never step onto
         # them; what this stops is `_merge_frontier` OFFERING one as a goal,
@@ -18741,11 +18624,11 @@ def _place_coaters(
                     f"the {item} lane is marked {port.cargo_domain.value}, so "
                     "a Spray Coater cannot be placed on it"
                 )
-            # EXPERIMENT: under a node arm this port is the NODE's four-tile
-            # run, not the consumer strip's channel, and the strip's own
-            # ``west_channel`` is back to ``WEST_CHANNEL`` because no addon
-            # rides it.  The node's whole interior is the candidate set, which
-            # with `narrow_seats` is the single tile 2.
+            # Under a node arm this port is the NODE's four-tile run, not the
+            # consumer strip's channel, and the strip's own ``west_channel`` is
+            # back to ``WEST_CHANNEL`` because no addon rides it.  The node's
+            # whole interior is the candidate set, which under the narrowed
+            # seat rule is the single tile 2.
             seat_channel = len(port.tiles) - 1 if coater_mode().is_node else strip.west_channel
             seats = _coater_seats(
                 canvas,

@@ -24,6 +24,18 @@ from tests.layout.hierarchy.conftest import chain_build_spec
 TwoSolvedBlocks = tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]
 
 
+@pytest.fixture
+def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``FLAB2BP_COATER_NODE=off``, the retained pre-2026-09-07 arm.
+
+    See the fixture of the same name in ``tests/layout/test_freeform.py``.  The
+    ``placed`` default adds the Coater body's OWN level to ``belt_ban`` -- that
+    is the whole point of the narrowed seat -- so "every banned level is at or
+    above 1" is an ``off``-arm statement about the ban's shape.
+    """
+    monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
+
+
 def test_pack_blocks_keeps_a_two_tile_gap_and_prefers_a_band_legal_shape():
     sizes = [(40, 30), (40, 30), (40, 30), (40, 30)]
     offsets, width, height = compose.pack_blocks(sizes, gap=2)
@@ -127,6 +139,7 @@ def _mixed_block(*, coater_seats: tuple[int, ...]) -> MixedBlock:
     return MixedBlock(buildings, sorter, splitter, machine, coaters, drops)
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
     """Kind by kind, because the differences are what the game enforces.
 

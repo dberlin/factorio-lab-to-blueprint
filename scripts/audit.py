@@ -97,6 +97,7 @@ from flab2bp.layout.base import (  # noqa: E402
     PlacementCompletion,
     ProjectionFailureRecord,
 )
+from flab2bp.layout.coater_mode import coater_mode  # noqa: E402
 from flab2bp.layout.freeform import FreeformLayout  # noqa: E402
 from flab2bp.layout.sequence_solver import SequencePairLayout  # noqa: E402
 from flab2bp.layout.strategy_race import (  # noqa: E402
@@ -216,7 +217,7 @@ class Result:
     #: fact from a refusal under Cython, and a JSONL that cannot tell them apart
     #: cannot be compared against one taken with the other backend.
     route_backend: str = field(default_factory=route_kernel.selected_backend)
-    #: EXPERIMENT (``FLAB2BP_COATER_NODE``): coaters placed, coater bodies
+    #: ``FLAB2BP_COATER_NODE`` arm census: coaters placed, coater bodies
     #: sitting over a belt with two predecessors, and belt tiles.  Zero on a
     #: row with no placement.
     coaters: int = 0
@@ -509,7 +510,7 @@ def run_cell(job: Job) -> Result:
 def _coater_census(placement: object) -> tuple[int, int, int]:
     """``(coaters, bodies over a belt merge, belt tiles)`` for one placement.
 
-    EXPERIMENT (``FLAB2BP_COATER_NODE``).  The middle number is the reported
+    ``FLAB2BP_COATER_NODE``.  The middle number is the reported
     defect measured directly rather than inferred: a Spray Coater's oriented
     3x1 body covers three tiles, and a belt on one of them with more than one
     predecessor is a 2-into-1 merge under the addon.  Nothing in
@@ -695,7 +696,7 @@ def record(tallies: dict[str, Tally], r: Result) -> None:
         "projection_collider_pairs": r.projection_collider_pairs,
         "projection_power_pairs": r.projection_power_pairs,
         "projection_sorters": r.projection_sorters,
-        "coater_arm": os.environ.get("FLAB2BP_COATER_NODE", "off"),
+        "coater_arm": coater_mode().value,
         "coaters": r.coaters,
         "coater_merges": r.coater_merges,
         "belt_tiles": r.belt_tiles,

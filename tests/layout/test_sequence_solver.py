@@ -166,6 +166,18 @@ class _CompactSeedCapture(TypedDict, total=False):
     absolute_deadline: float | None
 
 
+@pytest.fixture
+def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``FLAB2BP_COATER_NODE=off``, the retained pre-2026-09-07 arm.
+
+    See the fixture of the same name in ``test_freeform.py``.  Under the
+    ``placed`` default a sprayed strip keeps an ordinary ``WEST_CHANNEL``
+    rather than the widened coater channel, so both the recorded channel
+    arithmetic and the recorded solve times here are ``off``-arm facts.
+    """
+    monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
+
+
 def _placement(*, area: int, belt_tiles: int, valid: bool = True) -> Placement:
     return Placement(
         buildings=(
@@ -6073,6 +6085,7 @@ def test_selected_strips_memo_keys_name_the_selected_variant() -> None:
     }
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_sequence_reservation_and_child_rebuild_preserve_piler_tail_fields() -> None:
     spec = proliferated_spec()
     policy = BandPolicy("120")
@@ -6277,6 +6290,7 @@ def test_preparing_shifted_piler_producers_keeps_contiguous_merge_groups() -> No
         ),
     ),
 )
+@pytest.mark.usefixtures("off_arm")
 def test_selected_variant_recomputes_its_own_staged_static_clearance(
     monkeypatch: pytest.MonkeyPatch,
     risky_yaw: float,
@@ -9213,8 +9227,17 @@ def test_production_counts_every_candidate_that_reached_the_detailed_router() ->
     assert placement.stats["alns_evaluations"] == placement.stats["detailed_routes"]
 
 
+@pytest.mark.usefixtures("off_arm")
 @pytest.mark.slow
 def test_reported_sequence_output_products_keeps_machine_inputs_separate() -> None:
+    """Pinned to ``off``, the arm this 10 s budget was recorded under.
+
+    Under the ``placed`` default this cell still lays out and still certifies
+    -- measured 2026-09-07 on an unloaded box, 24.4 s / area 2944 at a 30 s
+    budget and 48.9 s / area 2860 at 60 s -- but it does not finish inside the
+    10 s recorded here.  Re-recording the budget is a throughput decision, not
+    a correctness one, so the capture keeps the arm it was taken on.
+    """
     from flab2bp.lab.data import load_vendored
     from flab2bp.lab.url import parse_url
     from flab2bp.rates.candidates import CandidatePolicy, build_candidates
