@@ -2114,9 +2114,18 @@ def _check_shared_lane_capacity(
 ) -> None:
     """A shared lane must carry the SUM of its items within the belt tier.
 
+    PERMANENTLY INERT SINCE SPEC §9 R1, and left in place deliberately.  Its
+    body is ``if len(lane) < 2: continue`` and no lane reaches it with two items
+    any more, so it never rejects anything and never will while the ban holds.
+    That is not a bug to fix by deleting it: it is the check a later ruling
+    readmitting a shared lane would need on day one, and removing it is not the
+    mixing ban's call to make.  Read it as a dormant guard, not a live one --
+    the same status as ``StripVariant.attachment_plan``'s per-item column
+    assignment, which is dormant for the same reason.
+
     Only shared lanes are checked.  A single-item lane is left exactly as it
-    was, so this cannot reject a spec that already worked -- mixing is the new
-    thing, so mixing is what gets the new constraint.
+    was, so this cannot reject a spec that already worked -- mixing was the new
+    thing, so mixing is what got the new constraint.
 
     ``stack`` is the LANE's, taken from the ``LogicalLane`` the family already
     planned rather than re-derived here: one belt has one cargo size, and the
@@ -2230,7 +2239,6 @@ def _seat_inputs(
     columns: int,
     *,
     flank_outputs: bool = False,
-    lane_fits: Callable[[tuple[str, ...]], bool] | None = None,
     seating_fits: Callable[[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]], bool]
     | None = None,
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
@@ -2255,6 +2263,12 @@ def _seat_inputs(
     full routing pass to discover it.  This is the discipline the coater seat
     chooser gets from ``prolif.coater_rides_one_run`` -- the emitter agrees with
     the validator rather than racing it.
+
+    A ``lane_fits`` per-lane rate predicate went with them, and deliberately was
+    not kept as a seam for single-item lanes: it summed the WHOLE group's
+    throughput across every strip against one belt, while a lane serves one
+    strip, and :func:`~flab2bp.layout.strip_variants._machine_cap` is already the
+    single-item rate gate.  Spec §9 R8 records the measurement.
 
     ``above_cap`` and ``below_cap`` are THIS MACHINE's rows per side, from
     :func:`_side_lane_caps`, and they are not both ``SORTER_MAX_REACH``: a
@@ -2334,8 +2348,6 @@ def _seat_inputs(
     ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]] | None:
         for k in mix_sizes:
             lanes = [tuple(items[i : i + k]) for i in range(0, n, k)]
-            if lane_fits is not None and any(not lane_fits(lane) for lane in lanes):
-                continue
             # The split point is searched rather than fixed at `above_cap`.
             # Filling the north side first was harmless while only ROWS were
             # rationed -- a full north side left the whole south side for the

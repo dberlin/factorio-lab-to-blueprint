@@ -814,8 +814,12 @@ def _input_stack(items: tuple[str, ...], spec: BuildSpec | None) -> int:
     """
     if spec is None:
         return 1
-    # `default` guards a lane with no items: `LogicalLane` rejects one, but
-    # `input_lane_fits` is handed candidate lanes before any lane exists.
+    # `default` is now unreachable and is left as a total-function guard rather
+    # than a live case.  It existed for `input_lane_fits`, which was handed
+    # candidate lanes before any lane existed and could therefore be handed an
+    # empty one; spec §9 R8 deleted that caller, and every surviving caller
+    # passes a `LogicalLane`'s items, which `__post_init__` forbids from being
+    # empty.  `min()` of an empty sequence raises, so the default stays.
     return min((spec.planning_stack(item) for item in items), default=1)
 
 
@@ -2003,11 +2007,17 @@ def _machine_cap(group: _Group, spec: BuildSpec) -> int:
     is the floor of capacity over the largest per-machine single-item rate.
     A machine whose one rate exceeds the capacity cannot be served by any
     strip length; that is refused here, early and with the numbers, instead
-    of late by ``flow.belt_capacity``. This cap is computed per single item, so
-    a merged lane carrying several items at once can still exceed capacity
-    even when every one of those items is individually under the cap --
-    ``flow.belt_capacity`` at validation is the backstop for that case. A
-    group with neither inputs nor outputs returns 0 (uncapped).
+    of late by ``flow.belt_capacity``. A group with neither inputs nor outputs
+    returns 0 (uncapped).
+
+    THIS IS THE RATE GATE, and since spec §9 R1 it is the whole of it.  The cap
+    is computed per single item, and the docstring used to name the one case
+    that left uncovered: "a merged lane carrying several items at once can still
+    exceed capacity even when every one of those items is individually under the
+    cap", with ``flow.belt_capacity`` at validation as the backstop.  No input
+    lane carries several items any more, so that gap is closed by construction
+    rather than by a second check -- §9 R8 records why the seating-time
+    predicate that used to sit beside this one was deleted instead of kept.
     """
     cap: int | None = None
     for item, rate in (*group.inputs.items(), *group.outputs.items()):

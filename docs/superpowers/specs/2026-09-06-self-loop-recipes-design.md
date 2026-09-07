@@ -477,8 +477,24 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
   to seat, so the strategy REFUSES rather than emitting a lane
   `flow.lane_single_item` would convict. This is the same rule the coater-seat
   predicate follows in F2 — the emitter agrees with the validator instead of
-  racing it. `input_lane_fits` (`strip_variants.py:1363-1374`) stays as the
-  unconditional rate test for the single-item lane it now always is.
+  racing it. `max_per_lane` goes with the ladder it capped.
+
+  *Amended again 2026-09-07 — see §9 R8.* This paragraph used to end: "`input_lane_fits`
+  (`strip_variants.py:1363-1374`) stays as the unconditional rate test for the
+  single-item lane it now always is." **That is struck.** `input_lane_fits` is
+  deleted with the preference, because its premise was false twice over. It was
+  never a production check — it reached `_seat_inputs` only through
+  `prefer_shared_inputs`, which required `prefer_shared_proliferation`, a flag
+  no production caller ever set. And it is not a valid test for a single-item
+  lane: it summed `rate * group.count`, the WHOLE group across every strip,
+  against one belt, while a lane serves ONE strip. Passing it unconditionally
+  refuses 28 specs in `tests/layout/test_strip_variants.py` alone, 27 of them
+  quoting `1 ingredients cannot be seated` — measured, evidence at
+  `docs/superpowers/evidence/2026-09-06-selfloop/task5/strip-variants-with-unconditional-lane-fits.txt`.
+  The single-item rate gate is `strip_variants._machine_cap`
+  (`strip_variants.py:1998`), which caps a strip at `capacity // rate` machines
+  and whose own docstring names the merged lane as the one case it could not
+  cover — a case §9 R1 has now abolished.
 * **F2.** `freeform._coater_seat` (`freeform.py:18039`) and `_coater_seats`
   (`freeform.py:18018`) gain a predicate rejecting a seat whose covered tiles
   contain a belt with more than one belt predecessor, and rejecting a seat
@@ -771,6 +787,55 @@ tests that pin it keep meaning something) and the live `_coater_seats` path.
 
 *Cost if wrong:* filtering the live path can refuse a seat the validator would
 have accepted, costing coverage; the gate counts it per arm.
+
+### R8 — `input_lane_fits` is deleted, not kept as a single-lane rate gate
+
+A controller ruling, 2026-09-07, made while implementing §9 R1's executor
+corollary. §5.5 F1 said: "`input_lane_fits` (`strip_variants.py:1363-1374`)
+stays as the unconditional rate test for the single-item lane it now always
+is." That sentence is struck; F1 is amended in place above.
+
+**The premise was false twice over, and it was measured rather than argued.**
+
+1. *It was never a production check.* `input_lane_fits` reached `_seat_inputs`
+   only through `prefer_shared_inputs`, which was
+   `prefer_shared_proliferation and group.proliferated and len(input_items) >= 3`.
+   No caller in `src/` ever set `prefer_shared_proliferation`; only tests did.
+   So the lane rate was never gated at seating time on any path production takes,
+   and "keeping" the check would have been *adding* one.
+
+2. *It is not a valid test for a single-item lane.* It sums
+   `rate * group.count` — the whole group's throughput across EVERY strip —
+   against one belt, while a lane serves ONE strip. Applying it per lane
+   therefore refuses any group whose total production exceeds a belt, which is
+   the ordinary case that sharding exists to handle.
+
+**Measured:** passing it unconditionally, exactly as F1 directed, produced 28
+failures in `tests/layout/test_strip_variants.py` alone. All 28 trace to the same
+cause — a one-item lane rejected on the whole group's rate — but the symptom is
+not uniform, and the difference is worth recording: 27 surface as a refusal
+quoting `1 ingredients cannot be seated`, while
+`test_a_single_machine_over_the_ceiling_is_refused_early_with_the_rate` surfaces
+as a regex mismatch, because the seating refusal pre-empted the rate refusal that
+test asserts. Evidence:
+`docs/superpowers/evidence/2026-09-06-selfloop/task5/strip-variants-with-unconditional-lane-fits.txt`.
+
+**What replaces it: nothing new.** `strip_variants._machine_cap`
+(`strip_variants.py:1998`) is already the single-item rate gate — "Machines per
+strip so no single-item lane exceeds its effective capacity" — and it caps a
+strip at `capacity // rate`, refusing early and with the numbers when one
+machine's rate alone exceeds the fastest belt. Its docstring named exactly one
+case it could not cover: "a merged lane carrying several items at once can still
+exceed capacity even when every one of those items is individually under the
+cap". §9 R1 abolished that case, so `_machine_cap` now covers the whole space.
+
+*Cost if this ruling is wrong:* a single-item lane whose rate exceeds one belt
+would reach `flow.belt_capacity` at validation instead of being refused at
+seating time — a later, less legible refusal, not a bad emission. That is the
+same backstop `_machine_cap`'s docstring already names, and the cell is
+INVALID rather than REFUSED in the audit.
+
+*Changes:* §5.5 F1 (amended in place, with a pointer here).
 
 ### R5 — The Pile Sorter rule stays retracted
 
