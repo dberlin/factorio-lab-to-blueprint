@@ -57,7 +57,8 @@ def main() -> None:
         )
         print(f"  in_above {strip.in_above}")
         print(f"  in_below {strip.in_below}")
-        print(f"  drain row {strip.row_of_output(0)} span {strip.sorter_span(strip.row_of_output(0))}")
+        drain = strip.row_of_output(0)
+        print(f"  drain row {drain} span {strip.sorter_span(drain)}")
         for lane in strip.in_below:
             row = strip.row_of_input(lane[0])
             print(f"  below {lane} row {row} span {strip.sorter_span(row)}")

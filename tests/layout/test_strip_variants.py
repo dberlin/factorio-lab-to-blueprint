@@ -1834,24 +1834,33 @@ def _universe_matrix_spec() -> BuildSpec:
     return _corpus_spec("universe-matrix", CandidatePolicy.NO_PROLIFERATOR)
 
 
-def _six_ingredient_assembler_spec() -> BuildSpec:
+def _two_ingredient_flanked_spec() -> BuildSpec:
     """A flanked spec whose south side does NOT fill every reachable row.
 
-    An Assembling Machine reserves four rows for a three-row footprint, so
-    `_side_lane_caps` gives it two rows below, not three; six ingredients seat
-    three-and-three across two lanes and `in_below` holds one of them.  That is
-    a flanked strip with a spare reachable row below -- the case the drain move
-    must leave byte-identical.
-    """
-    import string
+    TWO ingredients, and the count is load-bearing twice over.
 
+    An EM-Rail Ejector offers its lane ONE insert column per face, so two
+    ingredients already exceed what the south face can hold beside an output
+    column and `_seat_inputs` refuses -- which is what makes the planner flank.
+    Flanked, they seat one lane above and one below, `_side_lane_caps` gives
+    three reachable rows below, and `1 < 3` leaves `drain_outermost` False.
+    That is the case the drain move must leave byte-identical.
+
+    AND BOTH LANES ALREADY CARRY ONE ITEM, which is why this fixture and not the
+    six-ingredient Assembling Machine that stood here first.  That one reached
+    `drain_outermost == False` only by seating six items as three-and-three
+    across two MIXED lanes; when spec §9 R1's ban collapses the mixing ladder it
+    cannot seat at all, and this test would have gone red with a REFUSAL --
+    inviting the next implementer to delete the only regression test for the
+    gating this task exists to keep.  Nothing here mixes, so nothing here moves.
+    """
     return BuildSpec(
         groups=(
             _group(
                 "impossible",
-                "assembling-machine-2",
+                "em-rail-ejector",
                 1,
-                {k: Fraction(1) for k in string.ascii_lowercase[:6]},
+                {"a": Fraction(1), "b": Fraction(1)},
                 {"out": Fraction(1)},
             ),
         )
@@ -1911,11 +1920,40 @@ def test_a_flanked_strip_that_never_needed_the_row_is_unchanged() -> None:
     pre-2026-09-07 map exactly: drain innermost, inputs pushed out by
     `len(out_lanes)`.  Pinned as byte-identical row indices, not as a shrug.
     """
-    strip = _flanked_strip_for(_six_ingredient_assembler_spec())
+    strip = _flanked_strip_for(_two_ingredient_flanked_spec())
     assert not strip.drain_outermost
     assert len(strip.in_below) == 1
+    assert all(len(lane) == 1 for lane in (*strip.in_above, *strip.in_below))
     assert strip.row_of_output(0) == strip.first_row_below_band
     assert strip.row_of_input(strip.in_below[0][0]) == strip.first_row_below_band + 1
+
+
+def test_a_side_with_no_reachable_row_at_all_does_not_move_the_drain() -> None:
+    """`0 == 0` is not "the inputs filled every row" (spec §9 R2's guard).
+
+    `drain_outermost` asks whether the south INPUT lanes took every
+    sorter-reachable row, and `len(in_below) == below_cap` answers it -- except
+    on a side with no reachable row, where both sides of that comparison are
+    zero and nothing was taken.  22 (building, yaw) pairs in the catalog have a
+    zero side cap, three of them with a flankable east face, so the shape is
+    real even though no corpus plan reaches it.
+
+    Measured, and it is the seating that makes the case: three ingredients with
+    `below_cap == 0` seat entirely above and leave `in_below` empty.  Moving a
+    drain past an empty side would cost the family the one-machine cap for a
+    gap belt that crosses nothing.
+    """
+    above, below = freeform._seat_inputs(
+        ("a", "b", "c"), 1, 3, 0, max_per_lane=5, columns=3, flank_outputs=True
+    )
+    assert [len(lane) for lane in above] == [1, 1, 1]
+    assert below == ()
+    assert not strip_variants_module._drain_moves_outermost(True, below, 0)
+    # ... while a side that really did fill up still moves, and an unflanked
+    # strip never does.
+    assert strip_variants_module._drain_moves_outermost(True, (("a",), ("b",), ("c",)), 3)
+    assert not strip_variants_module._drain_moves_outermost(True, (("a",),), 3)
+    assert not strip_variants_module._drain_moves_outermost(False, (("a",), ("b",)), 2)
 
 
 def test_every_both_fed_ingredient_is_seated_on_its_side_s_outermost_row() -> None:

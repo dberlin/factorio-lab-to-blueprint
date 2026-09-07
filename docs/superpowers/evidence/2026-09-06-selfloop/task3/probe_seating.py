@@ -33,7 +33,8 @@ def main() -> None:
     print("_side_lane_caps(2901, 0.0, 5)", _side_lane_caps(2901, 0.0, 5))
     probe = slots.probe_building(2901, 0.0)
     for lane_y in (-1, -2, -3, -4, 5, 6, 7, 8):
-        print(f"  attachable_columns lane_y={lane_y:>3}", len(slots.attachable_columns(probe, lane_y)))
+        columns = len(slots.attachable_columns(probe, lane_y))
+        print(f"  attachable_columns lane_y={lane_y:>3}", columns)
 
     print("== _seat_inputs ==")
     six = ("a", "b", "c", "d", "e", "f")

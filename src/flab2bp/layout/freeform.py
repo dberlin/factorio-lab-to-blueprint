@@ -950,10 +950,12 @@ class Strip:
     #: returns 0 for it BY DESIGN, and ``_machines_without_poses`` already skips
     #: flanked strips.
     #:
-    #: Derived once, in ``_logical_strip_plans``, as
-    #: ``flank_outputs and len(in_below) == below_cap``: a spec that never
-    #: needed the freed row keeps today's seating and today's area, which is the
-    #: user's ruling in spec §9 R2.
+    #: Derived once, in ``_logical_strip_plans``, by
+    #: ``strip_variants._drain_moves_outermost``: flanked, ``below_cap > 0``,
+    #: and ``len(in_below) == below_cap``.  A spec that never needed the freed
+    #: row keeps today's seating and today's area, which is the user's ruling in
+    #: spec §9 R2.  A side with NO reachable row is not "filled" -- ``0 == 0``
+    #: would say it was, and there is nothing to push the drain past.
     #:
     #: IT ALSO CAPS THE FAMILY AT ONE MACHINE PER STRIP, in
     #: ``generate_strip_families``, and the reason is a belt column rather than

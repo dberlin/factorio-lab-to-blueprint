@@ -2818,10 +2818,15 @@ class TestPlanStrips:
         assert strips[0].in_above == (("gear", "iron-ingot", "magnetic-coil"),)
         assert strips[0].in_below == ()
 
-    def test_shared_proliferation_preference_leaves_wide_lab_plan_unchanged(
+    def test_shared_proliferation_preference_now_diverges_from_the_ordinary_ladder(
         self,
     ) -> None:
         """The preference was inert here only while BOTH ladders mixed.
+
+        RENAMED from `..._leaves_wide_lab_plan_unchanged`, which now asserts the
+        opposite of what it says: the plans differ, and a `-k` filter or a grep
+        should say so rather than the other way round.  The old name comes back
+        with the old assertion, if it ever does.
 
         RE-DERIVED 2026-09-07 (spec §9 R2, the drain-row task).  This asserted
         `preferred == ordinary`, and it held because the wide lab seated three

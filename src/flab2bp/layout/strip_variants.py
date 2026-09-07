@@ -1217,9 +1217,20 @@ def _seat_both_fed_outermost(
     # A flanked output charges the south side NEITHER a reachable row nor a
     # column: its drain carries no sorter and may sit past `below_cap`, which is
     # the third copy of that charge and the one that would otherwise reject the
-    # wider seating `_seat_inputs` just produced.  `fits` is invariant under the
-    # reordering this function does -- the lane counts never change -- so
-    # relaxing it here cannot invent a seating the seater did not already reach.
+    # wider seating `_seat_inputs` just produced.
+    #
+    # THIS DOES WIDEN WHAT `fits` ACCEPTS, and an earlier version of this
+    # comment claimed the opposite.  `fits` is only ever consulted on the
+    # cross-side candidates below -- the early return above takes every case
+    # that does not move a lane between sides -- and those candidates change
+    # `len(candidate_below)` by one.  With the output's row charge waived, a
+    # candidate whose south side then holds exactly `below_cap` lanes is
+    # accepted where it used to be rejected, so the per-side split this returns
+    # can differ from the one `_seat_inputs` handed in, and that can turn
+    # `drain_outermost` on.  What still holds is the part that matters: `fits`
+    # goes on charging every INPUT lane its row and its column, so no input can
+    # be moved past `below_cap` or past the face's poses.  Only the output's
+    # row and column charge is waived, and only when it leaves east.
     south_output_rows = 1 if n_sinks and not flank_outputs else 0
     south_output_columns = 1 if n_sinks and not flank_outputs else 0
 
@@ -1526,7 +1537,7 @@ def _logical_strip_plans(
         # flanked output has room whatever the inputs did: it carries no sorter,
         # so it takes the row PAST reach (spec §9 R2, `Strip.drain_outermost`).
         # One lane, because one east gap belt per machine drains into one belt.
-        drain_outermost = flank and len(in_below) == below_cap
+        drain_outermost = _drain_moves_outermost(flank, in_below, below_cap)
         south_columns = len(slots.attachable_columns(probe, group.pitch_h))
         out_capacity = below_cap - len(in_below)
         if flank:
@@ -1669,6 +1680,30 @@ def _logical_strip_plans(
                 )
             )
     return tuple(plans)
+
+
+def _drain_moves_outermost(
+    flank: bool,
+    in_below: tuple[tuple[str, ...], ...],
+    below_cap: int,
+) -> bool:
+    """Must a flanked output's drain lane take the row past sorter reach?
+
+    Only when the south INPUT lanes have taken every sorter-reachable row on
+    that side, which is what `len(in_below) == below_cap` says (spec §9 R2).
+
+    `below_cap > 0` IS PART OF THE QUESTION, not a defensive extra.  A side with
+    no reachable row at all also satisfies `0 == 0`, and 22 (building, yaw)
+    pairs in the catalog have a zero side cap -- an Oil Refinery at yaw 0, a
+    Battlefield Analysis Base at yaw 0 and a Vertical Launching Silo at 180 have
+    `below_cap == 0` AND a flankable east face.  There the drain has not been
+    pushed anywhere: `in_below` is empty, the gap belt crosses nothing, and the
+    row map is the pre-2026-09-07 one.  Saying True there would move the drain
+    for no reason, make `Strip.drain_outermost`'s own doc-comment false, and
+    charge the family the one-machine cap for nothing.  No corpus plan reaches
+    that shape today; the guard is here so the flag means what it says.
+    """
+    return flank and below_cap > 0 and len(in_below) == below_cap
 
 
 def _legacy_side_lane_caps(item_id: int, yaw: float, band_rows: int) -> tuple[int, int]:
