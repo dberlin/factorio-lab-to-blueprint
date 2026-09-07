@@ -1,0 +1,5 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+flab2bp: no valid layout for all-products after 60s: hierarchical/all-products: composed placement failed validation: power.coverage: building 5952 has tile (63,3) outside every tower's supply radius; it would sit unpowered; power.coverage: building 5953 has tile (63,3) outside every tower's supply radius; it would sit unpowered; power.coverage: building 5959 has tile (62,1) outside every tower's supply radius; it would sit unpowered. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+  stats hierarchical/all-products: arm_dispatch_both=0 arm_dispatch_freeform=5 arm_dispatch_sequence_pair=1 blocks=6 blocks_unattempted=0 compose_gap=2 cut_lanes=26 nogood_skips=0 player_fed=0 port_demands=31 recut_rounds=0 reservation_degraded=1 reservation_missing=0 resplits=0 unrouted_cuts=0
+EXIT=3
+WALL_S=25.892704778

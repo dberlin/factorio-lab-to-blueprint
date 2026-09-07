@@ -1,0 +1,46 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?o=conveyor-belt-3*1080&ibe=conveyor-belt-3&rex=P*Y*d*k*u*BN*BU*BX*Bk~Bl*Bs*CF~CG*CQ~CR&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "no-proliferator",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v3/large-belt3-no-proliferator-b60-r1.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "docs/superpowers/evidence/2026-09-07-hierarchical-v3/large-belt3-no-proliferator-b60-r1.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for no-proliferator after 60s: hierarchical/no-proliferator: unrouted cut(s): copper-ingot: block 4 -> block 8: SEALED_POCKET; gear: block 11 -> block 13: DYNAMIC_ACCESS; gear: block 11 -> block 13: DYNAMIC_ACCESS; gear: block 11 -> block 13: DYNAMIC_ACCESS; iron-ingot: block 5 -> block 11: DYNAMIC_ACCESS; iron-ingot: block 5 -> block 11: DYNAMIC_ACCESS; iron-ingot: block 5 -> block 11: COMMIT_LINK; iron-ingot: block 6 -> block 12: COMMIT_LINK. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/no-proliferator": {
+   "arm_dispatch_both": "0",
+   "arm_dispatch_freeform": "0",
+   "arm_dispatch_sequence_pair": "14",
+   "blocks": "14",
+   "blocks_unattempted": "0",
+   "compose_gap": "2",
+   "cut_lanes": "147",
+   "nogood_skips": "2",
+   "player_fed": "0",
+   "port_demands": "183",
+   "recut_rounds": "0",
+   "reservation_degraded": "1",
+   "reservation_missing": "0",
+   "resplits": "0",
+   "unrouted_cuts": "8"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 35.23
+}
