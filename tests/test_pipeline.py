@@ -43,7 +43,7 @@ from flab2bp.rates.candidates import (
     _build_candidates_canonical,
     build_candidates,
 )
-from flab2bp.spec import BeltTier, BuildSpec, BuildSpecSet, MachineGroup
+from flab2bp.spec import BeltTier, BuildSpec, BuildSpecSet, MachineGroup, MachineMoveRecord
 from flab2bp.web.payload import describe
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
@@ -63,6 +63,26 @@ def _title_spec(
     label: str = "all-products",
 ) -> BuildSpec:
     return BuildSpec(groups=(), outputs=outputs, label=label)
+
+
+def test_exact_machine_rank_does_not_change_the_description() -> None:
+    assert pipeline._machine_rank_note(BuildSpec(groups=(), machine_rank="exact")) == ""
+
+
+def test_up_to_description_reports_each_move_and_its_counts() -> None:
+    move = MachineMoveRecord(
+        recipe_id="iron-ingot",
+        from_machine="plane-smelter",
+        to_machine="arc-smelter",
+        count_before=2,
+        count_after=2,
+    )
+    spec = BuildSpec(groups=(), machine_rank="up-to", machine_moves=(move,))
+    note = pipeline._machine_rank_note(spec)
+
+    for value in ("up-to", move.recipe_id, move.from_machine, move.to_machine, "2->2"):
+        assert value in note
+    assert "up-to" in pipeline._machine_rank_note(BuildSpec(groups=(), machine_rank="up-to"))
 
 
 def test_generated_title_under_the_game_limit_is_unchanged() -> None:
