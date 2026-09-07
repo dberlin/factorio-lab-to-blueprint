@@ -28,6 +28,7 @@ from flab2bp.layout.observe import (
     SearchEvent,
 )
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
+from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.web.trace import TRACE_DRAIN_INTERVAL_S, frame_json
 
 
@@ -399,6 +400,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_candidate_policy_argument(ap)
     ap.add_argument(
+        "--machine-rank",
+        choices=[rank.value for rank in MachineRank],
+        default=MachineRank.EXACT.value,
+        help=(
+            "how to read the URL's machine rank: 'exact' always uses the "
+            "ranked producer (FactorioLab's behaviour, the default); 'up-to' "
+            "treats it as a speed ceiling and uses the slowest unlocked "
+            "producer that needs the same number of machines"
+        ),
+    )
+    ap.add_argument(
         "--flow",
         type=Path,
         help="FactorioLab CSV export (the list view's 'download as CSV'). Pins "
@@ -556,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
                 strategy=args.strategy,
                 band=args.band,
                 candidate_policies=candidate_policies,
+                machine_rank=MachineRank(args.machine_rank),
                 time_budget_s=args.budget,
                 sequence_islands=sequence_islands,
                 name=args.name,
