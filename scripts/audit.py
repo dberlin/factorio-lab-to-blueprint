@@ -881,9 +881,9 @@ def main() -> int:
     if expired:
         # Charge the unreached cells to whichever strategies were being audited.
         # Spreading them evenly would be a guess; naming the count is not.
+        unreached = Counter(job.strategy for job in jobs[done:])
         for name in names:
-            share = sum(1 for j in jobs[done:] if j.strategy == name)
-            tallies[name].not_run += share
+            tallies[name].not_run += unreached[name]
         print(
             f"\n!! WALL-CLOCK CAP HIT at {args.max_seconds:g}s with "
             f"{len(jobs) - done} cells unreached.",
