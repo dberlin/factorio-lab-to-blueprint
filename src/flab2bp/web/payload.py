@@ -148,6 +148,19 @@ def _belt_tiers(spec: BuildSpec, placement: Placement, report: validate.Report) 
     }
 
 
+def _machine_moves(spec: BuildSpec) -> list[JsonValue]:
+    return [
+        {
+            "recipe_id": move.recipe_id,
+            "from_machine": move.from_machine,
+            "to_machine": move.to_machine,
+            "count_before": move.count_before,
+            "count_after": move.count_after,
+        }
+        for move in spec.machine_moves
+    ]
+
+
 def _attempt_detail(attempt: pipeline.Attempt) -> Json:
     """One attempt's own facts: what IT belts in, makes, and costs.
 
@@ -163,6 +176,8 @@ def _attempt_detail(attempt: pipeline.Attempt) -> Json:
     unmarked = markers.unmarked_external_inputs(attempt.placement, spec)
     return {
         "machines": spec.machine_count,
+        "machine_rank": spec.machine_rank,
+        "machine_moves": _machine_moves(spec),
         "buildings": len(attempt.placement.buildings),
         "primary_band": frame.primary_band,
         "certified_bands": _array(frame.certified_bands),
@@ -249,6 +264,8 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "strategy": build.strategy,
         "candidate": build.spec.label,
         "machines": build.spec.machine_count,
+        "machine_rank": build.spec.machine_rank,
+        "machine_moves": _machine_moves(build.spec),
         "pilers": int(build.placement.stats.get("pilers", 0)),
         "area": build.placement.area,
         "primary_band": frame.primary_band,
