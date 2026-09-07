@@ -116,6 +116,30 @@ def test_trace_jsonl_parses_to_a_path() -> None:
     assert args.trace_jsonl == Path("trace.jsonl")
 
 
+def test_trace_jsonl_with_race_is_refused_rather_than_silently_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Task 13 fix round 1: this combination used to write a valid-looking,
+    permanently empty trace file (no `trace_queue` was ever threaded through
+    to a raced arm). It must now fail loudly at argument time, before any
+    solve, rather than produce output that reads as "the search found
+    nothing".
+    """
+    monkeypatch.setattr(
+        pipeline,
+        "build",
+        lambda *args, **kwargs: pytest.fail("a raced+traced build must never start"),
+    )
+    trace_path = tmp_path / "trace.jsonl"
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["https://example/x", "--race", "--trace-jsonl", str(trace_path)])
+
+    assert exc_info.value.code == 2
+    assert not trace_path.exists()
+
+
 def test_without_the_flag_no_observer_is_built(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 

@@ -1,0 +1,8 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+wall: um60 (5 trials)  uptime: 19:39:09 up 22 days,  1:25, 10 users,  load average: 7.15, 7.97, 9.80
+  um60: Rule W NOT SEPARATED  median_off=70.336s median_on=72.432s ratio=1.0298 on_frames=[33, 34, 33, 30, 35]
+wall: qc180 (5 trials)  uptime: 19:51:21 up 22 days,  1:37, 10 users,  load average: 13.25, 13.51, 12.38
+  qc180: Rule W PASS  median_off=179.854s median_on=179.257s ratio=0.9967 on_frames=[41, 41, 40, 41, 42]
+wall: belt3 (5 trials)  uptime: 20:21:26 up 22 days,  2:07, 10 users,  load average: 7.36, 8.02, 9.66
+  belt3: Rule W PASS  median_off=60.486s median_on=60.760s ratio=1.0045 on_frames=[29, 25, 25, 31, 31]
+wall report -> /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/search-viz/docs/superpowers/evidence/2026-09-06-search-trace/wall-2026-09-06T233909+0000.md

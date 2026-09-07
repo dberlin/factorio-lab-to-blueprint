@@ -30,15 +30,37 @@ minutes of CP-SAT and the suite stays fast.
 idle; the load is I/O wait, so a run is never postponed waiting for an idle
 machine -- the contention is RECORDED instead.
 
-RULE W USES THE SHIPPING CLI, NOT AN IN-PROCESS CALL
-------------------------------------------------------
-Rule W measures the artefact a user actually runs, so each repeat shells out to
-the installed ``flab2bp`` console script -- ``--race``, default workers, no
-``--workers`` override -- and the trace-on leg adds only ``--trace-jsonl``
-(Task 12's CLI flag, the same ``frame_json`` projection the web transport
-uses). Two configs that differ by exactly one flag is the fairness property
-``ab_compare.py`` already established for A/B strategy comparisons, applied
-here to trace on/off instead of to strategies.
+RULE W FIX ROUND 1: THE CLI'S ``--trace-jsonl`` IS INERT UNDER ``--race``
+---------------------------------------------------------------------------
+The first version of this harness shelled out to the ``flab2bp`` console
+script for Rule W, on the theory that the CLI is "the shipping artefact."
+That measured nothing: ``cli.py`` never threads a ``trace_queue`` through to
+``pipeline.build``, so under ``--race`` every raced arm runs with tracing
+structurally disabled regardless of ``--trace-jsonl`` -- confirmed by all 15
+trace-on trials of that first sweep producing a 0-byte JSONL file, and by an
+isolated 2-second repro (serial: 8 frames; ``--race``: 0 frames). A wall-clock
+comparison between two identical, untraced runs is not a measurement of
+observer cost; it is noise wearing a ratio.
+
+Rule W now drives ``pipeline.build`` directly, in the raced shipping
+configuration (``race=True``, default workers), wiring up a real
+``multiprocessing.Queue`` plus a ``web.trace.TraceCollector`` to drain it --
+the exact mechanism ``web/jobs.py``'s ``Builder._run`` uses for a live web
+build (construct the queue, start the collector's daemon drain thread, hand
+``collector.observer`` to ``search_observer`` and the queue itself to
+``trace_queue``, then ``collector.stop()`` after the build settles). This is
+"the shipping artefact minus argument parsing": the real code path a raced,
+traced build actually takes, without the CLI's now-known-broken wiring in the
+way. See ``_run_direct`` and FIX 1 below.
+
+FIX 1: A HARNESS THAT CANNOT DETECT ITS OWN NO-OP MEASURES NOTHING
+---------------------------------------------------------------------
+The first round's real defect was not just the CLI gap -- it was that the
+*harness* could not tell the difference between "tracing cost nothing" and
+"tracing never ran," and reported three plausible-looking ratios either way.
+``_require_frames_captured`` is now a hard precondition on every trace-on leg:
+zero frames raises ``TraceNotCapturedError`` and that leg's timing is refused,
+never silently accepted into a median.
 
 RULE P CALLS ``pipeline.build`` DIRECTLY
 -----------------------------------------
@@ -55,6 +77,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import subprocess
 import sys
 import time
@@ -63,7 +86,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -77,7 +100,8 @@ from flab2bp.layout.observe import (  # noqa: E402
     SampledObserver,
     SearchEvent,
 )
-from flab2bp.web.trace import frame_json  # noqa: E402
+from flab2bp.layout.observe_channel import TRACE_QUEUE_MAXSIZE  # noqa: E402
+from flab2bp.web.trace import TraceCollector, TraceRing, frame_json  # noqa: E402
 
 Verdict = Literal["PASS", "FAIL", "NOT SEPARATED"]
 PurityVerdict = Literal["PASS", "FAIL"]
@@ -127,6 +151,10 @@ class WallResult:
     #: off leg and the on leg), for the evidence file. Empty for a result
     #: built by hand (as the unit tests do).
     context: tuple[str, ...] = field(default_factory=tuple)
+    #: Frames captured on each trial's trace-on leg, in trial order -- proof
+    #: (per FIX 1) that every accepted ``on_s`` reading actually traced
+    #: something. Empty for a result built by hand.
+    on_frames: tuple[int, ...] = field(default_factory=tuple)
 
     @property
     def median_off(self) -> float:
@@ -158,6 +186,33 @@ def wall_verdict(result: WallResult) -> Verdict:
     if straddles:
         return "NOT SEPARATED"
     return "PASS" if result.median_on <= line else "FAIL"
+
+
+class TraceNotCapturedError(RuntimeError):
+    """A trace-on leg captured zero frames -- the observer never fired.
+
+    Fix round 1's whole lesson: a wall-clock ratio computed from a trace-on
+    leg that traced nothing is not a measurement of trace cost, it is two
+    identical runs compared against each other. This must never be accepted
+    into a median silently.
+    """
+
+
+def _require_frames_captured(frame_count: int, *, cell: str, leg: str) -> None:
+    """Hard precondition on every trace-on leg: refuse a leg that traced nothing.
+
+    Not a warning -- a raised exception, so a caller cannot forget to check it
+    and cannot average it away. There is no legitimate reason for a
+    correctly-wired trace-on leg to produce zero frames over a multi-second
+    budget: ``ALWAYS_SAMPLE`` alone (incumbent, composed) fires at least once
+    per settled attempt.
+    """
+    if frame_count <= 0:
+        raise TraceNotCapturedError(
+            f"{cell}: {leg}'s trace-on leg captured 0 frames -- the observer "
+            "never fired, so this leg's timing cannot be used to measure "
+            "trace overhead. Refusing to accept it into Rule W's median."
+        )
 
 
 def purity_verdict(off: Mapping[str, Any], on: Mapping[str, Any]) -> PurityVerdict:
@@ -299,49 +354,112 @@ def _capture_vmstat() -> str:
     return lines[-1]
 
 
-def _run_cli(url: str, *, budget_s: float, trace_jsonl: Path | None) -> tuple[float, int]:
-    """Shell the installed ``flab2bp`` console script; return (wall_s, returncode).
+def _run_direct(
+    url: str,
+    *,
+    budget_s: float,
+    trace: bool,
+    evidence_path: Path | None = None,
+) -> tuple[float, int]:
+    """Run ``pipeline.build`` in the raced shipping configuration; return (wall_s, frame_count).
 
-    Shipping configuration: default workers (no ``--workers``), ``--race``.
-    The trace-on leg differs from the trace-off leg by exactly one flag,
-    ``--trace-jsonl``, so nothing else about the invocation can explain a
-    timing difference (the same discipline ``ab_compare.py`` uses for A/B).
+    Mirrors ``web/jobs.py``'s ``Builder._run`` exactly: a spawn-context
+    ``multiprocessing.Queue`` plus a ``TraceCollector`` draining it on a
+    background thread, so a raced arm's search events reach this process the
+    same way the real web consumer receives them (Task 8 fix round 1's
+    ``trace_queue`` contract). ``search_observer=None, trace_queue=None`` for
+    the trace-off leg is the CLI's own off-by-default shape -- one ``is None``
+    per call site, nothing constructed.
+
+    ``wall_s`` covers only the ``pipeline.build`` call itself, not collector
+    teardown afterwards: a live web build is "done," from a caller's point of
+    view, the instant ``pipeline.build`` returns, and charging the on-leg for
+    its own cleanup would be exactly the kind of asymmetry Rule W exists to
+    rule out.
+
+    ``frame_count`` is ``collector._seq`` after ``collector.stop()`` -- the
+    total number of events the collector actually turned into a frame, from
+    either source (`` _pending``, the in-process/serial path, or ``queue``,
+    the raced/child path), which is the same counter a live web build's
+    frames are numbered by. It is exactly 0 for a trace-off leg (no collector
+    at all -- not "traced but empty").
     """
-    argv = ["uv", "run", "flab2bp", url, "--budget", str(budget_s), "--race", "-o", "/dev/null"]
-    if trace_jsonl is not None:
-        argv += ["--trace-jsonl", str(trace_jsonl)]
+    collector: TraceCollector | None = None
+    trace_queue: object | None = None
+    search_observer: SampledObserver | None = None
+    if trace:
+        trace_queue = multiprocessing.get_context("spawn").Queue(maxsize=TRACE_QUEUE_MAXSIZE)
+        collector = TraceCollector(TraceRing(), started_at=time.monotonic(), queue=trace_queue)
+        collector.start()
+        search_observer = collector.observer
+
     started = time.perf_counter()
-    result = subprocess.run(argv, capture_output=True, text=True, cwd=_ROOT, check=False)
-    wall_s = time.perf_counter() - started
-    return wall_s, result.returncode
+    try:
+        pipeline.build(
+            url,
+            time_budget_s=budget_s,
+            race=True,
+            search_observer=search_observer,
+            trace_queue=trace_queue,
+        )
+    finally:
+        wall_s = time.perf_counter() - started
+
+    frame_count = 0
+    if collector is not None:
+        collector.stop()
+        frame_count = collector._seq  # noqa: SLF001 -- the harness's own frame count, by design
+        if evidence_path is not None:
+            frames, _next = collector.ring.since(0, limit=collector.ring.max_frames)
+            evidence_path.write_text("\n".join(json.dumps(frame) for frame in frames) + "\n")
+    if trace_queue is not None:
+        cast(Any, trace_queue).cancel_join_thread()
+        cast(Any, trace_queue).close()
+    return wall_s, frame_count
 
 
 def wall(cell: str, *, repeat: int = 5, evidence_dir: Path | None = None) -> WallResult:
-    """Rule W for one cell: ``repeat`` trials, trace-off then trace-on, back to back."""
+    """Rule W for one cell: ``repeat`` trials, trace-off then trace-on, back to back.
+
+    Raises :class:`TraceNotCapturedError` (FIX 1) the instant any trace-on leg
+    captures zero frames -- that trial's timing is refused outright rather
+    than folded into the median silently.
+    """
     c = CELLS[cell]
     url = _corpus_url(c.entry_id)
     off_s: list[float] = []
     on_s: list[float] = []
+    on_frames: list[int] = []
     context: list[str] = []
     for trial in range(repeat):
         pre_uptime = _capture_uptime()
-        off_wall, off_rc = _run_cli(url, budget_s=c.budget_s, trace_jsonl=None)
+        off_wall, _off_frames = _run_direct(url, budget_s=c.budget_s, trace=False)
         off_vmstat = _capture_vmstat()
 
-        trace_path = (
-            (evidence_dir / f"{cell}-trial{trial}.jsonl") if evidence_dir is not None else None
+        evidence_path = (
+            (evidence_dir / f"{cell}-trial{trial}-on.jsonl") if evidence_dir is not None else None
         )
-        on_wall, on_rc = _run_cli(url, budget_s=c.budget_s, trace_jsonl=trace_path)
+        on_wall, frame_count = _run_direct(
+            url, budget_s=c.budget_s, trace=True, evidence_path=evidence_path
+        )
+        _require_frames_captured(frame_count, cell=cell, leg=f"trial{trial}")
         on_vmstat = _capture_vmstat()
 
         off_s.append(off_wall)
         on_s.append(on_wall)
+        on_frames.append(frame_count)
         context.append(
-            f"trial={trial} uptime={pre_uptime!r} off_s={off_wall:.3f} off_rc={off_rc} "
-            f"off_vmstat={off_vmstat!r} on_s={on_wall:.3f} on_rc={on_rc} "
+            f"trial={trial} uptime={pre_uptime!r} off_s={off_wall:.3f} "
+            f"off_vmstat={off_vmstat!r} on_s={on_wall:.3f} on_frames={frame_count} "
             f"on_vmstat={on_vmstat!r}"
         )
-    return WallResult(cell=cell, off_s=off_s, on_s=on_s, context=tuple(context))
+    return WallResult(
+        cell=cell,
+        off_s=off_s,
+        on_s=on_s,
+        context=tuple(context),
+        on_frames=tuple(on_frames),
+    )
 
 
 def _render_purity_markdown(results: list[PurityResult]) -> str:
@@ -377,6 +495,7 @@ def _render_wall_markdown(results: list[WallResult]) -> str:
         lines.append(f"- ratio (on/off): {r.ratio:.4f}")
         lines.append(f"- off_s: {list(r.off_s)}")
         lines.append(f"- on_s:  {list(r.on_s)}")
+        lines.append(f"- on_frames (FIX 1 guard, per trial): {list(r.on_frames)}")
         lines.append("- per-trial context:")
         for line in r.context:
             lines.append(f"  - {line}")
@@ -438,12 +557,21 @@ def main(argv: list[str] | None = None) -> int:
                 f"wall: {cell} ({args.repeat} trials)  uptime: {_capture_uptime()}",
                 file=sys.stderr,
             )
-            result = wall(cell, repeat=args.repeat, evidence_dir=args.out_dir)
+            try:
+                result = wall(cell, repeat=args.repeat, evidence_dir=args.out_dir)
+            except TraceNotCapturedError as exc:
+                # FIX 1: a cell whose trace-on leg traced nothing is aborted
+                # LOUDLY and skipped, never folded into a PASS/FAIL/NOT
+                # SEPARATED verdict it did not earn.
+                print(f"  {cell}: ABORTED -- {exc}", file=sys.stderr)
+                all_pass = False
+                continue
             wall_results.append(result)
             verdict = wall_verdict(result)
             print(
                 f"  {cell}: Rule W {verdict}  median_off={result.median_off:.3f}s "
-                f"median_on={result.median_on:.3f}s ratio={result.ratio:.4f}",
+                f"median_on={result.median_on:.3f}s ratio={result.ratio:.4f} "
+                f"on_frames={list(result.on_frames)}",
                 file=sys.stderr,
             )
             all_pass = all_pass and verdict == "PASS"

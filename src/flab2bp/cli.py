@@ -353,6 +353,24 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--sequence-islands must be from 1 to 16")
     if args.workers is not None and args.workers < 1:
         ap.error("--workers must be a positive integer")
+    if args.trace_jsonl is not None and args.race:
+        # Task 13 fix round 1: a raced arm runs in a spawned child with no
+        # in-process observer to call, and this CLI has no `trace_queue` to
+        # give it one -- so before this check existed, `--trace-jsonl
+        # --race` silently produced a valid-looking, permanently empty
+        # file. That reads as "the search produced nothing," which is a much
+        # worse failure than a build refusing to start. Threading a queue and
+        # a drain thread through here (mirroring `web/jobs.py`'s
+        # `Builder._run`) would fix it properly; refusing the combination
+        # outright is the smaller, safer fix that removes the silent-empty-
+        # file failure mode today. Tracing a raced build is not unsupported
+        # forever, just not wired through this flag yet.
+        ap.error(
+            "--trace-jsonl is not yet supported together with --race: a raced "
+            "arm has no channel to report search events through, so the "
+            "combination would silently write an empty trace file. Drop "
+            "--race, or omit --trace-jsonl."
+        )
     # Islands are ON by default for both `sequence-pair` and `best`, which is
     # every plain `flab2bp <url>` build: four islands measured 13.6 % smaller
     # layouts at the same budget (design doc L1).  The count is deliberately NOT

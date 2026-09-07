@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from scripts.trace_overhead import CELLS, WallResult, wall_verdict
 
 
@@ -36,3 +38,14 @@ def test_purity_compares_area_belt_tiles_and_the_refusal_ledger() -> None:
     assert purity_verdict(off, on) == "PASS"
     on_bad = {"attempts": [("all-products", "freeform", 2246, 611)], "refused": []}
     assert purity_verdict(off, on_bad) == "FAIL"
+
+
+def test_a_trace_on_leg_with_zero_frames_aborts_loudly() -> None:
+    """Fix round 1's FIX 1: a trace-on leg that captured nothing must raise,
+    never silently pass its (meaningless) timing into a Rule W median."""
+    from scripts.trace_overhead import TraceNotCapturedError, _require_frames_captured
+
+    with pytest.raises(TraceNotCapturedError):
+        _require_frames_captured(0, cell="um60", leg="trial0")
+    # A leg that genuinely traced something must not raise.
+    _require_frames_captured(5, cell="um60", leg="trial0")
