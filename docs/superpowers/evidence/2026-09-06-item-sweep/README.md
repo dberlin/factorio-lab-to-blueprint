@@ -73,13 +73,27 @@ all 151.
 
 ## Rounds
 
-| round | items run | CLEAN | REFUSED | INVALID | CRASH | wall |
-|---|---|---|---|---|---|---|
-| 1 | 151 | **150** | 1 | 0 | 0 | 5.43 h |
+| round | items run | CLEAN | REFUSED | INVALID | CRASH | wall | base |
+|---|---|---|---|---|---|---|---|
+| 1 | 151 | **150** | 1 | 0 | 0 | 5.43 h | master `340f8e01` |
+| 2 | 151 | **151** | 0 | 0 | 0 | 5.33 h | master `840204fc` + the group-1 fix |
+
+**Round 2 is the answer to the question that was asked: every item in the game that a
+factory can make -- all 151 of them -- builds.** 151/151 CLEAN, every one
+cross-validated by the viewer's independent decoder with a valid hash and a matching
+building count, zero validator errors, and not one check landing in `Report.skipped`.
 
 Round 1 ran on master `340f8e01`; the branch was then rebased onto master `840204fc`
 (64 commits of other work had landed meanwhile) and the one refusal was confirmed to
 reproduce there unchanged before anything was fixed.
+
+Round 2 is not slower or bigger for the fix: 127.0 s mean per item against round 1's
+129.4 s, and the geometric mean of round-2 area over round-1 area across the 150 items
+both rounds built is 0.9893, with a median of exactly 1.0000 -- that is, almost every
+block is byte-identical in size and the handful that moved got slightly smaller. CPU
+pressure over the round (five-second mean of `vmstat`'s runnable count, taken before
+each build) averaged 4.5 and peaked at 54.8 on 128 cores, so no timing here was taken
+on a contended box.
 
 "CLEAN" is a strong word here and is meant to be. It requires all four of: the CLI
 exiting 0 (so the validator found no errors, since the CLI refuses to emit an invalid
