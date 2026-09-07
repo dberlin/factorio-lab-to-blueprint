@@ -493,20 +493,16 @@ def frozen_captures(graph: Graph | None = None) -> dict[str, tuple[str, ...]]:
     when the truth is "it consults a copy taken at import" is the kind of
     confident wrong answer this whole plan exists to stop.
     """
-    g = graph if graph is not None else build_graph()
-    captured: dict[str, frozenset[str]] = {}
-    for node, node_kind in g.kind.items():
-        if node_kind not in {"const", "default"}:
-            continue
-        direct = g.edges.get(node, frozenset())
-        run = g.closure(g.calls.get(node, frozenset()))
-        captured[node] = direct | run
+    # Deferred: flab2bp.indexed.reference_graph imports `Graph` from this
+    # module, so a module-level import here would be circular.
+    from flab2bp.indexed import ReferenceGraph
+
+    index = ReferenceGraph.of(graph if graph is not None else build_graph())
     out: dict[str, tuple[str, ...]] = {}
     for entry in registry.rules():
-        node = entry.dotted
-        holders = [n for n, reach in captured.items() if n != node and node in reach]
+        holders = index.holders_of(entry.dotted)
         if holders:
-            out[entry.symbol] = tuple(sorted(holders))
+            out[entry.symbol] = holders
     return out
 
 
@@ -516,17 +512,20 @@ def hardcoding_readers(graph: Graph | None = None) -> dict[str, tuple[str, ...]]
     A reader of one of these consults the rule *at an assumed tech level*, which
     the plan's tech clause distinguishes from consulting it properly.
     """
-    g = graph if graph is not None else build_graph()
+    # Deferred: flab2bp.indexed.reference_graph imports `Graph` from this
+    # module, so a module-level import here would be circular.
+    from flab2bp.indexed import ReferenceGraph
+
+    index = ReferenceGraph.of(graph if graph is not None else build_graph())
+    modules = (*STRATEGY_MODULES, VALIDATE_MODULE)
+    # Hoisted out of the entry loop -- exactly what `consultation()` already
+    # does at :429-430, and the one thing :527 did not.
+    per_module_reach = index.module_reach(modules)
     out: dict[str, tuple[str, ...]] = {}
     for entry in registry.ENTRIES:
         if not entry.hardcodes:
             continue
-        readers = [
-            m
-            for m in (*STRATEGY_MODULES, VALIDATE_MODULE)
-            if entry.dotted in g.closure(g.nodes_in(m))
-        ]
-        out[entry.symbol] = tuple(sorted(readers))
+        out[entry.symbol] = tuple(sorted(m for m in modules if entry.dotted in per_module_reach[m]))
     return out
 
 
@@ -634,12 +633,25 @@ def scan_source(
     tree = ast.parse(source)
     owners = _owner_by_line(tree)
     out: list[LiteralViolation] = []
+    # A float match is by tolerance, not equality, so an exact dict cannot
+    # replace the scan -- but a rounded bucket can narrow it: a value within
+    # `math.isclose`'s default relative tolerance of a needle rounds to that
+    # needle's key or to one of its two neighbours.
+    by_key: dict[int, list[tuple[float, tuple[str, ...]]]] = {}
+    for needle, symbols in hunted.items():
+        by_key.setdefault(round(needle * 1_000_000), []).append((needle, symbols))
     for node in ast.walk(tree):
         value = _literal_value(node)
         if value is None:
             continue
         lineno = getattr(node, "lineno", 0)
-        for needle, symbols in hunted.items():
+        probe = round(value * 1_000_000)
+        candidates = (
+            *by_key.get(probe - 1, ()),
+            *by_key.get(probe, ()),
+            *by_key.get(probe + 1, ()),
+        )
+        for needle, symbols in candidates:
             if math.isclose(value, needle, rel_tol=1e-9, abs_tol=1e-12):
                 out.append(
                     LiteralViolation(
