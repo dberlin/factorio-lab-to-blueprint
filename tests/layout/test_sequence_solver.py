@@ -6210,9 +6210,7 @@ def _run_carrying(placement: Placement, ride_belt: int) -> tuple[int, ...]:
     buildings = placement.buildings
     ride = buildings[ride_belt]
     owner, y, z = ride.owner_strip, ride.y, ride.z
-    belt_at = {
-        (b.x, b.y, b.z): i for i, b in enumerate(buildings) if catalog.is_belt(b.item_id)
-    }
+    belt_at = {(b.x, b.y, b.z): i for i, b in enumerate(buildings) if catalog.is_belt(b.item_id)}
     indices = [ride_belt]
     cur = ride_belt
     while True:

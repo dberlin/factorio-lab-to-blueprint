@@ -169,7 +169,10 @@ def main() -> None:
         tiles = sum(int(rows[c].get("belt_tiles", 0)) for c in prolif)
         nets = sum(float(rows[c].get("stats", {}).get("nets", 0.0)) for c in prolif)
         coaters = sum(int(rows[c].get("coaters", 0)) for c in prolif)
-        print(f"  {arm:<9} n={len(prolif):>3}  belt_tiles={tiles:>7}  nets={nets:>7.0f}  coaters={coaters:>5}")
+        print(
+            f"  {arm:<9} n={len(prolif):>3}  belt_tiles={tiles:>7}  nets={nets:>7.0f}  "
+            f"coaters={coaters:>5}"
+        )
     if len(order) == 2:
         a, b = order
         for name, key in (("belt_tiles", "belt_tiles"), ("nets", "nets")):

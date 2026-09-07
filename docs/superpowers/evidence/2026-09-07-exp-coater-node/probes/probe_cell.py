@@ -23,9 +23,9 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import validate
-from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import PlacementCompletion
+from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidates
