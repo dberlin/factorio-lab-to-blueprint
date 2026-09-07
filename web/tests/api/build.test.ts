@@ -14,6 +14,14 @@ import { aJob, anAttempt, aResult, restoreFetch, serving } from '../support/buil
 
 afterEach(restoreFetch);
 
+test('machine rank accepts only exact and up-to without changing the default', () => {
+  expect(DEFAULT_OPTIONS.machine_rank).toBe('exact');
+  expect(BuildOptions.parse({ ...DEFAULT_OPTIONS, machine_rank: 'up-to' }).machine_rank).toBe(
+    'up-to',
+  );
+  expect(BuildOptions.safeParse({ ...DEFAULT_OPTIONS, machine_rank: 'upto' }).success).toBe(false);
+});
+
 test('candidate policy schema defaults to all three UI choices', () => {
   expect(CandidatePolicy.options).toEqual(['no-proliferator', 'all-products', 'output-products']);
   expect(DEFAULT_OPTIONS.candidate_policies).toEqual([
