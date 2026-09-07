@@ -5,15 +5,17 @@ import { buildOverlays } from '../model/overlays';
 import type { Atlas } from '../model/schemas';
 import { assetPath, isAbortError, loadAtlas } from '../state/assets';
 import { useBlueprint } from '../state/BlueprintProvider';
-import { BeltChevrons } from './BeltChevrons';
+import { BeltRibbons } from './BeltRibbons';
 import { BuildingInstances } from './BuildingInstances';
 import { CameraRig } from './CameraRig';
 import { CountLabels } from './CountLabels';
 import { IconInstances } from './IconInstances';
+import { SorterModels } from './SorterModels';
 import { TraceOverlay } from './TraceOverlay';
 
 export function BlueprintCanvas() {
-  const { sceneModel, selectedIndex, select, catalog, traceFrame, traceShow } = useBlueprint();
+  const { sceneModel, selectedIndex, select, catalog, traceFrame, traceShow, view } =
+    useBlueprint();
   const [atlas, setAtlas] = useState<Atlas | null>(null);
   const [atlasTexture, setAtlasTexture] = useState<Texture | null>(null);
   useEffect(() => {
@@ -78,13 +80,23 @@ export function BlueprintCanvas() {
       // never sized at all. Dropping the debounce removes the timer, and
       // scroll tracking is unnecessary in a non-scrolling 100vh grid layout.
       resize={{ debounce: 0, scroll: false }}
+      // Deselection lives on the canvas rather than on the building mesh: the
+      // machines can be hidden entirely, and a click on empty space must still
+      // clear the selection when they are.
+      onPointerMissed={() => select(null)}
     >
       <color attach="background" args={['#10141a']} />
       <hemisphereLight args={['#cfe3ff', '#2a2f38', 1.1]} />
       <directionalLight position={[40, 80, 30]} intensity={1.4} />
       <CameraRig model={sceneModel} />
-      <BuildingInstances model={sceneModel} selectedIndex={selectedIndex} onSelect={select} />
-      <BeltChevrons model={sceneModel} />
+      <BuildingInstances
+        model={sceneModel}
+        selectedIndex={selectedIndex}
+        onSelect={select}
+        look={view.machines}
+      />
+      <BeltRibbons model={sceneModel} showLabels={view.beltLabels} onSelect={select} />
+      <SorterModels model={sceneModel} showTies={view.sorterTies} onSelect={select} />
       <TraceOverlay frame={traceFrame} show={traceShow} />
       {atlas && atlasTexture && overlays && (
         <>

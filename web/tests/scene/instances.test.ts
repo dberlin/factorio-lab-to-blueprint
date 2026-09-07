@@ -1,7 +1,7 @@
 import { expect, test } from '@rstest/core';
 import { Matrix4, Object3D } from 'three';
-import type { BuildingInstance } from '../../src/model/layout';
-import { instanceMatrix } from '../../src/scene/BuildingInstances';
+import type { BuildingInstance, SceneModel } from '../../src/model/layout';
+import { drawnInstances, instanceMatrix } from '../../src/scene/BuildingInstances';
 
 const inst = (over: Partial<BuildingInstance> = {}): BuildingInstance => ({
   index: 0,
@@ -36,4 +36,27 @@ test('yaw rotates about world Y', () => {
   // rotating +90deg about Y maps local +X to -Z
   expect(e[0]).toBeCloseTo(0);
   expect(e[2]).toBeCloseTo(-1);
+});
+
+test('belts and sorters are left to their own layers, not drawn as boxes too', () => {
+  // A belt is a strip and a sorter is a little machine; a box in the same
+  // place would be a second, wrong shape on top of the right one.
+  const instances = [
+    { index: 1, itemId: 2003 }, // belt
+    { index: 2, itemId: 2014 }, // sorter
+    { index: 3, itemId: 2303 }, // assembler
+    { index: 4, itemId: 2020 }, // splitter
+  ].map((o) => ({
+    ...o,
+    modelIndex: 1,
+    position: [0, 0, 0] as [number, number, number],
+    size: [1, 1, 1] as [number, number, number],
+    yawRad: 0,
+    color: 0x888888,
+    recipeId: 0,
+    filterId: 0,
+    parameters: [] as readonly number[],
+  }));
+  const drawn = drawnInstances({ instances } as unknown as SceneModel);
+  expect(drawn.map((i) => i.index)).toEqual([3, 4]);
 });

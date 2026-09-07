@@ -21,7 +21,12 @@ rstest.mock('@react-three/fiber', () => ({
 const sceneModel = { instances: [], unknownItemIds: [] } as unknown as SceneModel;
 
 rstest.mock('../../src/state/BlueprintProvider', () => ({
-  useBlueprint: () => ({ sceneModel, selectedIndex: null, select: () => {} }),
+  useBlueprint: () => ({
+    sceneModel,
+    selectedIndex: null,
+    select: () => {},
+    view: { beltLabels: true, sorterTies: true, machines: 'ghosted' },
+  }),
 }));
 
 // BlueprintCanvas loads the icon atlas on mount. Unmocked, that is a real

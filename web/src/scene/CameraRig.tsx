@@ -8,6 +8,16 @@ import type { SceneModel } from '../model/layout';
 /** The game's blueprint view looks down at roughly 35 degrees. */
 const TILT = 35 * (Math.PI / 180);
 
+/**
+ * The plan view the `O` key snaps to.
+ *
+ * Not exactly 90 degrees: straight down makes the view direction parallel to
+ * the camera's up vector, which leaves the roll undefined, and OrbitControls
+ * then flips the scene the first time the view is dragged. Two degrees off is
+ * indistinguishable from vertical and completely well defined.
+ */
+export const PLAN_TILT = 88 * (Math.PI / 180);
+
 // The +45-degree azimuth phase puts the camera corner-on to the grid — the
 // isometric angle DSP's own blueprint camera uses — rather than staring
 // straight down an axis at one face. Do not remove it: at quarterTurns=0
@@ -18,13 +28,14 @@ export function isoPosition(
   center: [number, number, number],
   radius: number,
   quarterTurns: number,
+  tilt: number = TILT,
 ): [number, number, number] {
   const dist = radius * 2.2;
   const az = (quarterTurns * Math.PI) / 2 + Math.PI / 4;
-  const horiz = Math.cos(TILT) * dist;
+  const horiz = Math.cos(tilt) * dist;
   return [
     center[0] + Math.sin(az) * horiz,
-    center[1] + Math.sin(TILT) * dist,
+    center[1] + Math.sin(tilt) * dist,
     center[2] + Math.cos(az) * horiz,
   ];
 }
@@ -83,15 +94,27 @@ export function CameraRig({ model }: { model: SceneModel }) {
   const get = useThree((s) => s.get);
   const size = useThree((s) => s.size);
   const [turns, setTurns] = useState(0);
-  const [orbit, setOrbit] = useState(false);
+  const [planView, setPlanView] = useState(false);
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
+  // The viewport the current framing was computed for. A resize adjusts the
+  // zoom against this rather than re-framing, which is what lets an orbited
+  // or zoomed view survive one.
+  const framedFor = useRef(size);
 
-  // Frame the model whenever it changes or we rotate a quarter turn.
+  // Frame the model when it changes, when we rotate a quarter turn, or when
+  // the plan view is toggled -- NOT when the window resizes. Re-framing on
+  // resize is why free orbit used to be worth avoiding: every resize threw
+  // away whatever the user had orbited to.
   useLayoutEffect(() => {
     const camera = get().camera as OrthographicCamera;
-    const [x, y, z] = isoPosition(model.center, model.radius, turns);
+    const [x, y, z] = isoPosition(
+      model.center,
+      model.radius,
+      turns,
+      planView ? PLAN_TILT : undefined,
+    );
     camera.position.set(x, y, z);
-    camera.zoom = frameZoom(model.radius, size);
+    camera.zoom = frameZoom(model.radius, framedFor.current);
     camera.near = -model.radius * 20;
     camera.far = model.radius * 40;
     camera.lookAt(model.center[0], model.center[1], model.center[2]);
@@ -100,7 +123,21 @@ export function CameraRig({ model }: { model: SceneModel }) {
       controls.current.target.set(model.center[0], model.center[1], model.center[2]);
       controls.current.update();
     }
-  }, [get, model, turns, size]);
+  }, [get, model, turns, planView]);
+
+  // A resize keeps whatever the user is looking at the same size on screen:
+  // the zoom is scaled by the ratio of framings, and the position is left
+  // alone.
+  useLayoutEffect(() => {
+    const camera = get().camera as OrthographicCamera;
+    const before = frameZoom(model.radius, framedFor.current);
+    const after = frameZoom(model.radius, size);
+    framedFor.current = size;
+    if (before > 0 && after > 0 && Number.isFinite(before) && Number.isFinite(after)) {
+      camera.zoom *= after / before;
+      camera.updateProjectionMatrix();
+    }
+  }, [get, model.radius, size]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -111,7 +148,9 @@ export function CameraRig({ model }: { model: SceneModel }) {
       if (shouldIgnoreKeyTarget(e.target) || shouldIgnoreKeyTarget(document.activeElement)) return;
       if (e.key === 'q' || e.key === 'Q') setTurns((t) => t - 1);
       if (e.key === 'e' || e.key === 'E') setTurns((t) => t + 1);
-      if (e.key === 'o' || e.key === 'O') setOrbit((v) => !v);
+      // `O` is a snap to the plan view and back, not an orbit switch: orbit
+      // is always on now.
+      if (e.key === 'o' || e.key === 'O') setPlanView((v) => !v);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -121,7 +160,7 @@ export function CameraRig({ model }: { model: SceneModel }) {
     <OrbitControls
       ref={controls}
       makeDefault
-      enableRotate={orbit}
+      enableRotate
       enablePan
       enableZoom
       target={model.center}

@@ -1,9 +1,8 @@
 import { useLayoutEffect, useMemo, useRef } from 'react';
-import { CanvasTexture, InstancedBufferAttribute, type InstancedMesh, Object3D } from 'three';
+import { InstancedBufferAttribute, type InstancedMesh, Object3D } from 'three';
 import type { CountPlacement } from '../model/overlays';
+import { DIGIT_COLS, makeDigitTexture, patchDigitShader } from './digitAtlas';
 
-const DIGIT_CELL = 64;
-const DIGIT_COLS = 10;
 const DIGIT_SIZE = 0.9;
 const DIGIT_SPACING = 0.62;
 
@@ -33,33 +32,6 @@ export function layoutDigits(placements: readonly CountPlacement[]): DigitQuad[]
     });
   }
   return quads;
-}
-
-/**
- * A 10-cell strip of digit glyphs, drawn at runtime.
- *
- * Digits are not game data, so generating them here keeps the asset extractor
- * untouched and adds no font file to the repo.
- */
-export function makeDigitTexture(): CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = DIGIT_CELL * DIGIT_COLS;
-  canvas.height = DIGIT_CELL;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    throw new Error(
-      'makeDigitTexture: canvas 2D context unavailable, so the digit glyph strip cannot be ' +
-        'drawn -- every belt count would silently render as nothing.',
-    );
-  }
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `bold ${DIGIT_CELL * 0.8}px system-ui, sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  for (let d = 0; d < DIGIT_COLS; d++) {
-    ctx.fillText(String(d), d * DIGIT_CELL + DIGIT_CELL / 2, DIGIT_CELL / 2);
-  }
-  return new CanvasTexture(canvas);
 }
 
 export function CountLabels({ placements }: { placements: CountPlacement[] }) {
@@ -111,25 +83,7 @@ export function CountLabels({ placements }: { placements: CountPlacement[] }) {
         map={texture}
         transparent
         depthWrite={false}
-        onBeforeCompile={(shader) => {
-          shader.vertexShader = shader.vertexShader
-            .replace(
-              '#include <common>',
-              `#include <common>\nattribute float digitOffset;\nvarying float vDigit;`,
-            )
-            .replace('#include <uv_vertex>', `#include <uv_vertex>\nvDigit = digitOffset;`);
-          shader.fragmentShader = shader.fragmentShader
-            .replace('#include <common>', `#include <common>\nvarying float vDigit;`)
-            .replace(
-              '#include <map_fragment>',
-              // Single-row strip, so only u is offset; unlike the icon atlas
-              // there is no multi-row flipY correction to undo here.
-              `vec2 digitUv = vec2( vDigit + vMapUv.x * ${1 / DIGIT_COLS}, vMapUv.y );
-               vec4 sampled = texture2D( map, digitUv );
-               if ( sampled.a < 0.1 ) discard;
-               diffuseColor *= sampled;`,
-            );
-        }}
+        onBeforeCompile={patchDigitShader}
       />
     </instancedMesh>
   );

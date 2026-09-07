@@ -1,5 +1,10 @@
 import { expect, test } from '@rstest/core';
-import { frameZoom, isoPosition, shouldIgnoreKeyTarget } from '../../src/scene/CameraRig';
+import {
+  frameZoom,
+  isoPosition,
+  PLAN_TILT,
+  shouldIgnoreKeyTarget,
+} from '../../src/scene/CameraRig';
 
 test('camera sits above and away from the centre', () => {
   const p = isoPosition([0, 0, 0], 10, 0);
@@ -102,4 +107,15 @@ test('key shortcuts still fire from non-text targets', () => {
   expect(shouldIgnoreKeyTarget(document.body)).toBe(false);
   expect(shouldIgnoreKeyTarget(window)).toBe(false);
   expect(shouldIgnoreKeyTarget(null)).toBe(false);
+});
+
+test('the plan tilt looks almost straight down without ever being exactly vertical', () => {
+  const [x, y, z] = isoPosition([0, 0, 0], 10, 0, PLAN_TILT);
+  const dist = 10 * 2.2;
+  expect(y).toBeCloseTo(dist * Math.sin(PLAN_TILT), 6);
+  // A hair off vertical: exactly vertical leaves the camera's roll undefined
+  // and OrbitControls flips the scene on the first drag.
+  const horizontal = Math.hypot(x, z);
+  expect(horizontal).toBeGreaterThan(0);
+  expect(horizontal).toBeLessThan(dist * 0.05);
 });

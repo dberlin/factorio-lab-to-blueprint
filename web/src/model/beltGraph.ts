@@ -130,6 +130,16 @@ export function runForBelt(index: number, runs: readonly BeltRun[]): BeltRun | u
 }
 
 /**
+ * The run's POSITION in `runs`, which is the number the scene draws on that
+ * run's strip and colours it from. The info panel reports the same number, so
+ * clicking a belt and reading the picture agree.
+ */
+export function runIndexForBelt(index: number, runs: readonly BeltRun[]): number | null {
+  const at = runs.findIndex((run) => run.belts.includes(index));
+  return at < 0 ? null : at;
+}
+
+/**
  * Bearing for each belt, used to orient direction chevrons.
  *
  * Belt yaw cannot be used: the game zeroes it when serialising a belt

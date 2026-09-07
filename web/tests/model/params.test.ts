@@ -716,14 +716,21 @@ test('clicking a belt reports the contents inferred for its run', () => {
   inferCarried(parsed, runs, catalog);
 
   const rows = describeInferred(parsed.buildings[0]!, parsed, runs, catalog);
-  expect(rows).toEqual([{ label: 'Carries', value: 'Iron Ingot', inferred: true }]);
+  // The run row names the same number the scene draws on that run's strip, so
+  // the panel and the picture agree about which run was clicked.
+  expect(rows).toEqual([
+    { label: 'Belt run', value: '#0 · 1 belt' },
+    { label: 'Carries', value: 'Iron Ingot', inferred: true },
+  ]);
 });
 
-test('a belt whose run carries nothing gets no inferred row', () => {
+test('a belt whose run carries nothing still reports which run it is', () => {
   const parsed = bp([belt(0, -1)]);
   const runs = buildBeltRuns(parsed);
   inferCarried(parsed, runs, catalog);
-  expect(describeInferred(parsed.buildings[0]!, parsed, runs, catalog)).toEqual([]);
+  expect(describeInferred(parsed.buildings[0]!, parsed, runs, catalog)).toEqual([
+    { label: 'Belt run', value: '#0 · 1 belt' },
+  ]);
 });
 
 test('a non-belt, non-sorter building gets no inferred rows', () => {

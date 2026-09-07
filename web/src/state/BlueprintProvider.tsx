@@ -4,6 +4,21 @@ import { type Blueprint, parseBlueprint } from '../format';
 import type { Catalog } from '../model/catalog';
 import { buildSceneModel, type SceneModel } from '../model/layout';
 
+/** How the machines are drawn. Ghosted by default: the belts, their numbers
+    and the sorters that serve them all sit at ground level, and a solid
+    machine block hides most of them -- 73% of the heretical smelter block's
+    footprint is machine. Solid is one click away for anyone who wants it. */
+export type MachineLook = 'solid' | 'ghosted' | 'hidden';
+
+/** Layers the viewer can quiet on a busy blueprint. Both default on. */
+export interface ViewOptions {
+  /** The run number drawn on each strip. */
+  beltLabels: boolean;
+  /** The sorter direction markings and the tie lines to off-port ends. */
+  sorterTies: boolean;
+  machines: MachineLook;
+}
+
 /** Which trace overlay layers are on. Independent toggles (task-10-addendum.md
     Ruling 4): a layer contributes nothing when off, regardless of the other. */
 export interface TraceOverlayShow {
@@ -30,6 +45,8 @@ export interface BlueprintState {
       (see `load`) and while no trace has produced one yet. */
   traceFrame: TraceFrame | null;
   traceShow: TraceOverlayShow;
+  view: ViewOptions;
+  setView(view: ViewOptions): void;
   load(text: string): void;
   loadSnapshot(bp: Blueprint, label: string): void;
   setTraceFrame(frame: TraceFrame | null): void;
@@ -56,6 +73,11 @@ export function BlueprintProvider({
   const [traceShow, setTraceShow] = useState<TraceOverlayShow>({
     stranded: true,
     noGoods: true,
+  });
+  const [view, setView] = useState<ViewOptions>({
+    beltLabels: true,
+    sorterTies: true,
+    machines: 'ghosted',
   });
 
   // Derived during render. Do NOT move this into state or an effect; the React
@@ -98,6 +120,8 @@ export function BlueprintProvider({
     snapshotLabel,
     traceFrame,
     traceShow,
+    view,
+    setView,
     load,
     loadSnapshot,
     setTraceFrame,
