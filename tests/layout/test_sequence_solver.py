@@ -5426,17 +5426,10 @@ def test_production_planning_generates_variant_families_once(
     original = generate_strip_families
     calls = 0
 
-    def counted_families(
-        spec: BuildSpec,
-        *,
-        prefer_shared_proliferation: bool = False,
-    ) -> tuple[StripFamily, ...]:
+    def counted_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
         nonlocal calls
         calls += 1
-        return original(
-            spec,
-            prefer_shared_proliferation=prefer_shared_proliferation,
-        )
+        return original(spec)
 
     monkeypatch.setattr(
         sequence_solver_module,

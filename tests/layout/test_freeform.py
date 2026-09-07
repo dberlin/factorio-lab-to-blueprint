@@ -2787,7 +2787,17 @@ class TestPlanStrips:
         assert s.band_rows == s.ph, "the band reserves clearance, not footprint"
         assert s.height == 3 + s.band_rows + 2 == 9
 
-    def test_low_rate_proliferated_inputs_share_one_coater_lane(self) -> None:
+    def test_low_rate_proliferated_inputs_still_get_one_lane_each(self) -> None:
+        """RENAMED from `..._share_one_coater_lane`, which is now a banned build.
+
+        It used to plan the same spec twice: once ordinarily (three single-item
+        lanes) and once with `prefer_shared_proliferation=True`, asserting that
+        the preference merged all three ingredients onto ONE belt above to save
+        two Spray Coaters.  Spec §9 R1 removed the preference and the merge with
+        it -- fewer coaters is not worth a belt whose items must interleave
+        exactly -- so the second half of the test has no call to make and the
+        first half is the whole assertion.
+        """
         spec = BuildSpec(
             groups=(
                 group(
@@ -2804,46 +2814,27 @@ class TestPlanStrips:
             belt_items_per_second=F(30),
         )
 
-        default = plan_strips(spec, strip_len=6)
-        default_inputs = default[0].in_above + default[0].in_below
-        assert len(default_inputs) == 3
-        assert all(len(lane) == 1 for lane in default_inputs)
+        strips = plan_strips(spec, strip_len=6)
+        lanes = strips[0].in_above + strips[0].in_below
+        assert len(lanes) == 3
+        assert all(len(lane) == 1 for lane in lanes)
 
-        families = generate_strip_families(
-            spec,
-            prefer_shared_proliferation=True,
-        )
-        strips = plan_strips(spec, strip_len=6, families=families)
+    def test_a_wide_lab_seats_every_ingredient_on_its_own_lane(self) -> None:
+        """RENAMED, twice, and this is the name that lasts.
 
-        assert strips[0].in_above == (("gear", "iron-ingot", "magnetic-coil"),)
-        assert strips[0].in_below == ()
+        It was `..._leaves_wide_lab_plan_unchanged`, asserting that a
+        `prefer_shared_proliferation` plan equalled the ordinary one -- true, and
+        true for the wrong reason: BOTH ladders put three ingredients on one belt
+        above and three on one below, because five south rows could not carry six
+        lanes.  Freeing the drain row (spec §9 R2) split them and it became
+        `..._now_diverges_from_the_ordinary_ladder`, pinning `preferred !=
+        ordinary` as a tripwire for this task.
 
-    def test_shared_proliferation_preference_now_diverges_from_the_ordinary_ladder(
-        self,
-    ) -> None:
-        """The preference was inert here only while BOTH ladders mixed.
-
-        RENAMED from `..._leaves_wide_lab_plan_unchanged`, which now asserts the
-        opposite of what it says: the plans differ, and a `-k` filter or a grep
-        should say so rather than the other way round.  The old name comes back
-        with the old assertion, if it ever does.
-
-        RE-DERIVED 2026-09-07 (spec §9 R2, the drain-row task).  This asserted
-        `preferred == ordinary`, and it held because the wide lab seated three
-        ingredients on one belt above and three on one below WHICHEVER ladder
-        ran: the ordinary one climbed to a mix of three because five south rows
-        could not carry six lanes, and the shared one started there.
-
-        Freeing the sixth row splits them.  The ordinary ladder now stops at one
-        item per lane -- six single-item lanes, which is the seating §9 R1
-        requires -- while `prefer_shared` still starts at the widest mix and
-        still finds the three-and-three, so the two plans genuinely differ.
-
-        THE DIVERGENCE IS TRANSIENT AND IS PINNED SO THAT IT CANNOT BE
-        FORGOTTEN.  §9 R1's executor corollary collapses `_seat_inputs`' mixing
-        ladder to one item per lane outright; when that lands, `prefer_shared`
-        has nothing left to reverse, the two plans agree again, and the
-        inequality below must go back to `preferred == ordinary`.
+        The tripwire has fired.  §9 R1's executor corollary collapsed the mixing
+        ladder, `prefer_shared_proliferation` is deleted, and there is one plan
+        again -- six ingredients, six single-item lanes, product out east.  The
+        assertion is now about the seating itself rather than about two plans
+        agreeing, because there is no longer a second plan to compare against.
         """
         ingredients = (
             "antimatter",
@@ -2869,25 +2860,8 @@ class TestPlanStrips:
             belt_items_per_second=F(30),
         )
 
-        ordinary = generate_strip_families(spec)
-        preferred = generate_strip_families(
-            spec,
-            prefer_shared_proliferation=True,
-        )
-
-        (wide,) = [family for family in ordinary if family.flank_outputs]
+        (wide,) = [family for family in generate_strip_families(spec) if family.flank_outputs]
         assert [lane.items for lane in wide.input_lanes] == [(item,) for item in ingredients]
-        (shared,) = [family for family in preferred if family.flank_outputs]
-        assert [lane.items for lane in shared.input_lanes] == [
-            ingredients[:3],
-            ingredients[3:],
-        ]
-        # TRIPWIRE FOR THE MIXING-LADDER TASK (spec §9 R1's executor corollary):
-        # when `_seat_inputs` stops mixing at all, `prefer_shared` has nothing
-        # left to reverse and this line goes red.  Deleting it and restoring
-        # `assert preferred == ordinary` is the correct response -- along with
-        # the two assertions above, which then describe the same plan twice.
-        assert preferred != ordinary
 
     def test_a_four_input_recipe_lays_out_and_validates(self) -> None:
         """Planning it is not enough -- it has to emit and pass the neutral judge.
@@ -2939,7 +2913,14 @@ class TestPlanStrips:
         )
 
     def test_the_ceiling_is_the_machines_insert_POSES_not_its_rows(self) -> None:
-        """Five ingredients on an assembler: three above, two below, output below.
+        """Five ingredients on an assembler: three sorters above, two below.
+
+        AMENDED 2026-09-07 (spec §9 R1): the sums below are unchanged and the
+        seating under them is not.  It used to be `('a', 'b', 'c')` on ONE belt
+        above and `('d', 'e')` on ONE below, with the output on the south face;
+        the mixing ladder is gone, so it is five single-item lanes with the
+        output flanked east.  The counts this test is about -- three sorters on
+        the north face, two on the south -- are what the poses carry either way.
 
         THIS SAID TWELVE, AND TWELVE NEEDED TWELVE SLOTS THAT DO NOT EXIST.  An
         Assembling Machine offers a lane THREE insert poses per face, and a slot
@@ -2960,29 +2941,41 @@ class TestPlanStrips:
         assert sum(len(lane) for lane in strips[0].in_above) == 3
         assert sum(len(lane) for lane in strips[0].in_below) == 2
 
-    def test_six_ingredients_seat_once_the_product_leaves_east(self) -> None:
-        """Six fit when the output flanks; seven still do not, and must not.
+    def test_five_ingredients_seat_once_the_product_leaves_east(self) -> None:
+        """RENAMED from `test_six_ingredients_seat_once_the_product_leaves_east`.
 
-        THIS TEST USED TO ASSERT THAT SIX REFUSED, and it was right about the
-        arithmetic and wrong about the building.  An Assembling Machine defines
-        TWELVE insert poses, three per side, and a lane-fed strip was reading two
-        of the four sides.  Six ingredients and a product is seven connections
-        into six slots only if the east face does not exist.
+        Its history is worth keeping because the number has moved twice.  It
+        first asserted that SIX refused, which was right about the arithmetic and
+        wrong about the building: an Assembling Machine defines TWELVE insert
+        poses, three per side, and a lane-fed strip was reading two of the four
+        sides.  It then asserted that six SEATED once the product flanked east --
+        and that seating, measured 2026-09-07, was
+        `(('a', 'b', 'c'),)` above and `(('d', 'e', 'f'),)` below: TWO MIXED
+        BELTS.  `len(in_lanes) == 6` counts items, not lanes, so it read as six
+        lanes and was two.  Spec §9 R1 bans that build, so six refuses again --
+        this time on the honest ground that an assembler has three reachable rows
+        above and only two below, and six single-item lanes need six rows.
 
-        Seven ingredients still refuse, and that is the half of this test that
-        matters.  The north and south faces carry three sorters each and the east
-        face carries the product; the ceiling moved from six connections to
-        seven, it did not go away.  If a change makes seven pass, it has relaxed
-        ``game.slot_occupancy`` rather than used another face.
+        Five is the number that flanking actually buys, and it is asserted here
+        so the east face keeps a live test: unflanked, the output's south column
+        leaves room for four ingredients; flanked, the south face is handed back
+        whole and the fifth seats.
+
+        Seven ingredients refuse in both worlds, and that is still the half that
+        guards `game.slot_occupancy`: if a change makes seven pass, it has
+        relaxed the slot rule rather than used another face.
 
         2026-09-05: the refusal comes back as ``NoValidLayout`` rather than a
         raw ``ValueError`` -- ``generate_strip_families`` is the refusal
         boundary now, and this families-less ``plan_strips`` call falls back
         to it internally.
         """
-        strips = plan_strips(self._many_input_spec(6), strip_len=6)
-        assert strips[0].flank_outputs, "six must seat by flanking, not by doubling up"
-        assert len(strips[0].in_lanes) == 6
+        strips = plan_strips(self._many_input_spec(5), strip_len=6)
+        assert strips[0].flank_outputs, "five must seat by flanking, not by doubling up"
+        assert [len(lane) for lane in strips[0].in_above] == [1, 1, 1]
+        assert [len(lane) for lane in strips[0].in_below] == [1, 1]
+        with pytest.raises(NoValidLayout, match="cannot be seated"):
+            plan_strips(self._many_input_spec(6), strip_len=6)
         with pytest.raises(NoValidLayout, match="insert pose"):
             plan_strips(self._many_input_spec(7), strip_len=6)
 
@@ -2994,8 +2987,13 @@ class TestPlanStrips:
         flanked output is not on that face at all.  Charging it anyway rations
         away the column the flank exists to free, and it shows up as a lane
         trimmed one tile short of the column it was actually given.
+
+        FIXTURE MOVED 6 -> 5 (spec §9 R1): six ingredients used to flank and seat
+        as two mixed belts, which is now a refusal.  Five flanks on the merits,
+        with two single-item lanes below, so the property this test is about is
+        unchanged and still has a strip to read it off.
         """
-        strips = plan_strips(self._many_input_spec(6), strip_len=6)
+        strips = plan_strips(self._many_input_spec(5), strip_len=6)
         s = strips[0]
         assert s.flank_outputs and s.out_lanes, "this strip must have both to mean anything"
         assert s.column_offset(s.in_below[0]) == 0
@@ -3023,12 +3021,10 @@ def test_seat_inputs_uses_the_freed_south_row_only_when_flanked() -> None:
     band, so the reservation still binds and six ingredients still refuse.
     """
     six = ("a", "b", "c", "d", "e", "f")
-    above, below = freeform._seat_inputs(
-        six, 1, 3, 3, max_per_lane=5, columns=3, flank_outputs=True
-    )
+    above, below = freeform._seat_inputs(six, 1, 3, 3, columns=3, flank_outputs=True)
     assert [len(lane) for lane in (*above, *below)] == [1, 1, 1, 1, 1, 1]
     with pytest.raises(ValueError, match="cannot be seated"):
-        freeform._seat_inputs(six, 1, 3, 3, max_per_lane=5, columns=3)
+        freeform._seat_inputs(six, 1, 3, 3, columns=3)
 
 
 class TestASideCarriesAsManyLanesAsItsPosesAllow:
@@ -11011,9 +11007,11 @@ def five_input_spec() -> BuildSpec:
     ``miniature-particle-collider`` takes five things and makes one, in an
     assembler.  Five is the most a lane-fed machine can carry -- three insert
     poses on the north face and three on the south, one of the south three spent
-    on the output lane -- and an assembler's ROW caps are tighter than that, so
-    seating five forces a shared lane.  That is what keeps mixed lanes under
-    test now that six ingredients are refused.
+    on the output lane -- and an assembler has only two reachable rows below, so
+    five single-item lanes seat only once the product leaves EAST and gives the
+    south face its third column back.  Before spec §9 R1 the planner never got
+    that far: it bought the row by putting three items on one belt above and two
+    on another below, unflanked, which is the build the user reported starving.
 
     Deliberately a real recipe, not a synthesised one: a made-up name plans
     perfectly well and then dies at ``catalog.recipe_id``, so a synthetic-only
@@ -11046,7 +11044,8 @@ def six_input_spec() -> BuildSpec:
 
     ``universe-matrix`` takes antimatter plus all five lower matrices and runs in
     a Matrix Lab.  Six inputs plus one output is seven lanes, and two sides of
-    three cannot carry that one-item-per-lane -- which is what mixing is for.
+    three carry that one-item-per-lane only because the seventh leaves by the
+    EAST face and its drain row sits past sorter reach (spec §9 R2).
 
     Deliberately a real recipe, not a synthesised one: a made-up name plans
     perfectly well and then dies at ``catalog.recipe_id``, so a synthetic-only
@@ -11114,12 +11113,21 @@ def _lane_runs(p: Placement) -> dict[int, set[int]]:
 
 
 class TestMixedItemLanes:
-    """One item per lane is our simplification, not a DSP rule.
+    """One item per lane, and DSP's own designs are not a reason to relax it.
 
-    Measured across the fixture corpus, 236 of 1,288 real sorters carry a
-    filter, and ``falk-v7-mall-full`` filters 100% of its 196 -- bus designs
-    where several items share a belt and filtered sorters pick off the one they
-    want.
+    RENAMED IN SPIRIT, not in letter: the class name is left alone because it is
+    still where a mixed input lane would be caught, but nothing under it asserts
+    that we PRODUCE one any more.  Spec §9 R1 bans it absolutely.
+
+    The measurement that used to justify mixing is still true and is kept because
+    it is the strongest argument against the ruling: across the fixture corpus
+    236 of 1,288 real sorters carry a filter, and ``falk-v7-mall-full`` filters
+    100% of its 196 -- human bus designs where several items share a belt and
+    filtered sorters pick off the one they want.  Those work because a bus is fed
+    to saturation from outside.  A lane we emit is fed by the exact production
+    that consumes it, so an item that runs ahead fills the belt and backs the
+    others up; the user reported that build.  Filtering picks WHICH item a sorter
+    takes and controls the interleaving not at all.
     """
 
     def test_a_six_ingredient_recipe_builds_with_its_product_leaving_east(self) -> None:
@@ -11199,36 +11207,75 @@ class TestMixedItemLanes:
                 f"({sorted(lane_reachable)}); the east face was never used"
             )
 
-    def test_a_five_ingredient_recipe_still_mixes_and_validates(self) -> None:
-        """Mixing is not dead, it is bounded.  Five fits, and has to keep fitting.
+    def test_a_five_ingredient_recipe_seats_one_item_per_lane_and_validates(self) -> None:
+        """RENAMED from `..._still_mixes_and_validates`, which asserted the ban.
 
-        Without this, the column bound could tighten to "one item per lane" and
-        every mixed-lane test above would still pass by refusing.
+        It asserted `max(len(lane) ...) > 1` -- that five ingredients on an
+        Assembling Machine produced at least one shared belt -- and its docstring
+        said mixing "is not dead, it is bounded".  Spec §9 R1 killed it: an input
+        lane carries one item, not chosen and not forced.
+
+        Five is still the interesting number, and it still builds.  An assembler
+        has three reachable rows above and two below and three insert poses per
+        face, so five single-item lanes fit only if the product stops charging
+        the south face a column -- which is exactly what flanking it east does.
+        Measured before the ban the planner took the cheaper unflanked answer,
+        `('frame-material', 'graphene', 'processor')` above and
+        `('super-magnetic-ring', 'titanium-alloy')` below; it now flanks instead.
+
+        The `report.ok` half is unchanged and is what stops the rename from being
+        a way to pass by refusing: the placement is still emitted and still
+        judged by the neutral validator.
         """
         spec = five_input_spec()
         strips = plan_strips(spec, strip_len=6)
-        assert max(len(lane) for lane in strips[0].in_above + strips[0].in_below) > 1
+        lanes = strips[0].in_above + strips[0].in_below
+        assert len(lanes) == 5, lanes
+        assert all(len(lane) == 1 for lane in lanes), lanes
+        assert strips[0].flank_outputs, "five single-item lanes need the east face"
         p = FreeformLayout(
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
 
-    def test_every_sorter_on_a_mixed_lane_is_filtered(self) -> None:
-        """An unfiltered sorter on a shared lane grabs whatever passes.
+    def test_no_input_belt_is_drawn_from_under_two_filters(self) -> None:
+        """REPURPOSED from `test_every_sorter_on_a_mixed_lane_is_filtered`.
 
-        That starves the machine that needed the other item, and nothing about
-        the paste looks wrong -- so this is correctness, not tidiness.
+        That test asserted the mitigation: a sorter on a shared lane carries a
+        filter, so it takes only its own item rather than grabbing whatever
+        passes.  The user's report is why the mitigation is not enough --
+        filtering controls WHICH item each sorter takes and nothing controls the
+        interleaving on the belt, so whichever item the machines are not short of
+        fills it and the others back up.  Spec §9 R1 bans the lane instead.
+
+        So the same signal is read for the opposite verdict, on the same fixture
+        that used to be the canonical mixed-lane spec: `_lane_runs` finds no belt
+        run drawn from under two different filters, because the emitter filters a
+        sorter only when `len(lane) > 1` and no lane is.
+
+        The guard below is what keeps this from passing vacuously -- an empty map
+        means "nothing shared" only if there were sorters feeding from belts at
+        all, and a placement that emitted none would satisfy the assertion while
+        proving nothing.
         """
         spec = five_input_spec()
         p = FreeformLayout(
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
-        shared = _lane_runs(p)
-        assert shared, "a five-input strip must produce at least one mixed lane"
-        assert any(len(f) > 1 for f in shared.values()), (
-            "expected some belt to be drawn from under two different filters"
+        belts = {i for i, b in enumerate(p.buildings) if catalog.is_belt(b.item_id)}
+        feeding = [
+            b
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id) and b.input_obj is not None and b.input_obj in belts
+        ]
+        assert len(feeding) >= len(spec.groups[0].inputs_per_machine), (
+            "the spec must emit a sorter per ingredient or this proves nothing"
         )
+        assert not any(b.filter_id for b in feeding), (
+            "a filtered sorter means the emitter drew two items from one belt"
+        )
+        assert _lane_runs(p) == {}, _lane_runs(p)
 
     def test_unmixed_lanes_stay_unfiltered(self) -> None:
         """The signal only means something if it is absent when lanes are pure.

@@ -1252,24 +1252,34 @@ def test_variants_expand_one_pose_into_exact_alternative_seatings() -> None:
         )
 
 
-def test_shared_lane_items_receive_distinct_authoritative_columns() -> None:
-    family = _family(
-        _single_machine_spec(
-            "chemical-plant",
-            inputs=tuple(f"ingredient-{index}" for index in range(7)),
-        )
-    )
-    shared = tuple(
-        plan
-        for variant in family.variants
-        for plan in variant.attachment_plan
-        if len(plan.lane.items) > 1
-    )
+def test_more_ingredients_than_rows_refuses_instead_of_sharing_a_lane() -> None:
+    """RENAMED from `test_shared_lane_items_receive_distinct_authoritative_columns`.
 
-    assert shared
-    for plan in shared:
-        assert len(plan.attachments) == len(plan.lane.items)
-        assert len({attachment.column for attachment in plan.attachments}) == len(plan.attachments)
+    That test asserted that when several ingredients shared one lane, the
+    attachment planner gave each of them its own column -- correct, and about a
+    plan spec §9 R1 no longer allows anyone to make.  Its fixture is this one:
+    seven ingredients into a Chemical Plant, which has two reachable rows above
+    and three below.  Six single-item lanes plus an output is the most that
+    seats, so the seventh has nowhere to go and the ladder used to buy the row
+    by doubling up.  It now refuses, and this is where the price of the ruling
+    is written down.
+
+    What is no longer covered, said plainly rather than quietly dropped: NO
+    plan reachable through `_logical_strip_plans` produces a lane with two items
+    any more, on either face -- `_merge_lanes` folds output DESTINATIONS onto a
+    lane, never a second item -- so `StripVariant.attachment_plan`'s
+    per-item column assignment has no live caller with more than one attachment.
+    The code is left in place; it is the fallback the emitter would need if a
+    later ruling ever readmits a shared lane, and deleting it is not this task's
+    call.
+    """
+    with pytest.raises(NoValidLayout, match="7 ingredients cannot be seated"):
+        _family(
+            _single_machine_spec(
+                "chemical-plant",
+                inputs=tuple(f"ingredient-{index}" for index in range(7)),
+            )
+        )
 
 
 def test_multi_lane_assembler_uses_globally_unique_slots_deterministically() -> None:
@@ -1943,9 +1953,7 @@ def test_a_side_with_no_reachable_row_at_all_does_not_move_the_drain() -> None:
     drain past an empty side would cost the family the one-machine cap for a
     gap belt that crosses nothing.
     """
-    above, below = freeform._seat_inputs(
-        ("a", "b", "c"), 1, 3, 0, max_per_lane=5, columns=3, flank_outputs=True
-    )
+    above, below = freeform._seat_inputs(("a", "b", "c"), 1, 3, 0, columns=3, flank_outputs=True)
     assert [len(lane) for lane in above] == [1, 1, 1]
     assert below == ()
     assert not strip_variants_module._drain_moves_outermost(True, below, 0)
@@ -1954,6 +1962,71 @@ def test_a_side_with_no_reachable_row_at_all_does_not_move_the_drain() -> None:
     assert strip_variants_module._drain_moves_outermost(True, (("a",), ("b",), ("c",)), 3)
     assert not strip_variants_module._drain_moves_outermost(True, (("a",),), 3)
     assert not strip_variants_module._drain_moves_outermost(False, (("a",), ("b",)), 2)
+
+
+def _five_ingredient_assembler_spec() -> BuildSpec:
+    """Five ingredients into an Assembling Machine: more lanes than one side holds.
+
+    `_side_lane_caps` gives an Assembling Machine three reachable rows above and
+    two below, and each face offers three insert columns, so five single-item
+    lanes fit only once the product leaves EAST and stops charging the south
+    face a column.  The mixing ladder found a cheaper answer first and took it:
+    measured on this branch before spec §9 R1's executor corollary landed,
+    `(('frame-material', 'graphene', 'processor'),)` above and
+    `(('super-magnetic-ring', 'titanium-alloy'),)` below -- two mixed belts,
+    unflanked.
+    """
+    ingredients = ("frame-material", "graphene", "processor", "super-magnetic-ring", "wire")
+    return BuildSpec(
+        groups=(
+            _group(
+                "five-ingredient",
+                "assembling-machine-2",
+                2,
+                {item: Fraction(1) for item in ingredients},
+                {"out": Fraction(1)},
+            ),
+        ),
+        external_inputs={item: Fraction(2) for item in ingredients},
+        outputs={"out": Fraction(2)},
+    )
+
+
+def test_a_five_ingredient_group_seats_one_item_per_lane() -> None:
+    """Fewer rows is not worth a belt whose items must interleave exactly.
+
+    The user reported a blueprint that merged three items onto one belt into a
+    machine and watched it starve: nothing controls the interleaving, so
+    whichever item the machines are not short of fills the belt and the others
+    back up.  Spec §9 R1 bans that lane outright -- not chosen and not forced --
+    and its executor's corollary collapses `_seat_inputs`' mixing ladder so the
+    emitter stops PRODUCING one rather than merely stopping preferring it.
+
+    Five ingredients is the case that used to mix on the merits: the ladder's
+    first rung could not seat five single lanes under an unflanked output, so it
+    climbed.  It no longer climbs -- it flanks, and five lanes carry one item
+    each.
+    """
+    (plan,) = strip_variants_module._logical_strip_plans(_five_ingredient_assembler_spec())
+    lanes = (*plan.in_above, *plan.in_below)
+    assert len(lanes) == 5, lanes
+    assert all(len(lane) == 1 for lane in lanes), lanes
+
+
+def test_seat_inputs_refuses_rather_than_mixing_when_one_per_lane_will_not_fit() -> None:
+    """No lane is better than a mixed lane (spec §9 R1).
+
+    The ladder used to escalate to two, then three items per lane.  It no longer
+    does: a spec whose ingredients outnumber the reachable rows fails to seat,
+    `_logical_strip_plans` turns the `ValueError` into a refusal, and the audit
+    says REFUSED -- which is the truth -- instead of emitting a belt
+    `flow.lane_single_item` convicts after a full routing pass.
+
+    One row above, one below, and a face three columns wide: three ingredients
+    used to come back as a single three-item belt above.
+    """
+    with pytest.raises(ValueError, match="cannot be seated"):
+        freeform._seat_inputs(("a", "b", "c"), 1, 1, 1, columns=3)
 
 
 def test_every_both_fed_ingredient_is_seated_on_its_side_s_outermost_row() -> None:

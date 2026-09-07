@@ -2227,25 +2227,34 @@ def _seat_inputs(
     n_sinks: int,
     above_cap: int,
     below_cap: int,
-    max_per_lane: int,
     columns: int,
     *,
     flank_outputs: bool = False,
-    prefer_shared: bool = False,
     lane_fits: Callable[[tuple[str, ...]], bool] | None = None,
     seating_fits: Callable[[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]], bool]
     | None = None,
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
     """Seat ingredients into lanes above and below the machine band.
 
-    Tries one item per lane first by default, preserving ordinary layouts.
-    ``prefer_shared`` reverses that order for proliferation lanes whose caller
-    supplies an exact throughput predicate: fewer lanes then mean fewer Coaters
-    and avoid an unroutable wall of adjacent supply terminals.
+    ONE ITEM PER LANE, or no seating at all.  Spec §9 R1 bans a mixed input
+    lane absolutely -- not chosen and not forced -- because nothing controls the
+    interleaving on a belt carrying two items into a machine: whichever item the
+    machines are not short of fills the belt and the others back up, and the
+    machines starve.  The user reported exactly that build.
 
-    Mixing is capped at ``max_per_lane`` -- the machine's width -- because two
-    sorters serving one machine from one lane cannot share an anchor, so each
-    item on a shared lane needs its own column across that width.
+    So this searches ONE split, not a ladder.  It used to try one item per lane
+    first and then climb -- two to a lane, then three, up to a ``max_per_lane``
+    cap -- and a ``prefer_shared`` flag reversed the climb for proliferated
+    groups to save Spray Coaters.  All of it is gone, the cap parameter with it:
+    a bound on how far mixing may go is machinery for a thing that may not
+    happen at all.  A seating that cannot fit one item per lane raises,
+    :func:`~flab2bp.layout.strip_variants._logical_strip_plans` turns that into
+    a refusal, and the audit says REFUSED, which is the truth.  The alternative
+    is worse and not cheaper: an emitted mixed lane is an ERROR under
+    ``flow.lane_single_item``, so the cell would come back INVALID having paid a
+    full routing pass to discover it.  This is the discipline the coater seat
+    chooser gets from ``prolif.coater_rides_one_run`` -- the emitter agrees with
+    the validator rather than racing it.
 
     ``above_cap`` and ``below_cap`` are THIS MACHINE's rows per side, from
     :func:`_side_lane_caps`, and they are not both ``SORTER_MAX_REACH``: a
@@ -2256,9 +2265,11 @@ def _seat_inputs(
     LANES, this counts SORTERS.  Every item on a side needs its own column,
     because a machine slot holds exactly one connection -- see
     :data:`~flab2bp.dsp.rules.CONN_SLOTS_PER_OBJECT` and
-    ``validate.game.slot_occupancy``.  Mixing two items onto one lane saves a
-    row and saves no column at all, so without this bound "mix harder" walks
-    straight past the real limit.
+    ``validate.game.slot_occupancy``.  Mixing two items onto one lane saved a
+    row and saved no column at all, which is why "mix harder" used to walk
+    straight past the real limit without this bound; with the ladder gone,
+    ``columns`` is simply what refuses a side carrying more ingredients than the
+    face has insert poses.
 
     It was missing, and what it cost was not hypothetical.  ``universe-matrix``
     takes six ingredients and produces one, and a Matrix Lab offers three
@@ -2287,6 +2298,9 @@ def _seat_inputs(
     ruling, and §9 R1 is why it had to be made: the seating this replaced put
     three ingredients on one belt above and three on one below, and a belt
     carrying two items into a machine starves it however the sorters filter.
+    That seating is not a fallback any more, it is unreachable -- the row had to
+    be freed or the Matrix Lab would refuse, because ``flow.lane_single_item``
+    convicts the mixed alternative and this function no longer offers it.
 
     ``seating_fits`` judges a whole candidate split rather than one lane: it is
     where the caller asks whether the ROWS this split implies can be served at
@@ -2310,9 +2324,10 @@ def _seat_inputs(
     n = len(items)
     if n == 0:
         return (), ()
-    mix_sizes = (
-        range(max(1, max_per_lane), 0, -1) if prefer_shared else range(1, max(1, max_per_lane) + 1)
-    )
+    # One rung, and it is deliberately a one-element tuple rather than an
+    # inlined `k = 1`: the ladder is what spec §9 R1 removed, and leaving its
+    # shape visible says that the next rung is not missing, it is banned.
+    mix_sizes = (1,)
 
     def search(
         require_servable: bool,
@@ -2333,7 +2348,7 @@ def _seat_inputs(
             for a in range(min(len(lanes), above_cap), -1, -1):
                 above, below = tuple(lanes[:a]), tuple(lanes[a:])
                 if len(below) > below_cap:
-                    continue  # more lanes than that side can hold; mix harder
+                    continue  # more lanes than that side can hold; try the other split
                 if n_sinks and not flank_outputs and below_cap - len(below) <= 0:
                     continue  # no room left below for an output lane
                 if sum(len(lane) for lane in above) > columns:
@@ -2355,10 +2370,12 @@ def _seat_inputs(
     flanked = " with the product leaving east" if flank_outputs else ""
     raise ValueError(
         f"{n} ingredients cannot be seated{flanked}: {above_cap} lane(s) above "
-        f"and {below_cap} below carrying at most {max_per_lane} items each, over "
-        f"a face that offers {columns} insert pose(s) per side, leaves no room "
-        f"for {n} ingredient sorter(s) and the output lane. A machine slot holds "
-        f"one connection, so two sorters cannot share a column"
+        f"and {below_cap} below, each carrying ONE item, over a face that offers "
+        f"{columns} insert pose(s) per side, leaves no room for {n} ingredient "
+        f"sorter(s) and the output lane. A machine slot holds one connection, so "
+        f"two sorters cannot share a column, and spec §9 R1 forbids merging two "
+        f"items onto one belt to save a row -- nothing controls the interleaving "
+        f"and the machines starve"
     )
 
 

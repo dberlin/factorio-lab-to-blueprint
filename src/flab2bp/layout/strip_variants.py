@@ -1278,11 +1278,7 @@ def _seat_both_fed_outermost(
     raise ValueError("two both-fed lanes cannot be placed on opposite outer rows within the caps")
 
 
-def _logical_strip_plans(
-    spec: BuildSpec,
-    *,
-    prefer_shared_proliferation: bool = False,
-) -> tuple[_LogicalStripPlan, ...]:
+def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
     """Allocate lane shards, admitting exact two-face output overflow.
 
     The historical planner budgets outputs only on the face below the machine
@@ -1384,24 +1380,16 @@ def _logical_strip_plans(
             if boundary or not destinations:
                 sinks.append((item, "", CargoDomain.UNSPRAYED))
 
-        prefer_shared_inputs = (
-            prefer_shared_proliferation and group.proliferated and len(input_items) >= 3
-        )
-        group_input_rates = tuple(group.inputs.items())
-
-        def input_lane_fits(
-            lane: tuple[str, ...],
-            input_rates: tuple[tuple[str, Fraction], ...] = group_input_rates,
-            machine_count: int = group.count,
-        ) -> bool:
-            total = sum(
-                (rate * machine_count for item, rate in input_rates if item in lane),
-                spec.lane_capacity * 0,
-            )
-            # One belt, one cargo size: a shared lane is judged at the smallest
-            # stack any of its items was planned at (`_input_stack`).
-            return total <= spec.lane_capacity * _input_stack(lane, spec)
-
+        # `_seat_inputs` used to take a per-lane rate predicate here
+        # (`input_lane_fits`: does the sum of this lane's items fit one belt at
+        # the smallest stack any of them was planned at?).  It existed for
+        # SHARED lanes, which spec §9 R1 has now banned outright, and it is gone
+        # with them.  It is not repurposable as a check on single-item lanes: it
+        # summed `group.count` machines, the WHOLE group across every strip,
+        # whereas a lane only ever serves one strip and `_machine_cap` below
+        # already caps a strip at `capacity // rate` machines.  Measured
+        # 2026-09-07 by keeping it: 28 failures in this file's own suite alone,
+        # every one a spec refusing with "1 ingredients cannot be seated".
         probe = slots.probe_building(group.item_id, group.yaw)
         columns = len(slots.attachable_columns(probe, -1)) or 1
 
@@ -1473,10 +1461,7 @@ def _logical_strip_plans(
                 len(sinks),
                 above_cap,
                 below_cap,
-                max_per_lane=group.width,
                 columns=columns,
-                prefer_shared=prefer_shared_inputs,
-                lane_fits=input_lane_fits if prefer_shared_inputs else None,
                 seating_fits=seating_servable,
             )
         except ValueError as exc:
@@ -1489,11 +1474,8 @@ def _logical_strip_plans(
                     len(sinks),
                     above_cap,
                     below_cap,
-                    max_per_lane=group.width,
                     columns=columns,
                     flank_outputs=True,
-                    prefer_shared=prefer_shared_inputs,
-                    lane_fits=input_lane_fits if prefer_shared_inputs else None,
                     seating_fits=lambda above, below: seating_servable(
                         above, below, flank_outputs=True
                     ),
@@ -2046,23 +2028,14 @@ def _machine_cap(group: _Group, spec: BuildSpec) -> int:
     return max(1, cap) if cap is not None else 0
 
 
-def generate_strip_families(
-    spec: BuildSpec,
-    *,
-    prefer_shared_proliferation: bool = False,
-) -> tuple[StripFamily, ...]:
+def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
     """Generate deterministic pose-valid variants for every logical lane shard."""
     from flab2bp.layout.freeform import _adapt
 
     groups = _adapt(spec)
     families: list[StripFamily] = []
     try:
-        plans = tuple(
-            _logical_strip_plans(
-                spec,
-                prefer_shared_proliferation=prefer_shared_proliferation,
-            )
-        )
+        plans = tuple(_logical_strip_plans(spec))
     except (ValueError, KeyError) as exc:
         # `_logical_strip_plans` and `_merge_lanes` speak ValueError to each
         # other; every caller of this function -- both strategies, the race
