@@ -417,10 +417,11 @@ work hard. 62 addons is not worth reintroducing splitters on sprayed cargo.
    `_merge_frontier` cannot offer one.
 
 Both properties are structural after those two. Everything else in A — the
-`CoaterNode` record, moving the seat into `_emit_strip`, deleting the
-now-vacuous seat predicate — is consolidation that makes the node visible in the
-code rather than implied by an index. The plan sequences it that way: the
-correctness lands in Tasks 1-2 and can be shipped alone; Tasks 3-6 are the node.
+`CoaterNode` record, deleting `_coater_seat`, deleting the now-vacuous
+`selfloop` seat predicate — is consolidation that makes the node visible in the
+code rather than implied by a slice index. The plan sequences it that way: the
+correctness lands in Tasks 1-2 and can be shipped alone; Tasks 3-6 are the node
+and the ruling; Task 7 is the gate.
 
 ---
 
@@ -521,7 +522,7 @@ the drop are excluded: both are legitimate destinations.
 `_place_coaters`'s tail already pops the ban on each committed drop
 (`freeform.py:18768-18769`); that stays.
 
-### 5.3 `CoaterNode`, and `_place_coaters` becomes `_seat_coater_nodes`
+### 5.3 `CoaterNode` — the invariant stated in the type
 
 The record that makes the node visible rather than implied:
 
