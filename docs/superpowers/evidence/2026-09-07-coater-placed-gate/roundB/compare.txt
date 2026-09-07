@@ -1,0 +1,4 @@
+clean 72  refused 0  invalid 0  crashed 0  paired 72  area ratio 1.0184  p95 31.4s
+  FAIL area ratio 1.0184 exceeds 1 + 0.013
+  FAIL p95 wall 31.4s exceeds 30.0s
+FAIL

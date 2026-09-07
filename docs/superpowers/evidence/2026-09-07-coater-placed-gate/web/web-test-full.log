@@ -1,0 +1,43 @@
+[0m[2m[35m$[0m [2m[1mrstest run[0m
+---
+tool: "@rstest/core@0.11.12"
+timestamp: "2026-09-07T14:27:03.085Z"
+runtime: {"node":"v26.8.1","platform":"linux","cwd":"/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/coater-placed/web"}
+---
+
+# Rstest Test Execution Report
+
+## Summary
+
+```json
+{
+  "status": "pass",
+  "counts": {
+    "testFiles": 39,
+    "failedFiles": 0,
+    "tests": 399,
+    "failedTests": 0,
+    "passedTests": 399,
+    "skippedTests": 0,
+    "todoTests": 0
+  },
+  "durationMs": {
+    "total": 7284,
+    "build": 428,
+    "tests": 6856
+  },
+  "snapshot": {
+    "added": 0,
+    "updated": 0,
+    "unmatched": 0,
+    "removed": 0,
+    "unchecked": 0
+  }
+}
+```
+
+## Failures
+
+No test failures reported.
+
+Note: all tests passed. Lists omitted for brevity.

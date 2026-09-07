@@ -259,14 +259,18 @@ def _to_build_spec(
 def lanes_requiring_split(data: Dataset, spec: BuildSpec) -> frozenset[str]:
     """Sprayed lanes that also feed an unproliferated consumer.
 
-    Such a lane must be split before it is built.  Spray rides on the items, not
-    on the machine, so an unproliferated consumer drinking from a sprayed lane
-    quietly receives a bonus nobody costed -- it over-produces, and the running
-    factory stops matching the numbers in this ``BuildSpec``.
+    This is now a REPORT, not a correctness constraint: spray rides on the
+    items, not on the machine, so an unproliferated consumer drinking from a
+    sprayed lane quietly receives a bonus nobody costed -- it over-produces,
+    and the running factory stops matching the numbers in this ``BuildSpec``.
+    The user ruled that acceptable (2026-09-07, "over-proliferating is fine
+    if it makes life easier"): a placement that shares one of these lanes is
+    no longer refused for it, only named, in
+    ``prolif.sprayed_cargo_reaches_machines``'s findings, as a
+    ``Severity.WARNING``.
 
     Explicit policies can still mix proliferated and unproliferated consumers,
-    especially ``output-products`` at the boundary of the final recipe. The
-    lane must be split between those consumers.
+    especially ``output-products`` at the boundary of the final recipe.
     """
     consumers: dict[str, list[MachineGroup]] = {}
     for group in spec.groups:

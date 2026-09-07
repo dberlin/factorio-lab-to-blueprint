@@ -1,0 +1,8 @@
+=== same-arm, roundA -> roundB (baseline) ===
+clean 72  refused 0  invalid 0  crashed 0  paired 72  area ratio 1.0042  p95 31.5s
+  FAIL p95 wall 31.5s exceeds 30.0s
+FAIL
+=== same-arm, roundA -> roundB (placed) ===
+clean 72  refused 0  invalid 0  crashed 0  paired 72  area ratio 0.9919  p95 31.4s
+  FAIL p95 wall 31.4s exceeds 30.0s
+FAIL
