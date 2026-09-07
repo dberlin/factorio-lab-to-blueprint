@@ -146,24 +146,95 @@ place every block, wire every cut and reach the router, where v1 had one.
   but verdict-neutral: 36 skips on `mall/all-products`, 8 / 4 / 2 elsewhere,
   no cell's verdict, failure class or block count changed.
 
-Still open, and now with measurements behind them (v2 gate.md §6-§7):
-- **Make the port-access oracle boundary-aware for internal demands** — the
-  cheapest unexplored lever, and the prerequisite for knowing whether a bus
-  corridor is even needed, since until the oracle can reject a rung no wider gap
-  is ever tried. v2 gate.md §6 lever 1 carries the file:line mechanism.
-- A bus corridor reserved BEFORE block placement, rather than routing cuts on
-  whatever ground the packing left — design §4 E specifies it. Evidence:
-  28 / 15 / 9 / 4 / 3 unrouted cuts across the five composing cells, all
-  `COMMIT_LINK` / `SEALED_POCKET` / `DYNAMIC_ACCESS` contention, while the
-  reservation reports every port satisfied.
-- Round funding that does not divide a round's wall by WAVES, and a global
-  bound on re-cut growth, so a finer partition stops being self-defeating (the
-  malls refuse with 22 and 45 blocks never placed even at a 32-wide pool).
-- The other two adaptive memories: a cross-build solved-block cache (now much
-  more valuable — the finer partitions are 6-29 mostly single-recipe blocks, and
-  one mall refusal names nine consecutive `magnet` blocks) and a strip cap that
-  moves with outcomes (cap 8 gives belt3 8 unrouted lanes against the shipped
-  cap 12's 28). v2 gate.md §7 records the evidence for each.
+### From hierarchical v3
+
+Branch `hierarchical-v3`, gated in
+`docs/superpowers/evidence/2026-09-07-hierarchical-v3/gate.md` — also a
+**FAIL** (0 of 8 large cells emit a blueprint), and again the failure moved.
+Two of v2's three open levers closed as mechanisms; both malls now attempt
+every block; and one cell reached `validate.certify` with every cut lane
+wired, which no hierarchical build had ever done.
+
+- **DONE** Every diagnostic the gate needs is carried into every refusal and
+  printed by the CLI as `  stats <strategy>/<candidate>: key=value ...`
+  (`cli.py`, `layout/base.py`, `hierarchy/strategy.py`). v3's gate harness
+  monkeypatches nothing, where v2's had to wrap four production functions to
+  read `nogood_skips`, `player_fed` and the composition gap. Limit: the line
+  is printed on the refusal path only.
+- **DONE** Round funding that does not divide a round's wall by WAVES alone,
+  plus a global bound on re-cut growth: `block_budget = clamp(remaining /
+  rounds_left / waves, 5, 20)` with `rounds_left = 1 + allowed_recuts -
+  recut_rounds`, `MAX_RECUT_ROUNDS = 2` and `allowed_recut_rounds(wall) =
+  min(2, max(0, int(wall // 5) - 1))`, which is 0 at the web UI's 15 s
+  (`hierarchy/strategy.py`). **Effect: `blocks_unattempted` goes from 22 and
+  45 on the two malls to 0 — and to 0 on all eight gate cells in both
+  rounds.** This closes v2's "round funding" item outright.
+- **PARTLY** The port-access oracle can now be asked a per-demand question:
+  a demand carries its own reachability goal (`layout/freeform.py`) and
+  `compose` gives each cut lane's demand its trunk partner's doorstep
+  (`hierarchy/compose.py`). This supersedes v2's "make the oracle
+  boundary-aware" item — the boundary half was structurally unreachable and
+  the fix was to stop asking a boundary question at all. **It is inert in
+  production**: `_match_access_corridors` exhausts `_ACCESS_CUT_ROUNDS = 8`
+  and returns a wholesale EMPTY assignment, which the composer discards as an
+  unusable answer and re-asks locally, recording `reservation_degraded = 1` —
+  on all five composing cells in both rounds, ten runs of ten. v3 gate.md §5
+  lever 1.
+- **PARTLY** One arm per block, dispatched from a routing-difficulty feature
+  key with widen-before-cut (`hierarchy/dispatch.py`). Measured cost where the
+  key has no signal: on `mall/no-proliferator` the policy creates no spray
+  lanes, so `coaters == 0` on every block and the whole cell goes to
+  `sequence-pair` — **6 blocks never placed under both arms against 31 under
+  one**. v3 gate.md §5 lever 3.
+- **KILLED AT STEP 0** The bus corridor (design §4 E). Task 6 walked every
+  `GAP_LADDER` rung on belt3 and zurl2 and found the oracle rejects no rung
+  for a sealed-trunk reason (`missing_sealed = 0` on all twelve judged rungs);
+  every rejection is the wholesale matcher give-up above.
+  `corridor-spike.md` records the verdict and its own caveat: a corridor's
+  value cannot be judged while the oracle cannot grade a rung.
+
+Still open, and now with measurements behind them (v3 gate.md §5-§6):
+- **Make `_match_access_corridors` return its partial assignment instead of
+  giving up wholesale** — the headline lever. `freeform.py:11875` /
+  `:11881`, `_ACCESS_CUT_ROUNDS = 8` at `:375`. It is a matcher-scaling
+  problem with a worked counterexample, not a wall: zurl2's gap-16 rung came
+  back complete at 144/144 in 4.17 s. Until it is fixed the ladder cannot
+  rank a rung, `compose_gap` is pinned at 2 on every cell, and Tasks 4-5 are
+  paid for and thrown away on every build.
+- **Power the ground COMPOSITION adds.** `titanium-glass/all-products` at 60 s
+  composes, wires all 26 cut lanes and fails `certify` with
+  `errors_by_check == {power.coverage: 4}` — nothing else wrong with the
+  placement. All four are cut-lane splitters; the canvas has 61 Tesla towers
+  and 80 splitters, 76 covered and 4 not, because each block brought towers
+  sized for its own footprint and the gap `compose` opens carries none. The
+  smallest measured distance between this strategy and a validator-clean
+  blueprint in three gates. v3 gate.md §2.3.
+- **A bus corridor reserved BEFORE block placement** — design §4 E specifies
+  it. Not dead, but not judgeable yet: the spike was killed at Step 0 because
+  the oracle cannot grade a rung, and it should be revisited once the wholesale
+  give-up above is fixed.
+- **An "abstain" answer for `dispatch_arms`** on a feature vector the evidence
+  does not cover: `coaters == 0` with `strips` under `UNCOVERED_STRIPS = 85`
+  is currently indistinguishable from a genuine sequence-pair block
+  (`dispatch.py:109-111`), and that is the 6-versus-31 regression above.
+- The other two adaptive memories, **neither of them planned, each for a
+  stated reason**:
+  - *A cross-build solved-block cache.* Deliberately NOT planned: related work
+    is already planned as the "background compound block cache" (`42c9e0e`)
+    and duplicating it would be two designs for one cache.
+  - *A strip cap that moves with outcomes.* Deliberately NOT attached to the
+    `_ShapeNoGood` memo v2 shipped, because it is not cheap to attach:
+    `_ShapeNoGood` is consulted BEFORE a block solve and keyed on
+    `(shape, arm)`, while the signal the cap should adapt on is the ROUTER's
+    verdict (unrouted lanes per cut), which arrives once per build after every
+    block has already been solved and composed. There is no second composition
+    within a build to feed it, so an outcome-driven cap needs a cross-build
+    memory — which is the previous bullet.
+- **A residual risk carried deliberately**, not a plan: Ruling R7's discard
+  fires only on an assignment of exactly zero (`compose.py:899`), so a small
+  PARTIAL assignment would commit and report `reservation_degraded = 0` — a
+  stats line claiming a trustworthy verdict. No evidence either way; a narrow
+  trigger was preferred to a tuned threshold. v3 gate.md §6.
 
 ### Orchestrator and dispatch
 - Anytime dispatch of strategy, budget and islands from the feature vector:
