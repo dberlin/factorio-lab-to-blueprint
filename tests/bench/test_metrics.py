@@ -49,6 +49,10 @@ def _sorter(x: int, y: int, *, inp: int | None, out: int | None) -> PlacedBuildi
     )
 
 
+def _substation(x: int, y: int) -> PlacedBuilding:
+    return PlacedBuilding(item_id=2212, model_index=68, x=x, y=y, width=5, height=5)
+
+
 def test_measures_geometry_from_buildings_not_stats() -> None:
     # stats claims an absurd area; the harness must ignore it.
     placement = Placement(
@@ -112,3 +116,13 @@ def test_empty_placement_does_not_divide_by_zero() -> None:
     m = measure(Placement(buildings=()))
     assert m.machines == 0
     assert m.packing_efficiency == 0.0
+
+
+def test_measure_counts_a_substation_as_a_tower() -> None:
+    buildings = [_substation(0, 0)]
+    assert measure(Placement(buildings=buildings)).towers == 1
+
+
+def test_measure_excludes_a_substation_from_the_machine_count() -> None:
+    buildings = [_substation(0, 0)]
+    assert measure(Placement(buildings=buildings)).machines == 0

@@ -15,7 +15,7 @@ from flab2bp.layout.base import PlacedBuilding, Placement
 def _is_machine(b: PlacedBuilding) -> bool:
     if catalog.is_belt(b.item_id) or catalog.is_sorter(b.item_id):
         return False
-    if b.item_id in (catalog.SPLITTER_ID, catalog.TESLA_TOWER_ID):
+    if b.item_id == catalog.SPLITTER_ID or catalog.building(b.item_id).is_power_node:
         return False
     try:
         return catalog.building(b.item_id).occupies_tiles
@@ -62,7 +62,7 @@ def measure(placement: Placement) -> Metrics:
     machines = sum(1 for b in buildings if _is_machine(b))
     belt_tiles = sum(1 for b in buildings if catalog.is_belt(b.item_id))
     sorters = sum(1 for b in buildings if catalog.is_sorter(b.item_id))
-    towers = sum(1 for b in buildings if b.item_id == catalog.TESLA_TOWER_ID)
+    towers = sum(1 for b in buildings if catalog.building(b.item_id).is_power_node)
 
     machine_indices = {i for i, b in enumerate(buildings) if _is_machine(b)}
     direct_inserts = sum(
