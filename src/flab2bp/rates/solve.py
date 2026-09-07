@@ -49,6 +49,7 @@ from flab2bp.rates.adjust import (
     available_modes,
     select_machine,
 )
+from flab2bp.rates.machine_choice import MachineMove, MachineRank, rechoose_columns
 from flab2bp.spec import MAX_CARGO_STACK, ProliferatorMode
 
 _SECONDS_PER_PERIOD = {
@@ -121,6 +122,8 @@ class RateSolution:
     #: Items the URL forbade as inputs (``Limit`` objectives at zero); every
     #: one of them was crafted here, or the solve refused.
     forbidden_inputs: frozenset[str] = frozenset()
+    #: Recipes whose ranked machine moved down under ``machine_rank=up-to``.
+    machine_moves: tuple[MachineMove, ...] = ()
 
     @property
     def machine_count(self) -> int:
@@ -1127,6 +1130,8 @@ def solve(
     mode_policy: ProliferatorMode = ProliferatorMode.NONE,
     time_limit_s: float = 30.0,
     prove_minimal: bool = True,
+    machine_rank: MachineRank = MachineRank.EXACT,
+    pinned_machines: frozenset[str] = frozenset(),
 ) -> RateSolution:
     """Solve ``request`` into exact flows and exact-ceiling machine counts.
 
@@ -1144,6 +1149,11 @@ def solve(
     ``proliferable`` (or every recipe when it is ``None``), falling back to
     ``NONE`` where products are illegal. ``fixed_modes`` instead preserves
     authored per-recipe flow modes.
+
+    ``machine_rank`` controls whether FactorioLab's ranked machine is exact or
+    a speed ceiling. ``UP_TO`` re-chooses after rates are final because machine
+    speed changes craft time, not the per-craft input and output vectors.
+    ``pinned_machines`` names recipes whose supplied flow fixed the machine.
 
     Demand is served from the URL's declared ``Input`` supplies before anything
     is built, exactly as FactorioLab does it, so what comes back is the factory
@@ -1241,6 +1251,18 @@ def solve(
             demand,
             objective,
         )
+
+    # Rebuild before the lower bound and group materialisation so every
+    # downstream count, area, and capacity check sees the same machine.
+    columns, machine_moves = rechoose_columns(
+        data,
+        request,
+        columns,
+        crafts,
+        machine_rank=machine_rank,
+        tier=tier,
+        pinned=pinned_machines,
+    )
 
     geometric_objective = _default_objective(columns)
     if used_milp or objective != geometric_objective:
@@ -1400,4 +1422,5 @@ def solve(
         tier=tier,
         forbidden_inputs=forbidden,
         lower_bound_area=lower_bound,
+        machine_moves=machine_moves,
     )
