@@ -7,6 +7,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from flab2bp.indexed import StripPositions
+
 if TYPE_CHECKING:
     from flab2bp.layout.strip_variants import StripFamilyId, StripInstanceId
 
@@ -679,7 +681,8 @@ def select_lns_neighbourhood(
                 )
             )
 
-    neighbourhood = endpoints | _sequence_neighbours(pair, endpoints)
+    positions = (StripPositions.of(pair.positive), StripPositions.of(pair.negative))
+    neighbourhood = endpoints | _sequence_neighbours(positions, endpoints)
     for strip, ((strip_width, strip_height), east, north) in enumerate(
         zip(problem.sizes, gaps.east, gaps.north, strict=True)
     ):
@@ -703,7 +706,7 @@ def select_lns_neighbourhood(
             neighbourhood.add(strip)
 
     if stagnation >= grow_after:
-        neighbourhood.update(_sequence_neighbours(pair, neighbourhood))
+        neighbourhood.update(_sequence_neighbours(positions, neighbourhood))
     return frozenset(neighbourhood)
 
 
@@ -744,16 +747,17 @@ def _add_net_endpoints(strips: set[int], net: NetId, size: int) -> None:
             strips.add(endpoint)
 
 
-def _sequence_neighbours(pair: SequencePair, strips: set[int]) -> set[int]:
+def _sequence_neighbours(
+    positions: tuple[StripPositions, StripPositions], strips: set[int]
+) -> set[int]:
     neighbours: set[int] = set()
-    for permutation in (pair.positive, pair.negative):
-        positions = {strip: index for index, strip in enumerate(permutation)}
+    for permutation in positions:
         for strip in strips:
-            position = positions[strip]
+            position = permutation.position_of(strip)
             if position:
-                neighbours.add(permutation[position - 1])
+                neighbours.add(permutation.strip_at(position - 1))
             if position + 1 < len(permutation):
-                neighbours.add(permutation[position + 1])
+                neighbours.add(permutation.strip_at(position + 1))
     return neighbours
 
 
