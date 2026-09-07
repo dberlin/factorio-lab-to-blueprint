@@ -49,7 +49,18 @@ touched.
 - No per-recipe special case. Every rule is stated over
   `inputs ∩ outputs` or over machine geometry, never over a recipe id.
 - Two other agents run builds on this box: **at most ONE build at a time**,
-  `--budget 30` for single builds, and record `uptime` beside every timing.
+  `--budget 30` for single builds, and record CPU PRESSURE beside every timing.
+- **CPU pressure is measured with `vmstat`, never with `uptime` or load average**
+  (user instruction, 2026-09-07). Load average on this box is mostly I/O wait and
+  says nothing about CPU contention. The number to record is the five-second mean
+  of runnable processes:
+
+  ```bash
+  cpu_pressure() { vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}'; }
+  ```
+
+  Below 64 is fine on these 128 cores. **Never wait for it to fall** — record it
+  beside the timing and carry on.
 - Use Serena's symbolic tools to read and edit; `freeform.py` is 22k lines and
   `validate.py` is large, so read symbols, not files.
 - **Mixed belts are given up, not made cleverer** (user note in spec §4 F1).
@@ -546,16 +557,16 @@ must be reasoned about rather than merely re-run green:
 
 - [ ] **Step 5: Build `universe-matrix` through the CLI and decode it**
 
-ONE build at a time; `uptime` beside the timing.
+ONE build at a time; the `cpu_pressure` number beside the timing.
 
 ```bash
 E=docs/superpowers/evidence/2026-09-06-selfloop/task3
 mkdir -p "$E"
 UNIVERSE_MATRIX_URL=$(uv run python -c "from flab2bp.bench.corpus import URL_CORPUS; print(next(e.url for e in URL_CORPUS if e.url_id=='universe-matrix'))")
-uptime | tee "$E/uptime.txt"
+cpu_pressure | tee "$E/cpu-pressure.txt"
 /usr/bin/time -v uv run flab2bp "$UNIVERSE_MATRIX_URL" --budget 30 -v \
   -o "$E/bp-um.txt" 2>&1 | tee "$E/build-um.log"
-uptime | tee -a "$E/uptime.txt"
+cpu_pressure | tee -a "$E/cpu-pressure.txt"
 uv run python docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_decode.py \
   "$E/bp-um.txt" > "$E/decode-um.txt"
 ```
@@ -1336,17 +1347,18 @@ slow layout test is near it, run `tests/layout` on its own.
 - Consumes: `uv run flab2bp`, `scripts/audit.py`, `scripts/audit_compare.py`, `docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_decode.py`, `probe_coater.py`.
 - Produces: a PASS/FAIL verdict with area geomean, CLEAN counts and routing seconds per arm.
 
-**ONE BUILD AT A TIME. Record `uptime` beside every timing.**
+**ONE BUILD AT A TIME. Record the `cpu_pressure` number beside every timing —
+never `uptime`, never load average.**
 
 - [ ] **Step 1: The reported URL builds and no longer emits a mixed lane or a coater merge**
 
 ```bash
 E=docs/superpowers/evidence/2026-09-06-selfloop/gate
 mkdir -p "$E"
-uptime | tee "$E/uptime-before-amm.txt"
+cpu_pressure | tee "$E/cpu-pressure-amm.txt"
 /usr/bin/time -v uv run flab2bp "$AMM_URL" --budget 30 -v \
   -o "$E/bp-amm-after.txt" 2>&1 | tee "$E/build-amm-after.log"
-uptime | tee -a "$E/uptime-before-amm.txt"
+cpu_pressure | tee -a "$E/cpu-pressure-amm.txt"
 uv run python docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_decode.py \
   "$E/bp-amm-after.txt" > "$E/decode-amm-after.txt"
 uv run python docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_coater.py \
@@ -1373,10 +1385,10 @@ This is the PASS condition spec §9 R2 exists for, and it is checked by decoding
 the blueprint, not by reading the planner's intentions.
 
 ```bash
-uptime | tee "$E/uptime-before-um.txt"
+cpu_pressure | tee "$E/cpu-pressure-um.txt"
 /usr/bin/time -v uv run flab2bp "$UNIVERSE_MATRIX_URL" --budget 30 -v \
   -o "$E/bp-um-after.txt" 2>&1 | tee "$E/build-um-after.log"
-uptime | tee -a "$E/uptime-before-um.txt"
+cpu_pressure | tee -a "$E/cpu-pressure-um.txt"
 uv run python docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_decode.py \
   "$E/bp-um-after.txt" > "$E/decode-um-after.txt"
 ```
@@ -1415,19 +1427,19 @@ with the test from spec §6 T12 added in Task 7. PASS requires
 From a clean master checkout of this worktree's parent commit:
 
 ```bash
-uptime | tee "$E/uptime-baseline.txt"
+cpu_pressure | tee "$E/cpu-pressure-baseline.txt"
 /usr/bin/time -v uv run python scripts/audit.py --tier stress --budget 30 \
   --strategy both --json "$E/audit-baseline.jsonl" 2>&1 | tee "$E/audit-baseline.log"
-uptime | tee -a "$E/uptime-baseline.txt"
+cpu_pressure | tee -a "$E/cpu-pressure-baseline.txt"
 ```
 
 - [ ] **Step 4: The candidate round**
 
 ```bash
-uptime | tee "$E/uptime-candidate.txt"
+cpu_pressure | tee "$E/cpu-pressure-candidate.txt"
 /usr/bin/time -v uv run python scripts/audit.py --tier stress --budget 30 \
   --strategy both --json "$E/audit-candidate.jsonl" 2>&1 | tee "$E/audit-candidate.log"
-uptime | tee -a "$E/uptime-candidate.txt"
+cpu_pressure | tee -a "$E/cpu-pressure-candidate.txt"
 ```
 
 - [ ] **Step 5: Compare, and report all three axes**
@@ -1465,7 +1477,7 @@ Add a `## Gate result` section to
 `docs/superpowers/evidence/2026-09-06-selfloop/README.md` with the four Step-1
 checks, the three Step-1a `universe-matrix` checks (including the six decoded
 single-item lane lines), the per-arm table above, the `audit_compare` verdict
-line, and the `uptime` readings beside every timing. Every number is as
+line, and the `cpu_pressure` readings beside every timing. Every number is as
 measured; nothing is predicted.
 
 ---
