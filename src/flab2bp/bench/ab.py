@@ -540,6 +540,12 @@ class Cell:
     strategy: str
     budget_s: float
     trials: tuple[Trial, ...] = ()
+    areas: tuple[int, ...] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "areas", tuple(t.area for t in self.trials if t.area is not None)
+        )
 
     @property
     def n(self) -> int:
@@ -547,10 +553,6 @@ class Cell:
 
     def count(self, outcome: Outcome) -> int:
         return sum(1 for t in self.trials if t.outcome is outcome)
-
-    @property
-    def areas(self) -> tuple[int, ...]:
-        return tuple(t.area for t in self.trials if t.area is not None)
 
     @property
     def median_area(self) -> int | None:
@@ -699,6 +701,10 @@ class Comparison:
     pairs: tuple[Pair, ...] = ()
     deadband: float = DENSITY_DEADBAND
     cross: CrossSummary = field(default_factory=lambda: CrossSummary(available=False))
+    comparable: tuple[Pair, ...] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "comparable", tuple(p for p in self.pairs if p.comparable))
 
     @property
     def n_urls(self) -> int:
@@ -719,10 +725,6 @@ class Comparison:
     @property
     def b_always(self) -> int:
         return sum(1 for p in self.pairs if p.b.always)
-
-    @property
-    def comparable(self) -> tuple[Pair, ...]:
-        return tuple(p for p in self.pairs if p.comparable)
 
     @property
     def n_pairs(self) -> int:

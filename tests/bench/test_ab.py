@@ -114,6 +114,32 @@ def _trial(
     )
 
 
+def test_replacing_trials_recomputes_derived_cell_statistics() -> None:
+    from dataclasses import replace
+
+    initial = Cell("u", "a", 1.0, (_trial(Outcome.VALID, area=20),))
+    updated = replace(
+        initial,
+        trials=(_trial(Outcome.VALID, area=40), _trial(Outcome.REFUSED)),
+    )
+    assert (initial.median_area, initial.always) == (20, True)
+    assert (updated.areas, updated.median_area, updated.always) == ((40,), 40, False)
+
+
+def test_replacing_comparison_pairs_recomputes_comparability() -> None:
+    from dataclasses import replace
+
+    a = Cell("u", "a", 1.0, (_trial(Outcome.VALID, area=20),))
+    b = Cell("u", "b", 1.0, (_trial(Outcome.VALID, area=10),))
+    pair = Pair("u", 1.0, a, b)
+    comparison = Comparison(1.0, "a", "b", (pair,))
+    updated = replace(comparison, pairs=(replace(pair, b=Cell("u", "b", 1.0)),))
+    assert comparison.n_pairs == 1
+    assert comparison.geo_mean == 0.5
+    assert updated.n_pairs == 0
+    assert updated.geo_mean is None
+
+
 # --------------------------------------------------------------------------
 # Guard 1: a rejected layout cannot hold an area, structurally.
 # --------------------------------------------------------------------------
