@@ -535,3 +535,43 @@ class TestBoundaryRule:
         inputs = {"fire-ice": Fraction(1), "proliferator-3": Fraction(1)}
         assert unsupplied_inputs(pristine, data, inputs) == ("proliferator-3",)
         assert unsupplied_inputs(pristine, data, inputs, exempt=frozenset({"proliferator-3"})) == ()
+
+
+def _selection_fixture() -> FlowSelection:
+    """A small selection with items, recipes, and a byproduct row of neither."""
+    return FlowSelection(
+        GRAPHENE_URL,
+        (
+            FlowRow(item_id="graphene", recipe_id="graphene-advanced", items=Fraction(60)),
+            FlowRow(item_id="fire-ice", recipe_id="fire-ice-vein", items=Fraction(15, 2)),
+            FlowRow(item_id="hydrogen", items=Fraction(0), surplus=Fraction(30)),
+        ),
+    )
+
+
+class TestByItemAndByRecipe:
+    def test_by_item_is_built_once_rather_than_per_access(self) -> None:
+        """`by_item` was a plain `@property` rebuilding `{r.item_id: r ...}` per
+        read. `FlowSelection` is `@dataclass(frozen=True, slots=True)`, so
+        `functools.cached_property` cannot be used -- a slotted class has no
+        `__dict__` for it to write into, and raises `TypeError: No '__dict__'
+        attribute on 'FlowSelection'`.
+        """
+        selection = _selection_fixture()
+        assert selection.by_item is selection.by_item
+        assert selection.by_recipe is selection.by_recipe
+
+    def test_by_item_and_by_recipe_answer_exactly_what_the_comprehensions_did(self) -> None:
+        selection = _selection_fixture()
+        assert dict(selection.by_item) == {r.item_id: r for r in selection.rows if r.item_id}
+        assert dict(selection.by_recipe) == {
+            r.recipe_id: r for r in selection.rows if r.recipe_id
+        }
+
+    def test_the_maps_cannot_be_mutated_through_the_public_attribute(self) -> None:
+        selection = _selection_fixture()
+        try:
+            selection.by_item["invented"] = next(iter(selection.by_item.values()))
+        except TypeError:
+            return
+        raise AssertionError("by_item must be read-only; a caller mutation would be shared state")

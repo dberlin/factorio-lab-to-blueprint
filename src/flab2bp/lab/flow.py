@@ -93,7 +93,7 @@ import csv
 import io
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
 from types import MappingProxyType
@@ -449,6 +449,26 @@ class FlowSelection:
     #: The header actually present, so a report can say what the file carried.
     columns: tuple[str, ...] = ()
 
+    #: Built once in `__post_init__`, not per access: `_rate_findings`
+    #: (lab/flow.py:1065) reads `by_item` once per item inside its finding
+    #: loop and a plain `@property` rebuilt the whole map every time.
+    #: `functools.cached_property` is unavailable -- `slots=True` leaves no
+    #: `__dict__` for it to write into.
+    by_item: Mapping[str, FlowRow] = field(init=False, repr=False, compare=False)
+    by_recipe: Mapping[str, FlowRow] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "by_item",
+            MappingProxyType({r.item_id: r for r in self.rows if r.item_id}),
+        )
+        object.__setattr__(
+            self,
+            "by_recipe",
+            MappingProxyType({r.recipe_id: r for r in self.rows if r.recipe_id}),
+        )
+
     @property
     def chosen_recipe_ids(self) -> frozenset[str]:
         """Every recipe FactorioLab's flow runs.
@@ -460,14 +480,6 @@ class FlowSelection:
         out the recipe that supplies the byproduct.
         """
         return frozenset(r.recipe_id for r in self.rows if r.recipe_id)
-
-    @property
-    def by_item(self) -> Mapping[str, FlowRow]:
-        return {r.item_id: r for r in self.rows if r.item_id}
-
-    @property
-    def by_recipe(self) -> Mapping[str, FlowRow]:
-        return {r.recipe_id: r for r in self.rows if r.recipe_id}
 
     @property
     def is_exact(self) -> bool:
