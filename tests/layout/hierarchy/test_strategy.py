@@ -591,10 +591,19 @@ def test_a_job_is_capped_at_its_own_budget_when_it_starts_not_when_the_round_did
     assert started + 2.0 <= deadline <= started + 4.0
 
 
-def test_a_budget_too_small_to_fund_one_solve_round_refuses_saying_so(
+def test_a_budget_too_small_to_fund_a_round_still_attempts_the_seed_round(
     chain_spec: BuildSpec,
 ) -> None:
-    with pytest.raises(NoValidLayout, match=r"is under the .*s a block solve is given at all"):
+    """The seed round is never refused for funding, even under the reserve.
+
+    At 1.0 s the settlement reserve alone (5.0 s) exceeds the whole budget --
+    the OLD pre-attempt funding check would have refused here before a
+    placer ever saw a block.  The new rule floors the seed round's share to
+    `BLOCK_BUDGET_MIN_S` and runs it anyway; each block's own deadline
+    (still clipped to the parent's) is what actually refuses it, and the
+    build then runs out of the zero re-cut rounds this budget's wall allows.
+    """
+    with pytest.raises(NoValidLayout, match=r"out of re-cut round\(s\)"):
         _layout().lay_out(chain_spec, time_budget_s=1.0)
 
 
@@ -751,3 +760,103 @@ def test_a_refusal_carries_the_strategy_stats(
     assert "recut_rounds" in stats
     assert "nogood_skips" in stats
     assert "player_fed" in stats
+
+
+def test_allowed_recut_rounds_is_zero_when_the_wall_holds_one_round():
+    # 15 s budget: reserve 6.0, so the round loop has ~9 s -- one round.
+    assert strategy.allowed_recut_rounds(8.7) == 0
+    assert strategy.allowed_recut_rounds(12.0) == 1
+    assert strategy.allowed_recut_rounds(35.1) == strategy.MAX_RECUT_ROUNDS
+
+
+def test_the_seed_round_keeps_the_whole_wall_when_no_recut_is_affordable(chain_spec, monkeypatch):
+    """The web-UI path: a 15 s build must not fund rounds it can never run.
+
+    ``workers=16`` for the same reason as
+    ``test_a_fifteen_second_build_funds_one_round``: the chain is 2 blocks x
+    2 arms (``best``) = 4 jobs, and only a pool 4 wide (``workers=16``) makes
+    that one wave -- at ``workers=8`` (pool 2 wide, 2 waves) the share is
+    already under the floor by the wave split alone, before this rule's own
+    ``rounds_left`` divisor ever enters into it, so the two are not
+    distinguishable there.
+    """
+    seen: list[float] = []
+    real = strategy._solve_block
+
+    def spy(args):
+        seen.append(args[2])
+        return real(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", spy)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=16,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    layout.lay_out(chain_spec, time_budget_s=15.0)
+    # reserve 6.0, ~9 s of round, one wave -> the whole wall (~9s), not a
+    # third of it (~3s, which the floor would then clamp up to 5.0).
+    assert seen and min(seen) > 1.5 * strategy.BLOCK_BUDGET_MIN_S
+
+
+def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch):
+    """`MAX_RESPLIT_ATTEMPTS` is per block; this bound is per build.
+
+    `chain_spec` is 4 machines total and saturates its OWN splittability
+    after exactly one real re-cut (2 blocks -> 4 single-machine, indivisible
+    ones), one round short of `MAX_RECUT_ROUNDS = 2` -- so with the real
+    `_recut`, `_next_cut`'s per-block exhaustion (`out of re-cut attempts`)
+    would fire first and this test would never reach the GLOBAL bound it
+    means to exercise.  `_recut` is faked to always report progress, unchanged,
+    so the only thing left driving the loop is the round counter this task
+    adds.
+    """
+    rounds: list[int] = []
+
+    def always_refuse(args):
+        rounds.append(1)
+        return (
+            {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+            None,
+        )
+
+    def always_progress(entries, still, *, nogood, arms, budget_s):
+        return entries, True
+
+    monkeypatch.setattr(strategy, "_solve_block", always_refuse)
+    monkeypatch.setattr(strategy, "_recut", always_progress)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=1,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    with pytest.raises(NoValidLayout) as caught:
+        layout.lay_out(chain_spec, time_budget_s=60.0)
+    assert caught.value.stats["recut_rounds"] <= float(strategy.MAX_RECUT_ROUNDS)
+    assert "re-cut round" in caught.value.reason
+
+
+def test_a_round_that_cannot_afford_the_floor_names_the_wall_not_the_waves(chain_spec, monkeypatch):
+    def always_refuse(args):
+        return (
+            {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+            None,
+        )
+
+    monkeypatch.setattr(strategy, "_solve_block", always_refuse)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    with pytest.raises(NoValidLayout) as caught:
+        layout.lay_out(chain_spec, time_budget_s=9.0)
+    # The seed round runs anyway: nothing was attempted, so nothing is refused
+    # for funding before a placer has seen a single block.
+    assert caught.value.stats["blocks_unattempted"] == 0.0

@@ -67,13 +67,19 @@ plan proposed and each is spelled out separately below:
   CP-SAT-holding processes for a build with few blocks -- each is already
   ``_BLOCK_WORKERS`` threads deep, so the pool count itself does not need to
   chase the affinity set past a point.
-* Per round, ``block_budget = clamp(remaining / waves, 5, 20)`` seconds
-  (``BLOCK_BUDGET_MIN_S``/``BLOCK_BUDGET_MAX_S``), where ``remaining`` is the
-  parent's wall less the settlement reserve.
 * The per-JOB deadline is ``min(parent_deadline, job_start + block_budget)``,
   computed inside :func:`_solve_block` at job start rather than by the round.
 * ``MAX_RESPLIT_ATTEMPTS = 4`` is counted PER BLOCK, not as a global round
-  bound: a child created by a re-cut starts at attempt 0.
+  bound: a child created by a re-cut starts at attempt 0.  The GLOBAL bound
+  is ``MAX_RECUT_ROUNDS = 2``, floored further by
+  :func:`allowed_recut_rounds` to what the round wall can actually hold at
+  ``BLOCK_BUDGET_MIN_S`` -- 0 at the web UI's 15 s, which is what gives the
+  seed round the whole wall there (v3 Task 2).
+* Per round, ``block_budget = clamp(remaining / rounds_left / waves, 5, 20)``
+  seconds, where ``rounds_left`` is this round plus the re-cuts still
+  permitted.  Dividing by ``waves`` alone let one round spend the wall the
+  NEXT round -- against a block count that round had grown -- would need:
+  v2 measured both malls refusing with 22 and 45 blocks never placed.
 * A ``(shape, arm)`` no-good memo, local to one :meth:`lay_out` call (v2 Task
   5): ``_solve_round`` solves each distinct shape AT MOST ONCE per round --
   two same-shaped children of one re-cut block routinely land in the same
@@ -174,6 +180,13 @@ SETTLEMENT_RESERVE_SHARE = 0.4
 #: never been cut itself, so it starts at attempt 0 rather than inheriting its
 #: parent's place in a global round counter.
 MAX_RESPLIT_ATTEMPTS = 4
+#: Global bound on how many times ONE BUILD may re-cut, however many blocks
+#: refuse.  `MAX_RESPLIT_ATTEMPTS` is per BLOCK and does not bound this: a
+#: child created by a re-cut starts at attempt 0, so a build can grow its
+#: block list without limit -- v2 measured 19 seed blocks becoming 22
+#: unattempted and 24 becoming 45, each round's wall divided by a count the
+#: previous round grew.
+MAX_RECUT_ROUNDS = 2
 #: Tiles of free ground between packed blocks.  ``compose.MIN_GAP`` is the
 #: floor the router needs to turn a trunk out of a block at all.
 DEFAULT_GAP = 2
@@ -261,6 +274,18 @@ def settlement_reserve_s(time_budget_s: float) -> float:
         SETTLEMENT_RESERVE_MAX_S,
         max(SETTLEMENT_RESERVE_MIN_S, SETTLEMENT_RESERVE_SHARE * time_budget_s),
     )
+
+
+def allowed_recut_rounds(rounds_wall_s: float) -> int:
+    """How many re-cut rounds this wall can hold at the floor.
+
+    A re-cut round that cannot be given `BLOCK_BUDGET_MIN_S` per wave is a
+    round that will refuse the moment it is dispatched, and reserving wall
+    for it only takes that wall away from the round that CAN run.  At the web
+    UI's 15 s this is 0, which is what keeps the seed round's share at the
+    whole `rounds_wall` rather than a third of it.
+    """
+    return min(MAX_RECUT_ROUNDS, max(0, int(rounds_wall_s // BLOCK_BUDGET_MIN_S) - 1))
 
 
 def _available_cpu_count() -> int:
@@ -495,6 +520,12 @@ class HierarchicalLayout:
         # budget would name a number nobody spent.
         refuse = _refuser(spec, max(0.0, deadline - started_at), stats)
         reserve = settlement_reserve_s(time_budget_s)
+        # Computed ONCE, before the partition, from the wall the ROUND LOOP
+        # will have: re-planning it each round would let a slow round argue
+        # itself more re-cuts.
+        rounds_wall = max(0.0, deadline - time.monotonic() - reserve)
+        allowed_recuts = allowed_recut_rounds(rounds_wall)
+        recut_rounds = 0
 
         partition = initial_partition(spec, strip_cap=self.strip_cap)
         entries = [_Entry(list(block)) for block in partition.blocks]
@@ -543,24 +574,37 @@ class HierarchicalLayout:
                 todo = [index for index, entry in enumerate(entries) if entry.placement is None]
                 if not todo:
                     break
-                jobs = len(todo) * len(self._arms())
+                jobs = sum(len(self._arms_for(entries[index])) for index in todo)
                 waves = math.ceil(jobs / width)
                 remaining = deadline - time.monotonic() - reserve
-                share = remaining / waves
-                if share < BLOCK_BUDGET_MIN_S:
-                    stats.blocks_unattempted = float(
-                        sum(1 for entry in entries if not entry.verdicts)
-                    )
-                    raise refuse(
-                        _block_refusal(
-                            entries,
-                            todo,
-                            why=(
-                                f"{remaining:.1f}s left over {waves} wave(s) is under the "
-                                f"{BLOCK_BUDGET_MIN_S:g}s a block solve is given at all"
-                            ),
+                attempted = any(entry.verdicts for entry in entries)
+                # FUND THE ROUNDS THAT CAN STILL RUN, not the wall divided by
+                # a block count the NEXT round will have grown.  `rounds_left`
+                # is this round plus the re-cuts still permitted.
+                rounds_left = 1 + allowed_recuts - recut_rounds
+                share = remaining / rounds_left / waves
+                if remaining / waves < BLOCK_BUDGET_MIN_S:
+                    if attempted:
+                        stats.blocks_unattempted = float(
+                            sum(1 for entry in entries if not entry.verdicts)
                         )
-                    )
+                        raise refuse(
+                            _block_refusal(
+                                entries,
+                                todo,
+                                why=(
+                                    f"{remaining:.1f}s left over {waves} wave(s) is under "
+                                    f"the {BLOCK_BUDGET_MIN_S:g}s a block solve is given "
+                                    f"at all"
+                                ),
+                            )
+                        )
+                    # THE SEED ROUND ALWAYS RUNS.  A build that refuses having
+                    # attempted nothing tells nobody anything, and the job's
+                    # own deadline is still clipped to the parent's, so the
+                    # floor can only spend into the settlement reserve, never
+                    # past `--budget`.
+                    share = BLOCK_BUDGET_MIN_S
                 block_budget = min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, share))
                 started = time.monotonic()
                 stats.nogood_skips += self._solve_round(
@@ -576,6 +620,20 @@ class HierarchicalLayout:
                 still = [index for index in todo if entries[index].placement is None]
                 if not still:
                     break
+                if recut_rounds >= allowed_recuts:
+                    stats.blocks_unattempted = float(
+                        sum(1 for entry in entries if not entry.verdicts)
+                    )
+                    raise refuse(
+                        _block_refusal(
+                            entries,
+                            still,
+                            why=(
+                                f"out of re-cut round(s) after {recut_rounds} of "
+                                f"{allowed_recuts} the {rounds_wall:.1f}s round wall allows"
+                            ),
+                        )
+                    )
                 grown, progress = _recut(
                     entries, still, nogood=nogood, arms=self._arms(), budget_s=block_budget
                 )
@@ -585,7 +643,9 @@ class HierarchicalLayout:
                     )
                     raise refuse(_block_refusal(entries, still, why="out of re-cut attempts"))
                 entries = grown
-                stats.resplits += 1
+                recut_rounds += 1
+                stats.recut_rounds = float(recut_rounds)
+                stats.resplits = float(recut_rounds)
 
         blocks = [entry.units for entry in entries]
         solved = [entry.placement for entry in entries if entry.placement is not None]
@@ -719,6 +779,11 @@ class HierarchicalLayout:
         if self.block_strategy == "best":
             return ("freeform", "sequence-pair")
         return (self.block_strategy,)
+
+    def _arms_for(self, entry: _Entry) -> tuple[str, ...]:
+        # Placeholder for Task 3, which dispatches one arm per entry instead
+        # of every entry to every arm; see the v3 plan's Task 3.
+        return self._arms()
 
     def _pool_width(self) -> int:
         """Jobs run at once.  One job is a whole placer holding CP-SAT workers,
