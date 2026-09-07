@@ -318,18 +318,27 @@ def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
     layout = _layout()
     nogood = strategy._ShapeNoGood()
     todo = list(range(len(entries)))
+    # `dispatch.dispatch_arms` would send this shape (uncoated, few strips) to
+    # `sequence-pair` alone above `SEQUENCE_PAIR_EXACT_FLOOR_S` -- but
+    # `chain_spec` is coater-free and every budget here is below the floor
+    # (Task 7), so both arms race; this test only cares about `sequence-pair`
+    # specifically, which is on offer either way. `_solve_round` no longer
+    # derives `arms_by_slot` itself (Task 7 fix round 1) -- the caller does,
+    # once, the same way `lay_out`'s round loop does.
+    arm_cache: dict[tuple[ShapeKey, float], tuple[str, ...]] = {}
+    arms_by_slot = [
+        layout._arms_for(spec, entries[index], arm_cache, block_budget=20.0) for index in todo
+    ]
     round_args = dict(
         pool=_InlinePool(),
         block_budget=20.0,
         deadline=time.monotonic() + 600.0,
         nogood=nogood,
-        arm_cache={},
+        arms_by_slot=arms_by_slot,
     )
     layout._solve_round(spec, entries, todo, **round_args)  # type: ignore[arg-type]
     assert offered, "the first round must have offered every block to a placer"
 
-    # `dispatch.dispatch_arms` sends this shape (uncoated, few strips) to
-    # `sequence-pair` alone -- see `dispatch`'s cross-tab.
     shape = strategy.shape_key(entries[0].units)
     assert nogood.remembers(shape, "sequence-pair", 0.05), (
         "the refusal is still evidence about the wall the job actually got"
@@ -966,7 +975,9 @@ def test_a_refused_block_is_offered_the_other_arm_before_it_is_cut(chain_spec, m
     isolates the widen-before-cut escalation this test exists to check.
     """
     monkeypatch.setattr(
-        strategy.dispatch, "dispatch_arms", lambda features, arms, **kwargs: ("sequence-pair",)
+        strategy.dispatch,
+        "dispatch_arms",
+        lambda features, arms, **kwargs: (strategy.dispatch.ARM_SEQUENCE_PAIR,),
     )
     cut = []
     real_next_cut = strategy._next_cut

@@ -10,10 +10,10 @@ rounds (r3, r4) after round 1 vs round 2 disagreed too violently to read as n=2 
 
 ## v3 baseline (both rounds identical; `docs/superpowers/evidence/2026-09-07-hierarchical-v3/gate.md` lines 133, 211-212, 246-247)
 
-| cell | blocks | dispatch ff/sp/both | blocks never placed |
-| --- | --- | --- | --- |
-| mall/all-products | 39 | 44 / 6 / 13 | 9 |
-| mall/no-proliferator | 54 | 0 / 73 / 19 | 31 |
+| cell | blocks | blocks_unattempted | dispatch ff/sp/both | blocks never placed |
+| --- | --- | --- | --- | --- |
+| mall/all-products | 39 | 0 | 44 / 6 / 13 | 9 |
+| mall/no-proliferator | 54 | 0 | 0 / 73 / 19 | 31 |
 
 ## Task 7 measurement
 
@@ -36,11 +36,15 @@ Raw sidecars: `mall-all-products-b60-r1.json`, `mall-all-products-b60-r2.json`,
 ## Reading it
 
 **`mall/all-products` is unchanged, exactly.** `blocks`, the dispatch triple, and the
-never-placed count are identical to v3 in both rounds. This candidate policy is not
-predominantly coater-free, so the arm-dispatch cache's new `(shape, budget)` key never crosses
-`dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S` differently than v3's shape-only key would have for any
-block this build actually solves -- Task 7's branch is inert here. This is the expected,
-uninteresting case.
+never-placed count are identical to v3 in both rounds. Every per-block budget this build can
+ever produce is below `SEQUENCE_PAIR_EXACT_FLOOR_S` regardless of policy (`BLOCK_BUDGET_MAX_S`
+is a whole second under it), so Task 7's abstain branch is gated purely on `features.coaters
+== 0` -- the budget comparison never changes which side of it a block lands on. The 6 blocks
+this cell still dispatches to `sequence-pair` alone therefore must have `coaters > 0` (this
+policy allows proliferators, hence spray lanes) *and* `strips > ARM_SMALL_STRIPS`, which is
+exactly the cross-tab cell v3's rule already sent to `sequence-pair` alone -- Task 7's
+coater-free gate never fires for them, so the branch is inert here, not "not predominantly
+coater-free." This is the expected, uninteresting case.
 
 **`mall/no-proliferator` is where the lever fires, and it moved the number this task exists to
 move, but not cleanly.** Every dispatch went to `arm_dispatch_both` in both rounds (0
@@ -148,3 +152,43 @@ never-placed (`blocks_unattempted=0`, no floor crossing); 1 of 4 collapses to 67
 67 in this sample. The good regime is the majority outcome at n=4, but the bad regime is not
 rare noise either -- it recurred once in four tries, with a mechanism (the floor crossing)
 that is directly legible in the refusal text every time it fires, not a mystery each time.
+
+## Fix round 1: post-fix rounds (r5-r8)
+
+Task 7 fix round 1 (review of commit `3d5aba53`) found the round loop derived arms TWICE per
+round under two different budgets -- `jobs`/the stats loop under the budget the round
+*started* with, `_solve_round` under the freshly-recomputed `block_budget` -- doubling
+`dispatch.block_features`'s `plan_strips` call per shape per round on the unguarded
+orchestrator path. Fixed by computing `arms_by_slot` once per round and passing it straight
+into `_solve_round` instead of it re-deriving under a fresher budget. Four more rounds of
+`mall/no-proliferator --budget 60`, same probe/argv/policy, one build at a time, AFTER that
+fix (uncommitted at measurement time, committed together with it):
+
+| round | blocks | blocks_unattempted | dispatch ff/sp/both | never placed | recut_rounds | floor crossed? | in-proc wall | shell wall | load |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| r5 | 95 | **70** | 0 / 0 / 143 | **70** | 2 | **yes** | 15.76s | 17.39s | 3.8 |
+| r6 | 83 | 0 | 0 / 0 / 125 | 6 | 2 | no | 20.85s | 22.54s | 19.4 |
+| r7 | 87 | 0 | 0 / 0 / 131 | 6 | 2 | no | 20.95s | 22.41s | 2.6 |
+| r8 | 85 | 0 | 0 / 0 / 128 | 6 | 2 | no | 21.01s | 22.69s | 1.8 |
+
+Raw sidecars: `mall-no-proliferator-b60-r5.json` .. `r8.json`, each with its
+`.log`/`.stdout.txt`/`-load.txt`/`.shellwall.txt` beside it.
+
+**As measured: the collapse survives the fix.** 1 of 4 post-fix rounds (r5) still has
+`blocks_unattempted > 0` -- exactly the same 1-in-4 rate as the pre-fix sample (r1-r4), and
+r5's refusal text is the same directly-quotable floor crossing as pre-fix r2's:
+`"21.0s left over 5 wave(s) is under the 5s a block solve is given at all"`. The fix removed a
+real, independently-justified defect (double `plan_strips`, mismatched stats attribution) and
+is correct on its own merits, but it does not by itself prevent the funding formula from
+occasionally crossing `BLOCK_BUDGET_MIN_S` once every job in this cell is doubled. Combined
+across all eight rounds measured for this cell (r1-r8), the collapse rate is 2 of 8 (25%), and
+every rate everywhere in this sample has been either 1-in-4 or its close neighbor -- consistent
+with one underlying phenomenon, not something the fix changed the shape of.
+
+**A related, smaller thing the fix DID resolve, found while investigating Finding 3 below:**
+`tests/layout/hierarchy/test_strategy.py::test_a_budget_too_small_to_fund_a_round_still_attempts_the_seed_round`
+went from 4/20 failures pre-fix (commit `3d5aba53`) to 0/20 post-fix (this branch's working
+tree at measurement time) in the same 20-run sample described under Finding 3. That single
+unit test's own spawned-pool timing margin benefited from cutting a redundant `plan_strips`
+call out of the hot path; the full `mall/no-proliferator` build's funding-floor collapse did
+not.

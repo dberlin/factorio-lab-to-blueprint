@@ -574,9 +574,14 @@ class HierarchicalLayout:
         # Seeded before the first round has computed its own `block_budget`
         # (below, from `share`): the round loop needs SOME budget to offer
         # `_arms_for` before it can size itself off `_arms_for`'s own answer.
-        # `BLOCK_BUDGET_MIN_S` is a fine seed because it changes nothing that
-        # matters -- every real per-block budget this rule can ever produce
-        # is below `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S` anyway
+        # STILL NEEDED AFTER TASK 7 FIX ROUND 1, which made `arms_by_slot`
+        # (below) the round's ONE `_arms_for` computation, at the budget the
+        # round STARTS with -- this variable, not the fresh value the round
+        # goes on to compute for itself.  Round 1 has no prior round to carry
+        # a value from, so it still needs an initial one before that first
+        # computation.  `BLOCK_BUDGET_MIN_S` is a fine seed because it changes
+        # nothing that matters -- every real per-block budget this rule can
+        # ever produce is below `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S` anyway
         # (`BLOCK_BUDGET_MAX_S` is a whole second under it), so the abstain
         # branch is unconditional either way. From round 2 on this holds the
         # PRIOR round's real `block_budget`, computed below and never
@@ -622,24 +627,43 @@ class HierarchicalLayout:
                 todo = [index for index, entry in enumerate(entries) if entry.placement is None]
                 if not todo:
                     break
-                jobs = sum(
-                    len(self._arms_for(spec, entries[index], arm_cache, block_budget=block_budget))
+                # COMPUTED ONCE PER ROUND, HERE, AND REUSED BELOW -- not
+                # re-derived by `_solve_round` under a second, fresher
+                # `block_budget` (Task 7 fix round 1; a review of the
+                # original Task 7 commit caught this).  This uses the
+                # budget THIS round STARTS with -- last round's `block_budget`,
+                # or the seed on round 1 -- because the round's OWN
+                # `block_budget` is not known yet: it is computed below,
+                # from `waves`, which is computed from `jobs`, which is
+                # computed from THIS list, so the round cannot fund itself
+                # before counting its own jobs.  Before this fix,
+                # `_solve_round` called `_arms_for` again with the freshly
+                # computed `block_budget`, which (a) ran
+                # `dispatch.block_features`'s `plan_strips` -- `_arms_for`'s
+                # own docstring calls it "the only expensive thing here" --
+                # a SECOND time per shape per round on the unguarded
+                # orchestrator path, spending exactly the wall this task
+                # made scarce by racing more arms, and (b) meant `jobs`,
+                # `waves` and the stats below could describe a different arm
+                # set than the one `_solve_round` actually funded and
+                # solved.  Passing `arms_by_slot` straight through removes
+                # both: one `_arms_for` answer per block this round, shared
+                # by `jobs`, the stats loop, and `_solve_round`.
+                arms_by_slot = [
+                    self._arms_for(spec, entries[index], arm_cache, block_budget=block_budget)
                     for index in todo
-                )
+                ]
+                jobs = sum(len(arms) for arms in arms_by_slot)
                 # COUNTED HERE, NOT AFTER `_solve_round` RETURNS (v3 Task 3,
                 # Ruling P3): by then `_solve_round` has already widened
                 # `entries[index].arms_tried`, so `_arms_for`'s widening
                 # branch would return the FULL arm set for every block just
                 # solved and this would count `arm_dispatch_both` for all of
-                # them.  Counting from the SAME `_arms_for` calls the `jobs`
-                # line already made -- cached on `ShapeKey`, so this is a
-                # cache hit, not a second feature computation -- gives the
+                # them.  Reusing the SAME `arms_by_slot` the `jobs` line just
+                # built -- not a second `_arms_for` call -- gives the
                 # identical once-per-block-per-round numbers with the correct
                 # attribution.
-                for index in todo:
-                    chosen = self._arms_for(
-                        spec, entries[index], arm_cache, block_budget=block_budget
-                    )
+                for chosen in arms_by_slot:
                     if len(chosen) > 1:
                         stats.arm_dispatch_both += 1.0
                     elif chosen[0] == dispatch.ARM_FREEFORM:
@@ -686,7 +710,7 @@ class HierarchicalLayout:
                     block_budget=block_budget,
                     deadline=deadline,
                     nogood=nogood,
-                    arm_cache=arm_cache,
+                    arms_by_slot=arms_by_slot,
                 )
                 block_wall += time.monotonic() - started
                 still = [index for index in todo if entries[index].placement is None]
@@ -953,12 +977,23 @@ class HierarchicalLayout:
         block_budget: float,
         deadline: float,
         nogood: _ShapeNoGood,
-        arm_cache: dict[tuple[ShapeKey, float], tuple[str, ...]],
+        arms_by_slot: list[tuple[str, ...]],
     ) -> int:
         """Solve every block in ``todo`` with every arm; smallest valid wins.
 
         ``pool`` is the ONE pool `lay_out` built for the whole build, opened
         and closed there -- this method never constructs or shuts one down.
+
+        ``arms_by_slot`` -- index-aligned to ``todo`` -- is `lay_out`'s ROUND
+        LOOP's own `_arms_for` answer, computed ONCE there (Task 7 fix round
+        1) and passed straight through, rather than this method calling
+        `_arms_for` again itself.  Re-deriving it here used to happen under a
+        DIFFERENT, freshly-recomputed `block_budget` than the one `jobs` and
+        the dispatch stats were counted under in the round loop -- a second
+        `dispatch.block_features`/`plan_strips` call per shape per round, and
+        an attribution mismatch between what the stats claimed ran and what
+        this method actually funded.  Taking the list as given keeps both in
+        lockstep by construction.
 
         A JOB IS KEYED BY ``(shape, arm)``, NOT BY ``(block, arm)``.
         ``_recut``'s "halve" attempt on a single-recipe block routinely hands
@@ -985,10 +1020,6 @@ class HierarchicalLayout:
         ``(block, arm)`` pairs this round did NOT hand to a placer -- a
         remembered no-good or a same-round duplicate.
         """
-        arms_by_slot = [
-            self._arms_for(spec, entries[index], arm_cache, block_budget=block_budget)
-            for index in todo
-        ]
         shapes = [shape_key(entries[index].units) for index in todo]
         # `(shape, arm) -> todo-slots that need this exact question answered`,
         # insertion-ordered so the FIRST slot to need a key is the one whose
