@@ -93,7 +93,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "src"))
 
 from flab2bp import pipeline  # noqa: E402
-from flab2bp.bench.corpus import URL_CORPUS  # noqa: E402
+from flab2bp.bench.corpus import entry as corpus_entry  # noqa: E402
 from flab2bp.layout.base import DETERMINISTIC_WORKERS  # noqa: E402
 from flab2bp.layout.observe import (  # noqa: E402
     TRACE_SAMPLE_INTERVAL_S,
@@ -134,10 +134,7 @@ CELLS: dict[str, Cell] = {
 
 
 def _corpus_url(entry_id: str) -> str:
-    for entry in URL_CORPUS:
-        if entry.url_id == entry_id:
-            return entry.url
-    raise KeyError(f"no corpus entry {entry_id!r}")
+    return corpus_entry(entry_id).url
 
 
 @dataclass(frozen=True, slots=True)
