@@ -128,6 +128,7 @@ from flab2bp.layout.base import (
 )
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.hierarchy import compose as compose_mod
+from flab2bp.layout.hierarchy import dispatch
 from flab2bp.layout.hierarchy.contracts import (
     ContractError,
     LaneEnd,
@@ -477,6 +478,11 @@ class _Entry:
     #: child created by a re-cut has never been cut itself, and starting it at
     #: its parent's count would deny it the cuts `split_block` offers.
     attempts: int = 0
+    #: Arms this block has already been offered.  A block whose dispatched
+    #: arm refused is re-offered the FULL set before `_recut` spends an
+    #: attempt on it: widening the arms is strictly cheaper than growing the
+    #: block list, and it is design §3.3's escalate-only-if-needed rule.
+    arms_tried: frozenset[str] = frozenset()
 
 
 class HierarchicalLayout:
@@ -536,6 +542,10 @@ class HierarchicalLayout:
         # THIS CALL'S OWN no-good memo -- see `_ShapeNoGood`'s docstring for
         # why it is a local rather than `self._nogood`.
         nogood = _ShapeNoGood()
+        # THIS CALL'S OWN arm-dispatch cache, keyed on `ShapeKey`: see
+        # `_arms_for`'s docstring for why two same-shaped blocks share an
+        # answer, and `_ShapeNoGood`'s docstring for why this is a local too.
+        arm_cache: dict[ShapeKey, tuple[str, ...]] = {}
         # ONE POOL FOR THE WHOLE BUILD, not one per round: a re-cut starts a
         # new round with more (smaller) blocks, and building a fresh pool for
         # it would pay a spawned process pool's own start-up again for jobs
@@ -576,7 +586,26 @@ class HierarchicalLayout:
                 todo = [index for index, entry in enumerate(entries) if entry.placement is None]
                 if not todo:
                     break
-                jobs = sum(len(self._arms_for(entries[index])) for index in todo)
+                jobs = sum(len(self._arms_for(spec, entries[index], arm_cache)) for index in todo)
+                # COUNTED HERE, NOT AFTER `_solve_round` RETURNS (v3 Task 3,
+                # Ruling P3): by then `_solve_round` has already widened
+                # `entries[index].arms_tried`, so `_arms_for`'s widening
+                # branch would return the FULL arm set for every block just
+                # solved and this would count `arm_dispatch_both` for all of
+                # them.  Counting from the SAME `_arms_for` calls the `jobs`
+                # line already made -- cached on `ShapeKey`, so this is a
+                # cache hit, not a second feature computation -- gives the
+                # identical once-per-block-per-round numbers with the correct
+                # attribution, and one fewer pass over `todo` than counting
+                # separately after the round would need.
+                for index in todo:
+                    chosen = self._arms_for(spec, entries[index], arm_cache)
+                    if len(chosen) > 1:
+                        stats.arm_dispatch_both += 1.0
+                    elif chosen[0] == dispatch.ARM_FREEFORM:
+                        stats.arm_dispatch_freeform += 1.0
+                    else:
+                        stats.arm_dispatch_sequence_pair += 1.0
                 waves = math.ceil(jobs / width)
                 remaining = deadline - time.monotonic() - reserve
                 attempted = any(entry.verdicts for entry in entries)
@@ -617,6 +646,7 @@ class HierarchicalLayout:
                     block_budget=block_budget,
                     deadline=deadline,
                     nogood=nogood,
+                    arm_cache=arm_cache,
                 )
                 block_wall += time.monotonic() - started
                 still = [index for index in todo if entries[index].placement is None]
@@ -782,10 +812,32 @@ class HierarchicalLayout:
             return ("freeform", "sequence-pair")
         return (self.block_strategy,)
 
-    def _arms_for(self, entry: _Entry) -> tuple[str, ...]:
-        # Placeholder for Task 3, which dispatches one arm per entry instead
-        # of every entry to every arm; see the v3 plan's Task 3.
-        return self._arms()
+    def _arms_for(
+        self, spec: BuildSpec, entry: _Entry, cache: dict[ShapeKey, tuple[str, ...]]
+    ) -> tuple[str, ...]:
+        """Which arms this block is offered this round.
+
+        Cached on `ShapeKey` for the build: `sub_spec` is a pure function of
+        the units (its `index` argument reaches only a diagnostic label -- see
+        `_solve_round`'s docstring), so two same-shaped blocks score the same
+        features, and `plan_strips` is the only expensive thing here.
+
+        A block that has already been offered its dispatched arm and refused
+        gets the FULL set.
+        """
+        arms = self._arms()
+        if len(arms) < 2:
+            return arms
+        key = shape_key(entry.units)
+        chosen = cache.get(key)
+        if chosen is None:
+            chosen = dispatch.dispatch_arms(
+                dispatch.block_features(sub_spec(spec, entry.units, 0)), arms
+            )
+            cache[key] = chosen
+        if entry.arms_tried >= set(chosen):
+            return arms
+        return chosen
 
     def _pool_width(self) -> int:
         """Jobs run at once.  One job is a whole placer holding CP-SAT workers,
@@ -810,6 +862,7 @@ class HierarchicalLayout:
         block_budget: float,
         deadline: float,
         nogood: _ShapeNoGood,
+        arm_cache: dict[ShapeKey, tuple[str, ...]],
     ) -> int:
         """Solve every block in ``todo`` with every arm; smallest valid wins.
 
@@ -841,14 +894,14 @@ class HierarchicalLayout:
         ``(block, arm)`` pairs this round did NOT hand to a placer -- a
         remembered no-good or a same-round duplicate.
         """
-        arms = self._arms()
+        arms_by_slot = [self._arms_for(spec, entries[index], arm_cache) for index in todo]
         shapes = [shape_key(entries[index].units) for index in todo]
         # `(shape, arm) -> todo-slots that need this exact question answered`,
         # insertion-ordered so the FIRST slot to need a key is the one whose
         # sub-spec actually gets built and solved.
         slots_by_key: dict[tuple[ShapeKey, str], list[int]] = {}
         for slot in range(len(todo)):
-            for arm in arms:
+            for arm in arms_by_slot[slot]:
                 slots_by_key.setdefault((shapes[slot], arm), []).append(slot)
 
         jobs: list[_BlockJob] = []
@@ -938,11 +991,13 @@ class HierarchicalLayout:
             outcome_by_key[job_key] = result
 
         for slot, index in enumerate(todo):
-            outcomes = [outcome_by_key.get((shapes[slot], arm), skip_record) for arm in arms]
+            slot_arms = arms_by_slot[slot]
+            outcomes = [outcome_by_key.get((shapes[slot], arm), skip_record) for arm in slot_arms]
             winners = [placement for _record, placement in outcomes if placement is not None]
             entries[index].verdicts = tuple(
                 str(record.get("verdict", "no verdict")) for record, _placement in outcomes
             )
+            entries[index].arms_tried = entries[index].arms_tried | set(slot_arms)
             if winners:
                 entries[index].placement = min(winners, key=lambda p: p.area)
         return skipped
@@ -970,6 +1025,13 @@ def _recut(
     for index, entry in enumerate(entries):
         if index not in refusing:
             grown.append(entry)
+            continue
+        if not entry.arms_tried >= set(arms):
+            # An arm this block has never been offered is cheaper than a cut.
+            # Leaving the entry alone is `progress` because `_arms_for` will
+            # widen it next round.
+            grown.append(entry)
+            progress = True
             continue
         children = _next_cut(entry, nogood=nogood, arms=arms, budget_s=budget_s)
         if children is None:

@@ -316,15 +316,18 @@ def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
         block_budget=20.0,
         deadline=time.monotonic() + 600.0,
         nogood=nogood,
+        arm_cache={},
     )
     layout._solve_round(spec, entries, todo, **round_args)  # type: ignore[arg-type]
     assert offered, "the first round must have offered every block to a placer"
 
+    # `dispatch.dispatch_arms` sends this shape (uncoated, few strips) to
+    # `sequence-pair` alone -- see `dispatch`'s cross-tab.
     shape = strategy.shape_key(entries[0].units)
-    assert nogood.remembers(shape, "freeform", 0.05), (
+    assert nogood.remembers(shape, "sequence-pair", 0.05), (
         "the refusal is still evidence about the wall the job actually got"
     )
-    assert not nogood.remembers(shape, "freeform", 20.0), (
+    assert not nogood.remembers(shape, "sequence-pair", 20.0), (
         "a 0.05s refusal says nothing about what the shape does with 20s"
     )
 
@@ -860,3 +863,63 @@ def test_a_round_that_cannot_afford_the_floor_names_the_wall_not_the_waves(chain
     # The seed round runs anyway: nothing was attempted, so nothing is refused
     # for funding before a placer has seen a single block.
     assert caught.value.stats["blocks_unattempted"] == 0.0
+
+
+def test_a_dispatched_block_is_offered_one_arm_not_two(chain_spec, monkeypatch):
+    arms: list[str] = []
+    real = strategy._solve_block
+
+    def spy(args):
+        arms.append(args[1])
+        return real(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", spy)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    placement = layout.lay_out(chain_spec, time_budget_s=40.0)
+    assert len(set(arms)) == 1, f"both arms were funded: {sorted(set(arms))}"
+    dispatched = (
+        placement.stats["arm_dispatch_freeform"] + placement.stats["arm_dispatch_sequence_pair"]
+    )
+    assert dispatched == placement.stats["blocks"]
+    assert placement.stats["arm_dispatch_both"] == 0.0
+
+
+def test_a_refused_block_is_offered_the_other_arm_before_it_is_cut(chain_spec, monkeypatch):
+    """Widening the arms is cheaper than growing the block list."""
+    cut = []
+    real_next_cut = strategy._next_cut
+
+    def watch(entry, **kw):
+        cut.append(strategy.shape_key(entry.units))
+        return real_next_cut(entry, **kw)
+
+    monkeypatch.setattr(strategy, "_next_cut", watch)
+    seen: list[str] = []
+    real = strategy._solve_block
+
+    def refuse_first_arm(args):
+        seen.append(args[1])
+        if len(seen) <= 2:
+            return (
+                {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+                None,
+            )
+        return real(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", refuse_first_arm)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    layout.lay_out(chain_spec, time_budget_s=40.0)
+    assert len(set(seen)) == 2, "the other arm was never tried"
+    assert not cut, "a block was cut before every arm had been offered"
