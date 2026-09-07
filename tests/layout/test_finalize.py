@@ -3819,3 +3819,150 @@ def test_band_target_width_rejects_an_implausible_core() -> None:
         finalize.band_target_width(
             _portable_envelope(), height=40, width=finalize.C_BAND_SCAN_MAX + 1
         )
+
+
+# --- Task 4 fix round 1: the belts() conversions review flagged as WORTH ---
+#
+# _required_external_input_belts, _prunable_open_belts and _boundary_open_belts
+# all key their belt-membership test on ``carries_item``/graph links that only
+# a SOLVED placement populates -- the raw-decoded-blueprint fixture the four
+# tests above use never sets ``carries_item`` at all (blueprint decode does
+# not carry it; the layout pipeline derives it), so it produces vacuous
+# (empty) results for these three functions specifically. A real solved
+# placement is the correct "real fixture" for this group instead: same
+# `FreeformLayout(...).lay_out(two_stage_spec(), time_budget_s=0.5)` call
+# `test_finalize_records_frame_placement_calls_with_band_policy` already
+# makes elsewhere in this file, so conftest.py's per-call memo makes this a
+# cache hit, not a second solve.
+
+
+def _two_stage_placement() -> Placement:
+    return freeform.FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        two_stage_spec(),
+        time_budget_s=0.5,
+    )
+
+
+def _brute_force_belt_set(placement: Placement) -> set[int]:
+    """The old ``enumerate(buildings)`` + ``catalog.is_belt`` scan, verbatim."""
+    return {
+        index
+        for index, building in enumerate(placement.buildings)
+        if catalog.is_belt(building.item_id)
+    }
+
+
+def test_prunable_open_belts_matches_brute_force_belt_scan_on_a_real_layout() -> None:
+    placement = _two_stage_placement()
+    expected_belts = _brute_force_belt_set(placement)
+    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
+
+    actual = finalize._prunable_open_belts(placement)
+    assert len(actual) > 0, "fixture regressed: expected at least one prunable open belt"
+    # Reproduce the OLD algorithm's remaining (unconverted) stages against the
+    # brute-force belt set, so this proves the CONVERTED belt-set construction
+    # specifically, not just "the function still returns something".
+    buildings = placement.buildings
+    predecessors: dict[int, set[int]] = {index: set() for index in expected_belts}
+    for index in expected_belts:
+        target = buildings[index].output_obj
+        if target in expected_belts:
+            predecessors[target].add(index)
+    nonbelt_references: set[int] = set()
+    for index, building in enumerate(buildings):
+        if index in expected_belts:
+            continue
+        for target in (building.input_obj, building.output_obj):
+            if target in expected_belts:
+                assert target is not None
+                nonbelt_references.add(target)
+    left, bottom, right, top = placement.bounds
+    expected: set[int] = set()
+    for index in expected_belts:
+        building = buildings[index]
+        successor = building.output_obj if building.output_obj in expected_belts else None
+        neighbours = len(predecessors[index]) + int(successor is not None)
+        open_end = not predecessors[index] or successor is None
+        outer = (
+            building.x == left
+            or building.x + building.width - 1 == right
+            or building.y == bottom
+            or building.y + building.height - 1 == top
+        )
+        protected = index in nonbelt_references or bool(building.parameters)
+        if outer and open_end and not protected and neighbours <= 1:
+            expected.add(index)
+    assert actual == frozenset(expected)
+
+
+def test_boundary_open_belts_matches_brute_force_belt_scan_on_a_real_layout() -> None:
+    placement = _two_stage_placement()
+    expected_belts = _brute_force_belt_set(placement)
+    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
+
+    left, bottom, right, top = placement.bounds
+    buildings = placement.buildings
+    any_non_empty = False
+    for side in ("left", "bottom", "right", "top"):
+        expected = frozenset(
+            index
+            for index in expected_belts
+            if ((building := buildings[index]).input_obj is None or building.output_obj is None)
+            and (
+                (side == "left" and building.x == left)
+                or (side == "bottom" and building.y == bottom)
+                or (side == "right" and building.x + building.width - 1 == right)
+                or (side == "top" and building.y + building.height - 1 == top)
+            )
+        )
+        actual = finalize._boundary_open_belts(placement, side)
+        assert actual == expected
+        any_non_empty = any_non_empty or len(expected) > 0
+    assert any_non_empty, "fixture regressed: expected at least one boundary-open belt on some side"
+
+
+def test_required_external_input_belts_matches_brute_force_belt_scan_on_a_real_layout() -> None:
+    placement = _two_stage_placement()
+    spec = two_stage_spec()
+    expected_belts = _brute_force_belt_set(placement)
+    assert len(expected_belts) > 0, "fixture regressed: expected at least one belt"
+
+    actual = finalize._required_external_input_belts(placement, spec)
+    assert len(actual) > 0, "fixture regressed: expected at least one required external belt"
+
+    # Reproduce the OLD algorithm's remaining (unconverted) connected-component
+    # and predicate stages against the brute-force belt set.
+    output_items = set(spec.outputs) | set(spec.surplus_outputs)
+    left, bottom, right, top = placement.bounds
+    buildings = placement.buildings
+    connected: set[int] = set()
+    for source, building in enumerate(buildings):
+        for target in (building.input_obj, building.output_obj):
+            if target is None or not 0 <= target < len(buildings):
+                continue
+            if source in expected_belts:
+                connected.add(source)
+            if target in expected_belts:
+                connected.add(target)
+    expected = frozenset(
+        index
+        for index, building in enumerate(buildings)
+        if (
+            index in expected_belts
+            and index in connected
+            and (
+                building.carries_item in spec.external_inputs
+                or (
+                    building.carries_item in output_items
+                    and building.output_obj is None
+                    and (
+                        building.x == left
+                        or building.x + building.width - 1 == right
+                        or building.y == bottom
+                        or building.y + building.height - 1 == top
+                    )
+                )
+            )
+        )
+    )
+    assert actual == expected

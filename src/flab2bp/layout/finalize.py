@@ -918,6 +918,15 @@ def first_projected_static_failure(
     for index, building in buildings:
         if kind_for(building.item_id) in (Kind.BELT, Kind.SORTER):
             continue
+        # ``position_by_index`` is last-write-wins; the old ``next()`` search
+        # this replaces was first-match-wins. Those agree only because
+        # ``buildings`` never repeats a placement ``index`` -- each
+        # (index, PlacedBuilding) pair here names a distinct building, in
+        # every production caller (freeform.py's materialized_base plus one
+        # re-inserted candidate). Asserted rather than silently relied on.
+        assert index not in position_by_index, (
+            f"first_projected_static_failure: duplicate placement index {index} in buildings"
+        )
         position_by_index[index] = len(retained_list)
         retained_list.append((index, building))
     retained = tuple(retained_list)
@@ -1848,6 +1857,8 @@ def _projection_invariants(
         raise ProjectionCancelled
     belts_list: list[tuple[int, PlacedBuilding]] = []
     for i in index.belts():
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
         belt = index.by_index(i)
         assert belt is not None
         belts_list.append((i, belt))
@@ -1874,12 +1885,16 @@ def _projection_invariants(
     addon_hits = sorted(
         i for item_id in _multi_area_addon_item_ids() for i in index.by_item(item_id)
     )
-    addons = tuple(
-        (i, building, catalog.building(building.item_id).addon_areas)
-        for i in addon_hits
-        for building in (index.by_index(i),)
-        if building is not None
-    )
+    addons_list: list[tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]] = []
+    for i in addon_hits:
+        if cancelled is not None and cancelled():
+            raise ProjectionCancelled
+        addon_building = index.by_index(i)
+        assert addon_building is not None
+        addons_list.append(
+            (i, addon_building, catalog.building(addon_building.item_id).addon_areas)
+        )
+    addons = tuple(addons_list)
     if cancelled is None:
         nodes = _power_nodes(placement)
         sorters = _planet_sorters(placement)
@@ -2859,12 +2874,14 @@ def _prunable_open_belts(
 ) -> frozenset[int]:
     """Unreferenced outer belt leaves that can be removed as one structural wave."""
     buildings = placement.buildings
-    belts: set[int] = set()
-    for index, building in enumerate(buildings):
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
-        if catalog.is_belt(building.item_id):
-            belts.add(index)
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    # The O(N) belt classification this loop used to run (enumerate() plus a
+    # catalog.is_belt() call per building) now happens once, inside
+    # Buildings.of()'s index construction -- see the cancellation-density
+    # note in _projection_invariants and this task's report for why that
+    # move is safe to leave unchecked mid-build.
+    belts: set[int] = set(Buildings.of(placement).belts())
     predecessors: dict[int, set[int]] = {index: set() for index in belts}
     for index in belts:
         if cancelled is not None and cancelled():
@@ -2916,13 +2933,19 @@ def _boundary_open_belts(
 ) -> frozenset[int]:
     """Open belts on one current bounding side for the certified fallback."""
     left, bottom, right, top = placement.bounds
+    buildings = placement.buildings
     selected: set[int] = set()
-    for index, building in enumerate(placement.buildings):
+    # Visits only belts (index.belts()) rather than every building, applying
+    # the remaining predicates (protected_roots, open-end, boundary side) to
+    # each -- catalog.is_belt(building.item_id) is automatically satisfied by
+    # restricting the iteration domain, so this is the same predicate over a
+    # strictly smaller set, not a different one.
+    for index in Buildings.of(placement).belts():
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
+        building = buildings[index]
         if (
             index not in protected_roots
-            and catalog.is_belt(building.item_id)
             and (building.input_obj is None or building.output_obj is None)
             and (
                 (side == "left" and building.x == left)
@@ -2944,21 +2967,20 @@ def _required_external_input_belts(
     """Find every connected player-facing I/O belt that cleanup must retain."""
     output_items = set(spec.outputs) | set(spec.surplus_outputs)
     left, bottom, right, top = placement.bounds
-    belts: list[bool] = []
-    for building in placement.buildings:
-        if cancelled is not None and cancelled():
-            raise ProjectionCancelled
-        belts.append(catalog.is_belt(building.item_id))
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    belt_count = len(placement.buildings)
+    belts = set(Buildings.of(placement).belts())
     connected: set[int] = set()
     for source, building in enumerate(placement.buildings):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         for target in (building.input_obj, building.output_obj):
-            if target is None or not 0 <= target < len(belts):
+            if target is None or not 0 <= target < belt_count:
                 continue
-            if belts[source]:
+            if source in belts:
                 connected.add(source)
-            if belts[target]:
+            if target in belts:
                 connected.add(target)
     # A required lane may start one or more cells inside the initial bounds:
     # unrelated leaves can define the outer edge before the cleanup wave peels
@@ -2967,7 +2989,7 @@ def _required_external_input_belts(
         index
         for index, building in enumerate(placement.buildings)
         if (
-            belts[index]
+            index in belts
             and index in connected
             and (
                 building.carries_item in spec.external_inputs
