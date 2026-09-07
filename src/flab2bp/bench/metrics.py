@@ -65,12 +65,13 @@ def measure(placement: Placement) -> Metrics:
     sorters = index.count_by_kind(Kind.SORTER)
     towers = index.count_by_item(catalog.TESLA_TOWER_ID)
 
-    # `Kind.MACHINE` is a superset of `_is_machine` -- it also holds the
-    # Tesla Tower and anything `catalog.building(...)` cannot resolve, both of
-    # which `_is_machine` excludes.  Restricting to the MACHINE bucket first
-    # and then re-applying `_is_machine` keeps the exact predicate while only
-    # paying the catalog lookup for candidates that could possibly qualify.
-    machine_indices = {i for i in index.by_kind(Kind.MACHINE) if _is_machine(buildings[i])}
+    # Piler occupies tiles and satisfies this metric's historical machine
+    # predicate, although the domain index classifies it as OTHER.
+    machine_indices = {
+        i
+        for i in (*index.machines(), *index.by_item(catalog.PILER_ID))
+        if _is_machine(buildings[i])
+    }
     machines = len(machine_indices)
     direct_inserts = len(index.sorters_between(machine_indices, machine_indices))
 

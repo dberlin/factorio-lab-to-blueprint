@@ -133,44 +133,27 @@ def test_empty_placement_does_not_divide_by_zero() -> None:
     assert m.packing_efficiency == 0.0
 
 
-def test_machines_excludes_tesla_towers_and_spray_coaters() -> None:
-    """``Kind.MACHINE`` alone is the WRONG count here -- pin the right one.
-
-    ``measure()`` reads ``buildings_index.by_kind(Kind.MACHINE)`` only as a
-    candidate set, then re-tests each candidate with the same ``_is_machine``
-    predicate the pre-``Buildings`` code used.  A Tesla Tower and a Spray
-    Coater both land in the ``Kind.MACHINE`` bucket (``kind_for``'s catch-all
-    covers anything that is not a belt, sorter, splitter or piler) but
-    ``_is_machine`` excludes both -- the tower by item id, the coater because
-    it is belt-integrated and does not occupy tiles. A naive
-    ``count_by_kind(Kind.MACHINE)`` would report 4 machines here; the correct
-    answer, proven below, is 2.
-    """
-    buildings = (
-        _assembler(0, 0),
-        _assembler(10, 0),
-        _tower(20, 0),
-        _coater(21, 0),
+def test_machine_metrics_include_piler_but_exclude_tower_and_coater() -> None:
+    piler = catalog.building(catalog.PILER_ID)
+    placement = Placement(
+        buildings=(
+            _assembler(0, 0),
+            _assembler(10, 0),
+            _tower(20, 0),
+            _coater(21, 0),
+            PlacedBuilding(
+                item_id=catalog.PILER_ID,
+                model_index=piler.model_index,
+                x=25,
+                y=0,
+            ),
+            _sorter(4, 0, inp=0, out=4),
+            _sorter(15, 0, inp=4, out=1),
+            _sorter(20, 0, inp=0, out=2),
+            _sorter(21, 0, inp=3, out=1),
+        )
     )
-    placement = Placement(buildings=buildings)
-    m = measure(placement)
-
-    # Non-vacuous: four real, distinct buildings actually went in.
-    assert len(buildings) == 4
-    assert {b.item_id for b in buildings} == {
-        2304,
-        catalog.TESLA_TOWER_ID,
-        catalog.SPRAY_COATER_ID,
-    }
-
-    naive_kind_count = sum(
-        1
-        for b in buildings
-        if not catalog.is_belt(b.item_id)
-        and not catalog.is_sorter(b.item_id)
-        and b.item_id not in (catalog.SPLITTER_ID, catalog.PILER_ID)
-    )
-    assert naive_kind_count == 4, "sanity: Kind.MACHINE's catch-all really does net all four"
-
-    assert m.machines == 2
-    assert m.towers == 1
+    measured = measure(placement)
+    assert measured.machines == 3
+    assert measured.direct_inserts == 2
+    assert measured.towers == 1
