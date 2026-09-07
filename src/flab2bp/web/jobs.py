@@ -43,6 +43,7 @@ from flab2bp.layout.observe_channel import TRACE_QUEUE_MAXSIZE
 from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
 from flab2bp.rates.adjust import ProliferatorTier
+from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.web.payload import Json, JsonValue, describe, projection_failure, refusal
 from flab2bp.web.trace import TraceCollector, TraceRing
 
@@ -72,6 +73,7 @@ class Options:
     candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES
     budget_s: float = 15.0
     proliferator_tier: ProliferatorTier | None = None
+    machine_rank: MachineRank = MachineRank.EXACT
     name: str = ""
     #: Mirrors ``--allow-invalid``.  Off by default: a blueprint that pastes
     #: cleanly and then does not run is the worst outcome available here.
@@ -207,6 +209,7 @@ def parse_options(raw: JsonValue) -> Options:
         "candidate_policies",
         "budget_s",
         "proliferator_tier",
+        "machine_rank",
         "name",
         "allow_invalid",
         "flow",
@@ -285,6 +288,15 @@ def parse_options(raw: JsonValue) -> Options:
             proliferator_tier = ProliferatorTier.MK3
         case _:
             raise InvalidOptions("'proliferator_tier' must be one of auto, none, 1, 2, 3")
+    raw_rank = raw.get("machine_rank", MachineRank.EXACT.value)
+    match raw_rank:
+        case "exact" | None:
+            machine_rank = MachineRank.EXACT
+        case "up-to":
+            machine_rank = MachineRank.UP_TO
+        case _:
+            raise InvalidOptions("'machine_rank' must be one of exact, up-to")
+
 
     allow_invalid = raw.get("allow_invalid", False)
     if not isinstance(allow_invalid, bool):
@@ -317,6 +329,7 @@ def parse_options(raw: JsonValue) -> Options:
         candidate_policies=candidate_policies,
         budget_s=budget,
         proliferator_tier=proliferator_tier,
+        machine_rank=machine_rank,
         name=name,
         allow_invalid=allow_invalid,
         flow=flow.strip(),
@@ -403,6 +416,7 @@ def run_build(
         candidate_policies=options.candidate_policies,
         time_budget_s=options.budget_s,
         proliferator_tier=options.proliferator_tier,
+        machine_rank=options.machine_rank,
         name=options.name,
         flow_text=options.flow or None,
         fetch_flow=options.fetch_flow,
@@ -594,6 +608,7 @@ class Builder:
                         if job.options.proliferator_tier is not None
                         else "auto"
                     ),
+                    "machine_rank": job.options.machine_rank.value,
                     "allow_invalid": job.options.allow_invalid,
                     "name": job.options.name,
                     # The CSV itself is not echoed -- it is up to 256kB and the
