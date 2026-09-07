@@ -456,6 +456,12 @@ class PlacementStats(TypedDict, total=False):
     #: `partial > 0` is "the oracle answered for most lane heads and named the
     #: rest", and `reservation_missing` is then that named rest.
     reservation_partial: float
+    #: Towers the COMPOSITION stood, over and above what the blocks brought,
+    #: for powered tiles its own added Splitters put on unreached ground.
+    power_infill_towers: float
+    #: Composed tiles the infill could not cover with a free, linked, legal
+    #: site.  Every one of them is also a named cut in the refusal.
+    power_uncovered_tiles: float
     #: Hierarchical strategy: demands the committed rung could not give a
     #: corridor to.  0 with a non-zero `unrouted_cuts` is the v2 finding: the
     #: oracle says every port is satisfiable and the router still refuses.

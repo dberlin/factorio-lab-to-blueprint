@@ -837,6 +837,18 @@ def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: Two
     assert heads <= fed
 
 
+def test_composition_reports_a_tile_it_could_not_power_as_a_named_cut(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(compose, "plan_power_infill", lambda canvas, **kwargs: ([], ((63, 3),)))
+
+    left, right, flows, spec, ramped = two_solved_blocks
+    result = compose.compose([left, right], flows, spec, gap=2, ramped=ramped, deadline=None)
+
+    assert result.power_uncovered == 1
+    assert any("power.coverage" in failure and "(63,3)" in failure for failure in result.failures)
+
+
 def test_compose_reports_an_unwired_cut_instead_of_handing_it_back(
     two_solved_blocks: TwoSolvedBlocks,
 ):

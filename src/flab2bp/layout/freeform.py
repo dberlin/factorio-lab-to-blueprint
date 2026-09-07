@@ -15987,6 +15987,166 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     return placed
 
 
+def plan_power_infill(
+    canvas: _Canvas,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[list[tuple[int, int]], tuple[tuple[int, int], ...]]:
+    """Towers for powered tiles the towers already standing do not reach.
+
+    :func:`_power_plan` decides a whole block's network BEFORE routing, from an
+    envelope, and that is the right shape for a block: the pack is known, the
+    ground is free, and a tower planned there is held in ``keep_out`` until it
+    is stood.  A COMPOSED canvas cannot be planned that way, and the reason is
+    not tidiness.  Each block arrives with its own network already built and
+    sized for its own footprint; what the composition ADDS is belts (unpowered)
+    and the Splitters :func:`_commit_paths` creates at taps -- and where a tap
+    lands is decided by the router, on ground that only exists once the blocks
+    are packed.  Planning the composed envelope before routing would either
+    re-plan 61 towers that are already correct or blanket the gap with towers
+    for tiles nothing will ever occupy.
+
+    So this is a COVER OF WHAT IS ACTUALLY THERE, run after ``_route_all``.  It
+    is small by construction -- v3 measured 76 of 80 Splitters already covered
+    on ``titanium-glass/all-products`` -- and it is honest about its one
+    weakness: the ground is whatever routing left, so a tile with no legal free
+    site is REPORTED rather than papered over.  A reported tile is a named cut
+    the composer refuses on; the alternative is ``validate.certify`` convicting
+    it several stages later by building index (v3 gate.md §2.3).
+
+    Three legality rules, all consulted rather than restated:
+
+    * **Coverage** uses the doubled-integer predicate ``validate._coverage``
+      and :func:`_place_power` use, so this pass and the validator cannot
+      disagree about a radius.
+    * **``game.power_too_close``** -- no site inside
+      ``rules.power_node_keepout_offsets`` of any node already present, tower
+      or mode-driven machine.
+    * **``power.connectivity``** -- every new site must lie within link
+      distance of a node already present, taking ``max`` of the two link
+      distances exactly as ``validate._connectivity`` does, so a new tower
+      joins the network instead of stranding itself.
+
+    Returns ``(sites, uncovered)``: ground coordinates for
+    :func:`_place_power`, and the tiles no legal site could reach.
+    """
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    reach2 = math.floor((2 * tower.cover_radius) ** 2)
+    link2 = math.floor((2 * tower.connect_distance) ** 2)
+
+    #: (doubled centre x, doubled centre y, doubled cover radius squared,
+    #: doubled connect distance squared) for every node already standing.
+    nodes: list[tuple[int, int, int, int]] = []
+    keepout: set[tuple[int, int]] = set()
+    for b in canvas.buildings:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        try:
+            info = catalog.building(b.item_id)
+        except KeyError:
+            continue
+        if info.cover_radius > 0:
+            nodes.append(
+                (
+                    2 * b.x + b.width,
+                    2 * b.y + b.height,
+                    math.floor((2 * info.cover_radius) ** 2),
+                    math.floor((2 * info.connect_distance) ** 2),
+                )
+            )
+        if info.power_node.is_power_node:
+            cx, cy = b.x + b.width // 2, b.y + b.height // 2
+            for dx, dy, dz in rules.power_node_keepout_offsets(info.power_node, tower.power_node):
+                if not dz:
+                    keepout.add((cx + dx, cy + dy))
+
+    def covered(tx: int, ty: int) -> bool:
+        dx, dy = 2 * tx + 1, 2 * ty + 1
+        return any(
+            (dx - ox) * (dx - ox) + (dy - oy) * (dy - oy) <= lim for ox, oy, lim, _link in nodes
+        )
+
+    # EVERY NON-BELT BUILDING, INCLUDING THE SUPPLIERS.  `validate`'s `_POWERED`
+    # is {MACHINE, SORTER, SPLITTER, PILER, ADDON} and a mode-driven machine
+    # that also supplies power is a MACHINE, so it is checked for coverage
+    # there too -- and it covers itself, so including it here costs nothing and
+    # keeps the two sets from drifting.  Altitude is not in the predicate: a
+    # stack of belts over one ground cell is one question, not three.
+    dark: set[tuple[int, int]] = set()
+    for b in canvas.buildings:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        if catalog.is_belt(b.item_id):
+            continue
+        for tx, ty, _tz in b.tiles():
+            if (tx, ty) not in dark and not covered(tx, ty):
+                dark.add((tx, ty))
+    if not dark:
+        return [], ()
+
+    limit = canvas.limit
+    if limit is None:  # pragma: no cover - `canvas_for` always sets it
+        return [], tuple(sorted(dark))
+    min_x, min_y, max_x, max_y = limit
+    blocked_columns = {(bx, by) for (bx, by, _level) in canvas.blocked}
+
+    def free_site(x: int, y: int) -> bool:
+        return (
+            min_x <= x <= max_x
+            and min_y <= y <= max_y
+            and (x, y) not in keepout
+            and (x, y) not in blocked_columns
+            and (x, y) not in canvas.solid
+            and canvas.free((x, y, 0))
+        )
+
+    reach = int(tower.cover_radius) + 1
+    sites: list[tuple[int, int]] = []
+    while dark:
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        # Only a cell within reach of a still-dark tile can cover anything, so
+        # the candidate set is the dark set dilated by the coverage disc rather
+        # than the whole composed canvas.
+        candidates = sorted(
+            {
+                (tx + dx, ty + dy)
+                for tx, ty in dark
+                for dx in range(-reach, reach + 1)
+                for dy in range(-reach, reach + 1)
+                if free_site(tx + dx, ty + dy)
+            }
+        )
+        best_site: tuple[int, int] | None = None
+        best_cover: set[tuple[int, int]] = set()
+        for cx, cy in candidates:
+            ox, oy = 2 * cx + tower.width, 2 * cy + tower.height
+            if not any(
+                (ox - px) * (ox - px) + (oy - py) * (oy - py) <= (link2 if link2 > plink else plink)
+                for px, py, _cover, plink in nodes
+            ):
+                continue
+            cover = {
+                (tx, ty)
+                for tx, ty in dark
+                if (ox - (2 * tx + 1)) ** 2 + (oy - (2 * ty + 1)) ** 2 <= reach2
+            }
+            # STRICTLY more, so the first site in sorted order wins a tie and
+            # the answer does not depend on set iteration order.
+            if len(cover) > len(best_cover):
+                best_site, best_cover = (cx, cy), cover
+        if best_site is None:
+            break
+        sites.append(best_site)
+        dark -= best_cover
+        ox, oy = 2 * best_site[0] + tower.width, 2 * best_site[1] + tower.height
+        nodes.append((ox, oy, reach2, link2))
+        for dx, dy, dz in rules.power_node_keepout_offsets(tower.power_node, tower.power_node):
+            if not dz:
+                keepout.add((best_site[0] + dx, best_site[1] + dy))
+    return sites, tuple(sorted(dark))
+
+
 # --- assembly --------------------------------------------------------------
 
 

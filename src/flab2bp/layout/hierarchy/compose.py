@@ -42,6 +42,7 @@ from flab2bp.layout.freeform import (
     _collision_pose,
     _lane_stacks_for,
     _Net,
+    _place_power,
     _Port,
     _port_access_inventory,
     _PreparationDeadline,
@@ -51,6 +52,8 @@ from flab2bp.layout.freeform import (
     _sorter_stacks_for,
     _sorter_tiers_for,
     _StagedCoater,
+    _Unpowerable,
+    plan_power_infill,
 )
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import Cell, DetailedRouteStatus, NetId, NetRole
@@ -154,6 +157,11 @@ class ComposeResult:
     #: Of `reservation_degraded`, how many rungs committed a surveyed partial
     #: rather than falling back to the local-only oracle.
     reservation_partial: int = 0
+    #: Towers the composition stood for powered tiles no block's plan reached,
+    #: and tiles it could not cover at all.  A non-zero `power_uncovered` is
+    #: always accompanied by one `failures` entry per tile.
+    power_infill: int = 0
+    power_uncovered: int = 0
 
 
 class _Packing(NamedTuple):
@@ -1084,6 +1092,26 @@ def compose(
         if net.net_id is not None and net.net_id not in accounted
     )
 
+    # THE GROUND THE COMPOSITION OPENED IS NOT POWERED BY ANY BLOCK'S PLAN.
+    # Each block brought towers sized for its own footprint; the Splitters the
+    # router just created at taps between blocks stand on ground none of them
+    # reaches.  v3 gate.md §2.3: 76 of 80 covered, 4 not, and those 4 were the
+    # ONLY thing wrong with the first placement this strategy ever composed.
+    infill_sites, unpowered = plan_power_infill(canvas, cancelled=partial(_spent, deadline))
+    try:
+        _place_power(canvas, infill_sites)
+    except _Unpowerable as exc:
+        # A planned site taken between the plan and the stand is a reservation
+        # bug, and it is REPORTED here rather than raised: this runs after the
+        # router, so there is a composed placement worth naming a cut on.
+        infill_sites = []
+        failures.append(f"composition power infill: {exc}")
+    failures.extend(
+        f"power.coverage: composed tile ({tx},{ty}) is outside every tower's supply "
+        "radius and no free, linked, legal site can cover it"
+        for tx, ty in unpowered
+    )
+
     return ComposeResult(
         Placement(buildings=tuple(canvas.buildings), description="hierarchical composition"),
         blocks,
@@ -1094,6 +1122,8 @@ def compose(
         reservation_missing=len(reservation.missing),
         reservation_degraded=packed.degraded,
         reservation_partial=packed.partial,
+        power_infill=len(infill_sites),
+        power_uncovered=len(unpowered),
     )
 
 

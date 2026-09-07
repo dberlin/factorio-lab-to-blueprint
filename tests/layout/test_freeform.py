@@ -10652,6 +10652,98 @@ class TestPower:
         assert not report.ok, "a tower 30 tiles away must not count as covering"
 
 
+# --- power infill on a composed canvas --------------------------------------
+
+
+def _canvas_with_limit(box: tuple[int, int, int, int]) -> _Canvas:
+    return _Canvas(limit=box)
+
+
+def _stand_tower(canvas: _Canvas, x: int, y: int) -> int:
+    tower = catalog.building(catalog.TESLA_TOWER_ID)
+    return canvas.add(
+        PlacedBuilding(
+            item_id=catalog.TESLA_TOWER_ID,
+            model_index=tower.model_index,
+            x=x,
+            y=y,
+            width=tower.width,
+            height=tower.height,
+        ),
+        solid=True,
+    )
+
+
+def _stand_splitter(canvas: _Canvas, x: int, y: int) -> int:
+    splitter = catalog.building(catalog.SPLITTER_ID)
+    return canvas.add(
+        PlacedBuilding(
+            item_id=catalog.SPLITTER_ID,
+            model_index=splitter.model_index,
+            x=x,
+            y=y,
+            width=splitter.width,
+            height=splitter.height,
+        )
+    )
+
+
+def test_the_infill_covers_a_splitter_the_blocks_towers_do_not_reach() -> None:
+    # One tower at the origin, and a splitter far enough away to be dark. The
+    # shape of v3 gate §2.3: 76 of 80 splitters covered, 4 not.
+    canvas = _canvas_with_limit((0, 0, 60, 20))
+    _stand_tower(canvas, 0, 0)
+    _stand_splitter(canvas, 20, 0)
+
+    sites, uncovered = freeform.plan_power_infill(canvas)
+
+    assert uncovered == ()
+    assert len(sites) == 1
+
+
+def test_the_infill_places_nothing_when_every_powered_tile_is_already_covered() -> None:
+    canvas = _canvas_with_limit((0, 0, 60, 20))
+    _stand_tower(canvas, 10, 0)
+    _stand_splitter(canvas, 11, 0)
+
+    assert freeform.plan_power_infill(canvas) == ([], ())
+
+
+def test_the_infill_never_strands_a_tower_outside_the_existing_network() -> None:
+    # A splitter beyond every legal linked site: covering it would place a
+    # tower `power.connectivity` then convicts, which is a worse blueprint
+    # than a named uncovered tile.
+    canvas = _canvas_with_limit((0, 0, 400, 20))
+    _stand_tower(canvas, 0, 0)
+    _stand_splitter(canvas, 380, 0)
+
+    sites, uncovered = freeform.plan_power_infill(canvas)
+
+    assert sites == []
+    assert (380, 0) in uncovered
+
+
+def test_the_infill_refuses_a_site_inside_another_nodes_keepout() -> None:
+    # `game.power_too_close`: two power nodes closer than 3.5 world units are
+    # refused by the paste, and a Tesla Tower has no build collider, so
+    # nothing else in this file could see it.
+    canvas = _canvas_with_limit((0, 0, 60, 20))
+    _stand_tower(canvas, 20, 0)
+    _stand_splitter(canvas, 33, 0)
+
+    sites, uncovered = freeform.plan_power_infill(canvas)
+
+    keepout = {
+        (20 + dx, 0 + dy)
+        for dx, dy, dz in rules.power_node_keepout_offsets(
+            catalog.building(catalog.TESLA_TOWER_ID).power_node,
+            catalog.building(catalog.TESLA_TOWER_ID).power_node,
+        )
+        if dz == 0
+    }
+    assert not set(sites) & keepout
+
+
 # --- exact arithmetic ------------------------------------------------------
 
 

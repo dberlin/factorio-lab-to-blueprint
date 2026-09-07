@@ -760,6 +760,8 @@ class HierarchicalLayout:
         stats.port_demands = float(composition.port_demands)
         stats.reservation_degraded = float(composition.reservation_degraded)
         stats.reservation_partial = float(composition.reservation_partial)
+        stats.power_infill_towers = float(composition.power_infill)
+        stats.power_uncovered_tiles = float(composition.power_uncovered)
         stats.reservation_missing = float(composition.reservation_missing)
         stats.unrouted_cuts = float(len(composition.failures))
         if composition.failures:
@@ -1145,6 +1147,8 @@ class _StrategyStats:
     port_demands: float = 0.0
     reservation_degraded: float = 0.0
     reservation_partial: float = 0.0
+    power_infill_towers: float = 0.0
+    power_uncovered_tiles: float = 0.0
     reservation_missing: float = 0.0
     unrouted_cuts: float = 0.0
     arm_dispatch_freeform: float = 0.0
