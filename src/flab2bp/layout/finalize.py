@@ -13,6 +13,7 @@ from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings, Kind, kind_for
 from flab2bp.layout.validate import Report
 from flab2bp.layout.validate import certify as _certify
 from flab2bp.spec import BuildSpec
@@ -506,24 +507,45 @@ def _collision_placed(building: PlacedBuilding) -> colliders.Placed:
     )
 
 
+@cache
+def _power_item_ids() -> frozenset[int]:
+    """Every catalog item ID that is a power node.
+
+    Static game data, computed once and reused across every placement --
+    ``_power_nodes`` used to ask ``catalog.building(item_id).is_power_node``
+    of every building in the placement; this is the same predicate, applied
+    once to the (small, fixed) catalog rather than once per building.
+    """
+    return frozenset(b.item_id for b in catalog.all_buildings() if b.is_power_node)
+
+
+@cache
+def _multi_area_addon_item_ids() -> frozenset[int]:
+    """Every catalog item ID whose ``addon_areas`` has 2+ entries (e.g. the Spray Coater).
+
+    Same shape as :func:`_power_item_ids`: a fixed catalog predicate, computed
+    once instead of once per building in ``_projection_invariants``.
+    """
+    return frozenset(b.item_id for b in catalog.all_buildings() if len(b.addon_areas) >= 2)
+
+
 def _power_nodes(
     placement: Placement,
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[tuple[int, PlacedBuilding, rules.PowerNode], ...]:
+    index = Buildings.of(placement)
+    hits = sorted(i for item_id in _power_item_ids() for i in index.by_item(item_id))
     nodes: list[tuple[int, PlacedBuilding, rules.PowerNode]] = []
-    for index, building in enumerate(placement.buildings):
+    for position in hits:
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        try:
-            info = catalog.building(building.item_id)
-        except KeyError:
-            continue
-        if not info.is_power_node:
-            continue
+        building = index.by_index(position)
+        assert building is not None
+        info = catalog.building(building.item_id)
         nodes.append(
             (
-                index,
+                position,
                 building,
                 rules.PowerNode(
                     is_power_node=True,
@@ -552,12 +574,12 @@ def _planet_sorters(
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[tuple[int, planet.Sorter], ...]:
     buildings = placement.buildings
+    building_index = Buildings.of(placement)
     sorters: list[tuple[int, planet.Sorter]] = []
-    for index, building in enumerate(buildings):
+    for index in building_index.sorters():
+        building = buildings[index]
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        if not catalog.is_sorter(building.item_id):
-            continue
         if building.x2 is None or building.y2 is None:
             continue
 
@@ -878,11 +900,27 @@ def first_projected_static_failure(
     """
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
-    retained = tuple(
-        (index, building)
-        for index, building in buildings
-        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(building.item_id)
-    )
+    # ``buildings`` is a fresh, small, per-candidate sequence rebuilt by the
+    # caller on every call -- the "loop" the WORTH survey flagged, not a
+    # stable placement to memoise a full Buildings index against. Building
+    # one here would trade a single O(N) filter for an O(N) Buildings
+    # construction (kind columns, owner-strip, carries, link and tile
+    # indexes -- none of which this function needs) PLUS the same O(N)
+    # by_kind lookups, which is strictly more work. So this classifies with
+    # the shared ``kind_for`` (the same is_belt/is_sorter pair the old filter
+    # called, just through buildings.py's vocabulary) and folds the
+    # candidate's position into the SAME pass that builds ``retained``,
+    # collapsing what used to be two full passes (this filter, then a
+    # separate linear ``next()`` search over the result) into one filter
+    # pass plus an O(1) dict lookup.
+    retained_list: list[tuple[int, PlacedBuilding]] = []
+    position_by_index: dict[int, int] = {}
+    for index, building in buildings:
+        if kind_for(building.item_id) in (Kind.BELT, Kind.SORTER):
+            continue
+        position_by_index[index] = len(retained_list)
+        retained_list.append((index, building))
+    retained = tuple(retained_list)
     tested_list: list[tuple[int, colliders.Placed]] = []
     pending_placed: dict[PlacedBuilding, colliders.Placed] = {}
     for index, building in retained:
@@ -901,14 +939,9 @@ def first_projected_static_failure(
         _placed_cache.update(pending_placed)
     candidate_position: int | None = None
     if candidate_index is not None:
-        try:
-            candidate_position = next(
-                position
-                for position, (index, _building) in enumerate(retained)
-                if index == candidate_index
-            )
-        except StopIteration:
-            raise ValueError("prospective static candidate is not collision-tested") from None
+        candidate_position = position_by_index.get(candidate_index)
+        if candidate_position is None:
+            raise ValueError("prospective static candidate is not collision-tested")
 
     pair_buildings = tuple(building for _index, building in tested)
     pairs_by_context: dict[
@@ -1810,31 +1843,43 @@ def _projection_invariants(
     *,
     cancelled: Callable[[], bool] | None = None,
 ) -> _ProjectionInvariants:
+    index = Buildings.of(placement)
+    if cancelled is not None and cancelled():
+        raise ProjectionCancelled
+    belts_list: list[tuple[int, PlacedBuilding]] = []
+    for i in index.belts():
+        belt = index.by_index(i)
+        assert belt is not None
+        belts_list.append((i, belt))
+    belts = tuple(belts_list)
     tested: list[tuple[int, colliders.Placed]] = []
-    belts: list[tuple[int, PlacedBuilding]] = []
-    addons: list[tuple[int, PlacedBuilding, tuple[catalog.AddonSupplyPose, ...]]] = []
     coaters: list[tuple[int, colliders.Placed]] = []
     splitters: list[tuple[int, colliders.Placed]] = []
-    for index, building in enumerate(placement.buildings):
+    # "Not belt and not sorter" is Kind.MACHINE union Kind.OTHER (splitters and
+    # pilers) -- the same predicate ``kind_for`` derives from the two catalog
+    # checks this loop used to run per building. Merged and re-sorted here so
+    # the result stays in ascending placement-index order, matching the old
+    # single enumerate() pass exactly.
+    for i in sorted(index.by_kind(Kind.MACHINE) + index.by_kind(Kind.OTHER)):
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
-        is_belt = catalog.is_belt(building.item_id)
-        is_sorter = catalog.is_sorter(building.item_id)
-        if is_belt:
-            belts.append((index, building))
-        if not is_belt and not is_sorter:
-            placed = _collision_placed(building)
-            tested.append((index, placed))
-            if building.item_id == catalog.SPRAY_COATER_ID:
-                coaters.append((index, placed))
-            elif building.item_id == catalog.SPLITTER_ID:
-                splitters.append((index, placed))
-        try:
-            areas = catalog.building(building.item_id).addon_areas
-        except KeyError:
-            continue
-        if len(areas) >= 2:
-            addons.append((index, building, areas))
+        building = index.by_index(i)
+        assert building is not None
+        placed = _collision_placed(building)
+        tested.append((i, placed))
+        if building.item_id == catalog.SPRAY_COATER_ID:
+            coaters.append((i, placed))
+        elif building.item_id == catalog.SPLITTER_ID:
+            splitters.append((i, placed))
+    addon_hits = sorted(
+        i for item_id in _multi_area_addon_item_ids() for i in index.by_item(item_id)
+    )
+    addons = tuple(
+        (i, building, catalog.building(building.item_id).addon_areas)
+        for i in addon_hits
+        for building in (index.by_index(i),)
+        if building is not None
+    )
     if cancelled is None:
         nodes = _power_nodes(placement)
         sorters = _planet_sorters(placement)
@@ -1845,8 +1890,8 @@ def _projection_invariants(
         tested=tuple(tested),
         nodes=nodes,
         sorters=sorters,
-        belts=tuple(belts),
-        addons=tuple(addons),
+        belts=belts,
+        addons=addons,
         coaters=tuple(coaters),
         splitters=tuple(splitters),
     )

@@ -7,15 +7,19 @@ import random
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
+from pathlib import Path
 from typing import cast
 
 import pytest
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
+from flab2bp.dsp.records import BlueprintBuilding
 from flab2bp.layout import finalize, freeform, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from tests.layout.test_freeform import two_stage_spec
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 
 def _belt(x: int, y: int, *, output: int | None) -> PlacedBuilding:
@@ -56,6 +60,54 @@ def _extent(width: int, height: int) -> tuple[PlacedBuilding, PlacedBuilding]:
         _belt(0, 0, output=None),
         _belt(width - 1, height - 1, output=None),
     )
+
+
+def _placed_from_blueprint(bs: Sequence[BlueprintBuilding]) -> tuple[PlacedBuilding, ...]:
+    """A decoded blueprint as PlacedBuildings, index-aligned so links resolve.
+
+    Same conversion as ``tests/layout/test_sorter_slots.py``'s
+    ``_placed_blueprint``, kept local rather than imported so this file's real-
+    fixture equivalence tests below do not depend on another test module's
+    private helper.
+    """
+    out = []
+    for b in bs:
+        d = catalog.building(b.item_id)
+        out.append(
+            PlacedBuilding(
+                item_id=b.item_id,
+                model_index=b.model_index,
+                x=b.x - (d.width - 1) / 2,  # type: ignore[arg-type]
+                y=b.y - (d.height - 1) / 2,  # type: ignore[arg-type]
+                z=b.z,  # type: ignore[arg-type]
+                width=d.width,
+                height=d.height,
+                yaw=b.yaw,
+                x2=b.x2,  # type: ignore[arg-type]
+                y2=b.y2,  # type: ignore[arg-type]
+                z2=b.z2,  # type: ignore[arg-type]
+                yaw2=b.yaw2,
+                input_obj=b.input_obj_idx if b.input_obj_idx >= 0 else None,
+                output_obj=b.output_obj_idx if b.output_obj_idx >= 0 else None,
+                input_from_slot=b.input_from_slot,
+                output_to_slot=b.output_to_slot,
+            )
+        )
+    return tuple(out)
+
+
+#: 351 buildings with 32 power nodes, 34 sorters, 1 splitter, 3 Spray Coaters
+#: (the only multi-area-addon item in the corpus) and 276 belts -- the one
+#: fixture in ``tests/fixtures`` that exercises every bucket the WORTH sites
+#: below convert onto, so one real placement backs every equivalence test.
+_MULTI_BUCKET_FIXTURE = (
+    FIXTURES / "tillable-blackbox-module-polar-artificial-stars-x85-warper-production-x24.txt"
+)
+
+
+def _multi_bucket_placement() -> Placement:
+    blueprint = codec.decode(_MULTI_BUCKET_FIXTURE.read_text(encoding="utf-8").strip())
+    return Placement(buildings=_placed_from_blueprint(blueprint.buildings))
 
 
 @dataclass(frozen=True)
@@ -3613,6 +3665,153 @@ def test_band_target_width_returns_the_widest_core_a_band_accepts() -> None:
 
 def test_band_target_width_returns_the_input_when_it_already_fits() -> None:
     assert finalize.band_target_width(_portable_envelope(), height=40, width=20) == 20
+
+
+# --- Task 4: finalize.py's Buildings-index conversions, against a real fixture ---
+#
+# Every test below re-derives its expected answer with the exact brute-force
+# predicate the converted function used to run (a plain enumerate() scan), on
+# the SAME real placement, and asserts the expected collection is non-empty
+# before comparing -- a passing assertion over two empty tuples proves
+# nothing about the conversion.
+
+
+def test_power_nodes_matches_brute_force_scan_on_a_real_fixture() -> None:
+    placement = _multi_bucket_placement()
+    expected = tuple(
+        index
+        for index, building in enumerate(placement.buildings)
+        if catalog.building(building.item_id).is_power_node
+    )
+    assert len(expected) == 32, "fixture regressed: expected 32 power nodes"
+
+    actual = tuple(index for index, _building, _node in finalize._power_nodes(placement))
+    assert actual == expected
+
+
+def test_planet_sorters_matches_brute_force_scan_on_a_real_fixture() -> None:
+    placement = _multi_bucket_placement()
+    expected = tuple(
+        index
+        for index, building in enumerate(placement.buildings)
+        if catalog.is_sorter(building.item_id)
+        and building.x2 is not None
+        and building.y2 is not None
+    )
+    assert len(expected) > 0, "fixture regressed: expected at least one seated sorter"
+
+    actual = tuple(index for index, _sorter in finalize._planet_sorters(placement))
+    assert actual == expected
+
+
+def test_projection_invariants_matches_brute_force_scan_on_a_real_fixture() -> None:
+    placement = _multi_bucket_placement()
+    buildings = placement.buildings
+
+    expected_belts = tuple(i for i, b in enumerate(buildings) if catalog.is_belt(b.item_id))
+    expected_tested = tuple(
+        i
+        for i, b in enumerate(buildings)
+        if not catalog.is_belt(b.item_id) and not catalog.is_sorter(b.item_id)
+    )
+    expected_coaters = tuple(
+        i for i in expected_tested if buildings[i].item_id == catalog.SPRAY_COATER_ID
+    )
+    expected_splitters = tuple(
+        i for i in expected_tested if buildings[i].item_id == catalog.SPLITTER_ID
+    )
+    expected_addons = tuple(
+        i for i, b in enumerate(buildings) if len(catalog.building(b.item_id).addon_areas) >= 2
+    )
+    assert len(expected_belts) == 276, "fixture regressed: expected 276 belts"
+    assert len(expected_tested) == 41, (
+        "fixture regressed: expected 41 non-belt non-sorter buildings"
+    )
+    assert len(expected_coaters) == 3, "fixture regressed: expected 3 Spray Coaters"
+    assert len(expected_splitters) == 1, "fixture regressed: expected 1 splitter"
+    assert len(expected_addons) == 3, "fixture regressed: expected 3 multi-area-addon buildings"
+
+    invariants = finalize._projection_invariants(placement)
+    assert tuple(i for i, _b in invariants.belts) == expected_belts
+    assert tuple(i for i, _placed in invariants.tested) == expected_tested
+    assert tuple(i for i, _placed in invariants.coaters) == expected_coaters
+    assert tuple(i for i, _placed in invariants.splitters) == expected_splitters
+    assert tuple(i for i, _b, _areas in invariants.addons) == expected_addons
+
+    # And the two sites _projection_invariants delegates to still answer the
+    # same way when reached through it as when called directly.
+    assert invariants.nodes == finalize._power_nodes(placement)
+    assert invariants.sorters == finalize._planet_sorters(placement)
+
+
+def test_first_projected_static_failure_retained_filter_matches_brute_force(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The converted ``kind_for`` filter keeps exactly what the old catalog-pair filter kept.
+
+    Drives ``candidate_index`` over every position the brute-force filter
+    retains and captures the ``candidate_position`` the converted position-map
+    resolves each one to, via ``planet.candidate_pairs`` -- the first place
+    that value crosses back out of ``first_projected_static_failure``. A
+    dropped or reordered retained index would show up as a wrong or missing
+    position here.
+    """
+    placement = _multi_bucket_placement()
+    pairs = tuple(enumerate(placement.buildings))
+    expected_retained = tuple(
+        (index, building)
+        for index, building in pairs
+        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(building.item_id)
+    )
+    assert len(expected_retained) == 41, "fixture regressed: expected 41 retained buildings"
+
+    band = next(candidate for candidate in planet.bands() if candidate.area_segments == 100)
+    projection = planet.Projection(
+        band=band,
+        anchor_row=0,
+        segment=colliders.PLANET_SEGMENT,
+        radius=colliders.PLANET_RADIUS,
+    )
+    real_candidate_pairs = planet.candidate_pairs
+    captured: list[int | None] = []
+
+    def capture(
+        buildings: Sequence[colliders.Placed],
+        band_arg: planet.Band,
+        segment: int,
+        radius: float,
+        *,
+        candidate_position: int | None = None,
+    ) -> Sequence[tuple[int, int]]:
+        captured.append(candidate_position)
+        return real_candidate_pairs(
+            buildings, band_arg, segment, radius, candidate_position=candidate_position
+        )
+
+    monkeypatch.setattr(planet, "candidate_pairs", capture)
+
+    for position, (candidate_index, _building) in enumerate(expected_retained):
+        captured.clear()
+        finalize.first_projected_static_failure(
+            pairs,
+            (projection,),
+            candidate_index=candidate_index,
+        )
+        assert captured == [position]
+
+    # A belt or sorter index is never retained, so it must still raise --
+    # exactly the ValueError the old linear next() search raised on a miss.
+    dropped_index = next(
+        index
+        for index, building in pairs
+        if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id)
+    )
+    with pytest.raises(ValueError, match="not collision-tested"):
+        finalize.first_projected_static_failure(
+            pairs,
+            (projection,),
+            candidate_index=dropped_index,
+        )
 
 
 def test_band_target_width_rejects_an_implausible_core() -> None:
