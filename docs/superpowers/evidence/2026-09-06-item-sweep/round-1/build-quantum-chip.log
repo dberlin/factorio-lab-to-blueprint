@@ -1,0 +1,16 @@
+sequence-pair / output-products: 34 machines, 1590 tiles, 1183 buildings
+primary_band: 160
+certified_bands: 160, 200
+inputs to belt in: coal, copper-ore, hydrogen, iron-ore, organic-crystal, proliferator-3, silicon-ore, stone, sulfuric-acid, titanium-ore, water  (11 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-1 (6.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; no run needed more than the floor; stack 1; 0 piler(s)
+
+candidate           strategy      area  errors
+output-products     sequence-pair    1590       0
+no-proliferator     sequence-pair    1840       0
+output-products     freeform      1848       0
+all-products        sequence-pair    2200       0
+all-products        freeform      2301       0
+no-proliferator     freeform      2560       0
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/item-sweep/docs/superpowers/evidence/2026-09-06-item-sweep/round-1/bp-quantum-chip.txt

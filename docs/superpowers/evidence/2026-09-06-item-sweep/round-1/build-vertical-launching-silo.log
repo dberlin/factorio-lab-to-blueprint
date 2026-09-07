@@ -1,0 +1,22 @@
+sequence-pair / output-products: 227 machines, 14898 tiles, 8862 buildings
+primary_band: 200
+certified_bands: 200
+inputs to belt in: coal, copper-ore, hydrogen, iron-ore, organic-crystal, proliferator-3, silicon-ore, stone, sulfuric-acid, titanium-ore, water  (17 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-1 (6.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; 14 run(s) raised to conveyor-belt-2, conveyor-belt-3; stack 1; 0 piler(s)
+  entry lanes: copper-ore 2 (needs 1 at 30/s)
+  entry lanes: hydrogen 2 (needs 1 at 30/s)
+  entry lanes: iron-ore 3 (needs 2 at 30/s)
+  entry lanes: sulfuric-acid 2 (needs 1 at 30/s)
+  entry lanes: titanium-ore 2 (needs 1 at 30/s)
+  3 strategy/candidate pair(s) produced no layout:
+    freeform/no-proliferator: no packing of 34 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing
+    freeform/all-products: every packing that wired was rejected by our own validator (flow.conservation; findings: flow.conservation (201, 1366, 1367, 1403, 1404): 8 machine(s) consume 742912/234375 items/s of copper-ingot but only 2086912/703125 items/s of it can reach them in flow order (lanes [3, 4, 5, 6, 73, 202]); short by 141824/703125 items/s ({'item': 'copper-ingot', 'demand': '742912/234375', 'supply': '2086912/703125', 'shortfall': '141824/703125', 'consumers': 8, 'lanes': [3, 4, 5, 6, 73, 202, 203]}); flow.conservation (201, 1366, 1367, 1403, 1404): 8 machine(s) consume 742912/234375 items/s of copper-ingot but only 2086912/703125 items/s of it can reach them in flow order (lanes [3, 4, 5, 6, 77, 214]); short by 141824/703125 items/s ({'item': 'copper-ingot', 'demand': '742912/234375', 'supply': '2086912/703125', 'shortfall': '141824/703125', 'consumers': 8, 'lanes': [3, 4, 5, 6, 77, 214, 215]})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+    sequence-pair/all-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation; island 1: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation; island 2: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation; island 3: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation
+
+candidate           strategy      area  errors
+output-products     sequence-pair   14898       0
+no-proliferator     sequence-pair   17190       0
+output-products     freeform     19000       0
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/item-sweep/docs/superpowers/evidence/2026-09-06-item-sweep/round-1/bp-vertical-launching-silo.txt
