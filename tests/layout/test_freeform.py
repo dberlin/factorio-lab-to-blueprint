@@ -12198,7 +12198,7 @@ class TestPortAccessIsReservedForEveryRole:
                     ((3, 0, 0), (4, 0, 0)),
                 ),
             },
-        )
+        ).assigned
 
         assert set(matched) == {first, second}
         occupied = {
@@ -12348,7 +12348,7 @@ def test_corridor_tie_break_never_outruns_its_work_cap(monkeypatch: pytest.Monke
     demands, corridors = _two_ports_with_two_corridors_each()
     assigned = freeform._match_access_corridors(
         demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
-    )
+    ).assigned
     assert len(assigned) == len(demands)
     assert seen, "the matcher solved nothing"
     assert all(work > 0.0 for work, _wall in seen), seen
@@ -12373,7 +12373,7 @@ def test_corridor_matcher_falls_back_to_the_rank_solution_when_polish_is_cut_sho
     demands, corridors = _two_ports_with_two_corridors_each()
     assigned = freeform._match_access_corridors(
         demands, corridors, validate=lambda _assigned: None, deadline=time.monotonic() + 30.0
-    )
+    ).assigned
     assert len(assigned) == len(demands)
 
 
@@ -24768,7 +24768,7 @@ def test_two_reachable_boundary_claims_are_jointly_rematched() -> None:
             first: (((1, 0, 0), shared), ((0, 1, 0), (0, 2, 0))),
             second: (((3, 0, 0), shared), ((4, 1, 0), (4, 2, 0))),
         },
-    )
+    ).assigned
     assert set(matched) == {first, second}
     occupied = {cell for corridor in matched.values() for cell in (corridor.access, corridor.exit)}
     assert len(occupied) == 4
@@ -24811,7 +24811,7 @@ def test_validated_access_rematching_keeps_each_tie_break_solve_bounded(
             )
         },
         validate=reject_first,
-    )
+    ).assigned
 
     assert matched
     assert len(validations) == 2
@@ -24844,7 +24844,7 @@ def test_tie_work_limit_unknown_uses_ranked_fallback_before_wall_deadline(
         (demand,),
         {demand: (((1, 0, 0), (2, 0, 0)),)},
         deadline=time.monotonic() + 60.0,
-    )
+    ).assigned
 
     assert set(matched) == {demand}
 
@@ -24889,7 +24889,7 @@ def test_tie_work_limit_after_validation_cut_never_reuses_cut_assignment(
             )
         },
         validate=reject_first_assignment,
-    )
+    ).assigned
 
     assert set(matched) == {demand}
     assert len(validations) == 2
@@ -25011,7 +25011,7 @@ def _recorded_reachable_options(
         demands: Sequence[freeform.PortAccessDemand],
         options: Mapping[freeform.PortAccessDemand, tuple[tuple[Cell, Cell], ...]],
         **kwargs: object,
-    ) -> dict[freeform.PortAccessDemand, freeform.PortAccessCorridor]:
+    ) -> freeform._CorridorMatch:
         recorded.update(options)
         return real_match(demands, options, **kwargs)  # type: ignore[arg-type]
 
@@ -25294,3 +25294,97 @@ def test_freeform_with_an_attached_observer_does_not_perturb_the_result(
     )
     assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])
     assert observer.events, "an attached observer must actually receive events"
+
+
+def _demand(index: int) -> freeform.PortAccessDemand:
+    """One claim at a distinct cell, so `by_port` never groups two together."""
+    return freeform.PortAccessDemand(
+        cell=(10 * index, 0, 0),
+        kind=freeform.PortAccessKind.INTERNAL_DEPARTURE,
+        item="iron-ingot",
+        belt=index,
+        strip_index=None,
+        columns=1,
+    )
+
+
+def _corridors(demand: freeform.PortAccessDemand) -> tuple[tuple[Cell, Cell], ...]:
+    """Two disjoint (access, exit) pairs beside this demand's own cell."""
+    x, y, z = demand.cell
+    return (((x + 1, y, z), (x + 2, y, z)), ((x, y + 1, z), (x, y + 2, z)))
+
+
+def test_the_matcher_commits_the_partial_when_the_cut_loop_runs_out_of_rounds() -> None:
+    # Nine demands and a validate that convicts a DIFFERENT one every round:
+    # eight cut rounds can never satisfy it, which is exactly the shape
+    # production hits with 91 demands and _ACCESS_CUT_ROUNDS = 8.
+    demands = [_demand(i) for i in range(9)]
+    options = {demand: _corridors(demand) for demand in demands}
+    rounds = 0
+
+    def validate(assigned):
+        nonlocal rounds
+        rounds += 1
+        return (demands[rounds % len(demands)],)
+
+    def survey(assigned):
+        # The two the cut loop never satisfied.
+        return (demands[0], demands[1])
+
+    match = freeform._match_access_corridors(demands, options, validate=validate, survey=survey)
+
+    assert match.converged is False
+    assert set(match.assigned) == set(demands[2:])
+    assert len(match.assigned) == 7
+
+
+def test_a_converged_match_reports_converged_and_assigns_everything() -> None:
+    demands = [_demand(i) for i in range(4)]
+    options = {demand: _corridors(demand) for demand in demands}
+
+    match = freeform._match_access_corridors(
+        demands, options, validate=lambda assigned: None, survey=lambda assigned: ()
+    )
+
+    assert match.converged is True
+    assert set(match.assigned) == set(demands)
+
+
+def test_no_demands_is_a_converged_empty_answer_not_a_give_up() -> None:
+    # `compose`'s trigger used to spell this `goal_driven.assigned or not
+    # demands`; it is now spelled by `converged`, so the empty case has to
+    # keep saying yes or a demandless composition would degrade for nothing.
+    match = freeform._match_access_corridors([], {}, validate=lambda a: None, survey=lambda a: ())
+
+    assert match.converged is True
+    assert match.assigned == {}
+
+
+def test_a_surveyed_partial_never_keeps_a_corridor_the_survey_convicted() -> None:
+    demands = [_demand(i) for i in range(5)]
+    options = {demand: _corridors(demand) for demand in demands}
+
+    match = freeform._match_access_corridors(
+        demands,
+        options,
+        validate=lambda assigned: (demands[0],),
+        survey=lambda assigned: tuple(assigned),
+    )
+
+    assert match.converged is False
+    assert match.assigned == {}
+
+
+def test_a_matcher_with_no_survey_gives_up_wholesale_as_before() -> None:
+    # freeform's own default path passes `validate` and no `survey`; without a
+    # survey there is no way to know which corridors are safe, so the old
+    # wholesale give-up is what it must keep doing.
+    demands = [_demand(i) for i in range(9)]
+    options = {demand: _corridors(demand) for demand in demands}
+
+    match = freeform._match_access_corridors(
+        demands, options, validate=lambda assigned: (demands[0],)
+    )
+
+    assert match.converged is False
+    assert match.assigned == {}

@@ -84,7 +84,7 @@ from enum import Enum
 from fractions import Fraction
 from functools import cache, lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, NamedTuple, cast
 
 import numpy as np
 from ortools.sat.python import cp_model
@@ -11687,6 +11687,12 @@ class PortAccessReservation:
     assigned: tuple[tuple[PortAccessDemand, PortAccessCorridor], ...]
     missing: tuple[PortAccessDemand, ...]
     evidence: tuple[PortAccessEvidence, ...]
+    #: Whether the joint matcher reached a fixed point, or handed back what it
+    #: had.  `missing` on a NON-converged reservation is "what the survey
+    #: convicted plus whatever was never assigned", which is a weaker claim
+    #: than "the ground will not serve these".  A caller that reads
+    #: `complete`/`missing` as a verdict MUST read this too.
+    converged: bool = True
 
     @property
     def complete(self) -> bool:
@@ -11763,6 +11769,24 @@ def _restore_port_corridor(
     canvas.reserved[corridor.exit] = key
 
 
+class _CorridorMatch(NamedTuple):
+    """What the joint matcher decided, and whether the decision is a verdict.
+
+    ``converged`` is True ONLY when the validate/cut loop reached a fixed point
+    -- every assigned corridor still reaching its own goal with every other
+    corridor's cells forbidden -- or when there was no validator at all.  Every
+    give-up is False, INCLUDING the ones that now hand back a partial, because
+    a partial is ground the router can use and NOT an answer to the question
+    the ladder asked.  `compose` must be able to tell those apart: see
+    `hierarchy/compose.pack_with_access`, where a partial increments
+    `degraded` precisely so that `reservation_degraded == 0` keeps meaning
+    "the oracle answered, completely".
+    """
+
+    assigned: dict[PortAccessDemand, PortAccessCorridor]
+    converged: bool
+
+
 def _match_access_corridors(
     demands: Sequence[PortAccessDemand],
     corridors: Mapping[PortAccessDemand, Sequence[tuple[Cell, Cell]]],
@@ -11774,9 +11798,16 @@ def _match_access_corridors(
         ]
         | None
     ) = None,
+    survey: (
+        Callable[
+            [Mapping[PortAccessDemand, PortAccessCorridor]],
+            Collection[PortAccessDemand],
+        ]
+        | None
+    ) = None,
     cancelled: Callable[[], bool] | None = None,
     deadline: float | None = None,
-) -> dict[PortAccessDemand, PortAccessCorridor]:
+) -> _CorridorMatch:
     """Assign cell-disjoint corridors, giving every port its first claim first.
 
     Every solve carries a deterministic work cap, so it is bounded in the work
@@ -11792,6 +11823,21 @@ def _match_access_corridors(
     fallback, so the next capped tie-break without an incumbent re-establishes
     one by solving the cut model for feasibility alone, under the same cap the
     rank solves use.  Rematching rounds are bounded by `_ACCESS_CUT_ROUNDS`.
+
+    WHEN THE CUT LOOP RUNS OUT OF ROUNDS, THE ASSIGNMENT IS NOT DISCARDED.
+    ``validate`` names ONE witness per round, so ``_ACCESS_CUT_ROUNDS`` rounds
+    can convict at most that many demands out of however many there are -- and
+    a composed canvas raises 91 or 144 (v3 gate §5 lever 1).  Returning ``{}``
+    there threw away a complete cell-disjoint assignment because a handful of
+    its corridors failed a probe STRICTER than the router that follows: the
+    probe forbids every other corridor's cells outright, while ``_route_all``
+    negotiates and rips up.  So on give-up, ``survey`` -- which reports EVERY
+    failing demand rather than the first -- is asked once, and what survives it
+    is committed with ``converged=False``.  Dropping the failures can only free
+    ground, so a corridor that reached its goal against the FULL selection
+    still reaches it against the smaller one; the survivors need no re-check.
+    Without a ``survey`` there is no way to know which corridors are safe, and
+    the wholesale give-up is kept.
     """
 
     def solve_model(work: float) -> cp_model.CpSolverStatus:
@@ -11855,12 +11901,15 @@ def _match_access_corridors(
         model.maximize(sum(rank_vars))
         status = solve_model(_ACCESS_RANK_DETERMINISTIC_WORK)
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            return {}
+            return _CorridorMatch({}, False)
         model.add(sum(rank_vars) == round(solver.objective_value))
 
     ordered_choices = tuple(choices)
     if not ordered_choices:
-        return {}
+        # No demand had a single free option -- or there were no demands.  The
+        # second is a COMPLETE answer to an empty question and must not make a
+        # caller degrade; the first is a give-up.
+        return _CorridorMatch({}, not demands)
 
     def solution_values() -> dict[tuple[PortAccessDemand, Cell, Cell], bool]:
         return {choice: solver.boolean_value(variable) for choice, variable in choices.items()}
@@ -11873,13 +11922,29 @@ def _match_access_corridors(
         ordinal * choices[choice] for ordinal, choice in enumerate(ordered_choices, start=1)
     )
     model.minimize(tie_objective)
+    best_partial: dict[PortAccessDemand, PortAccessCorridor] = {}
+
+    def surrender() -> _CorridorMatch:
+        """The largest assignment seen, minus everything the survey convicts."""
+        if not best_partial or survey is None:
+            return _CorridorMatch({}, False)
+        failing = set(survey(best_partial))
+        return _CorridorMatch(
+            {
+                demand: corridor
+                for demand, corridor in best_partial.items()
+                if demand not in failing
+            },
+            False,
+        )
+
     for _round in range(_ACCESS_CUT_ROUNDS):
         status = solve_model(_ACCESS_TIE_DETERMINISTIC_WORK)
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             selected_values = solution_values()
         elif status == cp_model.INFEASIBLE:
             if validate is not None or fallback_values is None:
-                return {}
+                return surrender()
             selected_values = fallback_values
         elif fallback_values is not None:
             selected_values = fallback_values
@@ -11895,7 +11960,7 @@ def _match_access_corridors(
             finally:
                 model.minimize(tie_objective)
             if fallback_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-                return {}
+                return surrender()
             fallback_values = solution_values()
             model.clear_hints()  # type: ignore[no-untyped-call]
             for choice, variable in choices.items():
@@ -11913,15 +11978,21 @@ def _match_access_corridors(
         if (cancelled is not None and cancelled()) or _expired(deadline):
             raise _PreparationDeadline
         if validate is None or witness is None:
-            return assigned
+            return _CorridorMatch(assigned, True)
+        # STRICTLY larger, so the FIRST round to reach a given size keeps it:
+        # the rank solves already fixed each rank's total, so later rounds are
+        # tie-break re-arrangements of the same size and re-surveying one buys
+        # nothing but A* probes.
+        if len(assigned) > len(best_partial):
+            best_partial = assigned
         cut_variables = [
             selected_by_demand[demand] for demand in witness if demand in selected_by_demand
         ]
         if not cut_variables:
-            return {}
+            return surrender()
         model.add(sum(cut_variables) <= len(cut_variables) - 1)
         fallback_values = None
-    return {}
+    return surrender()
 
 
 def _reserve_port_access(
@@ -12104,11 +12175,11 @@ def _reserve_port_access(
         reachable_options[demand] = tuple(candidates)
         exhaustive[demand] = complete
 
-    def assignment_boundary_cut(
+    def _selection(
         assigned: Mapping[PortAccessDemand, PortAccessCorridor],
-    ) -> Collection[PortAccessDemand] | None:
-        if not probed or bounds is None:
-            return None
+    ) -> tuple[
+        dict[Cell, PortAccessDemand], dict[PortAccessDemand, int], dict[int, PortAccessDemand]
+    ]:
         selected_cells: dict[Cell, PortAccessDemand] = {
             cell: owner
             for owner, selected in assigned.items()
@@ -12116,47 +12187,90 @@ def _reserve_port_access(
         }
         ordered_owners = tuple(assigned)
         owner_index = {owner: index for index, owner in enumerate(ordered_owners)}
-        owner_by_index = dict(enumerate(ordered_owners))
+        return selected_cells, owner_index, dict(enumerate(ordered_owners))
+
+    def _wall_between(
+        demand: PortAccessDemand,
+        corridor: PortAccessCorridor,
+        selected_cells: Mapping[Cell, PortAccessDemand],
+        owner_index: Mapping[PortAccessDemand, int],
+    ) -> tuple[Cell, ...] | None:
+        """The wall between this corridor and its goal, or None if it reaches.
+
+        A ``BUDGET`` refusal is NOT a wall: the A* ran out of expansions, which
+        says nothing about the ground, and convicting on it would drop
+        corridors for the searcher's clock rather than for geometry.
+        """
+        goal = _goal_for(demand)
+        if goal is None or bounds is None:
+            return None
+        result = _astar(
+            canvas,
+            [corridor.exit],
+            goal,
+            {},
+            0.0,
+            bounds,
+            deadline=deadline,
+            grid=shared_grid,
+            forbidden={cell for cell, owner in selected_cells.items() if owner != demand},
+            blocking_owners={
+                cell: owner_index[owner]
+                for cell, owner in selected_cells.items()
+                if owner != demand
+            },
+        )
+        check_cancelled()
+        if result.path is not None or result.kind is RouteFailureKind.BUDGET:
+            return None
+        frontiers[demand].update(result.wall)
+        return tuple(result.wall)
+
+    def assignment_boundary_cut(
+        assigned: Mapping[PortAccessDemand, PortAccessCorridor],
+    ) -> Collection[PortAccessDemand] | None:
+        if not probed or bounds is None:
+            return None
+        selected_cells, owner_index, owner_by_index = _selection(assigned)
         cell_owner_index = {cell: owner_index[owner] for cell, owner in selected_cells.items()}
         for demand, corridor in assigned.items():
-            goal = _goal_for(demand)
-            if goal is None:
+            wall = _wall_between(demand, corridor, selected_cells, owner_index)
+            if wall is None:
                 continue
-            forbidden = {cell for cell, owner in selected_cells.items() if owner != demand}
-            result = _astar(
-                canvas,
-                [corridor.exit],
-                goal,
-                {},
-                0.0,
-                bounds,
-                deadline=deadline,
-                grid=shared_grid,
-                forbidden=forbidden,
-                blocking_owners={
-                    cell: owner_index[owner]
-                    for cell, owner in selected_cells.items()
-                    if owner != demand
-                },
-            )
-            check_cancelled()
-            if result.path is not None or result.kind is RouteFailureKind.BUDGET:
-                continue
-            frontiers[demand].update(result.wall)
             blocking_demands = {
                 owner_by_index[index]
-                for cell in result.wall
+                for cell in wall
                 for index in (cell_owner_index.get(cell),)
                 if index is not None
             }
             return (demand, *sorted(blocking_demands, key=lambda blocked: blocked.cell))
         return None
 
+    def assignment_survey(
+        assigned: Mapping[PortAccessDemand, PortAccessCorridor],
+    ) -> Collection[PortAccessDemand]:
+        """EVERY demand whose corridor cannot reach its goal, not just the first.
+
+        ``assignment_boundary_cut`` short-circuits because one witness is all a
+        no-good needs.  A partial commit needs the WHOLE failing set: committing
+        a corridor the survey never looked at is exactly the wrong half of
+        Ruling R7's residual.  This runs ONCE per reservation, on give-up only.
+        """
+        if not probed or bounds is None:
+            return ()
+        selected_cells, owner_index, _ = _selection(assigned)
+        return tuple(
+            demand
+            for demand, corridor in assigned.items()
+            if _wall_between(demand, corridor, selected_cells, owner_index) is not None
+        )
+
     try:
-        assignments = _match_access_corridors(
+        match = _match_access_corridors(
             demands,
             reachable_options,
             validate=assignment_boundary_cut if probed else None,
+            survey=assignment_survey if probed else None,
             cancelled=cancelled,
             deadline=deadline,
         )
@@ -12166,6 +12280,7 @@ def _reserve_port_access(
         canvas.port_corridors.clear()
         canvas.port_corridors.update(saved_corridors)
         raise
+    assignments = match.assigned
     check_cancelled()
     assigned_by_port: dict[Cell, list[PortAccessCorridor]] = defaultdict(list)
     for demand, corridor in assignments.items():
@@ -12204,6 +12319,7 @@ def _reserve_port_access(
             )
             for demand in missing
         ),
+        converged=match.converged,
     )
 
 
