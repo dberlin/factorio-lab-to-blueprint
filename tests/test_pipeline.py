@@ -727,20 +727,19 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
 
     started = time.monotonic()
 
-    # Measured 2026-09-01: since commit 8161392 sped up preparation, this build
-    # now *succeeds* at time_budget_s=10.0 (~10.3s wall) instead of exhausting
-    # the deadline. 1.5s is small enough that exact preparation is still
-    # reliably cancelled mid-flight (verified: NoValidLayout, 3/3 runs).
-    #
-    # THE CEILING IS 2.0s, MEASURED: at 2.0 the solver sometimes SUCCEEDS on
+    # Re-measured 2026-09-07 (hierarchical v4 Task 6, `exact-floor.md`): the
+    # 2026-09-01 budget of 1.5s no longer exhausts -- preparation got faster
+    # again -- so this build SUCCEEDED at 1.5s and the test was red on master.
+    # THE CEILING IS 1.25s, MEASURED: at 1.25s the solver sometimes SUCCEEDS on
     # this URL, so the budget has to stay strictly below it or the test is
     # flaky rather than wrong. The mechanism is deliberately a real cell that
     # exhausts inside exact preparation rather than a mechanised clock,
     # because what is under test is that the preparation path itself honours
-    # the deadline -- a faked clock would prove that the fake fired.
+    # the deadline -- a faked clock would prove that the fake fired. 1.0s
+    # refused 3 of 3 runs.
     #
     # So this budget is a moving target by design: the next preparation
-    # speedup that makes 1.5s enough to finish will fail here with
+    # speedup that makes 1.0s enough to finish will fail here with
     # `DID NOT RAISE NoValidLayout`. That failure is the test working. Lower
     # the budget until the refusal is reliable again (and re-measure the
     # ceiling), rather than relaxing the assertion.
@@ -750,7 +749,7 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     # can never see a `_PreparationDeadline` raised in one of them. One island
     # is the in-process path this test exists to guard, and it is the path a
     # `--sequence-islands 1` build still takes.
-    budget = 1.5
+    budget = 1.0
     with pytest.raises(NoValidLayout, match="deadline exhausted"):
         pipeline.build(
             DEADLINE_REGRESSION_URL,

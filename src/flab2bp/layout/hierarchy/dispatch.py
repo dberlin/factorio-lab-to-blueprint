@@ -42,6 +42,27 @@ ARM_SMALL_STRIPS = 6
 UNCOVERED_ITEMS_ABOVE_ONE_BELT = 8
 UNCOVERED_STRIPS = 85
 
+#: The smallest per-block budget at which `sequence-pair` produced an exact
+#: layout for EVERY coater-free mall block measured in
+#: `docs/superpowers/evidence/2026-09-07-hierarchical-v4/exact-floor.md`.
+#: Below it, the arm's own exact preparation is cancelled mid-flight and the
+#: block comes back "deadline exhausted before finding an exact layout"
+#: (`sequence_solver.py:1602`) -- which is what 31 of `mall/no-proliferator`'s
+#: 54 blocks did in the v3 gate, on an arm the rule had chosen for them.
+#:
+#: THIS IS A MEASUREMENT, NOT A TUNING KNOB.  Re-measure it with
+#: `floor_probe.py` before changing it; a value picked to make a cell pass is
+#: the thing the `UNCOVERED_*` thresholds exist to avoid.
+#:
+#: Measured 2026-09-07: none of the five swept mall blocks (one each of
+#: `magnet`, `iron-ingot`, `electric-motor`, `super-magnetic-ring`, and the
+#: `circuit-board`/`processor`/`sorter-1`/`sorter-2`/`sorter-3` block)
+#: produced an exact layout at ANY swept budget from `BLOCK_BUDGET_MIN_S`
+#: (5.0s) through `BLOCK_BUDGET_MAX_S` (20.0s) -- all 25 cells refused. So per
+#: the stated rule this is `BLOCK_BUDGET_MAX_S + 1.0`: no per-block budget the
+#: funding rule can ever hand a coater-free block is above this floor.
+SEQUENCE_PAIR_EXACT_FLOOR_S = 21.0
+
 
 @dataclass(frozen=True, slots=True)
 class BlockFeatures:
@@ -130,6 +151,7 @@ __all__ = [
     "ARM_FREEFORM",
     "ARM_SEQUENCE_PAIR",
     "ARM_SMALL_STRIPS",
+    "SEQUENCE_PAIR_EXACT_FLOOR_S",
     "UNCOVERED_ITEMS_ABOVE_ONE_BELT",
     "UNCOVERED_STRIPS",
     "BlockFeatures",

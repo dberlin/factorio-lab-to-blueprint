@@ -1,0 +1,14 @@
+{
+  "block": 21,
+  "budget_s": 5.0,
+  "ok": false,
+  "recipes": [
+    "circuit-board",
+    "processor",
+    "sorter-1",
+    "sorter-2",
+    "sorter-3"
+  ],
+  "verdict": "no valid layout for no-proliferator#block21 after 5s: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.",
+  "wall_s": 4.508
+}

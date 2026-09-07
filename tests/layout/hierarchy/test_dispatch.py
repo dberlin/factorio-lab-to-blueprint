@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 
-from flab2bp.layout.hierarchy import dispatch
+from flab2bp.layout.hierarchy import dispatch, strategy
 from flab2bp.layout.hierarchy.dispatch import BlockFeatures
 
 _BOTH = ("freeform", "sequence-pair")
@@ -37,6 +37,13 @@ def test_a_large_block_goes_to_sequence_pair_whether_or_not_it_is_coated():
 def test_a_block_above_the_belt_capacity_branch_races_both_arms():
     got = dispatch.dispatch_arms(BlockFeatures(strips=5, coaters=2, items_above_one_belt=8), _BOTH)
     assert got == _BOTH
+
+
+def test_the_exact_preparation_floor_is_inside_the_block_budget_range_or_above_it() -> None:
+    # A floor below BLOCK_BUDGET_MIN_S would mean the rule can never fire and
+    # the constant is dead; the measurement is what decides which side it is
+    # on, so this only pins that it is a real second and not a placeholder.
+    assert dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S >= strategy.BLOCK_BUDGET_MIN_S
 
 
 def test_a_block_bigger_than_the_evidence_covers_races_both_arms():
