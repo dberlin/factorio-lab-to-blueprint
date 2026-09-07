@@ -12,7 +12,11 @@ the concurrent resume wave. Main owns execution after all lanes settle.
 - Base is `ad8a6f80`, pre-existing `machine-upto-base`; do not reset it.
 - Batch A original range: `f037d206..6eb5f5a8`. Main's independent review found
   one Important: a catalog lookup returning `None` was admitted as placeable.
-  Fix round 1: `6eb5f5a8..bc038dc7`. Independent re-review and red/green proof pending.
+  Fix round 1: `6eb5f5a8..bc038dc7`. Main's independent scoped re-review
+  **PASS/PASS**, no findings. Main's regression execution: pre-fix module selected
+  unknown-smelter and exited 1; fixed module exited 0. Preserved logs:
+  `.superpowers/sdd/2026-09-07-machine-upto/recovery-review-red.log` and
+  `recovery-review-green.log`. New B–E execution remains pending.
 - Ruling R4: pinned CSV recipes keep their exact machines, but report the requested
   mode. Attempt details carry their own mode/moves, so selecting a non-winning
   attempt never displays the winner's move provenance.
