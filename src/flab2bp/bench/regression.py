@@ -14,6 +14,7 @@ from enum import Enum
 from pathlib import Path
 
 from flab2bp.bench.types import CellResult
+from flab2bp.indexed import Cells
 
 #: Areas above baseline by more than this fail.  Improvements beyond it only
 #: print a notice.
@@ -64,12 +65,7 @@ def _rank(cell: CellResult) -> tuple[int, int]:
 
 def _best_per_url(cells: Sequence[CellResult]) -> dict[str, CellResult]:
     """The result the pipeline would actually ship for each URL."""
-    best: dict[str, CellResult] = {}
-    for cell in cells:
-        current = best.get(cell.url_id)
-        if current is None or _rank(cell) < _rank(current):
-            best[cell.url_id] = cell
-    return best
+    return Cells.of(cells).best_per_url(valid_only=False, rank=_rank)
 
 
 def write_baseline(cells: Sequence[CellResult], path: Path) -> None:
