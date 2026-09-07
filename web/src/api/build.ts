@@ -39,6 +39,9 @@ export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair', 'hierarchic
 
 export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
 
+/** Whether the URL's ranked producer is exact or a speed ceiling. */
+export const MachineRank = z.enum(['exact', 'up-to']);
+
 /** Named candidate policies accepted by the rate solver, in backend canonical order. */
 export const CandidatePolicy = z.enum(['no-proliferator', 'all-products', 'output-products']);
 
@@ -88,6 +91,13 @@ const BeltTiers = z.object({
   stack: z.number(),
 });
 
+export const MachineMove = z.object({
+  recipe_id: z.string(),
+  from_machine: z.string(),
+  to_machine: z.string(),
+  count_before: z.number().int().positive(),
+  count_after: z.number().int().positive(),
+});
 /**
  * One candidate's own facts. The report panel describes the SELECTED attempt,
  * so every attempt carries its own boundary — what it belts in, what it makes,
@@ -95,6 +105,8 @@ const BeltTiers = z.object({
  */
 const AttemptDetail = z.object({
   machines: z.number(),
+  machine_rank: MachineRank,
+  machine_moves: z.array(MachineMove),
   buildings: z.number(),
   primary_band: z.number(),
   certified_bands: z.array(z.number()),
@@ -127,6 +139,7 @@ const BeltRules = z.object({
   from_url: z.boolean(),
 });
 
+
 const BuildResult = z.object({
   /** Null when validation failed and the caller did not pass allow_invalid. */
   blueprint: z.string().nullable(),
@@ -136,6 +149,8 @@ const BuildResult = z.object({
   strategy: ExplicitStrategy,
   candidate: z.string(),
   machines: z.number(),
+  machine_rank: MachineRank,
+  machine_moves: z.array(MachineMove),
   pilers: z.number(),
   area: z.number(),
   buildings: z.number(),
@@ -213,6 +228,7 @@ export const BuildOptions = z
     candidate_policies: CandidatePolicySelection,
     budget_s: z.number(),
     proliferator_tier: ProliferatorTier,
+    machine_rank: MachineRank,
     band: BandSelection,
     name: z.string(),
     allow_invalid: z.boolean(),
@@ -233,6 +249,7 @@ export type BuildOptions = z.infer<typeof BuildOptions>;
 export type RequestStrategy = z.infer<typeof RequestStrategy>;
 export type ExplicitStrategy = z.infer<typeof ExplicitStrategy>;
 export type ProliferatorTier = z.infer<typeof ProliferatorTier>;
+export type MachineRank = z.infer<typeof MachineRank>;
 
 export const DEFAULT_OPTIONS: BuildOptions = {
   url: '',
@@ -240,6 +257,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   candidate_policies: ['all-products', 'output-products', 'no-proliferator'],
   budget_s: 15,
   proliferator_tier: 'auto',
+  machine_rank: 'exact',
   name: '',
   band: 'portable',
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly
