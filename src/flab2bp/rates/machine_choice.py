@@ -51,11 +51,7 @@ def _is_placeable(machine_item_id: str) -> bool:
     ``catalog.get_item_id`` and raises when it cannot.  A candidate the
     layout cannot place is not a candidate.
     """
-    try:
-        catalog.get_item_id(machine_item_id)
-    except KeyError, ValueError:
-        return False
-    return True
+    return catalog.get_item_id(machine_item_id) is not None
 
 
 def candidate_ladder(
