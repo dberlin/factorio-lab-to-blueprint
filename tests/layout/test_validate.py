@@ -5481,6 +5481,134 @@ def test_sprayed_cargo_still_fires_across_a_hop_with_no_coater_anywhere() -> Non
     assert fired(r, SPRAYED_REACHES), errors(r)
 
 
+# --- prolif.sprayed_cargo_reaches_machines: the over-proliferation ruling ---
+#
+# The user's ruling, 2026-09-07: "over-proliferating is fine if it makes life
+# easier."  A Spray Coater sprays everything that rides its belt tile, so once
+# one consumer of an item needs it sprayed, any OTHER consumer sharing that
+# physical lane gets sprayed too, whether it asked for it or not.  That used
+# to be an ERROR (``forbids_spray``); it is now a WARNING that still names the
+# item.  The other half -- a proliferated consumer that never got sprayed at
+# all (``requires_spray``) -- is a silent rate miss and stays an ERROR.
+
+_SPLIT_LANE_IDS = IdMap(
+    recipes={"magnetic-coil": 6, "gear": 7},
+    items={"assembling-machine-2": ASSEMBLER, "copper-ore": 1001},
+)
+
+
+def _split_lane_spec() -> BuildSpec:
+    """One item, ``copper-ore``, feeds two consumers wanting different
+    proliferator modes: SPEED on ``magnetic-coil``, NONE on ``gear``.
+
+    A Spray Coater holds one proliferator item and ``RateSolution.tier``
+    (``solve.py:118``) is global to the solve, so there is no such thing as
+    spraying just the ``magnetic-coil`` branch and not the ``gear`` branch --
+    proliferation is a property of the LANE, not the consumer.  Physically
+    separating the two draws is therefore still the only way to avoid
+    over-producing ``gear``'s input, which is exactly what
+    ``lanes_requiring_split`` marks this item for.  That marking is UNCHANGED
+    by the over-proliferation ruling; what changes is only the severity this
+    check reports once a placement shares the branch anyway.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                proliferator_mode=ProliferatorMode.SPEED,
+                inputs_per_machine={"copper-ore": Fraction(1)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                proliferator_mode=ProliferatorMode.NONE,
+                inputs_per_machine={"copper-ore": Fraction(1)},
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": Fraction(8), "proliferator-3": Fraction(1, 2)},
+        spray_lanes={"copper-ore": True},
+        lanes_requiring_split=frozenset({"copper-ore"}),
+    )
+
+
+def _split_lane_scene(*, coater_at: int | None) -> Placement:
+    """A six-tile ``copper-ore`` lane feeding both consumers of
+    ``_split_lane_spec``.
+
+    Sorter A taps tile 1, upstream of a coater riding tile 2, into the
+    proliferated (``magnetic-coil``) group: unsprayed cargo reaching a
+    proliferated machine, the still-ERROR case.  Sorter B taps tile 4,
+    downstream of the same coater, into the unproliferated (``gear``) group:
+    sprayed cargo reaching an unproliferated machine, the now-WARNING case.
+    ``coater_at`` rides the given tile unless ``None``, matching the seam
+    ``_sprayed_scene`` uses above.
+    """
+    lane = [belt(x, 0, out=x + 1 if x < 5 else None, carries="copper-ore") for x in range(6)]
+    parts: list[PlacedBuilding] = [
+        *lane,
+        machine(0, 1, recipe_id=6),  # magnetic-coil, proliferated -- index 6
+        machine(4, 1, recipe_id=7),  # gear, unproliferated -- index 7
+        sorter(1, 0, 1, 1, inp=1, out=6),  # unsprayed pickup -> proliferated group
+        sorter(4, 0, 4, 1, inp=4, out=7),  # sprayed pickup -> unproliferated group
+        belt(-1, 0, 1, carries="proliferator-3"),
+    ]
+    if coater_at is not None:
+        parts.append(_coater(coater_at, 0))
+    return place(*parts)
+
+
+def test_a_shared_lane_through_a_node_warns_rather_than_refusing() -> None:
+    """Over-proliferation is a WARNING: the user ruled it acceptable.
+
+    A sprayed lane that reaches an unproliferated consumer over-produces that
+    consumer's proliferator cost.  It does not break the build, it does not
+    miss a rate, and forbidding it refuses a legal placement.  The build is
+    still told, so it reaches the report.
+    """
+    r = validate(_split_lane_scene(coater_at=2), _split_lane_spec(), ids=_SPLIT_LANE_IDS)
+    findings = r.by_check(SPRAYED_REACHES)
+    over = [f for f in findings if "over-produce" in f.message]
+    assert over, "the case must still be reported"
+    assert all(f.severity is Severity.WARNING for f in over)
+
+
+def test_a_machine_eating_unsprayed_cargo_is_still_an_ERROR() -> None:
+    """The requires_spray half is untouched: a proliferated machine eating
+    cargo that never passed a coater still misses its rate silently, which is
+    the whole reason this check exists."""
+    r = validate(_split_lane_scene(coater_at=2), _split_lane_spec(), ids=_SPLIT_LANE_IDS)
+    findings = r.by_check(SPRAYED_REACHES)
+    missed = [f for f in findings if "miss its rate" in f.message]
+    assert missed, "a proliferated machine drawing unsprayed cargo must still be reported"
+    assert all(f.severity is Severity.ERROR for f in missed)
+
+
+def test_a_shared_lane_serving_differing_proliferator_modes_keeps_severities_apart() -> None:
+    """Step 4's differing-mode case: two consumers of ONE item want different
+    proliferator modes (SPEED vs NONE) at once.  A coater cannot spray one
+    consumer's share of a shared lane and not the other's -- proliferation
+    rides the item, not the machine -- so this split stays geometrically
+    mandatory regardless of the over-proliferation ruling.  What the ruling
+    changes is only which half of a violated split is fatal: the same report,
+    from the same shared-lane placement, must carry BOTH an ERROR (the
+    proliferated consumer's rate miss) AND a WARNING (the unproliferated
+    consumer's over-production) side by side, each attributed to its own
+    finding and never swapped.
+    """
+    r = validate(_split_lane_scene(coater_at=2), _split_lane_spec(), ids=_SPLIT_LANE_IDS)
+    findings = r.by_check(SPRAYED_REACHES)
+    by_severity = {f.severity: f for f in findings}
+    assert Severity.ERROR in by_severity, [f.message for f in findings]
+    assert Severity.WARNING in by_severity, [f.message for f in findings]
+    assert "miss its rate" in by_severity[Severity.ERROR].message
+    assert "over-produce" in by_severity[Severity.WARNING].message
+
+
 # --- belt.port_dock: the connection a Ray Receiver takes ---------------------
 #
 # A Ray Receiver's prefab ships ZERO insert poses and two belt PORTS.  Nothing

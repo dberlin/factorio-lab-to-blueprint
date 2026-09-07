@@ -5298,9 +5298,24 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
 
     So the question is asked from the MACHINE's end, which is where correctness
     lives.  A proliferated group must draw each sprayed ingredient downstream
-    of a coater.  For an item in ``lanes_requiring_split``, an unproliferated
-    group must draw upstream of every coater; sharing the sprayed branch would
-    silently over-produce it.
+    of a coater -- that half stays ``Severity.ERROR``: it is a silent rate
+    miss, the entire reason this check exists.  For an item in
+    ``lanes_requiring_split``, an unproliferated group drawing downstream of a
+    coater over-produces that item's proliferator cost -- under the user's
+    ruling (2026-09-07, "over-proliferating is fine if it makes life
+    easier") that half is only ``Severity.WARNING``: the build still pastes,
+    still runs, and still hits its rate, so refusing the placement over it
+    would refuse an otherwise legal build.  The finding still names the item
+    and still fires, because the build should still be told.
+
+    ``lanes_requiring_split`` itself is UNCHANGED by that ruling and stays
+    mandatory where two consumers of one item want *different* proliferator
+    modes: a Spray Coater holds one proliferator item and
+    ``RateSolution.tier`` is global to the solve, so one physical lane cannot
+    carry two proliferator tiers at once.  That split is a geometry
+    requirement, not a cost opinion, and the WARNING above never applies to
+    it -- it applies only to a shared-tier lane an unproliferated consumer
+    happens to also draw from.
 
     ``prolif.coaters_are_supplied`` cannot answer this and never could.  It asks
     whether proliferator reaches the coater; it says nothing about whether the
@@ -5357,6 +5372,7 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
                 if not wrong_side:
                     continue
                 if requires_spray:
+                    severity = Severity.ERROR
                     message = (
                         f"sorter {i} feeds machine {m} with {item}, which "
                         f"{ctx.recipe_of(m)} is proliferated on, from belt {src} at "
@@ -5365,16 +5381,25 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
                         "would paste, run, and quietly miss its rate"
                     )
                 else:
+                    # The user's ruling, 2026-09-07: over-proliferation is
+                    # acceptable if it makes life easier.  This lane's coater
+                    # sprays cargo for a proliferated sibling consumer, and
+                    # this unproliferated machine draws from the same sprayed
+                    # branch -- it over-produces `item`'s proliferator cost,
+                    # by design.  Nothing breaks and no rate is missed, so
+                    # this is a WARNING, not the ERROR that would refuse an
+                    # otherwise legal placement.
+                    severity = Severity.WARNING
                     message = (
                         f"sorter {i} feeds unproliferated machine {m} with {item} "
                         f"from belt {src} at ({bs[src].x}, {bs[src].y}) after it "
-                        "passed a Spray Coater. This item requires physically split "
-                        "sprayed and unsprayed lanes; sharing this branch would "
-                        "silently over-produce"
+                        "passed a Spray Coater. The build over-produces "
+                        f"{item}'s proliferator cost by design -- over-proliferation "
+                        "is acceptable"
                     )
                 yield Finding(
                     "prolif.sprayed_cargo_reaches_machines",
-                    Severity.ERROR,
+                    severity,
                     message,
                     (i, m, src),
                     {"item": item, "machine": m, "belt": src},
