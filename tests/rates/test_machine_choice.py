@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from fractions import Fraction
 
 import pytest
@@ -84,15 +85,28 @@ def test_a_single_producer_recipe_has_a_one_entry_ladder(data) -> None:
     assert candidate_ladder(data, recipe, ceiling, _every_machine(data)) == (ceiling,)
 
 
-def test_every_ladder_entry_is_placeable(data) -> None:
-    from flab2bp.dsp import catalog
+def test_an_unlocked_unknown_producer_is_not_a_candidate(data) -> None:
+    unknown = replace(data.item("arc-smelter"), id="unknown-smelter")
+    custom = replace(data, items=(*data.items, unknown))
+    recipe = replace(
+        data.recipe("iron-ingot"),
+        producers=("unknown-smelter", "arc-smelter", "plane-smelter"),
+    )
+    unlocked = {"unknown-smelter", "arc-smelter", "plane-smelter"}
 
-    every = _every_machine(data)
-    for recipe in data.recipes:
-        if len(recipe.producers) < 2:
-            continue
-        for machine_id in candidate_ladder(data, recipe, recipe.producers[-1], every):
-            catalog.get_item_id(machine_id)  # must not raise
+    assert candidate_ladder(custom, recipe, "plane-smelter", unlocked) == (
+        "arc-smelter",
+        "plane-smelter",
+    )
+    assert choose_machine(
+        custom,
+        recipe,
+        ceiling_id="plane-smelter",
+        craft_rate=Fraction(1, 2),
+        mode=ProliferatorMode.NONE,
+        tier=ProliferatorTier.NONE,
+        unlocked=unlocked,
+    ) == "arc-smelter"
 
 
 def _choose(data, recipe_id: str, ceiling: str, craft_rate: Fraction) -> str:
@@ -187,7 +201,6 @@ def _is_placeable_for_test(machine_id: str) -> bool:
     from flab2bp.dsp import catalog
 
     try:
-        catalog.get_item_id(machine_id)
+        return catalog.get_item_id(machine_id) is not None
     except KeyError, ValueError:
         return False
-    return True
