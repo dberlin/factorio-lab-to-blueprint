@@ -13763,6 +13763,25 @@ class TestPowerClaimsItsGroundBeforeRouting:
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
 
 
+@pytest.mark.parametrize("belt_site", [(-1, 2), (5, 2), (2, -1), (2, 5)])
+def test_substation_emission_refuses_a_belt_in_its_clearance_halo(
+    belt_site: tuple[int, int],
+) -> None:
+    canvas = _Canvas(power_building=catalog.power_tower_building("satellite-substation"))
+    canvas.add(_belt(*belt_site))
+    with pytest.raises(_Unpowerable):
+        freeform._place_power(canvas, [(0, 0)])
+
+
+def test_substation_planner_refuses_a_footprint_sized_hole_without_clearance() -> None:
+    canvas = _Canvas(
+        power_building=catalog.power_tower_building("satellite-substation"),
+        limit=(0, 0, 4, 4),
+    )
+    with pytest.raises(_Unpowerable):
+        _power_plan(canvas, (0, 0, 4, 4), policy=BandPolicy("160"))
+
+
 def _power_node_at(index: int, x: int) -> tuple[int, PlacedBuilding, rules.PowerNode]:
     """A Tesla tower power node standing at ``x`` on row zero."""
     tower = catalog.building(catalog.TESLA_TOWER_ID)
@@ -25500,8 +25519,8 @@ class TestThePowerBuildingIsTheSpecsChoice:
 
         ``step`` is the pitch of the 3x3 machines, and it decides what can
         stand between them: at 6 the gaps are three tiles wide, which holds a
-        1x1 tower and nothing larger, and at 8 they are five, which holds a
-        Satellite Substation.  The 5x5 arms below must ask for 8.  On the
+        1x1 tower and nothing larger, and at 10 they are seven, which holds a
+        Satellite Substation's collider-clearance reservation.
         three-wide field a substation has no legal site at all, and this helper
         used to hand it one anyway -- the anchor cell was free, and the other
         twenty-four tiles of the building landed on four machines.  See
@@ -25535,7 +25554,7 @@ class TestThePowerBuildingIsTheSpecsChoice:
 
     def test_power_sites_use_the_chosen_power_building(self) -> None:
         substation = catalog.power_tower_building("satellite-substation")
-        canvas, sites = self._planned(substation, step=8)
+        canvas, sites = self._planned(substation, step=10)
         power = self._placed_power(canvas, sites)
 
         assert power
@@ -25553,12 +25572,12 @@ class TestThePowerBuildingIsTheSpecsChoice:
     def test_a_substation_build_needs_far_fewer_power_sites(self) -> None:
         """A 26.5-tile cover radius must buy fewer sites than a 10.5-tile one.
 
-        The SAME field on both sides, at the pitch that can hold a 5x5 -- a
+        The SAME field on both sides, at a pitch that holds the clearance halo --
         comparison across two different fields would be measuring the field.
         """
-        _tesla_canvas, tesla_sites = self._planned(step=8)
+        _tesla_canvas, tesla_sites = self._planned(step=10)
         _sub_canvas, sub_sites = self._planned(
-            catalog.power_tower_building("satellite-substation"), step=8
+            catalog.power_tower_building("satellite-substation"), step=10
         )
 
         assert len(sub_sites) < len(tesla_sites), (len(tesla_sites), len(sub_sites))
@@ -25600,7 +25619,7 @@ class TestThePowerBuildingIsTheSpecsChoice:
 
 
 class TestALargePowerBuildingClaimsItsWholeFootprint:
-    """A 1x1 tower needs one free tile.  A 5x5 substation needs a 5x5 BLOCK.
+    """A 5x5 substation needs its centred collider-clearance reservation too.
 
     Site selection and site reservation both used to ask about ONE cell -- the
     anchor -- while ``_place_power`` then marked the whole
@@ -25627,8 +25646,8 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
 
         ``step`` is the whole experiment: 3x3 machines every 6 tiles leave
         three-wide gaps, which a 5x5 substation cannot stand in at all, and
-        every 8 tiles leave five-wide ones, which it can -- but only if it is
-        anchored exactly right.
+        every 10 tiles leave seven-wide ones, which hold the centred clearance
+        reservation as well as the footprint.
         """
         canvas = _Canvas(limit=(0, 0, 60, 60), power_building=power_building)
         for x in range(2, 50, step):
@@ -25641,20 +25660,18 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         return catalog.power_tower_building("satellite-substation")
 
     def test_a_planned_substation_holds_every_tile_it_will_stand_on(self) -> None:
-        """``keep_out`` is what the router paths around, so it owes 25 tiles."""
-        canvas = self._field(8, self._substation())
+        """Every cell in the centred clearance halo must remain unroutable."""
+        canvas = self._field(10, self._substation())
         sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
 
         assert sites
         for sx, sy in sites:
-            for dx in range(5):
-                for dy in range(5):
-                    assert (sx + dx, sy + dy) in canvas.keep_out, (
-                        f"substation at {(sx, sy)} left {(sx + dx, sy + dy)} unreserved"
-                    )
+            for dx in range(-1, 6):
+                for dy in range(-1, 6):
+                    assert not canvas.free((sx + dx, sy + dy, 0))
 
     def test_a_substation_site_never_overlaps_another_building(self) -> None:
-        canvas = self._field(8, self._substation())
+        canvas = self._field(10, self._substation())
         sites = _power_plan(canvas, (0, 0, 60, 60), policy=BandPolicy("portable"))
         assert sites
         canvas.keep_out.clear()
@@ -25667,7 +25684,7 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
             for bx, by, bw, bh, item in boxes:
                 if item == self.SUBSTATION_ID and (bx, by) == (px, py):
                     continue
-                overlaps = px < bx + bw and bx < px + pw and py < by + bh and by < py + ph
+                overlaps = px - 1 < bx + bw and bx < px + pw + 1 and py - 1 < by + bh and by < py + ph + 1
                 assert not overlaps, f"substation at {(px, py)} overlaps item {item} at {(bx, by)}"
 
     def test_two_planned_substations_never_land_on_each_other(self) -> None:
@@ -25699,7 +25716,7 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         assert len(sites) > 1, "this field needs several sites to be the case it is"
         for index, (ax, ay) in enumerate(sites):
             for bx, by in sites[index + 1 :]:
-                overlaps = ax < bx + 5 and bx < ax + 5 and ay < by + 5 and by < ay + 5
+                overlaps = abs(ax - bx) < 7 and abs(ay - by) < 7
                 assert not overlaps, f"planned substations at {(ax, ay)} and {(bx, by)} overlap"
 
         # And the plan is standable, which is the property the refusal denied.
@@ -25786,7 +25803,7 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         ]
         for sx, sy, sw, sh in subs:
             for cx, cy, cw, ch in carriers:
-                overlaps = sx < cx + cw and cx < sx + sw and sy < cy + ch and cy < sy + sh
+                overlaps = sx - 1 < cx + cw and cx < sx + sw + 1 and sy - 1 < cy + ch and cy < sy + sh + 1
                 assert not overlaps, (
                     f"belt/sorter at {(cx, cy)} {(cw, ch)} inside substation at {(sx, sy)}"
                 )
@@ -25808,7 +25825,7 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         ]
         for sx, sy, sw, sh in subs:
             for bx, by, bw, bh in others:
-                overlaps = sx < bx + bw and bx < sx + sw and sy < by + bh and by < sy + sh
+                overlaps = sx - 1 < bx + bw and bx < sx + sw + 1 and sy - 1 < by + bh and by < sy + sh + 1
                 assert not overlaps, f"substation at {(sx, sy)} overlaps a building at {(bx, by)}"
 
     def test_a_substation_build_certifies_clean(

@@ -15462,6 +15462,21 @@ def _power_projection_envelope(
     )
 
 
+def _power_reservation(tower: catalog.Building) -> tuple[int, int, int, int]:
+    """Cell offsets enclosing the collider clearance about the real footprint.
+
+    Round half-cell halos outwards on BOTH sides. A 6x6 clearance centred on a
+    5x5 substation therefore holds 7x7 cells; shifting a 6x6 rectangle east would
+    leave its west collider edge unprotected. Tesla retains its 1x1 reservation.
+    """
+    if tower.item_id == catalog.TESLA_TOWER_ID:
+        return 0, 0, tower.width, tower.height
+    width, height = catalog.clearance(tower.item_id, 0)
+    halo_x = max(0, (width - tower.width + 1) // 2)
+    halo_y = max(0, (height - tower.height + 1) // 2)
+    return -halo_x, -halo_y, tower.width + halo_x, tower.height + halo_y
+
+
 def _power_plan(
     canvas: _Canvas,
     demand: tuple[int, int, int, int],
@@ -15534,6 +15549,9 @@ def _power_plan(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
     tower = canvas.power_building
+    reserve_x0, reserve_y0, reserve_x1, reserve_y1 = _power_reservation(tower)
+    reserve_width = reserve_x1 - reserve_x0
+    reserve_height = reserve_y1 - reserve_y0
     reach2 = math.floor((2 * tower.cover_radius) ** 2)
     link2 = math.floor((2 * tower.connect_distance) ** 2)
     demand_x0, demand_y0, demand_x1, demand_y1 = demand
@@ -15585,40 +15603,22 @@ def _power_plan(
                 continue
             open_ground[x - min_x + pad, y - min_y + pad] = True
 
-    # A SITE IS A FOOTPRINT, NOT A CELL.
-    #
-    # `free` is the set of ANCHORS a tower may stand on, and `open_ground` is
-    # the ground itself.  For the 1x1 Tesla Tower the two are the same array and
-    # the loop below never runs, which is why the default arm cannot move.  For
-    # a 5x5 Satellite Substation they are not remotely the same: a three-wide
-    # gap between two machine rows is open ground with no anchor in it at all,
-    # and asking only about the anchor cell is what let the greedy plan a
-    # substation whose other twenty-four tiles landed on four machines and a
-    # belt -- measured end to end on `two-stage`, a substation at (-1, 10)
-    # swallowing the belt at (1, 11), and `certify` could not see it because
-    # 2212 is in `catalog.LOW_CONFIDENCE_FOOTPRINTS` and its belt-collision
-    # findings are suppressed.
-    #
-    # This is STRICTER THAN :meth:`_Canvas.fits`, not a second occupancy model:
-    # eroding by the footprint asks `free`/`solid` of every tile of the
-    # rectangle, which is that predicate's own definition, and then denies the
-    # cells `fits` would allow that a SITE may not use anyway -- a column
-    # blocked at any level rather than only at level 0, and anything outside
-    # `canvas.limit`.  Both of those were already in this fill before the
-    # footprint reached it.  `_place_power` guards the same rectangle with the
-    # method itself, so the looser predicate can only ever accept what this one
-    # already accepted.  The
-    # erosion is a mask because this is the hot path -- one shifted `&` per
-    # footprint tile against a per-cell Python call for each of ~29k cells on
-    # `universe-matrix`.
+    # Erode open ground by the collider-clearance reservation, not merely the
+    # visible footprint. Low-confidence substation collider findings may be
+    # suppressed by certification, so routing must never borrow this halo.
+    # The Tesla offsets are still only (0, 0), preserving its default mask.
     free = open_ground.copy()
-    for footprint_dx in range(tower.width):
-        for footprint_dy in range(tower.height):
+    for footprint_dx in range(reserve_x0, reserve_x1):
+        for footprint_dy in range(reserve_y0, reserve_y1):
             if not footprint_dx and not footprint_dy:
                 continue
             shifted = np.zeros(shape, dtype=bool)
-            shifted[: shape[0] - footprint_dx, : shape[1] - footprint_dy] = open_ground[
-                footprint_dx:, footprint_dy:
+            shifted[
+                max(0, -footprint_dx) : shape[0] - max(0, footprint_dx),
+                max(0, -footprint_dy) : shape[1] - max(0, footprint_dy),
+            ] = open_ground[
+                max(0, footprint_dx) : shape[0] - max(0, -footprint_dx),
+                max(0, footprint_dy) : shape[1] - max(0, -footprint_dy),
             ]
             free &= shifted
 
@@ -16114,29 +16114,11 @@ def _power_plan(
             gx - spacing_reach : gx + spacing_reach + 1,
             gy - spacing_reach : gy + spacing_reach + 1,
         ] &= ~spacing_stamp
-        # AND EVERY ANCHOR WHOSE FOOTPRINT WOULD LAND ON THIS ONE.
-        #
-        # `free` is eroded ONCE, from the static ground, so it knows nothing
-        # about the towers this loop is itself placing.  The spacing halo is the
-        # only per-site clearing there is and it is not the right rule for this:
-        # substation-against-substation it is 21 cells, `dx**2 + dy**2 <= 7`, a
-        # reach of two -- while two 5x5 footprints overlap out to `|dx| <= 4`.
-        # Sixty of the eighty-one overlapping anchor offsets were left standing,
-        # and the greedy duly planned two substations into each other:
-        # 3x3 machines at pitch 12 inside a 40x40 limit planned (20, 20) and
-        # then (24, 19), and `_place_power` refused the pack with "planned tower
-        # site (24, 19) was taken during routing" -- a message that was not even
-        # true, because nothing took it during routing.  It failed CLOSED, which
-        # is why it was a refused build rather than a pasted collision, but a
-        # build refused for a site the planner itself double-booked is a bug in
-        # the planner.
-        #
-        # At 1x1 this slice is the single cell `(gx, gy)`, which the spacing
-        # stamp has already cleared -- offset (0, 0) is one of its 21 -- so the
-        # default arm cannot move, by construction rather than by measurement.
+        # Exclude anchors whose clearance reservations overlap the new tower.
+        # On Tesla this remains the one cell already cleared by spacing.
         free[
-            gx - (tower.width - 1) : gx + tower.width,
-            gy - (tower.height - 1) : gy + tower.height,
+            gx - (reserve_width - 1) : gx + reserve_width,
+            gy - (reserve_height - 1) : gy + reserve_height,
         ] = False
         linked[gx - link : gx + link + 1, gy - link : gy + link + 1] |= link_stamp
         win = (slice(gx - reach, gx + reach + 1), slice(gy - reach, gy + reach + 1))
@@ -16156,14 +16138,10 @@ def _power_plan(
             exact_retry_evidence=projected_retry_evidence,
         )
 
-    # THE RESERVATION IS THE FOOTPRINT, because what `_place_power` will mark
-    # solid is the footprint.  Holding only the anchor is an invitation the
-    # router accepts: it lays a belt through the other twenty-four tiles of a
-    # substation, `keep_out` reports nothing amiss, and `_place_power` then
-    # stands the building on top of the belt.
+    # Hold the same clearance rectangle through every routing level.
     for site_x, site_y in sites:
-        for footprint_dx in range(tower.width):
-            for footprint_dy in range(tower.height):
+        for footprint_dx in range(reserve_x0, reserve_x1):
+            for footprint_dy in range(reserve_y0, reserve_y1):
                 canvas.keep_out.add((site_x + footprint_dx, site_y + footprint_dy))
     return sites
 
@@ -16194,12 +16172,16 @@ def _place_power(canvas: _Canvas, sites: Sequence[tuple[int, int]]) -> int:
     if not canvas.buildings:
         return 0
     tower = canvas.power_building
+    reserve_x0, reserve_y0, reserve_x1, reserve_y1 = _power_reservation(tower)
     placed = 0
     for cx, cy in sites:
-        # The whole FOOTPRINT, not the anchor: `canvas.add` below marks
-        # `tower.width x tower.height` tiles solid, so those are the tiles the
-        # reservation had to hold and those are the tiles this verifies it did.
-        if not canvas.fits(cx, cy, tower.width, tower.height):
+        # Routing must leave the collider halo free as well as the footprint.
+        if not canvas.fits(
+            cx + reserve_x0,
+            cy + reserve_y0,
+            reserve_x1 - reserve_x0,
+            reserve_y1 - reserve_y0,
+        ):
             raise _Unpowerable(f"planned tower site {(cx, cy)} was taken during routing")
         canvas.add(
             PlacedBuilding(
