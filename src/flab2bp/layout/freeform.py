@@ -975,10 +975,14 @@ class Strip:
     #: a rate: ``_flank_lane``'s gap belt runs down the column east of its OWN
     #: machine, so with the drain outermost it crosses every south input lane
     #: and ``geom.belt_single_occupancy`` convicts the result.  Only the last
-    #: machine in a strip has a clear gap column.  That cap is why
-    #: ``universe-matrix`` refuses today -- 15 one-machine strips out-fan the
-    #: ``antimatter`` producer's lane -- and spec §9 R2 records the measurement
-    #: and names the next lever.
+    #: machine in a strip has a clear gap column.  That cap turns
+    #: ``universe-matrix#37`` into 15 one-machine strips.  It used
+    #: to refuse there, on ``_fanout_shortfall``'s theory that each consumer taps
+    #: a different TILE of the producer lane; that theory was measured wrong --
+    #: nets sharing a source lane branch off each other's committed paths
+    #: (``_route``'s ``same_src``), and a 10-tile lane wired all twelve of its
+    #: consumers.  See ``docs/superpowers/specs/2026-09-07-lane-fanout-design.md``
+    #: section 2, and section 4 for the two blockers behind it.
     drain_outermost: bool = False
     family_id: StripFamilyId | None = None
     machine_start: int = 0
@@ -19882,61 +19886,6 @@ def _place_proliferator_entry(
     )
 
 
-def _fanout_shortfall(strips: list[Strip]) -> list[str]:
-    """Producer lanes with fewer tiles than the consumers they must tap.
-
-    ``_build`` pairs the two sides of an edge cyclically -- ``srcs[k % len(srcs)]``
-    against ``sinks[k % len(sinks)]`` -- so whichever side is sharded further is
-    fully served.  More sinks than sources means a producer lane is reused, and
-    each reuse taps a different tile of that lane and junctions there.
-
-    That works right up to the point where the lane runs out of tiles: two taps
-    on one tile would need two splitters on one square.  A lane is as wide as
-    its strip, so this is rare -- but it is a property of the STRIP PLAN, decided
-    before any packing exists, and worth knowing before the height sweep rather
-    than after.  A spec that trips it refuses at every height and every budget,
-    and each attempt costs a full sweep plus the retry at
-    :data:`RETRY_BUDGET_S`.
-
-    Returns one description per offending edge, empty when the plan is servable.
-    """
-    src_lanes: dict[tuple[str, str, str, CargoDomain], int] = defaultdict(int)
-    src_tiles: dict[tuple[str, str, str, CargoDomain], int] = {}
-    sink_lanes: dict[tuple[str, str, CargoDomain], int] = defaultdict(int)
-    for s in strips:
-        for item, dest, cargo_domain in s.out_lanes:
-            for d in _dests(dest):
-                key = (s.group_key, item, d, cargo_domain)
-                src_lanes[key] += 1
-                src_tiles[key] = min(src_tiles.get(key, s.width), s.width)
-        for item in s.in_lanes:
-            sink_lanes[s.group_key, item, s.cargo_domain] += 1
-
-    out: list[str] = []
-    for (src_key, item, dest, cargo_domain), n_src in sorted(
-        src_lanes.items(),
-        key=lambda entry: (
-            entry[0][0],
-            entry[0][1],
-            entry[0][2],
-            entry[0][3].value,
-        ),
-    ):
-        n_sink = sink_lanes.get((dest, item, cargo_domain), 0)
-        if n_sink <= n_src:
-            continue
-        # Taps land on the narrowest lane of the group, so that is the one that
-        # can run out. Ceiling division: the reuse is spread round-robin.
-        per_lane = -(-n_sink // n_src)
-        tiles = src_tiles[src_key, item, dest, cargo_domain]
-        if per_lane > tiles:
-            out.append(
-                f"{item}: {src_key} lane is {tiles} tile(s) wide but must tap "
-                f"{per_lane} consumer lane(s) of {dest}"
-            )
-    return out
-
-
 def _drainable_by_port(strip: Strip) -> bool:
     """Can every output lane claim a distinct port facing the lane band?
 
@@ -20497,10 +20446,6 @@ class FreeformLayout:
         # generic routing miss. Structural failures are named before the one
         # requested-budget sweep instead.
         #
-        # Fan-out itself is no longer a shortfall: a lane serving several
-        # consumers taps a different tile for each and junctions there. What
-        # remains unservable is a lane with fewer TILES than taps to make, since
-        # two taps on one tile would need two splitters on one square.
         # A machine no sorter can attach to is refused FIRST, because it is not
         # a question about the packing at all: `_emit_strip` crashes on the
         # empty lane it implies, so every later stage would be reporting a
@@ -20510,15 +20455,6 @@ class FreeformLayout:
             raise NoValidLayout(
                 "a machine in this spec has lanes to wire and no insert pose to "
                 "wire them to, so it would paste joined to nothing. " + "; ".join(unreachable[:3]),
-                spec_label=spec.label,
-                budget_s=0.0,
-            )
-
-        shortfall = _fanout_shortfall(strips)
-        if shortfall:
-            raise NoValidLayout(
-                "a producer lane has fewer tiles than the consumers it must tap, "
-                "so two junctions would have to share one tile. " + "; ".join(shortfall[:3]),
                 spec_label=spec.label,
                 budget_s=0.0,
             )

@@ -13015,6 +13015,33 @@ class TestOneLaneCanServeSeveralDestinations:
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
         assert p.stats["route_failures"] == 0.0
 
+    def test_a_lane_serves_more_consumers_than_it_has_tiles(self) -> None:
+        """The tap count is not bound by the lane's tile count.
+
+        `_fanout_shortfall` used to refuse here, on the theory that each
+        consumer taps a different TILE of the producer lane.  The router does
+        not do that: nets that share a source lane branch off each other's
+        committed paths (`_route`'s `same_src` grouping), and `_tap_source`
+        builds the splitter on that path.  Measured on `universe-matrix`: a
+        10-tile lane wired all twelve of its consumers
+        (spec 2026-09-07-lane-fanout-design.md section 2).
+        """
+        spec = one_machine_fan_out_spec(4)
+        strips = plan_strips(spec, strip_len=6)
+        producers = [s for s in strips if s.group_key.startswith("copper-ingot")]
+        assert len(producers) == 1, "one machine cannot be split across shards"
+        consumers = [s for s in strips if "copper-ingot" in s.in_lanes]
+        assert len(consumers) > producers[0].width, (
+            "this spec no longer exercises fan-out past the lane's tiles: "
+            f"{len(consumers)} consumer lane(s) against a {producers[0].width}-tile lane"
+        )
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            workers=DETERMINISTIC_WORKERS,
+        ).lay_out(spec, time_budget_s=8.0)
+        report = _full_report(p, spec)
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
+
 
 class TestPowerClaimsItsGroundBeforeRouting:
     """Coverage cannot be whatever the router leaves behind.
