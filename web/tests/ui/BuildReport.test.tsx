@@ -65,3 +65,30 @@ test('the report describes the selected candidate, not just the winner', () => {
     'magnetic-coil, proliferator-mk-iii (2 marked with icons)',
   );
 });
+
+test('machine moves follow the selected attempt rather than the winner', () => {
+  const alternative = anAttempt({
+    chosen: false,
+    detail: anAttemptDetail({
+      machine_rank: 'up-to',
+      machine_moves: [
+        {
+          recipe_id: 'iron-ingot',
+          from_machine: 'plane-smelter',
+          to_machine: 'arc-smelter',
+          count_before: 2,
+          count_after: 2,
+        },
+      ],
+    }),
+  });
+  render(
+    <BuildReportPanel result={aResult()} selectedAttempt={alternative} onSelectAttempt={() => {}} />,
+  );
+
+  const ranking = screen.getByText('Machine ranking').nextElementSibling;
+  expect(ranking).toHaveTextContent('Up to');
+  expect(ranking).toHaveTextContent('iron-ingot');
+  expect(ranking).toHaveTextContent('plane-smelter');
+  expect(ranking).toHaveTextContent('arc-smelter');
+});
