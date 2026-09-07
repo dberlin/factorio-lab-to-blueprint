@@ -606,7 +606,7 @@ def projection_pitch_requirements(
     building_index = Buildings.of(placement)
     machine_flags = [False] * len(placement.buildings)
     positions_by_key: dict[_ProjectionMachineKey, set[tuple[int, int]]] = {}
-    for index in building_index.machines():
+    for index in sorted((*building_index.machines(), *building_index.by_item(catalog.PILER_ID))):
         building = placement.buildings[index]
         is_machine = _is_machine_building(building)
         machine_flags[index] = is_machine

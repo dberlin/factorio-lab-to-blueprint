@@ -487,10 +487,8 @@ def _lane(buildings: Buildings, index: int) -> tuple[int, ...]:
     run = [head]
     while True:
         onward = records[run[-1]].output_obj
-        following = buildings.by_index(onward)
-        if following is None or not catalog.is_belt(following.item_id):
+        if onward is None or not catalog.is_belt(records[onward].item_id):
             break
-        assert onward is not None
         run.append(onward)
     # ONE CONTIGUOUS ROW of that run, the one the port's own tile stands in.
     # A run that leaves the row and comes back contributes two disjoint
@@ -531,7 +529,9 @@ def _port(buildings: Buildings, index: int, machines: int) -> _Port:
     )
 
 
-def _machines_behind(buildings: Buildings, block: BlockPlaced, index: int) -> int:
+def _machines_behind(
+    buildings: Buildings, block: BlockPlaced, index: int, fallback_count: int
+) -> int:
     """Production machines behind one lane, for :attr:`_Port.machines`.
 
     Keep the exact ``recipe_id != 0`` predicate: the Buildings machine kind is
@@ -540,11 +540,9 @@ def _machines_behind(buildings: Buildings, block: BlockPlaced, index: int) -> in
     records = buildings.all()
     strip = records[index].owner_strip
     stop = block.base + len(block.placement.buildings)
-    candidates: Sequence[int]
     if strip is None:
-        candidates = range(block.base, stop)
-    else:
-        candidates = buildings.by_owner_strip(strip)
+        return max(1, fallback_count)
+    candidates = buildings.by_owner_strip(strip)
     return max(
         1,
         sum(
@@ -712,6 +710,10 @@ def _pack_at(
 
     building_index = Buildings(buildings)
 
+    fallback_machine_counts = [
+        sum(building.recipe_id != 0 for building in block.placement.buildings)
+        for block in blocks
+    ]
     canvas = canvas_for(spec, buildings, ramped=ramped, margin=margin)
 
     nets: list[_Net] = []
@@ -725,12 +727,16 @@ def _pack_at(
                 src=_port(
                     building_index,
                     src_index,
-                    _machines_behind(building_index, src_block, src_index),
+                    _machines_behind(
+                        building_index, src_block, src_index, fallback_machine_counts[flow.src.block]
+                    ),
                 ),
                 dst=_port(
                     building_index,
                     dst_index,
-                    _machines_behind(building_index, dst_block, dst_index),
+                    _machines_behind(
+                        building_index, dst_block, dst_index, fallback_machine_counts[flow.dst.block]
+                    ),
                 ),
                 item=flow.item,
                 # The strip fields carry the BLOCK indices here: they are the

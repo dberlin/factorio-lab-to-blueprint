@@ -141,7 +141,7 @@ def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
     canvas = compose.canvas_for(chain_build_spec(), block.buildings, ramped=False, margin=4)
 
     # Index order is the composed list's own: every `_Port` indexes into it.
-    assert canvas.buildings == block.buildings
+    assert tuple(canvas.buildings) == tuple(block.buildings)
 
     assert (block.sorter.x, block.sorter.y) not in canvas.solid
     assert not any(key[:2] == (block.sorter.x, block.sorter.y) for key in canvas.blocked)
