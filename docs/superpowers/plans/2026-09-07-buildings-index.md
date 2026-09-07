@@ -256,6 +256,45 @@ link indexes need per-relink maintenance, which `_commit_paths.refresh_predecess
 `_Canvas.add`, an index hooked into `add` would silently miss them — so
 `MutableBuildings` wraps **the list itself**, which no call site can bypass.
 
+## Sibling interface: what the `indexed-scans` plan needs from `Buildings`
+
+The sibling plan `docs/superpowers/plans/2026-09-07-indexed-scans.md` (branch
+`indexed-scans`, commit `1e11cb8e`) defers three of its scout rows to this type.
+All four of its asks are ACCEPTED:
+
+1. **`splitter_successors(index) -> tuple[int, ...]`**, valid while
+   `_Canvas.add()` appends. For freeform's `_splitter_successors`
+   (freeform.py:12822), rebuilt inside `_leads_back` (:12940) and
+   `_committed_path_closes_cycle` (:12976) on every `_sink_for` call
+   (:13121/:13140/:13165). **It must be incrementally maintained, not
+   memoised** — `canvas.add()` at :12628 grows the list inside the same commit
+   pass that queries it, so a memo keyed on the sequence would answer from
+   before the append. That is exactly what `MutableBuildings` (Task 2) is for,
+   and `into` / `refresh_predecessor` (:12496-12513) is the model. On the frozen
+   `Buildings` it is a plain derived index.
+2. **`predecessor_of(index) -> int | None`** — the unique predecessor, or
+   `None` when there is not exactly one. For `hierarchy/compose.py:476`
+   `_lane`, which rebuilds a full reverse map per call, twice per `LaneFlow` in
+   `_pack_at`'s loop. Distinct from `by_output_obj`, which returns all of them.
+3. **`belt_run(index, *, forward: bool) -> frozenset[int]`**, crossing
+   splitters and pilers. For `hierarchy/contracts.py:67-103` `_belt_run`, whose
+   inner scan at :86-88 is what makes it quadratic.
+4. **Does `Buildings` wrap `Placement.buildings` as well as
+   `_Canvas.buildings`? YES — both.** `Buildings.of(placement)` (Task 3) is the
+   frozen path and is what `validate.py` reads; `MutableBuildings` (Task 2) is
+   the live-canvas path. So the sibling plan's `Sorters` type may delegate its
+   link keys to `sorters_into` / `sorters_out_of` and keep only its item index.
+
+Two of that plan's findings bear on this one and are already reflected above:
+`functools.cached_property` raises on a `slots=True` frozen dataclass, which is
+why Task 3 uses `field(init=False)` plus `object.__setattr__` rather than
+`cached_property`; and neither littletable, polars nor networkx is a dependency
+today. That plan would add one with `uv add` — **this plan does not**, per the
+Backend and Graph rulings above, which measured all three and found each slower
+than the scan it would replace at this project's sizes. If the sibling plan
+adds one anyway, the containment test here still holds: no module outside
+`layout/buildings.py` may name it.
+
 ## File Structure
 
 | file | responsibility |
@@ -320,8 +359,13 @@ class Buildings:
     def sorters_into(self, index: int) -> tuple[int, ...]: ...
     def sorters_out_of(self, index: int) -> tuple[int, ...]: ...
     def sorters_between(
-        self, sources: Container[int], sinks: Container[int]
+        self, sources: Collection[int], sinks: Collection[int]
     ) -> tuple[int, ...]: ...
+
+    # requested by the sibling `indexed-scans` plan (see § Sibling interface)
+    def predecessor_of(self, index: int) -> int | None: ...
+    def splitter_successors(self, index: int) -> tuple[int, ...]: ...
+    def belt_run(self, index: int, *, forward: bool) -> frozenset[int]: ...
 
     # spatial
     def at_tile(self, x: int, y: int, z: Fraction | int | None = None) -> tuple[int, ...]: ...
