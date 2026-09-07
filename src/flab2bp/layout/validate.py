@@ -6196,6 +6196,65 @@ def _lane_attribution(ctx: Context) -> Iterable[Finding]:
         )
 
 
+@check("flow.lane_single_item", needs_spec=True, needs_groups=True)
+def _lane_single_item(ctx: Context) -> Iterable[Finding]:
+    """One input belt carries one item.  No exemption (spec Sec 9 R1).
+
+    A run whose sorters draw two or more DISTINCT items into machines is an
+    ERROR, full stop.  There is deliberately no forced-geometry exemption: a
+    lane whose items must interleave in the recipe's exact proportion to avoid
+    starving each other is not a build we emit, and "the machine's own faces
+    left no alternative" describes a seating we must not ship rather than one we
+    must tolerate.  Where a machine family really cannot be seated
+    one-item-per-lane the answer is a planner change -- Task 3 moved the
+    flanked output's drain row past sorter reach so a Matrix Lab seats six
+    ingredients as six lanes -- or an honest refusal, never a permitted mixed
+    belt.
+
+    Detail carries ``run``, sorted ``items`` and the ``machines``, so the
+    finding names what to un-mix.
+
+    This counts distinct ITEMS, never taps: several consumers of ONE item off
+    one lane is belt sharing (``freeform._merge_lanes`` / ``_merge_frontier``),
+    a different mechanism, load-bearing on 12 of 36 corpus cells, and it stays
+    untouched here.
+    """
+    assert ctx.spec is not None
+    bs = ctx.placement.buildings
+    items = _sorter_items(ctx)
+    items_by_run: dict[int, set[str]] = defaultdict(set)
+    sorters_by_run: dict[int, set[int]] = defaultdict(set)
+    machines_by_run: dict[int, set[int]] = defaultdict(set)
+    for i, s in ctx.of_kind(Kind.SORTER):
+        src, dst = s.input_obj, s.output_obj
+        if src is None or dst is None or not (0 <= src < len(bs) and 0 <= dst < len(bs)):
+            continue
+        if ctx.kinds[src] is not Kind.BELT or ctx.kinds[dst] is not Kind.MACHINE:
+            continue
+        item = items.get(i)
+        if item is None or src not in ctx.run_of:
+            continue
+        run = ctx.run_of[src]
+        items_by_run[run].add(item)
+        sorters_by_run[run].add(i)
+        machines_by_run[run].add(dst)
+
+    for run, carried in sorted(items_by_run.items()):
+        if len(carried) < 2:
+            continue
+        names = sorted(carried)
+        machines = sorted(machines_by_run[run])
+        yield Finding(
+            "flow.lane_single_item",
+            Severity.ERROR,
+            f"belt run {run} draws {len(names)} distinct items into machine(s) "
+            f"{machines} off one lane ({', '.join(names)}); whichever item the "
+            f"machines are not short of fills the belt and the others starve",
+            tuple(sorted(sorters_by_run[run])) + tuple(machines),
+            {"run": run, "items": names, "machines": machines},
+        )
+
+
 def _propagate(
     ctx: Context, own: Mapping[Node, ItemRates], *, downstream: bool
 ) -> dict[Node, dict[str | None, Fraction]]:

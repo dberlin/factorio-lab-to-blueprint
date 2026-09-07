@@ -3146,6 +3146,193 @@ def test_flow_lane_attribution_clean_on_single_item_lanes() -> None:
     assert not fired(r, "flow.lane_attribution")
 
 
+# --- absolute mixed-lane ban (spec Sec 9 R1) --------------------------------
+#
+# No input lane ever carries two distinct items -- not chosen, not forced.
+# There is no `_lane_seating_is_forced` helper and no geometry exemption: a
+# mixed lane is an ERROR however it came to be.
+
+
+def _two_items_on_one_input_lane() -> Placement:
+    """One physical run, tapped by two filtered sorters carrying different items.
+
+    Same shape as ``shared_lane()`` above: belts (3,0)->(3,1) form one run, an
+    assembler sits east of it and a smelter west, each drawn from by its own
+    filtered sorter.  Exactly the geometry `flow.lane_single_item` exists to
+    convict -- two distinct items drawn off one physical run into machines.
+    """
+    return shared_lane()
+
+
+def _two_ingredient_spec() -> BuildSpec:
+    return two_consumer_spec(Fraction(5), Fraction(5))
+
+
+def test_mixed_item_input_lane_is_convicted() -> None:
+    """One input belt carries one item.
+
+    Measured on the reporting URL: belt run 7 carried frame-material,
+    optical-grating-crystal AND super-magnetic-ring into the same two
+    advanced-mining-machine assemblers, and run 16 carried two more.  A native
+    DSP merge is first-come, not proportional, so whichever source runs ahead
+    fills the belt and the others back up.  `flow.belt_capacity` already sums
+    across items and was satisfied; nothing asked whether they could interleave.
+    """
+    placement = _two_items_on_one_input_lane()
+    report = validate(
+        placement, _two_ingredient_spec(), ids=TWO_CONSUMER_IDS, expect_power=False
+    )
+    findings = [f for f in report.errors if f.check == "flow.lane_single_item"]
+    assert findings, [f.check for f in report.errors]
+    assert findings[0].detail["items"] == ["copper-ingot", "iron-ingot"]
+
+
+def _one_item_two_consumers_on_one_lane() -> Placement:
+    """One belt run, two consumers, ONE item: belt sharing, not a mixed lane.
+
+    Same shape as ``shared_lane()`` but both sorters are filtered to the SAME
+    item.  ``freeform._merge_lanes`` / ``_merge_frontier`` fold a producer's
+    destinations onto one lane this way; that sharing is load-bearing for
+    feasibility on 12 of 36 corpus cells and must never be convicted here.
+    """
+    return place(
+        machine(4, 0, recipe_id=6),  # 0  assembler, x 4..7
+        machine(0, 0, item_id=SMELTER, recipe_id=9),  # 1  smelter, x 0..2
+        belt(3, 0, out=3),  # 2
+        belt(3, 1),  # 3
+        sorter(3, 0, 4, 0, inp=2, out=0, item_id=PILE, filter_id=COPPER_ID),  # 4
+        sorter(3, 1, 2, 1, inp=3, out=1, item_id=PILE, filter_id=COPPER_ID),  # 5
+    )
+
+
+def _one_ingredient_two_groups_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(5)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="copper-sheet",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(5)},
+                outputs_per_machine={"copper-sheet": Fraction(1)},
+            ),
+        ),
+    )
+
+
+ONE_INGREDIENT_TWO_GROUPS_IDS = IdMap(
+    recipes={"magnetic-coil": 6, "copper-sheet": 9},
+    items={
+        "assembling-machine-2": ASSEMBLER,
+        "arc-smelter": SMELTER,
+        "copper-ingot": COPPER_ID,
+    },
+)
+
+
+def test_same_item_shared_lane_is_not_a_mixed_lane() -> None:
+    """Two consumers of ONE item off one lane is belt sharing, and it stays.
+
+    `_merge_lanes` / `_merge_frontier` fold a producer's destinations onto one
+    lane; that sharing is load-bearing for feasibility on 12 of 36 corpus cells.
+    This check counts DISTINCT ITEMS on a run, never taps.
+    """
+    placement = _one_item_two_consumers_on_one_lane()
+    report = validate(
+        placement,
+        _one_ingredient_two_groups_spec(),
+        ids=ONE_INGREDIENT_TWO_GROUPS_IDS,
+        expect_power=False,
+    )
+    # Proves the guard is not vacuous: the check ran (was not skipped for an
+    # unresolved machine or a missing spec) and still found nothing to convict.
+    assert "flow.lane_single_item" in report.checks_run
+    assert not [f for f in report.errors if f.check == "flow.lane_single_item"]
+
+
+MATRIX_FRAME_ID = 1201
+MATRIX_GRATING_ID = 1202
+MATRIX_RING_ID = 1203
+
+
+def _matrix_lab_three_items_on_one_lane_placement() -> Placement:
+    """Three distinct items off one physical run into one machine.
+
+    Mirrors the pre-Task-3 Matrix Lab seating (freeform.py:2208-2223 on
+    master): three ingredient columns fed by one run, each sorter filtered to
+    a different item, all landing on one machine.  The check has NO
+    forced-geometry exemption (spec Sec 9 R1), so a lane like this is
+    convicted exactly like a chosen mixed lane.
+    """
+    return place(
+        machine(6, 0, recipe_id=8),  # 0
+        belt(5, 0, out=2),  # 1
+        belt(5, 1, out=3),  # 2
+        belt(5, 2),  # 3
+        sorter(5, 0, 6, 0, inp=1, out=0, item_id=PILE, filter_id=MATRIX_FRAME_ID),  # 4
+        sorter(5, 1, 6, 1, inp=2, out=0, item_id=PILE, filter_id=MATRIX_GRATING_ID),  # 5
+        sorter(5, 2, 6, 2, inp=3, out=0, item_id=PILE, filter_id=MATRIX_RING_ID),  # 6
+    )
+
+
+def _matrix_lab_six_ingredient_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="six-ingredient-recipe",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={
+                    "frame-material": Fraction(1),
+                    "optical-grating-crystal": Fraction(1),
+                    "super-magnetic-ring": Fraction(1),
+                    "copper-ingot": Fraction(1),
+                    "iron-ingot": Fraction(1),
+                    "titanium-ingot": Fraction(1),
+                },
+                outputs_per_machine={"matrix-cube": Fraction(1)},
+            ),
+        ),
+    )
+
+
+MATRIX_LAB_IDS = IdMap(
+    recipes={"six-ingredient-recipe": 8},
+    items={
+        "assembling-machine-2": ASSEMBLER,
+        "frame-material": MATRIX_FRAME_ID,
+        "optical-grating-crystal": MATRIX_GRATING_ID,
+        "super-magnetic-ring": MATRIX_RING_ID,
+    },
+)
+
+
+def test_forced_mixed_lane_is_still_convicted() -> None:
+    """"The machine's faces left no alternative" is not a defence (spec Sec 9 R1).
+
+    A Matrix Lab offers three insert columns per face, and before Task 3 that
+    made `freeform._seat_inputs` seat `universe-matrix`'s six ingredients as
+    three items per lane above and three below (freeform.py:2208-2223).  The
+    user's ruling is that such a lane starves in game exactly like a chosen one
+    -- whichever item the machines are not short of fills the belt -- so the
+    check has NO exemption.  Task 3 is what keeps `universe-matrix` building:
+    it frees a sixth input row so the lab seats one item per lane on the merits.
+    """
+    placement = _matrix_lab_three_items_on_one_lane_placement()
+    report = validate(
+        placement, _matrix_lab_six_ingredient_spec(), ids=MATRIX_LAB_IDS, expect_power=False
+    )
+    findings = [f for f in report.errors if f.check == "flow.lane_single_item"]
+    assert findings, [f.check for f in report.errors]
+    assert len(findings[0].detail["items"]) == 3
+
+
 # --- negative control against real game blueprints -------------------------
 #
 # Real blueprints are known-good, so any geometry finding against one is a bug
