@@ -170,7 +170,10 @@ def _scope_reasons(side: str, samples: Sequence[Sample], required: PromotionMani
     for key in sorted(required_keys & observed_keys):
         expected = requirements[key]
         rows = by_cell[key]
-        trials = {sample.trial for sample in rows}
+        by_trial: dict[int, set[str]] = {}
+        for sample in rows:
+            by_trial.setdefault(sample.trial, set()).add(sample.candidate)
+        trials = set(by_trial)
         wanted_trials = set(range(expected.repeat))
         if trials != wanted_trials:
             reasons.append(
@@ -179,7 +182,7 @@ def _scope_reasons(side: str, samples: Sequence[Sample], required: PromotionMani
             )
         candidate_sets: list[set[str]] = []
         for trial in sorted(trials):
-            candidates = {sample.candidate for sample in rows if sample.trial == trial}
+            candidates = by_trial[trial]
             candidate_sets.append(candidates)
             if len(candidates) != expected.candidates:
                 reasons.append(
