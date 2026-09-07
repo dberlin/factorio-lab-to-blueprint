@@ -333,6 +333,8 @@ def sub_spec(spec: BuildSpec, block: list[Unit], index: int) -> BuildSpec:
         sorter_pick_stacks=spec.sorter_pick_stacks,
         sorter_place_stacks=spec.sorter_place_stacks,
         piler_unlocked=spec.piler_unlocked,
+        machine_rank=spec.machine_rank,
+        machine_moves=spec.machine_moves,
         label=f"{spec.label}#block{index}",
         belt_required_edges=frozenset(
             edge for edge in spec.belt_required_edges if edge[0] in recipes and edge[1] in recipes
@@ -432,6 +434,8 @@ def composed_spec(
         sorter_pick_stacks=spec.sorter_pick_stacks,
         sorter_place_stacks=spec.sorter_place_stacks,
         piler_unlocked=spec.piler_unlocked,
+        machine_rank=spec.machine_rank,
+        machine_moves=spec.machine_moves,
         label=f"{spec.label}#composed",
         belt_required_edges=spec.belt_required_edges,
         spray_lanes=spec.spray_lanes,
