@@ -729,3 +729,28 @@ def test_compiled_relaxed_search_matches_python(monkeypatch: pytest.MonkeyPatch)
 
         assert calls, f"trial {trial}: the compiled relaxed loop was never reached"
         assert compiled_result == python_result, f"trial {trial}"
+
+
+def test_capacity_ledger_preserves_first_compatible_unit() -> None:
+    """A later choice can distinguish which compatible unit accepted a net."""
+    from flab2bp.layout.global_router import _CapacityLedger
+
+    ledger = _CapacityLedger(size=1)
+    first = NetId(0, 1, "iron", NetRole.INTERNAL, 0)
+    second = NetId(0, 2, "iron", NetRole.INTERNAL, 1)
+    third = NetId(0, 3, "iron", NetRole.INTERNAL, 2)
+    assert ledger.occupy(0, first, frozenset({first})) == 0
+    assert ledger.occupy(0, second, frozenset({second})) == 1
+    assert ledger.occupy(0, third, frozenset({first, second, third})) == 0
+
+    # The third net must join the FIRST compatible unit, not the second.
+    assert ledger.present_cost(0, frozenset({first, third})) == 1
+
+
+def test_reserved_owner_index_keeps_the_first_cell() -> None:
+    from flab2bp.layout.global_router import _reserved_by_owner
+
+    assert _reserved_by_owner(((7, (1, 2, 0)), (9, (3, 4, 0)), (11, (1, 2, 0)))) == {
+        (1, 2, 0): 7,
+        (3, 4, 0): 9,
+    }

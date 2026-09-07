@@ -71,7 +71,7 @@ class _CapacityLedger:
 
     size: int
     occupancy: list[int] = field(init=False)
-    units: dict[int, list[list[NetId]]] = field(default_factory=dict)
+    units: dict[int, list[frozenset[NetId]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.occupancy = [0] * self.size
@@ -80,7 +80,7 @@ class _CapacityLedger:
         units = self.units.get(index)
         if units is None:
             return 0
-        shares = any(all(owner in compatible for owner in unit) for unit in units)
+        shares = any(unit <= compatible for unit in units)
         return max(0, len(units) - 1) if shares else len(units)
 
     def occupy(
@@ -92,18 +92,18 @@ class _CapacityLedger:
         units = self.units.get(index)
         before = max(0, self.occupancy[index] - 1)
         if units is None:
-            self.units[index] = [[net_id]]
+            self.units[index] = [frozenset({net_id})]
             self.occupancy[index] = 1
         else:
-            shared = next(
-                (unit for unit in units if all(owner in compatible for owner in unit)),
+            position = next(
+                (i for i, unit in enumerate(units) if unit <= compatible),
                 None,
             )
-            if shared is None:
-                units.append([net_id])
+            if position is None:
+                units.append(frozenset({net_id}))
                 self.occupancy[index] += 1
             else:
-                shared.append(net_id)
+                units[position] = units[position] | {net_id}
         return max(0, self.occupancy[index] - 1) - before
 
 
@@ -226,6 +226,7 @@ def _route_round(
     )
 
     ledger = _CapacityLedger(external_grid.size)
+    reserved_by_owner = _reserved_by_owner(external_grid.reserved)
     paths: dict[NetId, tuple[Cell, ...]] = {}
     net_results: list[GlobalNetResult] = []
     remaining = budget
@@ -240,7 +241,7 @@ def _route_round(
             was_cancelled = True
             break
         grid = external_grid if net.net_id.role is NetRole.EXTERNAL else internal_grid
-        flags, starts, goals = _route_ends(net, grid)
+        flags, starts, goals = _route_ends(net, grid, reserved_by_owner)
         compatible = frozenset((*net.src_group, *net.dst_group))
         searched = _search_relaxed(
             grid,
@@ -392,18 +393,24 @@ def _hot_regions(
     return tuple(sorted(regions))
 
 
+def _reserved_by_owner(reserved: Sequence[tuple[int, Cell]]) -> dict[Cell, int]:
+    """The first reserved grid index for each destination, in source order."""
+    by_owner: dict[Cell, int] = {}
+    for index, owner in reserved:
+        by_owner.setdefault(owner, index)
+    return by_owner
+
+
 def _route_ends(
     net: _PreparedNet,
     grid: _Grid,
+    reserved_by_owner: Mapping[Cell, int],
 ) -> tuple[bytearray, tuple[int, ...], frozenset[int]]:
     destination = (net.dst.x, net.dst.y, net.dst.z)
     released: tuple[int, ...] = ()
     routing_ports: Collection[tuple[int, int, int]] = ()
     if net.net_id.role is NetRole.EXTERNAL:
-        released_index = next(
-            (at for at, owner in grid.reserved if owner == destination),
-            None,
-        )
+        released_index = reserved_by_owner.get(destination)
         if released_index is not None:
             released = (released_index,)
     elif net.src is not None:
