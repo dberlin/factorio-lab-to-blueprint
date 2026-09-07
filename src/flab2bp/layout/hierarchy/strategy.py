@@ -19,15 +19,17 @@ scope where mypy and the import graph can both see it.
 
 HOW THE BUDGET IS DIVIDED.  A round's jobs are ``blocks x arms``, run
 ``_pool_width()`` at a time, so the round takes ``ceil(jobs / width)`` WAVES and
-one block's wall is the round's remaining wall divided by the waves, clamped to
-``[BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S]``.
+one block's wall is the round's remaining wall divided by ``rounds_left x
+waves``, clamped to ``[BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S]`` -- see
+:func:`allowed_recut_rounds` for ``rounds_left``.
 :func:`settlement_reserve_s` comes off the top, because composing, ROUTING EVERY
 CUT LANE, compacting, finalizing and certifying happen after the last block and
-have no budget of their own.  A round whose share falls under the floor is not
-started: it would only spend the settlement's wall on solves that cannot
-finish.  The per-job wall is combined with the parent's deadline
-inside :func:`_solve_block`, at job start -- see its docstring for why the
-parent cannot do it.
+have no budget of their own.  A round is refused only when ``remaining /
+waves`` itself is under the floor -- the seed round is exempt even then: a
+build that refuses having attempted nothing reports nothing, so its share is
+floored to ``BLOCK_BUDGET_MIN_S`` instead and it runs anyway.  The per-job wall
+is combined with the parent's deadline inside :func:`_solve_block`, at job
+start -- see its docstring for why the parent cannot do it.
 
 WHAT THE PARENT PROMISES A CHILD.  A block can finish early but never outlives
 the build.  It does NOT get the parent's band policy: the composer discards each
