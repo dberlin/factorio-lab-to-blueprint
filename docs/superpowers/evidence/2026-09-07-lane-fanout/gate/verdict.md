@@ -128,8 +128,8 @@ compares to the fixed 30s budget, not to the baseline arm.
 
 Computed directly from the three committed JSONL files (`audit-baseline.jsonl`,
 `audit-candidate-r1.jsonl`, `audit-candidate-r2.jsonl`), pairing by
-`(strategy, url_id, spec_label, power, budget)` per Task 2's method (`spec_index` is not a stable
-join key across arms).
+`(strategy, url_id, spec_label, power, budget)` per Task 2's method. Raw JSONL row order
+differs; `(strategy, url_id, spec_index)` also pairs all 72 cells correctly.
 
 | arm | strategy | CLEAN | REFUSED | INVALID | CRASHED |
 |---|---|---|---|---|---|
@@ -162,6 +162,7 @@ Geomean area ratio, over cells CLEAN in both arms:
 | 2 | 66 of 66 | **0.999424** |
 
 p50 / p95 wall (`build_wall_time_s`, all 72 cells per arm):
+Percentiles use nearest rank: `index = ceil(p*n) - 1` into sorted values.
 
 | round | arm | p50 | p95 |
 |---|---|---|---|
@@ -175,6 +176,43 @@ figures are above Task 2's measured same-arm noise floor (1.3%, from `control-ta
 measured rise, reported as measured; it is not part of this task's PASS condition (which names the
 six `universe-matrix` cells, lane invariants, and zero regressions, not a p95 ceiling) but it is a
 real number and is not softened here.
+
+### Attribution of the wall-time increase
+
+Recomputed from the committed JSONL using the same nearest-rank definition:
+
+| arm | non-universe-matrix p50 | non-universe-matrix p95 | p95 change |
+|---|---|---|---|
+| baseline (66 cells) | 26.9928s | 30.8735s | — |
+| candidate r1 (66 cells) | 27.2560s | 31.2729s | +1.2935% |
+| candidate r2 (66 cells) | 27.0594s | 31.1150s | +0.7820% |
+
+The non-universe-matrix p95 changes remain within the 1.3% noise floor. Paired
+wall-time deltas sum to **+175.0838s / +170.8763s** for the six universe-matrix
+cells, versus **+6.3235s / -4.8346s** for the other 66, changing sign between rounds.
+The aggregate cost is concentrated in the six refusing cells; the remaining changes
+are consistent with noise, not a demonstrated corpus-wide slowdown.
+
+On the baseline those six cells hit the plan-time guard in 0.2315–3.5649s.
+After its deletion and the pack-work scaling, they spend approximately the 30s
+budget searching before refusing. Moving six values from the bottom into the tail
+changes both percentiles; p95 is the 69th of the 72 sorted values.
+Task 2's intermediate capture isolates the stages: its three sequence-pair cells
+already took 27.7601–30.7607s, while its freeform cells still took 0.7276–2.6943s.
+Task 1 removed the sequence-pair fast refusal; Task 3 let freeform proceed past its
+undersized deterministic pack allowance.
+
+Summed per-cell wall time is **1272.5527s → 1453.9599s / 1438.5943s**
+(approximately +14.3% / +13.0%); these sums are not the concurrent audit's elapsed
+wall time. The worst candidate cell is sequence-pair universe-matrix/output-products
+at **33.9875s**, compared with a baseline maximum of **31.2071s**: maximum end-to-end
+overrun against 30s grew from about **4.0% to 13.3%**.
+
+The baseline was captured in Task 2's earlier session under different CPU pressure,
+so this is not a same-session paired timing experiment. The per-cell breakdown
+nevertheless supports the attribution above. The final review accepted this real,
+concentrated cost: retaining a guard that rejects routable fan-out merely to save
+about 175s would trade correctness for an early false refusal. **Coverage still FAILS.**
 
 ## Step 5: the six `universe-matrix` cells, named, both rounds, both arms
 
@@ -284,7 +322,7 @@ rounds and both arms; every lane single-item; 72/72 paired against master with z
   "worst" figure moved from 5 to 59 between rounds for this same cell).
 - **sequence-pair arm** — `residual.md` item 2, quoted there as: *"The sequence-pair per-island exact-
   layout search does not converge with a longer clock"* (`src/flab2bp/layout/sequence_islands.py:223`,
-  `src/flab2bp/layout/sequence_solver.py:1600`). This round's text is byte-identical to
+  `src/flab2bp/layout/sequence_solver.py:1601`). This round's text is byte-identical to
   `residual.md`'s own build 2 and build 4 (30s and 300s) captures for all three cells: *"all 4
   sequence islands refused: island 0: deadline exhausted before finding an exact layout; ..."* — and
   is byte-identical between this gate's round 1 and round 2 as well, confirming `residual.md`'s

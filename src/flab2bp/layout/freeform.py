@@ -377,6 +377,7 @@ def _deterministic_pack_work(strip_count: int) -> float:
     scale = max(1, strip_count) / _DETERMINISTIC_PACK_STRIPS
     return _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE * scale
 
+
 #: Deterministic work allowed only for choosing among already rank-optimal port
 #: access assignments. The ranked solution remains the safe fallback; this
 #: bounded polish must never turn a preparation step into an unbounded search.
@@ -4409,11 +4410,13 @@ def _feedback_objective_score(
 #: gets `share * _PACK_SHARE / len(heights)` and is followed by a 1.9-4.6 s
 #: preparation, so a repair that costs more than a second buys nothing.
 C_WINDOW_SECONDS = 1.0
-#: Deterministic work bound for a window solve.  A full pack of fifteen or more
-#: strips gets `_deterministic_pack_work(len(strips))` and is expected to stop
-#: at its first incumbent from a shelf warm start; a window has at most twelve
-#: free strips but no such guarantee, and is expected to close a small model, so it gets
-#: twenty-five times that allowance.  On an idle box this is the limit that
+#: Deterministic work bound for a window solve.  A full pack of fifteen or
+#: more strips gets `_deterministic_pack_work(len(strips))` and is expected
+#: to stop at its first incumbent from a shelf warm start; a window has at
+#: most twelve free strips but no such guarantee, and is expected to close a
+#: small model, so it gets this bound instead.  This constant is twenty-five
+#: times the *calibrated-size* allowance -- what a fifteen-strip pack gets --
+#: so larger packs narrow the ratio.  On an idle box this is the limit that
 #: fires; under `--jobs 16` the wall limit above fires first.
 C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE
 #: One CP-SAT worker per window.  `pyproject.toml` records that a single solve
@@ -6311,8 +6314,8 @@ class _Port:
         """This port moved to the ``k``-th tile of its own lane.
 
         Out-of-range or an unknown tile list leaves the port alone, so a caller
-        that asks for more taps than the lane has tiles degrades to sharing --
-        which the fan-out check then reports honestly rather than mis-linking.
+        that asks for more taps than the lane has tiles degrades to sharing.
+        Test-only: no production caller (see tests/layout/test_freeform.py).
         """
         if not self.tiles or not 0 <= k < len(self.tiles):
             return self

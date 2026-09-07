@@ -62,10 +62,10 @@ Every one of the 30 small-tier cells, in both arms, packs at most **6** strips.
 `_deterministic_pack_work` has exactly two call sites in `src/`, and both are behind a guard that is
 `False` for every small-tier cell:
 
-- **The solver call site**, `freeform.py:5350` (`_pack`'s `max_deterministic_time` assignment), executes
-  only `if deterministic:` (`freeform.py:5347`). `_pack`'s `deterministic` parameter defaults to `False`
-  (`freeform.py:5294`, `deterministic: bool = False`). The only place in `src/` that ever passes
-  `deterministic=True` is `freeform.py:21617`:
+- **The solver call site**, `freeform.py:5351` (`_pack`'s `max_deterministic_time` assignment), executes
+  only `if deterministic:` (`freeform.py:5346`). `_pack`'s `deterministic` parameter defaults to `False`
+  (`freeform.py:5297`, `deterministic: bool = False`). The only place in `src/` that ever passes
+  `deterministic=True` is `freeform.py:21620`:
   ```python
   deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS,
   ```
@@ -73,8 +73,8 @@ Every one of the 30 small-tier cells, in both arms, packs at most **6** strips.
   `sequence-pair` strategy's own `_pack` call, `sequence_solver.py:6029`, passes no `deterministic=`
   keyword at all, so it always takes the `False` default regardless of strip count -- meaning this call
   site is unreachable for `sequence-pair` cells of ANY size, not only small ones.
-- **The refusal-message call site**, `freeform.py:20729` (inside the UNKNOWN-refusal sentence), is gated
-  by its own `if len(strips) >= _DETERMINISTIC_PACK_STRIPS:` at `freeform.py:20730` -- same threshold,
+- **The refusal-message call site**, `freeform.py:20731` (inside the UNKNOWN-refusal sentence), is gated
+  by its own `if len(strips) >= _DETERMINISTIC_PACK_STRIPS:` at `freeform.py:20733` -- same threshold,
   same reason it never fires below 15 strips.
 
 So for every cell in the small tier, `_deterministic_pack_work` is called **zero times** in both the
@@ -106,7 +106,7 @@ never a regression to rule out at this strip count either way).
 
 ## 6. `C_WINDOW_DETERMINISTIC_WORK` is unchanged
 
-`C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE` (`freeform.py:4418`) is a
+`C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE` (`freeform.py:4421`) is a
 pure rename of `25 * _DETERMINISTIC_PACK_WORK` (the pre-Task-3 name for the same `0.02` constant):
 
 ```

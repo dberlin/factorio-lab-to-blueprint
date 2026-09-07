@@ -141,7 +141,7 @@ which would make `report.ok` false and the cell not CLEAN. This is the real mech
 ## Ranked list of what is left
 
 1. **The freeform packer produces packs its own router cannot wire, and more clock does not fix it** —
-   `src/flab2bp/layout/freeform.py:20692-20696` (the `PACKER defect` refusal clause, taken only when
+   `src/flab2bp/layout/freeform.py:20695-20699` (the `PACKER defect` refusal clause, taken only when
    `attempts` is non-empty). Measured directly: build 3 (300 s) had 8-16 routed attempts per cell (vs. 2 at
    30 s) and every one of them still left nets unrouted, so the refusal text itself names this a packer
    defect rather than a clock shortage. This is the residual blocker with no measured fix in hand — it is
@@ -149,15 +149,15 @@ which would make `report.ok` false and the cell not CLEAN. This is the real mech
 
 2. **The sequence-pair per-island exact-layout search does not converge with a longer clock** —
    `src/flab2bp/layout/sequence_islands.py:223` (aggregation: `f"all {requested} sequence islands
-   refused"`) and `src/flab2bp/layout/sequence_solver.py:1600` (`"deadline": "deadline exhausted before
+   refused"`) and `src/flab2bp/layout/sequence_solver.py:1601` (`"deadline": "deadline exhausted before
    finding an exact layout"`). Measured directly: build 2 (30 s) and build 4 (300 s) produced
    byte-for-byte identical refusal text for all three cells and all four islands each — a 10x clock
    multiplier changed nothing. This is spec §4.3 blocker 3 for the sequence-pair arm.
 
 3. **At the gate's own budget (30 s), the freeform failure mode is still partly clock-limited, and that
-   mode is distinct from the 300 s mode** — contrast `src/flab2bp/layout/freeform.py:20673-20676` (the
+   mode is distinct from the 300 s mode** — contrast `src/flab2bp/layout/freeform.py:20676-20679` (the
    deadline-exhaustion refusal clause reached at 30 s, where `budget_unspent_s=0` and only 2 attempts
-   occurred) against `freeform.py:20692-20696` (the PACKER-defect clause reached at 300 s with 8-16
+   occurred) against `freeform.py:20695-20699` (the PACKER-defect clause reached at 300 s with 8-16
    attempts). Measured directly: build 1's refusal text says "the 30s deadline passed with no completed
    packing... a longer clock alone would not have wired this spec" (already conceding the clock isn't the
    whole story) while still reporting only 2 attempts, whereas build 3 with 4-8x more attempts converts to
@@ -165,7 +165,7 @@ which would make `report.ok` false and the cell not CLEAN. This is the real mech
    other; they describe two measured, different symptoms at the two budgets.
 
 4. **Task 3's pack-work bound is reached and is not obviously starving the solve any more** —
-   `src/flab2bp/layout/freeform.py:354` (`_DETERMINISTIC_PACK_STRIPS = 15`) and `freeform.py:21617`
+   `src/flab2bp/layout/freeform.py:354` (`_DETERMINISTIC_PACK_STRIPS = 15`) and `freeform.py:21620`
    (`deterministic=len(strips) >= _DETERMINISTIC_PACK_STRIPS`). All three refusing cells (57/53/54 strips)
    are above the threshold, so the deterministic path Task 3 rescaled is now live for them (unlike the
    small-tier corpus documented in `pack-work-task3.md`, where it is never reached). Measured directly:

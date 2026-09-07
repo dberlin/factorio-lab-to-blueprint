@@ -49,15 +49,16 @@ Identical counts in both arms.
 
 ## Pairing, area ratio, p95 wall
 
-Cells were paired by `(strategy, url_id, spec_label, power, budget)` — `spec_index` is not
-stable across arms (JSONL row order differs) and must not be used as a join key.
+Cells were paired by `(strategy, url_id, spec_label, power, budget)`. Raw JSONL row order
+differs across arms, so positional pairing is unsafe; `(strategy, url_id, spec_index)` also
+pairs all 72 cells correctly. The richer key used here is valid, not required by index instability.
 
 - Paired keys: 72 of 72 on both sides (every cell present in both arms).
 - Paired CLEAN/CLEAN cells: 66 of 66.
 - Geomean area ratio over the 66 paired CLEAN/CLEAN cells: **0.999874** (audit_compare.py
   reports the rounded `0.9999`).
-- p95 wall (`build_wall_time_s`, all 72 cells, n=72 so p95 index = ceil(0.95*72)-1 = 68th
-  of 72 sorted values):
+- p95 wall (`build_wall_time_s`, all 72 cells, n=72 so p95 index = ceil(0.95*72)-1 = 68,
+  the 69th of 72 sorted values):
   - baseline: **30.8735 s**
   - candidate: **31.2543 s**
   - relative change: **+1.2333 %** (this repo's same-arm noise floor is 1.3 %; the measured

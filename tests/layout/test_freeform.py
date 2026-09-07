@@ -2602,8 +2602,9 @@ ALL_SPECS = [single_recipe_spec, two_stage_spec, magnetic_ring_spec, proliferate
 
 #: Freeform used to refuse any strip plan where one producer lane had to feed
 #: several consumer lanes, because a belt tile has one ``output_obj``.  It now
-#: taps a different TILE of the lane for each consumer and junctions there with
-#: a splitter, so the gap is closed and the marker that stood here is gone.
+#: closes the gap by having later nets branch off a sibling's committed path
+#: when they share a source lane (``_route``'s ``same_src``); ``_tap_source``
+#: builds the branch point as a splitter, so the marker that stood here is gone.
 #:
 #: Kept as a note rather than a marker: the tests it was attached to are the
 #: ones that prove the fan-out works, and they assert it directly now.
@@ -6992,9 +6993,10 @@ class TestSolverActuallyRuns:
         """The gap this used to pin as unfixable, now closed.
 
         A belt tile has one ``output_obj``, so a lane feeding four consumers
-        cannot simply point at all four. It taps a different TILE of the lane
-        for each and puts a splitter there -- the lane keeps flowing past the
-        tap, and the branch draws from the junction.
+        cannot simply point at all four. Later nets branch off a sibling's
+        committed path instead (``_route``'s ``same_src``), and ``_tap_source``
+        builds that branch point as a splitter -- the lane keeps flowing past
+        the tap, and the branch draws from the junction.
 
         This test previously asserted the opposite (that the spec was refused),
         deliberately written to fail the moment the gap closed. It did.
