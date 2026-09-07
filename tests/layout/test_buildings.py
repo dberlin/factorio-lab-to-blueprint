@@ -323,11 +323,38 @@ def test_belt_run_crosses_splitters_and_pilers_and_terminates_on_cycles() -> Non
     assert 2 not in index.belt_run(0, forward=True)
     assert 6 not in index.belt_run(0, forward=True)
 
-    from flab2bp.layout.hierarchy.contracts import _belt_run
+    def brute_force(start: int, *, forward: bool) -> frozenset[int]:
+        onward: dict[int, list[int]] = {}
+        for i, building in enumerate(records):
+            link = building.output_obj
+            if link is None or not 0 <= link < len(records):
+                continue
+            if catalog.is_belt(building.item_id) and catalog.is_belt(records[link].item_id):
+                onward.setdefault(i, []).append(link)
+            elif catalog.is_belt(building.item_id):
+                for j, other in enumerate(records):
+                    if catalog.is_belt(other.item_id) and other.input_obj == link:
+                        onward.setdefault(i, []).append(j)
+        if not forward:
+            backward: dict[int, list[int]] = {}
+            for source, destinations in onward.items():
+                for destination in destinations:
+                    backward.setdefault(destination, []).append(source)
+            onward = backward
+        seen = {start}
+        pending = [start]
+        while pending:
+            node = pending.pop()
+            for following in onward.get(node, ()):
+                if following not in seen:
+                    seen.add(following)
+                    pending.append(following)
+        return frozenset(seen)
 
     for start in range(len(records)):
         for forward in (True, False):
-            expected = frozenset(_belt_run(records, start, forward=forward))
+            expected = brute_force(start, forward=forward)
+            assert expected
             assert index.belt_run(start, forward=forward) == expected
 
 
