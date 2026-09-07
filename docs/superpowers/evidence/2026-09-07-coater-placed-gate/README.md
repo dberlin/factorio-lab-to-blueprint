@@ -458,3 +458,41 @@ per affected `sequence-pair` cell, and is still available — reintroduce `cd4db
 narrower version of it, e.g. gated on a time budget rather than unconditionally) behind its own
 measurement against the reported URL's `sequence-pair / all-products` pair specifically, rather
 than reintroducing it corpus-wide on an ungated `coater_mode().is_node` check as `cd4db8c9` did.
+
+## 13. Note (2026-09-07, task 6 review): stale `arm=` labels in `reported/` and `reportedC/`
+
+Found while reviewing Task 6's web-viewer evidence, which builds two of its own blueprints with
+the same probe and hit this first.
+
+**`docs/superpowers/evidence/2026-09-07-coater-placed-gate/reported/placed.log` and
+`reportedC/placed.log` both self-report `arm=off` on every one of their per-pair lines** (e.g.
+`reportedC/placed.log:7`: `arm=off cell=reported/no-proliferator strategy=freeform`). This is
+wrong for those two files: both were run from the `coater-placed` branch checkout with
+`FLAB2BP_COATER_NODE` unset, which under this branch's env-var contract (§0 of the plan; also
+`global-constraints.md`) means **`placed`**, not `off`.
+
+**Cause:** `probe_cell.py`'s own print statement defaulted an unset env var to the string
+`'off'` directly, rather than asking `flab2bp.layout.coater_mode.coater_mode()` what arm the
+process is actually running. That default was correct on the pre-branch contract (unset meant
+`off` there — confirmed against the `coater-placed-base` checkout's `coater_mode.py`, whose
+default literally falls through to `CoaterMode.OFF`) and became wrong the moment this branch
+flipped the contract. **Fixed at the source** in the branch's copy of the probe
+(`docs/superpowers/evidence/2026-09-07-exp-coater-node/probes/probe_cell.py`, task 6 fix round 1)
+to read `coater_mode()` instead of the env var directly. The older experiment's already-committed
+logs (this gate's own `reported/`, `reportedC/`, and the separate `2026-09-07-exp-coater-node`
+evidence directory) are **not** re-run or edited for this — the label was wrong, the underlying
+build was not, and re-running is hours of solver time for a label.
+
+**`reported/baseline.log`'s `arm=off` lines are correct, not stale** — that arm ran from the
+`coater-placed-base` checkout (the true merge base), where `coater_mode()` genuinely defaults
+unset to `OFF` under the old contract. Only the two `placed`-checkout files above are wrong.
+
+**How a reader tells the arms apart despite the wrong per-pair label:** every log's own header
+line already carries the real arm, written by `run_reported.sh` itself rather than by the probe —
+`reported/placed.log:1` is `=== reported arm=placed ===` and `reported/baseline.log:1` is `===
+reported arm=baseline ===`; `reportedC/placed.log` is `placed`-only by construction (§11: "the
+six reported-URL pairs, `placed` arm only, re-run after the revert"). Barring that header, the
+digests are the unambiguous tell — §7 and §12's tables give the digest for each pair, and no
+digest is shared between a `baseline` build and a `placed` build of the same pair anywhere in this
+gate's evidence. (§7 already carried a shorter version of this caveat for `reported/`'s own two
+logs; this section extends it to `reportedC/` and records the fix.)

@@ -11,7 +11,6 @@ tiles -- which is the reported defect, stated directly rather than inferred.
 from __future__ import annotations
 
 import argparse
-import os
 import time
 from collections import defaultdict
 from fractions import Fraction
@@ -24,6 +23,7 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
 from flab2bp.layout import validate
+from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import PlacementCompletion
 from flab2bp.layout.freeform import FreeformLayout
@@ -67,7 +67,7 @@ def main() -> None:
             islands=1,
         )
 
-    print(f"arm={os.environ.get('FLAB2BP_COATER_NODE', 'off')} "
+    print(f"arm={coater_mode().value} "
           f"cell={args.url_id}/{args.policy} strategy={args.strategy}")
     t0 = time.monotonic()
     try:
