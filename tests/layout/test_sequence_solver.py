@@ -39,7 +39,6 @@ from flab2bp.layout.freeform import (
     _COATER_NODE_TILES,
     _COATER_WEST_CHANNEL,
     _ENTRY_RING,
-    WEST_CHANNEL,
     PreparedRoutingLowerBound,
     _box,
     _coarsen_saturated_strip_plan,
@@ -6088,99 +6087,20 @@ def test_selected_strips_memo_keys_name_the_selected_variant() -> None:
     }
 
 
-def _sprayed_strips_for(spec: BuildSpec) -> list[freeform_module.Strip]:
-    """Planned strips for ``spec``, at least one of them ``REQUIRES_SPRAY``.
-
-    The task brief names an existing helper; this module had none, so this is
-    it.  ``plan_strips`` is the entry point the rest of the channel tests here
-    use, and it is what gives each sprayed strip the ``physical_variant``
-    that :func:`_sequence_reservation_strips` gates its lift on -- a strip
-    without one is never lifted, so a fabricated ``Strip`` would prove nothing.
-    """
-    strips = plan_strips(spec, strip_len=6, band_policy=BandPolicy("120"))
-    sprayed = [strip for strip in strips if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY]
-    assert sprayed, "spec has no REQUIRES_SPRAY strip to measure"
-    assert all(strip.physical_variant is not None for strip in sprayed)
-    return strips
-
-
-def test_placed_stops_the_sequence_pair_sprayed_channel_lift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A sprayed strip pays WEST_CHANNEL under ``placed``, W4 under ``off``.
-
-    The lift reserves room for a 3x1 addon riding the strip's own channel.
-    Under ``placed`` the addon is on its own four-tile run, so the reservation
-    buys nothing and costs two columns per sprayed strip.
-    """
-    strips = _sprayed_strips_for(proliferated_spec())
-    sprayed = [strip for strip in strips if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY]
-    assert {strip.west_channel for strip in sprayed} == {WEST_CHANNEL}
-
-    monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
-    reserved = sequence_solver_module._sequence_reservation_strips(strips)
-    assert {
-        strip.west_channel for strip in reserved if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
-    } == {_COATER_WEST_CHANNEL + 1}
-
-    monkeypatch.setenv("FLAB2BP_COATER_NODE", "placed")
-    reserved = sequence_solver_module._sequence_reservation_strips(strips)
-    assert {
-        strip.west_channel for strip in reserved if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
-    } == {WEST_CHANNEL}
-
-
-def test_placed_stops_the_selected_strip_sprayed_channel_lift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The mirror of the reservation lift, on the strips the anneal scores.
-
-    ``_selected_strips`` rewrites ``west_channel`` from the variant on every
-    call, so the arm has to be read there too and not just at plan time.
-    """
-    spec = proliferated_spec()
-    policy = BandPolicy("120")
-    strips = _sprayed_strips_for(spec)
-    instance_ids, variant_tables = _variant_search_inputs(spec, strips, strip_len=6)
-    problem = PlacementProblem(
-        sizes=tuple(_box(strip) for strip in strips),
-        nets=tuple(_nets_between(strips)),
-        outline_height=40,
-        area_lower_bound=1,
-        instance_ids=instance_ids,
-        variant_tables=variant_tables,
-    )
-    indices = AnnealState.initial(problem.size, seed=17).variant_indices
-    sprayed = [
-        index
-        for index, strip in enumerate(strips)
-        if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
-    ]
-
-    monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
-    selected = _selected_strips(strips, problem, indices, band_policy=policy)
-    assert {selected[index].west_channel for index in sprayed} == {_COATER_WEST_CHANNEL}
-
-    monkeypatch.setenv("FLAB2BP_COATER_NODE", "placed")
-    selected = _selected_strips(strips, problem, indices, band_policy=policy)
-    assert {selected[index].west_channel for index in sprayed} == {WEST_CHANNEL}
-    assert {
-        selected[index].west_channel for index in range(len(selected)) if index not in sprayed
-    } == {WEST_CHANNEL}
-
-
-@pytest.mark.parametrize(
-    ("arm", "expected_reserved_channel"),
-    (
-        pytest.param("off", _COATER_WEST_CHANNEL + 1, id="off-reserves-W4"),
-        pytest.param("placed", WEST_CHANNEL, id="placed-reserves-nothing"),
-    ),
-)
+@pytest.mark.parametrize("arm", ("off", "placed"), ids=("off-arm", "placed-arm"))
 def test_sequence_reservation_and_child_rebuild_preserve_piler_tail_fields(
-    monkeypatch: pytest.MonkeyPatch,
-    arm: str,
-    expected_reserved_channel: int,
+    monkeypatch: pytest.MonkeyPatch, arm: str
 ) -> None:
+    """The W4 reservation lift is unconditional again on both arms.
+
+    `cd4db8c9` guarded this lift on ``coater_mode().is_node`` so ``placed``
+    packed a sprayed strip two columns narrower than ``off``.  The controller
+    reverted that guard (docs/superpowers/sdd/2026-09-07-coater-placed/
+    task-7b-report.md): the reported URL's `sequence-pair / all-products`
+    pair no longer builds inside its 30 s budget once the reservation is
+    gone, and the user's standing ruling is that density may be paid for
+    correctness.  Both arms must therefore reserve the same room again.
+    """
     monkeypatch.setenv("FLAB2BP_COATER_NODE", arm)
     spec = proliferated_spec()
     policy = BandPolicy("120")
@@ -6211,7 +6131,12 @@ def test_sequence_reservation_and_child_rebuild_preserve_piler_tail_fields(
     assert _box(strips[target])[0] == ordinary_width + 7
 
     reserved = sequence_solver_module._sequence_reservation_strips(strips)
-    assert reserved[target].west_channel == expected_reserved_channel
+    # The lift pins W4 outright rather than adding to whatever `plan_strips`
+    # assigned -- under `placed`, `strips[target].west_channel` is already
+    # the plain `WEST_CHANNEL` (no plan-time coater keepout once the addon
+    # is a free-standing node), so comparing against that pre-lift value
+    # would silently pass at the wrong number on this arm.
+    assert reserved[target].west_channel == _COATER_WEST_CHANNEL + 1
     assert reserved[target].tail_extension == 7
     assert reserved[target].pilers == (piler,)
 

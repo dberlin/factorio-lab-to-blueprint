@@ -30,7 +30,6 @@ from flab2bp.layout.base import (
     PlacementCompletion,
     ProjectionFailureRecord,
 )
-from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.compact_seed import (
     CompactSeedConfig,
     CompactSeedDiagnostics,
@@ -3743,21 +3742,7 @@ def _variant_search_inputs(
 
 
 def _sequence_reservation_strips(strips: Sequence[Strip]) -> list[Strip]:
-    """Reserve W4 so a later exact pose swap cannot outgrow its proxy box.
-
-    The reservation exists for an addon riding the strip's OWN west channel:
-    the proxy box the sequence pair packs is built before the exact pose is
-    known, and W4 is the widest that pose can turn out to need, so a later swap
-    cannot outgrow the box the neighbours were packed against.
-
-    Under a node arm there is no such addon.  The coater rides its own
-    free-standing four-tile run sited after the pack, so the widest exact pose
-    of a sprayed strip is the same as any other strip's and the reservation
-    buys nothing while costing two columns per sprayed strip.  Return the
-    strips untouched -- ``plan_strips`` has already given them ``WEST_CHANNEL``.
-    """
-    if coater_mode().is_node:
-        return list(strips)
+    """Reserve W4 so a later exact pose swap cannot outgrow its proxy box."""
     return [
         (
             replace(
@@ -3798,10 +3783,7 @@ def _sequence_reservation_strips(strips: Sequence[Strip]) -> list[Strip]:
 #:
 #: The template's own ``cargo_domain``, ``tail_extension`` and ``pilers`` are
 #: read too, but the template is a function of ``(instance_id, index)`` against
-#: a fixed ``strips``, so they are already pinned.  ``coater_mode()`` is read
-#: too and is deliberately NOT in the key: the arm comes from the environment
-#: and is fixed for the life of the process, so one dict never spans two arms.
-#: Bounded like the freeform
+#: a fixed ``strips``, so they are already pinned.  Bounded like the freeform
 #: geometry memo: clearing on overflow costs recomputation and stays exact.
 _SELECTED_STRIP_MEMO_LIMIT = 65536
 
@@ -3869,7 +3851,6 @@ def _selected_strips(
                 west_channel=(
                     _COATER_WEST_CHANNEL
                     if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY
-                    and not coater_mode().is_node
                     else WEST_CHANNEL
                 ),
                 tail_extension=strip.tail_extension,
@@ -3879,7 +3860,7 @@ def _selected_strips(
                 if len(memo) >= _SELECTED_STRIP_MEMO_LIMIT:
                     memo.clear()
                 memo[memo_key] = selected_strip
-        if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY and not coater_mode().is_node:
+        if strip.cargo_domain is CargoDomain.REQUIRES_SPRAY:
             selected_strip = replace(
                 selected_strip,
                 west_channel=max(
