@@ -1,0 +1,215 @@
+=== arm=baseline round=roundA strategy=both jobs=8 budget=30 ===
+root: /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/coater-placed-base
+commit: 2e861af02b6a5062792f8d21fca009b64aee5ab6
+flab2bp: /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/coater-placed-base/src/flab2bp/__init__.py
+cpu pressure before (runnable, 5s mean): 2.6
+2026-09-07T08:56:12-04:00
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     2s freeform  trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN      0.6s
+  . [  2/6]     3s freeform  trivial  iron-ingot/output-products power=1 budget=30s        CLEAN      1.5s
+  . [  3/6]     3s freeform  trivial  iron-ingot/all-products power=1 budget=30s           CLEAN      1.7s
+  . [  4/6]    11s sequence-pair trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN     10.0s
+  . [  5/6]    22s sequence-pair trivial  iron-ingot/output-products power=1 budget=30s        CLEAN     20.7s  <-- 21s
+  . [  6/6]    22s sequence-pair trivial  iron-ingot/all-products power=1 budget=30s           CLEAN     20.9s  <-- 21s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 21s sequence-pair iron-ingot/all-products power=1 budget=30s, 21s sequence-pair iron-ingot/output-products power=1 budget=30s
+
+22s wall, 6/6 cells
+  [iron-ingot exit 0] cpu=22.2
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     3s freeform  trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN      1.3s
+  . [  2/6]     4s freeform  trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN      2.8s
+  . [  3/6]     6s freeform  trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN      4.4s
+  . [  4/6]    20s sequence-pair trivial  magnetic-coil/no-proliferator power=1 budget=30s     CLEAN     19.1s  <-- 19s
+  . [  5/6]    32s sequence-pair trivial  magnetic-coil/all-products power=1 budget=30s        CLEAN     30.9s  <-- 31s
+  . [  6/6]    32s sequence-pair trivial  magnetic-coil/output-products power=1 budget=30s     CLEAN     31.0s  <-- 31s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 31s sequence-pair magnetic-coil/output-products power=1 budget=30s, 31s sequence-pair magnetic-coil/all-products power=1 budget=30s, 19s sequence-pair magnetic-coil/no-proliferator power=1 budget=30s
+
+32s wall, 6/6 cells
+2 cells completed after their own requested search deadline; the largest completion tail was 1.0s. Emission, detailed routing already in flight, and validation finish atomically.
+  [magnetic-coil exit 0] cpu=8.8
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     3s freeform  small    graphene/no-proliferator power=1 budget=30s          CLEAN      1.7s
+  . [  2/6]     3s freeform  small    graphene/output-products power=1 budget=30s          CLEAN      2.3s
+  . [  3/6]     4s freeform  small    graphene/all-products power=1 budget=30s             CLEAN      2.7s
+  . [  4/6]    27s sequence-pair small    graphene/no-proliferator power=1 budget=30s          CLEAN     26.4s  <-- 26s
+  . [  5/6]    32s sequence-pair small    graphene/all-products power=1 budget=30s             CLEAN     30.9s  <-- 31s
+  . [  6/6]    32s sequence-pair small    graphene/output-products power=1 budget=30s          CLEAN     31.3s  <-- 31s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 31s sequence-pair graphene/output-products power=1 budget=30s, 31s sequence-pair graphene/all-products power=1 budget=30s, 26s sequence-pair graphene/no-proliferator power=1 budget=30s
+
+32s wall, 6/6 cells
+2 cells completed after their own requested search deadline; the largest completion tail was 1.3s. Emission, detailed routing already in flight, and validation finish atomically.
+  [graphene exit 0] cpu=5.6
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     4s freeform  small    electromagnetic-matrix/no-proliferator power=1 budget=30s CLEAN      2.5s
+  . [  2/6]     5s freeform  small    electromagnetic-matrix/output-products power=1 budget=30s CLEAN      4.1s
+  . [  3/6]    14s freeform  small    electromagnetic-matrix/all-products power=1 budget=30s CLEAN     12.8s  <-- 13s
+  . [  4/6]    31s sequence-pair small    electromagnetic-matrix/all-products power=1 budget=30s CLEAN     29.4s  <-- 29s
+  . [  5/6]    32s sequence-pair small    electromagnetic-matrix/output-products power=1 budget=30s CLEAN     30.5s  <-- 30s
+  . [  6/6]    33s sequence-pair small    electromagnetic-matrix/no-proliferator power=1 budget=30s CLEAN     31.4s  <-- 31s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 13s freeform electromagnetic-matrix/all-products power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 31s sequence-pair electromagnetic-matrix/no-proliferator power=1 budget=30s, 30s sequence-pair electromagnetic-matrix/output-products power=1 budget=30s, 29s sequence-pair electromagnetic-matrix/all-products power=1 budget=30s
+
+33s wall, 6/6 cells
+2 cells completed after their own requested search deadline; the largest completion tail was 1.4s. Emission, detailed routing already in flight, and validation finish atomically.
+  [electromagnetic-matrix exit 0] cpu=57.8
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     4s freeform  small    plastic/no-proliferator power=1 budget=30s           CLEAN      2.7s
+  . [  2/6]     6s freeform  small    plastic/output-products power=1 budget=30s           CLEAN      4.8s
+  . [  3/6]     7s freeform  small    plastic/all-products power=1 budget=30s              CLEAN      6.3s
+  . [  4/6]    31s sequence-pair small    plastic/all-products power=1 budget=30s              CLEAN     30.0s  <-- 30s
+  . [  5/6]    31s sequence-pair small    plastic/output-products power=1 budget=30s           CLEAN     30.4s  <-- 30s
+  . [  6/6]    33s sequence-pair small    plastic/no-proliferator power=1 budget=30s           CLEAN     31.6s  <-- 32s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s sequence-pair plastic/no-proliferator power=1 budget=30s, 30s sequence-pair plastic/output-products power=1 budget=30s, 30s sequence-pair plastic/all-products power=1 budget=30s
+
+33s wall, 6/6 cells
+3 cells completed after their own requested search deadline; the largest completion tail was 1.6s. Emission, detailed routing already in flight, and validation finish atomically.
+  [plastic exit 0] cpu=6.2
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     6s freeform  mid      processor/no-proliferator power=1 budget=30s         CLEAN      5.4s
+  . [  2/6]    10s freeform  mid      processor/output-products power=1 budget=30s         CLEAN      8.9s
+  . [  3/6]    13s freeform  mid      processor/all-products power=1 budget=30s            CLEAN     12.2s  <-- 12s
+  . [  4/6]    30s sequence-pair mid      processor/all-products power=1 budget=30s            CLEAN     29.5s  <-- 29s
+  . [  5/6]    32s sequence-pair mid      processor/output-products power=1 budget=30s         CLEAN     30.7s  <-- 31s
+  . [  6/6]    32s sequence-pair mid      processor/no-proliferator power=1 budget=30s         CLEAN     31.2s  <-- 31s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 12s freeform processor/all-products power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 31s sequence-pair processor/no-proliferator power=1 budget=30s, 31s sequence-pair processor/output-products power=1 budget=30s, 29s sequence-pair processor/all-products power=1 budget=30s
+
+32s wall, 6/6 cells
+2 cells completed after their own requested search deadline; the largest completion tail was 1.2s. Emission, detailed routing already in flight, and validation finish atomically.
+  [processor exit 0] cpu=62
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     3s freeform  mid      energy-matrix/no-proliferator power=1 budget=30s     CLEAN      1.6s
+  . [  2/6]     4s freeform  mid      energy-matrix/output-products power=1 budget=30s     CLEAN      2.5s
+  . [  3/6]     4s freeform  mid      energy-matrix/all-products power=1 budget=30s        CLEAN      2.7s
+  . [  4/6]    32s sequence-pair mid      energy-matrix/all-products power=1 budget=30s        CLEAN     30.8s  <-- 31s
+  . [  5/6]    32s sequence-pair mid      energy-matrix/output-products power=1 budget=30s     CLEAN     31.1s  <-- 31s
+  . [  6/6]    33s sequence-pair mid      energy-matrix/no-proliferator power=1 budget=30s     CLEAN     31.8s  <-- 32s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s sequence-pair energy-matrix/no-proliferator power=1 budget=30s, 31s sequence-pair energy-matrix/output-products power=1 budget=30s, 31s sequence-pair energy-matrix/all-products power=1 budget=30s
+
+33s wall, 6/6 cells
+3 cells completed after their own requested search deadline; the largest completion tail was 1.8s. Emission, detailed routing already in flight, and validation finish atomically.
+  [energy-matrix exit 0] cpu=7
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]    30s freeform  mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     28.5s  <-- 28s
+  . [  2/6]    31s sequence-pair mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     29.2s  <-- 29s
+  . [  3/6]    31s freeform  mid      super-magnetic-ring/no-proliferator power=1 budget=30s CLEAN     29.2s  <-- 29s
+  . [  4/6]    31s sequence-pair mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     29.2s  <-- 29s
+  . [  5/6]    31s freeform  mid      super-magnetic-ring/all-products power=1 budget=30s  CLEAN     29.7s  <-- 30s
+  . [  6/6]    31s sequence-pair mid      super-magnetic-ring/output-products power=1 budget=30s CLEAN     29.8s  <-- 30s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 30s freeform super-magnetic-ring/all-products power=1 budget=30s, 29s freeform super-magnetic-ring/no-proliferator power=1 budget=30s, 28s freeform super-magnetic-ring/output-products power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 30s sequence-pair super-magnetic-ring/output-products power=1 budget=30s, 29s sequence-pair super-magnetic-ring/all-products power=1 budget=30s, 29s sequence-pair super-magnetic-ring/no-proliferator power=1 budget=30s
+
+31s wall, 6/6 cells
+  [super-magnetic-ring exit 0] cpu=5.8
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     6s freeform  large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN      4.9s
+  . [  2/6]    10s freeform  large    casimir-crystal/output-products power=1 budget=30s   CLEAN      8.9s
+  . [  3/6]    13s freeform  large    casimir-crystal/all-products power=1 budget=30s      CLEAN     11.2s  <-- 11s
+  . [  4/6]    31s sequence-pair large    casimir-crystal/all-products power=1 budget=30s      CLEAN     29.3s  <-- 29s
+  . [  5/6]    31s sequence-pair large    casimir-crystal/output-products power=1 budget=30s   CLEAN     29.9s  <-- 30s
+  . [  6/6]    33s sequence-pair large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN     31.2s  <-- 31s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 11s freeform casimir-crystal/all-products power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 31s sequence-pair casimir-crystal/no-proliferator power=1 budget=30s, 30s sequence-pair casimir-crystal/output-products power=1 budget=30s, 29s sequence-pair casimir-crystal/all-products power=1 budget=30s
+
+33s wall, 6/6 cells
+1 cells completed after their own requested search deadline; the largest completion tail was 1.2s. Emission, detailed routing already in flight, and validation finish atomically.
+  [casimir-crystal exit 0] cpu=7.2
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]    14s freeform  large    information-matrix/no-proliferator power=1 budget=30s CLEAN     13.1s  <-- 13s
+  . [  2/6]    26s freeform  large    information-matrix/output-products power=1 budget=30s CLEAN     24.7s  <-- 25s
+  . [  3/6]    29s sequence-pair large    information-matrix/all-products power=1 budget=30s   CLEAN     27.8s  <-- 28s
+  . [  4/6]    29s sequence-pair large    information-matrix/output-products power=1 budget=30s CLEAN     28.3s  <-- 28s
+  . [  5/6]    30s sequence-pair large    information-matrix/no-proliferator power=1 budget=30s CLEAN     29.4s  <-- 29s
+  . [  6/6]    31s freeform  large    information-matrix/all-products power=1 budget=30s   CLEAN     29.8s  <-- 30s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 30s freeform information-matrix/all-products power=1 budget=30s, 25s freeform information-matrix/output-products power=1 budget=30s, 13s freeform information-matrix/no-proliferator power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 29s sequence-pair information-matrix/no-proliferator power=1 budget=30s, 28s sequence-pair information-matrix/output-products power=1 budget=30s, 28s sequence-pair information-matrix/all-products power=1 budget=30s
+
+31s wall, 6/6 cells
+  [information-matrix exit 0] cpu=16.8
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]    11s freeform  stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     10.1s  <-- 10s
+  . [  2/6]    18s freeform  stress   quantum-chip/output-products power=1 budget=30s      CLEAN     16.6s  <-- 17s
+  . [  3/6]    27s sequence-pair stress   quantum-chip/all-products power=1 budget=30s         CLEAN     25.5s  <-- 26s
+  . [  4/6]    28s freeform  stress   quantum-chip/all-products power=1 budget=30s         CLEAN     26.5s  <-- 26s
+  . [  5/6]    31s sequence-pair stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     29.3s  <-- 29s
+  . [  6/6]    31s sequence-pair stress   quantum-chip/output-products power=1 budget=30s      CLEAN     29.5s  <-- 30s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 26s freeform quantum-chip/all-products power=1 budget=30s, 17s freeform quantum-chip/output-products power=1 budget=30s, 10s freeform quantum-chip/no-proliferator power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 30s sequence-pair quantum-chip/output-products power=1 budget=30s, 29s sequence-pair quantum-chip/no-proliferator power=1 budget=30s, 26s sequence-pair quantum-chip/all-products power=1 budget=30s
+
+31s wall, 6/6 cells
+  [quantum-chip exit 0] cpu=10.6
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]    29s freeform  stress   universe-matrix/output-products power=1 budget=30s   CLEAN     28.3s  <-- 28s
+  . [  2/6]    30s freeform  stress   universe-matrix/all-products power=1 budget=30s      CLEAN     28.6s  <-- 29s
+  . [  3/6]    32s freeform  stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     31.2s  <-- 31s
+  . [  4/6]    32s sequence-pair stress   universe-matrix/output-products power=1 budget=30s   CLEAN     31.3s  <-- 31s
+  . [  5/6]    33s sequence-pair stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     31.7s  <-- 32s
+  . [  6/6]    34s sequence-pair stress   universe-matrix/all-products power=1 budget=30s      CLEAN     32.9s  <-- 33s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 31s freeform universe-matrix/no-proliferator power=1 budget=30s, 29s freeform universe-matrix/all-products power=1 budget=30s, 28s freeform universe-matrix/output-products power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 33s sequence-pair universe-matrix/all-products power=1 budget=30s, 32s sequence-pair universe-matrix/no-proliferator power=1 budget=30s, 31s sequence-pair universe-matrix/output-products power=1 budget=30s
+
+34s wall, 6/6 cells
+4 cells completed after their own requested search deadline; the largest completion tail was 2.9s. Emission, detailed routing already in flight, and validation finish atomically.
+  [universe-matrix exit 0] cpu=9.6
+cpu pressure after (runnable, 5s mean): 11.6
+ARM baseline roundA DONE 2026-09-07T09:03:58-04:00
