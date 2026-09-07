@@ -10,6 +10,7 @@ per-collection backend table and why each backend was chosen.
 
 from __future__ import annotations
 
+from flab2bp.indexed.block_graph import BlockGraph
 from flab2bp.indexed.cells import Cells
 from flab2bp.indexed.reference_graph import ReferenceGraph
 from flab2bp.indexed.sorters import Sorters
@@ -18,6 +19,7 @@ from flab2bp.indexed.staked_paths import StakedPaths
 from flab2bp.indexed.strip_positions import StripPositions
 
 __all__: tuple[str, ...] = (
+    "BlockGraph",
     "Cells",
     "ReferenceGraph",
     "Sorters",
