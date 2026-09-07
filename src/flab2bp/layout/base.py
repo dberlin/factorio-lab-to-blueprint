@@ -450,6 +450,12 @@ class PlacementStats(TypedDict, total=False):
     #: and is trustworthy; non-zero means SOME rung was degraded and the
     #: committed one may or may not have been.
     reservation_degraded: float
+    #: Of `reservation_degraded`, the rungs that committed a SURVEYED PARTIAL
+    #: from the trunk-goal oracle instead of falling back to v2's local-only
+    #: question.  `degraded > 0, partial == 0` is "the oracle was thrown away";
+    #: `partial > 0` is "the oracle answered for most lane heads and named the
+    #: rest", and `reservation_missing` is then that named rest.
+    reservation_partial: float
     #: Hierarchical strategy: demands the committed rung could not give a
     #: corridor to.  0 with a non-zero `unrouted_cuts` is the v2 finding: the
     #: oracle says every port is satisfiable and the router still refuses.

@@ -9,7 +9,13 @@ import pytest
 from flab2bp.dsp import catalog
 from flab2bp.layout import junction, slots
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
-from flab2bp.layout.freeform import PortAccessEvidence, PortAccessKind, PortAccessReservation
+from flab2bp.layout.freeform import (
+    PortAccessCorridor,
+    PortAccessDemand,
+    PortAccessEvidence,
+    PortAccessKind,
+    PortAccessReservation,
+)
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import (
@@ -631,8 +637,12 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
 ):
     """An assignment of NOTHING is an unusable answer, not a geometric verdict.
 
-    `_match_access_corridors` returns `{}` wholesale when its validate/cut loop
-    gives up rather than when the ground runs out, and an empty reservation
+    This is the WHOLESALE give-up: since Task 1, `_match_access_corridors`
+    only returns `{}` wholesale (rather than committing whatever partial its
+    survey left unconvicted) when a deadline is caught mid-survey, and that
+    give-up is always `converged=False` -- so the mock scripts that too,
+    or `pack_with_access`'s new `goal_driven.converged` trigger would commit
+    this empty answer directly instead of falling back.  An empty reservation
     stakes NO corridors -- so acting on one leaves the router worse off than
     v2's local-only oracle.  The belt3 measurement had exactly that: all 102
     demands discarded on a canvas the router still wired 65 of 89 cuts on.
@@ -646,7 +656,7 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
         reservation = real(canvas, demands, **kw)
         if kw.get("goals") is not None:
             assert demands, "the fixture must raise demands for this to be the unusable case"
-            return replace(reservation, assigned=(), missing=demands)
+            return replace(reservation, assigned=(), missing=demands, converged=False)
         return reservation
 
     monkeypatch.setattr(compose, "_reserve_port_access", empty_when_asked_about_trunks)
@@ -661,6 +671,85 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
     assert packed.reservation.complete
     assert packed.gap == compose.GAP_LADDER[0]
     assert packed.degraded == 1
+
+
+def _reservation(
+    demands: list[PortAccessDemand], assigned_count: int, *, converged: bool
+) -> PortAccessReservation:
+    """A `PortAccessReservation` over the first `assigned_count` demands."""
+    served = demands[:assigned_count]
+    return PortAccessReservation(
+        assigned=tuple(
+            (demand, PortAccessCorridor((0, 0, 0), (0, 1, 0), demand.kind)) for demand in served
+        ),
+        missing=tuple(demands[assigned_count:]),
+        evidence=(),
+        converged=converged,
+    )
+
+
+def test_a_committed_partial_is_counted_as_partial_and_as_degraded(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # THE R7 RESIDUAL, PINNED. A one-corridor partial must never reach the
+    # stats line with reservation_degraded=0, because that pair -- degraded 0,
+    # missing 0 -- is the only way a reader can trust `missing`.
+    left, right, flows, spec, ramped = two_solved_blocks
+
+    def fake_reserve(canvas, demands, **kwargs):
+        if kwargs.get("goals"):
+            return _reservation(list(demands), 1, converged=False)
+        raise AssertionError("the local-only oracle must not be re-asked for a partial")
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert len(packed.reservation.assigned) == 1
+    assert packed.partial >= 1
+    assert packed.degraded >= 1
+
+
+def test_a_wholesale_empty_answer_still_falls_back_to_the_local_only_oracle(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    left, right, flows, spec, ramped = two_solved_blocks
+    asked_local = 0
+
+    def fake_reserve(canvas, demands, **kwargs):
+        nonlocal asked_local
+        if kwargs.get("goals"):
+            return _reservation(list(demands), 0, converged=False)
+        asked_local += 1
+        return _reservation(list(demands), len(list(demands)), converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert asked_local >= 1
+    assert packed.degraded >= 1
+    assert packed.partial == 0
+
+
+def test_a_converged_answer_is_neither_partial_nor_degraded(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    left, right, flows, spec, ramped = two_solved_blocks
+
+    def fake_reserve(canvas, demands, **kwargs):
+        assert kwargs.get("goals"), "a converged trunk answer must not be re-asked"
+        return _reservation(list(demands), len(list(demands)), converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert packed.degraded == 0
+    assert packed.partial == 0
 
 
 def test_compose_reports_the_rung_and_the_reservation_it_committed(

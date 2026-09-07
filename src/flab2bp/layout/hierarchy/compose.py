@@ -151,6 +151,9 @@ class ComposeResult:
     reservation_missing: int = 0
     #: Ladder rungs whose trunk-goal reservation was discarded as unusable.
     reservation_degraded: int = 0
+    #: Of `reservation_degraded`, how many rungs committed a surveyed partial
+    #: rather than falling back to the local-only oracle.
+    reservation_partial: int = 0
 
 
 class _Packing(NamedTuple):
@@ -193,6 +196,16 @@ class PackedCanvas:
     #: rung with `reservation.missing` empty means "every port is satisfiable"
     #: only when this is 0.  See :func:`pack_with_access`.
     degraded: int = 0
+    #: How many rungs committed a SURVEYED PARTIAL from the trunk-goal oracle
+    #: -- an assignment the matcher handed back without converging, with the
+    #: demands its own survey convicted already removed.  A ladder total, like
+    #: `degraded`, and always <= it: every partial is also degraded, because
+    #: `reservation_degraded == 0` has exactly one meaning and it is "the
+    #: matcher converged".  This counter is what separates "the oracle was
+    #: thrown away and v2's local question re-asked" (degraded, not partial)
+    #: from "the oracle answered for most lane heads and named the rest"
+    #: (both).  See v3 gate.md §6's open residual.
+    partial: int = 0
 
 
 class _PackingDeadline(Exception):
@@ -807,6 +820,7 @@ def pack_with_access(
     )
     best: PackedCanvas | None = None
     degraded = 0
+    partial_rungs = 0
     for position, rung in enumerate(rungs):
         # The FIRST rung is unconditional and runs on the caller's own clock:
         # it is what a ladderless composer would have done, and a caller that
@@ -882,10 +896,13 @@ def pack_with_access(
         # TWO WAYS FOR THE TRUNK QUESTION TO COME BACK UNUSABLE, ONE FALLBACK.
         # The second is an assignment of NOTHING AT ALL while there were
         # demands to assign, which is not a geometric verdict: a canvas that
-        # really walls in every lane head still leaves the ones it does not,
-        # and `_match_access_corridors` returns `{}` wholesale when its
-        # validate/cut loop gives up (`_ACCESS_CUT_ROUNDS`) rather than when
-        # the ground runs out.  `assignment_boundary_cut` -- live for the first
+        # really walls in every lane head still leaves the ones it does not.
+        # `_match_access_corridors` no longer returns `{}` wholesale merely
+        # because its validate/cut loop runs out of rounds (`_ACCESS_CUT_ROUNDS`)
+        # -- since Task 1 it COMMITS the partial its own survey left unconvicted
+        # instead, and `{}` wholesale is now only what a deadline caught
+        # MID-SURVEY hands back.  See the paragraph below for what that commit
+        # means here.  `assignment_boundary_cut` -- live for the first
         # time here, because the goals set `probed` -- asks that EVERY
         # corridor stay reachable with every OTHER corridor's cells forbidden,
         # which is strictly stronger than what `_route_all` then does with
@@ -896,7 +913,22 @@ def pack_with_access(
         # contract of this lever (see `RESERVE_WALL_SHARE`) is that its worst
         # case is v2's behaviour.  The trigger is deliberately the narrow,
         # obviously-correct one rather than a tuned threshold.
-        if goal_driven is not None and (goal_driven.assigned or not demands):
+        #
+        # A PARTIAL IS GROUND, NOT A VERDICT.  Since the matcher stopped giving
+        # up wholesale it hands back the corridors its own survey did not
+        # convict, and those are strictly better ground for `_route_all` than
+        # the local-only answer -- the corridors are staked where the trunk
+        # probe said they reach.  What a partial is NOT is an answer to the
+        # ladder's question, so it counts as degraded as well as partial, and
+        # `reservation_degraded == 0` keeps its one meaning.  An assignment of
+        # NOTHING AT ALL while there were demands is still the wholesale
+        # give-up Ruling R7 discards: it stakes no corridors, so acting on it
+        # would leave the router worse off than v2's local-only oracle.
+        if goal_driven is not None and goal_driven.converged:
+            reservation = goal_driven
+        elif goal_driven is not None and goal_driven.assigned:
+            partial_rungs += 1
+            degraded += 1
             reservation = goal_driven
         else:
             degraded += 1
@@ -913,7 +945,13 @@ def pack_with_access(
                 if best is None:
                     raise _PackingDeadline(packing) from None
                 break
-        candidate = PackedCanvas(*packing, reservation=reservation, gap=rung, degraded=degraded)
+        candidate = PackedCanvas(
+            *packing,
+            reservation=reservation,
+            gap=rung,
+            degraded=degraded,
+            partial=partial_rungs,
+        )
         if reservation.complete:
             return candidate
         # STRICTLY fewer, so the NARROWEST of the equally-bad rungs wins: a
@@ -925,17 +963,21 @@ def pack_with_access(
     # `best` may be an EARLIER rung than the last one the ladder judged, and
     # `degraded` is the ladder's total rather than that rung's own -- so it is
     # stamped on here rather than read off the candidate.
-    return replace(best, degraded=degraded)
+    return replace(best, degraded=degraded, partial=partial_rungs)
 
 
 def _budget_refusal(packing: _Packing) -> ComposeResult:
     """Every cut of ``packing`` reported unwired under the router's budget word.
 
     `_reserve_port_access` puts back the reservations and corridors it cleared
-    and raises `_PreparationDeadline`; `_prepare_routing_problem` lets that
-    unwind to whoever owns the budget.  Here the caller wants a REFUSAL, so the
-    cuts are named instead -- an unwired entry lane the composer swallowed is a
-    block that starves, convicted many stages later with no way back.
+    and raises `_PreparationDeadline` when the deadline is caught outside a
+    survey; `_prepare_routing_problem` lets that unwind to whoever owns the
+    budget.  A deadline caught MID-SURVEY instead returns NORMALLY, with both
+    canvas dicts left cleared (never restored) and the reservation as the
+    ordinary wholesale give-up -- `assigned` empty, `missing` every demand,
+    `converged` False.  Here the caller wants a REFUSAL, so the cuts are named
+    instead -- an unwired entry lane the composer swallowed is a block that
+    starves, convicted many stages later with no way back.
     """
     return ComposeResult(
         Placement(
@@ -1034,6 +1076,7 @@ def compose(
         port_demands=len(reservation.assigned) + len(reservation.missing),
         reservation_missing=len(reservation.missing),
         reservation_degraded=packed.degraded,
+        reservation_partial=packed.partial,
     )
 
 
