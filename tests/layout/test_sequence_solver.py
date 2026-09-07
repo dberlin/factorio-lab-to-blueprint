@@ -36,6 +36,7 @@ from flab2bp.layout.compact_seed import (
     VariantDirectInsertTarget,
 )
 from flab2bp.layout.freeform import (
+    _COATER_NODE_TILES,
     _COATER_WEST_CHANNEL,
     _ENTRY_RING,
     WEST_CHANNEL,
@@ -6243,6 +6244,145 @@ def test_sequence_reservation_and_child_rebuild_preserve_piler_tail_fields(
         _box(child)[0] == _box(replace(child, tail_extension=0, pilers=()))[0] + 7
         for child in children
     )
+
+
+def _ridden_belt(ctx: validate.Context, coater_index: int) -> int:
+    """The belt index a Spray Coater sits on -- ``validate._coater_rides`` inverted.
+
+    Not an existing helper (the brief names it; this module had none), built
+    from ``validate._coater_rides``, which is the same "belt on the addon's
+    own tile" resolution ``prolif.coater_rides_one_run`` and
+    ``test_a_severed_supply_tree_is_convicted_on_a_real_build``
+    (tests/layout/test_freeform.py) already use.
+    """
+    for ride, index in validate._coater_rides(ctx).items():
+        if index == coater_index:
+            return ride
+    raise AssertionError(f"coater {coater_index} rides no belt")
+
+
+def _run_carrying(placement: Placement, ride_belt: int) -> tuple[int, ...]:
+    """The maximal straight, same-``owner_strip`` belt chain containing ``ride_belt``.
+
+    Not an existing helper either, and NOT ``validate.BeltRun``
+    (``ctx.runs``/``ctx.run_of``): that is a FLOW run, which follows
+    ``output_obj`` regardless of direction or ownership and only breaks at a
+    merge or a junction boundary.  On a fully routed sequence-pair placement
+    it runs straight through a coater node into whatever feeds it and
+    whatever it feeds -- measured on this fixture, 39 belts wide, not 4 --
+    because a node's OUT-port is deliberately sited adjacent to the consumer
+    lane head (``_coater_node_site``: "west-of-and-level-with the head...
+    is the same cell today's inline coater already occupies") and its IN-port
+    is where producer routes are made to converge, so neither port need be a
+    flow boundary.
+
+    This instead walks the PHYSICAL chain ``_emit_coater_node`` (and
+    ``_emit_strip``) actually build: one grid cell east per step, the same
+    ``owner_strip``, and linked by ``output_obj`` -- which is bounded by
+    construction (the node is exactly `_COATER_NODE_TILES` cells) rather than
+    by whatever the router later attaches to either end.
+    """
+    buildings = placement.buildings
+    ride = buildings[ride_belt]
+    owner, y, z = ride.owner_strip, ride.y, ride.z
+    belt_at = {
+        (b.x, b.y, b.z): i for i, b in enumerate(buildings) if catalog.is_belt(b.item_id)
+    }
+    indices = [ride_belt]
+    cur = ride_belt
+    while True:
+        prev = belt_at.get((buildings[cur].x - 1, y, z))
+        if (
+            prev is None
+            or buildings[prev].owner_strip != owner
+            or buildings[prev].output_obj != cur
+        ):
+            break
+        indices.insert(0, prev)
+        cur = prev
+    cur = ride_belt
+    while True:
+        nxt = belt_at.get((buildings[cur].x + 1, y, z))
+        if nxt is None or buildings[nxt].owner_strip != owner or buildings[cur].output_obj != nxt:
+            break
+        indices.append(nxt)
+        cur = nxt
+    return tuple(indices)
+
+
+@pytest.mark.parametrize(
+    ("arm", "expect_node"),
+    (
+        pytest.param("off", False, id="off-strip-channel"),
+        pytest.param("placed", True, id="placed-node"),
+    ),
+)
+def test_sequence_pair_builds_the_placed_coater_node(
+    monkeypatch: pytest.MonkeyPatch,
+    arm: str,
+    expect_node: bool,
+) -> None:
+    """`placed` reaches sequence-pair through the SHARED preparation.
+
+    Sequence-pair calls the same `_prepare_routing_problem` that emits the
+    coater node, so the ``placed`` arm needs none of the
+    `_variant_search_inputs` / `_selected_strips` / encoding work the
+    rejected PACKED experiment arm would have needed to reach sequence-pair
+    (docs/superpowers/evidence/2026-09-07-exp-coater-node/README.md §5.1:
+    "C needs none of this: it lives entirely inside the shared
+    `_prepare_routing_problem`, and it was clean on sequence-pair from the
+    first run.").  That was an observation from a corpus run; this asserts
+    it instead of assuming it.
+
+    Parametrised against ``off`` -- whose coater rides an interior tile of
+    its own consumer strip's widened west channel, never a free-standing
+    run of exactly `_COATER_NODE_TILES` tiles -- so the ``placed``
+    assertion has a real negative control to fail against, rather than a
+    bare ``!=`` that would pass for the wrong reason.
+    """
+    monkeypatch.setenv("FLAB2BP_COATER_NODE", arm)
+    spec = proliferated_spec()
+    placement = SequencePairLayout(
+        band_policy=BandPolicy("portable"), config=SequenceSolverConfig.test()
+    ).lay_out(spec, time_budget_s=2.0)
+
+    coaters = [
+        index
+        for index, building in enumerate(placement.buildings)
+        if building.item_id == catalog.SPRAY_COATER_ID
+    ]
+    assert coaters, "a proliferated spec must place at least one coater"
+
+    ctx = validate._context(placement, None, None, 256, catalog.DEFAULT_MAX_BELT_Z, True)
+    rides = validate._coater_rides(ctx)  # ride (belt index) -> coater index
+    assert sorted(rides.values()) == sorted(coaters), "every coater must ride exactly one belt"
+
+    for coater_index in coaters:
+        ride_belt = _ridden_belt(ctx, coater_index)  # the belt the addon rides
+        run = _run_carrying(placement, ride_belt)
+        ride_position = run.index(ride_belt)
+        if expect_node:
+            assert len(run) == _COATER_NODE_TILES, (
+                f"coater {coater_index} rides a {len(run)}-tile run; "
+                f"expected the free-standing {_COATER_NODE_TILES}-tile node, "
+                "not a strip channel"
+            )
+            # the addon is on the THIRD tile, off both ports on the body
+            assert ride_position == 2
+        else:
+            # `off`'s coater rides the interior of its consumer strip's own
+            # widened west channel: a run longer than the node's four tiles,
+            # with lane tiles both upstream and downstream of the seat.
+            assert len(run) > _COATER_NODE_TILES, (
+                f"coater {coater_index} rides a {len(run)}-tile run under "
+                f"'off', not longer than the node's {_COATER_NODE_TILES} "
+                "tiles -- has 'off' started riding a free-standing node too?"
+            )
+            assert 0 < ride_position < len(run) - 1, (
+                f"coater {coater_index} rides position {ride_position} of "
+                f"{len(run)} under 'off'; expected an interior seat, not "
+                "the run's head or tail"
+            )
 
 
 def test_preparing_shifted_piler_producers_keeps_contiguous_merge_groups() -> None:
