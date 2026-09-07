@@ -28,6 +28,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cache
 from typing import TYPE_CHECKING
 
 from flab2bp.layout.route_feedback import ClusterRelationNoGood, RouteFailureKind
@@ -127,29 +128,6 @@ def _anchor_cells(
         return ()
     source, destination = ends
     return tuple(cell for cell in (source, destination) if cell is not None)
-
-
-def _distance_to_stranded(
-    candidate: int,
-    stranded: Sequence[int],
-    paths: Mapping[int, tuple[Cell, ...]],
-    endpoints: Mapping[int, tuple[Cell | None, Cell]],
-) -> int:
-    """Manhattan distance from a candidate's cells to any stranded endpoint."""
-    cells = _anchor_cells(candidate, paths, endpoints)
-    best = _FAR
-    for seed in stranded:
-        ends = endpoints.get(seed)
-        if ends is None:
-            continue
-        for target in ends:
-            if target is None:
-                continue
-            for cell in cells:
-                value = abs(cell[0] - target[0]) + abs(cell[1] - target[1])
-                if value < best:
-                    best = value
-    return best
 
 
 def _source_lane(index: int, src_group: Mapping[int, tuple[int, ...]]) -> frozenset[int]:
@@ -255,6 +233,26 @@ def build_cluster(
     # the lowest seed overall -- the first the caller listed once sorted -- is
     # always kept and the problem is never seedless.
     seeds = tuple(seeds_kept)
+    targets = tuple(
+        (target[0], target[1])
+        for seed in seeds
+        for target in endpoints.get(seed, ())
+        if target is not None
+    )
+
+    @cache
+    def distance_at(x: int, y: int) -> int:
+        best = _FAR
+        for target_x, target_y in targets:
+            best = min(best, abs(x - target_x) + abs(y - target_y))
+        return best
+
+    def distance(candidate: int) -> int:
+        return min(
+            (distance_at(cell[0], cell[1]) for cell in _anchor_cells(candidate, paths, endpoints)),
+            default=_FAR,
+        )
+
     members = set(seeds)
     cluster = list(seeds)
     truncated = False
@@ -274,7 +272,7 @@ def build_cluster(
         ordered = sorted(
             candidates,
             key=lambda candidate: (
-                _distance_to_stranded(candidate, seeds, paths, endpoints),
+                distance(candidate),
                 candidate,
             ),
         )

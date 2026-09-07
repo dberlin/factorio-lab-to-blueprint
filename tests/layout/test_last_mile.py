@@ -81,6 +81,38 @@ def test_growth_is_transitive_until_the_cap_then_truncates_by_distance() -> None
     assert problem.truncated is True
 
 
+def test_cluster_distance_prefers_paths_ignores_height_and_breaks_ties_by_net() -> None:
+    problem = last_mile.build_cluster(
+        [0],
+        walls={},
+        blockers={0: (3, 2, 1)},
+        owner={},
+        paths={1: ((20, 0, 0),), 2: ((1, 0, 100),), 3: ((1, 0, 0),)},
+        endpoints={0: (None, (0, 0, 0)), 1: (None, (0, 0, 0))},
+        src_group={},
+        dst_group={},
+        max_cluster=2,
+    )
+    assert problem.nets == (0, 2)
+    assert problem.truncated
+
+
+def test_cluster_distance_caps_far_anchors_and_missing_anchors_equally() -> None:
+    problem = last_mile.build_cluster(
+        [0],
+        walls={},
+        blockers={0: (3, 2, 1)},
+        owner={},
+        paths={2: ((10**30, 0, 0),), 3: ((10**29, 0, 0),)},
+        endpoints={0: (None, (0, 0, 0))},
+        src_group={},
+        dst_group={},
+        max_cluster=2,
+    )
+    assert problem.nets == (0, 1)
+    assert problem.truncated
+
+
 def test_a_sibling_outside_the_cluster_makes_it_not_sibling_closed() -> None:
     closed = last_mile.build_cluster(
         [0],
