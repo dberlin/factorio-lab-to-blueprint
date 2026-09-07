@@ -202,16 +202,23 @@ def test_reforming_refine_self_loop_seeds(refined_oil_feedback_spec: BuildSpec) 
     """The second dataset self-loop recipe, driven off the self-feedback fixture.
 
     ``flow_refined_oil_self_feedback.csv`` pins a flow whose only group is
-    ``reforming-refine`` on ``oil-refinery``; hydrogen is supplied externally
-    by this fixture, so the refined-oil loop is the only self-loop present and
-    is the loop this test drives -- the second of the two vendored recipes,
-    exercised without naming ``x-ray-cracking``'s hydrogen case again.
+    ``reforming-refine`` on ``oil-refinery``.  ``reforming-refine``'s self-loop
+    item is refined-oil, not hydrogen: hydrogen is an ordinary ingredient of
+    this recipe and is correctly external here (ruling T7-A). The property
+    that matters, and the analogue of the first recipe's
+    ``"hydrogen" not in spec.external_inputs``, is that refined-oil is NOT an
+    external input -- the loop really is its own source.
     """
     spec = refined_oil_feedback_spec
     (seed,) = [s for s in spec.self_loop_seeds if s.recipe_id == "reforming-refine"]
     assert seed.item_id == "refined-oil"
+    assert seed.machine_item_id == "oil-refinery"
+    assert seed.machines == 20
+    assert seed.consumed_per_craft == Fraction(2)
+    assert seed.produced_per_craft == Fraction(3)
     assert seed.net_per_craft == Fraction(1)
     assert seed.seed_items == seed.machines * 2
+    assert "refined-oil" not in spec.external_inputs
 
 
 @pytest.fixture(scope="module")

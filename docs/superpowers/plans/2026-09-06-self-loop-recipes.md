@@ -1412,15 +1412,24 @@ the user.
 - [ ] **Step 2: The second self-loop recipe**
 
 `reforming-refine` is not activated by any corpus URL (`tests/rates/test_solve.py:596`),
-so drive it from the existing pinned fixture, with hydrogen NOT externally
-supplied so the loop is the only source:
+so drive it from the existing pinned fixture.
+
+**Corrected 2026-09-07 (controller ruling T7-A).** This step used to say "with
+hydrogen NOT externally supplied so the loop is the only source". That was wrong
+on its own terms: `reforming-refine`'s self-loop item is **`refined-oil`**, not
+hydrogen. Hydrogen is an ordinary ingredient of that recipe and the fixture's
+solved external inputs are `{'coal': 5, 'hydrogen': 5}` — measured, and correctly
+so. The property that actually matters, and the analogue of the first recipe's
+`"hydrogen" not in spec.external_inputs`, is that **`refined-oil` is not an
+external input**: the loop really is its own source.
 
 ```bash
 uv run pytest tests/rates/test_candidates.py -k reforming_refine_self_loop_seeds -q
 ```
 
-with the test from spec §6 T12 added in Task 7. PASS requires
-`seed_items == machines * 2` and `net_per_craft == 1` for `refined-oil`.
+with the test from spec §6 T12 added in Task 7. PASS requires, for
+`refined-oil`: `net_per_craft == 1`, `seed_items == machines * 2`, and
+`"refined-oil" not in spec.external_inputs`.
 
 - [ ] **Step 3: Baseline the corpus on master**
 
