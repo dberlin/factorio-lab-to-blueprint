@@ -1393,7 +1393,11 @@ def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
         # whereas a lane only ever serves one strip and `_machine_cap` below
         # already caps a strip at `capacity // rate` machines.  Measured
         # 2026-09-07 by keeping it: 28 failures in this file's own suite alone,
-        # every one a spec refusing with "1 ingredients cannot be seated".
+        # all 28 a lane refused on the whole group's rate -- 24 quoting
+        # "1 ingredients cannot be seated", two "3" and one "7", and one
+        # surfacing as a regex mismatch whose actual message says the same
+        # thing.  Spec §9 R8 lists them; the evidence capture is at
+        # docs/superpowers/evidence/2026-09-06-selfloop/task5/.
         probe = slots.probe_building(group.item_id, group.yaw)
         columns = len(slots.attachable_columns(probe, -1)) or 1
 

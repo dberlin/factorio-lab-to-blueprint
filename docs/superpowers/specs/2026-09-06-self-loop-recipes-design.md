@@ -488,8 +488,10 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
   no production caller ever set. And it is not a valid test for a single-item
   lane: it summed `rate * group.count`, the WHOLE group across every strip,
   against one belt, while a lane serves ONE strip. Passing it unconditionally
-  refuses 28 specs in `tests/layout/test_strip_variants.py` alone, 27 of them
-  quoting `1 ingredients cannot be seated` — measured, evidence at
+  refuses 28 specs in `tests/layout/test_strip_variants.py` alone, 24 of them
+  quoting `1 ingredients cannot be seated` and the other four the same refusal
+  at a different count or through a regex mismatch (broken down in §9 R8) —
+  measured, evidence at
   `docs/superpowers/evidence/2026-09-06-selfloop/task5/strip-variants-with-unconditional-lane-fits.txt`.
   The single-item rate gate is `strip_variants._machine_cap`
   (`strip_variants.py:1998`), which caps a strip at `capacity // rate` machines
@@ -812,13 +814,22 @@ is." That sentence is struck; F1 is amended in place above.
 
 **Measured:** passing it unconditionally, exactly as F1 directed, produced 28
 failures in `tests/layout/test_strip_variants.py` alone. All 28 trace to the same
-cause — a one-item lane rejected on the whole group's rate — but the symptom is
-not uniform, and the difference is worth recording: 27 surface as a refusal
-quoting `1 ingredients cannot be seated`, while
-`test_a_single_machine_over_the_ceiling_is_refused_early_with_the_rate` surfaces
-as a regex mismatch, because the seating refusal pre-empted the rate refusal that
-test asserts. Evidence:
-`docs/superpowers/evidence/2026-09-06-selfloop/task5/strip-variants-with-unconditional-lane-fits.txt`.
+cause — a lane rejected on the whole group's rate — and every one of the 28
+carries the string `ingredients cannot be seated`. The symptom is **not** uniform,
+and the breakdown is recorded here rather than rounded to one tidy number, because
+this ruling exists to stop a record disagreeing with its own evidence:
+
+| count | symptom | tests |
+| --- | --- | --- |
+| 24 | refusal quoting `1 ingredients cannot be seated` | the bulk — `_machine_cap` / strip-length / partition / projection families |
+| 2 | refusal quoting `3 ingredients cannot be seated` | `test_a_lane_is_never_seated_on_a_row_no_sorter_tier_can_serve`, `test_a_seating_no_row_can_serve_still_plans_and_is_judged_downstream` (this one flanked: "with the product leaving east") |
+| 1 | refusal quoting `7 ingredients cannot be seated` | `test_shared_lane_items_receive_distinct_authoritative_columns` |
+| 1 | `AssertionError: Regex pattern did not match` — the seating refusal pre-empted the rate refusal the test asserts, and its "Actual message" echoes `1 ingredients cannot be seated` | `test_a_single_machine_over_the_ceiling_is_refused_early_with_the_rate` |
+
+The three non-`1` counts are the predicate rejecting a lane in a spec whose group
+has more ingredients; they are the same defect, not a second one. Evidence:
+`docs/superpowers/evidence/2026-09-06-selfloop/task5/strip-variants-with-unconditional-lane-fits.txt`
+(counts re-derived from that file programmatically, 2026-09-07, fix round 2).
 
 **What replaces it: nothing new.** `strip_variants._machine_cap`
 (`strip_variants.py:1998`) is already the single-item rate gate — "Machines per
