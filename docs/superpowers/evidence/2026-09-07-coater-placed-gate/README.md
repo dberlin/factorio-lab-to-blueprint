@@ -352,3 +352,109 @@ uv run python docs/superpowers/evidence/2026-09-07-exp-coater-node/probes/probe_
 | `same-arm-compare.txt` | each arm against itself across the two rounds — the noise floor |
 | `flake.txt` | cross-round status and area flakes, per arm |
 | `roundA.stdout`, `roundB.stdout`, `reported.stdout` | the runners' own transcripts |
+| `roundC/` | `placed` re-measured after the `cd4db8c9` revert; `baseline.jsonl`/`.log` are `roundA`'s, copied in (not re-run — the revert does not touch baseline) so `run_round.sh`'s own skip-guard left only `placed` to build; `analyse.txt`, `compare.txt`, `compare-vs-roundA-baseline.txt`, `compare-vs-roundB-baseline.txt` |
+| `reportedC/placed.log` | the six reported-URL pairs, `placed` arm only, re-run after the revert (§12) |
+
+## 12. Ruling: `cd4db8c9` reverted, `placed` re-measured (2026-09-07, task-7b)
+
+**Controller's ruling, and why.** Task 7's gate (§7 above) PASSED all four clauses but found
+`cd4db8c9` ("stop sequence-pair reserving a coater channel it does not use") made the reported
+URL's own `sequence-pair / all-products` pair miss its 30 s budget under `placed` (3/3 refusals,
+against 3/3 ~22 s builds on `baseline`; it built at `--budget 120` in 103 s, area 4800, zero
+coater merges). The controller ruled to **revert `cd4db8c9`**: the reported URL is the user's own
+reported defect case, "builds 6/6" was the justifying experiment's headline claim, and the user's
+standing ruling (global-constraints.md) is that density may be paid for correctness. `cd4db8c9`
+was an addition the justifying experiment never measured, and it bought area only.
+
+**The revert.** Commit `a3cc471a` reverts `cd4db8c9` on top of branch HEAD `321e7f9e`. It
+conflicted with `4aa4e6b3`'s later import in the same block (`_COATER_NODE_TILES`, unrelated to
+this guard); resolved by dropping only the `_COATER_WEST_CHANNEL` import `cd4db8c9` had added
+(dead once the guard is gone) and keeping `_COATER_NODE_TILES`. `coater_mode` no longer appears
+anywhere in `sequence_solver.py` after the revert — confirms both `is_node` guards are gone and
+`_sequence_reservation_strips` / `_selected_strips` lift a sprayed strip's `west_channel`
+unconditionally again, on both arms, as on the merge base.
+
+The revert also fixes the test `cd4db8c9` had parametrized on the strength of the guard:
+`test_sequence_reservation_and_child_rebuild_preserve_piler_tail_fields` expected `WEST_CHANNEL`
+under `placed`, which is now wrong. It is re-parametrized over both arms (`off`, `placed`), both
+now expecting the lift. Its expected value is also corrected, from the relative
+`strips[target].west_channel + 1` to the fixed `_COATER_WEST_CHANNEL + 1` the reservation actually
+pins: the relative form only ever held because the test ran solely under `off`, where `plan_strips`
+already gives a sprayed strip `_COATER_WEST_CHANNEL` at plan time. Under `placed`, `plan_strips`
+gives it plain `WEST_CHANNEL` at plan time instead (a separate, pre-existing `needs_coater_keepout`
+guard in `freeform.py` — untouched by `cd4db8c9` or this revert), so the relative assertion would
+have silently checked the wrong number (`1 + 1 = 2`) against the reservation's actual `4`. No other
+test in `test_sequence_solver.py`, `test_coater_node.py` or `test_freeform.py` references this
+guard or asserts a channel width tied to it.
+
+Scoped suites, exit code 0: `tests/layout/test_sequence_solver.py`, `tests/layout/test_coater_node.py`,
+`tests/layout/test_freeform.py`.
+
+**Round C — corpus re-measurement.** `baseline` is unchanged by a `sequence_solver.py`-only
+revert, so `roundC/baseline.jsonl` is `roundA/baseline.jsonl` copied in verbatim (not re-run);
+`run_round.sh`'s own skip-guard ("Re-running this script skips URLs already recorded in the arm's
+JSONL") saw every baseline URL already recorded and built only `placed`, unmodified script, one
+build at a time. CPU pressure before: 11.8. After: 6.4.
+
+| arm | cells | CLEAN | REFUSED | INVALID | CRASH | coater merges | coaters | area GM | route p50 | route p95 | rip-ups | nets |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| baseline (= roundA) | 72 | 72 | 0 | 0 | 0 | 9 | 412 | 1091.8 | 0.7 s | 6.6 s | 83 | 1375 |
+| placed (post-revert) | 72 | 72 | 0 | 0 | 0 | 0 | 428 | 1122.6 | 0.7 s | 6.2 s | 83 | 1819 |
+
+`freeform 36/36`, `sequence-pair 36/36`. Movers against baseline: **+0 clean, −0 clean.** Area
+GM over cells clean in both arms: **+2.82%** against `roundA/baseline`, **+2.39%** against
+`roundB/baseline` (1096.4) — both under the +3.5% ceiling. `audit_compare.py` prints its own
+headline `FAIL` against its internal defaults (1.3% noise ceiling, 30 s p95) in all three
+comparisons (self, vs `roundA` baseline, vs `roundB` baseline) — read the counts, as briefed:
+`clean 72  refused 0  invalid 0  crashed 0  paired 72` in every one.
+
+Four clauses, round C:
+
+1. **72/72 CLEAN — PASS.**
+2. **Zero coater-merge findings — PASS.** 0 over all 72 corpus cells; 0 `MERGE-UNDER-BODY` on
+   all six reported pairs (next section), all six of which now build.
+3. **Area within +3.5% — PASS.** +2.82% (vs `roundA` baseline), +2.39% (vs `roundB` baseline).
+4. **No cell lost — PASS.** `+0 clean, −0 clean`; 0 refused/invalid/crashed in every compare.
+
+**The six reported pairs, after the revert.** Re-run for `placed` only (`reportedC/placed.log`);
+`baseline`'s six pairs are unchanged by this revert and stay as recorded in §7/`reported/baseline.log`.
+
+| strategy | policy | placed builds? | wall | coaters | area | coater_merges | MERGE-UNDER-BODY | digest |
+|---|---|---|---|---|---|---|---|---|
+| freeform | no-proliferator | yes | 8.7 s | 0 | 4125 | 0 | 0 | `f027ff6f87bf6078` |
+| freeform | all-products | yes | 28.5 s | 35 | 5100 | 0 | 0 | `248ca68195dbf468` |
+| freeform | output-products | yes | 19.9 s | 5 | 3780 | 0 | 0 | `a8f0ecfddb8e0bd5` |
+| sequence-pair | no-proliferator | yes | 27.2 s | 0 | 2700 | 0 | 0 | `a3c121b6d2fcae8d` |
+| sequence-pair | **all-products** | **yes** | **21.3 s** | 35 | 5325 | 0 | 0 | `572d4d69d4a6ea35` |
+| sequence-pair | output-products | yes | 26.6 s | 5 | 2790 | 0 | 0 | `5537814bf8020149` |
+
+**All six reported-URL pairs now build at `--budget 30`.** The pair that regressed,
+`sequence-pair / all-products`, builds in 21.3 s at area 5325 with 0 coater merges — matching the
+gate's own isolating-revert control (§7: 21–23 s, area 5325, digest `572d4d69d4a6ea35`) almost
+exactly. This confirms the §7 attribution was correct: `cd4db8c9` was the sole cause of the
+30 s-budget refusal, and reverting it alone restores the build with no other change.
+
+**The lever that remains: two columns per sprayed strip.** `cd4db8c9`'s guard bought area by
+narrowing every sprayed strip by two columns under `placed`. Reverting it pays that back. The
+cleanest, controlled measurement of its cost is the one apples-to-apples pair the gate's own
+isolating revert already produced, holding code and search seed fixed and flipping only the
+guard: on the reported URL's `sequence-pair / all-products` cell, the lift costs **+10.9% area**
+for that spec (4800 with the guard at `--budget 120` → 5325 without it at `--budget 30`), bought
+back **6.3 s of wall time** relative to the unguarded 30 s-refusal edge case, and is the difference
+between refusing and building inside a 30 s budget on this spec.
+
+At the 72-cell corpus level the same lever is **present but swamped by search noise**: comparing
+every `sequence-pair` proliferated cell clean in both `roundA/placed` (guarded) and `roundC/placed`
+(reverted), n=24, the per-cell delta ranges from −26.98% (`universe-matrix/all-products`, a huge,
+noisy cell) to +12.00% (`energy-matrix/output-products`), mean **−0.60%** — sign-inconsistent and
+smaller than the same-arm noise band already on record for this gate (±0.4–0.8%, task-7-report.md
+§5). `sequence-pair`'s anneal search is stochastic and each round is a fresh search instance, so a
+two-column packing change on a handful of strips is not separable from ordinary run-to-run
+variance at corpus scale — only the isolating-revert control (fixed seed, only the guard flipped)
+measures it cleanly.
+
+**For a future reader:** the lever is real, quantified on its one clean control at **+10.9% area**
+per affected `sequence-pair` cell, and is still available — reintroduce `cd4db8c9`'s guard (or a
+narrower version of it, e.g. gated on a time budget rather than unconditionally) behind its own
+measurement against the reported URL's `sequence-pair / all-products` pair specifically, rather
+than reintroducing it corpus-wide on an ungated `coater_mode().is_node` check as `cd4db8c9` did.
