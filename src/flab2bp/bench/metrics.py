@@ -10,6 +10,7 @@ from __future__ import annotations
 from flab2bp.bench.types import Metrics
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings, Kind
 
 
 def _is_machine(b: PlacedBuilding) -> bool:
@@ -59,19 +60,19 @@ def measure(placement: Placement) -> Metrics:
         for x, y, _z in b.tiles():
             occupied.add((x, y))
 
-    machines = sum(1 for b in buildings if _is_machine(b))
-    belt_tiles = sum(1 for b in buildings if catalog.is_belt(b.item_id))
-    sorters = sum(1 for b in buildings if catalog.is_sorter(b.item_id))
-    towers = sum(1 for b in buildings if b.item_id == catalog.TESLA_TOWER_ID)
+    index = Buildings.of(placement)
+    belt_tiles = index.count_by_kind(Kind.BELT)
+    sorters = index.count_by_kind(Kind.SORTER)
+    towers = index.count_by_item(catalog.TESLA_TOWER_ID)
 
-    machine_indices = {i for i, b in enumerate(buildings) if _is_machine(b)}
-    direct_inserts = sum(
-        1
-        for b in buildings
-        if catalog.is_sorter(b.item_id)
-        and b.input_obj in machine_indices
-        and b.output_obj in machine_indices
-    )
+    # `Kind.MACHINE` is a superset of `_is_machine` -- it also holds the
+    # Tesla Tower and anything `catalog.building(...)` cannot resolve, both of
+    # which `_is_machine` excludes.  Restricting to the MACHINE bucket first
+    # and then re-applying `_is_machine` keeps the exact predicate while only
+    # paying the catalog lookup for candidates that could possibly qualify.
+    machine_indices = tuple(i for i in index.by_kind(Kind.MACHINE) if _is_machine(buildings[i]))
+    machines = len(machine_indices)
+    direct_inserts = len(index.sorters_between(machine_indices, machine_indices))
 
     altitude_levels = len({b.z for b in buildings})
 
