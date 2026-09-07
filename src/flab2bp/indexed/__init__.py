@@ -17,6 +17,7 @@ from flab2bp.indexed.sorters import Sorters
 from flab2bp.indexed.stages import Stages
 from flab2bp.indexed.staked_paths import StakedPaths
 from flab2bp.indexed.strip_positions import StripPositions
+from flab2bp.indexed.union_find import UnionFind
 
 __all__: tuple[str, ...] = (
     "BlockGraph",
@@ -26,4 +27,5 @@ __all__: tuple[str, ...] = (
     "StakedPaths",
     "Stages",
     "StripPositions",
+    "UnionFind",
 )
