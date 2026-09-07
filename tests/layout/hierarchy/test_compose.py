@@ -928,6 +928,18 @@ def test_lane_takes_the_contiguous_segment_the_port_stands_in():
     assert xs(compose._lane(buildings, 9)) == [4, 5, 6]
 
 
+def test_the_doorstep_neighbourhood_is_the_one_reserve_port_access_enumerates():
+    """`_NEIGHBOURS` duplicates `freeform._STEPS` by value, and unenforced.
+
+    `_free_doorstep`'s docstring claims its output "is exactly the
+    `access_cells` set `_reserve_port_access` enumerates" -- true only while
+    the two neighbourhoods agree, which nothing else in either module checks.
+    """
+    from flab2bp.layout.freeform import _STEPS
+
+    assert set(compose._NEIGHBOURS) == set(_STEPS)
+
+
 def test_port_no_longer_asserts_on_a_run_that_doubles_back_to_its_row():
     """`_Port.at_tile` addresses taps as ``x0 + k``, so the span must be the tiles."""
     buildings = _chain_belts(_DOUBLE_BACK)

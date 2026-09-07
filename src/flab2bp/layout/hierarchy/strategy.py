@@ -34,6 +34,16 @@ floored to ``BLOCK_BUDGET_MIN_S`` instead and it runs anyway.  The per-job wall
 is combined with the parent's deadline inside :func:`_solve_block`, at job
 start -- see its docstring for why the parent cannot do it.
 
+WIDEN-BEFORE-CUT CANNOT HAPPEN AT THE WEB UI'S 15 s DEFAULT.  A block whose
+dispatched arm refused is re-offered the full arm set by :func:`_recut` before
+an attempt is spent cutting it, but ``_recut`` is only reached after the round
+loop's ``recut_rounds >= allowed_recuts`` check, and
+:func:`allowed_recut_rounds` is 0 for the ~8.7 s round wall a 15 s budget
+leaves -- so on the default budget the seed round IS the build, a refusing
+block is neither widened nor cut, and the one-arm rule ships there without its
+escalation (the v3 gate's §2.1 measures ``arm_dispatch_both = 0`` on both 15 s
+cells, and its §5 lever 3 is the regression that has no mitigation there).
+
 WHAT THE PARENT PROMISES A CHILD.  A block can finish early but never outlives
 the build.  It does NOT get the parent's band policy: the composer discards each
 block's own frame (``compose._normalize``) and repacks it, so a child's policy
@@ -330,18 +340,29 @@ def _block_layout(
     vertical: bool,
     workers: int,
 ) -> FreeformLayout | SequencePairLayout:
-    """Construct one block backend.  See the module docstring for why here."""
+    """Construct one block backend.  See the module docstring for why here.
+
+    AN UNRECOGNISED ARM RAISES rather than falling through to sequence-pair.
+    This is THE REGISTRY POINT: a solver added to `BlockStrategyName` and to
+    `hierarchy.dispatch` but not here would otherwise be dispatched a block
+    and then silently solved by a DIFFERENT placer, and the round's verdict
+    would be recorded against the arm that never ran.  The raise reaches the
+    caller as `_solve_block`'s CRASH arm -- a refusal naming the arm, which is
+    what a missing registration should look like -- rather than as wrong data.
+    """
     if strategy == "freeform":
         return FreeformLayout(
             belt_vertical_construction=vertical,
             band_policy=BandPolicy.parse("portable"),
             workers=workers,
         )
-    return SequencePairLayout(
-        belt_vertical_construction=vertical,
-        band_policy=BandPolicy.parse("portable"),
-        islands=1,
-    )
+    if strategy == "sequence-pair":
+        return SequencePairLayout(
+            belt_vertical_construction=vertical,
+            band_policy=BandPolicy.parse("portable"),
+            islands=1,
+        )
+    raise ValueError(f"no block backend is registered for arm {strategy!r}")
 
 
 def _solve_block(args: _BlockJob) -> tuple[dict[str, object], Placement | None]:
@@ -599,8 +620,7 @@ class HierarchicalLayout:
                 # line already made -- cached on `ShapeKey`, so this is a
                 # cache hit, not a second feature computation -- gives the
                 # identical once-per-block-per-round numbers with the correct
-                # attribution, and one fewer pass over `todo` than counting
-                # separately after the round would need.
+                # attribution.
                 for index in todo:
                     chosen = self._arms_for(spec, entries[index], arm_cache)
                     if len(chosen) > 1:
@@ -1136,6 +1156,8 @@ class _StrategyStats:
 def _refuser(
     spec: BuildSpec, budget_s: float, stats: _StrategyStats
 ) -> Callable[[str], NoValidLayout]:
+    """One place that knows how this strategy's refusals are labelled."""
+
     def refuse(reason: str) -> NoValidLayout:
         return NoValidLayout(
             reason, spec_label=spec.label, budget_s=budget_s, stats=stats.as_stats()

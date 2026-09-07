@@ -389,25 +389,51 @@ class PlacementStats(TypedDict, total=False):
     #: was already remembered refused this build, or already answered by an
     #: identically-shaped block earlier in the same round.
     nogood_skips: float
-    #: Hierarchical strategy: rounds in which a refusing block was re-cut.
+    #: Hierarchical strategy: the v1/v2 NAME for `recut_rounds`, carrying the
+    #: identical number, kept so the three gates' tables line up.
+    #:
+    #: IT IS NOT "rounds in which a block was re-cut", which is what this
+    #: comment used to say.  `strategy.lay_out` sets it from the round counter
+    #: it bumps on every round `_recut` reported PROGRESS on -- and `_recut`
+    #: reports progress for a refusing block it merely re-offered the FULL ARM
+    #: SET to, without cutting anything (widen-before-cut is deliberately
+    #: cheaper than growing the block list).  So a v3 `resplits` counts
+    #: widening rounds as well as cutting ones, and a v1/v2 `resplits` -- from
+    #: before widening existed -- does not: comparing the number across gates
+    #: needs that read alongside it.
     resplits: float
     #: Hierarchical strategy: how each block's arm was chosen.  `_both` counts
     #: the blocks raced on every arm because the feature vector fell outside
     #: what `2026-09-06-exp-features` covers, or because the dispatched arm
     #: refused and there was wall left to try the other.
+    #:
+    #: COUNTED ONCE PER BLOCK PER ROUND, at the funding site, not once per
+    #: block per build: a multi-round build counts every block again in every
+    #: round it is still unplaced for, so the three columns can sum to MORE
+    #: than `blocks` (the v3 gate's `mall/no-proliferator` sums 92 over three
+    #: rounds against 54 blocks).  They sum exactly to `blocks` only on a
+    #: single-round build.
     arm_dispatch_both: float
     arm_dispatch_freeform: float
     arm_dispatch_sequence_pair: float
     #: Hierarchical strategy: the `GAP_LADDER` rung the composition committed.
+    #: `0` IS A SENTINEL, NOT A MEASUREMENT -- it is what a refusal reports when
+    #: composition was never entered at all, and `MIN_GAP` means no committed
+    #: rung can ever be 0.  Read it together with `cut_lanes`/`port_demands`.
     compose_gap: float
     #: Hierarchical strategy: (block, item) entry heads left to the player
     #: under the both-fed lane contract.
     player_fed: float
     #: Hierarchical strategy: port-access demands the composed canvas raised.
+    #: Like `compose_gap`, `0` is AMBIGUOUS on a refusal: it is the sentinel for
+    #: "composition was never entered", not a measured "no port needed access".
+    #: Which one it is, is decided by whether the build reached `compose` at all.
     port_demands: float
-    #: Hierarchical strategy: re-cut ROUNDS this build spent, bounded by
-    #: `strategy.MAX_RECUT_ROUNDS`.  `resplits` counts the same rounds and is
-    #: kept for continuity with the v1/v2 gates.
+    #: Hierarchical strategy: rounds this build advanced past by RE-CUTTING or
+    #: by WIDENING a refusing block's arms, bounded by
+    #: `strategy.MAX_RECUT_ROUNDS`.  `resplits` carries the same number under
+    #: the v1/v2 name -- see its own comment for why neither is purely a count
+    #: of cuts.
     recut_rounds: float
     #: Hierarchical strategy: LADDER RUNGS whose trunk-goal reservation came
     #: back UNUSABLE and was re-asked as v2's local-only question -- either the

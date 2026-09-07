@@ -612,6 +612,19 @@ def test_a_budget_too_small_to_fund_a_round_still_attempts_the_seed_round(
     `BLOCK_BUDGET_MIN_S` and runs it anyway; each block's own deadline
     (still clipped to the parent's) is what actually refuses it, and the
     build then runs out of the zero re-cut rounds this budget's wall allows.
+
+    THE REAL SPAWNED POOL IS DELIBERATE HERE, and it is the one test in this
+    file that must NOT set `_executor_factory = ThreadPoolExecutor` (final
+    review raised the omission as an oversight; it is not).  What makes the
+    refusal deterministic is that a spawned `ProcessPoolExecutor`'s start-up
+    alone outlasts the 1.0 s parent deadline every block's own clock is
+    clipped to, so every block refuses on time and the build lands on the
+    out-of-re-cut-rounds refusal this asserts.  On threads there is no
+    start-up to outlast it: `chain_spec` is four machines, the real placers
+    finish inside the second, and this test PLACES instead of refusing --
+    measured, not supposed.  Swapping the pool would not make the test cheaper,
+    it would make it assert the opposite of its own name on a fast box and
+    flip back on a loaded one.
     """
     with pytest.raises(NoValidLayout, match=r"out of re-cut round\(s\)"):
         _layout().lay_out(chain_spec, time_budget_s=1.0)
@@ -823,10 +836,10 @@ def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch
     so the only thing left driving the loop is the round counter this task
     adds.
     """
-    rounds: list[int] = []
+    solves: list[str] = []
 
     def always_refuse(args):
-        rounds.append(1)
+        solves.append(args[1])
         return (
             {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
             None,
@@ -848,6 +861,9 @@ def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch
         layout.lay_out(chain_spec, time_budget_s=60.0)
     assert caught.value.stats["recut_rounds"] <= float(strategy.MAX_RECUT_ROUNDS)
     assert "re-cut round" in caught.value.reason
+    # The bound has to be what STOPPED the loop, not an unfunded round dressed
+    # up as one: the faked placer must actually have been handed jobs.
+    assert solves, "no block was ever offered to a placer"
 
 
 def test_a_round_that_cannot_afford_the_floor_names_the_wall_not_the_waves(chain_spec, monkeypatch):
@@ -870,6 +886,38 @@ def test_a_round_that_cannot_afford_the_floor_names_the_wall_not_the_waves(chain
     # The seed round runs anyway: nothing was attempted, so nothing is refused
     # for funding before a placer has seen a single block.
     assert caught.value.stats["blocks_unattempted"] == 0.0
+    # And the refusal that DOES land names the round WALL, not the wave count.
+    # At 9 s the reserve is the 5 s floor, leaving a ~4 s round wall, so
+    # `allowed_recut_rounds` is 0 and the seed round -- floored to
+    # `BLOCK_BUDGET_MIN_S` and run anyway -- is the whole build.  Only the
+    # stable half of the message is pinned: `rounds_wall` is real elapsed wall
+    # and prints to one decimal.
+    reason = caught.value.reason
+    assert "out of re-cut round(s) after 0 of 0" in reason
+    assert "round wall allows" in reason
+    assert "wave(s)" not in reason
+
+
+def test_an_unregistered_arm_raises_rather_than_being_solved_by_sequence_pair() -> None:
+    """`_block_layout` is THE REGISTRY POINT; an unknown arm must not fall through.
+
+    Inert against the arms shipped today: every `_BlockJob` this branch builds
+    takes its arm from `_arms_for`, which returns a subset of `_arms()`, which
+    is exactly `("freeform", "sequence-pair")` -- so no reachable call can
+    take the raise.  It exists for the SUB-SOLVER SEAM's next arm: a solver
+    named in `BlockStrategyName` and given a dispatch rule but never
+    registered here would otherwise be quietly solved by sequence-pair and
+    have the verdict recorded against the arm that never ran.
+    """
+    assert isinstance(
+        strategy._block_layout("freeform", vertical=True, workers=2), strategy.FreeformLayout
+    )
+    assert isinstance(
+        strategy._block_layout("sequence-pair", vertical=True, workers=2),
+        strategy.SequencePairLayout,
+    )
+    with pytest.raises(ValueError, match="block-library"):
+        strategy._block_layout("block-library", vertical=True, workers=2)
 
 
 def test_a_dispatched_block_is_offered_one_arm_not_two(chain_spec, monkeypatch):

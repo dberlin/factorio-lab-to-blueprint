@@ -51,6 +51,26 @@ def test_an_explicit_single_arm_is_never_widened():
     assert got == ("freeform",)
 
 
+def test_a_preferred_arm_that_is_not_on_offer_races_what_is():
+    """The answer is always a SUBSET of `arms`, never a name nobody offered.
+
+    Inert against the arms shipped today -- `strategy._arms()` returns exactly
+    `("freeform", "sequence-pair")` whenever it reaches here, so both names the
+    rule can pick are always members.  It is the SUB-SOLVER SEAM's third arm
+    that would otherwise let a block be dispatched to a solver it was never
+    offered to and silently solved by sequence-pair.
+    """
+    others = ("sequence-pair", "block-library")
+    # `coaters > 0, strips <= 6` prefers freeform, which is not on offer here.
+    got = dispatch.dispatch_arms(BlockFeatures(strips=5, coaters=2, items_above_one_belt=0), others)
+    assert got == others
+
+    no_sp = ("freeform", "block-library")
+    # `coaters = 0` prefers sequence-pair, which is not on offer here.
+    got = dispatch.dispatch_arms(BlockFeatures(strips=5, coaters=0, items_above_one_belt=0), no_sp)
+    assert got == no_sp
+
+
 def test_items_above_one_belt_uses_the_fastest_tier_and_the_cargo_stack(chain_spec):
     # `lane_capacity` is `max(tier.items_per_second) * belt_stack`, the same
     # threshold `validate`'s `flow.belt_capacity` uses.

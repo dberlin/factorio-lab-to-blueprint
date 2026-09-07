@@ -100,7 +100,19 @@ def block_features(sub: BuildSpec) -> BlockFeatures:
 
 
 def dispatch_arms(features: BlockFeatures, arms: tuple[str, ...]) -> tuple[str, ...]:
-    """The arms this block is offered THIS round, narrowest first."""
+    """The arms this block is offered THIS round, narrowest first.
+
+    THE ANSWER IS ALWAYS A SUBSET OF ``arms``.  The rule below names
+    `ARM_FREEFORM` and `ARM_SEQUENCE_PAIR` by hand, because that is what the
+    cross-tab above measured; `arms` is whatever the orchestrator is actually
+    offering, which is exactly those two today (`strategy.HierarchicalLayout.
+    _arms`) but which `strategy`'s THE SUB-SOLVER SEAM explicitly invites a
+    later plan to grow.  Returning a name the caller never offered would
+    dispatch a block to a solver nobody asked for, so a preferred arm that is
+    not on offer falls back to racing the whole offered set -- the same honest
+    answer the two `UNCOVERED_*` branches give when the evidence does not
+    cover the block.
+    """
     if len(arms) < 2:
         return arms
     if features.items_above_one_belt >= UNCOVERED_ITEMS_ABOVE_ONE_BELT:
@@ -108,8 +120,10 @@ def dispatch_arms(features: BlockFeatures, arms: tuple[str, ...]) -> tuple[str, 
     if features.strips >= UNCOVERED_STRIPS:
         return arms
     if features.coaters > 0 and features.strips <= ARM_SMALL_STRIPS:
-        return (ARM_FREEFORM,)
-    return (ARM_SEQUENCE_PAIR,)
+        chosen = ARM_FREEFORM
+    else:
+        chosen = ARM_SEQUENCE_PAIR
+    return (chosen,) if chosen in arms else arms
 
 
 __all__ = [
