@@ -269,11 +269,17 @@ but the net of **area, refusals, and routing time** — and a cell that starts
 building because its lanes stopped being coupled is a *win* for the rule, not
 a cost.
 
-**Decision.** Remove M2 (chosen mixing) outright. Keep M1 (forced mixing)
-because removing it makes `universe-matrix` refuse, and gate it behind a
-validator check that independently re-derives the forced condition, so a mixed
-lane can only ship when the machine's own geometry made one-per-lane
-impossible.
+**Decision (amended 2026-09-07 — see §9 R1).** The ban is **absolute**. Remove
+M2 (chosen mixing) outright, and give M1 (forced mixing) **no exemption**:
+`flow.lane_single_item` convicts every input lane carrying two or more distinct
+items, whatever the machine's geometry. A seating the planner "had no
+alternative to" is a seating we do not ship.
+
+`universe-matrix` is not sacrificed to this: §9 R2 frees the row it was short
+of by moving the flanked output's drain lane past sorter reach, so a Matrix Lab
+seats its six ingredients as six single-item lanes. That is a planner change,
+not an exemption — the check stays absolute and `universe-matrix` satisfies it
+on the merits.
 
 Preserve M3 (`_merge_lanes` / `_merge_frontier` sharing one lane between
 consumers of the SAME item) untouched — it is one item per lane and is
@@ -289,6 +295,8 @@ starvation-free. Neither is attempted here and neither is worth attempting;
 chosen mixing is given up outright, not made cleverer. This also bears on
 open question 1: a Matrix Lab's forced three-items-per-lane has the same
 uncontrolled interleaving, so "keep forced mixing" keeps that failure mode.
+**The user has since ruled on exactly that point — §9 R1 makes the ban
+absolute, and §9 R2 removes the reason forced mixing existed.**
 
 ### F2 — a Spray Coater rides exactly one belt run
 
@@ -423,13 +431,16 @@ def _self_loop_primed(ctx: Context) -> Iterable[Finding]:
 
 @check("flow.lane_single_item", needs_spec=True, needs_groups=True)
 def _lane_single_item(ctx: Context) -> Iterable[Finding]:
-    """One input belt carries one item.
+    """One input belt carries one item.  No exemption (§9 R1).
 
     A belt run whose sorters draw two or more DISTINCT items into machines is an
-    ERROR unless the consuming machine's own geometry made one-item-per-lane
-    impossible: re-derived here from ``freeform._side_lane_caps`` and
-    ``slots.attachable_columns`` against the group's ingredient count, so the
-    exemption is proved from the catalog rather than taken on the planner's word.
+    ERROR, full stop.  There is no forced-geometry exemption: a lane whose items
+    must interleave exactly to avoid starving each other is not a build we emit,
+    and "the machine's faces left no alternative" describes a seating we must
+    not ship rather than one we must tolerate.  When a machine family really
+    cannot be seated one-item-per-lane, the answer is a planner change (§9 R2
+    moved the Matrix Lab's drain row to free a lane) or a refusal, never a
+    convicted-but-permitted belt.
 
     Belt SHARING between several consumers of the SAME item is untouched: this
     counts DISTINCT items on a run, never taps.
@@ -452,14 +463,19 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
 
 ### 5.5 Planner fixes
 
-* **F1.** Delete the `prefer_shared_proliferation` parameter from
+* **F1** (amended 2026-09-07 for §9 R1). Delete the
+  `prefer_shared_proliferation` parameter from
   `strip_variants._logical_strip_plans` (`strip_variants.py:1255`) and
   `generate_strip_families` (`strip_variants.py:1985,1996`), and the
   `prefer_shared` branch of the ladder in `freeform._seat_inputs`
-  (`freeform.py:2179,2244`). `input_lane_fits`
-  (`strip_variants.py:1363-1374`) stays: it is still the rate test for a
-  *forced* mixed lane, so it becomes an unconditional argument rather than a
-  `prefer_shared`-gated one.
+  (`freeform.py:2179,2244`). Because the ban is absolute, the ladder does not
+  merely stop *preferring* mixed lanes — it stops producing them: `mix_sizes`
+  collapses to one item per lane, and a seating that cannot fit that way fails
+  to seat, so the strategy REFUSES rather than emitting a lane
+  `flow.lane_single_item` would convict. This is the same rule the coater-seat
+  predicate follows in F2 — the emitter agrees with the validator instead of
+  racing it. `input_lane_fits` (`strip_variants.py:1363-1374`) stays as the
+  unconditional rate test for the single-item lane it now always is.
 * **F2.** `freeform._coater_seat` (`freeform.py:18039`) and `_coater_seats`
   (`freeform.py:18018`) gain a predicate rejecting a seat whose covered tiles
   contain a belt with more than one belt predecessor, and rejecting a seat
@@ -491,7 +507,9 @@ shaped `{item: {"seed_items": int, "recipe": str, "machines": int}}`.
 | T4 | `test_self_loop_lane_head_is_marked_and_described` | `tests/layout/test_markers.py` | the loop head carries `catalog.belt_marker`, and the description contains `PRIME ONCE` |
 | T5 | `test_self_loop_unprimeable_lane_is_an_error` | `tests/layout/test_validate.py` | a hand-built placement whose loop run is walled in yields `flow.self_loop_primed` ERROR; the reachable version yields WARNING only |
 | T6 | `test_mixed_item_input_lane_is_convicted` | `tests/layout/test_validate.py` | a placement with two filtered items drawn off one run into a machine whose faces could hold both separately yields `flow.lane_single_item` ERROR |
-| T7 | `test_forced_mixed_lane_is_exempt` | `tests/layout/test_validate.py` | the `universe-matrix` six-ingredient Matrix Lab shape passes `flow.lane_single_item` |
+| T7 | `test_matrix_lab_six_ingredients_seat_as_six_single_item_lanes` | `tests/layout/test_strip_variants.py` | **replaces the old `test_forced_mixed_lane_is_exempt` (§9 R1/R2)**: the `universe-matrix` six-ingredient Matrix Lab shape seats as six lanes of one item each, so it passes `flow.lane_single_item` on the merits rather than by exemption |
+| T7b | `test_forced_mixed_lane_is_still_convicted` | `tests/layout/test_validate.py` | a mixed lane on a machine whose geometry "forced" it is an ERROR anyway — the exemption is gone |
+| T13 | `test_drain_row_moves_only_when_the_input_count_needs_it` | `tests/layout/test_strip_variants.py` | a `flank_outputs` spec that already fits seats byte-identically to master; the six-ingredient spec moves the drain row past sorter reach |
 | T8 | `test_same_item_shared_lane_is_not_a_mixed_lane` | `tests/layout/test_validate.py` | one item, two consumers, one lane: no finding (guards M3) |
 | T9 | `test_coater_over_a_belt_merge_is_convicted` | `tests/layout/test_validate.py` | a coater whose covered tile has two belt predecessors yields `prolif.coater_rides_one_run` ERROR |
 | T10 | `test_coater_supply_area_with_two_belts_is_convicted` | `tests/layout/test_validate.py` | two belts inside `ADDON_AREA_RADIUS` of area 1 yields the same check as an ERROR |
@@ -502,11 +520,17 @@ shaped `{item: {"seed_items": int, "recipe": str, "machines": int}}`.
 
 ## 7. Risks
 
-1. **`universe-matrix` refuses.** If the forced-mixing exemption in
-   `flow.lane_single_item` is derived slightly differently from
-   `_seat_inputs`'s own arithmetic, the check convicts a seating the planner
-   had no alternative to. Mitigation: T7 pins the shape, and the exemption is
-   computed from the same two catalog helpers the planner uses.
+1. **`universe-matrix` refuses** (rewritten 2026-09-07 for §9 R1/R2). There is
+   no exemption left to mis-derive; the risk moved into the planner. If the
+   drain-row move (§9 R2) does not in fact free the sixth input row — because
+   `_side_lane_caps` yields fewer reachable rows than measured, or because the
+   drain lane cannot sit past sorter reach on that band — then `universe-matrix`
+   refuses or is convicted by `flow.lane_single_item`, and the ban costs a
+   corpus cell. Mitigation: the drain-row task lands BEFORE the ban task, with
+   its own red-green tests and a CLI build of `universe-matrix` that must come
+   back CLEAN with six single-item lanes decoded from the blueprint. The gate
+   (Task 10 Step 1a) re-checks it end to end. A refusal here is reported as a
+   FAIL, not argued away.
 2. **Area regression from removing M2.** Fewer coaters was the whole point of
    `prefer_shared_proliferation`. Removing it costs one coater and one lane row
    per extra sprayed ingredient. On the reported URL that is +3 coaters and
@@ -523,7 +547,12 @@ shaped `{item: {"seed_items": int, "recipe": str, "machines": int}}`.
    that path to the external-input arithmetic rather than to a seed.
 ---
 
-## 8. Open questions for the user (three)
+## 8. Open questions for the user (three) — ALL ANSWERED, see §9
+
+**Status 2026-09-07: closed.** The user answered all three. Their answers are
+recorded as binding rulings in §9 and the sections above have been amended to
+match. The questions are kept verbatim below only so the rulings can be read
+against what was actually asked.
 
 1. **Forced mixing.** The ban on mixed input lanes cannot be total without
    making `universe-matrix` refuse: a Matrix Lab offers three insert columns
@@ -544,3 +573,130 @@ shaped `{item: {"seed_items": int, "recipe": str, "machines": int}}`.
    would let the player prime it anywhere and would make the surplus tail
    unnecessary. Should that rule gain a narrow exemption for a declared
    self-loop lane, or stay absolute?
+
+---
+
+## 9. Rulings, 2026-09-07 (binding; they outrank everything above)
+
+These are the user's answers to §8 plus one standing retraction. Where a ruling
+contradicts an earlier section, the ruling wins and the section has been
+amended in place with a pointer here.
+
+### R1 — Mixed input lanes: an ABSOLUTE ban
+
+**Answers §8 question 1.** No input lane ever carries two distinct items —
+not chosen, not forced. The forced-mixing exemption is **removed**:
+`flow.lane_single_item` convicts every mixed input lane, and
+`_lane_seating_is_forced` is not written at all.
+
+*Why:* the user's note under §4 F1 already established that a forced mixed lane
+has exactly the same uncontrolled interleaving as a chosen one — the machines
+starve the same way, and the geometry that forced it is not an argument that it
+works. An exemption would have shipped, permanently and by design, the precise
+build the user reported as broken.
+
+*Cost if the ruling is wrong:* any machine family that genuinely cannot be
+seated one-item-per-lane refuses instead of building. R2 removes the one such
+family we know of; a future one costs a corpus cell until its own seating is
+built.
+
+*Executor's corollary (controller ruling, 2026-09-07):* an absolute check the
+emitter can still violate would turn those cells INVALID rather than REFUSED
+and would waste a full routing pass discovering it. So `_seat_inputs`'
+mixing ladder collapses to one item per lane and a seating that will not fit
+refuses, exactly as the coater-seat predicate is made to agree with
+`prolif.coater_rides_one_run` in §5.5 F2. Cost if wrong: cells that would have
+emitted a mixed lane now refuse a little earlier — the same cells, since a
+mixed lane is an ERROR either way and `pipeline.py:1347` prefers a valid
+layout; the visible difference is REFUSED instead of INVALID in the audit.
+
+*Changes:* §4 F1 decision, §5.4 `_lane_single_item` docstring, §5.5 F1,
+§7 risk 1, §6 T7/T7b. Plan: the mixed-lane conviction task drops
+`_lane_seating_is_forced` and its exemption test.
+
+### R2 — `universe-matrix` keeps building by moving the flanked output's drain row
+
+**Makes R1 affordable.** Measured on master: a Matrix Lab is 5x5 with three
+insert poses per face; `freeform._side_lane_caps` returns three reachable rows
+above and three below at its band height; six ingredients fit six single-item
+lanes **except** that `_seat_inputs`'s `flank_outputs` path still charges the
+output's drain lane one south ROW (the gap belts between machines drain into
+it), leaving five input rows for six items.
+
+The drain lane **carries no sorter**. It can therefore sit on the row PAST
+sorter reach — row four on that side — costing one strip row on that machine
+family and freeing the third south row for an input lane.
+
+*Decision:* seat the drain lane at `below_cap + 1` (or the equivalent row
+index) **only when the input count needs the freed row**; keep today's seating
+otherwise, so no other spec's area moves. This lands as its own task **before**
+the mixed-lane ban task, with red-green tests (a Matrix Lab spec with six
+ingredients seats as six single-item lanes; a spec that never needed the row is
+byte-identical to before) and a CLI build of `universe-matrix` that must come
+back CLEAN with no `flow.lane_single_item` finding.
+
+*Why:* it is a planner change that satisfies the absolute ban on the merits,
+rather than an exemption that permits the failure mode. The cost is bounded and
+paid only by specs that need it.
+
+*Cost if the ruling is wrong:* one extra strip row on every `flank_outputs`
+spec that trips the condition (area regression, measured per arm by the gate);
+or, if the freed row does not materialise, `universe-matrix` refuses and R1
+costs a corpus cell — reported as a FAIL.
+
+*Measured while turning this ruling into a task (2026-09-07, on master, in
+tree) — two corrections to the ruling's own arithmetic, recorded rather than
+quietly absorbed:*
+
+* The reservation is written down **five** times, not once. `freeform.py:2268`
+  is the one the user named; `strip_variants.py:1504-1506` (`out_capacity`)
+  would then hand `_shard_sinks` a zero and raise *"no room left on the south
+  side for any output lane"*; `strip_variants.py:1205`
+  (`_seat_both_fed_outermost`'s `south_output_rows`) is a third copy; and
+  `freeform.py:1114/1171/1187` is the row map that must actually put the drain
+  outermost. `freeform.py:2602-2608` (`box_height`) needs no edit.
+* The cost is **+4 rows on that family, not +1**: `universe-matrix#37` goes
+  from `1 above + 5 band + 1 out + 1 below = 8` to `3 + 5 + 1 + 3 = 12`. Only
+  one of those rows is the drain move; the other three are the price of six
+  single-item lanes replacing two mixed ones — that is, the price of R1, which
+  is what the user asked for. The gate reports them separately and nets
+  nothing.
+
+Confirmed as measured: `_side_lane_caps(2901, 0.0, 5) == (3, 3)`;
+`attachable_columns` is three columns at the first three rows on each side and
+**empty at the fourth**, so the drain's new row is one no sorter could have
+used; `_seat_inputs` on six items with caps `(3, 4)` and `flank_outputs=True`
+returns six single-item lanes. Exactly one plan in the whole corpus is flanked
+(`universe-matrix#37`), so nothing else can move.
+
+### R3 — Priming: prime once and warn
+
+**Answers §8 question 2.** The design as written stands: derive the exact seed,
+mark the head tile, put it on the description, the CLI and the web payload, and
+let `flow.self_loop_primed` be the arbiter. **No permanent external input lane
+for the loop item.** Nothing in §3, §5.1, §5.2, §5.3, §5.6 changes; the plan's
+seed/marker/CLI/validator tasks are unchanged.
+
+*Cost if wrong:* a player who does not read the description pastes a block that
+looks broken. The icon on the head and the CLI line are the mitigation; nothing
+can force it.
+
+### R4 — Belt cycles: `belt.acyclic` stays absolute
+
+**Answers §8 question 3.** No narrow exemption for a declared self-loop lane.
+The loop stays a serial run with a surplus tail, exactly as decoded in §1.2 —
+which already gives the priority-splitter behaviour for free — and a physically
+closed belt ring remains an ERROR.
+
+*Why:* R3 already solves priming with an instruction, so the only thing a ring
+would buy is "prime it anywhere", at the cost of putting a hole in a validator
+rule that is currently absolute and cheap to reason about.
+
+*Cost if wrong:* the player must prime at the marked head rather than anywhere
+on the lane. Nothing to change beyond recording it.
+
+### R5 — The Pile Sorter rule stays retracted
+
+§5.3a is retracted and stays retracted: no Pile Sorter rule, no new tap check,
+no change to `_pick_sorter`. The loop self-regulates once primed; the "grabs
+only a few" observation was the start-up transient R3 already provides for.
