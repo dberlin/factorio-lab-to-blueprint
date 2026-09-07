@@ -11981,10 +11981,16 @@ def _reserve_port_access(
     #
     # Which caller takes which path, because the answer is NOT "all of them
     # take the local one" and a reader who assumes it is will conclude the
-    # boundary probe is dead code: `freeform.py:9507` passes neither and is
-    # local; `freeform.py:16709` passes a `boundary` and IS probed, so the
-    # boundary path is freeform's own default path; `hierarchy/compose.py:714`
-    # passes a `boundary` that it computes as `None` today.
+    # boundary probe is dead code and cap it.  Named by SYMBOL, never by line:
+    # this file is 22k lines and a line citation here was already stale one
+    # commit after it was written.
+    #
+    #   `_route_all`                       passes neither -- local only.
+    #   `_prepare_routing_problem`         passes `boundary=boundary_cells`
+    #     (in its nested `hold_ports`)     and IS probed.  This is freeform's
+    #                                      OWN default path.
+    #   `hierarchy.compose.pack_with_access`  passes a `boundary` that it
+    #                                      computes as `None` today.
     probed = boundary is not None or bool(goal_by_demand)
 
     def _goal_for(demand: PortAccessDemand) -> set[Cell] | None:
