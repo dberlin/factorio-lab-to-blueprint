@@ -176,6 +176,9 @@ def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     ``placed`` default a sprayed strip keeps an ordinary ``WEST_CHANNEL``
     rather than the widened coater channel, so both the recorded channel
     arithmetic and the recorded solve times here are ``off``-arm facts.
+
+    Deleting this fixture? See the retirement checklist, §14 of
+    ``docs/superpowers/evidence/2026-09-07-coater-placed-gate/README.md``.
     """
     monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
 

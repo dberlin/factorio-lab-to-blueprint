@@ -32,6 +32,9 @@ def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     ``placed`` default adds the Coater body's OWN level to ``belt_ban`` -- that
     is the whole point of the narrowed seat -- so "every banned level is at or
     above 1" is an ``off``-arm statement about the ban's shape.
+
+    Deleting this fixture? See the retirement checklist, §14 of
+    ``docs/superpowers/evidence/2026-09-07-coater-placed-gate/README.md``.
     """
     monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
 

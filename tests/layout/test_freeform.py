@@ -161,6 +161,9 @@ def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     of the ``off`` arm and says so here.  ``off`` is reachable for one release
     as the A/B control; ``tests/layout/test_coater_node.py`` covers the
     ``placed`` node's geometry.
+
+    Deleting this fixture? See the retirement checklist, §14 of
+    ``docs/superpowers/evidence/2026-09-07-coater-placed-gate/README.md``.
     """
     monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
 

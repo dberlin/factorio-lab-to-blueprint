@@ -504,3 +504,84 @@ digests are the unambiguous tell — §7 and §12's tables give the digest for e
 digest is shared between a `baseline` build and a `placed` build of the same pair anywhere in this
 gate's evidence. (§7 already carried a shorter version of this caveat for `reported/`'s own two
 logs; this section extends it to `reportedC/` and records the fix.)
+
+## 14. Checklist: the 36 `off_arm`-pinned tests, to retire alongside the `off` arm
+
+**Why this list exists.** Retiring `off` (dropping `FLAB2BP_COATER_NODE=off` after its one
+release) would ordinarily mean re-recording every test whose expected geometry, channel
+arithmetic, or solve time was captured before this branch flipped the default. Re-recording all
+36 in one pass would have been churn that hides a real regression inside a mechanical diff, so
+they were instead **pinned** to `off` via a fixture named `off_arm` — they keep running and
+keep passing, but only under `FLAB2BP_COATER_NODE=off`, and are **not exercised on the shipping
+default** (`placed`). A coater riding the consumer strip's widened west channel is a different
+placement from a free-standing four-tile node beside the lane, so `off`'s recorded geometry and
+`placed`'s recorded geometry are genuinely different numbers for the same test — pinning, not
+re-recording, was the deliberate choice.
+
+That choice was made **on condition** that this list survives as a checklist: when `off` is
+retired, **each of these 36 tests must be re-recorded against `placed` or deleted along with the
+`off`-arm code path it pins.** Nothing in the code currently forces this — the fixture will keep
+silently pinning tests to a deleted arm's geometry (or fail loudly and confusingly once
+`FLAB2BP_COATER_NODE=off` support is actually removed) unless a person does this by hand. This
+section is that person's checklist, kept here — tracked, and not gitignored — rather than only in
+the untracked `.superpowers/sdd/` scratch workspace that produced it, so it survives that
+workspace's deletion.
+
+Enumerated by an AST walk (not a decorator-line grep, which misses the class-level case: every
+`test_*` method of a class marked `@pytest.mark.usefixtures("off_arm")` inherits the pin from the
+class, not from its own decorator).
+
+### `tests/layout/test_freeform.py` — 33
+
+Eight standalone tests:
+- `test_staged_static_clearance_keys_memo_is_transparent` (line 2413)
+- `test_staged_clearance_key_classifies_every_strip_field` (2569)
+- `test_pack_model_with_no_pinned_strips_is_the_model_pack_built_before_the_split` (8503)
+- `test_plan_strips_preselects_projection_risk_clearance_for_direct_preparation` (9876)
+- `test_plan_time_projection_risks_are_batched_and_cached` (9967)
+- `test_static_clearance_requirement_regenerates_a_distinct_lane_variant` (10000)
+- `test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignments` (10039)
+- `test_clearance_feedback_replans_later_base_height_without_minting_retry` (10132)
+
+Eighteen tests via the class-level pin on `TestASprayedLaneEitherGetsACoaterOrRefuses`:
+- `test_coater_seat_rejects_projected_splitter_keepout_before_emission` (17878)
+- `test_later_projected_coater_splitter_refusal_commits_no_earlier_coater` (17910)
+- `test_coater_seat_allows_splitter_at_known_projected_separation` (17946)
+- `test_build_passes_policy_to_coater_splitter_check_before_routing` (17961)
+- `test_sprayed_lane_reserves_the_full_coater_body_west` (18015)
+- `test_universally_safe_sprayed_relation_keeps_the_w3_body_reservation` (18033)
+- `test_a_lane_too_short_to_seat_a_coater_is_refused` (18052)
+- `test_a_taken_drop_cell_is_refused` (18066)
+- `test_reported_coater_assembler_pair_is_refused_before_emission` (18101)
+- `test_coater_keepout_prepares_flat_candidates_in_one_pass` (18172)
+- `test_staged_static_alternate_seat_advances_in_order` (18224)
+- `test_staged_static_alternate_seat_never_passes_the_first_pickup` (18280)
+- `test_staged_static_mixed_same_strip_seat_failures_request_clearance` (18344)
+- `test_the_same_fixture_unblocked_seats_one` (18406)
+- `test_projected_supply_failure_tries_the_next_coater_seat` (18422)
+- `test_coater_projection_contexts_are_reused_across_preparations` (18466)
+- `test_items_sharing_one_lane_share_one_positional_coater` (18509)
+- `test_a_sprayed_item_no_strip_carries_is_refused` (18542)
+
+Five more standalone tests:
+- `test_staged_static_projection_risk_uses_one_exact_pair_per_relation` (18894)
+- `test_staged_static_clearance_reuses_only_the_same_physical_relation` (19017)
+- `test_plan_strips_batches_all_exact_preclearance_relations` (19137)
+- `test_batched_relation_anchor_collection_cancels_without_caching` (19180)
+- `test_staged_static_preclearance_cancels_inside_cold_proof_without_caching` (19232)
+
+Two more:
+- `test_broke7_boundary_access_rematches_equal_box_pair` (25262)
+- `test_broke7_recorded_pack_outcomes_after_boundary_role_repair` (25287)
+
+### `tests/layout/test_sequence_solver.py` — 2
+
+- `test_selected_variant_recomputes_its_own_staged_static_clearance` (6453)
+- `test_reported_sequence_output_products_keeps_machine_inputs_separate` (9391)
+
+### `tests/layout/hierarchy/test_compose.py` — 1
+
+- `test_canvas_for_registers_each_building_kind_the_way_freeform_does` (143)
+
+Line numbers are as of the source in this gate's evidence (`task-8-report.md`'s enumeration);
+expect drift as the files are edited further — match by test name, not by line.
