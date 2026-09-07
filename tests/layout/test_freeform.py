@@ -13016,14 +13016,28 @@ class TestOneLaneCanServeSeveralDestinations:
         assert p.stats["route_failures"] == 0.0
 
     def test_a_lane_serves_more_consumers_than_it_has_tiles(self) -> None:
-        """The tap count is not bound by the lane's tile count.
+        """A producer lane plans and lays out with more consumer strips than tiles.
 
-        `_fanout_shortfall` used to refuse here, on the theory that each
-        consumer taps a different TILE of the producer lane.  The router does
-        not do that: nets that share a source lane branch off each other's
-        committed paths (`_route`'s `same_src` grouping), and `_tap_source`
-        builds the splitter on that path.  Measured on `universe-matrix`: a
-        10-tile lane wired all twelve of its consumers
+        `_fanout_shortfall` did NOT fire for this fixture shape, before or
+        after its deletion: measured for consumers=3..8 (the vendored
+        dataset's cap on distinct `copper-ingot` consumers), `_merge_lanes`
+        packs the distinct one-machine dest groups onto exactly
+        `producer.width` lanes, and every merged key ends up with
+        `n_src == n_sink == 1` -- the guard was structurally inert here. The
+        guard's real firing shape was different: ONE dest group sharded into
+        many strips against one narrow producer lane --
+        `universe-matrix#37`, `n_src=1`, `n_sink=15`, `tiles=10`. The
+        regression evidence for removing the guard is therefore the corpus
+        control in
+        `docs/superpowers/evidence/2026-09-07-lane-fanout/gate/control-task2.md`,
+        not this test.
+
+        What this test does cover, and why it is still worth keeping: the
+        router's model of a shared source lane is not "one tap per TILE" --
+        nets that share a source lane branch off each other's committed paths
+        (`_route`'s `same_src` grouping), and `_tap_source` builds the
+        splitter on that path.  Measured on `universe-matrix`: a 10-tile lane
+        wired all twelve of its consumers
         (spec 2026-09-07-lane-fanout-design.md section 2).
         """
         spec = one_machine_fan_out_spec(4)
