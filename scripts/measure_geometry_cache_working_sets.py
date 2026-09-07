@@ -131,10 +131,11 @@ def _powers_of_two_through(cardinality: int) -> list[int]:
         size *= 2
 
 
-def recommended_maxsize(case_traces: list[list[CacheKey]]) -> int:
+def recommended_maxsize(
+    case_traces: list[list[CacheKey]], combined: list[CacheKey]
+) -> int:
     """Choose the smallest evidence-backed power-of-two cache bound."""
     peak_case_distinct = max((len(set(trace)) for trace in case_traces), default=1)
-    combined = [key for trace in case_traces for key in trace]
     unbounded_hits = len(combined) - len(set(combined))
     for size in _powers_of_two_through(max(len(set(combined)), 1)):
         hits = lru_hits(combined, size)
@@ -256,8 +257,9 @@ def collect_case_traces(root: Path) -> CaseTraces:
     return cases
 
 
-def _function_report(name: str, case_traces: list[list[CacheKey]]) -> _FunctionReport:
-    combined = [key for trace in case_traces for key in trace]
+def _function_report(
+    name: str, case_traces: list[list[CacheKey]], combined: list[CacheKey]
+) -> _FunctionReport:
     distinct_keys = len(set(combined))
     unbounded_hits = len(combined) - distinct_keys
     candidates = [
@@ -268,7 +270,7 @@ def _function_report(name: str, case_traces: list[list[CacheKey]]) -> _FunctionR
         )
         for size in _powers_of_two_through(max(distinct_keys, 1))
     ]
-    recommendation = recommended_maxsize(case_traces)
+    recommendation = recommended_maxsize(case_traces, combined)
     rollback_reason = _ROLLBACK_REASONS.get(name)
     return _FunctionReport(
         calls=len(combined),
@@ -282,17 +284,20 @@ def _function_report(name: str, case_traces: list[list[CacheKey]]) -> _FunctionR
     )
 
 
-def _build_report_and_traces(root: Path) -> tuple[_Report, CaseTraces]:
+def _build_report_and_traces(root: Path) -> tuple[_Report, FunctionTraces]:
     cases, skipped = _collect_case_traces(root)
     functions: dict[str, _FunctionReport] = {}
+    combined: FunctionTraces = {}
     for name in _FUNCTION_NAMES:
-        functions[name] = _function_report(name, [case[name] for case in cases.values()])
-    return _Report(skipped_blueprints=skipped, functions=functions), cases
+        case_traces = [case[name] for case in cases.values()]
+        combined[name] = [key for trace in case_traces for key in trace]
+        functions[name] = _function_report(name, case_traces, combined[name])
+    return _Report(skipped_blueprints=skipped, functions=functions), combined
 
 
 def build_report(root: Path) -> _Report:
     """Build the deterministic aggregate working-set report."""
-    report, _cases = _build_report_and_traces(root)
+    report, _traces = _build_report_and_traces(root)
     return report
 
 
@@ -301,10 +306,10 @@ def _clear_all_caches() -> None:
         function.cache_clear()
 
 
-def _add_timings(report: _Report, cases: CaseTraces, samples: int) -> None:
+def _add_timings(report: _Report, traces: FunctionTraces, samples: int) -> None:
     for name in _FUNCTION_NAMES:
         function = _FUNCTIONS[name]
-        trace = [key for case in cases.values() for key in case[name]]
+        trace = traces[name]
         elapsed: list[float] = []
         info: _CacheInfo | None = None
         for _sample in range(samples):
@@ -395,9 +400,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if compare is not None and samples is None:
         parser.error("--compare requires --samples")
 
-    report, cases = _build_report_and_traces(_ROOT)
+    report, traces = _build_report_and_traces(_ROOT)
     if samples is not None:
-        _add_timings(report, cases, samples)
+        _add_timings(report, traces, samples)
     _write_report(report, output)
     if compare is None:
         return 0

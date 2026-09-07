@@ -18,12 +18,12 @@ def test_recommendation_holds_peak_case_and_retains_observed_hits() -> None:
         [("a",), ("b",), ("a",)],
         [("c",), ("d",), ("c",)],
     ]
-    assert recommended_maxsize(cases) == 2
+    assert recommended_maxsize(cases, [key for case in cases for key in case]) == 2
 
 
 def test_no_repeat_trace_still_holds_one_complete_case() -> None:
     cases: list[list[tuple[object, ...]]] = [[("a",), ("b",), ("c",)], [("d",)]]
-    assert recommended_maxsize(cases) == 4
+    assert recommended_maxsize(cases, [key for case in cases for key in case]) == 4
 
 
 def test_splitter_trace_uses_the_real_one_argument_cache_key() -> None:
