@@ -1,0 +1,6 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+strips 69
+flanked strips 15 [('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True), ('universe-matrix#37', 1, 12, 6, True)]
+unmodified schedule (166, 130, 104, 83, 62)
+  tallest=166 realized_width=138 added=120
+widened schedule (130, 104, 83, 154, 62)

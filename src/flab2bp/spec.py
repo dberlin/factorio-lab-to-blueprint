@@ -119,6 +119,47 @@ class CoproductBufferProof(_Frozen):
     intrinsic_capacity: Fraction = Field(gt=0)
 
 
+class SelfLoopSeed(_Frozen):
+    """A recipe that consumes an item it also produces, and its one-off prime.
+
+    DSP machines paste EMPTY and a blueprint carries no inventory --
+    ``dsp.records.BlueprintBuilding`` has no inventory field -- so a loop whose
+    only source is itself holds zero items at t=0 and the block never starts.
+    The rates layer is right to net the loop away (``rates/solve.py:1306-1329``)
+    and the strip planner is right to build the recirculating lane; what neither
+    can express is that the lane must be filled once by hand.
+
+    ``seed_items`` is one full input batch per machine, so every machine in the
+    group can start its first craft at once.  It is sufficient because
+    ``net_per_craft`` is positive: the loop gains items from then on.
+    """
+
+    item_id: str
+    recipe_id: str
+    machine_item_id: str
+    machines: int = Field(gt=0)
+    consumed_per_craft: Fraction = Field(gt=0)
+    produced_per_craft: Fraction = Field(gt=0)
+    net_per_craft: Fraction = Field(gt=0)
+    seed_items: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _arithmetic_holds(self) -> SelfLoopSeed:
+        if self.net_per_craft != self.produced_per_craft - self.consumed_per_craft:
+            raise ValueError(
+                f"{self.recipe_id}: net_per_craft {self.net_per_craft} is not "
+                f"{self.produced_per_craft} - {self.consumed_per_craft}"
+            )
+        need = self.machines * self.consumed_per_craft
+        exact = -((-need.numerator) // need.denominator)
+        if self.seed_items != exact:
+            raise ValueError(
+                f"{self.recipe_id}: seed_items {self.seed_items} is not the "
+                f"{exact} whole items {self.machines} machine(s) need to start"
+            )
+        return self
+
+
 class BuildSpec(_Frozen):
     """One complete, self-consistent thing to build.
 
@@ -197,6 +238,10 @@ class BuildSpec(_Frozen):
     #: Startup-liveness certificates derived from exact recipe batches and the
     #: selected machine's game-defined internal output capacity.
     coproduct_buffer_proofs: tuple[CoproductBufferProof, ...] = ()
+
+    #: Items a group both consumes and produces.  Steady-state correct and dead
+    #: on paste until primed; see :class:`SelfLoopSeed`.
+    self_loop_seeds: tuple[SelfLoopSeed, ...] = ()
 
     @model_validator(mode="after")
     def _tiers_are_ordered(self) -> BuildSpec:

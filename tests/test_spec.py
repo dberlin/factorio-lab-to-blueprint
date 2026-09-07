@@ -5,10 +5,11 @@ from __future__ import annotations
 from fractions import Fraction
 
 import pytest
+from pydantic import ValidationError
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import NoValidLayout
-from flab2bp.spec import MAX_CARGO_STACK, BeltTier, BuildSpec, MachineGroup
+from flab2bp.spec import MAX_CARGO_STACK, BeltTier, BuildSpec, MachineGroup, SelfLoopSeed
 
 
 def _group() -> MachineGroup:
@@ -316,3 +317,28 @@ def test_the_external_override_beats_the_specs_own_classification() -> None:
     # deuterium is produced by classification: what the sorter places, 3.
     assert spec.planning_stack("deuterium") == 3
     assert spec.planning_stack("deuterium", external=True) == 2
+
+
+def test_self_loop_seed_arithmetic_cannot_lie() -> None:
+    with pytest.raises(ValidationError):
+        SelfLoopSeed(
+            item_id="hydrogen",
+            recipe_id="x-ray-cracking",
+            machine_item_id="oil-refinery",
+            machines=4,
+            consumed_per_craft=Fraction(2),
+            produced_per_craft=Fraction(3),
+            net_per_craft=Fraction(2),  # wrong: 3 - 2 = 1
+            seed_items=8,
+        )
+    with pytest.raises(ValidationError):
+        SelfLoopSeed(
+            item_id="hydrogen",
+            recipe_id="x-ray-cracking",
+            machine_item_id="oil-refinery",
+            machines=4,
+            consumed_per_craft=Fraction(2),
+            produced_per_craft=Fraction(3),
+            net_per_craft=Fraction(1),
+            seed_items=4,  # wrong: ceil(4 * 2) = 8
+        )

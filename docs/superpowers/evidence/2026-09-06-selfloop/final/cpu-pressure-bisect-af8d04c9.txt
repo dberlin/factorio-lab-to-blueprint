@@ -1,0 +1,5 @@
+# build af8d04c9 (Task 1: validator check only, no seat filter)
+# cpu_pressure before:
+4.6
+# cpu_pressure after:
+11.6

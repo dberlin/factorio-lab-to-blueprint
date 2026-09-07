@@ -1,0 +1,4 @@
+# cpu_pressure before pytest:
+6.2
+# cpu_pressure after pytest:
+17.6

@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 import flab2bp.layout.validate as validate_module
+from flab2bp.dsp import catalog, params, rules
 from flab2bp.dsp import colliders as dsp_colliders
-from flab2bp.dsp import params, rules
 from flab2bp.dsp.catalog import (
     DEFAULT_MAX_BELT_Z,
     ENERGY_EXCHANGER_ID,
@@ -49,6 +49,7 @@ from flab2bp.spec import (
     CoproductBufferProof,
     MachineGroup,
     ProliferatorMode,
+    SelfLoopSeed,
 )
 from tests.dsp.test_local_offset import GEOMETRY_CORPUS
 
@@ -1695,6 +1696,172 @@ def test_game_addon_supply_rejects_a_sorter_targeting_a_coater() -> None:
     assert any("sorter" in finding.message for finding in report.by_check("game.addon_supply"))
 
 
+def _coater_spec() -> BuildSpec:
+    """One proliferated group whose single ingredient rides a sprayed lane."""
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                proliferator_mode=ProliferatorMode.PRODUCTS,
+                inputs_per_machine={"iron-ingot": Fraction(1)},
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+        ),
+        external_inputs={"iron-ingot": Fraction(1), "proliferator-2": Fraction(1, 10)},
+        outputs={"gear": Fraction(1)},
+        spray_lanes={"iron-ingot": True},
+    )
+
+
+def _coater_placement(
+    *,
+    merge_under_body: bool,
+    second_belt_in_supply_area: bool = False,
+    one_run_two_belts_in_supply_area: bool = False,
+    two_runs_under_body: bool = False,
+) -> Placement:
+    """A coater at yaw 90 riding a straight lane, optionally spoiled.
+
+    ``merge_under_body`` adds a second belt chain whose tail points at the tile
+    one step upstream of the coater origin (9, 5, 0) -- a tile the 1x3 body
+    covers, since the body runs from (9, 5, 0) to (11, 5, 0) at yaw 90.
+
+    ``second_belt_in_supply_area`` adds two UNLINKED belts near addon area 1's
+    centre (8.75, 5, 1) -- one 0.3142 and one 0.9425 world units off it, both
+    inside ``ADDON_AREA_RADIUS``.  Neither has an ``output_obj``, so
+    ``_build_runs`` gives each its own run: this is the two-DISTINCT-RUNS case
+    ``prolif.coater_rides_one_run``'s narrowed second clause (spec section 9
+    R6) convicts -- which one the game would attach is a rotation convention
+    the emitted geometry never decided.
+
+    ``one_run_two_belts_in_supply_area`` is the regression guard for that same
+    narrowing: it chains the identical two belts into ONE run
+    (``output_obj`` from the far one to the near one).  Same positions, same
+    radius membership, but one run carries one item, so there is no rotation
+    ambiguity and the clause must NOT fire.
+
+    ``two_runs_under_body`` CUTS the link from the body tile at (9, 5) to the
+    ridden tile at (10, 5).  Nothing merges anywhere, so no belt has two
+    predecessors, but the body now spans two distinct runs -- the other half of
+    the first clause, which is what ``len(distinct_runs) >= 2`` convicts on its
+    own.
+    """
+    buildings: list[PlacedBuilding] = [
+        belt(7, 5, out=1),
+        belt(8, 5, out=2),
+        # Body tile (dx=-1): the merge target when spoiled, and the cut point
+        # when the body is made to span two runs.
+        belt(9, 5) if two_runs_under_body else belt(9, 5, out=3),
+        belt(10, 5, out=4),  # the coater's own ridden tile (dx=0)
+        belt(11, 5, out=5),  # body tile (dx=+1)
+        belt(12, 5),
+        _coater(10, 5, 0, yaw=90.0),
+    ]
+    if merge_under_body:
+        buildings.append(belt(9, 4, out=2))  # tail of a second chain, merges onto index 2
+    if second_belt_in_supply_area:
+        buildings.append(belt(9, 5, 1))
+        buildings.append(belt(8, 5, 1))
+    if one_run_two_belts_in_supply_area:
+        near_index = len(buildings) + 1
+        buildings.append(belt(9, 5, 1, out=near_index))
+        buildings.append(belt(8, 5, 1))
+    return Placement(buildings=tuple(buildings))
+
+
+def test_coater_over_a_belt_merge_is_convicted() -> None:
+    """Two belt runs merging on a tile the coater's body covers is not a lane.
+
+    A Spray Coater is a belt addon that rides ONE belt.  Two chains pointing at
+    a tile under its body is the geometry that reads in game as belts inserted
+    into the coater, and it is exactly the interleaving hazard a mixed lane has.
+    """
+    placement = _coater_placement(merge_under_body=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert findings, [f.check for f in report.errors]
+    assert "merge" in findings[0].message
+
+
+def test_coater_body_spanning_two_runs_without_a_merge_is_convicted() -> None:
+    """The untested half of the first clause, and the message it must produce.
+
+    ``_coater_rides_one_run``'s first clause fires on ``merged or
+    len(distinct_runs) >= 2``.  Every existing test drives the ``merged`` half;
+    the Task 1 review flagged the run half as shipped-but-unexercised, and it is
+    the half that actually convicts on the reported URL's freeform builds.
+
+    Here two belts under the coater's 1x3 body belong to different runs and
+    NOTHING merges -- ``merged`` is empty.  The clause must still fire, and the
+    message must name only the reason that fired.  It used to name both
+    unconditionally and read "belt(s) ``[]`` on its body tiles have two or more
+    predecessors, and its body tiles carry 2 distinct belt runs", which
+    contradicts itself: an empty list cannot have two predecessors.  A refusal
+    that names a merge the reader will not find is worse than no detail at all.
+    """
+    placement = _coater_placement(merge_under_body=False, two_runs_under_body=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert findings, [f.check for f in report.errors]
+    message = findings[0].message
+    assert "distinct belt runs" in message, message
+    assert findings[0].detail["merged_belts"] == [], findings[0].detail
+    # The clause that did NOT fire must not be asserted -- not in the reason,
+    # not in the lead, and not in the rationale.  All three used to claim a
+    # merge unconditionally.
+    assert "belt(s) [] " not in message, message
+    assert "have two or more predecessors" not in message, message
+    assert "merge" not in message, message
+
+
+def test_coater_on_a_single_run_is_clean() -> None:
+    placement = _coater_placement(merge_under_body=False)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    assert not [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+
+
+def test_coater_supply_area_with_two_belts_of_two_runs_is_convicted() -> None:
+    """Which belt supplies a coater must not depend on a rotation convention.
+
+    Measured on the reported URL: coater#768's addon area 1 had the proliferator
+    RUN 59 tail at (53,20,1) and a CARGO lane, RUN 27, at (55,20,1), both exactly
+    0.250 from the area centre and both inside ADDON_AREA_RADIUS = 1.0.
+
+    Renamed from ``test_coater_supply_area_with_two_belts_is_convicted`` (spec
+    section 9 R6): the clause is narrowed from "a second belt" to "a second
+    RUN", so the name and this docstring now say what actually convicts. The
+    fixture is unchanged -- its two belts were already unlinked, hence already
+    two distinct runs -- only the assertions below were sharpened to check the
+    run count the narrowed clause actually reports.
+    """
+    placement = _coater_placement(merge_under_body=False, second_belt_in_supply_area=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert findings
+    assert "addon area 1" in findings[0].message
+    assert "distinct belt runs" in findings[0].message
+    assert len(findings[0].detail["runs"]) >= 2
+
+
+def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None:
+    """The regression this narrowing (spec section 9 R6) exists to prevent.
+
+    Same two positions and the same radius membership as the two-runs case
+    above, but chained into ONE run.  ``freeform._place_coaters`` feeds every
+    coater exactly this way -- a ``supply`` belt and an ``approach`` belt, one
+    run, one item -- and landing the clause without this exemption convicted
+    every coater the tool has ever placed (19 ``tests/layout/test_freeform.py``
+    builds went to ``NoValidLayout``).  One run carries one item, so there is
+    no rotation ambiguity for the game to resolve either way.
+    """
+    placement = _coater_placement(merge_under_body=False, one_run_two_belts_in_supply_area=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert not findings, [f.message for f in findings]
+
+
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
     """A Chemical Plant is nine wide and takes a sorter on four of its columns.
 
@@ -3018,6 +3185,191 @@ def test_flow_lane_attribution_clean_on_single_item_lanes() -> None:
     """An unfiltered sorter is fine when its lane carries only one thing."""
     r = validate(fed_machine(), hungry_spec(Fraction(5)), ids=TWO_INPUT_IDS)
     assert not fired(r, "flow.lane_attribution")
+
+
+# --- absolute mixed-lane ban (spec Sec 9 R1) --------------------------------
+#
+# No input lane ever carries two distinct items -- not chosen, not forced.
+# There is no `_lane_seating_is_forced` helper and no geometry exemption: a
+# mixed lane is an ERROR however it came to be.
+
+
+def _two_items_on_one_input_lane() -> Placement:
+    """One physical run, tapped by two filtered sorters carrying different items.
+
+    Same shape as ``shared_lane()`` above: belts (3,0)->(3,1) form one run, an
+    assembler sits east of it and a smelter west, each drawn from by its own
+    filtered sorter.  Exactly the geometry `flow.lane_single_item` exists to
+    convict -- two distinct items drawn off one physical run into machines.
+    """
+    return shared_lane()
+
+
+def _two_ingredient_spec() -> BuildSpec:
+    return two_consumer_spec(Fraction(5), Fraction(5))
+
+
+def test_mixed_item_input_lane_is_convicted() -> None:
+    """One input belt carries one item.
+
+    Measured on the reporting URL: belt run 7 carried frame-material,
+    optical-grating-crystal AND super-magnetic-ring into the same two
+    advanced-mining-machine assemblers, and run 16 carried two more.  A native
+    DSP merge is first-come, not proportional, so whichever source runs ahead
+    fills the belt and the others back up.  `flow.belt_capacity` already sums
+    across items and was satisfied; nothing asked whether they could interleave.
+    """
+    placement = _two_items_on_one_input_lane()
+    report = validate(placement, _two_ingredient_spec(), ids=TWO_CONSUMER_IDS, expect_power=False)
+    findings = [f for f in report.errors if f.check == "flow.lane_single_item"]
+    assert findings, [f.check for f in report.errors]
+    assert findings[0].detail["items"] == ["copper-ingot", "iron-ingot"]
+
+
+def _one_item_two_consumers_on_one_lane() -> Placement:
+    """One belt run, two consumers, ONE item: belt sharing, not a mixed lane.
+
+    Same shape as ``shared_lane()`` but both sorters are filtered to the SAME
+    item.  ``freeform._merge_lanes`` / ``_merge_frontier`` fold a producer's
+    destinations onto one lane this way; that sharing is load-bearing for
+    feasibility on 12 of 36 corpus cells and must never be convicted here.
+    """
+    return place(
+        machine(4, 0, recipe_id=6),  # 0  assembler, x 4..7
+        machine(0, 0, item_id=SMELTER, recipe_id=9),  # 1  smelter, x 0..2
+        belt(3, 0, out=3),  # 2
+        belt(3, 1),  # 3
+        sorter(3, 0, 4, 0, inp=2, out=0, item_id=PILE, filter_id=COPPER_ID),  # 4
+        sorter(3, 1, 2, 1, inp=3, out=1, item_id=PILE, filter_id=COPPER_ID),  # 5
+    )
+
+
+def _one_ingredient_two_groups_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(5)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="copper-sheet",
+                machine_item_id="arc-smelter",
+                count=1,
+                inputs_per_machine={"copper-ingot": Fraction(5)},
+                outputs_per_machine={"copper-sheet": Fraction(1)},
+            ),
+        ),
+    )
+
+
+ONE_INGREDIENT_TWO_GROUPS_IDS = IdMap(
+    recipes={"magnetic-coil": 6, "copper-sheet": 9},
+    items={
+        "assembling-machine-2": ASSEMBLER,
+        "arc-smelter": SMELTER,
+        "copper-ingot": COPPER_ID,
+    },
+)
+
+
+def test_same_item_shared_lane_is_not_a_mixed_lane() -> None:
+    """Two consumers of ONE item off one lane is belt sharing, and it stays.
+
+    `_merge_lanes` / `_merge_frontier` fold a producer's destinations onto one
+    lane; that sharing is load-bearing for feasibility on 12 of 36 corpus cells.
+    This check counts DISTINCT ITEMS on a run, never taps.
+    """
+    placement = _one_item_two_consumers_on_one_lane()
+    report = validate(
+        placement,
+        _one_ingredient_two_groups_spec(),
+        ids=ONE_INGREDIENT_TWO_GROUPS_IDS,
+        expect_power=False,
+    )
+    # Proves the guard is not vacuous: the check ran (was not skipped for an
+    # unresolved machine or a missing spec) and still found nothing to convict.
+    assert "flow.lane_single_item" in report.checks_run
+    assert not [f for f in report.errors if f.check == "flow.lane_single_item"]
+
+
+MATRIX_FRAME_ID = 1201
+MATRIX_GRATING_ID = 1202
+MATRIX_RING_ID = 1203
+
+
+def _matrix_lab_three_items_on_one_lane_placement() -> Placement:
+    """Three distinct items off one physical run into one machine.
+
+    Mirrors the pre-Task-3 Matrix Lab seating (freeform.py:2208-2223 on
+    master): three ingredient columns fed by one run, each sorter filtered to
+    a different item, all landing on one machine.  The check has NO
+    forced-geometry exemption (spec Sec 9 R1), so a lane like this is
+    convicted exactly like a chosen mixed lane.
+    """
+    return place(
+        machine(6, 0, recipe_id=8),  # 0
+        belt(5, 0, out=2),  # 1
+        belt(5, 1, out=3),  # 2
+        belt(5, 2),  # 3
+        sorter(5, 0, 6, 0, inp=1, out=0, item_id=PILE, filter_id=MATRIX_FRAME_ID),  # 4
+        sorter(5, 1, 6, 1, inp=2, out=0, item_id=PILE, filter_id=MATRIX_GRATING_ID),  # 5
+        sorter(5, 2, 6, 2, inp=3, out=0, item_id=PILE, filter_id=MATRIX_RING_ID),  # 6
+    )
+
+
+def _matrix_lab_six_ingredient_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="six-ingredient-recipe",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                inputs_per_machine={
+                    "frame-material": Fraction(1),
+                    "optical-grating-crystal": Fraction(1),
+                    "super-magnetic-ring": Fraction(1),
+                    "copper-ingot": Fraction(1),
+                    "iron-ingot": Fraction(1),
+                    "titanium-ingot": Fraction(1),
+                },
+                outputs_per_machine={"matrix-cube": Fraction(1)},
+            ),
+        ),
+    )
+
+
+MATRIX_LAB_IDS = IdMap(
+    recipes={"six-ingredient-recipe": 8},
+    items={
+        "assembling-machine-2": ASSEMBLER,
+        "frame-material": MATRIX_FRAME_ID,
+        "optical-grating-crystal": MATRIX_GRATING_ID,
+        "super-magnetic-ring": MATRIX_RING_ID,
+    },
+)
+
+
+def test_forced_mixed_lane_is_still_convicted() -> None:
+    """ "The machine's faces left no alternative" is not a defence (spec Sec 9 R1).
+
+    A Matrix Lab offers three insert columns per face, and before Task 3 that
+    made `freeform._seat_inputs` seat `universe-matrix`'s six ingredients as
+    three items per lane above and three below (freeform.py:2208-2223).  The
+    user's ruling is that such a lane starves in game exactly like a chosen one
+    -- whichever item the machines are not short of fills the belt -- so the
+    check has NO exemption.  Task 3 is what keeps `universe-matrix` building:
+    it frees a sixth input row so the lab seats one item per lane on the merits.
+    """
+    placement = _matrix_lab_three_items_on_one_lane_placement()
+    report = validate(
+        placement, _matrix_lab_six_ingredient_spec(), ids=MATRIX_LAB_IDS, expect_power=False
+    )
+    findings = [f for f in report.errors if f.check == "flow.lane_single_item"]
+    assert findings, [f.check for f in report.errors]
+    assert len(findings[0].detail["items"]) == 3
 
 
 # --- negative control against real game blueprints -------------------------
@@ -6342,3 +6694,110 @@ def test_machine_checks_ignore_pilers() -> None:
     assert not report.findings
     assert set(report.checks_run) == checks
     assert not report.skipped
+
+
+# --- self-loop priming ------------------------------------------------------
+#
+# A block whose only source of an item is itself passed every other check and
+# still deadlocked on paste: `flow.conservation` is a correct steady-state
+# check with no notion of an initial fill, and `flow.coproduct_buffer` is a
+# certificate verifier that yields nothing when no certificate exists.  Loop
+# identification is not re-walked here -- `markers.self_loop_prime_heads`
+# already does it from the sorter graph alone, and these fixtures give it
+# exactly the shape it expects: the group's own output sorter feeding a belt
+# that returns via the group's own input sorter.
+
+SELF_LOOP_RECIPE_ID = catalog.recipe_id("x-ray-cracking")
+
+
+def _self_loop_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="x-ray-cracking",
+                machine_item_id="chemical-plant",
+                count=1,
+            ),
+        ),
+        self_loop_seeds=(
+            SelfLoopSeed(
+                item_id="hydrogen",
+                recipe_id="x-ray-cracking",
+                machine_item_id="chemical-plant",
+                machines=4,
+                consumed_per_craft=Fraction(2),
+                produced_per_craft=Fraction(3),
+                net_per_craft=Fraction(1),
+                seed_items=8,
+            ),
+        ),
+    )
+
+
+def _self_loop_placement(*, closed: bool = True, walled_in: bool = False) -> Placement:
+    """A one-machine hydrogen loop, head at (3, 21).
+
+    Building 1 is the group's own OUTPUT sorter (its ``input_obj`` is the
+    machine) and building 2 is the loop head belt.  Building 3 is the group's
+    own INPUT sorter (its ``output_obj`` is the machine); when ``closed=True``
+    its ``input_obj`` taps the head belt directly, exactly the interior-tap
+    shape ``markers.self_loop_prime_heads`` recognises (a tap need not sit at
+    the belt chain's own terminal ``output_obj`` -- design section 1.2's real
+    corpus case never does).
+
+    ``closed=False`` makes the input sorter tap an unrelated, disconnected
+    belt (building 4) instead, so nothing the walk from the group's own
+    output sorter ever visits is drawn on by a group input sorter -- the loop
+    does not physically close.  ``walled_in=True`` rings the head with plain
+    belts so no free tile touches it -- the same defect
+    ``flow.external_entry_reachable`` catches for an ordinary input.
+    """
+    buildings: list[PlacedBuilding] = [
+        machine(0, 0, item_id=CHEM_PLANT, recipe_id=SELF_LOOP_RECIPE_ID),  # 0
+        sorter(0, 0, 0, 1, inp=0, out=2, carries="hydrogen"),  # 1: OUTPUT sorter
+        belt(3, 21, out=None, carries="hydrogen"),  # 2: loop head
+        belt(50, 50, out=None, carries="hydrogen"),  # 3: disconnected belt (closed=False only)
+        sorter(
+            3, 21, 3, 22, inp=(2 if closed else 3), out=0, carries="hydrogen"
+        ),  # 4: INPUT sorter
+    ]
+    if walled_in:
+        buildings += [belt(x, y) for x, y in ((2, 21), (4, 21), (3, 20), (3, 22))]
+    return Placement(buildings=tuple(buildings))
+
+
+def test_self_loop_lane_that_cannot_be_reached_is_an_error() -> None:
+    """You cannot prime what no belt and no hand can reach.
+
+    An unreachable loop lane is the same class of defect as
+    `flow.external_entry_reachable`'s walled-in input: nothing about the
+    blueprint looks wrong, and it simply never starts.
+    """
+    spec = _self_loop_spec()
+    report = validate(
+        _self_loop_placement(walled_in=True), spec, ids=id_map(spec), expect_power=False
+    )
+    assert "flow.self_loop_primed" in report.checks_run
+    findings = [f for f in report.errors if f.check == "flow.self_loop_primed"]
+    assert findings
+
+
+def test_self_loop_lane_that_can_be_reached_is_a_warning_naming_the_seed() -> None:
+    spec = _self_loop_spec()
+    report = validate(_self_loop_placement(), spec, ids=id_map(spec), expect_power=False)
+    assert "flow.self_loop_primed" in report.checks_run
+    assert not [f for f in report.errors if f.check == "flow.self_loop_primed"]
+    (finding,) = [f for f in report.warnings if f.check == "flow.self_loop_primed"]
+    assert finding.detail["item"] == "hydrogen"
+    assert finding.detail["seed_items"] == 8
+
+
+def test_self_loop_lane_that_does_not_close_is_an_error() -> None:
+    """A declared loop whose output never reaches its own input is not a loop."""
+    spec = _self_loop_spec()
+    report = validate(
+        _self_loop_placement(closed=False), spec, ids=id_map(spec), expect_power=False
+    )
+    assert "flow.self_loop_primed" in report.checks_run
+    findings = [f for f in report.errors if f.check == "flow.self_loop_primed"]
+    assert findings

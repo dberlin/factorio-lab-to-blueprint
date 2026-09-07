@@ -1,0 +1,16 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+strip universe-matrix#0 machines=1 box_height=12 width=6 flank=True drain_outermost=True
+  in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+  in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+  drain row 11 span 0
+  below ('gravity-matrix',) row 8 span 1
+  below ('information-matrix',) row 9 span 2
+  below ('structure-matrix',) row 10 span 3
+strip universe-matrix#0 machines=1 box_height=12 width=6 flank=True drain_outermost=True
+  in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+  in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+  drain row 11 span 0
+  below ('gravity-matrix',) row 8 span 1
+  below ('information-matrix',) row 9 span 2
+  below ('structure-matrix',) row 10 span 3
+wrote docs/superpowers/evidence/2026-09-06-selfloop/task3/bp-six-input.txt

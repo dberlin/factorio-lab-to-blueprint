@@ -32,7 +32,7 @@ from fractions import Fraction
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import codec, colliders, params, rules, splitter_ports
 from flab2bp.dsp import colliders as dsp_colliders
-from flab2bp.layout import slots
+from flab2bp.layout import markers, slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.spec import BuildSpec, MachineGroup
 
@@ -4724,6 +4724,102 @@ def _coproduct_buffer(ctx: Context) -> Iterable[Finding]:
             )
 
 
+@check("flow.self_loop_primed", needs_spec=True, needs_groups=True)
+def _self_loop_primed(ctx: Context) -> Iterable[Finding]:
+    """A loop that feeds itself must close, be reachable, and be priced.
+
+    ``flow.conservation`` answers the steady-state question and answers it
+    correctly: a self-loop item nets to zero and the produced item does reach
+    the taps.  Neither of its clauses has any notion of an INITIAL FILL, and
+    ``flow.coproduct_buffer`` is a certificate verifier that yields nothing when
+    no certificate exists -- so a block whose only hydrogen source is itself
+    passed every check and deadlocked on paste.
+
+    ERROR when the loop lane does not physically close (the group's own output
+    sorter does not reach its own input pickups), and ERROR when every tile of
+    that lane is walled in, which is the same defect
+    ``flow.external_entry_reachable`` catches for an ordinary input.  WARNING
+    otherwise, naming item, ``seed_items`` and the marked tile, so the
+    obligation reaches the report, the CLI and the web payload rather than
+    living only in the blueprint description.
+
+    Loop-lane identification is NOT reimplemented here.
+    ``markers.self_loop_prime_heads`` already walks the sorter graph from a
+    group's own output sorter to its own input pickups -- a reviewer verified
+    it cannot pick a boundary run carrying the same item, since it walks
+    forward only from sorters whose ``input_obj`` is a group machine -- so a
+    second, subtly different walk here would be the one defect most likely to
+    survive review.  A seed absent from its result means exactly "does not
+    close"; a seed present in it names the one tile whose reachability answers
+    the other question.
+    """
+    assert ctx.spec is not None
+    if not ctx.spec.self_loop_seeds:
+        return
+    bs = ctx.placement.buildings
+    heads = markers.self_loop_prime_heads(ctx.placement, ctx.spec)
+    free: dict[Fraction, set[tuple[int, int]]] = {}
+    for seed in ctx.spec.self_loop_seeds:
+        head = heads.get(seed.item_id)
+        if head is None:
+            yield Finding(
+                "flow.self_loop_primed",
+                Severity.ERROR,
+                f"{seed.item_id!r}'s loop lane does not close: {seed.recipe_id}'s "
+                "own output sorter never reaches its own input pickups, so there "
+                "is no lane to prime and the group has no source of it",
+                (),
+                {"item": seed.item_id, "recipe_id": seed.recipe_id},
+            )
+            continue
+
+        run = ctx.runs[ctx.run_of[head]]
+        walled: list[int] = []
+        for i in run.indices:
+            b = bs[i]
+            plane = free.get(b.z)
+            if plane is None:
+                plane = _reachable_from_outside(ctx, b.z)
+                free[b.z] = plane
+            if any((b.x + dx, b.y + dy) in plane for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                break
+            walled.append(i)
+        else:
+            head_b = bs[head]
+            yield Finding(
+                "flow.self_loop_primed",
+                Severity.ERROR,
+                f"{seed.item_id!r}'s loop lane needs a one-off hand prime of "
+                f"{seed.seed_items} items, but all {len(walled)} of its tiles are "
+                "walled in -- no belt and no hand can ever reach it, so the block "
+                "can never start",
+                (head, *walled[:4]),
+                {
+                    "item": seed.item_id,
+                    "seed_items": seed.seed_items,
+                    "head": f"({head_b.x},{head_b.y},{head_b.z})",
+                    "tiles": len(walled),
+                },
+            )
+            continue
+
+        head_b = bs[head]
+        yield Finding(
+            "flow.self_loop_primed",
+            Severity.WARNING,
+            f"{seed.item_id!r}'s loop lane must be hand-primed with "
+            f"{seed.seed_items} items at ({head_b.x},{head_b.y},{head_b.z}) before "
+            f"paste -- a DSP blueprint carries no inventory, and this block's only "
+            f"source of {seed.item_id!r} is itself",
+            (head,),
+            {
+                "item": seed.item_id,
+                "seed_items": seed.seed_items,
+                "head": f"({head_b.x},{head_b.y},{head_b.z})",
+            },
+        )
+
+
 # --- spec conformance ------------------------------------------------------
 
 
@@ -4915,6 +5011,192 @@ def _coater_rides(ctx: Context) -> dict[int, int]:
         out[ride] = i
     ctx.cache.coater_rides = out
     return out
+
+
+def _coater_body_tiles(ctx: Context, index: int) -> set[tuple[int, int, Fraction]]:
+    """The tiles a Spray Coater's 1x3 body covers, at its own altitude.
+
+    ``range(-(width // 2), width // 2 + 1)`` centres exactly only for an ODD
+    footprint.  The Spray Coater's 1x3 always is one, at either orientation
+    ``oriented_footprint`` returns, so this is correct as written here.  It
+    does NOT generalise: a future belt addon with an EVEN footprint would need
+    a different centring rule, not this one reused as-is.
+    """
+    b = ctx.placement.buildings[index]
+    width, height = cat.oriented_footprint(cat.SPRAY_COATER_ID, b.yaw)
+    return {
+        (b.x + dx, b.y + dy, b.z)
+        for dx in range(-(width // 2), width // 2 + 1)
+        for dy in range(-(height // 2), height // 2 + 1)
+    }
+
+
+def _coater_belt_predecessor_counts(ctx: Context) -> Mapping[int, int]:
+    """How many BELT buildings feed each belt, via ``output_obj``.
+
+    ``_build_runs`` already asks the same question -- a belt whose count here
+    is anything but 1 becomes the head of a new run -- but it throws the count
+    itself away, keeping only the boundary.  ``prolif.coater_rides_one_run``
+    needs the count, to tell "no predecessor" (a run head, unremarkable) from
+    "two or more" (a native DSP merge) on a tile a coater's body covers.
+    """
+    bs = ctx.placement.buildings
+    counts: dict[int, int] = defaultdict(int)
+    for _i, b in ctx.of_kind(Kind.BELT):
+        o = b.output_obj
+        if o is None or not 0 <= o < len(bs) or ctx.kinds[o] is not Kind.BELT:
+            continue
+        counts[o] += 1
+    return counts
+
+
+def _coater_supply_area_candidates(
+    ctx: Context, coater: PlacedBuilding, *, area: int
+) -> tuple[int, ...]:
+    """Every belt within :data:`~flab2bp.dsp.rules.ADDON_AREA_RADIUS` of one coater addon area.
+
+    Mirrors the broadphase :func:`_belt_in_addon_area` runs to pick the belt
+    the game attaches, but keeps every match within radius instead of only the
+    nearest one: ``prolif.coater_rides_one_run`` convicts these candidates
+    spanning two or more distinct ``ctx.run_of`` values, because which one the
+    game would actually select then comes down to a rotation convention, not
+    the geometry emitted.  Candidates of one run are NOT convicted here --
+    see that check's docstring for why.
+    """
+    want = slots.addon_supply_position(
+        coater.item_id,
+        x=coater.x,
+        y=coater.y,
+        z=coater.z,
+        yaw=coater.yaw,
+        area=area,
+    )
+    reach = math.ceil(rules.ADDON_AREA_RADIUS / colliders.GRID_ARC)
+    anchor_x = math.floor(float(want[0]))
+    anchor_y = math.floor(float(want[1]))
+    by_tile = _belts_by_tile(ctx)
+    candidates: list[int] = []
+    for x in range(anchor_x - reach, anchor_x + reach + 1):
+        for y in range(anchor_y - reach, anchor_y + reach + 1):
+            for i in by_tile.get((x, y), ()):
+                belt = ctx.placement.buildings[i]
+                distance = slots.world_gap(
+                    float(want[0] - belt.x),
+                    float(want[1] - belt.y),
+                    float(want[2] - belt.z),
+                )
+                if distance < rules.ADDON_AREA_RADIUS:
+                    candidates.append(i)
+    return tuple(candidates)
+
+
+@check("prolif.coater_rides_one_run", needs_spec=True)
+def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
+    """A Spray Coater rides one belt run, with no merge under its body.
+
+    A coater carries no connection of its own -- the game finds its belts by
+    position (``game.addon_supply``) -- so nothing in the record says which lane
+    it is on beyond where the belts are.  Two chains pointing at one tile is a
+    legal DSP merge in general (``belt.acyclic`` says so), but under a coater it
+    is not a lane: the three flows it joins must arrive interleaved in the
+    recipe's exact proportion or one of them fills the belt and starves the
+    others, and nothing arranges that.
+
+    Measured on the reporting URL: belt#0 at (53,20,0) had predecessors
+    [817, 1872] and sat under coater#768's body; belt#19 at (53,26,0) had
+    predecessors [830, 2037] under coater#771.  Both blueprints validated clean.
+
+    The second clause fires when belts of two or more DISTINCT RUNS lie within
+    ``rules.ADDON_AREA_RADIUS`` of addon area 1: which one the game attaches is
+    then a rotation convention, not something the geometry we emitted decides.
+
+    Narrowed from "a second belt" to "a second RUN" on 2026-09-07 (controller
+    ruling, spec section 9 R6) after landing the literal rule convicted every
+    coater this tool has ever placed: ``freeform._place_coaters`` always feeds
+    a coater with two belts of its OWN making -- a ``supply`` belt on
+    ``slots.addon_supply_cell(..., area=1)`` and an ``approach`` belt one tile
+    further out that feeds it -- and at the Spray Coater's fixed addon pose
+    with ``Facing.EAST`` those sit ``0.314`` and ``0.942`` world units from the
+    area-1 centre, both inside the radius of ``1.0``.  Landing the literal rule
+    took 19 ``tests/layout/test_freeform.py`` builds to ``NoValidLayout``, on
+    ``proliferated_spec``, ``all-products``, ``output-products`` and the
+    negentropy block, every finding naming the coater's own approach/supply
+    pair.  Two belts of ONE run carry one item, so which of them the game
+    attaches cannot change what supplies the coater -- there is no ambiguity to
+    convict.  Two RUNS is exactly the originally reported defect:
+    coater#768's area 1 held the proliferator run 59 tail at (53,20,1) and a
+    cargo lane, run 27, at (55,20,1), both at ``0.250``, separated only by the
+    yaw convention.
+    """
+    bs = ctx.placement.buildings
+    predecessor_counts = _coater_belt_predecessor_counts(ctx)
+    for ride, coater_index in _coater_rides(ctx).items():
+        coater = bs[coater_index]
+        body_tiles = _coater_body_tiles(ctx, coater_index)
+        body_belts = tuple(
+            sorted(i for i, b in ctx.of_kind(Kind.BELT) if (b.x, b.y, b.z) in body_tiles)
+        )
+        merged = tuple(i for i in body_belts if predecessor_counts.get(i, 0) >= 2)
+        distinct_runs = {ctx.run_of[i] for i in body_belts if i in ctx.run_of}
+        if merged or len(distinct_runs) >= 2:
+            # Name ONLY the clause that fired -- lead, reason and rationale
+            # alike.  Either half convicts on its own, so the message must not
+            # assert the other: with `merged` empty it used to read "coater N
+            # rides a belt merge under its body: belt(s) [] ... have two or more
+            # predecessors, and its body tiles carry 2 distinct belt runs",
+            # which contradicts itself twice over and sends the reader hunting
+            # for a merge that is not there.
+            reasons = []
+            if merged:
+                reasons.append(
+                    f"belt(s) {list(merged)} on its body tiles have two or more predecessors"
+                )
+            if len(distinct_runs) >= 2:
+                reasons.append(
+                    f"its body tiles carry {len(distinct_runs)} distinct belt "
+                    f"runs {sorted(distinct_runs)} on belt(s) {list(body_belts)}"
+                )
+            if merged:
+                lead = "rides a belt merge under its body"
+                why = (
+                    "a coater carries no connection of its own and needs one "
+                    "lane, not a merge whose joined flows have no arrangement "
+                    "that keeps its recipe's proportion"
+                )
+            else:
+                lead = "has a body spanning more than one belt run"
+                why = (
+                    "a coater carries no connection of its own and rides "
+                    "whichever run the game attaches it to, so a body straddling "
+                    "two runs leaves what it sprays to a rotation convention"
+                )
+            yield Finding(
+                "prolif.coater_rides_one_run",
+                Severity.ERROR,
+                f"coater {coater_index} {lead}: {', and '.join(reasons)}; {why}",
+                (coater_index, *body_belts),
+                {
+                    "ride": ride,
+                    "merged_belts": list(merged),
+                    "distinct_runs": sorted(distinct_runs),
+                },
+            )
+        candidates = _coater_supply_area_candidates(ctx, coater, area=1)
+        candidate_runs = {ctx.run_of[i] for i in candidates if i in ctx.run_of}
+        if len(candidate_runs) >= 2:
+            sorted_candidates = sorted(candidates)
+            sorted_runs = sorted(candidate_runs)
+            yield Finding(
+                "prolif.coater_rides_one_run",
+                Severity.ERROR,
+                f"coater {coater_index}'s addon area 1 has {len(candidates)} "
+                f"belts within {rules.ADDON_AREA_RADIUS} world units of it, "
+                f"from {len(candidate_runs)} distinct belt runs: "
+                f"{sorted_candidates}; which one the game attaches is a "
+                "rotation convention, not the geometry we emitted",
+                (coater_index, *sorted_candidates),
+                {"area": 1, "candidates": sorted_candidates, "runs": sorted_runs},
+            )
 
 
 def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
@@ -6029,6 +6311,65 @@ def _lane_attribution(ctx: Context) -> Iterable[Finding]:
             f"lane cannot be determined and its capacity cannot be judged",
             culprits,
             {"run": ridx, "known_items": known, "unattributed": list(culprits)},
+        )
+
+
+@check("flow.lane_single_item", needs_spec=True, needs_groups=True)
+def _lane_single_item(ctx: Context) -> Iterable[Finding]:
+    """One input belt carries one item.  No exemption (spec Sec 9 R1).
+
+    A run whose sorters draw two or more DISTINCT items into machines is an
+    ERROR, full stop.  There is deliberately no forced-geometry exemption: a
+    lane whose items must interleave in the recipe's exact proportion to avoid
+    starving each other is not a build we emit, and "the machine's own faces
+    left no alternative" describes a seating we must not ship rather than one we
+    must tolerate.  Where a machine family really cannot be seated
+    one-item-per-lane the answer is a planner change -- Task 3 moved the
+    flanked output's drain row past sorter reach so a Matrix Lab seats six
+    ingredients as six lanes -- or an honest refusal, never a permitted mixed
+    belt.
+
+    Detail carries ``run``, sorted ``items`` and the ``machines``, so the
+    finding names what to un-mix.
+
+    This counts distinct ITEMS, never taps: several consumers of ONE item off
+    one lane is belt sharing (``freeform._merge_lanes`` / ``_merge_frontier``),
+    a different mechanism, load-bearing on 12 of 36 corpus cells, and it stays
+    untouched here.
+    """
+    assert ctx.spec is not None
+    bs = ctx.placement.buildings
+    items = _sorter_items(ctx)
+    items_by_run: dict[int, set[str]] = defaultdict(set)
+    sorters_by_run: dict[int, set[int]] = defaultdict(set)
+    machines_by_run: dict[int, set[int]] = defaultdict(set)
+    for i, s in ctx.of_kind(Kind.SORTER):
+        src, dst = s.input_obj, s.output_obj
+        if src is None or dst is None or not (0 <= src < len(bs) and 0 <= dst < len(bs)):
+            continue
+        if ctx.kinds[src] is not Kind.BELT or ctx.kinds[dst] is not Kind.MACHINE:
+            continue
+        item = items.get(i)
+        if item is None or src not in ctx.run_of:
+            continue
+        run = ctx.run_of[src]
+        items_by_run[run].add(item)
+        sorters_by_run[run].add(i)
+        machines_by_run[run].add(dst)
+
+    for run, carried in sorted(items_by_run.items()):
+        if len(carried) < 2:
+            continue
+        names = sorted(carried)
+        machines = sorted(machines_by_run[run])
+        yield Finding(
+            "flow.lane_single_item",
+            Severity.ERROR,
+            f"belt run {run} draws {len(names)} distinct items into machine(s) "
+            f"{machines} off one lane ({', '.join(names)}); whichever item the "
+            f"machines are not short of fills the belt and the others starve",
+            tuple(sorted(sorters_by_run[run])) + tuple(machines),
+            {"run": run, "items": names, "machines": machines},
         )
 
 
