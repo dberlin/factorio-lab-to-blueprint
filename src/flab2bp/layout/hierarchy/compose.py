@@ -900,9 +900,12 @@ def pack_with_access(
         # `_match_access_corridors` no longer returns `{}` wholesale merely
         # because its validate/cut loop runs out of rounds (`_ACCESS_CUT_ROUNDS`)
         # -- since Task 1 it COMMITS the partial its own survey left unconvicted
-        # instead, and `{}` wholesale is now only what a deadline caught
-        # MID-SURVEY hands back.  See the paragraph below for what that commit
-        # means here.  `assignment_boundary_cut` -- live for the first
+        # instead.  `{}` wholesale is what remains when there is NO unconvicted
+        # partial to hand back: an infeasible rank or tie solve, no demand
+        # having a single free option, or a survey -- run to completion or cut
+        # short by its OWN deadline -- that convicts everything `best_partial`
+        # held (see `surrender` in freeform.py).  See the paragraph below for
+        # what a partial commit means here.  `assignment_boundary_cut` -- live for the first
         # time here, because the goals set `probed` -- asks that EVERY
         # corridor stay reachable with every OTHER corridor's cells forbidden,
         # which is strictly stronger than what `_route_all` then does with
@@ -924,7 +927,11 @@ def pack_with_access(
         # NOTHING AT ALL while there were demands is still the wholesale
         # give-up Ruling R7 discards: it stakes no corridors, so acting on it
         # would leave the router worse off than v2's local-only oracle.
-        if goal_driven is not None and goal_driven.converged:
+        if (
+            goal_driven is not None
+            and goal_driven.converged
+            and (goal_driven.assigned or not demands)
+        ):
             reservation = goal_driven
         elif goal_driven is not None and goal_driven.assigned:
             partial_rungs += 1

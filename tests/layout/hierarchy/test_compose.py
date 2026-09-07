@@ -637,15 +637,18 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
 ):
     """An assignment of NOTHING is an unusable answer, not a geometric verdict.
 
-    This is the WHOLESALE give-up: since Task 1, `_match_access_corridors`
-    only returns `{}` wholesale (rather than committing whatever partial its
-    survey left unconvicted) when a deadline is caught mid-survey, and that
-    give-up is always `converged=False` -- so the mock scripts that too,
-    or `pack_with_access`'s new `goal_driven.converged` trigger would commit
-    this empty answer directly instead of falling back.  An empty reservation
-    stakes NO corridors -- so acting on one leaves the router worse off than
-    v2's local-only oracle.  The belt3 measurement had exactly that: all 102
-    demands discarded on a canvas the router still wired 65 of 89 cuts on.
+    This is the WHOLESALE give-up: `_match_access_corridors` returns `{}`
+    wholesale (rather than committing whatever partial its survey left
+    unconvicted) when there is NO unconvicted partial to hand back -- an
+    infeasible solve, no demand having a single free option, or a survey
+    (complete or cut short by its own deadline) that convicts everything it
+    held -- and every one of those routes is `converged=False`.  So the mock
+    scripts that too, or `pack_with_access`'s new `goal_driven.converged`
+    trigger would commit this empty answer directly instead of falling back.
+    An empty reservation stakes NO corridors -- so acting on one leaves the
+    router worse off than v2's local-only oracle.  The belt3 measurement had
+    exactly that: all 102 demands discarded on a canvas the router still
+    wired 65 of 89 cuts on.
     """
     left, right, flows, spec, ramped = two_solved_blocks
     real = compose._reserve_port_access
@@ -709,6 +712,9 @@ def test_a_committed_partial_is_counted_as_partial_and_as_degraded(
     assert len(packed.reservation.assigned) == 1
     assert packed.partial >= 1
     assert packed.degraded >= 1
+    # The docstring's own contract on `PackedCanvas.partial`: every partial is
+    # also degraded, so this can never invert.
+    assert packed.partial <= packed.degraded
 
 
 def test_a_wholesale_empty_answer_still_falls_back_to_the_local_only_oracle(
