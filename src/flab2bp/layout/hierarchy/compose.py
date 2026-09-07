@@ -900,12 +900,22 @@ def pack_with_access(
         # `_match_access_corridors` no longer returns `{}` wholesale merely
         # because its validate/cut loop runs out of rounds (`_ACCESS_CUT_ROUNDS`)
         # -- since Task 1 it COMMITS the partial its own survey left unconvicted
-        # instead.  `{}` wholesale is what remains when there is NO unconvicted
-        # partial to hand back: an infeasible rank or tie solve, no demand
-        # having a single free option, or a survey -- run to completion or cut
-        # short by its OWN deadline -- that convicts everything `best_partial`
-        # held (see `surrender` in freeform.py).  See the paragraph below for
-        # what a partial commit means here.  `assignment_boundary_cut` -- live for the first
+        # instead.  Only TWO sites return `{}` DIRECTLY: the initial rank solve
+        # coming back neither OPTIMAL nor FEASIBLE, and no demand having a
+        # single free option AT ALL while demands were raised (the SAME site
+        # with NO demands is the CONVERGED empty answer to an empty question,
+        # not a give-up -- see the `not demands` guard below).  Every other
+        # give-up -- an infeasible tie solve, a failed fallback rank re-solve,
+        # an empty cut-variable set, or the cut loop running out of rounds --
+        # calls `surrender()`, and reaching `surrender()` is NECESSARY but NOT
+        # SUFFICIENT for `{}`: it hands back the largest partial it saw, minus
+        # what its own survey convicts, and is `{}` only when no partial was
+        # ever recorded, no `survey` callback was passed at all, the survey is
+        # cut short by ITS OWN deadline, or the survey convicts every demand
+        # that partial held (see `surrender` in freeform.py).  Otherwise it
+        # hands back a non-empty, `converged=False` partial.  See the paragraph
+        # below for what a partial commit means here.  `assignment_boundary_cut`
+        # -- live for the first
         # time here, because the goals set `probed` -- asks that EVERY
         # corridor stay reachable with every OTHER corridor's cells forbidden,
         # which is strictly stronger than what `_route_all` then does with

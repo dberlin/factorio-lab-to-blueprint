@@ -639,12 +639,16 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
 
     This is the WHOLESALE give-up: `_match_access_corridors` returns `{}`
     wholesale (rather than committing whatever partial its survey left
-    unconvicted) when there is NO unconvicted partial to hand back -- an
-    infeasible solve, no demand having a single free option, or a survey
-    (complete or cut short by its own deadline) that convicts everything it
-    held -- and every one of those routes is `converged=False`.  So the mock
-    scripts that too, or `pack_with_access`'s new `goal_driven.converged`
-    trigger would commit this empty answer directly instead of falling back.
+    unconvicted) either directly -- an infeasible initial rank solve, or no
+    demand having a single free option while demands were raised -- or via
+    its `surrender()` fallback, which reaching is NECESSARY but not
+    SUFFICIENT for `{}`: `surrender()` hands back a non-empty partial unless
+    no partial was ever recorded, no `survey` callback was passed at all, its
+    survey is cut short by its own deadline, or the survey convicts every
+    demand the partial held.  Every one of those routes is `converged=False`.
+    So the mock scripts that too, or `pack_with_access`'s new
+    `goal_driven.converged` trigger would commit this empty answer directly
+    instead of falling back.
     An empty reservation stakes NO corridors -- so acting on one leaves the
     router worse off than v2's local-only oracle.  The belt3 measurement had
     exactly that: all 102 demands discarded on a canvas the router still
@@ -755,6 +759,40 @@ def test_a_converged_answer_is_neither_partial_nor_degraded(
     )
 
     assert packed.degraded == 0
+    assert packed.partial == 0
+
+
+def test_a_converged_but_empty_answer_does_not_bypass_the_local_only_oracle(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The restored structural guard: `converged=True` alone is not enough.
+
+    `_CorridorMatch` only reports `converged=True` with an empty assignment
+    for an EMPTY question (`not demands`) -- never a non-empty one. A
+    `converged=True, assigned=()` reservation while demands were raised is
+    therefore not a real answer, and the first branch's guard
+    (`goal_driven.assigned or not demands`) exists to stop it being committed
+    unchecked: without it, `reservation_degraded == 0` would sit beside
+    `missing == every demand`, exactly the failure mode this task exists to
+    close.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    asked_local = 0
+
+    def fake_reserve(canvas, demands, **kwargs):
+        nonlocal asked_local
+        if kwargs.get("goals"):
+            return _reservation(list(demands), 0, converged=True)
+        asked_local += 1
+        return _reservation(list(demands), len(list(demands)), converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert asked_local >= 1, "the empty-but-converged answer must not be committed unchecked"
+    assert packed.degraded >= 1
     assert packed.partial == 0
 
 
