@@ -552,6 +552,17 @@ def main(argv: list[str] | None = None) -> int:
                     f"{failure.buildings}: {failure.detail}",
                     file=sys.stderr,
                 )
+            for attempt_failure in exc.attempt_failures:
+                if not attempt_failure.stats:
+                    continue
+                numbers = " ".join(
+                    f"{key}={value:g}" if isinstance(value, int | float) else f"{key}={value}"
+                    for key, value in sorted(attempt_failure.stats.items())
+                )
+                pair = "/".join(
+                    part for part in (attempt_failure.strategy, attempt_failure.candidate) if part
+                )
+                print(f"  stats {pair}: {numbers}", file=sys.stderr)
             return 3
         except (ValueError, KeyError) as exc:
             print(f"flab2bp: {exc}", file=sys.stderr)

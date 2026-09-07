@@ -1,0 +1,106 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "/tmp/certprobe.txt"
+ ],
+ "certifications": [
+  {
+   "all_item_ids": {
+    "2003": 5326,
+    "2011": 328,
+    "2012": 22,
+    "2013": 3,
+    "2014": 9,
+    "2020": 80,
+    "2201": 61,
+    "2302": 23,
+    "2304": 89,
+    "2309": 4,
+    "2313": 48
+   },
+   "area": 11297,
+   "buildings_total": 5993,
+   "convicted": [
+    {
+     "detail": {
+      "tile": "(63,3)",
+      "towers": 61
+     },
+     "height": 1,
+     "index": 5952,
+     "item_id": 2020,
+     "message": "building 5952 has tile (63,3) outside every tower's supply radius; it would sit unpowered",
+     "model_index": 38,
+     "width": 1,
+     "x": 63,
+     "y": 3,
+     "z": "0"
+    },
+    {
+     "detail": {
+      "tile": "(63,3)",
+      "towers": 61
+     },
+     "height": 1,
+     "index": 5953,
+     "item_id": 2020,
+     "message": "building 5953 has tile (63,3) outside every tower's supply radius; it would sit unpowered",
+     "model_index": 38,
+     "width": 1,
+     "x": 63,
+     "y": 3,
+     "z": "2"
+    },
+    {
+     "detail": {
+      "tile": "(62,1)",
+      "towers": 61
+     },
+     "height": 1,
+     "index": 5959,
+     "item_id": 2020,
+     "message": "building 5959 has tile (62,1) outside every tower's supply radius; it would sit unpowered",
+     "model_index": 38,
+     "width": 1,
+     "x": 62,
+     "y": 1,
+     "z": "0"
+    },
+    {
+     "detail": {
+      "tile": "(62,1)",
+      "towers": 61
+     },
+     "height": 1,
+     "index": 5960,
+     "item_id": 2020,
+     "message": "building 5960 has tile (62,1) outside every tower's supply radius; it would sit unpowered",
+     "model_index": 38,
+     "width": 1,
+     "x": 62,
+     "y": 1,
+     "z": "2"
+    }
+   ],
+   "convicted_item_ids": {
+    "2020": 4
+   },
+   "errors_by_check": {
+    "power.coverage": 4
+   },
+   "errors_total": 4,
+   "ok": false,
+   "power_coverage_findings": 4
+  }
+ ],
+ "exit": 3
+}

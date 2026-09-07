@@ -1,0 +1,46 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v3/large-titanium-glass-all-products-b60-r1.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "docs/superpowers/evidence/2026-09-07-hierarchical-v3/large-titanium-glass-all-products-b60-r1.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for all-products after 60s: hierarchical/all-products: composed placement failed validation: power.coverage: building 5952 has tile (63,3) outside every tower's supply radius; it would sit unpowered; power.coverage: building 5953 has tile (63,3) outside every tower's supply radius; it would sit unpowered; power.coverage: building 5959 has tile (62,1) outside every tower's supply radius; it would sit unpowered. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/all-products": {
+   "arm_dispatch_both": "0",
+   "arm_dispatch_freeform": "5",
+   "arm_dispatch_sequence_pair": "1",
+   "blocks": "6",
+   "blocks_unattempted": "0",
+   "compose_gap": "2",
+   "cut_lanes": "26",
+   "nogood_skips": "0",
+   "player_fed": "0",
+   "port_demands": "31",
+   "recut_rounds": "0",
+   "reservation_degraded": "1",
+   "reservation_missing": "0",
+   "resplits": "0",
+   "unrouted_cuts": "0"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 24.68
+}

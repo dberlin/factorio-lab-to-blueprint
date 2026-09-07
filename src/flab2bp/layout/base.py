@@ -241,6 +241,10 @@ class PlacementStats(TypedDict, total=False):
     #: block solves cost (a wall, not a CPU sum -- the blocks run concurrently).
     block_wall_s: float
     blocks: float
+    #: Hierarchical strategy: blocks that never reached a placer at all --
+    #: `_Entry.verdicts` still empty when the build refused.  Distinct from
+    #: "never placed", which includes blocks a placer looked at and refused.
+    blocks_unattempted: float
     boundary_belts_removed: float
     boundary_cleanup_time_s: float
     box_area: float
@@ -385,8 +389,75 @@ class PlacementStats(TypedDict, total=False):
     #: was already remembered refused this build, or already answered by an
     #: identically-shaped block earlier in the same round.
     nogood_skips: float
-    #: Hierarchical strategy: rounds in which a refusing block was re-cut.
+    #: Hierarchical strategy: the v1/v2 NAME for `recut_rounds`, carrying the
+    #: identical number, kept so the three gates' tables line up.
+    #:
+    #: IT IS NOT "rounds in which a block was re-cut", which is what this
+    #: comment used to say.  `strategy.lay_out` sets it from the round counter
+    #: it bumps on every round `_recut` reported PROGRESS on -- and `_recut`
+    #: reports progress for a refusing block it merely re-offered the FULL ARM
+    #: SET to, without cutting anything (widen-before-cut is deliberately
+    #: cheaper than growing the block list).  So a v3 `resplits` counts
+    #: widening rounds as well as cutting ones, and a v1/v2 `resplits` -- from
+    #: before widening existed -- does not: comparing the number across gates
+    #: needs that read alongside it.
     resplits: float
+    #: Hierarchical strategy: how each block's arm was chosen.  `_both` counts
+    #: the blocks raced on every arm because the feature vector fell outside
+    #: what `2026-09-06-exp-features` covers, or because the dispatched arm
+    #: refused and there was wall left to try the other.
+    #:
+    #: COUNTED ONCE PER BLOCK PER ROUND, at the funding site, not once per
+    #: block per build: a multi-round build counts every block again in every
+    #: round it is still unplaced for, so the three columns can sum to MORE
+    #: than `blocks` (the v3 gate's `mall/no-proliferator` sums 92 over three
+    #: rounds against 54 blocks).  They sum exactly to `blocks` only on a
+    #: single-round build.
+    arm_dispatch_both: float
+    arm_dispatch_freeform: float
+    arm_dispatch_sequence_pair: float
+    #: Hierarchical strategy: the `GAP_LADDER` rung the composition committed.
+    #: `0` IS A SENTINEL, NOT A MEASUREMENT -- it is what a refusal reports when
+    #: composition was never entered at all, and `MIN_GAP` means no committed
+    #: rung can ever be 0.  Read it together with `cut_lanes`/`port_demands`.
+    compose_gap: float
+    #: Hierarchical strategy: (block, item) entry heads left to the player
+    #: under the both-fed lane contract.
+    player_fed: float
+    #: Hierarchical strategy: port-access demands the composed canvas raised.
+    #: Like `compose_gap`, `0` is AMBIGUOUS on a refusal: it is the sentinel for
+    #: "composition was never entered", not a measured "no port needed access".
+    #: Which one it is, is decided by whether the build reached `compose` at all.
+    port_demands: float
+    #: Hierarchical strategy: rounds this build advanced past by RE-CUTTING or
+    #: by WIDENING a refusing block's arms, bounded by
+    #: `strategy.MAX_RECUT_ROUNDS`.  `resplits` carries the same number under
+    #: the v1/v2 name -- see its own comment for why neither is purely a count
+    #: of cuts.
+    recut_rounds: float
+    #: Hierarchical strategy: LADDER RUNGS whose trunk-goal reservation came
+    #: back UNUSABLE and was re-asked as v2's local-only question -- either the
+    #: probe outran rung 0's `compose.RESERVE_WALL_SHARE`, or the joint matcher
+    #: gave up and assigned NOTHING at all while there were demands to assign.
+    #: Without this, `reservation_missing = 0` cannot be read: it means "every
+    #: port is satisfiable" only when this is 0, and "the oracle was thrown
+    #: away" otherwise -- which is the whole evaluation of Lever B.
+    #:
+    #: IT CAN ONLY EVER OVER-COUNT.  It is a ladder TOTAL, so a later rung that
+    #: degraded and then lost to an earlier `best` still counts, as does a rung
+    #: whose fallback went on to die on the clock.  A gate may therefore read
+    #: it as: 0 means the committed rung's verdict is the trunk oracle's own
+    #: and is trustworthy; non-zero means SOME rung was degraded and the
+    #: committed one may or may not have been.
+    reservation_degraded: float
+    #: Hierarchical strategy: demands the committed rung could not give a
+    #: corridor to.  0 with a non-zero `unrouted_cuts` is the v2 finding: the
+    #: oracle says every port is satisfiable and the router still refuses.
+    #: This always describes the reservation the composer ACTED ON, so a
+    #: degraded rung reports the local-only verdict's own number.
+    reservation_missing: float
+    #: Hierarchical strategy: cut lanes `compose` reported unwired.
+    unrouted_cuts: float
     restarts: float
     riser_columns: float
     risers: float

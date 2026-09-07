@@ -1,0 +1,46 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "no-proliferator",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v3/large-mall-no-proliferator-b60-r2.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "docs/superpowers/evidence/2026-09-07-hierarchical-v3/large-mall-no-proliferator-b60-r2.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for no-proliferator after 60s: hierarchical/no-proliferator: 31 block(s) never placed, out of re-cut round(s) after 2 of 2 the 36.0s round wall allows: block 2 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (270, 273): build colliders intersect; band 120 geom.collide (270, 273): build colliders intersect; band 160 geom.collide (270, 273): build colliders intersect; band 100 geom.collide (269, 272): build collider; block 3 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (261, 264): build colliders intersect; band 120 geom.collide (261, 264): build colliders intersect; band 160 geom.collide (261, 264): build colliders intersect; band 100 geom.collide (243, 246): build collider; block 4 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (261, 264): build colliders intersect; band 120 geom.collide (261, 264): build colliders intersect; band 160 geom.collide (261, 264): build colliders intersect; band 100 geom.collide (243, 246): build collider; block 5 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (270, 273): build colliders intersect; band 120 geom.collide (270, 273): build colliders intersect; band 160 geom.collide (270, 273): build colliders intersect; band 100 geom.collide (269, 272): build collider; block 6 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (261, 264): build colliders intersect; band 120 geom.collide (261, 264): build colliders intersect; band 160 geom.collide (261, 264): build colliders intersect; band 100 geom.collide (243, 246): build collider; block 7 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (261, 264): build colliders intersect; band 120 geom.collide (261, 264): build colliders intersect; band 160 geom.collide (261, 264): build colliders intersect; band 100 geom.collide (243, 246): build collider; block 8 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (270, 273): build colliders intersect; band 120 geom.collide (270, 273): build colliders intersect; band 160 geom.collide (270, 273): build colliders intersect; band 100 geom.collide (269, 272): build collider; block 9 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (261, 264): build colliders intersect; band 120 geom.collide (261, 264): build colliders intersect; band 160 geom.collide (261, 264): build colliders intersect; band 100 geom.collide (243, 246): build collider; block 10 (magnet): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (261, 264): build colliders intersect; band 120 geom.collide (261, 264): build colliders intersect; band 160 geom.collide (261, 264): build colliders intersect; band 100 geom.collide (243, 246): build collider; block 11 (iron-ingot): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (270, 273): build colliders intersect; band 120 geom.collide (270, 273): build colliders intersect; band 160 geom.collide (270, 273): build colliders intersect; band 100 geom.collide (269, 272): build collider; block 12 (iron-ingot): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (261, 264): build colliders intersect; band 120 geom.collide (261, 264): build colliders intersect; band 160 geom.collide (261, 264): build colliders intersect; band 100 geom.collide (243, 246): build collider; block 13 (iron-ingot): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (261, 264): build colliders intersect; band 120 geom.collide (261, 264): build colliders intersect; band 160 geom.collide (261, 264): build colliders intersect; band 100 geom.collide (243, 246): build collider; block 14 (iron-ingot): REFUSED: deadline exhausted before finding an exact layout; block 15 (iron-ingot): REFUSED: deadline exhausted before finding an exact layout; block 16 (iron-ingot): REFUSED: deadline exhausted before finding an exact layout; block 17 (iron-ingot): REFUSED: deadline exhausted before finding an exact layout; block 29 (copper-ingot): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (441, 453): build colliders intersect; band 120 geom.collide (441, 453): build colliders intersect; band 160 geom.collide (441, 453): build colliders intersect; block 30 (copper-ingot): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (441, 453): build colliders intersect; band 120 geom.collide (441, 453): build colliders intersect; band 160 geom.collide (441, 453): build colliders intersect; block 34 (magnetic-coil): REFUSED: deadline exhausted before finding an exact layout; block 35 (magnetic-coil): REFUSED: deadline exhausted before finding an exact layout; block 36 (electric-motor): REFUSED: deadline exhausted before finding an exact layout; block 37 (electric-motor): REFUSED: deadline exhausted before finding an exact layout; block 38 (electric-motor): REFUSED: deadline exhausted before finding an exact layout; block 39 (electric-motor): REFUSED: deadline exhausted before finding an exact layout; block 40 (electric-motor): REFUSED: deadline exhausted before finding an exact layout; block 41 (electric-motor): REFUSED: deadline exhausted before finding an exact layout; block 42 (electromagnetic-turbine): REFUSED: deadline exhausted before finding an exact layout; block 43 (electromagnetic-turbine): REFUSED: deadline exhausted before finding an exact layout; block 45 (super-magnetic-ring): REFUSED: deadline exhausted before finding an exact layout; block 46 (super-magnetic-ring): REFUSED: deadline exhausted before finding an exact layout; block 47 (circuit-board, sorter-1, sorter-2): REFUSED: deadline exhausted before finding an exact layout; exact validation failures: geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (408, 411): build colliders intersect; band 120 geom.collide (408, 411): build colliders intersect; band 160 geom.collide (408, 411): build colliders intersect. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/no-proliferator": {
+   "arm_dispatch_both": "19",
+   "arm_dispatch_freeform": "0",
+   "arm_dispatch_sequence_pair": "73",
+   "blocks": "54",
+   "blocks_unattempted": "0",
+   "compose_gap": "0",
+   "cut_lanes": "0",
+   "nogood_skips": "48",
+   "player_fed": "0",
+   "port_demands": "0",
+   "recut_rounds": "2",
+   "reservation_degraded": "0",
+   "reservation_missing": "0",
+   "resplits": "2",
+   "unrouted_cuts": "0"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 29.24
+}

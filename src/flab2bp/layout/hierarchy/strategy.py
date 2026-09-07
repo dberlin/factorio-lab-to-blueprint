@@ -17,17 +17,32 @@ runtime lookup) buy nothing: ``_new_layout`` is a two-branch constructor call
 and nothing else.  :func:`_block_layout` is that call, written out, at module
 scope where mypy and the import graph can both see it.
 
-HOW THE BUDGET IS DIVIDED.  A round's jobs are ``blocks x arms``, run
-``_pool_width()`` at a time, so the round takes ``ceil(jobs / width)`` WAVES and
-one block's wall is the round's remaining wall divided by the waves, clamped to
-``[BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S]``.
+HOW THE BUDGET IS DIVIDED.  A round's jobs are
+``sum(len(self._arms_for(block)) for block in todo)`` -- ``blocks x arms``
+only when every block races both arms, which one-arm dispatch
+(``hierarchy.dispatch``, v3 Task 3) makes the exception rather than the rule
+-- run ``_pool_width()`` at a time, so the round takes ``ceil(jobs / width)`` WAVES and
+one block's wall is the round's remaining wall divided by ``rounds_left x
+waves``, clamped to ``[BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S]`` -- see
+:func:`allowed_recut_rounds` for ``rounds_left``.
 :func:`settlement_reserve_s` comes off the top, because composing, ROUTING EVERY
 CUT LANE, compacting, finalizing and certifying happen after the last block and
-have no budget of their own.  A round whose share falls under the floor is not
-started: it would only spend the settlement's wall on solves that cannot
-finish.  The per-job wall is combined with the parent's deadline
-inside :func:`_solve_block`, at job start -- see its docstring for why the
-parent cannot do it.
+have no budget of their own.  A round is refused only when ``remaining /
+waves`` itself is under the floor -- the seed round is exempt even then: a
+build that refuses having attempted nothing reports nothing, so its share is
+floored to ``BLOCK_BUDGET_MIN_S`` instead and it runs anyway.  The per-job wall
+is combined with the parent's deadline inside :func:`_solve_block`, at job
+start -- see its docstring for why the parent cannot do it.
+
+WIDEN-BEFORE-CUT CANNOT HAPPEN AT THE WEB UI'S 15 s DEFAULT.  A block whose
+dispatched arm refused is re-offered the full arm set by :func:`_recut` before
+an attempt is spent cutting it, but ``_recut`` is only reached after the round
+loop's ``recut_rounds >= allowed_recuts`` check, and
+:func:`allowed_recut_rounds` is 0 for the ~8.7 s round wall a 15 s budget
+leaves -- so on the default budget the seed round IS the build, a refusing
+block is neither widened nor cut, and the one-arm rule ships there without its
+escalation (the v3 gate's §2.1 measures ``arm_dispatch_both = 0`` on both 15 s
+cells, and its §5 lever 3 is the regression that has no mitigation there).
 
 WHAT THE PARENT PROMISES A CHILD.  A block can finish early but never outlives
 the build.  It does NOT get the parent's band policy: the composer discards each
@@ -67,13 +82,19 @@ plan proposed and each is spelled out separately below:
   CP-SAT-holding processes for a build with few blocks -- each is already
   ``_BLOCK_WORKERS`` threads deep, so the pool count itself does not need to
   chase the affinity set past a point.
-* Per round, ``block_budget = clamp(remaining / waves, 5, 20)`` seconds
-  (``BLOCK_BUDGET_MIN_S``/``BLOCK_BUDGET_MAX_S``), where ``remaining`` is the
-  parent's wall less the settlement reserve.
 * The per-JOB deadline is ``min(parent_deadline, job_start + block_budget)``,
   computed inside :func:`_solve_block` at job start rather than by the round.
 * ``MAX_RESPLIT_ATTEMPTS = 4`` is counted PER BLOCK, not as a global round
-  bound: a child created by a re-cut starts at attempt 0.
+  bound: a child created by a re-cut starts at attempt 0.  The GLOBAL bound
+  is ``MAX_RECUT_ROUNDS = 2``, floored further by
+  :func:`allowed_recut_rounds` to what the round wall can actually hold at
+  ``BLOCK_BUDGET_MIN_S`` -- 0 at the web UI's 15 s, which is what gives the
+  seed round the whole wall there (v3 Task 2).
+* Per round, ``block_budget = clamp(remaining / rounds_left / waves, 5, 20)``
+  seconds, where ``rounds_left`` is this round plus the re-cuts still
+  permitted.  Dividing by ``waves`` alone let one round spend the wall the
+  NEXT round -- against a block count that round had grown -- would need:
+  v2 measured both malls refusing with 22 and 45 blocks never placed.
 * A ``(shape, arm)`` no-good memo, local to one :meth:`lay_out` call (v2 Task
   5): ``_solve_round`` solves each distinct shape AT MOST ONCE per round --
   two same-shaped children of one re-cut block routinely land in the same
@@ -108,7 +129,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Literal, cast
 
 from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
@@ -116,9 +137,11 @@ from flab2bp.layout.base import (
     NoValidLayout,
     Placement,
     PlacementCompletion,
+    PlacementStats,
 )
 from flab2bp.layout.freeform import FreeformLayout
 from flab2bp.layout.hierarchy import compose as compose_mod
+from flab2bp.layout.hierarchy import dispatch
 from flab2bp.layout.hierarchy.contracts import (
     ContractError,
     LaneEnd,
@@ -173,6 +196,13 @@ SETTLEMENT_RESERVE_SHARE = 0.4
 #: never been cut itself, so it starts at attempt 0 rather than inheriting its
 #: parent's place in a global round counter.
 MAX_RESPLIT_ATTEMPTS = 4
+#: Global bound on how many times ONE BUILD may re-cut, however many blocks
+#: refuse.  `MAX_RESPLIT_ATTEMPTS` is per BLOCK and does not bound this: a
+#: child created by a re-cut starts at attempt 0, so a build can grow its
+#: block list without limit -- v2 measured 19 seed blocks becoming 22
+#: unattempted and 24 becoming 45, each round's wall divided by a count the
+#: previous round grew.
+MAX_RECUT_ROUNDS = 2
 #: Tiles of free ground between packed blocks.  ``compose.MIN_GAP`` is the
 #: floor the router needs to turn a trunk out of a block at all.
 DEFAULT_GAP = 2
@@ -194,6 +224,47 @@ _POOL_CAP = 32
 
 BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
 
+# THE SUB-SOLVER SEAM.  `hierarchical` is the ORCHESTRATOR (design
+# §3.2-§3.3): it decides WHICH solver sees a block, at WHAT budget, and it
+# composes the answers.  Everything a solver has to satisfy to be dispatched
+# a block is on this page, and nothing in `partition`, `contracts` or
+# `compose` needs to change to add one.
+#
+#   _BlockJob = (spec, arm, budget_s, vertical, workers, parent_deadline)
+#     0 spec            a self-contained BuildSpec from `partition.sub_spec`:
+#                       boundary items are `external_inputs`/`outputs`, belt
+#                       tiers / sorter ladder / stack / piler travel verbatim,
+#                       and `spray_lanes` is RECOMPUTED for the block.
+#     1 arm             the solver's name, one of `BlockStrategyName`.
+#     2 budget_s        the round's per-block wall, in seconds.
+#     3 vertical        `belt_vertical_construction`; the composer's `ramped`
+#                       is its negation.
+#     4 workers         `_BLOCK_WORKERS` CP-SAT search workers for THIS block.
+#     5 parent_deadline absolute `time.monotonic()` deadline, or None.  The
+#                       WORKER combines it: `min(parent, start + budget_s)`.
+#
+#   _solve_block(job) -> (record, Placement | None)
+#     record["strategy"] : str   the arm, echoed back
+#     record["verdict"]  : str   "OK" | "REFUSED: ..." | "CRASH: ..."
+#                                | "POOL FAILED: ..."  -- ONLY "REFUSED: " is
+#                                remembered by `_ShapeNoGood`, because a crash
+#                                or a dead pool says nothing about the SHAPE.
+#     record["ok"]       : bool
+#     record["wall_s"]   : float what the job actually spent (the memo records
+#                                a refusal at THIS, not at the nominal budget)
+#     record["area"]     : float on the OK path only
+#     A refusal and a crash are RESULTS, not aborts: one block must never take
+#     the other nine with it.
+#
+#   _block_layout(arm, *, vertical, workers) -> LayoutStrategy
+#     THE REGISTRY POINT (design §3.2).  A new solver is added HERE, named in
+#     `BlockStrategyName`, and given an arm-choice rule in
+#     `hierarchy.dispatch`.  It must implement
+#     `lay_out(spec, *, time_budget_s, absolute_deadline) -> Placement` and
+#     raise `NoValidLayout` rather than return something invalid, and its
+#     `Placement` must pickle (it crosses a spawn boundary).  Candidates
+#     already named in `docs/speedup-idea-backlog.md`: the pre-generated block
+#     library, a revived `spine`, coater-composite strips.
 #: One block solve: ``(sub-spec, backend, budget, vertical construction, search
 #: workers, absolute deadline)``.  A plain tuple because it crosses a process
 #: boundary, and every member of it pickles.
@@ -219,6 +290,18 @@ def settlement_reserve_s(time_budget_s: float) -> float:
         SETTLEMENT_RESERVE_MAX_S,
         max(SETTLEMENT_RESERVE_MIN_S, SETTLEMENT_RESERVE_SHARE * time_budget_s),
     )
+
+
+def allowed_recut_rounds(rounds_wall_s: float) -> int:
+    """How many re-cut rounds this wall can hold at the floor.
+
+    A re-cut round that cannot be given `BLOCK_BUDGET_MIN_S` per wave is a
+    round that will refuse the moment it is dispatched, and reserving wall
+    for it only takes that wall away from the round that CAN run.  At the web
+    UI's 15 s this is 0, which is what keeps the seed round's share at the
+    whole `rounds_wall` rather than a third of it.
+    """
+    return min(MAX_RECUT_ROUNDS, max(0, int(rounds_wall_s // BLOCK_BUDGET_MIN_S) - 1))
 
 
 def _available_cpu_count() -> int:
@@ -257,18 +340,29 @@ def _block_layout(
     vertical: bool,
     workers: int,
 ) -> FreeformLayout | SequencePairLayout:
-    """Construct one block backend.  See the module docstring for why here."""
+    """Construct one block backend.  See the module docstring for why here.
+
+    AN UNRECOGNISED ARM RAISES rather than falling through to sequence-pair.
+    This is THE REGISTRY POINT: a solver added to `BlockStrategyName` and to
+    `hierarchy.dispatch` but not here would otherwise be dispatched a block
+    and then silently solved by a DIFFERENT placer, and the round's verdict
+    would be recorded against the arm that never ran.  The raise reaches the
+    caller as `_solve_block`'s CRASH arm -- a refusal naming the arm, which is
+    what a missing registration should look like -- rather than as wrong data.
+    """
     if strategy == "freeform":
         return FreeformLayout(
             belt_vertical_construction=vertical,
             band_policy=BandPolicy.parse("portable"),
             workers=workers,
         )
-    return SequencePairLayout(
-        belt_vertical_construction=vertical,
-        band_policy=BandPolicy.parse("portable"),
-        islands=1,
-    )
+    if strategy == "sequence-pair":
+        return SequencePairLayout(
+            belt_vertical_construction=vertical,
+            band_policy=BandPolicy.parse("portable"),
+            islands=1,
+        )
+    raise ValueError(f"no block backend is registered for arm {strategy!r}")
 
 
 def _solve_block(args: _BlockJob) -> tuple[dict[str, object], Placement | None]:
@@ -408,6 +502,11 @@ class _Entry:
     #: child created by a re-cut has never been cut itself, and starting it at
     #: its parent's count would deny it the cuts `split_block` offers.
     attempts: int = 0
+    #: Arms this block has already been offered.  A block whose dispatched
+    #: arm refused is re-offered the FULL set before `_recut` spends an
+    #: attempt on it: widening the arms is strictly cheaper than growing the
+    #: block list, and it is design §3.3's escalate-only-if-needed rule.
+    arms_tried: frozenset[str] = frozenset()
 
 
 class HierarchicalLayout:
@@ -447,20 +546,30 @@ class HierarchicalLayout:
         deadline = (
             absolute_deadline if absolute_deadline is not None else started_at + time_budget_s
         )
+        stats = _StrategyStats()
         # The wall this call ACTUALLY has, which is not `time_budget_s` when a
         # parent handed down a deadline: a refusal that quoted the nominal
         # budget would name a number nobody spent.
-        refuse = _refuser(spec, max(0.0, deadline - started_at))
+        refuse = _refuser(spec, max(0.0, deadline - started_at), stats)
         reserve = settlement_reserve_s(time_budget_s)
+        # Computed ONCE, before the partition, from the wall the ROUND LOOP
+        # will have: re-planning it each round would let a slow round argue
+        # itself more re-cuts.
+        rounds_wall = max(0.0, deadline - time.monotonic() - reserve)
+        allowed_recuts = allowed_recut_rounds(rounds_wall)
+        recut_rounds = 0
 
         partition = initial_partition(spec, strip_cap=self.strip_cap)
         entries = [_Entry(list(block)) for block in partition.blocks]
+        stats.blocks = float(len(entries))
         block_wall = 0.0
-        resplits = 0
-        nogood_skips = 0
         # THIS CALL'S OWN no-good memo -- see `_ShapeNoGood`'s docstring for
         # why it is a local rather than `self._nogood`.
         nogood = _ShapeNoGood()
+        # THIS CALL'S OWN arm-dispatch cache, keyed on `ShapeKey`: see
+        # `_arms_for`'s docstring for why two same-shaped blocks share an
+        # answer, and `_ShapeNoGood`'s docstring for why this is a local too.
+        arm_cache: dict[ShapeKey, tuple[str, ...]] = {}
         # ONE POOL FOR THE WHOLE BUILD, not one per round: a re-cut starts a
         # new round with more (smaller) blocks, and building a fresh pool for
         # it would pay a spawned process pool's own start-up again for jobs
@@ -497,27 +606,62 @@ class HierarchicalLayout:
                 # through it.
                 order, cuts = derive_cuts([entry.units for entry in entries])
                 entries = [entries[index] for index in order]
+                stats.blocks = float(len(entries))
                 todo = [index for index, entry in enumerate(entries) if entry.placement is None]
                 if not todo:
                     break
-                jobs = len(todo) * len(self._arms())
+                jobs = sum(len(self._arms_for(spec, entries[index], arm_cache)) for index in todo)
+                # COUNTED HERE, NOT AFTER `_solve_round` RETURNS (v3 Task 3,
+                # Ruling P3): by then `_solve_round` has already widened
+                # `entries[index].arms_tried`, so `_arms_for`'s widening
+                # branch would return the FULL arm set for every block just
+                # solved and this would count `arm_dispatch_both` for all of
+                # them.  Counting from the SAME `_arms_for` calls the `jobs`
+                # line already made -- cached on `ShapeKey`, so this is a
+                # cache hit, not a second feature computation -- gives the
+                # identical once-per-block-per-round numbers with the correct
+                # attribution.
+                for index in todo:
+                    chosen = self._arms_for(spec, entries[index], arm_cache)
+                    if len(chosen) > 1:
+                        stats.arm_dispatch_both += 1.0
+                    elif chosen[0] == dispatch.ARM_FREEFORM:
+                        stats.arm_dispatch_freeform += 1.0
+                    else:
+                        stats.arm_dispatch_sequence_pair += 1.0
                 waves = math.ceil(jobs / width)
                 remaining = deadline - time.monotonic() - reserve
-                share = remaining / waves
-                if share < BLOCK_BUDGET_MIN_S:
-                    raise refuse(
-                        _block_refusal(
-                            entries,
-                            todo,
-                            why=(
-                                f"{remaining:.1f}s left over {waves} wave(s) is under the "
-                                f"{BLOCK_BUDGET_MIN_S:g}s a block solve is given at all"
-                            ),
+                attempted = any(entry.verdicts for entry in entries)
+                # FUND THE ROUNDS THAT CAN STILL RUN, not the wall divided by
+                # a block count the NEXT round will have grown.  `rounds_left`
+                # is this round plus the re-cuts still permitted.
+                rounds_left = 1 + allowed_recuts - recut_rounds
+                share = remaining / rounds_left / waves
+                if remaining / waves < BLOCK_BUDGET_MIN_S:
+                    if attempted:
+                        stats.blocks_unattempted = float(
+                            sum(1 for entry in entries if not entry.verdicts)
                         )
-                    )
+                        raise refuse(
+                            _block_refusal(
+                                entries,
+                                todo,
+                                why=(
+                                    f"{remaining:.1f}s left over {waves} wave(s) is under "
+                                    f"the {BLOCK_BUDGET_MIN_S:g}s a block solve is given "
+                                    f"at all"
+                                ),
+                            )
+                        )
+                    # THE SEED ROUND ALWAYS RUNS.  A build that refuses having
+                    # attempted nothing tells nobody anything, and the job's
+                    # own deadline is still clipped to the parent's, so the
+                    # floor can only spend into the settlement reserve, never
+                    # past `--budget`.
+                    share = BLOCK_BUDGET_MIN_S
                 block_budget = min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, share))
                 started = time.monotonic()
-                nogood_skips += self._solve_round(
+                stats.nogood_skips += self._solve_round(
                     spec,
                     entries,
                     todo,
@@ -525,18 +669,38 @@ class HierarchicalLayout:
                     block_budget=block_budget,
                     deadline=deadline,
                     nogood=nogood,
+                    arm_cache=arm_cache,
                 )
                 block_wall += time.monotonic() - started
                 still = [index for index in todo if entries[index].placement is None]
                 if not still:
                     break
+                if recut_rounds >= allowed_recuts:
+                    stats.blocks_unattempted = float(
+                        sum(1 for entry in entries if not entry.verdicts)
+                    )
+                    raise refuse(
+                        _block_refusal(
+                            entries,
+                            still,
+                            why=(
+                                f"out of re-cut round(s) after {recut_rounds} of "
+                                f"{allowed_recuts} the {rounds_wall:.1f}s round wall allows"
+                            ),
+                        )
+                    )
                 grown, progress = _recut(
                     entries, still, nogood=nogood, arms=self._arms(), budget_s=block_budget
                 )
                 if not progress:
+                    stats.blocks_unattempted = float(
+                        sum(1 for entry in entries if not entry.verdicts)
+                    )
                     raise refuse(_block_refusal(entries, still, why="out of re-cut attempts"))
                 entries = grown
-                resplits += 1
+                recut_rounds += 1
+                stats.recut_rounds = float(recut_rounds)
+                stats.resplits = float(recut_rounds)
 
         blocks = [entry.units for entry in entries]
         solved = [entry.placement for entry in entries if entry.placement is not None]
@@ -574,6 +738,8 @@ class HierarchicalLayout:
                 sub = sub_spec(spec, entry.units, index)
                 tails[index], heads[index] = boundary_lanes(placement, sub, index)
             allocation = allocate_cuts(spec, cuts, tails, heads)
+            stats.player_fed = float(len(allocation.player_fed))
+            stats.cut_lanes = float(len(allocation.flows))
             composition = compose_mod.compose(
                 solved,
                 allocation.flows,
@@ -590,6 +756,11 @@ class HierarchicalLayout:
         except Exception as exc:  # noqa: BLE001 - a composer CRASH is a refusal
             raise refuse(f"composition crashed: {type(exc).__name__}: {exc}"[:400]) from exc
         compose_wall = time.monotonic() - started
+        stats.compose_gap = float(composition.gap)
+        stats.port_demands = float(composition.port_demands)
+        stats.reservation_degraded = float(composition.reservation_degraded)
+        stats.reservation_missing = float(composition.reservation_missing)
+        stats.unrouted_cuts = float(len(composition.failures))
         if composition.failures:
             raise refuse("unrouted cut(s): " + "; ".join(composition.failures))
 
@@ -651,14 +822,14 @@ class HierarchicalLayout:
         # sum) and `_recut`'s children were never counted at all, so a
         # faithful `strips_max` over the FINAL blocks could only be recomputed.
         placement.stats.update(
-            {
-                "blocks": float(len(blocks)),
-                "block_wall_s": round(block_wall, 3),
-                "compose_wall_s": round(compose_wall, 3),
-                "cut_lanes": float(len(allocation.flows)),
-                "resplits": float(resplits),
-                "nogood_skips": float(nogood_skips),
-            }
+            cast(
+                PlacementStats,
+                {
+                    **stats.as_stats(),
+                    "block_wall_s": round(block_wall, 3),
+                    "compose_wall_s": round(compose_wall, 3),
+                },
+            )
         )
         return replace(placement, completion=PlacementCompletion.COMPACTED_AND_FINALIZED)
 
@@ -667,6 +838,49 @@ class HierarchicalLayout:
         if self.block_strategy == "best":
             return ("freeform", "sequence-pair")
         return (self.block_strategy,)
+
+    def _arms_for(
+        self, spec: BuildSpec, entry: _Entry, cache: dict[ShapeKey, tuple[str, ...]]
+    ) -> tuple[str, ...]:
+        """Which arms this block is offered this round.
+
+        Cached on `ShapeKey` for the build: `sub_spec` is a pure function of
+        the units (its `index` argument reaches only a diagnostic label -- see
+        `_solve_round`'s docstring), so two same-shaped blocks score the same
+        features, and `plan_strips` is the only expensive thing here.
+
+        A block that has already been offered its dispatched arm and refused
+        gets the FULL set.
+
+        THIS RUNS IN THE ORCHESTRATOR, NOT A GUARDED WORKER (v3 Task 3 fix
+        round 1).  `dispatch.block_features` calls `plan_strips` -- real
+        freeform packer internals -- and `_solve_block`'s own docstring names
+        a precedent: a freeform-internals crash "took the whole run with it"
+        when it escaped unguarded.  `_arms_for` is called from `lay_out`'s
+        round loop, inside `with executor as pool:` but with no enclosing
+        `try`, so a `dispatch.block_features` crash here would break the
+        `Placement`-or-`NoValidLayout` contract this method promises, for a
+        reason that has nothing to do with the block itself.  Degrading to
+        the FULL arm set on failure is the same escape valve shape as the two
+        `dispatch.UNCOVERED_*` branches: race both arms rather than lose the
+        whole build to a feature-vector defect on one block.
+        """
+        arms = self._arms()
+        if len(arms) < 2:
+            return arms
+        key = shape_key(entry.units)
+        chosen = cache.get(key)
+        if chosen is None:
+            try:
+                chosen = dispatch.dispatch_arms(
+                    dispatch.block_features(sub_spec(spec, entry.units, 0)), arms
+                )
+            except Exception:  # noqa: BLE001 - a crashed feature vector races both arms, not an abort
+                chosen = arms
+            cache[key] = chosen
+        if entry.arms_tried >= set(chosen):
+            return arms
+        return chosen
 
     def _pool_width(self) -> int:
         """Jobs run at once.  One job is a whole placer holding CP-SAT workers,
@@ -691,6 +905,7 @@ class HierarchicalLayout:
         block_budget: float,
         deadline: float,
         nogood: _ShapeNoGood,
+        arm_cache: dict[ShapeKey, tuple[str, ...]],
     ) -> int:
         """Solve every block in ``todo`` with every arm; smallest valid wins.
 
@@ -722,14 +937,14 @@ class HierarchicalLayout:
         ``(block, arm)`` pairs this round did NOT hand to a placer -- a
         remembered no-good or a same-round duplicate.
         """
-        arms = self._arms()
+        arms_by_slot = [self._arms_for(spec, entries[index], arm_cache) for index in todo]
         shapes = [shape_key(entries[index].units) for index in todo]
         # `(shape, arm) -> todo-slots that need this exact question answered`,
         # insertion-ordered so the FIRST slot to need a key is the one whose
         # sub-spec actually gets built and solved.
         slots_by_key: dict[tuple[ShapeKey, str], list[int]] = {}
         for slot in range(len(todo)):
-            for arm in arms:
+            for arm in arms_by_slot[slot]:
                 slots_by_key.setdefault((shapes[slot], arm), []).append(slot)
 
         jobs: list[_BlockJob] = []
@@ -819,11 +1034,13 @@ class HierarchicalLayout:
             outcome_by_key[job_key] = result
 
         for slot, index in enumerate(todo):
-            outcomes = [outcome_by_key.get((shapes[slot], arm), skip_record) for arm in arms]
+            slot_arms = arms_by_slot[slot]
+            outcomes = [outcome_by_key.get((shapes[slot], arm), skip_record) for arm in slot_arms]
             winners = [placement for _record, placement in outcomes if placement is not None]
             entries[index].verdicts = tuple(
                 str(record.get("verdict", "no verdict")) for record, _placement in outcomes
             )
+            entries[index].arms_tried = entries[index].arms_tried | set(slot_arms)
             if winners:
                 entries[index].placement = min(winners, key=lambda p: p.area)
         return skipped
@@ -851,6 +1068,13 @@ def _recut(
     for index, entry in enumerate(entries):
         if index not in refusing:
             grown.append(entry)
+            continue
+        if not entry.arms_tried >= set(arms):
+            # An arm this block has never been offered is cheaper than a cut.
+            # Leaving the entry alone is `progress` because `_arms_for` will
+            # widen it next round.
+            grown.append(entry)
+            progress = True
             continue
         children = _next_cut(entry, nogood=nogood, arms=arms, budget_s=budget_s)
         if children is None:
@@ -900,10 +1124,43 @@ def _block_refusal(entries: list[_Entry], still: list[int], *, why: str) -> str:
     return f"{len(still)} block(s) never placed, {why}: " + "; ".join(parts)
 
 
-def _refuser(spec: BuildSpec, budget_s: float) -> Callable[[str], NoValidLayout]:
+@dataclass
+class _StrategyStats:
+    """Every number the gate reads, accumulated as the build runs.
+
+    Carried into the `NoValidLayout` of EVERY refusal, not just written onto
+    a successful `Placement`: the v2 gate refused on all sixteen runs and
+    could therefore read none of these from a shipped surface.
+    """
+
+    blocks: float = 0.0
+    blocks_unattempted: float = 0.0
+    recut_rounds: float = 0.0
+    resplits: float = 0.0
+    nogood_skips: float = 0.0
+    player_fed: float = 0.0
+    cut_lanes: float = 0.0
+    compose_gap: float = 0.0
+    port_demands: float = 0.0
+    reservation_degraded: float = 0.0
+    reservation_missing: float = 0.0
+    unrouted_cuts: float = 0.0
+    arm_dispatch_freeform: float = 0.0
+    arm_dispatch_sequence_pair: float = 0.0
+    arm_dispatch_both: float = 0.0
+
+    def as_stats(self) -> dict[str, float]:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+
+def _refuser(
+    spec: BuildSpec, budget_s: float, stats: _StrategyStats
+) -> Callable[[str], NoValidLayout]:
     """One place that knows how this strategy's refusals are labelled."""
 
     def refuse(reason: str) -> NoValidLayout:
-        return NoValidLayout(reason, spec_label=spec.label, budget_s=budget_s)
+        return NoValidLayout(
+            reason, spec_label=spec.label, budget_s=budget_s, stats=stats.as_stats()
+        )
 
     return refuse

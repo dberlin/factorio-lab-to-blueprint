@@ -375,6 +375,16 @@ _ACCESS_RANK_DETERMINISTIC_WORK = 2.0
 #: Validate/cut rounds the matcher runs before returning no assignment.
 _ACCESS_CUT_ROUNDS = 8
 
+#: Reachable options a probe stops after.  The joint matcher assigns ONE
+#: corridor per demand and only needs a second to have something to swap to
+#: under a cut; proving a third buys nothing and costs an A* per rung per
+#: demand.  This bounds GOAL-DRIVEN probes ONLY: a demand probed against the
+#: `boundary` still enumerates every option, because that is pre-existing
+#: behaviour the per-demand goal was added without disturbing, and truncating
+#: its option list would hand the joint matcher fewer corridors to swap
+#: between on a canvas that used to be given all of them.
+_PORT_ACCESS_PROBE_KEEP = 2
+
 
 #: Rip-up rounds with no improvement in the failure count before giving up.
 #:
@@ -11922,11 +11932,16 @@ def _reserve_port_access(
     bounds: tuple[int, int, int, int] | None = None,
     cancelled: Callable[[], bool] | None = None,
     deadline: float | None = None,
+    goals: Mapping[PortAccessDemand, frozenset[Cell]] | None = None,
 ) -> PortAccessReservation:
     """Enumerate and jointly hold one complete corridor per physical claim.
 
-    The final pass filters only true boundary claims through a static ground
-    component. Reservations are cleared before enumeration, so provisional
+    The final pass filters claims through a static ground component towards
+    THEIR OWN goal: ``boundary`` for a true boundary claim, and a ``goals``
+    entry for anything else.  A ``goals`` entry wins over ``boundary`` and is
+    honoured whatever the claim's kind says, so a composed canvas can aim a cut
+    lane's probe at its trunk partner's doorstep; a claim in neither is not
+    probed at all.  Reservations are cleared before enumeration, so provisional
     choices cannot veto an alternate candidate; nothing is committed until the
     joint matcher has selected every compatible corridor.
     """
@@ -11953,6 +11968,48 @@ def _reserve_port_access(
     exhaustive: dict[PortAccessDemand, bool] = {}
     frontiers: dict[PortAccessDemand, set[Cell]] = defaultdict(set)
     boundary_set = set(boundary or ())
+    # AN EMPTY GOAL SET IS NO GOAL, dropped here rather than handled at each
+    # use, so that "has an explicit goal" has ONE spelling.  `_goal_for` asks
+    # whether the lookup returned a set and the probe cap below asks whether
+    # the demand is a key; leaving an empty set in would make those two
+    # disagree, and the demand would be probed towards nowhere -- every option
+    # failing `DYNAMIC_ACCESS`, the cap firing on the wreckage.
+    goal_by_demand = {demand: goal for demand, goal in (goals or {}).items() if goal}
+    # WHETHER ANY PROBE RUNS AT ALL.  With neither a boundary nor a goal this
+    # function is the purely LOCAL oracle it has always been: every free
+    # (access, exit) pair is admitted unprobed, `exhaustive` is False, and no
+    # grid is built.
+    #
+    # Which caller takes which path, because the answer is NOT "all of them
+    # take the local one" and a reader who assumes it is will conclude the
+    # boundary probe is dead code and cap it.  Named by SYMBOL, never by line:
+    # this file is 22k lines and a line citation here was already stale one
+    # commit after it was written.
+    #
+    #   `_route_all`                       passes neither -- local only.
+    #   `_prepare_routing_problem`         passes `boundary=boundary_cells`
+    #     (in its nested `hold_ports`)     and IS probed.  This is freeform's
+    #                                      OWN default path.
+    #   `hierarchy.compose.pack_with_access`  passes a `boundary` that it
+    #                                      computes as `None` today.
+    probed = boundary is not None or bool(goal_by_demand)
+
+    def _goal_for(demand: PortAccessDemand) -> set[Cell] | None:
+        """Where this demand's corridor must be able to reach, or None.
+
+        An explicit goal WINS over the boundary and is honoured whatever the
+        demand's kind says.  A composed canvas's cut lanes are all
+        `INTERNAL_*` -- `reaches_boundary` False -- and their trunks run to
+        another BLOCK's port rather than to the rim, so the kind flag is the
+        wrong question for them; see
+        `docs/superpowers/evidence/2026-09-07-hierarchical-v2/gate.md` §6.
+        """
+        explicit = goal_by_demand.get(demand)
+        if explicit is not None:
+            return set(explicit)
+        if boundary is not None and demand.kind.reaches_boundary:
+            return boundary_set
+        return None
 
     # ONE GRID PER RESERVATION INSTEAD OF ONE PER PROBE, because every
     # reachability probe below -- and every re-probe the matcher's validate
@@ -11967,7 +12024,7 @@ def _reserve_port_access(
     # probe can start from; `_astar` falls back to a private grid for a start
     # or goal outside the span, so a miss costs a build and never a result.
     shared_grid: _Grid | None = None
-    if bounds is not None and boundary is not None:
+    if bounds is not None and probed:
         probe_box = _route_box(canvas, bounds)
         probe_cells = [
             (key[0] + dx + ex, key[1] + dy + ey, key[2])
@@ -11976,8 +12033,15 @@ def _reserve_port_access(
             for dx, dy in _STEPS
             for ex, ey in _STEPS
         ]
+        # EVERY goal cell has to be inside the span, not just the boundary's:
+        # `_astar` falls back to a private grid for a goal outside it, which
+        # would cost a fresh flatten per probe -- the 872 rebuilds and 3.9s
+        # this shared grid exists to avoid.
+        goal_cells = sorted(
+            boundary_set.union(*goal_by_demand.values()) if goal_by_demand else boundary_set
+        )
         shared_grid = _make_grid(
-            canvas, probe_box, _span_for(probe_box, probe_cells, list(boundary_set)), {}
+            canvas, probe_box, _span_for(probe_box, probe_cells, goal_cells), {}
         )
 
     for demand in demands:
@@ -11995,21 +12059,34 @@ def _reserve_port_access(
             if exit_cell != key and canvas.free(exit_cell)
         )
         local_options[demand] = options
-        if boundary is None or not demand.kind.reaches_boundary:
+        goal = _goal_for(demand)
+        if goal is None:
             reachable_options[demand] = options
-            exhaustive[demand] = boundary is not None
+            exhaustive[demand] = probed
             continue
         if bounds is None:
             reachable_options[demand] = options
             exhaustive[demand] = False
             continue
+        # STOP ONCE TWO OPTIONS ARE PROVEN, BUT ONLY FOR A GOAL-DRIVEN PROBE.
+        # The joint matcher needs alternatives, not every alternative, and
+        # probing all twelve options of every satisfiable demand is what would
+        # spend the router's wall to re-confirm what the first probe already
+        # said.  A demand that is genuinely walled in still probes every
+        # option, which is the case worth paying for.  A demand probed against
+        # the `boundary` is exempt: it enumerated every option before this
+        # parameter existed and must keep doing so.
+        probe_cap = _PORT_ACCESS_PROBE_KEEP if demand in goal_by_demand else None
         candidates: list[tuple[Cell, Cell]] = []
         complete = True
         for access, exit_cell in options:
+            if probe_cap is not None and len(candidates) >= probe_cap:
+                complete = False
+                break
             result = _astar(
                 canvas,
                 [exit_cell],
-                boundary_set,
+                goal,
                 {},
                 0.0,
                 bounds,
@@ -12030,7 +12107,7 @@ def _reserve_port_access(
     def assignment_boundary_cut(
         assigned: Mapping[PortAccessDemand, PortAccessCorridor],
     ) -> Collection[PortAccessDemand] | None:
-        if boundary is None or bounds is None:
+        if not probed or bounds is None:
             return None
         selected_cells: dict[Cell, PortAccessDemand] = {
             cell: owner
@@ -12042,13 +12119,14 @@ def _reserve_port_access(
         owner_by_index = dict(enumerate(ordered_owners))
         cell_owner_index = {cell: owner_index[owner] for cell, owner in selected_cells.items()}
         for demand, corridor in assigned.items():
-            if not demand.kind.reaches_boundary:
+            goal = _goal_for(demand)
+            if goal is None:
                 continue
             forbidden = {cell for cell, owner in selected_cells.items() if owner != demand}
             result = _astar(
                 canvas,
                 [corridor.exit],
-                boundary_set,
+                goal,
                 {},
                 0.0,
                 bounds,
@@ -12078,7 +12156,7 @@ def _reserve_port_access(
         assignments = _match_access_corridors(
             demands,
             reachable_options,
-            validate=assignment_boundary_cut if boundary is not None else None,
+            validate=assignment_boundary_cut if probed else None,
             cancelled=cancelled,
             deadline=deadline,
         )

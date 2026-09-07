@@ -227,8 +227,15 @@ def test_a_refused_shape_is_not_re_solved_at_a_budget_the_memo_already_covers(
     def spy(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
         arm, budget = args[1], args[2]
         if len(args[0].groups) == 1 and args[0].machine_count == 2:
+            # `wall_s` reports the FULL nominal budget, not a fixed 0.0: a
+            # real timeout-driven refusal spends the wall it was actually
+            # given, and only reporting that makes `_ShapeNoGood`'s "refused
+            # at this budget or higher" memo mean what its own docstring
+            # says -- a mock that always claims 0.0 wall spent understates
+            # every refusal and can let a same-or-lower-budget re-ask through
+            # that the real worker's bookkeeping would have skipped.
             result: tuple[dict[str, object], Placement | None] = (
-                {"strategy": arm, "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+                {"strategy": arm, "verdict": "REFUSED: forced", "ok": False, "wall_s": budget},
                 None,
             )
         else:
@@ -316,15 +323,18 @@ def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
         block_budget=20.0,
         deadline=time.monotonic() + 600.0,
         nogood=nogood,
+        arm_cache={},
     )
     layout._solve_round(spec, entries, todo, **round_args)  # type: ignore[arg-type]
     assert offered, "the first round must have offered every block to a placer"
 
+    # `dispatch.dispatch_arms` sends this shape (uncoated, few strips) to
+    # `sequence-pair` alone -- see `dispatch`'s cross-tab.
     shape = strategy.shape_key(entries[0].units)
-    assert nogood.remembers(shape, "freeform", 0.05), (
+    assert nogood.remembers(shape, "sequence-pair", 0.05), (
         "the refusal is still evidence about the wall the job actually got"
     )
-    assert not nogood.remembers(shape, "freeform", 20.0), (
+    assert not nogood.remembers(shape, "sequence-pair", 20.0), (
         "a 0.05s refusal says nothing about what the shape does with 20s"
     )
 
@@ -591,10 +601,32 @@ def test_a_job_is_capped_at_its_own_budget_when_it_starts_not_when_the_round_did
     assert started + 2.0 <= deadline <= started + 4.0
 
 
-def test_a_budget_too_small_to_fund_one_solve_round_refuses_saying_so(
+def test_a_budget_too_small_to_fund_a_round_still_attempts_the_seed_round(
     chain_spec: BuildSpec,
 ) -> None:
-    with pytest.raises(NoValidLayout, match=r"is under the .*s a block solve is given at all"):
+    """The seed round is never refused for funding, even under the reserve.
+
+    At 1.0 s the settlement reserve alone (5.0 s) exceeds the whole budget --
+    the OLD pre-attempt funding check would have refused here before a
+    placer ever saw a block.  The new rule floors the seed round's share to
+    `BLOCK_BUDGET_MIN_S` and runs it anyway; each block's own deadline
+    (still clipped to the parent's) is what actually refuses it, and the
+    build then runs out of the zero re-cut rounds this budget's wall allows.
+
+    THE REAL SPAWNED POOL IS DELIBERATE HERE, and it is the one test in this
+    file that must NOT set `_executor_factory = ThreadPoolExecutor` (final
+    review raised the omission as an oversight; it is not).  What makes the
+    refusal deterministic is that a spawned `ProcessPoolExecutor`'s start-up
+    alone outlasts the 1.0 s parent deadline every block's own clock is
+    clipped to, so every block refuses on time and the build lands on the
+    out-of-re-cut-rounds refusal this asserts.  On threads there is no
+    start-up to outlast it: `chain_spec` is four machines, the real placers
+    finish inside the second, and this test PLACES instead of refusing --
+    measured, not supposed.  Swapping the pool would not make the test cheaper,
+    it would make it assert the opposite of its own name on a fast box and
+    flip back on a loaded one.
+    """
+    with pytest.raises(NoValidLayout, match=r"out of re-cut round\(s\)"):
         _layout().lay_out(chain_spec, time_budget_s=1.0)
 
 
@@ -722,3 +754,255 @@ def test_a_deadline_spent_by_composition_refuses_before_finalization(
     monkeypatch.setattr(strategy.compose_mod, "compose", stall)
     with pytest.raises(NoValidLayout, match="deadline exhausted before finalization"):
         _layout().lay_out(chain_spec, time_budget_s=30.0)
+
+
+def test_a_refusal_carries_the_strategy_stats(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A build that never places a block still reports what it did."""
+
+    def always_refuse(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        return (
+            {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+            None,
+        )
+
+    monkeypatch.setattr(strategy, "_solve_block", always_refuse)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    with pytest.raises(NoValidLayout) as caught:
+        layout.lay_out(chain_spec, time_budget_s=40.0)
+    stats = caught.value.stats
+    assert stats["blocks"] >= 2.0
+    assert "blocks_unattempted" in stats
+    assert "recut_rounds" in stats
+    assert "nogood_skips" in stats
+    assert "player_fed" in stats
+
+
+def test_allowed_recut_rounds_is_zero_when_the_wall_holds_one_round():
+    # 15 s budget: reserve 6.0, so the round loop has ~9 s -- one round.
+    assert strategy.allowed_recut_rounds(8.7) == 0
+    assert strategy.allowed_recut_rounds(12.0) == 1
+    assert strategy.allowed_recut_rounds(35.1) == strategy.MAX_RECUT_ROUNDS
+
+
+def test_the_seed_round_keeps_the_whole_wall_when_no_recut_is_affordable(chain_spec, monkeypatch):
+    """The web-UI path: a 15 s build must not fund rounds it can never run.
+
+    ``workers=16`` for the same reason as
+    ``test_a_fifteen_second_build_funds_one_round``: the chain is 2 blocks x
+    2 arms (``best``) = 4 jobs, and only a pool 4 wide (``workers=16``) makes
+    that one wave -- at ``workers=8`` (pool 2 wide, 2 waves) the share is
+    already under the floor by the wave split alone, before this rule's own
+    ``rounds_left`` divisor ever enters into it, so the two are not
+    distinguishable there.
+    """
+    seen: list[float] = []
+    real = strategy._solve_block
+
+    def spy(args):
+        seen.append(args[2])
+        return real(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", spy)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=16,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    layout.lay_out(chain_spec, time_budget_s=15.0)
+    # reserve 6.0, ~9 s of round, one wave -> the whole wall (~9s), not a
+    # third of it (~3s, which the floor would then clamp up to 5.0).
+    assert seen and min(seen) > 1.5 * strategy.BLOCK_BUDGET_MIN_S
+
+
+def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch):
+    """`MAX_RESPLIT_ATTEMPTS` is per block; this bound is per build.
+
+    `chain_spec` is 4 machines total and saturates its OWN splittability
+    after exactly one real re-cut (2 blocks -> 4 single-machine, indivisible
+    ones), one round short of `MAX_RECUT_ROUNDS = 2` -- so with the real
+    `_recut`, `_next_cut`'s per-block exhaustion (`out of re-cut attempts`)
+    would fire first and this test would never reach the GLOBAL bound it
+    means to exercise.  `_recut` is faked to always report progress, unchanged,
+    so the only thing left driving the loop is the round counter this task
+    adds.
+    """
+    solves: list[str] = []
+
+    def always_refuse(args):
+        solves.append(args[1])
+        return (
+            {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+            None,
+        )
+
+    def always_progress(entries, still, *, nogood, arms, budget_s):
+        return entries, True
+
+    monkeypatch.setattr(strategy, "_solve_block", always_refuse)
+    monkeypatch.setattr(strategy, "_recut", always_progress)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=1,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    with pytest.raises(NoValidLayout) as caught:
+        layout.lay_out(chain_spec, time_budget_s=60.0)
+    assert caught.value.stats["recut_rounds"] <= float(strategy.MAX_RECUT_ROUNDS)
+    assert "re-cut round" in caught.value.reason
+    # The bound has to be what STOPPED the loop, not an unfunded round dressed
+    # up as one: the faked placer must actually have been handed jobs.
+    assert solves, "no block was ever offered to a placer"
+
+
+def test_a_round_that_cannot_afford_the_floor_names_the_wall_not_the_waves(chain_spec, monkeypatch):
+    def always_refuse(args):
+        return (
+            {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+            None,
+        )
+
+    monkeypatch.setattr(strategy, "_solve_block", always_refuse)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    with pytest.raises(NoValidLayout) as caught:
+        layout.lay_out(chain_spec, time_budget_s=9.0)
+    # The seed round runs anyway: nothing was attempted, so nothing is refused
+    # for funding before a placer has seen a single block.
+    assert caught.value.stats["blocks_unattempted"] == 0.0
+    # And the refusal that DOES land names the round WALL, not the wave count.
+    # At 9 s the reserve is the 5 s floor, leaving a ~4 s round wall, so
+    # `allowed_recut_rounds` is 0 and the seed round -- floored to
+    # `BLOCK_BUDGET_MIN_S` and run anyway -- is the whole build.  Only the
+    # stable half of the message is pinned: `rounds_wall` is real elapsed wall
+    # and prints to one decimal.
+    reason = caught.value.reason
+    assert "out of re-cut round(s) after 0 of 0" in reason
+    assert "round wall allows" in reason
+    assert "wave(s)" not in reason
+
+
+def test_an_unregistered_arm_raises_rather_than_being_solved_by_sequence_pair() -> None:
+    """`_block_layout` is THE REGISTRY POINT; an unknown arm must not fall through.
+
+    Inert against the arms shipped today: every `_BlockJob` this branch builds
+    takes its arm from `_arms_for`, which returns a subset of `_arms()`, which
+    is exactly `("freeform", "sequence-pair")` -- so no reachable call can
+    take the raise.  It exists for the SUB-SOLVER SEAM's next arm: a solver
+    named in `BlockStrategyName` and given a dispatch rule but never
+    registered here would otherwise be quietly solved by sequence-pair and
+    have the verdict recorded against the arm that never ran.
+    """
+    assert isinstance(
+        strategy._block_layout("freeform", vertical=True, workers=2), strategy.FreeformLayout
+    )
+    assert isinstance(
+        strategy._block_layout("sequence-pair", vertical=True, workers=2),
+        strategy.SequencePairLayout,
+    )
+    with pytest.raises(ValueError, match="block-library"):
+        strategy._block_layout("block-library", vertical=True, workers=2)
+
+
+def test_a_dispatched_block_is_offered_one_arm_not_two(chain_spec, monkeypatch):
+    arms: list[str] = []
+    real = strategy._solve_block
+
+    def spy(args):
+        arms.append(args[1])
+        return real(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", spy)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    placement = layout.lay_out(chain_spec, time_budget_s=40.0)
+    assert len(set(arms)) == 1, f"both arms were funded: {sorted(set(arms))}"
+    dispatched = (
+        placement.stats["arm_dispatch_freeform"] + placement.stats["arm_dispatch_sequence_pair"]
+    )
+    assert dispatched == placement.stats["blocks"]
+    assert placement.stats["arm_dispatch_both"] == 0.0
+
+
+def test_a_refused_block_is_offered_the_other_arm_before_it_is_cut(chain_spec, monkeypatch):
+    """Widening the arms is cheaper than growing the block list."""
+    cut = []
+    real_next_cut = strategy._next_cut
+
+    def watch(entry, **kw):
+        cut.append(strategy.shape_key(entry.units))
+        return real_next_cut(entry, **kw)
+
+    monkeypatch.setattr(strategy, "_next_cut", watch)
+    seen: list[str] = []
+    real = strategy._solve_block
+
+    def refuse_first_arm(args):
+        seen.append(args[1])
+        if len(seen) <= 2:
+            return (
+                {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+                None,
+            )
+        return real(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", refuse_first_arm)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
+        strip_cap=2,
+    )
+    layout._executor_factory = ThreadPoolExecutor
+    layout.lay_out(chain_spec, time_budget_s=40.0)
+    assert len(set(seen)) == 2, "the other arm was never tried"
+    assert not cut, "a block was cut before every arm had been offered"
+
+
+def test_a_crashing_feature_computation_falls_back_to_racing_both_arms(chain_spec, monkeypatch):
+    """`_arms_for` runs unguarded in `lay_out`'s round loop (v3 Task 3 fix round 1).
+
+    `dispatch.block_features` calls `plan_strips` -- real freeform packer
+    internals -- from the orchestrator, not from a `_solve_block` worker, so
+    there is no enclosing guard between it and `lay_out`'s
+    `Placement`-or-`NoValidLayout` contract.  A crash there must degrade to
+    racing the full arm set, the same escape-valve shape as the two
+    `dispatch.UNCOVERED_*` branches, rather than escape as a raw traceback
+    and take the whole build with it.
+    """
+
+    def boom(sub):
+        raise ValueError("synthetic plan_strips defect")
+
+    monkeypatch.setattr(strategy.dispatch, "block_features", boom)
+    layout = _layout()
+    entries = [_Entry(list(block)) for block in initial_partition(chain_spec, strip_cap=2).blocks]
+    arms = layout._arms_for(chain_spec, entries[0], {})
+    assert arms == ("freeform", "sequence-pair")
+
+    # And the round loop itself must still complete a real build rather than
+    # crash: the whole point is that `lay_out`'s contract survives.
+    layout._executor_factory = ThreadPoolExecutor
+    placement = layout.lay_out(chain_spec, time_budget_s=40.0)
+    assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
