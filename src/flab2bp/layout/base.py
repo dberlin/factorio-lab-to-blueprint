@@ -416,6 +416,13 @@ class PlacementStats(TypedDict, total=False):
     #: Without this, `reservation_missing = 0` cannot be read: it means "every
     #: port is satisfiable" only when this is 0, and "the oracle was thrown
     #: away" otherwise -- which is the whole evaluation of Lever B.
+    #:
+    #: IT CAN ONLY EVER OVER-COUNT.  It is a ladder TOTAL, so a later rung that
+    #: degraded and then lost to an earlier `best` still counts, as does a rung
+    #: whose fallback went on to die on the clock.  A gate may therefore read
+    #: it as: 0 means the committed rung's verdict is the trunk oracle's own
+    #: and is trustworthy; non-zero means SOME rung was degraded and the
+    #: committed one may or may not have been.
     reservation_degraded: float
     #: Hierarchical strategy: demands the committed rung could not give a
     #: corridor to.  0 with a non-zero `unrouted_cuts` is the v2 finding: the

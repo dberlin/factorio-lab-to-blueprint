@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import bisect
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import NamedTuple
@@ -629,8 +630,16 @@ def _free_doorstep(canvas: _Canvas, cell: Cell) -> frozenset[Cell]:
     )
 
 
-def _trunk_goals(packing: _Packing) -> dict[PortAccessDemand, frozenset[Cell]]:
+def _trunk_goals(
+    packing: _Packing, demands: Sequence[PortAccessDemand]
+) -> dict[PortAccessDemand, frozenset[Cell]]:
     """Each cut lane's demand, pointed at the doorstep of its own partners.
+
+    ``demands`` is the caller's own `_port_access_inventory(packing.nets)`
+    output rather than a second derivation of it: the inventory walks and sorts
+    every net, and the caller already needs the tuple to hand to
+    `_reserve_port_access`.  It is pure, so the two agreed -- but agreeing
+    twice costs the wall :data:`RESERVE_WALL_SHARE` exists to protect.
 
     THIS IS WHAT MAKES THE ORACLE ABLE TO SAY NO.  Every demand
     `_port_access_inventory` builds from a composed packing is an
@@ -653,7 +662,6 @@ def _trunk_goals(packing: _Packing) -> dict[PortAccessDemand, frozenset[Cell]]:
     every partner it has.  Probing per partner would multiply the A* count by
     the fan-out for a claim the router re-checks anyway.
     """
-    demands = _port_access_inventory(packing.nets).demands
     by_cell: dict[Cell, list[PortAccessDemand]] = {}
     for demand in demands:
         by_cell.setdefault(demand.cell, []).append(demand)
@@ -820,14 +828,16 @@ def pack_with_access(
         # demand could ever be moved into `missing` by it.  Handing
         # `_reserve_port_access` a boundary anyway is pure cost on a clock the
         # gate shows binding (BUDGET-class refusals on titanium-glass and
-        # zurl2): the rim's cells would widen the shared `_Grid`'s span for
-        # probes that never run, and the `assignment_boundary_cut` validate
-        # callback that `_match_access_corridors` re-invokes on every candidate
-        # assignment would walk every demand only to `continue` past it.  The
-        # `any` is kept rather than the argument deleted so that the day
-        # compose's demands become boundary-aware -- the v2 gate's §6 lever 1,
-        # "give the composer real boundary ports" -- the rim lights up again on
-        # its own.
+        # zurl2): the ONLY cost it would still add is its own cells in the
+        # shared `_Grid`'s span, for probes that never run.  The
+        # `assignment_boundary_cut` callback is no longer part of that cost --
+        # the goals below already set `probed`, so it runs on every candidate
+        # assignment either way, and it PROBES a goal-bearing demand rather
+        # than continuing past it, because an explicit goal beats the boundary
+        # in `_goal_for`.  The `any` is kept rather than the argument deleted
+        # so that the day compose's demands become boundary-aware -- the v2
+        # gate's §6 lever 1, "give the composer real boundary ports" -- the rim
+        # lights up again on its own.
         #
         # `goals` now carries the question that DOES apply to a cut lane: each
         # demand's own trunk partners, probed whatever the demand's kind says.
@@ -835,7 +845,7 @@ def pack_with_access(
         # makes the ladder able to reject a rung for the reason the router
         # refuses on it.  See `_trunk_goals`.
         boundary = _outer_ring(bounds) if any(d.kind.reaches_boundary for d in demands) else None
-        goals = _trunk_goals(packing)
+        goals = _trunk_goals(packing, demands)
         # Rung 0's reservation is funded out of `RESERVE_WALL_SHARE` and
         # DEGRADES rather than refusing: see the constant's docstring.
         reserve_deadline = (
@@ -1031,6 +1041,7 @@ __all__ = [
     "BAND_MAX_ROWS",
     "GAP_LADDER",
     "LADDER_WALL_SHARE",
+    "RESERVE_WALL_SHARE",
     "BlockPlaced",
     "ComposeResult",
     "PackedCanvas",
