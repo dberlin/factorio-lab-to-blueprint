@@ -24908,6 +24908,80 @@ def test_true_no_complete_boundary_matching_is_exhaustive_static_access() -> Non
     assert reservation.evidence[0].reachable_options == 0
 
 
+def _internal_pocket(*, sealed: bool) -> tuple[_Canvas, freeform.PortAccessDemand, frozenset[Cell]]:
+    """A one-cell lane head in a pocket, with a goal two cells past its wall.
+
+    The head at ``(3, 3, 0)`` keeps exactly ONE local corridor -- access
+    ``(4, 3, 0)``, exit ``(5, 3, 0)`` -- because belts stand on its three other
+    neighbours and on both flanks of that corridor.  ``sealed`` decides only
+    whether ``(6, 3, 0)`` closes the corridor's mouth, so the two variants offer
+    the identical single local option and differ purely in whether it can reach
+    ``(8, 3, 0)``.  The kind is ``INTERNAL_ARRIVAL``, whose ``reaches_boundary``
+    is False: nothing but an explicit goal can make this demand probe.
+    """
+    canvas = _Canvas(limit=(0, 0, 8, 6))
+    port = canvas.add(_belt(3, 3))
+    walls = [(2, 3), (3, 2), (3, 4), (4, 2), (4, 4), (5, 2), (5, 4)]
+    if sealed:
+        walls.append((6, 3))
+    for x, y in walls:
+        canvas.add(_belt(x, y))
+    canvas.keep_out.update((*walls, (3, 3)))
+    demand = _access_demand((3, 3, 0), freeform.PortAccessKind.INTERNAL_ARRIVAL, belt=port)
+    return canvas, demand, frozenset({(8, 3, 0)})
+
+
+def _walled_in_internal_demand() -> tuple[_Canvas, freeform.PortAccessDemand, frozenset[Cell]]:
+    """The pocket with its mouth bricked up: the goal is unreachable."""
+    return _internal_pocket(sealed=True)
+
+
+def _open_internal_demand() -> tuple[_Canvas, freeform.PortAccessDemand, frozenset[Cell]]:
+    """The same head with the wall removed: the goal is two open cells away."""
+    return _internal_pocket(sealed=False)
+
+
+def _second_internal_demand(canvas: _Canvas) -> freeform.PortAccessDemand:
+    """Another lane head on the same canvas, standing in open ground."""
+    port = canvas.add(_belt(1, 1))
+    canvas.keep_out.add((1, 1))
+    return _access_demand((1, 1, 0), freeform.PortAccessKind.INTERNAL_DEPARTURE, belt=port)
+
+
+def test_a_goal_makes_an_internal_demand_probed_where_the_boundary_flag_cannot() -> None:
+    """`INTERNAL_ARRIVAL.reaches_boundary` is False, so `boundary` alone can
+    never move this demand into `missing`; a per-demand goal can."""
+    canvas, demand, walled_goal = _walled_in_internal_demand()
+    without = _reserve_port_access(canvas, [demand], bounds=canvas.limit)
+    assert without.complete, "today's oracle admits every local option"
+    with_goal = _reserve_port_access(
+        canvas, [demand], bounds=canvas.limit, goals={demand: walled_goal}
+    )
+    assert with_goal.missing == (demand,)
+    assert with_goal.evidence[0].reachable_options == 0
+    assert with_goal.evidence[0].exhaustive
+
+
+def test_a_goal_a_demand_can_reach_is_assigned_a_corridor() -> None:
+    canvas, demand, open_goal = _open_internal_demand()
+    reservation = _reserve_port_access(
+        canvas, [demand], bounds=canvas.limit, goals={demand: open_goal}
+    )
+    assert reservation.complete
+    assert reservation.assigned[0][0] is demand
+
+
+def test_a_demand_with_no_goal_keeps_todays_local_only_behaviour() -> None:
+    """The freeform callers must be byte-identical: no goal, no probe."""
+    canvas, demand, walled_goal = _walled_in_internal_demand()
+    other = _second_internal_demand(canvas)
+    reservation = _reserve_port_access(
+        canvas, [demand, other], bounds=canvas.limit, goals={demand: walled_goal}
+    )
+    assert reservation.missing == (demand,)
+    assert other in dict(reservation.assigned)
+
+
 def test_boundary_corner_claim_already_on_perimeter_remains_reachable() -> None:
     canvas = _Canvas(limit=(0, 0, 4, 4))
     belt = canvas.add(_belt(1, 1))
