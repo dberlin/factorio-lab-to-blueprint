@@ -103,7 +103,7 @@ def test_run_cell_preserves_typed_refusal_evidence(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, candidate_policies: (SimpleNamespace(label="evidence fixture"),),
+        lambda url, candidate_policies, machine_rank: (SimpleNamespace(label="evidence fixture"),),
     )
     monkeypatch.setattr(
         audit,
@@ -189,7 +189,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, candidate_policies: (SimpleNamespace(label="projection fixture"),),
+        lambda url, candidate_policies, machine_rank: (SimpleNamespace(label="projection fixture"),),
     )
     monkeypatch.setattr(
         audit,
@@ -329,7 +329,7 @@ def test_run_cell_does_not_repeat_completed_placement_work(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, candidate_policies: (SimpleNamespace(label="completed fixture"),),
+        lambda url, candidate_policies, machine_rank: (SimpleNamespace(label="completed fixture"),),
     )
     monkeypatch.setattr(
         audit,
@@ -442,7 +442,7 @@ def test_run_cell_completes_unmarked_placement_once_and_preserves_invalid_findin
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, candidate_policies: (SimpleNamespace(label="ordinary fixture"),),
+        lambda url, candidate_policies, machine_rank: (SimpleNamespace(label="ordinary fixture"),),
     )
     monkeypatch.setattr(
         audit,
@@ -656,7 +656,7 @@ def test_run_cell_builds_the_strategy_at_the_cells_own_belt_ceiling(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, candidate_policies: (SimpleNamespace(label="ceiling fixture"),),
+        lambda url, candidate_policies, machine_rank: (SimpleNamespace(label="ceiling fixture"),),
     )
     monkeypatch.setattr(
         audit,
@@ -702,6 +702,7 @@ def test_a_clean_cell_reports_its_attempt_wall_and_the_overshoot_past_the_grace(
     def _slow_specs(
         url: str,
         candidate_policies: object,
+        machine_rank: object,
     ) -> tuple[SimpleNamespace, ...]:
         # Building the spec is the CELL's cost, not the attempt's, and the two
         # spans differ by exactly this: a wall measured from `t0` would charge
@@ -818,7 +819,7 @@ def test_a_raced_best_cell_is_judged_by_the_race_grace_not_the_atomic_one(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, candidate_policies: (SimpleNamespace(label="race grace fixture"),),
+        lambda url, candidate_policies, machine_rank: (SimpleNamespace(label="race grace fixture"),),
     )
     monkeypatch.setattr(
         audit,
