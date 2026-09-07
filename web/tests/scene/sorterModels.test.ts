@@ -101,6 +101,7 @@ test('the marking takes its contrast from the run it drops onto', () => {
       freeOutput: true,
       cyclic: false,
       carried: [],
+      carriedFrom: 'none',
       hasExplicitTag: false,
     },
   ];

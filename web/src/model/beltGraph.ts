@@ -10,15 +10,29 @@ export function isSorter(itemId: number): boolean {
   return itemId >= 2011 && itemId <= 2019;
 }
 
+/**
+ * How a run's `carried` was arrived at.
+ *
+ * `intersection` is the only confident case: both a feeding and a draining
+ * sorter were found and they agree on at least one item, so the graph itself
+ * pins the lane. `union` means one side was missing, or the two sides shared
+ * nothing, and the list is every candidate rather than an answer.
+ */
+export type CarriedSource = 'none' | 'intersection' | 'union';
+
 export interface BeltRun {
   /** Building indices, head to tail. */
   belts: number[];
   /**
-   * No belt feeds the head. Counts belt-to-belt inbound edges only: a sorter
-   * loading the head from a station does not clear this. That is deliberate,
-   * not an oversight -- suppressing it would hide real free-input
-   * information in blueprints where sorter filters are left unset (the
-   * heretical fixture has 0 of 18 end sorters filtered).
+   * Nothing puts anything on the head: no belt links into it AND no sorter
+   * drops onto it.
+   *
+   * The sorter half is not optional bookkeeping. Generated blueprints link
+   * every producer lane's head from a sorter rather than from another belt,
+   * so counting belt-to-belt edges alone called nearly every internal run
+   * "free" and scattered an endpoint icon over each one. A sorter merely
+   * DRAINING the head does not clear this: taking cargo off a belt says
+   * nothing about where the cargo came from.
    */
   freeInput: boolean;
   /** The tail points at nothing at all (outputObjIdx < 0). */
@@ -26,6 +40,8 @@ export interface BeltRun {
   cyclic: boolean;
   /** Item ids the run carries, sorted and deduped. Filled in by inferCarried. */
   carried: number[];
+  /** Which case in inferCarried produced `carried`. */
+  carriedFrom: CarriedSource;
   /** True if any belt in the run has an explicit item-filter tag set. */
   hasExplicitTag: boolean;
 }
@@ -71,6 +87,12 @@ export function buildBeltRuns(bp: Blueprint): BeltRun[] {
   const inbound = new Map<number, number>();
   for (const target of next.values()) inbound.set(target, (inbound.get(target) ?? 0) + 1);
 
+  // Belts some sorter deposits onto. A sorter's `outputObjIdx` is the thing it
+  // delivers into (inferCarried reads the pair the same way round), so a belt
+  // named there is being loaded, not drained.
+  const sorterFed = new Set<number>();
+  for (const b of bp.buildings) if (isSorter(b.itemId)) sorterFed.add(b.outputObjIdx);
+
   const runs: BeltRun[] = [];
   const visited = new Set<number>();
 
@@ -79,10 +101,11 @@ export function buildBeltRuns(bp: Blueprint): BeltRun[] {
     const tail = belts[belts.length - 1] as number;
     return {
       belts,
-      freeInput: !cyclic && (inbound.get(head) ?? 0) === 0,
+      freeInput: !cyclic && (inbound.get(head) ?? 0) === 0 && !sorterFed.has(head),
       freeOutput: !cyclic && (byIndex.get(tail)?.outputObjIdx ?? -1) < 0,
       cyclic,
       carried: [],
+      carriedFrom: 'none',
       hasExplicitTag: belts.some((i) => (byIndex.get(i)?.parameters.length ?? 0) > 0),
     };
   };
@@ -187,16 +210,26 @@ export function computeBeltHeadings(
 }
 
 /**
- * Fills in each run's `carried` from the sorters attached to it.
+ * Fills in each run's `carried` and `carriedFrom` from the sorters attached to
+ * it.
  *
  * A sorter's own filter is authoritative when set, but it frequently is not --
  * across the fixtures, 0 of 18 and 0 of 22 sorters at run ends carry filters in
  * two of the four belt-bearing blueprints. The fallback reads the recipe of the
  * building at the sorter's other end.
  *
- * A sorter feeding a multi-input recipe is genuinely ambiguous: the blueprint
- * never records which of the inputs that particular sorter carries. Every
- * candidate is contributed rather than guessing one.
+ * One sorter alone is genuinely ambiguous: a sorter feeding a five-input
+ * assembler could be carrying any of the five, and the blueprint never records
+ * which. The two ENDS of a lane together often are not. What can be put on the
+ * belt is what its feeding sorters can supply; what can be taken off is what
+ * its draining sorters can accept; only their intersection can actually be
+ * travelling. On the single-item lanes a generator emits, that intersection is
+ * exactly one item.
+ *
+ * The union survives as the fallback for the two cases where the intersection
+ * says nothing: only one side of the lane exists (an import, an export, a
+ * surplus lane), or the two sides share no item at all -- a lane we cannot
+ * model, where every candidate is more honest than an empty answer.
  */
 export function inferCarried(bp: Blueprint, runs: BeltRun[], catalog: Catalog): void {
   const byIndex = new Map<number, BlueprintBuilding>();
@@ -205,12 +238,14 @@ export function inferCarried(bp: Blueprint, runs: BeltRun[], catalog: Catalog): 
   const runOfBelt = new Map<number, BeltRun>();
   for (const run of runs) for (const index of run.belts) runOfBelt.set(index, run);
 
-  const collected = new Map<BeltRun, Set<number>>();
-  const add = (run: BeltRun, itemIds: readonly number[]): void => {
-    let set = collected.get(run);
+  // Kept apart, not merged: the whole point is to compare the two sides.
+  const putOn = new Map<BeltRun, Set<number>>();
+  const takenOff = new Map<BeltRun, Set<number>>();
+  const add = (into: Map<BeltRun, Set<number>>, run: BeltRun, itemIds: readonly number[]): void => {
+    let set = into.get(run);
     if (!set) {
       set = new Set();
-      collected.set(run, set);
+      into.set(run, set);
     }
     for (const id of itemIds) if (id > 0) set.add(id);
   };
@@ -220,16 +255,41 @@ export function inferCarried(bp: Blueprint, runs: BeltRun[], catalog: Catalog): 
 
     // The belt is the sorter's input: it drains the belt into `outputObjIdx`.
     const drained = runOfBelt.get(s.inputObjIdx);
-    if (drained) add(drained, itemsForSorter(s, byIndex.get(s.outputObjIdx), 'inputs', catalog));
+    if (drained) {
+      add(takenOff, drained, itemsForSorter(s, byIndex.get(s.outputObjIdx), 'inputs', catalog));
+    }
 
     // The belt is the sorter's output: `inputObjIdx` feeds the belt.
     const fed = runOfBelt.get(s.outputObjIdx);
-    if (fed) add(fed, itemsForSorter(s, byIndex.get(s.inputObjIdx), 'results', catalog));
+    if (fed) add(putOn, fed, itemsForSorter(s, byIndex.get(s.inputObjIdx), 'results', catalog));
   }
 
+  const sorted = (ids: Iterable<number>): number[] => [...ids].sort((a, b) => a - b);
+
   for (const run of runs) {
-    const set = collected.get(run);
-    run.carried = set ? [...set].sort((a, b) => a - b) : [];
+    // An empty set counts as an absent side, not as a side that says "nothing":
+    // a sorter whose far end has no recipe (a belt into a bare building) knows
+    // nothing about the lane and must not veto the side that does.
+    const on = putOn.get(run);
+    const off = takenOff.get(run);
+    const supply = on && on.size > 0 ? on : undefined;
+    const demand = off && off.size > 0 ? off : undefined;
+
+    if (supply && demand) {
+      const both = sorted([...supply].filter((id) => demand.has(id)));
+      if (both.length > 0) {
+        run.carried = both;
+        run.carriedFrom = 'intersection';
+        continue;
+      }
+      run.carried = sorted(new Set([...supply, ...demand]));
+      run.carriedFrom = 'union';
+      continue;
+    }
+
+    const only = supply ?? demand;
+    run.carried = only ? sorted(only) : [];
+    run.carriedFrom = only ? 'union' : 'none';
   }
 }
 

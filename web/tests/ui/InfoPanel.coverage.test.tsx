@@ -149,6 +149,7 @@ test('an inferred row is marked as inferred in the panel', () => {
       freeOutput: true,
       cyclic: false,
       carried: [1101],
+      carriedFrom: 'intersection',
       hasExplicitTag: false,
     },
   ];
