@@ -28,7 +28,7 @@ import {
   type Vec3,
 } from '../model/beltRibbons';
 import type { SceneModel } from '../model/layout';
-import { DIGIT_COLS, makeDigitTexture, patchDigitShader } from './digitAtlas';
+import { GLYPH_COLS, makeDigitTexture, patchDigitShader } from './digitAtlas';
 
 /** Just clear of the strip's top face. */
 const ARROW_LIFT = RIBBON_THICKNESS / 2 + 0.02;
@@ -249,7 +249,7 @@ export function BeltRibbons({
     const a = new Float32Array(Math.max(digitOf.length, 1));
     digitOf.forEach((d, i) => {
       const label = scene.labels[d.labelIndex] as RunLabelSpec;
-      a[i] = (label.digits[d.digitIndex] as number) / DIGIT_COLS;
+      a[i] = (label.digits[d.digitIndex] as number) / GLYPH_COLS;
     });
     return new InstancedBufferAttribute(a, 1);
   }, [digitOf, scene]);
