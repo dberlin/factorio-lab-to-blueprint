@@ -62,7 +62,9 @@ export function BlueprintCanvas() {
   }, []);
   if (!sceneModel) return <div className="canvas-empty">Load a blueprint to see it.</div>;
 
-  const overlays = atlas ? buildOverlays(sceneModel, catalog, atlas) : null;
+  const overlays = atlas
+    ? buildOverlays(sceneModel, catalog, atlas, { endpointIcons: view.endpointIcons })
+    : null;
 
   return (
     <Canvas

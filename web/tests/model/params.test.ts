@@ -123,6 +123,17 @@ const catalog = buildCatalog({
       resultCounts: [1],
       timeSpend: 60,
     },
+    // Two inputs, so a lane feeding it that nothing else pins is ambiguous.
+    {
+      id: 7,
+      name: 'Gear Box',
+      iconName: 'gear',
+      items: [1101, 1104],
+      itemCounts: [1, 1],
+      results: [1301],
+      resultCounts: [1],
+      timeSpend: 60,
+    },
   ],
 });
 
@@ -775,4 +786,30 @@ test('a filtered sorter gets no inferred row, because its filter is read not inf
   const runs = buildBeltRuns(parsed);
   inferCarried(parsed, runs, catalog);
   expect(describeInferred(parsed.buildings[1]!, parsed, runs, catalog)).toEqual([]);
+});
+
+test('a run the graph could not pin is reported as ambiguous', () => {
+  // belt 0 -> sorter 1 -> assembler 2, whose recipe takes two items. Nothing
+  // feeds the lane, so there is no second side to intersect with and both
+  // inputs stay candidates.
+  const parsed = bp([belt(0, -1), sorter(1, 0, 2), producer(2, 7)]);
+  const runs = buildBeltRuns(parsed);
+  inferCarried(parsed, runs, catalog);
+
+  const rows = describeInferred(parsed.buildings[0]!, parsed, runs, catalog);
+  const carries = rows.find((r) => r.label === 'Carries');
+  expect(carries!.inferred).toBe(true);
+  expect(carries!.ambiguous).toBe(true);
+});
+
+test('a run the graph did pin is inferred but not ambiguous', () => {
+  const parsed = bp([belt(0, -1), sorter(1, 2, 0), producer(2, 6)]);
+  const runs = buildBeltRuns(parsed);
+  inferCarried(parsed, runs, catalog);
+
+  const carries = describeInferred(parsed.buildings[0]!, parsed, runs, catalog).find(
+    (r) => r.label === 'Carries',
+  );
+  expect(carries!.inferred).toBe(true);
+  expect(carries!.ambiguous).toBeUndefined();
 });

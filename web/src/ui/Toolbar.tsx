@@ -41,9 +41,10 @@ export function Toolbar() {
       {sceneModel && sceneModel.unresolvedTagIds.length > 0 && (
         <span className="warn">{sceneModel.unresolvedTagIds.length} unrecognised belt tag(s)</span>
       )}
-      {/* Both layers default on and are here to be turned off: a blueprint
-          with hundreds of runs carries hundreds of numbers, and there are
-          moments when the shapes alone are what you want to look at. */}
+      {/* All three layers default on and are here to be turned off: a
+          blueprint with hundreds of runs carries hundreds of numbers and an
+          inferred item at nearly every lane end, and there are moments when
+          the shapes alone are what you want to look at. */}
       <label className="toggle">
         <input
           type="checkbox"
@@ -59,6 +60,14 @@ export function Toolbar() {
           onChange={(e) => setView({ ...view, sorterTies: e.target.checked })}
         />
         sorter ties
+      </label>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={view.endpointIcons}
+          onChange={(e) => setView({ ...view, endpointIcons: e.target.checked })}
+        />
+        endpoint icons
       </label>
       <label className="toggle">
         machines

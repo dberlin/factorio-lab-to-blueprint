@@ -52,7 +52,11 @@ export function InfoPanel() {
             <dt>{row.label}</dt>
             <dd className={row.inferred ? 'inferred' : undefined}>
               {row.value}
-              {row.inferred && <span className="inferred-tag"> (inferred)</span>}
+              {row.inferred && (
+                <span className="inferred-tag">
+                  {row.ambiguous ? ' (inferred, ambiguous)' : ' (inferred)'}
+                </span>
+              )}
             </dd>
           </Fragment>
         ))}
