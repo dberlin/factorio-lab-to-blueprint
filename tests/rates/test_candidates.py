@@ -10,18 +10,25 @@ import pytest
 
 from flab2bp.lab.data import load_dataset, load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
-from flab2bp.lab.schema import Dataset
+from flab2bp.lab.schema import Dataset, Defaults, Recipe
 from flab2bp.lab.url import parse_url
 from flab2bp.rates import candidates as candidates_module
-from flab2bp.rates.adjust import ProliferatorTier, available_modes, machine_footprint
+from flab2bp.rates.adjust import (
+    AdjustedRecipe,
+    ProliferatorTier,
+    available_modes,
+    machine_footprint,
+)
 from flab2bp.rates.candidates import (
     DEFAULT_CANDIDATE_POLICIES,
     CandidatePolicy,
+    _self_loop_seeds,
     build_candidates,
     lanes_requiring_split,
     proliferator_from_request,
 )
-from flab2bp.spec import BuildSpecSet, ProliferatorMode
+from flab2bp.rates.solve import RateSolution, SolvedGroup
+from flab2bp.spec import BuildSpec, BuildSpecSet, ProliferatorMode
 
 EXAMPLE_URL = (
     "https://factoriolab.github.io/dsp/flow"
@@ -41,6 +48,11 @@ BROKE_URL = (
     "https://factoriolab.github.io/dsp/list?z=eJxFyrEKwkAUBdG.2WKqbFCsXnMXtRMjJLitGkRiCE"
     "QUbd63i2C0OwwzmM5hMB2ZzQuIH7.-XlAWXzaUvyMTpyxNvhxaUxjbp23JnOi4ow2q0R51riu"
     "6kVae1qTK0y70.WjZ5UuvwsNifAOtdSVD&v=11"
+)
+AMM_URL = (
+    "https://factoriolab.github.io/dsp/list?z=eJxNjrsKwkAQRf9miql2JCbVNANGTJdGiI1oSJFi"
+    "WUnIQ4v9dska5HbnHAbmBrWcjxR0YnHOOWahoLckP.5wtpO9IdsCMgJf8ahFOYNcON.rA2oBvOIga9DK"
+    "loJWabYJfjCUGSXd1nz4hzRz4.7ZqdHQrXon7wdtosVTrMm.Ri1pVpEvAnpFKg__&v=11"
 )
 
 
@@ -90,6 +102,116 @@ def test_coproduct_hydrogen_is_internally_balanced_by_buffered_recipe(
         assert graphene_produced > graphene_consumed
         assert "graphene" not in spec.outputs
         assert spec.surplus_outputs["graphene"] == graphene_produced - graphene_consumed
+
+
+# --- self-loop seeds --------------------------------------------------------
+
+
+def _dataset_with_lossy_loop() -> Dataset:
+    """A minimal one-recipe dataset whose only recipe loses ``x`` per craft."""
+    recipe = Recipe(
+        id="lossy-loop",
+        name="lossy-loop",
+        time=Fraction(1),
+        inputs={"x": Fraction(3)},
+        outputs={"x": Fraction(2), "y": Fraction(1)},
+        producers=("assembler",),
+    )
+    return Dataset(
+        version={},
+        categories=(),
+        items=(),
+        recipes=(recipe,),
+        limitations={},
+        defaults=Defaults(),
+        flags=frozenset(),
+    )
+
+
+def _solution_with_group(
+    *,
+    recipe_id: str,
+    inputs_per_craft: dict[str, Fraction],
+    outputs_per_craft: dict[str, Fraction],
+) -> RateSolution:
+    """A one-group ``RateSolution`` for ``_self_loop_seeds`` unit tests."""
+    adjusted = AdjustedRecipe(
+        recipe_id=recipe_id,
+        machine_item_id="assembler",
+        mode=ProliferatorMode.NONE,
+        tier=ProliferatorTier.NONE,
+        craft_time=Fraction(1),
+        inputs_per_craft=inputs_per_craft,
+        outputs_per_craft=outputs_per_craft,
+        proliferator_per_craft=Fraction(0),
+        proliferator_item_id=None,
+    )
+    group = SolvedGroup(
+        recipe_id=recipe_id,
+        machine_item_id="assembler",
+        mode=ProliferatorMode.NONE,
+        machines=2,
+        exact_machines=Fraction(2),
+        crafts_per_second=Fraction(2),
+        adjusted=adjusted,
+        inputs={item_id: rate * 2 for item_id, rate in inputs_per_craft.items()},
+        outputs={item_id: rate * 2 for item_id, rate in outputs_per_craft.items()},
+    )
+    return RateSolution(groups=(group,), external_inputs={}, outputs={})
+
+
+def test_self_loop_seed_is_derived_for_x_ray_cracking(data: Dataset) -> None:
+    """The reported URL's hydrogen loop is declared, exactly and in whole items.
+
+    Measured: the output-products candidate runs four oil refineries on
+    x-ray-cracking, consuming 149/90 hydrogen/s and producing 149/60, with
+    149/180 leaving as surplus.  No hydrogen is an external input, so the loop
+    starts empty and the block deadlocks until someone drops eight in.
+    """
+    specs = build_candidates(data, parse_url(AMM_URL))
+    (spec,) = [s for s in specs.candidates if s.label == "output-products"]
+    (seed,) = spec.self_loop_seeds
+    assert seed.item_id == "hydrogen"
+    assert seed.recipe_id == "x-ray-cracking"
+    assert seed.machine_item_id == "oil-refinery"
+    assert seed.machines == 4
+    assert seed.consumed_per_craft == Fraction(2)
+    assert seed.produced_per_craft == Fraction(3)
+    assert seed.net_per_craft == Fraction(1)
+    assert seed.seed_items == 8
+    assert "hydrogen" not in spec.external_inputs
+    assert spec.surplus_outputs["hydrogen"] == Fraction(149, 180)
+
+
+def test_self_loop_seed_absent_when_net_is_not_positive() -> None:
+    """A loop that loses items is an external input, not a prime.
+
+    ``rates/solve.py:1306-1318`` already turns the shortfall into an external
+    input; declaring a seed there would promise a self-sustaining loop that is
+    not one.
+    """
+    solution = _solution_with_group(
+        recipe_id="lossy-loop",
+        inputs_per_craft={"x": Fraction(3)},
+        outputs_per_craft={"x": Fraction(2), "y": Fraction(1)},
+    )
+    assert _self_loop_seeds(_dataset_with_lossy_loop(), solution) == ()
+
+
+def test_reforming_refine_self_loop_seeds(refined_oil_feedback_spec: BuildSpec) -> None:
+    """The second dataset self-loop recipe, driven off the self-feedback fixture.
+
+    ``flow_refined_oil_self_feedback.csv`` pins a flow whose only group is
+    ``reforming-refine`` on ``oil-refinery``; hydrogen is supplied externally
+    by this fixture, so the refined-oil loop is the only self-loop present and
+    is the loop this test drives -- the second of the two vendored recipes,
+    exercised without naming ``x-ray-cracking``'s hydrogen case again.
+    """
+    spec = refined_oil_feedback_spec
+    (seed,) = [s for s in spec.self_loop_seeds if s.recipe_id == "reforming-refine"]
+    assert seed.item_id == "refined-oil"
+    assert seed.net_per_craft == Fraction(1)
+    assert seed.seed_items == seed.machines * 2
 
 
 @pytest.fixture(scope="module")
