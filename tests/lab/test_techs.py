@@ -8,8 +8,10 @@ from flab2bp.dsp import catalog
 from flab2bp.lab import params as P
 from flab2bp.lab import techs
 from flab2bp.lab.data import load_vendored, load_vendored_hash_index
+from flab2bp.lab.flow import canonicalize_dataset
 from flab2bp.lab.schema import Dataset
-from flab2bp.lab.url import parse_url
+from flab2bp.lab.techs import unlocked_recipe_ids
+from flab2bp.lab.url import LabRequest, parse_url
 
 
 def _without_technologies(dataset: Dataset) -> Dataset:
@@ -270,3 +272,47 @@ def test_an_empty_technology_set_still_answers_with_a_stack_per_tier() -> None:
     assert tiers.sorter_pick_stacks == (1,)
     assert tiers.sorter_place_stacks == (1,)
     assert tiers.piler is False
+
+
+# --- unlocked_recipe_ids (the named rule, extracted for Task 2) -------------
+
+
+#: `LabRequest.mod_id` and `.objectives` carry no default, so a request built
+#: only to exercise `unlocked_recipe_ids` still needs a minimal pair; the rest
+#: of the dataclass's fields default on their own.
+def _request(researched_technology_ids: set[str] | None) -> LabRequest:
+    return LabRequest(
+        mod_id="dsp",
+        objectives=(),
+        researched_technology_ids=researched_technology_ids,
+    )
+
+
+def test_no_researched_set_means_every_technology_is_unlocked() -> None:
+    data = canonicalize_dataset(load_vendored())
+    request = _request(None)
+    unlocked = unlocked_recipe_ids(request, data)
+    every = {
+        unlock
+        for item in data.items
+        if item.technology is not None
+        for unlock in item.technology.recipe_unlock
+    }
+    assert unlocked == every
+    assert "arc-smelter" in unlocked
+    assert "negentropy-smelter" in unlocked
+
+
+def test_an_explicit_researched_set_unlocks_only_its_own_recipes() -> None:
+    data = canonicalize_dataset(load_vendored())
+    request = _request({"automatic-metallurgy"})
+    unlocked = unlocked_recipe_ids(request, data)
+    assert "arc-smelter" in unlocked
+    assert "plane-smelter" not in unlocked
+    assert "negentropy-smelter" not in unlocked
+
+
+def test_an_empty_researched_set_unlocks_nothing() -> None:
+    data = canonicalize_dataset(load_vendored())
+    request = _request(set())
+    assert unlocked_recipe_ids(request, data) == frozenset()

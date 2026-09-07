@@ -27,7 +27,7 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.url import LabRequest, parse_url
 
-__all__ = ["belt_rules_for_url", "logistics_tiers_for_request"]
+__all__ = ["belt_rules_for_url", "logistics_tiers_for_request", "unlocked_recipe_ids"]
 
 
 def _belt_rules(url: str, dataset: Dataset) -> catalog.BeltAltitudeRules:
@@ -62,6 +62,29 @@ def belt_rules_for_url(url: str, dataset: Dataset | None = None) -> catalog.Belt
     return _belt_rules(url, dataset)
 
 
+def unlocked_recipe_ids(request: LabRequest, dataset: Dataset) -> frozenset[str]:
+    """Everything this request's save can build.
+
+    A thing is unlocked when some researched technology item lists it in
+    ``recipe_unlock``.  ``None`` for the researched set means every
+    technology, as :func:`belt_rules_for_url` documents -- FactorioLab's
+    ``settings-store.ts`` defaults an absent set to the full technology list,
+    not to the empty one.
+
+    Belts, sorters, and (under ``machine_rank=up-to``) machine candidates all
+    gate on this one set, so that a save which cannot build a Plane Smelter
+    cannot be handed one by any of them.
+    """
+    researched = request.researched_technology_ids
+    unlocked: set[str] = set()
+    for item in dataset.items:
+        if item.technology is None:
+            continue
+        if researched is None or item.id in researched:
+            unlocked.update(item.technology.recipe_unlock)
+    return frozenset(unlocked)
+
+
 def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalog.LogisticsTiers:
     """The belts and sorters this request's save can build.
 
@@ -75,13 +98,8 @@ def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalo
     ``("sorter-1",)``: it cannot build belts either, and refusing every build
     over it would help nobody.
     """
-    technology_items = [item for item in dataset.items if item.technology is not None]
     researched = request.researched_technology_ids
-    unlocked: set[str] = set()
-    for item in technology_items:
-        assert item.technology is not None
-        if researched is None or item.id in researched:
-            unlocked.update(item.technology.recipe_unlock)
+    unlocked = unlocked_recipe_ids(request, dataset)
 
     floor_id = request.belt_id or "conveyor-belt-1"
     floor_speed = dataset.belt_speed(floor_id)
