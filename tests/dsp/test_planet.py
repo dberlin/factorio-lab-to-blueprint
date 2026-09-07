@@ -727,3 +727,44 @@ def test_collisions_at_cancels_between_pairs_without_box_cache_artifact(
 
     assert overlaps == 1
     assert box_cache == {}
+
+
+def test_bands_by_segment_equals_the_next_over_bands_scan() -> None:
+    """The `next(... if candidate.area_segments == X)` scan, keyed.
+
+    dsp/codec.py:239-246 and dsp/splitter_ports.py:248-255 both linear-scan the
+    cached `bands()` tuple for a band by `area_segments`, and the pattern
+    recurs at 6+ sites.
+
+    Compared by value (`Band` is `@dataclass(frozen=True)`), not by `is`:
+    `bands_by_segment()`'s own default parameter resolves to an explicit
+    `bands(colliders.PLANET_SEGMENT)` call before `bands()`'s `@lru_cache`
+    ever sees it, while plain `planet.bands()` here is a no-argument call --
+    a PRE-EXISTING `lru_cache` quirk (explicit-default-value and no-argument
+    calls key separately) that already exists at master, since
+    splitter_ports.py already calls `bands(colliders.PLANET_SEGMENT)`
+    explicitly while codec.py calls `bands()` with no argument. The two
+    resulting tuples hold value-equal, not identical, `Band` objects.
+    """
+    by_segment = planet.bands_by_segment()
+    for band in planet.bands():
+        assert by_segment[band.area_segments] == band
+    assert set(by_segment) == {b.area_segments for b in planet.bands()}
+
+
+def test_bands_by_segment_keeps_bands_own_segment_parameter() -> None:
+    """splitter_ports.py:251 passes `colliders.PLANET_SEGMENT` explicitly to
+    `bands()`; `bands_by_segment` must accept the same parameter and answer
+    for THAT segment, not silently default to a different planet."""
+    default = planet.bands_by_segment()
+    explicit = planet.bands_by_segment(colliders.PLANET_SEGMENT)
+    assert default == explicit
+    assert set(default) == {b.area_segments for b in planet.bands(colliders.PLANET_SEGMENT)}
+
+
+def test_bands_by_segment_does_not_rebuild_its_map_on_every_call() -> None:
+    """Not a decorator-presence check: an uncached re-implementation that
+    rebuilds `{band.area_segments: band for band in bands()}` fresh every call
+    would fail this, since two fresh `dict`/`MappingProxyType` objects are
+    never `is` each other even when equal."""
+    assert planet.bands_by_segment() is planet.bands_by_segment()

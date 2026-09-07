@@ -55,9 +55,10 @@ from __future__ import annotations
 
 import math
 import struct
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
+from types import MappingProxyType
 
 from flab2bp.dsp import colliders, rules
 
@@ -336,6 +337,19 @@ def bands(segment: int = colliders.PLANET_SEGMENT) -> tuple[Band, ...]:
             break
         previous = current
     return tuple(out)
+
+
+@cache
+def bands_by_segment(segment: int = colliders.PLANET_SEGMENT) -> Mapping[int, Band]:
+    """Band by ``area_segments``, so the six `next()` scans become lookups.
+
+    `bands()` is small and `@lru_cache`d, so this is a duplication fix rather
+    than a hot-path fix -- but the scan is reimplemented at six sites and one
+    of them is on the emission path, which is what puts it in scope. Keeps
+    `bands()`'s own ``segment`` parameter: `splitter_ports.py:251` passes
+    `colliders.PLANET_SEGMENT` explicitly rather than relying on the default.
+    """
+    return MappingProxyType({band.area_segments: band for band in bands(segment)})
 
 
 class BandRefusal(ValueError):

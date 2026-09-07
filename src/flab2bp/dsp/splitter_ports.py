@@ -245,14 +245,7 @@ def blueprint_port_anchor(
     ports = catalog.port_poses_for_model(model_index)
     if not 0 <= port < len(ports):
         raise ValueError(f"model {model_index} defines {len(ports)} ports, not port {port}")
-    band = next(
-        (
-            candidate
-            for candidate in planet.bands(colliders.PLANET_SEGMENT)
-            if candidate.area_segments == frame.primary_band
-        ),
-        None,
-    )
+    band = planet.bands_by_segment(colliders.PLANET_SEGMENT).get(frame.primary_band)
     if band is None:
         raise ValueError(f"area frame primary band {frame.primary_band} names no DSP band")
     anchors = band.anchors(frame.height)

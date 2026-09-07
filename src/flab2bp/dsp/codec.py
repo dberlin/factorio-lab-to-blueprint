@@ -236,14 +236,7 @@ def _area_for(placement: Placement) -> BlueprintArea:
                     f"{frame.width}x{frame.height}"
                 )
 
-    band = next(
-        (
-            candidate
-            for candidate in planet.bands()
-            if candidate.area_segments == frame.primary_band
-        ),
-        None,
-    )
+    band = planet.bands_by_segment().get(frame.primary_band)
     if band is None:
         raise ValueError(f"area frame primary band {frame.primary_band} names no DSP latitude band")
     if frame.width > band.columns or frame.height > band.rows:
