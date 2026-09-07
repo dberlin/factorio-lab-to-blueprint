@@ -70,7 +70,7 @@ def measure(placement: Placement) -> Metrics:
     # which `_is_machine` excludes.  Restricting to the MACHINE bucket first
     # and then re-applying `_is_machine` keeps the exact predicate while only
     # paying the catalog lookup for candidates that could possibly qualify.
-    machine_indices = tuple(i for i in index.by_kind(Kind.MACHINE) if _is_machine(buildings[i]))
+    machine_indices = {i for i in index.by_kind(Kind.MACHINE) if _is_machine(buildings[i])}
     machines = len(machine_indices)
     direct_inserts = len(index.sorters_between(machine_indices, machine_indices))
 

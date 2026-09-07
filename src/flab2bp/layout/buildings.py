@@ -329,6 +329,12 @@ class _BuildingsQueries:
         ``len()``, hence ``Collection`` rather than the weaker ``Container``.
         The result is always ascending positional indices, regardless of
         which branch ran.
+
+        Whichever argument is the LARGER one pays an ``in`` test per hit on
+        the smaller side's incident sorters -- pass a ``set``/``frozenset``
+        for O(1) membership there, not a ``list``/``tuple``, or that
+        membership test degrades to a linear scan and undoes the whole point
+        of driving off the smaller side.
         """
         if len(sources) <= len(sinks):
             found = {
