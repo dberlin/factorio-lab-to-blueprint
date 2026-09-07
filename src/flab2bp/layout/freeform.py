@@ -16162,6 +16162,27 @@ def _join_shard_islands(
     with remaining deficit.  Largest balances are paired first, with root order
     as the deterministic tie-breaker, so the repair buys no avoidable edge.
 
+    **Which LANE of the deficit island receives it is not free either.**  One
+    belt arrives at one lane, and a lane can take no more than its own
+    consumers draw, so each lane carries a residual credit and a transfer is
+    only ever credited up to it.  Sending the whole island deficit down
+    whichever lane happened to be least tapped is how
+    ``df-strange-annihilation-fuel-rod`` refused: copper-ingot's deficit island
+    drew 2/15 on one lane and 16/15 on the other against 1 item/s of its own,
+    the repair went to the 2/15 lane, and ``flow.conservation`` reported the
+    placement 1/15 short -- precisely the part of the 3/15 that lane could
+    never have accepted.  A deficit wider than any single lane buys a second
+    net rather than being declared repaired by the first, and a lane whose
+    shortfall is owed by two different surplus islands may be belted twice.
+
+    The least-tapped lane stays the target whenever it can hold the whole
+    transfer, and the hungriest is reached for only when spreading would
+    under-deliver.  The hungriest lane is by construction the most crowded --
+    :func:`_merge_lanes` packs the most destinations onto the lane with the most
+    draw, and each tap at a lane end is a side of a four-sided junction -- so
+    preferring it unconditionally would aim every repair at the junctions least
+    able to take one.
+
     ``pairs`` are belt indices ``(producer lane, consumer lane)`` already
     linked, ``supply``/``demand`` are items/second per lane, and ``external``
     is the one global rate the player belts in.  It may be allocated among all
@@ -16213,16 +16234,52 @@ def _join_shard_islands(
     surpluses = {r: value for r, value in balance.items() if value > 0}
 
     extra: list[tuple[int, int]] = []
+    # How much more each lane could still receive.  A belt delivers into the
+    # island through ONE lane, and that lane can never take more than its own
+    # consumers draw, so this is the bound on what any repair aimed there can
+    # carry.  It is a RESIDUAL rather than a one-shot flag: two surplus islands
+    # may each owe part of one lane's shortfall, and refusing the second belt
+    # would leave that deficit standing.
+    credit = dict(demand)
     while remaining_deficit > external and surpluses and deficits:
         source_root = min(surpluses, key=lambda r: (-surpluses[r], r))
         sink_root = min(deficits, key=lambda r: (-deficits[r], r))
+        takers = [belt for belt in sinks[sink_root] if credit[belt] > 0]
+        if not takers:
+            # Unreachable while any lane of a deficit island still draws --
+            # a deficit means demand exceeds supply, so some lane has credit.
+            # Kept as the loop's termination backstop, because a lane whose
+            # credit is spent must never be chosen again: the transfer would be
+            # zero and this would spin.
+            remaining_deficit -= deficits.pop(sink_root)
+            continue
+        want = min(surpluses[source_root], deficits[sink_root])
+        # The least-tapped lane is still the right target WHENEVER it can hold
+        # the whole transfer.  A producer lane end becomes a junction under
+        # `_tap_source` and a junction has four sides, and the hungriest lane is
+        # by construction the most crowded one -- `_merge_lanes` packs the most
+        # destinations onto the lane with the most draw -- so aiming every
+        # repair at it would crowd exactly the junctions least able to take it.
+        #
+        # Reach for the hungriest lane only when spreading would UNDER-DELIVER.
+        # That is what `df-strange-annihilation-fuel-rod` needed: copper-ingot's
+        # deficit island drew 2/15 on one lane and 16/15 on the other against
+        # 1 item/s of its own, the least-tapped rule sent the whole 3/15 down
+        # the 2/15 lane, and `flow.conservation` convicted the placement 1/15
+        # short -- precisely the part that lane could never have accepted.
+        able = [belt for belt in takers if credit[belt] >= want]
+        sink_belt = (
+            min(able, key=lambda belt: (taps[belt], belt))
+            if able
+            else min(takers, key=lambda belt: (-credit[belt], taps[belt], belt))
+        )
         source_belt = min(srcs[source_root], key=lambda belt: (taps[belt], belt))
-        sink_belt = min(sinks[sink_root], key=lambda belt: (taps[belt], belt))
         extra.append((source_belt, sink_belt))
         taps[source_belt] += 1
         taps[sink_belt] += 1
 
-        transferred = min(surpluses[source_root], deficits[sink_root])
+        transferred = min(want, credit[sink_belt])
+        credit[sink_belt] -= transferred
         surpluses[source_root] -= transferred
         deficits[sink_root] -= transferred
         remaining_deficit -= transferred

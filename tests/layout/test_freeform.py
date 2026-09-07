@@ -14011,6 +14011,93 @@ class TestAShardThatCannotFeedItself:
         )
         assert _join_shard_islands([*cut, (10, 11)], supply, demand, F(0)) == []
 
+    def test_the_repair_goes_to_the_lane_that_can_absorb_it(self) -> None:
+        """An extra net delivers at most what its RECEIVING lane draws.
+
+        ``df-strange-annihilation-fuel-rod`` at 2/min, copper-ingot, measured:
+        two shards of two smelters, one lane each plus a sibling. The deficit
+        island owes 2/15 on one lane and 16/15 on the other against 1 item/s of
+        supply -- 3/15 short -- and the surplus island has exactly 3/15 spare.
+
+        Aiming the repair at the least-tapped lane sends it to the 2/15 one,
+        where no more than 2/15 can ever arrive; the island stays 1/15 short and
+        ``flow.conservation`` convicts the placement, which is what refused this
+        item. The hungriest lane is the one that can take the whole transfer.
+        """
+        pairs = [(213, 199), (216, 815), (224, 906), (227, 917), (213, 216), (224, 227)]
+        supply = {213: F(1), 216: F(0), 224: F(1), 227: F(0)}
+        demand = {199: F(2, 15), 815: F(16, 15), 906: F(4, 15), 917: F(8, 15)}
+
+        extra = _join_shard_islands(pairs, supply, demand, F(0))
+
+        # The SINK is what this test is about. Which of the surplus island's two
+        # sibling lanes sources it is the `(taps, belt)` tie-break, and both
+        # physically carry the item, so pinning it here would fail a future
+        # change to a rule this test says nothing about.
+        assert [sink for _source, sink in extra] == [815], (
+            "the repair must land on the 16/15 lane, which can absorb the whole "
+            f"3/15 deficit; got {extra}"
+        )
+        assert all(source in (224, 227) for source, _sink in extra), (
+            f"the source must be the surplus island's lane; got {extra}"
+        )
+
+    def test_a_deficit_wider_than_one_lane_buys_a_second_net(self) -> None:
+        """Capping the transfer at the lane is only honest if the loop goes on.
+
+        One strip making 1 item/s into two lanes that draw 2 each: 3 short, and
+        no single lane can take more than 2 of it. Crediting the whole 3 to the
+        first net would leave the island 1 short and the validator would say so.
+        """
+        pairs = [(10, 30), (11, 31), (10, 11), (20, 32)]
+        supply = {10: F(1), 11: F(0), 20: F(5)}
+        demand = {30: F(2), 31: F(2), 32: F(1)}
+
+        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(20, 30), (20, 31)]
+
+    def test_one_starving_lane_may_be_belted_by_two_surplus_islands(self) -> None:
+        """A lane's shortfall can be owed by more than one island.
+
+        Three shards of one producer: one owing 12 against 2 of its own, and two
+        with 4 and 6 to spare. Neither surplus covers the 10 alone, so both must
+        belt the starving lane -- letting a lane receive only one net ever would
+        leave it 4 short and refuse the build.
+        """
+        pairs = [(10, 30), (20, 31), (40, 32)]
+        supply = {10: F(2), 20: F(10), 40: F(10)}
+        demand = {30: F(12), 31: F(6), 32: F(4)}
+
+        # Largest surplus first, so the 6 comes before the 4.
+        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(40, 30), (20, 30)]
+
+    def test_a_lane_already_fed_from_inside_is_not_the_one_aimed_at(self) -> None:
+        """The hungriest lane is not always the one that can take a delivery.
+
+        Lane 101 draws 10 and one of the island's own producers already makes
+        exactly that, with nowhere else to put it; lane 102 draws 8 and gets 3.
+        Aiming at the hungriest lane would deliver into a full one. The
+        least-tapped lane that can hold the transfer is the right target, and
+        here it is also the starving one.
+        """
+        pairs = [(1, 101), (2, 102), (2, 101), (3, 103)]
+        supply = {1: F(10), 2: F(3), 3: F(5)}
+        demand = {101: F(10), 102: F(8), 103: F(0)}
+
+        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(3, 102)]
+
+    def test_a_lane_that_draws_nothing_is_never_belted(self) -> None:
+        """A zero-draw lane would take a zero transfer, and the loop would spin.
+
+        Its exclusion is what makes termination an argument rather than a hope,
+        so it is pinned: the call returns, and it returns the one net that can
+        actually carry something.
+        """
+        pairs = [(10, 30), (10, 31), (20, 32)]
+        supply = {10: F(1), 20: F(5)}
+        demand = {30: F(0), 31: F(3), 32: F(1)}
+
+        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(20, 31)]
+
     def test_what_the_player_belts_in_is_one_global_allocation(self) -> None:
         """The one external rate can cover either island's shortfall."""
         supply, demand = {10: F(3), 20: F(1)}, {30: F(1), 31: F(3)}
