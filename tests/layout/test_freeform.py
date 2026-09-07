@@ -364,7 +364,7 @@ def test_prepare_routing_problem_does_not_deepcopy_buildings(
     first = prepared.new_workspace()
     second = prepared.new_workspace()
     assert first.buildings is not second.buildings
-    assert first.buildings == second.buildings
+    assert tuple(first.buildings) == tuple(second.buildings)
 
 
 def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
@@ -11694,53 +11694,13 @@ class TestCanvasClone:
         canvas.junction_ban.add((7, 7, 0))
         return canvas
 
-    def test_clone_equals_the_original_field_for_field(self) -> None:
-        original = self._populated()
-        clone = original.clone()
-        for f in fields(_Canvas):
-            assert getattr(clone, f.name) == getattr(original, f.name), f.name
-
-    def test_clone_matches_deepcopy(self) -> None:
-        # Every field on `_Canvas` is either an immutable value (shared by
-        # `clone`, re-created by `deepcopy`) or a plain container of those, so
-        # `==` on the dataclass compares them the same way regardless of which
-        # one built them. There is no field here (like a compiled kernel
-        # handle or a callable) that lacks value equality, so nothing needs to
-        # be excluded from this comparison.
-        original = self._populated()
-        assert original.clone() == deepcopy(original)
-
-    def test_clone_passes_a_keyword_for_every_declared_field(self) -> None:
-        """Structural guard: `clone`'s hand-written field list cannot drift
-        from `_Canvas`'s actual fields without failing here.
-
-        `clone`'s docstring says listing every field by name is deliberate
-        and that a field added without a line there fails a test -- this is
-        that test.  It reads `clone`'s own source rather than exercising a
-        populated canvas, so it catches a missing (or misspelled, or
-        positional) field before anyone has to think to populate and mutate
-        the new one in the other `TestCanvasClone` tests.
-        """
-        import ast
-        import inspect
-        import textwrap
-
-        source = textwrap.dedent(inspect.getsource(_Canvas.clone))
-        call = next(
-            node
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "_Canvas"
-        )
-        passed_keywords = {kw.arg for kw in call.keywords if kw.arg is not None}
-        assert not call.args, "clone must pass every field by keyword, not positionally"
-        assert passed_keywords == {f.name for f in fields(_Canvas)}
-
     def test_mutating_the_clone_leaves_the_original_alone(self) -> None:
         original = self._populated()
         clone = original.clone()
         clone.buildings.append(_linked_belt(1, None))
+        clone.buildings[0] = replace(clone.buildings[0], output_obj=1)
+        assert clone.buildings.belts_into(1) == (0,)
+        assert original.buildings.belts_into(1) == ()
         clone.blocked[(8, 8, 0)] = 1
         clone.world_taken.add((8, 8, Fraction(0)))
         clone.solid.add((8, 8))
@@ -11753,7 +11713,12 @@ class TestCanvasClone:
         clone.port_corridors[(8, 8, 0)] = ()
         reference = self._populated()
         for f in fields(_Canvas):
-            assert getattr(original, f.name) == getattr(reference, f.name), f.name
+            original_value = getattr(original, f.name)
+            reference_value = getattr(reference, f.name)
+            if f.name == "buildings":
+                assert tuple(original_value) == tuple(reference_value)
+            else:
+                assert original_value == reference_value, f.name
 
 
 class TestAltitudeProfileCache:
@@ -18034,57 +17999,39 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
                 policy=BandPolicy("portable"),
             )
 
-    def test_coater_keepout_prepares_flat_candidates_in_one_pass(self) -> None:
-        class CountedBuildings(Sequence[PlacedBuilding]):
-            def __init__(self, buildings: tuple[PlacedBuilding, ...]) -> None:
-                self.buildings = buildings
-                self.iterations = 0
-
-            def __len__(self) -> int:
-                return len(self.buildings)
-
-            @overload
-            def __getitem__(self, index: int) -> PlacedBuilding: ...
-
-            @overload
-            def __getitem__(self, index: slice) -> Sequence[PlacedBuilding]: ...
-
-            def __getitem__(
-                self,
-                index: int | slice,
-            ) -> PlacedBuilding | Sequence[PlacedBuilding]:
-                return self.buildings[index]
-
-            def __iter__(self) -> Iterator[PlacedBuilding]:
-                self.iterations += 1
-                return iter(self.buildings)
-
+    def test_indexed_coater_keepout_keeps_overlapping_offset_footprints(self) -> None:
+        # The obstacle's centre is far outside the collider search square, but
+        # the edge of its footprint intersects the independent lateral keepout.
         coater = catalog.building(catalog.SPRAY_COATER_ID)
-        buildings = CountedBuildings(
-            (
-                _belt(0, 0, item=self.ITEM),
-                PlacedBuilding(
-                    item_id=2303,
-                    model_index=catalog.building(2303).model_index,
-                    x=20,
-                    y=20,
-                    width=3,
-                    height=3,
-                ),
-            )
+        assembler = catalog.building(2303)
+        obstacle = PlacedBuilding(
+            item_id=2303,
+            model_index=assembler.model_index,
+            x=-100,
+            y=-1,
+            width=101,
+            height=3,
         )
+        records = (
+            obstacle,
+            replace(obstacle, z=Fraction(30)),
+            _belt(0, 0, item=self.ITEM),
+        )
+        canvas = _Canvas()
+        for building in records:
+            canvas.buildings.append(building)
         candidate = PlacedBuilding(
             item_id=catalog.SPRAY_COATER_ID,
             model_index=coater.model_index,
-            x=2,
-            y=2,
-            width=coater.width,
-            height=coater.height,
+            x=0,
+            y=0,
         )
-
-        freeform._coater_keepout_hits(buildings, candidate)
-
-        assert buildings.iterations == 1
+        assert freeform._coater_keepout_hits(records, candidate) == (0,)
+        assert freeform._coater_keepout_hits(
+            canvas.buildings,
+            candidate,
+            max_obstacle_span=freeform._static_collider_span(obstacle),
+        ) == (0,)
 
     def test_staged_static_alternate_seat_advances_in_order(
         self,

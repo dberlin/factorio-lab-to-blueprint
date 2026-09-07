@@ -106,6 +106,7 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
 )
 from flab2bp.layout.belt_tiers import retier_belts
+from flab2bp.layout.buildings import Buildings, Kind as BuildingKind, MutableBuildings, bounds_of
 from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.observe import SearchEvent, SearchObserver, SearchPhase, stranded_endpoints
@@ -1733,11 +1734,13 @@ def _staged_static_projection_peers(
     *,
     owner_strip: int,
     policy: BandPolicy,
+    indices: Collection[int] | None = None,
 ) -> tuple[tuple[int, PlacedBuilding], ...]:
     """Retain every unknown pair and omit only proved-clean same-strip pairs."""
     return tuple(
         (index, peer)
-        for index, peer in enumerate(buildings)
+        for index in (range(len(buildings)) if indices is None else sorted(indices))
+        for peer in (buildings[index],)
         if not catalog.is_belt(peer.item_id)
         and not catalog.is_sorter(peer.item_id)
         and (
@@ -5285,25 +5288,36 @@ def _relative_rigid_frame_pose(
     )
 
 
+def _static_collider_span(building: PlacedBuilding) -> float:
+    try:
+        return max(catalog.collider_span(building.item_id, building.yaw))
+    except KeyError, ValueError:
+        return max(building.width, building.height) * colliders.GRID_ARC
+
+
 def _building_collider_hits(
     buildings: Sequence[PlacedBuilding],
     candidate: PlacedBuilding,
+    *,
+    indices: Sequence[int] | None = None,
 ) -> tuple[int, ...]:
     """Exact static build-collider hits for one proposed non-belt object."""
-    try:
-        candidate_span = max(catalog.collider_span(candidate.item_id, candidate.yaw))
-    except KeyError, ValueError:
-        candidate_span = max(candidate.width, candidate.height) * colliders.GRID_ARC
+    candidate_span = _static_collider_span(candidate)
     candidate_x = candidate.x + (candidate.width - 1) / 2.0
     candidate_y = candidate.y + (candidate.height - 1) / 2.0
     obstacles: list[tuple[int, PlacedBuilding]] = []
-    for index, building in enumerate(buildings):
+    candidates = indices
+    if candidates is None:
+        candidates = (
+            sorted((*buildings.machines(), *buildings.by_kind(BuildingKind.OTHER)))
+            if isinstance(buildings, MutableBuildings)
+            else range(len(buildings))
+        )
+    for index in candidates:
+        building = buildings[index]
         if catalog.is_belt(building.item_id) or catalog.is_sorter(building.item_id):
             continue
-        try:
-            obstacle_span = max(catalog.collider_span(building.item_id, building.yaw))
-        except KeyError, ValueError:
-            obstacle_span = max(building.width, building.height) * colliders.GRID_ARC
+        obstacle_span = _static_collider_span(building)
         radius = (candidate_span + obstacle_span) / (2.0 * colliders.GRID_ARC) + 3.0
         obstacle_x = building.x + (building.width - 1) / 2.0
         obstacle_y = building.y + (building.height - 1) / 2.0
@@ -5333,6 +5347,8 @@ def _building_collider_hits(
 def _coater_keepout_hits(
     buildings: Sequence[PlacedBuilding],
     candidate: PlacedBuilding,
+    *,
+    max_obstacle_span: float | None = None,
 ) -> tuple[int, ...]:
     """Objects intersecting the coater body or its observed lateral keepout.
 
@@ -5358,15 +5374,32 @@ def _coater_keepout_hits(
         x0 -= 1
         x1 += 1
 
-    try:
-        candidate_span = max(catalog.collider_span(candidate.item_id, candidate.yaw))
-    except KeyError, ValueError:
-        candidate_span = max(candidate.width, candidate.height) * colliders.GRID_ARC
+    candidate_span = _static_collider_span(candidate)
     candidate_x = candidate.x + (candidate.width - 1) / 2.0
     candidate_y = candidate.y + (candidate.height - 1) / 2.0
     hits: set[int] = set()
     collider_candidates: list[tuple[int, PlacedBuilding]] = []
-    for index, building in enumerate(buildings):
+    candidates: Sequence[int]
+    if isinstance(buildings, MutableBuildings) and max_obstacle_span is not None:
+        # Every old circular broad-phase hit has its footprint centre inside
+        # this square. Union the independent lateral keepout, then retain all
+        # old exact predicates below. The maximum is computed once per seating
+        # pass and includes every coater that can be appended during that pass.
+        radius = (candidate_span + max_obstacle_span) / (2.0 * colliders.GRID_ARC) + 3.0
+        candidates = buildings.in_box(
+            min(x0, math.floor(candidate_x - radius)),
+            min(y0, math.floor(candidate_y - radius)),
+            max(x1, math.ceil(candidate_x + radius)),
+            max(y1, math.ceil(candidate_y + radius)),
+        )
+    else:
+        candidates = (
+            sorted((*buildings.machines(), *buildings.by_kind(BuildingKind.OTHER)))
+            if isinstance(buildings, MutableBuildings)
+            else range(len(buildings))
+        )
+    for index in candidates:
+        building = buildings[index]
         is_belt = catalog.is_belt(building.item_id)
         is_sorter = catalog.is_sorter(building.item_id)
         if is_belt or is_sorter:
@@ -5618,12 +5651,14 @@ def _prepared_junction_ban(
     cache: _StagedStaticCache | None = None,
 ) -> frozenset[Cell]:
     """Precompute exact flat and projected Splitter refusals."""
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    indexed = buildings if isinstance(buildings, MutableBuildings) else Buildings(buildings)
     obstacles: list[PlacedBuilding] = []
-    for building in buildings:
+    for index in sorted((*indexed.machines(), *indexed.by_kind(BuildingKind.OTHER))):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        if not catalog.is_belt(building.item_id) and not catalog.is_sorter(building.item_id):
-            obstacles.append(building)
+        obstacles.append(buildings[index])
     tower = catalog.building(catalog.TESLA_TOWER_ID)
     for x, y in power_sites:
         if cancelled is not None and cancelled():
@@ -5668,11 +5703,10 @@ def _prepared_junction_ban(
             banned.add((obstacle.x + dx, obstacle.y + dy, level))
 
     coaters: list[tuple[int, PlacedBuilding]] = []
-    for index, building in enumerate(buildings):
+    for index in indexed.by_item(catalog.SPRAY_COATER_ID):
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
-        if building.item_id == catalog.SPRAY_COATER_ID:
-            coaters.append((index, building))
+        coaters.append((index, buildings[index]))
     if coaters and projection_frames:
         if junction_bounds is None:
             raise ValueError("projected junction bans require fixed junction bounds")
@@ -5768,7 +5802,7 @@ class _Canvas:
     #: sorter that keeps the promise the plan made (design 5.3).
     lane_stacks: _LaneStacks = _NO_LANE_STACKS
 
-    buildings: list[PlacedBuilding] = field(default_factory=list)
+    buildings: MutableBuildings = field(default_factory=MutableBuildings)
     #: ``(x, y, level)`` -> building index, for cells that block routing.
     #: Lattice cell -> index of the building holding it.  The altitude is a
     #: LEVEL INDEX when the router writes it and a world altitude when a caller
@@ -5875,6 +5909,12 @@ class _Canvas:
     junction_ban: set[Cell] = field(default_factory=set)
     junction_geometry_prepared: bool = False
 
+    def __post_init__(self) -> None:
+        # Construction accepts existing sequences; all live mutations belong
+        # to this canvas's maintained index from this point onward.
+        if not isinstance(self.buildings, MutableBuildings):
+            self.buildings = MutableBuildings(self.buildings)
+
     def add(self, b: PlacedBuilding, *, solid: bool = False, level: int | None = None) -> int:
         """Place ``b`` and mark the lattice cells it takes out of play.
 
@@ -5931,15 +5971,28 @@ class _Canvas:
         """Apply exact legality to every real member of a junction stack."""
         if (x, y, level) in self.junction_ban:
             return False
-        buildings = (
-            [building for building in self.buildings if building.item_id == catalog.SPLITTER_ID]
-            if self.junction_geometry_prepared
-            else self.buildings
-        )
-        return all(
-            not _building_collider_hits(buildings, stack_member)
-            for stack_member in _splitter_stack_geometry(x, y, level)
-        )
+        for stack_member in _splitter_stack_geometry(x, y, level):
+            indices = None
+            if self.junction_geometry_prepared:
+                # A diagonal bounds every rotation of a standing Splitter.
+                # The exact collider check still decides legality.
+                splitter_span = math.hypot(*catalog.collider_span(catalog.SPLITTER_ID, 0.0))
+                radius = (
+                    _static_collider_span(stack_member) + splitter_span
+                ) / (2.0 * colliders.GRID_ARC) + 3.0
+                centre_x = stack_member.x + (stack_member.width - 1) / 2.0
+                centre_y = stack_member.y + (stack_member.height - 1) / 2.0
+                indices = tuple(
+                    index
+                    for index in self.buildings.in_box(
+                        math.floor(centre_x - radius), math.floor(centre_y - radius),
+                        math.ceil(centre_x + radius), math.ceil(centre_y + radius),
+                    )
+                    if self.buildings[index].item_id == catalog.SPLITTER_ID
+                )
+            if _building_collider_hits(self.buildings, stack_member, indices=indices):
+                return False
+        return True
 
     def free_world(self, x: int, y: int, z: Fraction) -> bool:
         """Is the real cell at this altitude clear of belts?
@@ -5998,19 +6051,15 @@ class _Canvas:
         ``universe-matrix``) although nothing ever mutates one -- links are
         re-pointed with ``replace``.  Only the containers need to be fresh.
         ``belt_ban`` holds mutable sets, so those are copied one level down;
-        every other value is immutable and shared.  Listing every field by
-        name is deliberate: a field added to ``_Canvas`` without a matching
-        keyword here fails the structural guard,
-        ``TestCanvasClone.test_clone_passes_a_keyword_for_every_declared_field``,
-        which reads this method's own source rather than relying on some
-        test happening to populate and mutate the new field.
+        building records remain shared, but their live query buckets belong
+        to the clone so speculative links cannot change the original graph.
         """
         return _Canvas(
             ramped=self.ramped,
             sorter_tiers=self.sorter_tiers,
             sorter_stacks=self.sorter_stacks,
             lane_stacks=self.lane_stacks,
-            buildings=list(self.buildings),
+            buildings=MutableBuildings(self.buildings),
             blocked=dict(self.blocked),
             world_taken=set(self.world_taken),
             solid=set(self.solid),
@@ -6035,14 +6084,7 @@ def _core_bounds(canvas: _Canvas) -> tuple[int, int, int, int]:
     in on one side and none on the other, and "the edge" meant something
     different depending on which pass asked.
     """
-    if not canvas.buildings:
-        return (0, 0, 0, 0)
-    return (
-        min(b.x for b in canvas.buildings),
-        min(b.y for b in canvas.buildings),
-        max(b.x + b.width - 1 for b in canvas.buildings),
-        max(b.y + b.height - 1 for b in canvas.buildings),
-    )
+    return canvas.buildings.bounds()
 
 
 def _grow(box: tuple[int, int, int, int], rings: int) -> tuple[int, int, int, int]:
@@ -6395,7 +6437,7 @@ def _prepare_port(port: _Port) -> _PreparedPort:
     )
 
 
-def _bind_prepared_port(port: _PreparedPort, buildings: list[PlacedBuilding]) -> _Port:
+def _bind_prepared_port(port: _PreparedPort, buildings: Sequence[PlacedBuilding]) -> _Port:
     # Validate every index against this attempt's fresh building list.  _Port
     # stores indices rather than objects, so no mutable template can leak in.
     buildings[port.belt_index]
@@ -6910,6 +6952,9 @@ def _flank_lane(
     the slot is secured, so a skip leaves no orphan belt behind either.
     """
     placed = 0
+    tails_by_x: dict[int, int] = {}
+    for index in out_lane:
+        tails_by_x.setdefault(canvas.buildings[index].x, index)
     for m_idx in machines:
         m = canvas.buildings[m_idx]
         gx = m.x + s.pw - 1
@@ -6922,7 +6967,7 @@ def _flank_lane(
         if ry is None:
             continue
         got = rows[ry]
-        tail = next((i for i in out_lane if canvas.buildings[i].x == gx), None)
+        tail = tails_by_x.get(gx)
         if tail is None:
             continue
         taken.add(got.slot)
@@ -7187,6 +7232,9 @@ def _dock_lane(
     facing, keeping emission identical for every consumer of prepared geometry.
     """
     placed = 0
+    tails_by_x: dict[int, int] = {}
+    for index in out_lane:
+        tails_by_x.setdefault(canvas.buildings[index].x, index)
     for machine_index in machines:
         machine = canvas.buildings[machine_index]
         taken = claimed.setdefault(machine_index, set())
@@ -7218,10 +7266,7 @@ def _dock_lane(
                 dock = None
         if dock is None:
             continue
-        lane_tail = next(
-            (index for index in out_lane if canvas.buildings[index].x == dock.cell[0]),
-            None,
-        )
+        lane_tail = tails_by_x.get(dock.cell[0])
         if lane_tail is None:
             continue
 
@@ -8791,7 +8836,7 @@ def _junction_geometry_required(
 @dataclass(slots=True)
 class _RoutingWorkspace:
     canvas: _Canvas
-    buildings: list[PlacedBuilding]
+    buildings: MutableBuildings
     nets: list[_Net]
     external_output_nets: list[_Net]
 
@@ -8836,9 +8881,17 @@ class _PreparedRoutingProblem:
     sorter_tiers: tuple[int, ...] = catalog.SORTER_TIERS
     sorter_stacks: _SorterStacks = _NO_SORTER_STACKS
     lane_stacks: _LaneStacks = _NO_LANE_STACKS
+    buildings_index: Buildings | None = field(default=None, init=False, repr=False, compare=False)
+
+    def indexed_templates(self) -> Buildings:
+        cached = self.buildings_index
+        if cached is None:
+            cached = Buildings(self.building_templates)
+            object.__setattr__(self, "buildings_index", cached)
+        return cached
 
     def new_workspace(self) -> _RoutingWorkspace:
-        buildings = list(self.building_templates)
+        buildings = MutableBuildings(self.building_templates)
         canvas = _Canvas(
             ramped=self.ramped,
             sorter_tiers=self.sorter_tiers,
@@ -8880,13 +8933,14 @@ def _protected_template_belt_indices(
 ) -> frozenset[int]:
     """Return fixed belts that validator-clean boundary cleanup cannot delete."""
     templates = problem.building_templates
-    belt_indices = {
-        index for index, building in enumerate(templates) if catalog.is_belt(building.item_id)
-    }
+    indexed = problem.indexed_templates()
+    belt_indices = set(indexed.belts())
     return frozenset(
         target
-        for building in templates
-        if not catalog.is_belt(building.item_id)
+        for index in sorted(
+            (*indexed.machines(), *indexed.sorters(), *indexed.by_kind(BuildingKind.OTHER))
+        )
+        for building in (templates[index],)
         for target in (building.input_obj, building.output_obj)
         if target in belt_indices
     )
@@ -8900,18 +8954,17 @@ def _prepared_candidate_area_lower_bound(problem: _PreparedRoutingProblem) -> in
     completion of this prepared candidate.  Routing and final-frame padding can
     enlarge, but cannot shrink, the axis-aligned extent of that skeleton.
     """
+    indexed = problem.indexed_templates()
     protected = _protected_template_belt_indices(problem)
     survivors = tuple(
-        building
-        for index, building in enumerate(problem.building_templates)
-        if index in protected or not catalog.is_belt(building.item_id)
+        problem.building_templates[index]
+        for index in sorted(
+            (*protected, *indexed.machines(), *indexed.sorters(), *indexed.by_kind(BuildingKind.OTHER))
+        )
     )
     if not survivors:
         return 0
-    left = min(building.x for building in survivors)
-    bottom = min(building.y for building in survivors)
-    right = max(building.x + building.width - 1 for building in survivors)
-    top = max(building.y + building.height - 1 for building in survivors)
+    left, bottom, right, top = bounds_of(survivors)
     return (right - left + 1) * (top - bottom + 1)
 
 
@@ -9017,7 +9070,7 @@ def _prepared_routing_lower_bound(
     )
 
 
-def _bind_prepared_net(net: _PreparedNet, buildings: list[PlacedBuilding]) -> _Net:
+def _bind_prepared_net(net: _PreparedNet, buildings: Sequence[PlacedBuilding]) -> _Net:
     return _Net(
         src=(_bind_prepared_port(net.src, buildings) if net.src is not None else None),
         dst=_bind_prepared_port(net.dst, buildings),
@@ -9278,7 +9331,8 @@ def _junction_belt_clear(
                 if tentative_ok:
                     continue
                 return False
-            if 0 <= who < len(canvas.buildings) and catalog.is_belt(canvas.buildings[who].item_id):
+            building = canvas.buildings.by_index(who)
+            if building is not None and catalog.is_belt(building.item_id):
                 return False
     return True
 
@@ -9754,18 +9808,13 @@ def _route_all(
             for stack_member in _splitter_stack_geometry(x, y, level)
         )
 
-    building_predecessors: dict[int, list[int]] = defaultdict(list)
-    for building_index, building in enumerate(canvas.buildings):
-        if catalog.is_belt(building.item_id) and building.output_obj is not None:
-            building_predecessors[building.output_obj].append(building_index)
-
     def _direct_tap_clear(net: _Net, *, tentative_ok: bool = False) -> bool:
         tap = (net.source.x, net.source.y, net.source.z)
         # Splitter legality excuses the actual connected run around the tap,
         # not only the source port's declared horizontal lane. A prebuilt
         # proliferator trunk is vertical, and treating its predecessor and
         # successor as foreign belts makes every root falsely unavailable.
-        excused = _run_cells(canvas, building_predecessors, net.source.belt)
+        excused = _run_cells(canvas, canvas.buildings.belts_into, net.source.belt)
         try:
             stack = _splitter_stack_geometry(tap[0], tap[1], tap[2])
         except ValueError:
@@ -9786,11 +9835,8 @@ def _route_all(
                     if tentative_ok:
                         continue
                     return False
-                if (
-                    who is not None
-                    and 0 <= who < len(canvas.buildings)
-                    and catalog.is_belt(canvas.buildings[who].item_id)
-                ):
+                building = canvas.buildings.by_index(who)
+                if building is not None and catalog.is_belt(building.item_id):
                     return False
         return True
 
@@ -12492,23 +12538,8 @@ def _commit_paths(
             canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
         laid[i] = indices
 
-    # WHO FEEDS WHOM, now that every belt exists.  `into` is the reverse of
-    # `output_obj`, which the junction site test needs to walk a run UPSTREAM.
-    # Initialize it once, then maintain the few links each tap changes; rebuilding
-    # it per tap would rescan tens of thousands of buildings hundreds of times.
-    into: dict[int, list[int]] = defaultdict(list)
-    for idx, built in enumerate(canvas.buildings):
-        if built.output_obj is not None:
-            into[built.output_obj].append(idx)
-
-    def refresh_predecessor(index: int, previous_output: int | None) -> None:
-        current_output = canvas.buildings[index].output_obj
-        if previous_output == current_output:
-            return
-        if previous_output is not None:
-            into[previous_output].remove(index)
-        if current_output is not None:
-            into[current_output].append(index)
+    # The live index maintains reverse links as sinks and taps are relinked.
+    into = canvas.buildings.by_output_obj
 
     # Fix every sink before certifying any source Splitter. A sink link adds a
     # predecessor to its destination belt. Building a Splitter first made its
@@ -12534,12 +12565,10 @@ def _commit_paths(
             hint = (sink_hints or {}).get(i)
             record(i, paths[i][-1], "sink", (hint,) if hint is not None else ())
             continue
-        previous_sink_output = canvas.buildings[indices[-1]].output_obj
         canvas.buildings[indices[-1]] = _relink(
             canvas.buildings[indices[-1]],
             output_obj=sink,
         )
-        refresh_predecessor(indices[-1], previous_sink_output)
 
     splitter_owner: dict[int, tuple[int, int]] = {}
 
@@ -12564,7 +12593,6 @@ def _commit_paths(
         excused = _run_cells(canvas, into, feeder) | _run_cells(canvas, into, indices[0])
         tap_blockers: set[Cell] = set()
         tap_reason: list[str] = []
-        previous_feeder_output = canvas.buildings[feeder].output_obj
         previous_building_count = len(canvas.buildings)
         tap_succeeded = _tap_source(
             canvas,
@@ -12577,11 +12605,6 @@ def _commit_paths(
             tap_reason,
             predecessor_choices=into,
         )
-        refresh_predecessor(feeder, previous_feeder_output)
-        for added_index in range(previous_building_count, len(canvas.buildings)):
-            added_output = canvas.buildings[added_index].output_obj
-            if added_output is not None:
-                into[added_output].append(added_index)
         if not tap_succeeded:
             unlinked.append(i)
             feeder_building = canvas.buildings[feeder]
@@ -12754,14 +12777,14 @@ def _source_for(
     at = _lattice_cell(head.x, head.y, head.z)
     if hint is not None:
         who = canvas.blocked.get(hint)
+        other = canvas.buildings.by_index(who)
         if (
             hint in kin
             and who is not None
-            and 0 <= who < len(canvas.buildings)
+            and other is not None
             and who not in own
             and who != net.dst.belt
         ):
-            other = canvas.buildings[who]
             if (
                 catalog.is_belt(other.item_id)
                 and other.carries_item == net.item
@@ -12796,7 +12819,8 @@ def _source_for(
         if cell not in kin:
             continue
         who = canvas.blocked.get(cell)
-        if who is None or not 0 <= who < len(canvas.buildings) or who in own:
+        other = canvas.buildings.by_index(who)
+        if who is None or other is None or who in own:
             # Never attach to a belt of THIS path. The cell before the one we
             # are linking is adjacent and carries the same item, so it always
             # matches -- and pointing at it makes a two-belt cycle, which
@@ -12811,7 +12835,6 @@ def _source_for(
             # the intermittent `belt.acyclic` on the magnetic-ring fixture:
             # feeder 597 -> splitter -> stub -> branch 1192 -> 597.
             continue
-        other = canvas.buildings[who]
         if catalog.is_belt(other.item_id) and other.carries_item == net.item:
             return who
     # Nothing adjacent belongs to a net leaving where we leave, so this path
@@ -12821,16 +12844,11 @@ def _source_for(
 
 def _splitter_successors(canvas: _Canvas) -> dict[int, tuple[int, ...]]:
     """Index every belt branch fed by a splitter."""
-    successors: dict[int, list[int]] = defaultdict(list)
-    for index, building in enumerate(canvas.buildings):
-        feed = building.input_obj
-        if (
-            feed is not None
-            and 0 <= feed < len(canvas.buildings)
-            and canvas.buildings[feed].item_id == catalog.SPLITTER_ID
-        ):
-            successors[feed].append(index)
-    return {splitter: tuple(branches) for splitter, branches in successors.items()}
+    return {
+        splitter: canvas.buildings.splitter_successors(splitter)
+        for splitter in canvas.buildings.by_item(catalog.SPLITTER_ID)
+        if canvas.buildings.splitter_successors(splitter)
+    }
 
 
 def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
@@ -12867,10 +12885,10 @@ def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
         stack = [net.src.belt]
         while stack:
             index = stack.pop()
-            if index in seen or not 0 <= index < len(canvas.buildings):
+            building = canvas.buildings.by_index(index)
+            if index in seen or building is None:
                 continue
             seen.add(index)
-            building = canvas.buildings[index]
             if building.item_id == catalog.SPLITTER_ID:
                 stack.extend(successors.get(index, ()))
                 continue
@@ -12936,21 +12954,22 @@ def _leads_back(
     router most easily builds.  Same rule as ``validate._belt_successors``, so
     what this refuses to build is what that refuses to accept.
     """
-    if splitter_successors is None:
-        splitter_successors = _splitter_successors(canvas)
-
     seen: set[int] = set()
     stack = [start]
     while stack:
         i = stack.pop()
         if i in own:
             return True
-        if i in seen or not 0 <= i < len(canvas.buildings):
+        b = canvas.buildings.by_index(i)
+        if i in seen or b is None:
             continue
         seen.add(i)
-        b = canvas.buildings[i]
         if b.item_id == catalog.SPLITTER_ID:
-            stack.extend(splitter_successors.get(i, ()))
+            stack.extend(
+                canvas.buildings.splitter_successors(i)
+                if splitter_successors is None
+                else splitter_successors.get(i, ())
+            )
         elif catalog.is_belt(b.item_id) and b.output_obj is not None:
             stack.append(b.output_obj)
     return False
@@ -12972,8 +12991,6 @@ def _committed_path_closes_cycle(
     ``_leads_back`` follows: a Splitter to each branch fed from it, a belt to
     its ``output_obj``; anything else has no successors.
     """
-    if splitter_successors is None:
-        splitter_successors = _splitter_successors(canvas)
     buildings = canvas.buildings
     n = len(buildings)
     wanted = {i for i in indices if 0 <= i < n}
@@ -12983,7 +13000,11 @@ def _committed_path_closes_cycle(
     def successors(i: int) -> tuple[int, ...]:
         b = buildings[i]
         if b.item_id == catalog.SPLITTER_ID:
-            return tuple(splitter_successors.get(i, ()))
+            return (
+                buildings.splitter_successors(i)
+                if splitter_successors is None
+                else tuple(splitter_successors.get(i, ()))
+            )
         if catalog.is_belt(b.item_id) and b.output_obj is not None:
             return (b.output_obj,)
         return ()
@@ -13124,8 +13145,8 @@ def _sink_for(
         if hint in protected_targets:
             return None
         who = canvas.blocked.get(hint)
-        if hint in kin and who is not None and 0 <= who < len(canvas.buildings) and who not in own:
-            other = canvas.buildings[who]
+        other = canvas.buildings.by_index(who)
+        if hint in kin and who is not None and other is not None and who not in own:
             if (
                 catalog.is_belt(other.item_id)
                 and _legal_link(
@@ -13153,13 +13174,13 @@ def _sink_for(
         if cell not in kin:
             continue
         who = canvas.blocked.get(cell)
-        if who is None or not 0 <= who < len(canvas.buildings) or who in own:
+        other = canvas.buildings.by_index(who)
+        if who is None or other is None or who in own:
             # Never attach to a belt of THIS path. The cell before the one we
             # are linking is adjacent and carries the same item, so it always
             # matches -- and pointing at it makes a two-belt cycle, which
             # `belt.acyclic` then reports.
             continue
-        other = canvas.buildings[who]
         if not catalog.is_belt(other.item_id):
             continue
         if _leads_back(canvas, who, own):
@@ -13172,7 +13193,7 @@ def _sink_for(
 
 def _run_cells(
     canvas: _Canvas,
-    into: Mapping[int, list[int]],
+    into: Callable[[int], Sequence[int]],
     start: int,
     hops: int = 3,
 ) -> set[tuple[int, int, int]]:
@@ -13186,8 +13207,8 @@ def _run_cells(
 
     Followed through SPLITTERS as well as belts, for the same reason
     ``_leads_back`` does: a junction carries no ``output_obj`` of its own, so a
-    walk that stops at one misses exactly the run a tap creates.  ``into`` is
-    the reverse of ``output_obj``, which the caller builds once per commit.
+    walk that stops at one misses exactly the run a tap creates. ``into`` queries
+    the maintained reverse links, either all records or only belts.
 
     Deliberately generous.  Over-excusing here can only leave a site the game
     would refuse looking clear, which ``validate.certify`` still catches and
@@ -13201,10 +13222,10 @@ def _run_cells(
         for idx in frontier:
             b = canvas.buildings[idx]
             onward = b.output_obj
-            if onward is not None and 0 <= onward < len(canvas.buildings) and onward not in seen:
+            if onward is not None and canvas.buildings.by_index(onward) is not None and onward not in seen:
                 seen.add(onward)
                 nxt.append(onward)
-            for j in into.get(idx, ()):
+            for j in into(idx):
                 if j not in seen:
                     seen.add(j)
                     nxt.append(j)
@@ -13232,11 +13253,8 @@ def _belt_keepout_blockers(
         if cell in excused:
             continue
         who = canvas.blocked.get(cell)
-        if (
-            who is not None
-            and 0 <= who < len(canvas.buildings)
-            and catalog.is_belt(canvas.buildings[who].item_id)
-        ):
+        building = canvas.buildings.by_index(who)
+        if building is not None and catalog.is_belt(building.item_id):
             blocked.append(cell)
     return tuple(blocked)
 
@@ -13266,7 +13284,7 @@ def _tap_source(
     excused: Set[tuple[int, int, int]] = frozenset(),
     rejected_cells: set[Cell] | None = None,
     rejected_reason: list[str] | None = None,
-    predecessor_choices: Mapping[int, Sequence[int]] | None = None,
+    predecessor_choices: Callable[[int], Sequence[int]] | None = None,
 ) -> bool:
     """Make ``belt_idx`` hand items to ``branch``, junctioning if it must.
 
@@ -13290,11 +13308,7 @@ def _tap_source(
     b = canvas.buildings[belt_idx]
     onward = b.output_obj
     if predecessor_choices is None:
-        built_predecessors: dict[int, list[int]] = defaultdict(list)
-        for index, candidate in enumerate(canvas.buildings):
-            if catalog.is_belt(candidate.item_id) and candidate.output_obj is not None:
-                built_predecessors[candidate.output_obj].append(index)
-        predecessor_choices = built_predecessors
+        predecessor_choices = canvas.buildings.belts_into
     if onward is None:
         canvas.buildings[belt_idx] = _relink(b, output_obj=branch)
         return True
@@ -13316,11 +13330,12 @@ def _tap_source(
 
         used_ports: set[int] = set()
         attached = 0
-        for index, candidate in enumerate(canvas.buildings):
+        for index in canvas.buildings.attached_to(junction_idx):
+            candidate = canvas.buildings[index]
             outward_idx: int | None
             if candidate.output_obj == junction_idx:
                 attached += 1
-                incoming = predecessor_choices.get(index, ())
+                incoming = predecessor_choices(index)
                 outward_idx = incoming[0] if len(incoming) == 1 else None
             elif candidate.input_obj == junction_idx:
                 attached += 1
@@ -13350,11 +13365,7 @@ def _tap_source(
                 rejected_reason.append("ramp")
             return False
         level = int(b.z)
-        incoming = [
-            index
-            for index, candidate in enumerate(canvas.buildings)
-            if catalog.is_belt(candidate.item_id) and candidate.output_obj == belt_idx
-        ]
+        incoming = canvas.buildings.belts_into(belt_idx)
         if len(incoming) != 1:
             if rejected_reason is not None:
                 rejected_reason.append("splitter-port")
@@ -13437,9 +13448,9 @@ def _tap_source(
             for _hop in range(3):
                 if current == belt_idx:
                     return True
-                if not (0 <= current < len(canvas.buildings)):
+                candidate = canvas.buildings.by_index(current)
+                if candidate is None:
                     return False
-                candidate = canvas.buildings[current]
                 if not catalog.is_belt(candidate.item_id) or candidate.output_obj is None:
                     return False
                 current = candidate.output_obj
@@ -13464,16 +13475,13 @@ def _tap_source(
                     and (
                         who is None
                         or reaches_tap_downstream(who)
-                        or len(predecessor_choices.get(who, ())) <= 1
+                        or len(predecessor_choices(who)) <= 1
                     )
                 ):
                     continue
                 who = canvas.blocked.get(cell)
-                if (
-                    who is not None
-                    and 0 <= who < len(canvas.buildings)
-                    and catalog.is_belt(canvas.buildings[who].item_id)
-                ):
+                building = canvas.buildings.by_index(who)
+                if building is not None and catalog.is_belt(building.item_id):
                     belt_blockers.add(cell)
         if belt_blockers:
             if rejected_cells is not None:
@@ -15437,7 +15445,11 @@ def _power_plan(
         gx, gy = x - min_x + pad, y - min_y + pad
         if 0 <= gx < shape[0] and 0 <= gy < shape[1]:
             dark[gx, gy] = True
-    for b in canvas.buildings:
+    for index in sorted(
+        (*canvas.buildings.machines(), *canvas.buildings.sorters(),
+         *canvas.buildings.by_kind(BuildingKind.OTHER))
+    ):
+        b = canvas.buildings[index]
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         if catalog.is_belt(b.item_id) or b.item_id == catalog.TESLA_TOWER_ID:
@@ -15505,7 +15517,10 @@ def _power_plan(
     # once per candidate per peer.  `zip(..., strict=True)` makes a missed
     # append fail loudly instead of silently pairing the wrong centre.
     peer_centres: list[tuple[float, float, float]] = []
-    for index, b in enumerate(canvas.buildings):
+    for index in sorted(
+        (*canvas.buildings.machines(), *canvas.buildings.by_kind(BuildingKind.OTHER))
+    ):
+        b = canvas.buildings[index]
         if cancelled is not None and cancelled():
             raise _PreparationDeadline
         try:
@@ -17443,9 +17458,8 @@ def _prepare_routing_problem(
         else frozenset()
     )
     projection_coaters = tuple(
-        (index, building)
-        for index, building in enumerate(canvas.buildings)
-        if building.item_id == catalog.SPRAY_COATER_ID
+        (index, canvas.buildings[index])
+        for index in canvas.buildings.by_item(catalog.SPRAY_COATER_ID)
     )
     junction_frame_bans = (
         _projected_coater_junction_bans_by_frame(
@@ -18095,7 +18109,7 @@ def _build_prepared(
             "routed": float(len(internal_routing.routed)),
             "route_failures": float(routing.failed_count),
             "repair_iterations": float(routing.iterations),
-            "belt_tiles": float(sum(1 for b in canvas.buildings if catalog.is_belt(b.item_id))),
+            "belt_tiles": float(canvas.buildings.count_by_kind(BuildingKind.BELT)),
             "direct_inserts": float(prepared.direct_inserts),
             # Combined across the four sub-routings, not just the interior
             # one: each of them runs a last-mile pass of its own, and reading
@@ -18206,9 +18220,9 @@ def _bridge(
     destination_tiles = set(dst.tiles)
 
     def is_machine(index: int) -> bool:
-        if not 0 <= index < len(buildings):
+        building = buildings.by_index(index)
+        if building is None:
             return False
-        building = buildings[index]
         return (
             building.owner_strip is not None
             and not catalog.is_belt(building.item_id)
@@ -18218,20 +18232,16 @@ def _bridge(
 
     source_injections = [
         buildings[target].x
-        for sorter in buildings
-        if catalog.is_sorter(sorter.item_id)
-        and (origin := sorter.input_obj) is not None
+        for target in source_tiles
+        for sorter_index in buildings.sorters_into(target)
+        if (origin := buildings[sorter_index].input_obj) is not None
         and is_machine(origin)
-        and (target := sorter.output_obj) is not None
-        and target in source_tiles
     ]
     destination_pickups = [
         buildings[source].x
-        for sorter in buildings
-        if catalog.is_sorter(sorter.item_id)
-        and (source := sorter.input_obj) is not None
-        and source in destination_tiles
-        and (target := sorter.output_obj) is not None
+        for source in destination_tiles
+        for sorter_index in buildings.sorters_out_of(source)
+        if (target := buildings[sorter_index].output_obj) is not None
         and is_machine(target)
     ]
     # Port-driven machines attach directly to a belt rather than through a
@@ -18695,15 +18705,21 @@ def _place_coaters(
     staged: list[_StagedCoater] = []
     staged_hosts: set[int] = set()
     staged_supply_cells: set[Cell] = set()
-    prospective = list(canvas.buildings)
+    prospective = MutableBuildings(canvas.buildings)
+    # Staging adds only belts and Spray Coaters. Bound all possible coater
+    # rotations now, alongside every existing non-belt/non-sorter obstacle.
+    max_obstacle_span = math.hypot(*catalog.collider_span(catalog.SPRAY_COATER_ID, 0.0))
+    for index in (*prospective.machines(), *prospective.by_kind(BuildingKind.OTHER)):
+        if cancelled is not None and cancelled():
+            raise _PreparationDeadline
+        max_obstacle_span = max(max_obstacle_span, _static_collider_span(prospective[index]))
     obstacle_index = _ProjectedObstacleIndex.build(
         tuple(enumerate(prospective)),
         cancelled=cancelled,
     )
     splitter_buildings = tuple(
-        (index, building)
-        for index, building in enumerate(canvas.buildings)
-        if building.item_id == catalog.SPLITTER_ID
+        (index, canvas.buildings[index])
+        for index in canvas.buildings.by_item(catalog.SPLITTER_ID)
     )
     projected_capacity = (
         canvas.limit or _grow(_core_bounds(canvas), _ENTRY_RING) if splitter_buildings else None
@@ -18718,8 +18734,9 @@ def _place_coaters(
 
     belt_at: dict[tuple[int, int, int], int] = {
         (building.x, building.y, int(building.z)): index
-        for index, building in enumerate(canvas.buildings)
-        if catalog.is_belt(building.item_id) and building.z.denominator == 1
+        for index in canvas.buildings.belts()
+        for building in (canvas.buildings[index],)
+        if building.z.denominator == 1
     }
 
     for strip_index, (strip, in_ports) in enumerate(zip(strips, ports, strict=True)):
@@ -18816,6 +18833,7 @@ def _place_coaters(
                 collider_hits = _coater_keepout_hits(
                     prospective,
                     proposed_coater,
+                    max_obstacle_span=max_obstacle_span,
                 )
                 if collider_hits:
                     if all(
@@ -18903,7 +18921,6 @@ def _place_coaters(
                     cancelled=cancelled,
                 )
                 if potential_peers:
-                    broad_phase_peers = frozenset(potential_peers)
                     potential_peers = tuple(
                         index
                         for index, _peer in _staged_static_projection_peers(
@@ -18911,8 +18928,8 @@ def _place_coaters(
                             proposed_coater,
                             owner_strip=strip_index,
                             policy=policy,
+                            indices=potential_peers,
                         )
-                        if index in broad_phase_peers
                     )
                 if potential_peers:
                     projected_failure = _prospective_static_failure(
@@ -22192,7 +22209,11 @@ class FreeformLayout:
                                     exact_retry_evidence = _exact_retry_evidence(
                                         "finalizer",
                                         failure,
-                                        dict(enumerate(placement.buildings)),
+                                        {
+                                            index: placement.buildings[index]
+                                            for index in failure.buildings
+                                            if 0 <= index < len(placement.buildings)
+                                        },
                                     )
                             if projection_no_good is not None:
                                 projection_no_good_key = projection_no_good
