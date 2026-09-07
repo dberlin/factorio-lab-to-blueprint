@@ -20,6 +20,8 @@ from fractions import Fraction
 
 from flab2bp.dsp import catalog
 from flab2bp.lab.schema import Dataset, Recipe
+from flab2bp.rates.adjust import ProliferatorTier, adjust
+from flab2bp.spec import ProliferatorMode
 
 
 class MachineRank(StrEnum):
@@ -91,3 +93,50 @@ def candidate_ladder(
         ladder.append((speed, index, machine_id))
     ladder.sort()
     return tuple(machine_id for _, _, machine_id in ladder)
+
+
+def machines_needed(craft_rate: Fraction, crafts_per_second: Fraction) -> int:
+    """Exact ceiling of ``craft_rate / crafts_per_second``.
+
+    The same expression ``solve.py`` uses to turn an exact rate into a
+    physical count.  Kept exact: at 0.1 crafts/s a float ceiling rounds the
+    wrong way often enough to move a real build.
+    """
+    exact = craft_rate / crafts_per_second
+    return -((-exact.numerator) // exact.denominator)
+
+
+def choose_machine(
+    data: Dataset,
+    recipe: Recipe,
+    *,
+    ceiling_id: str,
+    craft_rate: Fraction,
+    mode: ProliferatorMode,
+    tier: ProliferatorTier,
+    unlocked: Collection[str],
+) -> str:
+    """The slowest producer that meets ``craft_rate`` in the fewest machines.
+
+    Fewest machines first, then lowest tier.  Because
+    :func:`candidate_ladder` is already ordered ``(speed, dataset order)``
+    and ``min`` is stable, the first candidate attaining the minimum count is
+    the lowest-tier one, which is the tie-break the design asks for.
+
+    ``mode`` and ``tier`` are the column's own -- a proliferator speed bonus
+    scales every candidate equally, but the ceiling is nonlinear, so each
+    candidate is measured through ``adjust()`` rather than by scaling.
+    """
+    ladder = candidate_ladder(data, recipe, ceiling_id, unlocked)
+    if len(ladder) == 1:
+        return ladder[0]
+    best_id = ceiling_id
+    best_count: int | None = None
+    for machine_id in ladder:
+        count = machines_needed(
+            craft_rate, adjust(data, recipe, machine_id, mode, tier).crafts_per_second
+        )
+        if best_count is None or count < best_count:
+            best_count = count
+            best_id = machine_id
+    return best_id

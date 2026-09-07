@@ -6,7 +6,15 @@ import pytest
 
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset
-from flab2bp.rates.machine_choice import MachineRank, candidate_ladder, machine_speed
+from flab2bp.rates.adjust import ProliferatorTier, adjust
+from flab2bp.rates.machine_choice import (
+    MachineRank,
+    candidate_ladder,
+    choose_machine,
+    machine_speed,
+    machines_needed,
+)
+from flab2bp.spec import ProliferatorMode
 
 
 @pytest.fixture(scope="module")
@@ -85,3 +93,101 @@ def test_every_ladder_entry_is_placeable(data) -> None:
             continue
         for machine_id in candidate_ladder(data, recipe, recipe.producers[-1], every):
             catalog.get_item_id(machine_id)  # must not raise
+
+
+def _choose(data, recipe_id: str, ceiling: str, craft_rate: Fraction) -> str:
+    return choose_machine(
+        data,
+        data.recipe(recipe_id),
+        ceiling_id=ceiling,
+        craft_rate=craft_rate,
+        mode=ProliferatorMode.NONE,
+        tier=ProliferatorTier.NONE,
+        unlocked=_every_machine(data),
+    )
+
+
+def test_machines_needed_is_an_exact_ceiling() -> None:
+    assert machines_needed(Fraction(1, 2), Fraction(1)) == 1
+    assert machines_needed(Fraction(5, 2), Fraction(1)) == 3
+    assert machines_needed(Fraction(3), Fraction(1)) == 3
+    assert machines_needed(Fraction(0), Fraction(1)) == 0
+    # 0.1 is not representable in binary floating point; the exact form is.
+    assert machines_needed(Fraction(1, 10) * 10, Fraction(1)) == 1
+
+
+def test_a_rate_only_the_top_smelter_meets_in_one_machine_keeps_it(data) -> None:
+    # iron-ingot: time 1s, out 1.  arc 1/s, plane 2/s, negentropy 3/s.
+    # 2.4 crafts/s -> arc ceil(2.4)=3, plane ceil(1.2)=2, negentropy ceil(0.8)=1.
+    assert _choose(data, "iron-ingot", "negentropy-smelter", Fraction(12, 5)) == (
+        "negentropy-smelter"
+    )
+
+
+def test_a_rate_the_bottom_smelter_also_meets_in_one_machine_drops_to_it(data) -> None:
+    # 0.5 crafts/s -> every smelter needs ceil(<=0.5) == 1; tie -> lowest tier.
+    assert _choose(data, "iron-ingot", "negentropy-smelter", Fraction(1, 2)) == "arc-smelter"
+
+
+def test_a_tie_between_the_middle_and_the_top_takes_the_middle(data) -> None:
+    # 1.5 crafts/s -> arc 2, plane 1, negentropy 1.  Tie between plane and
+    # negentropy at 1; the slower one wins.
+    assert _choose(data, "iron-ingot", "negentropy-smelter", Fraction(3, 2)) == "plane-smelter"
+
+
+def test_the_ceiling_bounds_the_choice_from_above(data) -> None:
+    # With an arc-smelter ceiling nothing faster may be chosen, even though
+    # a faster smelter would need fewer machines.
+    assert _choose(data, "iron-ingot", "arc-smelter", Fraction(12, 5)) == "arc-smelter"
+
+
+def test_a_locked_save_cannot_be_handed_a_machine_it_has_not_researched(data) -> None:
+    chosen = choose_machine(
+        data,
+        data.recipe("iron-ingot"),
+        ceiling_id="negentropy-smelter",
+        craft_rate=Fraction(1, 2),
+        mode=ProliferatorMode.NONE,
+        tier=ProliferatorTier.NONE,
+        unlocked=frozenset({"plane-smelter"}),
+    )
+    assert chosen == "plane-smelter"
+
+
+def test_the_choice_never_needs_more_machines_than_the_ceiling(data) -> None:
+    """Invariant U: up-to is exactly count-preserving."""
+    every = _every_machine(data)
+    checked = 0
+    for recipe in data.recipes:
+        if len(recipe.producers) < 2:
+            continue
+        ceiling = recipe.producers[-1]
+        if not _is_placeable_for_test(ceiling):
+            continue
+        for numerator in (1, 2, 3, 5, 7, 11, 23, 97):
+            for denominator in (1, 2, 3, 4, 10):
+                rate = Fraction(numerator, denominator)
+                chosen = choose_machine(
+                    data,
+                    recipe,
+                    ceiling_id=ceiling,
+                    craft_rate=rate,
+                    mode=ProliferatorMode.NONE,
+                    tier=ProliferatorTier.NONE,
+                    unlocked=every,
+                )
+                before = machines_needed(rate, adjust(data, recipe, ceiling).crafts_per_second)
+                after = machines_needed(rate, adjust(data, recipe, chosen).crafts_per_second)
+                assert after == before, (recipe.id, ceiling, chosen, rate)
+                checked += 1
+    assert checked > 1000
+
+
+def _is_placeable_for_test(machine_id: str) -> bool:
+    from flab2bp.dsp import catalog
+
+    try:
+        catalog.get_item_id(machine_id)
+    except KeyError, ValueError:
+        return False
+    return True
