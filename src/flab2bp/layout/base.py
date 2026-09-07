@@ -533,6 +533,17 @@ class Placement:
     #: another's records -- a stale index here would answer confidently and
     #: wrongly, which is worse than being slow.
     buildings_index: Buildings | None = field(default=None, init=False, compare=False, repr=False)
+    #: Lazily computed :attr:`bounds`, memoised separately from
+    #: :attr:`buildings_index`.  ``bounds`` alone does not need the full
+    #: ``Buildings`` index -- constructing it would build all nine buckets,
+    #: including ``by_tile``'s O(N * width * height) loop, just to answer one
+    #: four-number question -- so this field lets ``bounds`` answer cheaply
+    #: without ever building ``buildings_index``.  Same ``init=False`` shape
+    #: and the same reason: :func:`dataclasses.replace` must not carry a
+    #: stale bounds tuple onto different records.
+    _bounds_cache: tuple[int, int, int, int] | None = field(
+        default=None, init=False, compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.completion is not None and self.frame is None:
@@ -542,14 +553,27 @@ class Placement:
     def bounds(self) -> tuple[int, int, int, int]:
         """``(min_x, min_y, max_x, max_y)`` inclusive of every footprint tile.
 
-        Answers from the placement's index.  This used to run four full list
-        comprehensions over ``buildings`` on every call, and it is called from
-        inside the freeform search loop and finalize's frame-candidate loop --
-        24+ traced call sites, several of them per placement candidate.
+        Answers from a dedicated memo, not from :attr:`buildings_index`.  This
+        used to run four full list comprehensions over ``buildings`` on every
+        call, and it is called from inside the freeform search loop and
+        finalize's frame-candidate loop -- 24+ traced call sites, several of
+        them per placement candidate, many on a rejected candidate that gets
+        asked for its bounds once and then discarded.  Building the full
+        ``Buildings`` index there -- nine buckets, including ``by_tile``'s
+        O(N * width * height) loop -- to answer one four-number question would
+        cost more than the scan it replaced, so this deliberately does NOT call
+        ``Buildings.of``.  Tasks 4-10's real query sites still go through
+        ``Buildings.of``, which amortizes that cost across many questions.
         """
-        from flab2bp.layout.buildings import Buildings
+        cached = self._bounds_cache
+        if cached is not None:
+            return cached
 
-        return Buildings.of(self).bounds()
+        from flab2bp.layout.buildings import bounds_of
+
+        computed = bounds_of(self.buildings)
+        object.__setattr__(self, "_bounds_cache", computed)
+        return computed
 
     @property
     def area(self) -> int:

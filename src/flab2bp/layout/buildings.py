@@ -166,6 +166,26 @@ def _index_all(
     )
 
 
+def bounds_of(records: Sequence[PlacedBuilding]) -> tuple[int, int, int, int]:
+    """``(min_x, min_y, max_x, max_y)`` inclusive of every footprint tile.
+
+    The single implementation of this computation.  ``Buildings._compute_bounds``
+    calls it when it builds the full index; ``Placement.bounds`` also calls it
+    directly, WITHOUT building a ``Buildings``, because bounds alone does not
+    need the other eight buckets -- constructing all of them (``by_tile`` in
+    particular, an O(N * width * height) loop) just to answer a bounds question
+    on a candidate that gets asked once and discarded would cost more than the
+    four comprehensions this module replaced.
+    """
+    if not records:
+        return (0, 0, 0, 0)
+    min_x = min(b.x for b in records)
+    min_y = min(b.y for b in records)
+    max_x = max(b.x + b.width - 1 for b in records)
+    max_y = max(b.y + b.height - 1 for b in records)
+    return (min_x, min_y, max_x, max_y)
+
+
 class _BuildingsQueries:
     """The query surface shared, verbatim, by ``Buildings`` and ``MutableBuildings``.
 
@@ -420,13 +440,7 @@ class _BuildingsQueries:
         return tuple(sorted(seen))
 
     def _compute_bounds(self) -> tuple[int, int, int, int]:
-        if not self._records:
-            return (0, 0, 0, 0)
-        min_x = min(b.x for b in self._records)
-        min_y = min(b.y for b in self._records)
-        max_x = max(b.x + b.width - 1 for b in self._records)
-        max_y = max(b.y + b.height - 1 for b in self._records)
-        return (min_x, min_y, max_x, max_y)
+        return bounds_of(self._records)
 
     def bounds(self) -> tuple[int, int, int, int]:
         """``(min_x, min_y, max_x, max_y)`` inclusive of every footprint tile."""

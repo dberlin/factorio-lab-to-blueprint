@@ -115,7 +115,9 @@ def test_no_valid_layout_carries_optional_solver_stats() -> None:
     assert carried.stats["alns_operators"] == "destroy:failed-endpoints:9"
 
 
-def test_bounds_is_memoised_and_matches_the_scan() -> None:
+def test_bounds_is_memoised_and_matches_the_scan(monkeypatch: pytest.MonkeyPatch) -> None:
+    from flab2bp.layout import buildings as buildings_module
+
     records = tuple(
         PlacedBuilding(item_id=2303, model_index=0, x=i * 4, y=i, width=3, height=3)
         for i in range(20)
@@ -123,23 +125,67 @@ def test_bounds_is_memoised_and_matches_the_scan() -> None:
     placement = Placement(buildings=records)
     xs = [b.x for b in records] + [b.x + b.width - 1 for b in records]
     ys = [b.y for b in records] + [b.y + b.height - 1 for b in records]
-    assert placement.bounds == (min(xs), min(ys), max(xs), max(ys))
-    # Second call answers from the memo, and answers the same.
-    assert placement.bounds == (min(xs), min(ys), max(xs), max(ys))
-    assert placement.buildings_index is not None
+    expected = (min(xs), min(ys), max(xs), max(ys))
+    assert placement.bounds == expected
+
+    # Prove the SECOND call answers from the memo rather than recomputing: once
+    # the memo is warm, swap in a `bounds_of` that would fail the test if it
+    # were ever called again.
+    def _must_not_be_called(_records: object) -> tuple[int, int, int, int]:
+        raise AssertionError("bounds_of was called again -- the memo did not hold")
+
+    monkeypatch.setattr(buildings_module, "bounds_of", _must_not_be_called)
+    assert placement.bounds == expected
+    # Answering `bounds` must not build the full nine-bucket index either --
+    # that would cost more than the scan it replaced on a candidate asked once
+    # and discarded (see `Placement.bounds`'s docstring).
+    assert placement.buildings_index is None
+
+
+def test_bounds_does_not_build_the_full_buildings_index() -> None:
+    """Pins the fast path: `bounds` must answer without ever touching
+    `buildings_index` -- building the full nine-bucket index (`by_tile`'s
+    O(N * width * height) loop included) just to answer a four-number question
+    would cost more than the scan it replaced, on exactly the rejected-search-
+    candidate path this task was meant to speed up.
+    """
+    records = tuple(
+        PlacedBuilding(item_id=2303, model_index=0, x=i * 4, y=i, width=3, height=3)
+        for i in range(5)
+    )
+    placement = Placement(buildings=records)
+    assert placement.buildings_index is None
+    _ = placement.bounds
+    assert placement.buildings_index is None
+    _ = placement.bounds  # second call too
+    assert placement.buildings_index is None
 
 
 def test_replace_does_not_carry_a_stale_index() -> None:
     from dataclasses import replace as dc_replace
 
+    from flab2bp.layout.buildings import Buildings
+
     first = Placement(buildings=(PlacedBuilding(item_id=2303, model_index=0, x=0, y=0),))
     assert first.bounds == (0, 0, 0, 0)
+    first_index = Buildings.of(first)  # force-build the full index too
+
     second = dc_replace(
         first,
         buildings=(PlacedBuilding(item_id=2303, model_index=0, x=10, y=10),),
     )
-    assert second.buildings_index is None or len(second.buildings_index) == 1
+    # Nothing has asked `second` anything yet: both memos MUST be unpopulated,
+    # not merely "consistent-looking" -- a future regression that eagerly
+    # populated either one right after `replace()` has to fail this, not pass
+    # it by accident (the same vacuous-assertion class that already bit this
+    # branch once, in Task 2's staleness check comparing `()` to `()`).
+    assert second.buildings_index is None
+    assert second._bounds_cache is None
+
     assert second.bounds == (10, 10, 10, 10)
+    second_index = Buildings.of(second)
+    assert second_index is not first_index
+    assert len(second_index) == 1
 
 
 def test_empty_placement_bounds_is_the_origin() -> None:
@@ -190,6 +236,6 @@ def test_memoised_bounds_matches_the_old_four_comprehension_scan_on_a_real_layou
 
     assert placement.buildings_index is None  # nothing has asked yet
     assert placement.bounds == old_bounds
-    assert placement.buildings_index is not None  # first call memoised it
+    assert placement.buildings_index is None  # bounds must not build the full index
     # Second call answers from the memo and still agrees.
     assert placement.bounds == old_bounds
