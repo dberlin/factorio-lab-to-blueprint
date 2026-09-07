@@ -4410,9 +4410,9 @@ def _feedback_objective_score(
 #: preparation, so a repair that costs more than a second buys nothing.
 C_WINDOW_SECONDS = 1.0
 #: Deterministic work bound for a window solve.  A full pack of fifteen or more
-#: strips gets `_DETERMINISTIC_PACK_WORK` and is expected to stop at its first
-#: incumbent from a shelf warm start; a window has at most twelve free strips
-#: but no such guarantee, and is expected to close a small model, so it gets
+#: strips gets `_deterministic_pack_work(len(strips))` and is expected to stop
+#: at its first incumbent from a shelf warm start; a window has at most twelve
+#: free strips but no such guarantee, and is expected to close a small model, so it gets
 #: twenty-five times that allowance.  On an idle box this is the limit that
 #: fires; under `--jobs 16` the wall limit above fires first.
 C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE
@@ -20710,13 +20710,16 @@ class FreeformLayout:
             # that returns UNKNOWN is the solve running out of its own
             # allowance, and the sentence above reads as the first while being
             # true of both.  The user's compressed-mall URL is the second: at 33
-            # strips all fifteen candidate solves ended UNKNOWN inside the fixed
-            # `_DETERMINISTIC_PACK_WORK` bound -- 0.02 units, calibrated on the
-            # fifteen-strip cell where a shelf warm start yields an incumbent at
-            # once -- and the sweep exhausted its candidates in 1.4s with 28.6s
-            # of a 30s ceiling never spent.  Raising that bound to 0.5 on the
-            # same spec turns all fifteen UNKNOWNs into four FEASIBLE packs, so
-            # the packing was never the thing that could not be found.
+            # strips all fifteen candidate solves ended UNKNOWN inside the
+            # `_deterministic_pack_work` bound that pack was given -- then a
+            # fixed 0.02 units for every size (0.02 is now only its value at
+            # the calibrated fifteen-strip size), calibrated on the
+            # fifteen-strip cell where a shelf warm start yields an incumbent
+            # at once -- and the sweep exhausted its candidates in 1.4s with
+            # 28.6s of a 30s ceiling never spent.  Raising that bound to 0.5 on
+            # the same spec turns all fifteen UNKNOWNs into four FEASIBLE
+            # packs, so the packing was never the thing that could not be
+            # found.
             solves = float(refusal_stats.get("pack_cp_solves", 0.0))
             unknown = float(refusal_stats.get("pack_cp_unknown", 0.0))
             if solves and unknown == solves:

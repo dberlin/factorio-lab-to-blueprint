@@ -24172,12 +24172,14 @@ def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
 
     "no pack was ever produced" reads as a statement about the packing, and on
     the user's compressed-mall URL it was read that way: at 33 strips every one
-    of the fifteen candidate solves returned UNKNOWN inside the fixed
-    ``_DETERMINISTIC_PACK_WORK`` allowance, the sweep exhausted its candidates
-    in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and none of that
-    was in the sentence.  INFEASIBLE would have been a verdict; UNKNOWN is a
-    clock, and a refusal that cannot tell them apart sends the next reader to
-    the packer's model instead of to its work bound.
+    of the fifteen candidate solves returned UNKNOWN inside the
+    ``_deterministic_pack_work`` allowance that pack was given -- then a fixed
+    0.02 units for every size, the value ``_deterministic_pack_work`` still
+    gives at the calibrated fifteen-strip size -- the sweep exhausted its
+    candidates in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and
+    none of that was in the sentence.  INFEASIBLE would have been a verdict;
+    UNKNOWN is a clock, and a refusal that cannot tell them apart sends the
+    next reader to the packer's model instead of to its work bound.
     """
 
     def unknown_every_solve(
