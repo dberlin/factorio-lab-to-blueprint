@@ -14,13 +14,16 @@ ladder.  Only the building placed changes, and only ever downward.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from fractions import Fraction
 
 from flab2bp.dsp import catalog
 from flab2bp.lab.schema import Dataset, Recipe
-from flab2bp.rates.adjust import ProliferatorTier, adjust
+from flab2bp.lab.techs import unlocked_recipe_ids
+from flab2bp.lab.url import LabRequest
+from flab2bp.rates.adjust import AdjustedRecipe, ProliferatorTier, adjust
 from flab2bp.spec import ProliferatorMode
 
 
@@ -136,3 +139,72 @@ def choose_machine(
             best_count = count
             best_id = machine_id
     return best_id
+
+
+@dataclass(frozen=True, slots=True)
+class MachineMove:
+    """One recipe whose machine the ``up-to`` rule moved down a tier."""
+
+    recipe_id: str
+    from_machine: str
+    to_machine: str
+    count_before: int
+    count_after: int
+
+
+def rechoose_columns(
+    data: Dataset,
+    request: LabRequest,
+    columns: Sequence[AdjustedRecipe],
+    crafts: Sequence[Fraction],
+    *,
+    machine_rank: MachineRank,
+    tier: ProliferatorTier,
+    pinned: Collection[str] = (),
+) -> tuple[list[AdjustedRecipe], tuple[MachineMove, ...]]:
+    """Re-choose machines against rates the solver has already fixed.
+
+    Exact mode preserves every original column object. Under up-to, zero-rate,
+    flow-pinned, and extraction columns stay untouched. The exact type check is
+    deliberate: ``_ExtractionColumn`` subclasses ``AdjustedRecipe`` and must
+    not be rebuilt as a plain crafting column.
+    """
+    if machine_rank is MachineRank.EXACT:
+        return columns if isinstance(columns, list) else list(columns), ()
+
+    unlocked = unlocked_recipe_ids(request, data)
+    out: list[AdjustedRecipe] = []
+    moves: list[MachineMove] = []
+    for column, craft_rate in zip(columns, crafts, strict=True):
+        if craft_rate <= 0 or type(column) is not AdjustedRecipe:
+            out.append(column)
+            continue
+        if column.recipe_id in pinned:
+            out.append(column)
+            continue
+        recipe = data.recipe(column.recipe_id)
+        chosen = choose_machine(
+            data,
+            recipe,
+            ceiling_id=column.machine_item_id,
+            craft_rate=craft_rate,
+            mode=column.mode,
+            tier=tier,
+            unlocked=unlocked,
+        )
+        if chosen == column.machine_item_id:
+            out.append(column)
+            continue
+        replacement = adjust(data, recipe, chosen, column.mode, tier)
+        moves.append(
+            MachineMove(
+                recipe_id=column.recipe_id,
+                from_machine=column.machine_item_id,
+                to_machine=chosen,
+                count_before=machines_needed(craft_rate, column.crafts_per_second),
+                count_after=machines_needed(craft_rate, replacement.crafts_per_second),
+            )
+        )
+        out.append(replacement)
+    moves.sort(key=lambda move: move.recipe_id)
+    return out, tuple(moves)
