@@ -569,10 +569,10 @@ class MutableBuildings(_BuildingsQueries, MutableSequence[PlacedBuilding]):
     so the live and frozen answers cannot drift apart. What this class adds is
     the narrow mutation grammar freeform's canvas actually uses -- tail
     :meth:`append`, tail :meth:`pop`/:meth:`__delitem__`, and an
-    :meth:`__setitem__` relink that may only change ``input_obj``,
-    ``output_obj`` and/or ``z`` -- and it raises ``ValueError`` on anything
-    else, so a mutation this class was not built for fails loudly instead of
-    silently answering from a stale index.
+    :meth:`__setitem__` replacement that preserves indexed identity and footprint
+    fields. Links are maintained; unindexed fields (including altitude and DSP
+    port slots) are read from the current record. Unsupported indexed geometry
+    changes raise rather than silently answering from a stale index.
 
     The backing buckets are ``dict[key, list[int]]`` rather than
     ``Buildings``'s ``dict[key, tuple[int, ...]]``, so :meth:`append` can grow
@@ -647,12 +647,12 @@ class MutableBuildings(_BuildingsQueries, MutableSequence[PlacedBuilding]):
     def __setitem__(
         self, index: int | slice, value: PlacedBuilding | Iterable[PlacedBuilding]
     ) -> None:
-        """Relink an existing record. Only ``input_obj``/``output_obj``/``z`` may change.
+        """Replace a record without changing indexed identity or footprint.
 
-        Any other field differing from the record being replaced raises
-        ``ValueError`` mentioning "geometry" -- geometry is never rewritten
-        after insertion in freeform's actual usage, so a caller that tries is
-        a bug this must not paper over by answering from a stale index.
+        Links update their buckets; unindexed fields such as ``z`` and port
+        slots may change freely. Fields in ``_GEOMETRY_FIELDS`` must match the
+        original, or this raises ``ValueError`` rather than retaining a stale
+        index.
         """
         if isinstance(index, slice) or not isinstance(value, PlacedBuilding):
             raise ValueError("MutableBuildings: slice assignment is not supported")
@@ -669,8 +669,8 @@ class MutableBuildings(_BuildingsQueries, MutableSequence[PlacedBuilding]):
                 raise ValueError(
                     "MutableBuildings: geometry is immutable after insertion; "
                     f"{field_name} changed from {old_value!r} to {new_value!r} at "
-                    f"index {i}. Only input_obj/output_obj/z may change via "
-                    "__setitem__."
+                    f"index {i}. Indexed identity and footprint fields "
+                    "must remain unchanged via __setitem__."
                 )
         if old.output_obj != new.output_obj:
             self._relink(self._by_output_obj, old.output_obj, new.output_obj, i)

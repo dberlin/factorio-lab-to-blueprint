@@ -13,7 +13,6 @@ import math
 import random
 import time
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from copy import deepcopy
 from dataclasses import fields, replace
 from fractions import Fraction
 from fractions import Fraction as F
