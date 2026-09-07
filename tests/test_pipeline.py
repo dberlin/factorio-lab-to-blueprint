@@ -19,6 +19,7 @@ import pytest
 
 from flab2bp import cli, pipeline
 from flab2bp.dsp import catalog, codec
+from flab2bp.lab import params as P
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.techs import belt_rules_for_url
@@ -291,6 +292,62 @@ def completed_layout(monkeypatch: pytest.MonkeyPatch) -> Placement:
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     return completed
+
+
+@pytest.mark.parametrize(
+    ("explicit", "rank", "expected"),
+    [
+        (None, None, "tesla-tower"),
+        (None, ["arc-smelter"], "tesla-tower"),
+        (None, ["arc-smelter", "wireless-power-tower", "satellite-substation"],
+         "wireless-power-tower"),
+        (None, ["satellite-substation", "wireless-power-tower"], "satellite-substation"),
+        ("tesla", ["satellite-substation"], "tesla-tower"),
+        ("substation", ["wireless-power-tower"], "satellite-substation"),
+    ],
+)
+def test_power_tower_precedence(
+    explicit: str | None, rank: list[str] | None, expected: str
+) -> None:
+    request = dataclasses.replace(parse_url(SMALL_URL), machine_rank_ids=rank)
+    assert pipeline._resolve_power_tower(explicit, request) == expected
+
+
+def test_unknown_power_choice_is_not_replaced_by_url_selection() -> None:
+    with pytest.raises(ValueError, match="power_tower"):
+        pipeline._resolve_power_tower("invalid", parse_url(SMALL_URL))
+
+
+def test_hashed_url_power_choice_reaches_the_blueprint_description(
+    completed_layout: Placement,
+) -> None:
+    mod_hash = P.load_mod_hash("dsp")
+    item = P.n_to_id(mod_hash.items.index("electromagnetic-matrix"))
+    tower = P.n_to_id(mod_hash.machines.index("satellite-substation"))
+    inner = f"o={item}*60&mmr={tower}&v=11"
+    url = f"https://factoriolab.github.io/dsp/flow?z={P.deflate(inner)}&v=11"
+    result = pipeline.build(
+        url, strategy="freeform", candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=1, time_budget_s=0.5,
+    )
+    assert result.spec.power_tower_item_id == "satellite-substation"
+    assert "; power: Satellite Substation" in codec.decode(result.blueprint).header.description
+    assert describe(result)["power_building"] == "Satellite Substation"
+
+
+def test_explicit_tesla_keeps_default_blueprint_bytes(completed_layout: Placement) -> None:
+    implicit = pipeline.build(
+        SMALL_URL, strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,), workers=1, time_budget_s=0.5,
+    )
+    explicit = pipeline.build(
+        SMALL_URL, strategy="freeform", power_tower="tesla",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,), workers=1, time_budget_s=0.5,
+    )
+    assert implicit.placement.description == explicit.placement.description
+    assert codec.encode(implicit.placement, timestamp=0) == codec.encode(
+        explicit.placement, timestamp=0
+    )
 
 
 def test_completed_backend_output_skips_duplicate_completion(

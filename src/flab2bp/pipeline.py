@@ -35,7 +35,7 @@ from flab2bp.lab.flow import (
 )
 from flab2bp.lab.schema import Dataset
 from flab2bp.lab.techs import belt_rules_for_url
-from flab2bp.lab.url import parse_url
+from flab2bp.lab.url import LabRequest, parse_url
 from flab2bp.layout import finalize, markers, strategy_race, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
@@ -79,6 +79,7 @@ PRODUCTION_STRATEGIES: tuple[ExplicitStrategyName, ...] = (
     "sequence-pair",
 )
 PRODUCTION_STRATEGY_COUNT = len(PRODUCTION_STRATEGIES)
+POWER_TOWER_CHOICES = catalog.POWER_TOWER_CHOICES
 
 #: Default aggregate solver-worker budget for one build. More logical CPUs do
 #: not improve these time-limited searches enough to justify making every
@@ -479,6 +480,27 @@ def _generated_title(spec: BuildSpec) -> str:
     return _ellipsize_utf16(title)
 
 
+def _resolve_power_tower(explicit: str | None, request: LabRequest) -> str:
+    """An explicit choice wins over the URL's first recognized power node."""
+    if explicit is not None:
+        try:
+            return POWER_TOWER_CHOICES[explicit]
+        except KeyError:
+            raise ValueError(
+                "power_tower must be one of " + ", ".join(POWER_TOWER_CHOICES)
+            ) from None
+    for machine in request.machine_rank_ids or ():
+        if machine in POWER_TOWER_CHOICES.values():
+            return machine
+    return catalog.DEFAULT_POWER_TOWER
+
+
+def _power_note(spec: BuildSpec) -> str:
+    if spec.power_tower_item_id == catalog.DEFAULT_POWER_TOWER:
+        return ""
+    return f"; power: {catalog.power_tower_building(spec.power_tower_item_id).name}"
+
+
 def _prime_note(spec: BuildSpec, placement: Placement) -> str:
     """``"; PRIME ONCE: 8 hydrogen onto the marked belt at (3,21)"``, or ``""``.
 
@@ -641,6 +663,7 @@ def build(
     candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     time_budget_s: float = 15.0,
     proliferator_tier: ProliferatorTier | None = None,
+    power_tower: str | None = None,
     #: Legal with ``best`` as well as ``sequence-pair``, because islands live
     #: inside the raced sequence-pair arm. Under ``race=True`` the candidate
     #: batch width is chosen FIRST and each candidate's islands are then
@@ -745,6 +768,7 @@ def build(
         raise ValueError("candidate parallelism requires a raced best-strategy build")
     data = canonicalize_dataset(dataset if dataset is not None else load_vendored())
     request = canonicalize_request(parse_url(url))
+    power_tower_item_id = _resolve_power_tower(power_tower, request)
     # How high a belt may go, and whether it may climb with no run at all, are
     # properties of the player's SAVE -- so they come from the technologies
     # FactorioLab already recorded in the URL, not from a flag whose default we
@@ -805,6 +829,7 @@ def build(
             tier=proliferator_tier,
             candidate_policies=candidate_policies,
             flow=selection,
+            power_tower_item_id=power_tower_item_id,
         )
     except (FlowProvenanceError, InfeasibleError, UnsupportedObjectiveError) as exc:
         raise SpecInfeasible(str(exc)) from exc
@@ -1269,6 +1294,7 @@ def build(
                     f"flab2bp {sname} layout, {spec.label} candidate, "
                     f"{spec.machine_count} machines, {placement.area} tiles"
                     f"{_prime_note(spec, marked)}"
+                    f"{_power_note(spec)}"
                 ),
             )
             phase_started = time.monotonic()

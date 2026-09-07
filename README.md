@@ -74,6 +74,20 @@ The command prints the blueprint string to standard output. Use `-o FILE` to wri
 file, and `uv run flab2bp --help` for the full strategy, candidate-policy, latitude-band,
 flow-provenance, and validation options.
 
+Power is always included. The web **Power tower** selector and CLI
+`--power-tower tesla|substation|wireless` override the URL's preferred machines.
+Without an override, the first recognized power building in the URL's machine
+rank is used; otherwise it remains Tesla Tower. The Python API accepts the same
+choice names as `pipeline.build(..., power_tower="substation")`; web requests
+use `"power_tower": "auto"` for URL selection. Non-default blueprint descriptions
+and the web **Power** report row name the selected building.
+
+Satellite Substations retain a low-confidence collider caveat: their planner
+reserves centred catalog clearance, but a clean certificate alone does not prove
+the suppressed substation/belt collider cases. Direct clearance checks and
+in-game paste validation remain necessary; larger towers can also expose
+conservative power-planning refusals near a coverage boundary.
+
 ## What it builds
 
 The whole recipe chain from the FactorioLab flow, minus mining. Ores, water, oil and

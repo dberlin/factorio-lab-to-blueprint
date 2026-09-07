@@ -24,6 +24,7 @@ from fractions import Fraction
 from typing import cast
 
 from flab2bp import pipeline
+from flab2bp.dsp import catalog
 from flab2bp.layout import markers, validate
 from flab2bp.layout.base import (
     LayoutAttemptFailure,
@@ -249,6 +250,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "strategy": build.strategy,
         "candidate": build.spec.label,
         "machines": build.spec.machine_count,
+        "power_building": catalog.power_tower_building(build.spec.power_tower_item_id).name,
         "pilers": int(build.placement.stats.get("pilers", 0)),
         "area": build.placement.area,
         "primary_band": frame.primary_band,

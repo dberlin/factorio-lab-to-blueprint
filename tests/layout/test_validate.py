@@ -164,6 +164,14 @@ def tower(x: int, y: int) -> PlacedBuilding:
     return PlacedBuilding(item_id=TOWER, model_index=44, x=x, y=y)
 
 
+def power_node(item_id: int, x: int, y: int) -> PlacedBuilding:
+    info = catalog.building(item_id)
+    return PlacedBuilding(
+        item_id=item_id, model_index=info.model_index, x=x, y=y,
+        width=info.width, height=info.height,
+    )
+
+
 def place(*buildings: PlacedBuilding) -> Placement:
     """A placement with its sorter slots filled in, as a strategy would leave it.
 
@@ -1946,6 +1954,42 @@ def test_belt_acyclic_clean_on_a_line() -> None:
 
 
 # --- power -----------------------------------------------------------------
+
+
+def test_substation_coverage_uses_its_larger_radius_and_every_machine_tile() -> None:
+    # Substation centre is (2.5, 2.5), radius 26.5. At x=26 the assembler's
+    # furthest tile is 26 tiles away; shifting two tiles leaves it dark.
+    inside = place(power_node(2212, 0, 0), machine(26, 1))
+    outside = place(power_node(2212, 0, 0), machine(28, 1))
+    assert not fired(validate(inside), "power.coverage")
+    assert fired(validate(outside), "power.coverage")
+    assert fired(validate(place(tower(0, 0), machine(26, 1))), "power.coverage")
+
+
+def test_substation_connectivity_uses_its_own_link_distance() -> None:
+    distance = int(catalog.building(2212).connect_distance)
+    assert not fired(
+        validate(place(power_node(2212, 0, 0), power_node(2212, distance, 0))),
+        "power.connectivity",
+    )
+    assert fired(
+        validate(place(power_node(2212, 0, 0), power_node(2212, distance + 1, 0))),
+        "power.connectivity",
+    )
+
+
+def test_substation_spacing_brackets_the_world_distance_rule() -> None:
+    # Same-size buildings have identical centre offsets, which cancel.
+    boundary = rules.POWER_TOO_CLOSE_SQR / dsp_colliders.GRID_ARC**2
+    assert 2**2 + 1**2 < boundary < 2**2 + 2**2
+    assert fired(
+        validate(place(power_node(2212, 0, 0), power_node(2212, 2, 1))),
+        "game.power_too_close",
+    )
+    assert not fired(
+        validate(place(power_node(2212, 0, 0), power_node(2212, 2, 2))),
+        "game.power_too_close",
+    )
 
 
 def test_power_coverage_fires_when_machine_is_out_of_radius() -> None:

@@ -113,6 +113,12 @@ export function BuildReportPanel({
         </dd>
         <dt>Machines</dt>
         <dd>{shown.machines}</dd>
+        {result.power_building && (
+          <>
+            <dt>Power</dt>
+            <dd>{result.power_building}</dd>
+          </>
+        )}
         <dt>Area</dt>
         <dd>{area} tiles</dd>
         <dt>primary_band</dt>

@@ -5,6 +5,8 @@ import { parseBlueprint } from '../../src/format';
 import { buildCatalog } from '../../src/model/catalog';
 import { buildSceneModel } from '../../src/model/layout';
 import { visualScaleFor } from '../../src/model/visualScale';
+import { buildOverlays } from '../../src/model/overlays';
+import { realCatalog } from '../support/catalog';
 
 const catalog = buildCatalog({
   items: [
@@ -142,6 +144,25 @@ function blueprint(buildings: BlueprintBuilding[]): Blueprint {
     buildings,
   };
 }
+
+test('a substation uses its game model and carries no endpoint or recipe icons', () => {
+  const model = buildSceneModel(
+    blueprint([building({ itemId: 2212, modelIndex: 68, recipeId: 0, filterId: 0 })]),
+    realCatalog,
+  );
+  const instance = model.instances[0]!;
+  const box = realCatalog.model(68)!;
+  const scale = visualScaleFor(2212);
+  expect(instance.size).toEqual(box.size.map((size, axis) => size * scale[axis]!));
+  // Use a populated atlas so an erroneous power-node icon cannot hide behind
+  // a missing texture. Power nodes are not belt endpoints or recipe machines.
+  const icon = realCatalog.item(2212)!.iconName;
+  const overlays = buildOverlays(model, realCatalog, {
+    cell: 64, cols: 1, rows: 1, entries: { [icon]: [0, 0] },
+  });
+  expect(overlays.icons).toEqual([]);
+  expect(overlays.counts).toEqual([]);
+});
 
 test('maps blueprint (x,y,z) to three (x, z, -y) with the box centre applied', () => {
   const m = buildSceneModel(blueprint([building({ x: 3, y: 21, z: 0.5 })]), catalog);

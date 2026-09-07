@@ -465,6 +465,7 @@ def build_candidates(
     candidate_policies: tuple[CandidatePolicy, ...] = DEFAULT_CANDIDATE_POLICIES,
     time_limit_s: float = 30.0,
     flow: FlowSelection | None = None,
+    power_tower_item_id: str = catalog.DEFAULT_POWER_TOWER,
 ) -> BuildSpecSet:
     """Canonicalize direct public inputs once, then build the selected policies."""
     return _build_candidates_canonical(
@@ -474,6 +475,7 @@ def build_candidates(
         candidate_policies=candidate_policies,
         time_limit_s=time_limit_s,
         flow=flow,
+        power_tower_item_id=power_tower_item_id,
     )
 
 

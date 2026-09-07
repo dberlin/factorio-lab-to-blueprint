@@ -1,0 +1,6 @@
+https://factoriolab.github.io/dsp/flow?z=eJzLt3Uq0jIzUMvNLbINVyuzNTQEADLjBTI_&v=11
+
+Generated from vendored hash.json, RFC 1950 zlib compression and FactorioLab's base64 alphabet.
+Inner payload: o=Br*60&mmr=W&v=11
+The URL encodes electromagnetic-matrix 60/min with Satellite Substation in the machine rank.
+Input prepared only: no build, browser, parser smoke or gate was run in the concurrent implementation wave.

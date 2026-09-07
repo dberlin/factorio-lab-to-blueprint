@@ -16,6 +16,18 @@ from flab2bp.web.payload import JsonValue
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
 
+@pytest.mark.parametrize("selection", [None, "auto", "tesla", "substation", "wireless"])
+def test_power_tower_selection_preserves_auto_and_named_choices(selection: str | None) -> None:
+    options = parse_options({"url": URL, "power_tower": selection})
+    assert options.power_tower == (None if selection in (None, "auto") else selection)
+
+
+@pytest.mark.parametrize("selection", ["none", "satellite-substation", 2212, [], {}])
+def test_invalid_power_tower_is_refused(selection: JsonValue) -> None:
+    with pytest.raises(InvalidOptions, match="power_tower"):
+        parse_options({"url": URL, "power_tower": selection})
+
+
 def test_fetch_flow_defaults_off_and_accepts_the_factorio_lab_origin() -> None:
     assert parse_options({"url": URL}).fetch_flow is False
     assert parse_options({"url": URL, "fetch_flow": True}).fetch_flow is True

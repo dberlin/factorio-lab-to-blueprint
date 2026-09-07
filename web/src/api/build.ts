@@ -38,6 +38,7 @@ export const RequestStrategy = z.enum(['best', 'freeform', 'sequence-pair', 'hie
 export const ExplicitStrategy = z.enum(['freeform', 'sequence-pair', 'hierarchical']);
 
 export const ProliferatorTier = z.enum(['auto', 'none', '1', '2', '3']);
+export const PowerTower = z.enum(['auto', 'tesla', 'substation', 'wireless']);
 
 /** Named candidate policies accepted by the rate solver, in backend canonical order. */
 export const CandidatePolicy = z.enum(['no-proliferator', 'all-products', 'output-products']);
@@ -136,6 +137,7 @@ const BuildResult = z.object({
   strategy: ExplicitStrategy,
   candidate: z.string(),
   machines: z.number(),
+  power_building: z.string().optional(),
   pilers: z.number(),
   area: z.number(),
   buildings: z.number(),
@@ -213,6 +215,7 @@ export const BuildOptions = z
     candidate_policies: CandidatePolicySelection,
     budget_s: z.number(),
     proliferator_tier: ProliferatorTier,
+    power_tower: PowerTower,
     band: BandSelection,
     name: z.string(),
     allow_invalid: z.boolean(),
@@ -233,6 +236,7 @@ export type BuildOptions = z.infer<typeof BuildOptions>;
 export type RequestStrategy = z.infer<typeof RequestStrategy>;
 export type ExplicitStrategy = z.infer<typeof ExplicitStrategy>;
 export type ProliferatorTier = z.infer<typeof ProliferatorTier>;
+export type PowerTower = z.infer<typeof PowerTower>;
 
 export const DEFAULT_OPTIONS: BuildOptions = {
   url: '',
@@ -240,6 +244,7 @@ export const DEFAULT_OPTIONS: BuildOptions = {
   candidate_policies: ['all-products', 'output-products', 'no-proliferator'],
   budget_s: 15,
   proliferator_tier: 'auto',
+  power_tower: 'auto',
   name: '',
   band: 'portable',
   // Off by default, exactly as the CLI has it: a blueprint that pastes cleanly
