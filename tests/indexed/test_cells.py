@@ -86,7 +86,7 @@ def test_best_per_url_equals_the_scoring_and_report_scan() -> None:
     index = Cells.of(_as_cells(cells))
     for strategy in ("freeform", "sequence-pair"):
         expected = cast("dict[str, CellResult]", _brute_best_valid(cells, strategy))
-        assert index.best_per_url(strategy=strategy) == expected
+        assert list(index.best_per_url(strategy=strategy).items()) == list(expected.items())
 
 
 def test_best_per_url_equals_the_regression_scan_with_its_own_rank_key() -> None:
@@ -97,7 +97,7 @@ def test_best_per_url_equals_the_regression_scan_with_its_own_rank_key() -> None
         rank=lambda c: (0 if c.valid else 1, c.area),
     )
     expected = cast("dict[str, CellResult]", _brute_best_ranked(cells))
-    assert got == expected
+    assert list(got.items()) == list(expected.items())
 
 
 def test_ties_keep_the_first_cell_seen_exactly_as_the_scan_does() -> None:
@@ -129,3 +129,17 @@ def test_best_per_url_defaults_to_smallest_area_when_strategy_is_unset() -> None
     large_valid = _FakeCell("u", "sequence-pair", "default", True, 9000)
     index = Cells.of(_as_cells([small_invalid, large_valid]))
     assert index.best_per_url()["u"] is cast("CellResult", large_valid)
+
+
+def test_url_order_follows_first_eligible_row_not_first_unfiltered_row() -> None:
+    rows = [
+        _FakeCell("late", "freeform", "invalid", False, 1),
+        _FakeCell("first", "freeform", "early", True, 100),
+        _FakeCell("late", "freeform", "valid", True, 100),
+        _FakeCell("first", "freeform", "winner", True, 50),
+    ]
+    chosen = Cells.of(_as_cells(rows)).best_per_url(strategy="freeform")
+    assert [(url, cell.candidate) for url, cell in chosen.items()] == [
+        ("first", "winner"),
+        ("late", "valid"),
+    ]

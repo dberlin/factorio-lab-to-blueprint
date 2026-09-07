@@ -107,7 +107,7 @@ class Cells:
         first cell in input order, exactly as every scan above does.
         """
         key = _area_rank if rank is None else rank
-        result: dict[str, CellResult] = {}
+        selected: list[tuple[int, str, CellResult]] = []
         for url_id in self._url_ids:
             candidates: littletable.Table = self._table.by.url_id[url_id]
             if strategy is not None:
@@ -121,5 +121,5 @@ class Cells:
                 if best_cell is None or key(cell) < key(best_cell):
                     best_cell = cell
             if best_cell is not None:
-                result[url_id] = best_cell
-        return result
+                selected.append((ordered[0].position, url_id, best_cell))
+        return {url_id: cell for _position, url_id, cell in sorted(selected)}
