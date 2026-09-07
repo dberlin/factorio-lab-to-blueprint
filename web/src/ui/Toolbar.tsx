@@ -1,7 +1,9 @@
-import { useBlueprint } from '../state/BlueprintProvider';
+import { type MachineLook, useBlueprint } from '../state/BlueprintProvider';
+
+const MACHINE_LOOKS: MachineLook[] = ['ghosted', 'solid', 'hidden'];
 
 export function Toolbar() {
-  const { blueprint, sceneModel, stale, snapshotLabel } = useBlueprint();
+  const { blueprint, sceneModel, stale, snapshotLabel, view, setView } = useBlueprint();
   if (!blueprint) return <header className="toolbar">No blueprint loaded</header>;
 
   const title = blueprint.header.shortDesc || '(untitled)';
@@ -39,7 +41,39 @@ export function Toolbar() {
       {sceneModel && sceneModel.unresolvedTagIds.length > 0 && (
         <span className="warn">{sceneModel.unresolvedTagIds.length} unrecognised belt tag(s)</span>
       )}
-      <span className="hint">Q/E rotate · O toggle orbit · scroll zoom</span>
+      {/* Both layers default on and are here to be turned off: a blueprint
+          with hundreds of runs carries hundreds of numbers, and there are
+          moments when the shapes alone are what you want to look at. */}
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={view.beltLabels}
+          onChange={(e) => setView({ ...view, beltLabels: e.target.checked })}
+        />
+        belt numbers
+      </label>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={view.sorterTies}
+          onChange={(e) => setView({ ...view, sorterTies: e.target.checked })}
+        />
+        sorter ties
+      </label>
+      <label className="toggle">
+        machines
+        <select
+          value={view.machines}
+          onChange={(e) => setView({ ...view, machines: e.target.value as MachineLook })}
+        >
+          {MACHINE_LOOKS.map((look) => (
+            <option key={look} value={look}>
+              {look}
+            </option>
+          ))}
+        </select>
+      </label>
+      <span className="hint">Q/E rotate · O top-down · drag orbit · scroll zoom</span>
     </header>
   );
 }

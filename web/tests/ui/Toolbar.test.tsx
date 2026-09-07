@@ -1,5 +1,5 @@
 import { expect, rstest, test } from '@rstest/core';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { Blueprint } from '../../src/format/types';
 import type { SceneModel } from '../../src/model/layout';
 import type { BlueprintState } from '../../src/state/BlueprintProvider';
@@ -25,6 +25,8 @@ const blueprint = {
 // A mutable stand-in for the provider, so different tests in this file can
 // exercise Toolbar against different `snapshotLabel`/`stale` combinations
 // without re-mocking the module per test.
+const view = { beltLabels: true, sorterTies: true, machines: 'ghosted' as const };
+
 let mockState: Partial<BlueprintState> = {
   blueprint,
   sceneModel,
@@ -32,6 +34,8 @@ let mockState: Partial<BlueprintState> = {
   select: () => {},
   stale: false,
   snapshotLabel: null,
+  view,
+  setView: () => {},
 };
 
 rstest.mock('../../src/state/BlueprintProvider', () => ({
@@ -46,6 +50,8 @@ test('reports unresolved belt tags', () => {
     select: () => {},
     stale: false,
     snapshotLabel: null,
+    view,
+    setView: () => {},
   };
   render(<Toolbar />);
   expect(screen.getByText(/2 unrecognised belt tag/)).toBeDefined();
@@ -60,6 +66,8 @@ test('the canvas label reads TRACE while a snapshot is on the canvas, and revert
     select: () => {},
     stale: false,
     snapshotLabel: traceCaption,
+    view,
+    setView: () => {},
   };
   const { rerender } = render(<Toolbar />);
 
@@ -82,4 +90,39 @@ test('the canvas label reads TRACE while a snapshot is on the canvas, and revert
 
   expect(screen.getByText('Test')).toBeDefined();
   expect(screen.queryByTestId('trace-label')).toBeNull();
+});
+
+test('the layer switches report what the viewer should stop drawing', () => {
+  const calls: unknown[] = [];
+  mockState = {
+    blueprint,
+    sceneModel,
+    selectedIndex: null,
+    select: () => {},
+    stale: false,
+    snapshotLabel: null,
+    view,
+    setView: (next) => calls.push(next),
+  };
+  render(<Toolbar />);
+
+  // Both layers start on: a blueprint is more legible with them than without,
+  // and the switches exist for the busy cases.
+  const labels = screen.getByLabelText('belt numbers') as HTMLInputElement;
+  const ties = screen.getByLabelText('sorter ties') as HTMLInputElement;
+  expect(labels.checked).toBe(true);
+  expect(ties.checked).toBe(true);
+
+  fireEvent.click(labels);
+  expect(calls[0]).toEqual({ ...view, beltLabels: false });
+
+  fireEvent.click(ties);
+  expect(calls[1]).toEqual({ ...view, sorterTies: false });
+
+  // Machines ghost by default, because at ground level almost everything worth
+  // reading is underneath them.
+  const machines = screen.getByLabelText('machines') as HTMLSelectElement;
+  expect(machines.value).toBe('ghosted');
+  fireEvent.change(machines, { target: { value: 'solid' } });
+  expect(calls[2]).toEqual({ ...view, machines: 'solid' });
 });

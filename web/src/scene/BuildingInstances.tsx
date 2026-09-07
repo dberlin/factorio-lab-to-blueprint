@@ -1,8 +1,11 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { Color, type InstancedMesh, type Matrix4, Object3D } from 'three';
+import { isBelt, isSorter } from '../model/beltGraph';
 import type { BuildingInstance, SceneModel } from '../model/layout';
+import type { MachineLook } from '../state/BlueprintProvider';
 
 const SELECTED = new Color(0xffffff);
+const GHOST_OPACITY = 0.16;
 
 /** Pure: builds the world matrix for one instance. Exported for testing. */
 export function instanceMatrix(inst: BuildingInstance, dummy: Object3D): Matrix4 {
@@ -13,31 +16,48 @@ export function instanceMatrix(inst: BuildingInstance, dummy: Object3D): Matrix4
   return dummy.matrix;
 }
 
+/**
+ * Boxes for everything that is NOT a belt or a sorter.
+ *
+ * Belts are strips (BeltRibbons) and sorters are little machines
+ * (SorterModels); both draw their own geometry and handle their own clicks, so
+ * drawing a box for them here would put a second, wrong shape in the same
+ * place.
+ */
+export function drawnInstances(model: SceneModel): BuildingInstance[] {
+  return model.instances.filter((i) => !isBelt(i.itemId) && !isSorter(i.itemId));
+}
+
 export function BuildingInstances({
   model,
   selectedIndex,
   onSelect,
+  look,
 }: {
   model: SceneModel;
   selectedIndex: number | null;
   onSelect: (index: number | null) => void;
+  look: MachineLook;
 }) {
   const meshRef = useRef<InstancedMesh>(null);
-  const count = model.instances.length;
+  const drawn = useMemo(() => drawnInstances(model), [model]);
+  const count = drawn.length;
 
   useLayoutEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
     const dummy = new Object3D();
     const color = new Color();
-    model.instances.forEach((inst, i) => {
+    drawn.forEach((inst, i) => {
       mesh.setMatrixAt(i, instanceMatrix(inst, dummy));
       mesh.setColorAt(i, inst.index === selectedIndex ? SELECTED : color.setHex(inst.color));
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     mesh.computeBoundingSphere();
-  }, [model, selectedIndex]);
+  }, [drawn, selectedIndex]);
+
+  if (look === 'hidden') return null;
 
   // key on count so a differently-sized blueprint remounts with correct buffers
   return (
@@ -49,12 +69,19 @@ export function BuildingInstances({
       onClick={(e) => {
         e.stopPropagation();
         const i = e.instanceId;
-        onSelect(i === undefined ? null : (model.instances[i]?.index ?? null));
+        onSelect(i === undefined ? null : (drawn[i]?.index ?? null));
       }}
-      onPointerMissed={() => onSelect(null)}
     >
       <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial roughness={0.55} metalness={0.1} />
+      {/* Ghosted machines keep writing colour but not depth, so the belts and
+          sorters underneath them stay visible instead of being swallowed. */}
+      <meshStandardMaterial
+        roughness={0.55}
+        metalness={0.1}
+        transparent={look === 'ghosted'}
+        opacity={look === 'ghosted' ? GHOST_OPACITY : 1}
+        depthWrite={look !== 'ghosted'}
+      />
     </instancedMesh>
   );
 }

@@ -37,6 +37,29 @@ body {
   background: #182029;
   border-bottom: 1px solid #26313d;
 }
+/* Layer switches sit at the right-hand end of the toolbar, away from the
+   blueprint's own facts on the left. `margin-left: auto` on the first of them
+   is what pushes the whole group over. */
+.toolbar .toggle {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  white-space: nowrap;
+  color: #b9c6d4;
+}
+.toolbar .toggle + .hint {
+  margin-left: 0;
+}
+.toolbar .toggle:first-of-type {
+  margin-left: auto;
+}
+.toolbar .toggle select {
+  background: #101820;
+  color: inherit;
+  border: 1px solid #2b3846;
+  border-radius: 3px;
+  padding: 0.1rem 0.25rem;
+}
 .input-panel {
   display: grid;
   gap: 0.5rem;
