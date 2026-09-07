@@ -738,6 +738,7 @@ class HierarchicalLayout:
         compose_wall = time.monotonic() - started
         stats.compose_gap = float(composition.gap)
         stats.port_demands = float(composition.port_demands)
+        stats.reservation_degraded = float(composition.reservation_degraded)
         stats.reservation_missing = float(composition.reservation_missing)
         stats.unrouted_cuts = float(len(composition.failures))
         if composition.failures:
@@ -1121,6 +1122,7 @@ class _StrategyStats:
     cut_lanes: float = 0.0
     compose_gap: float = 0.0
     port_demands: float = 0.0
+    reservation_degraded: float = 0.0
     reservation_missing: float = 0.0
     unrouted_cuts: float = 0.0
     arm_dispatch_freeform: float = 0.0

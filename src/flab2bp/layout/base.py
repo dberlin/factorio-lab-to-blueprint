@@ -409,9 +409,19 @@ class PlacementStats(TypedDict, total=False):
     #: `strategy.MAX_RECUT_ROUNDS`.  `resplits` counts the same rounds and is
     #: kept for continuity with the v1/v2 gates.
     recut_rounds: float
+    #: Hierarchical strategy: LADDER RUNGS whose trunk-goal reservation came
+    #: back UNUSABLE and was re-asked as v2's local-only question -- either the
+    #: probe outran rung 0's `compose.RESERVE_WALL_SHARE`, or the joint matcher
+    #: gave up and assigned NOTHING at all while there were demands to assign.
+    #: Without this, `reservation_missing = 0` cannot be read: it means "every
+    #: port is satisfiable" only when this is 0, and "the oracle was thrown
+    #: away" otherwise -- which is the whole evaluation of Lever B.
+    reservation_degraded: float
     #: Hierarchical strategy: demands the committed rung could not give a
     #: corridor to.  0 with a non-zero `unrouted_cuts` is the v2 finding: the
     #: oracle says every port is satisfiable and the router still refuses.
+    #: This always describes the reservation the composer ACTED ON, so a
+    #: degraded rung reports the local-only verdict's own number.
     reservation_missing: float
     #: Hierarchical strategy: cut lanes `compose` reported unwired.
     unrouted_cuts: float

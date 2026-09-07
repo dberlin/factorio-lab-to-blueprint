@@ -144,9 +144,12 @@ class ComposeResult:
     #: The `GAP_LADDER` rung the composition committed.
     gap: int = 0
     #: Port-access demands the committed rung raised, and how many of them the
-    #: reservation could not give a corridor to.
+    #: reservation could not give a corridor to.  Both describe the reservation
+    #: the composer ACTED ON, degraded or not -- see `reservation_degraded`.
     port_demands: int = 0
     reservation_missing: int = 0
+    #: Ladder rungs whose trunk-goal reservation was discarded as unusable.
+    reservation_degraded: int = 0
 
 
 class _Packing(NamedTuple):
@@ -182,6 +185,13 @@ class PackedCanvas:
     nets: list[_Net]
     reservation: PortAccessReservation
     gap: int
+    #: How many rungs of the ladder -- this one included -- had their
+    #: trunk-goal reservation discarded as unusable and re-asked local-only.
+    #: A LADDER TOTAL rather than a property of this rung, because it is the
+    #: ladder's whole answer that the gate has to be able to read: a committed
+    #: rung with `reservation.missing` empty means "every port is satisfiable"
+    #: only when this is 0.  See :func:`pack_with_access`.
+    degraded: int = 0
 
 
 class _PackingDeadline(Exception):
@@ -766,6 +776,15 @@ def pack_with_access(
     * with NO rung judged, :class:`_PackingDeadline` carries the packing out to
       the caller, which owes its own caller a refusal naming every cut.
 
+    AND DEGRADING TO v2's ORACLE RATHER THAN ACTING ON AN UNUSABLE ANSWER.  A
+    rung whose trunk-goal reservation either outran rung 0's share or came back
+    having assigned NOTHING AT ALL is re-asked LOCAL-ONLY on that rung's own
+    clock, and it is the local answer the rung is judged by.  Both triggers
+    take one path so there is a single behaviour to reason about, and
+    :attr:`PackedCanvas.degraded` counts how often it fired -- without which a
+    committed rung reporting no missing corridors cannot be told apart from one
+    whose oracle was thrown away.
+
     ``gap`` is a FLOOR, not the gap: a caller that knows two blocks cannot be
     laid closer than 8 passes 8 and the ladder starts there.  When the floor is
     above every rung the floor itself is the only rung, since a ladder must
@@ -779,6 +798,7 @@ def pack_with_access(
         None if deadline is None else entered + (deadline - entered) * LADDER_WALL_SHARE
     )
     best: PackedCanvas | None = None
+    degraded = 0
     for position, rung in enumerate(rungs):
         # The FIRST rung is unconditional and runs on the caller's own clock:
         # it is what a ladderless composer would have done, and a caller that
@@ -826,8 +846,9 @@ def pack_with_access(
                 entered + (rung_deadline - entered) * RESERVE_WALL_SHARE,
             )
         )
+        goal_driven: PortAccessReservation | None
         try:
-            reservation = _reserve_port_access(
+            goal_driven = _reserve_port_access(
                 packing.canvas,
                 demands,
                 boundary=boundary,
@@ -844,10 +865,31 @@ def pack_with_access(
                 if best is None:
                     raise _PackingDeadline(packing) from None
                 break
-            # RUNG 0 ONLY: the trunk probe outran its own share, so ask the
-            # LOCAL-ONLY question on the caller's full clock.  That is exactly
-            # v2's oracle, so the worst case of this whole lever is v2's
-            # behaviour rather than a refusal on BUDGET.
+            # RUNG 0 ONLY: the trunk probe outran its own share.  Fall through
+            # to the degradation below, which is the same one an unusable
+            # answer takes -- one behaviour to reason about, not two.
+            goal_driven = None
+        # TWO WAYS FOR THE TRUNK QUESTION TO COME BACK UNUSABLE, ONE FALLBACK.
+        # The second is an assignment of NOTHING AT ALL while there were
+        # demands to assign, which is not a geometric verdict: a canvas that
+        # really walls in every lane head still leaves the ones it does not,
+        # and `_match_access_corridors` returns `{}` wholesale when its
+        # validate/cut loop gives up (`_ACCESS_CUT_ROUNDS`) rather than when
+        # the ground runs out.  `assignment_boundary_cut` -- live for the first
+        # time here, because the goals set `probed` -- asks that EVERY
+        # corridor stay reachable with every OTHER corridor's cells forbidden,
+        # which is strictly stronger than what `_route_all` then does with
+        # rip-up and negotiation; the belt3 measurement had it discard all 102
+        # demands on a canvas the router still wired 65 of 89 cuts on.  An
+        # empty reservation stakes NO corridors, so acting on it would leave
+        # the router worse off than v2's local-only oracle -- and the whole
+        # contract of this lever (see `RESERVE_WALL_SHARE`) is that its worst
+        # case is v2's behaviour.  The trigger is deliberately the narrow,
+        # obviously-correct one rather than a tuned threshold.
+        if goal_driven is not None and (goal_driven.assigned or not demands):
+            reservation = goal_driven
+        else:
+            degraded += 1
             try:
                 reservation = _reserve_port_access(
                     packing.canvas,
@@ -858,8 +900,10 @@ def pack_with_access(
                     deadline=rung_deadline,
                 )
             except _PreparationDeadline:
-                raise _PackingDeadline(packing) from None
-        candidate = PackedCanvas(*packing, reservation=reservation, gap=rung)
+                if best is None:
+                    raise _PackingDeadline(packing) from None
+                break
+        candidate = PackedCanvas(*packing, reservation=reservation, gap=rung, degraded=degraded)
         if reservation.complete:
             return candidate
         # STRICTLY fewer, so the NARROWEST of the equally-bad rungs wins: a
@@ -868,7 +912,10 @@ def pack_with_access(
         if best is None or len(reservation.missing) < len(best.reservation.missing):
             best = candidate
     assert best is not None  # `rungs` is never empty, so the first rung ran
-    return best
+    # `best` may be an EARLIER rung than the last one the ladder judged, and
+    # `degraded` is the ladder's total rather than that rung's own -- so it is
+    # stamped on here rather than read off the candidate.
+    return replace(best, degraded=degraded)
 
 
 def _budget_refusal(packing: _Packing) -> ComposeResult:
@@ -976,6 +1023,7 @@ def compose(
         gap=packed.gap,
         port_demands=len(reservation.assigned) + len(reservation.missing),
         reservation_missing=len(reservation.missing),
+        reservation_degraded=packed.degraded,
     )
 
 

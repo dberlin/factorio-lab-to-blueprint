@@ -510,6 +510,46 @@ def test_rung_zero_falls_back_to_the_local_oracle_on_its_own_deadline(
     assert len(calls) == 2
     assert calls[0] is not None and calls[1] is None, "the retry must drop the goals"
     assert packed.gap == compose.GAP_LADDER[0]
+    # The deadline and the unusable answer take the SAME fallback, so they are
+    # counted the same way -- one behaviour to reason about, not two.
+    assert packed.degraded == 1
+
+
+def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+):
+    """An assignment of NOTHING is an unusable answer, not a geometric verdict.
+
+    `_match_access_corridors` returns `{}` wholesale when its validate/cut loop
+    gives up rather than when the ground runs out, and an empty reservation
+    stakes NO corridors -- so acting on one leaves the router worse off than
+    v2's local-only oracle.  The belt3 measurement had exactly that: all 102
+    demands discarded on a canvas the router still wired 65 of 89 cuts on.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    real = compose._reserve_port_access
+    asked: list[object] = []
+
+    def empty_when_asked_about_trunks(canvas, demands, **kw):
+        asked.append(kw.get("goals"))
+        reservation = real(canvas, demands, **kw)
+        if kw.get("goals") is not None:
+            assert demands, "the fixture must raise demands for this to be the unusable case"
+            return replace(reservation, assigned=(), missing=demands)
+        return reservation
+
+    monkeypatch.setattr(compose, "_reserve_port_access", empty_when_asked_about_trunks)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert asked[0] is not None and asked[1] is None, "the retry must drop the goals"
+    # The LOCAL-ONLY answer is the one the rung was judged by, and it is a real
+    # one: it assigns corridors, so the router is handed v2's canvas.
+    assert packed.reservation.assigned
+    assert packed.reservation.complete
+    assert packed.gap == compose.GAP_LADDER[0]
+    assert packed.degraded == 1
 
 
 def test_compose_reports_the_rung_and_the_reservation_it_committed(
@@ -520,6 +560,9 @@ def test_compose_reports_the_rung_and_the_reservation_it_committed(
     assert result.gap in compose.GAP_LADDER
     assert result.port_demands > 0
     assert result.reservation_missing == 0
+    # `reservation_missing == 0` only reads as "every port is satisfiable"
+    # while nothing was degraded, which is what makes the pair worth reporting.
+    assert result.reservation_degraded == 0
     assert result.failures == () and result.routed == len(flows)
 
 
