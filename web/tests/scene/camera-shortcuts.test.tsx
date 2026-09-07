@@ -33,7 +33,10 @@ const camera = {
 };
 
 // Stable references: CameraRig's framing effect depends on `get` and `size`.
-const state = { get: () => ({ camera }), size: { width: 800, height: 600 } };
+const state: { get: () => { camera: typeof camera }; size: { width: number; height: number } } = {
+  get: () => ({ camera }),
+  size: { width: 800, height: 600 },
+};
 let orbitProps: Record<string, unknown> = {};
 
 rstest.mock('@react-three/fiber', () => ({
@@ -55,10 +58,12 @@ const press = (key: string, target: EventTarget) =>
 
 const pos = () => [camera.position.x, camera.position.y, camera.position.z];
 
-test('typing in the blueprint textarea neither rotates the camera nor toggles orbit', () => {
+test('typing in the blueprint textarea neither rotates the camera nor snaps the view', () => {
   render(<CameraRig model={model} />);
   const before = pos();
-  expect(orbitProps.enableRotate).toBe(false);
+  // Free orbit is the default now; the O key is a plan-view snap, not a
+  // switch that turns rotation on.
+  expect(orbitProps.enableRotate).toBe(true);
 
   const textarea = document.createElement('textarea');
   document.body.appendChild(textarea);
@@ -67,7 +72,6 @@ test('typing in the blueprint textarea neither rotates the camera nor toggles or
   for (const key of ['e', 'q', 'o', 'E', 'Q', 'O']) {
     press(key, textarea);
     expect(pos()).toEqual(before);
-    expect(orbitProps.enableRotate).toBe(false);
   }
 
   textarea.remove();
@@ -98,6 +102,33 @@ test('the same keys still work when focus is not in a text field', () => {
   press('q', document.body);
   expect(pos()).toEqual(start);
 
+  // O snaps to the plan view -- almost straight down -- and back again.
+  const iso = pos();
   press('o', document.body);
-  expect(orbitProps.enableRotate).toBe(true);
+  const plan = pos();
+  expect(plan[1]).toBeGreaterThan(iso[1] as number);
+  expect(Math.hypot(plan[0] as number, plan[2] as number)).toBeLessThan(
+    Math.hypot(iso[0] as number, iso[2] as number) / 4,
+  );
+  press('o', document.body);
+  expect(pos()).toEqual(iso);
+});
+
+test('a resize rescales the view instead of throwing it away', () => {
+  const { rerender } = render(<CameraRig model={model} />);
+  press('e', document.body);
+  const framed = pos();
+  const zoom = camera.zoom;
+
+  // The user has orbited away from the framing; a resize must not undo that.
+  camera.position.set(1, 2, 3);
+  state.size = { width: 400, height: 600 };
+  rerender(<CameraRig model={model} />);
+
+  expect(pos()).toEqual([1, 2, 3]);
+  // Same world scale on screen. The framing fits the model's sphere into the
+  // SHORTER side, so going from 800x600 to 400x600 narrows that side by a
+  // third and the zoom follows it, not the width.
+  expect(camera.zoom).toBeCloseTo((zoom * 400) / 600, 6);
+  expect(framed).not.toEqual([1, 2, 3]);
 });
