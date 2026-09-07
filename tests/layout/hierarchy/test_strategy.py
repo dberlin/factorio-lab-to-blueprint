@@ -228,12 +228,12 @@ def test_a_refused_shape_is_not_re_solved_at_a_budget_the_memo_already_covers(
         arm, budget = args[1], args[2]
         if len(args[0].groups) == 1 and args[0].machine_count == 2:
             # `wall_s` reports the FULL nominal budget, not a fixed 0.0: a
-            # real timeout-driven refusal spends the wall it was given, and
-            # only that makes the memo's "refused at this budget or higher"
-            # test line up with round budgets that can (correctly, since v3
-            # Task 3's widening round is its own, separately-budgeted round,
-            # not a smaller slice of the cut-round budget) shrink between an
-            # arm's first ask and its widened re-ask.
+            # real timeout-driven refusal spends the wall it was actually
+            # given, and only reporting that makes `_ShapeNoGood`'s "refused
+            # at this budget or higher" memo mean what its own docstring
+            # says -- a mock that always claims 0.0 wall spent understates
+            # every refusal and can let a same-or-lower-budget re-ask through
+            # that the real worker's bookkeeping would have skipped.
             result: tuple[dict[str, object], Placement | None] = (
                 {"strategy": arm, "verdict": "REFUSED: forced", "ok": False, "wall_s": budget},
                 None,
@@ -610,16 +610,10 @@ def test_a_budget_too_small_to_fund_a_round_still_attempts_the_seed_round(
     the OLD pre-attempt funding check would have refused here before a
     placer ever saw a block.  The new rule floors the seed round's share to
     `BLOCK_BUDGET_MIN_S` and runs it anyway; each block's own deadline
-    (still clipped to the parent's) is what actually refuses it.
-
-    With one-arm dispatch (v3 Task 3) the seed round only offers ONE arm, so
-    the refusing block still has an untried arm -- and Ruling R4 makes
-    widening ALWAYS allowed, however tight the (zero) re-cut-round budget is.
-    So the build spends its one free widening round before it runs out of
-    WALL for a further round at all; the refusal that actually lands names
-    the funding floor, not the re-cut-round budget.
+    (still clipped to the parent's) is what actually refuses it, and the
+    build then runs out of the zero re-cut rounds this budget's wall allows.
     """
-    with pytest.raises(NoValidLayout, match=r"a block solve is given at all"):
+    with pytest.raises(NoValidLayout, match=r"out of re-cut round\(s\)"):
         _layout().lay_out(chain_spec, time_budget_s=1.0)
 
 
@@ -839,7 +833,7 @@ def test_a_build_stops_re_cutting_after_the_global_bound(chain_spec, monkeypatch
         )
 
     def always_progress(entries, still, *, nogood, arms, budget_s):
-        return entries, True, True  # (grown, progress, cut) -- always report a cut
+        return entries, True
 
     monkeypatch.setattr(strategy, "_solve_block", always_refuse)
     monkeypatch.setattr(strategy, "_recut", always_progress)
@@ -964,84 +958,3 @@ def test_a_crashing_feature_computation_falls_back_to_racing_both_arms(chain_spe
     layout._executor_factory = ThreadPoolExecutor
     placement = layout.lay_out(chain_spec, time_budget_s=40.0)
     assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
-
-
-def test_a_widening_round_is_free_and_matches_the_both_arms_cut_count(chain_spec, monkeypatch):
-    """The widen round Task 3 adds must not cost a cut-round of budget (Ruling R4).
-
-    `_refuse_first_shape_then_real` refuses the unsplit ingot block
-    regardless of which arm asks it, and solves everything else -- including
-    the ingot's own children after a cut -- for real.  With one-arm
-    dispatch this forces exactly one FREE widening round (the ingot's
-    dispatched arm refuses; the widened round offers the other arm, which
-    the predicate refuses too) before the ingot is finally cut -- ONE cut
-    generation, the same count both-arms-per-round dispatch needed to
-    resolve the identical refusal (both arms tried together in round 0,
-    cut in round 1).  If the widen round wrongly consumed a cut-round (the
-    v3 Task 3 defect this fixes), `recut_rounds` would read 2, not 1.
-    """
-    monkeypatch.setattr(strategy, "_solve_block", _refuse_first_shape_then_real)
-    layout = _layout()
-    layout._executor_factory = ThreadPoolExecutor
-    placement = layout.lay_out(chain_spec, time_budget_s=40.0)
-    assert placement.stats["recut_rounds"] == 1.0
-    assert placement.stats["resplits"] == 1.0
-
-
-def test_a_pathological_widening_loop_is_stopped_by_its_own_cap(chain_spec, monkeypatch):
-    """The widen-round cap is a real cap, not just an informal monotonic argument.
-
-    Monkeypatching `_arms_for` to always offer the same single arm --
-    regardless of `entry.arms_tried` -- simulates a dispatch that could never
-    converge on the full arm set.  Every dispatched attempt is also forced to
-    refuse, so `_recut`'s widen branch is taken every round and never becomes
-    a cut.  Without its own bound this would loop forever; with it, the build
-    refuses cleanly after `MAX_RECUT_ROUNDS` widen-only rounds, having never
-    spent a single cut-round.
-    """
-
-    def always_refuse(args):
-        return (
-            {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
-            None,
-        )
-
-    monkeypatch.setattr(strategy, "_solve_block", always_refuse)
-    monkeypatch.setattr(
-        HierarchicalLayout, "_arms_for", lambda self, spec, entry, cache: ("sequence-pair",)
-    )
-    layout = _layout()
-    layout._executor_factory = ThreadPoolExecutor
-    with pytest.raises(NoValidLayout) as caught:
-        layout.lay_out(chain_spec, time_budget_s=40.0)
-    assert "arm-widening round" in caught.value.reason
-    assert caught.value.stats["recut_rounds"] == 0.0
-
-
-def test_recut_reports_whether_it_actually_cut_anything() -> None:
-    """The returned `cut` flag is explicit, not inferred from `len(grown)`.
-
-    An entry with an untried arm is left alone (a widen, not a cut) even
-    though it is refusing; an entry that has already tried every arm and can
-    still be split IS a cut.  Both happen in the SAME `_recut` call here, and
-    the flag must reflect only the second.
-    """
-    ingot = MachineGroup(
-        recipe_id="iron-ingot",
-        machine_item_id="arc-smelter",
-        count=1,
-        inputs_per_machine={"iron-ore": Fraction(1)},
-        outputs_per_machine={"iron-ingot": Fraction(1)},
-    )
-    arms = ("freeform", "sequence-pair")
-    nogood = strategy._ShapeNoGood()
-
-    untried = _Entry([Unit(0, ingot, 6)])  # arms_tried defaults to frozenset()
-    ready = _Entry([Unit(0, ingot, 6)], arms_tried=frozenset(arms))
-    entries = [untried, ready]
-    grown, progress, cut = strategy._recut(entries, [0, 1], nogood=nogood, arms=arms, budget_s=10.0)
-    assert progress
-    assert cut  # `ready` was actually split
-    assert untried in grown  # left alone, not cut
-    assert ready not in grown  # replaced by its children
-    assert len(grown) == 3  # untried (1) + ready's two 3-machine children (2)

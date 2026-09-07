@@ -79,10 +79,7 @@ plan proposed and each is spelled out separately below:
   is ``MAX_RECUT_ROUNDS = 2``, floored further by
   :func:`allowed_recut_rounds` to what the round wall can actually hold at
   ``BLOCK_BUDGET_MIN_S`` -- 0 at the web UI's 15 s, which is what gives the
-  seed round the whole wall there (v3 Task 2).  ``MAX_RECUT_ROUNDS`` bounds
-  CUT rounds only -- see its own definition for why a round that only widens
-  a refusing block's arm set (v3 Task 3) does not spend this budget, and is
-  capped separately.
+  seed round the whole wall there (v3 Task 2).
 * Per round, ``block_budget = clamp(remaining / rounds_left / waves, 5, 20)``
   seconds, where ``rounds_left`` is this round plus the re-cuts still
   permitted.  Dividing by ``waves`` alone let one round spend the wall the
@@ -195,20 +192,6 @@ MAX_RESPLIT_ATTEMPTS = 4
 #: block list without limit -- v2 measured 19 seed blocks becoming 22
 #: unattempted and 24 becoming 45, each round's wall divided by a count the
 #: previous round grew.
-#:
-#: THIS BOUNDS CUTS -- BLOCK-LIST GROWTH -- ONLY (v3 Task 3 fix round 1).  A
-#: round in which `_recut` only WIDENS a refusing block's arm set (offers the
-#: FULL arm set to a block whose single dispatched arm refused, before ever
-#: cutting it -- `hierarchy.dispatch`) grows no block and spends none of this
-#: budget: `lay_out` counts it against a SEPARATE counter, also capped at
-#: `MAX_RECUT_ROUNDS`, so widening cannot loop forever either even though it
-#: cannot in practice exceed one round per build (`arms_tried` grows
-#: monotonically over a two-element arm set, and new entries needing their
-#: own widening only appear from a cut).  Conflating the two was a real
-#: defect: with one-arm dispatch, every refusing block hits the widen branch
-#: in the SAME round, so the first `_recut` call used to be pure widening and
-#: still consumed a cut-round -- turning `MAX_RECUT_ROUNDS = 2` cutting
-#: generations into 1.
 MAX_RECUT_ROUNDS = 2
 #: Tiles of free ground between packed blocks.  ``compose.MIN_GAP`` is the
 #: floor the router needs to turn a trunk out of a block at all.
@@ -554,12 +537,6 @@ class HierarchicalLayout:
         rounds_wall = max(0.0, deadline - time.monotonic() - reserve)
         allowed_recuts = allowed_recut_rounds(rounds_wall)
         recut_rounds = 0
-        # WIDENING has its own, separate budget from CUTTING (v3 Task 3 fix
-        # round 1) -- see `_recut`'s docstring and where `MAX_RECUT_ROUNDS`
-        # is defined for why a round in which every refusing block merely
-        # got offered an arm it had never tried must not spend a re-cut
-        # round.
-        widen_rounds = 0
 
         partition = initial_partition(spec, strip_cap=self.strip_cap)
         entries = [_Entry(list(block)) for block in partition.blocks]
@@ -678,18 +655,7 @@ class HierarchicalLayout:
                 still = [index for index in todo if entries[index].placement is None]
                 if not still:
                     break
-                full_arms = self._arms()
-                # WIDENING (offering an arm this block has never tried) is
-                # always allowed and costs no re-cut budget; only CUTTING is
-                # budgeted.  So the cut-budget gate below fires only when
-                # cutting is the sole way anything still refusing could make
-                # progress -- if some still-refusing block has an untried
-                # arm, let this round run (it may widen, cut, or both; see
-                # `_recut`'s docstring) instead of refusing pre-emptively.
-                widening_pending = any(
-                    not entries[index].arms_tried >= set(full_arms) for index in still
-                )
-                if not widening_pending and recut_rounds >= allowed_recuts:
+                if recut_rounds >= allowed_recuts:
                     stats.blocks_unattempted = float(
                         sum(1 for entry in entries if not entry.verdicts)
                     )
@@ -703,29 +669,8 @@ class HierarchicalLayout:
                             ),
                         )
                     )
-                # WIDENING'S OWN BUDGET.  `arms_tried` grows monotonically
-                # over a two-element arm set and new entries only appear from
-                # cuts, so in practice this cannot fire more than once per
-                # build -- but the termination argument is enforced here as a
-                # cap, not left as an argument in a report (v3 Task 3 fix
-                # round 1: every refusing block widening in lockstep used to
-                # spend a real re-cut round for zero cuts).
-                if widening_pending and widen_rounds >= MAX_RECUT_ROUNDS:
-                    stats.blocks_unattempted = float(
-                        sum(1 for entry in entries if not entry.verdicts)
-                    )
-                    raise refuse(
-                        _block_refusal(
-                            entries,
-                            still,
-                            why=(
-                                f"out of arm-widening round(s) after {widen_rounds} of "
-                                f"{MAX_RECUT_ROUNDS} allowed"
-                            ),
-                        )
-                    )
-                grown, progress, cut = _recut(
-                    entries, still, nogood=nogood, arms=full_arms, budget_s=block_budget
+                grown, progress = _recut(
+                    entries, still, nogood=nogood, arms=self._arms(), budget_s=block_budget
                 )
                 if not progress:
                     stats.blocks_unattempted = float(
@@ -733,12 +678,9 @@ class HierarchicalLayout:
                     )
                     raise refuse(_block_refusal(entries, still, why="out of re-cut attempts"))
                 entries = grown
-                if cut:
-                    recut_rounds += 1
-                    stats.recut_rounds = float(recut_rounds)
-                    stats.resplits = float(recut_rounds)
-                else:
-                    widen_rounds += 1
+                recut_rounds += 1
+                stats.recut_rounds = float(recut_rounds)
+                stats.resplits = float(recut_rounds)
 
         blocks = [entry.units for entry in entries]
         solved = [entry.placement for entry in entries if entry.placement is not None]
@@ -1087,7 +1029,7 @@ def _recut(
     nogood: _ShapeNoGood,
     arms: tuple[str, ...],
     budget_s: float,
-) -> tuple[list[_Entry], bool, bool]:
+) -> tuple[list[_Entry], bool]:
     """Replace every refusing entry with its children; did anything change?
 
     Each block spends its OWN attempt counter, so ``split_block``'s four
@@ -1095,22 +1037,9 @@ def _recut(
     ``nogood``, ``arms`` and ``budget_s`` are threaded through to
     ``_next_cut`` so it can skip a cut this build already knows is wasted --
     see its own docstring.
-
-    Returns ``(grown, progress, cut)``.  ``progress`` is True the moment
-    ANYTHING moved -- a widen or a cut.  ``cut`` is a SEPARATE, EXPLICIT flag
-    (not inferred from ``len(grown)`` -- ``_next_cut`` always returns at
-    least two children or ``None``, but inferring from a length comparison
-    would still silently misattribute a round that both widened one entry
-    and cut another) that is True only when at least one entry was actually
-    replaced by ``_next_cut``'s children this call.  ``lay_out`` uses it to
-    decide whether this round spent a CUT round (``MAX_RECUT_ROUNDS``-bounded)
-    or a WIDEN round (bounded separately) -- see the module docstring's
-    budget paragraph and where ``MAX_RECUT_ROUNDS`` is defined for why the
-    two are not the same budget (v3 Task 3 fix round 1).
     """
     grown: list[_Entry] = []
     progress = False
-    cut = False
     refusing = set(still)
     for index, entry in enumerate(entries):
         if index not in refusing:
@@ -1119,8 +1048,7 @@ def _recut(
         if not entry.arms_tried >= set(arms):
             # An arm this block has never been offered is cheaper than a cut.
             # Leaving the entry alone is `progress` because `_arms_for` will
-            # widen it next round.  This does NOT set `cut`: widening spends
-            # no cut-round budget.
+            # widen it next round.
             grown.append(entry)
             progress = True
             continue
@@ -1129,9 +1057,8 @@ def _recut(
             grown.append(entry)
             continue
         progress = True
-        cut = True
         grown.extend(_Entry(list(child)) for child in children)
-    return grown, progress, cut
+    return grown, progress
 
 
 def _next_cut(
