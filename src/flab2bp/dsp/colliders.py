@@ -122,6 +122,7 @@ from pathlib import Path
 from typing import Protocol
 
 from flab2bp.dsp import geometry_kernel
+from flab2bp.indexed import BeltOverlap
 
 __all__ = [
     "BELT_PROBE_LIFT",
@@ -1739,28 +1740,41 @@ def belt_run_ends_in_a_building(
     return False
 
 
-def _belt_overlap_candidates(
-    previews: Sequence[Preview],
-) -> tuple[tuple[int, tuple[int, ...]], ...]:
-    """Raw belt/collider probe hits after flag excusals, before graph rescue."""
+def _belt_boxes(previews: Sequence[Preview]) -> list[list[Box]]:
+    """Every preview's collision boxes -- empty for a belt."""
     poses = [flat_pose(p.x, p.y, p.z, p.yaw) for p in previews]
-    boxes = [target_boxes(p, *poses[i]) if not p.is_belt else [] for i, p in enumerate(previews)]
+    return [target_boxes(p, *poses[i]) if not p.is_belt else [] for i, p in enumerate(previews)]
+
+
+def _belt_cells(boxes: Sequence[Sequence[Box]]) -> list[list[tuple[int, int]]]:
+    """The grid cells each preview's boxes occupy, reach-expanded by ``BELT_PROBE_RADIUS``.
+
+    An OBB's horizontal circumradius is rotation-invariant. Index exactly the
+    grid cells its probe-expanded AABB can reach instead of copying every
+    collider into a fixed 3x3 neighbourhood.
+    """
     cell = 8.0
-    grid: dict[tuple[int, int], list[int]] = {}
-    for j, bxs in enumerate(boxes):
+    out: list[list[tuple[int, int]]] = []
+    for bxs in boxes:
+        cells: list[tuple[int, int]] = []
         for box in bxs:
-            # An OBB's horizontal circumradius is rotation-invariant. Index
-            # exactly the grid cells its probe-expanded AABB can reach instead
-            # of copying every collider into a fixed 3x3 neighbourhood.
             reach = math.hypot(box.half[0], box.half[2]) + BELT_PROBE_RADIUS
             min_x = math.floor((box.centre[0] - reach) / cell)
             max_x = math.floor((box.centre[0] + reach) / cell)
             min_y = math.floor((box.centre[2] - reach) / cell)
             max_y = math.floor((box.centre[2] + reach) / cell)
-            for x in range(min_x, max_x + 1):
-                for y in range(min_y, max_y + 1):
-                    grid.setdefault((x, y), []).append(j)
+            cells.extend((x, y) for x in range(min_x, max_x + 1) for y in range(min_y, max_y + 1))
+        out.append(cells)
+    return out
 
+
+def _belt_overlap_candidates(
+    previews: Sequence[Preview],
+) -> tuple[tuple[int, tuple[int, ...]], ...]:
+    """Raw belt/collider probe hits after flag excusals, before graph rescue."""
+    boxes = _belt_boxes(previews)
+    index = BeltOverlap.for_previews(previews, lambda _p: _belt_cells(boxes))
+    cell = 8.0
     candidates: list[tuple[int, tuple[int, ...]]] = []
     for i, belt in enumerate(previews):
         if not belt.is_belt:
@@ -1768,7 +1782,7 @@ def _belt_overlap_candidates(
         probe = belt_probe(belt.x, belt.y, belt.z)
         key = (int(probe[0] // cell), int(probe[2] // cell))
         hits: list[int] = []
-        for j in dict.fromkeys(grid.get(key, ())):
+        for j in index.candidates(key):
             if j == i:
                 continue
             other = previews[j]

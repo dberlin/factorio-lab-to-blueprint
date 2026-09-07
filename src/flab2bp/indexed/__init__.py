@@ -10,6 +10,7 @@ per-collection backend table and why each backend was chosen.
 
 from __future__ import annotations
 
+from flab2bp.indexed.belt_overlap import BeltOverlap
 from flab2bp.indexed.block_graph import BlockGraph
 from flab2bp.indexed.cells import Cells
 from flab2bp.indexed.nets import Nets
@@ -21,6 +22,7 @@ from flab2bp.indexed.strip_positions import StripPositions
 from flab2bp.indexed.union_find import UnionFind
 
 __all__: tuple[str, ...] = (
+    "BeltOverlap",
     "BlockGraph",
     "Cells",
     "Nets",

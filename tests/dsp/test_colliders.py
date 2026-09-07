@@ -554,6 +554,43 @@ def test_belt_overlap_broadphase_visits_only_geometrically_near_colliders(
     assert calls <= 9 * count // 4
 
 
+def _previews_fixture() -> tuple[C.Preview, ...]:
+    """A small, real belt/machine layout with an uncontested collision."""
+    return (
+        C.Preview(_ASSEMBLER_2, 0.0, 0.0, 0.0),
+        C.Preview(_BELT_MK3, 1.0, 0.0, 0.0, is_belt=True),
+    )
+
+
+def test_both_belt_collision_rules_share_one_overlap_grid_across_equal_previews() -> None:
+    """The two rules that ask on one validation pass must share one grid, not
+    build two -- even though `layout/validate.py:_belt_collide_findings`
+    calls the unmemoized `_paste_previews(ctx)` separately for each of the
+    two checks, handing them a FRESH (but value-equal) tuple every time,
+    never the identical object twice."""
+    from flab2bp.indexed import BeltOverlap
+
+    BeltOverlap.clear_cache()
+    builds: list[int] = []
+    original = BeltOverlap.of
+
+    def counting(cells_by_index):  # type: ignore[no-untyped-def]
+        builds.append(1)
+        return original(cells_by_index)
+
+    BeltOverlap.of = staticmethod(counting)  # type: ignore[method-assign]
+    try:
+        previews_a = _previews_fixture()
+        previews_b = _previews_fixture()
+        assert previews_a is not previews_b
+        assert previews_a == previews_b
+        colliders.belt_collisions(previews_a)
+        colliders.stable_belt_collisions(previews_b)
+    finally:
+        BeltOverlap.of = original  # type: ignore[method-assign]
+    assert len(builds) == 1
+
+
 def test_a_raw_sorter_box_test_convicts_blueprints_the_game_wrote() -> None:
     """Why :func:`C.collisions` still says nothing about sorter-on-sorter.
 
