@@ -33,6 +33,7 @@ from typing import NamedTuple
 from flab2bp.dsp import catalog
 from flab2bp.layout import junction, slots
 from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.freeform import (
     CoaterSupplyPort,
     PortAccessDemand,
@@ -465,40 +466,35 @@ def canvas_for(
     return canvas
 
 
-def _lane(buildings: list[PlacedBuilding], index: int) -> tuple[int, ...]:
+def _lane(buildings: Buildings, index: int) -> tuple[int, ...]:
     """The maximal contiguous x-run at ``index``'s own row, west to east.
 
     NOT the whole belt run reached through ``output_obj``: that run also takes
     in the north-south sorter drop columns spliced into it, and it can leave the
     row and come back.  What comes back here is one east-west segment -- the one
-    ``index``'s own tile stands in -- and the reason is in the body.
+    ``index``'s own tile stands in.
     """
-    prev = {b.output_obj: i for i, b in enumerate(buildings) if b.output_obj is not None}
     head = index
-    while head in prev and catalog.is_belt(buildings[prev[head]].item_id):
-        head = prev[head]
+    while True:
+        predecessors = buildings.by_output_obj(head)
+        if not predecessors:
+            break
+        predecessor = predecessors[-1]
+        if not catalog.is_belt(buildings[predecessor].item_id):
+            break
+        head = predecessor
     run = [head]
     while True:
         onward = buildings[run[-1]].output_obj
-        if onward is None or not catalog.is_belt(buildings[onward].item_id):
+        following = buildings.by_index(onward)
+        if following is None or not catalog.is_belt(following.item_id):
             break
+        assert onward is not None
         run.append(onward)
     # ONE CONTIGUOUS ROW of that run, the one the port's own tile stands in.
-    # A boundary lane in a freeform block is east-west
-    # (`_prepare_routing_problem` builds its ports as `x0 = head.x,
-    # x1 = head.x + len(lane) - 1`), but the run reached through `output_obj`
-    # also takes in the north-south sorter drop columns spliced into it.
-    # `_Port.at_tile` (freeform ~6033) reads the k-th tap off as `x0 + k` with
-    # `tiles[k]`, so the tile list and the column span have to be the same
-    # cells.
-    #
-    # Filtering to the row is not enough on its own, and that is not
-    # hypothetical: a run that leaves the row and comes back contributes TWO
-    # disjoint east-west segments at the same `y`, and belt3 raised
-    # `AssertionError: lane at 9865 is not one contiguous row` out of `_port`
-    # on exactly that shape. The port belongs to the segment its own tile
-    # stands in; the other segment is a different reach of the same run and its
-    # cells are not addressable as `x0 + k` from here.
+    # A run that leaves the row and comes back contributes two disjoint
+    # east-west segments at the same y; the port belongs only to the segment
+    # containing its own tile.
     row = buildings[index].y
     on_row = sorted((i for i in run if buildings[i].y == row), key=lambda i: buildings[i].x)
     at = on_row.index(index)
@@ -511,7 +507,7 @@ def _lane(buildings: list[PlacedBuilding], index: int) -> tuple[int, ...]:
     return tuple(on_row[low : high + 1])
 
 
-def _port(buildings: list[PlacedBuilding], index: int, machines: int) -> _Port:
+def _port(buildings: Buildings, index: int, machines: int) -> _Port:
     """The router's view of one boundary lane, attached at ``index``."""
     tiles = _lane(buildings, index)
     b = buildings[index]
@@ -533,23 +529,25 @@ def _port(buildings: list[PlacedBuilding], index: int, machines: int) -> _Port:
     )
 
 
-def _machines_behind(buildings: list[PlacedBuilding], block: BlockPlaced, index: int) -> int:
+def _machines_behind(buildings: Buildings, block: BlockPlaced, index: int) -> int:
     """Production machines behind one lane, for :attr:`_Port.machines`.
 
-    A machine building is the only kind carrying a real recipe, so
-    ``recipe_id != 0`` picks it out (the same rule ``contracts`` rates lanes
-    by).  A lane that kept its ``owner_strip`` is credited with that strip's
-    machines; one that lost it falls back to the whole block's, which is the
-    coarse answer rather than a wrong precise one.
+    Keep the exact ``recipe_id != 0`` predicate: the Buildings machine kind is
+    deliberately coarser and also contains power nodes and belt addons.
     """
     strip = buildings[index].owner_strip
     stop = block.base + len(block.placement.buildings)
+    candidates: Sequence[int]
+    if strip is None:
+        candidates = range(block.base, stop)
+    else:
+        candidates = buildings.by_owner_strip(strip)
     return max(
         1,
         sum(
             1
-            for b in buildings[block.base : stop]
-            if b.recipe_id != 0 and (strip is None or b.owner_strip == strip)
+            for candidate in candidates
+            if block.base <= candidate < stop and buildings[candidate].recipe_id != 0
         ),
     )
 
@@ -709,6 +707,8 @@ def _pack_at(
         buildings.extend(_translate(placement, base, ox, oy))
         blocks.append(BlockPlaced(i, placement, base, (ox, oy), w, h))
 
+    building_index = Buildings(buildings)
+
     canvas = canvas_for(spec, buildings, ramped=ramped, margin=margin)
 
     nets: list[_Net] = []
@@ -719,8 +719,16 @@ def _pack_at(
         dst_index = flow.dst.building + dst_block.base
         nets.append(
             _Net(
-                src=_port(buildings, src_index, _machines_behind(buildings, src_block, src_index)),
-                dst=_port(buildings, dst_index, _machines_behind(buildings, dst_block, dst_index)),
+                src=_port(
+                    building_index,
+                    src_index,
+                    _machines_behind(building_index, src_block, src_index),
+                ),
+                dst=_port(
+                    building_index,
+                    dst_index,
+                    _machines_behind(building_index, dst_block, dst_index),
+                ),
                 item=flow.item,
                 # The strip fields carry the BLOCK indices here: they are the
                 # router's stable identity for a net, and the only thing a

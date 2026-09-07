@@ -9,6 +9,7 @@ import pytest
 from flab2bp.dsp import catalog
 from flab2bp.layout import junction, slots
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.freeform import PortAccessEvidence, PortAccessKind, PortAccessReservation
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
@@ -917,15 +918,16 @@ _DOUBLE_BACK = [
 
 def test_lane_takes_the_contiguous_segment_the_port_stands_in():
     buildings = _chain_belts(_DOUBLE_BACK)
+    index = Buildings(buildings)
     xs = lambda tiles: [buildings[i].x for i in tiles]  # noqa: E731
 
     # The last tile belongs to the segment the run came back to, not to the one
     # it started on -- even though both are at y == 0 and both are in this run.
-    assert xs(compose._lane(buildings, 10)) == [4, 5, 6]
+    assert xs(compose._lane(index, 10)) == [4, 5, 6]
     # And the first tile belongs to the segment it starts.
-    assert xs(compose._lane(buildings, 0)) == [0, 1, 2]
+    assert xs(compose._lane(index, 0)) == [0, 1, 2]
     # A tile in the middle of the far segment picks up the whole of it.
-    assert xs(compose._lane(buildings, 9)) == [4, 5, 6]
+    assert xs(compose._lane(index, 9)) == [4, 5, 6]
 
 
 def test_the_doorstep_neighbourhood_is_the_one_reserve_port_access_enumerates():
