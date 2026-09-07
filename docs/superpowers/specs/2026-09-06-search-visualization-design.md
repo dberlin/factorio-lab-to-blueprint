@@ -312,7 +312,8 @@ Four separable pieces:
   by the sample rate rather than by the search.
 - It is *additive*. With `trace=false` the only new work in the whole tree is
   `if observer is not None` at a handful of call sites, and the existing
-  `/api/build/<id>` response is byte-identical.
+  `/api/build/<id>` response is byte-identical except the new `options.trace`
+  key, which the client reads (§7.2) regardless of whether trace is on.
 
 ---
 
@@ -768,7 +769,9 @@ job on every poll, `settled` included (`jobs.py:470-519`). Adding frames to it
 couples the trace cadence (~4 Hz while live-tailing) to the job poll's backoff
 (300 ms → 2 s, `build.ts:346-348`) and grows a body that is currently a few
 hundred bytes. A separate endpoint keeps the existing contract **byte-identical
-when trace is off**, which is the property that makes this feature safe to ship.
+when trace is off, except the new `options.trace` key** (echoed unconditionally
+so the client can gate the trace panel on it, §7.2) — which is the property
+that makes this feature safe to ship.
 
 Cursor semantics: `from` is exclusive; `next` is the highest `seq` returned plus
 one, or `from` unchanged when nothing is new. A `from` older than the ring's
