@@ -195,7 +195,7 @@ wired, which no hierarchical build had ever done.
 
 Still open, and now with measurements behind them (v3 gate.md §5-§6):
 - **Make `_match_access_corridors` return its partial assignment instead of
-  giving up wholesale** — the headline lever. `freeform.py:11875` /
+  giving up wholesale** — the headline lever. `layout/freeform.py:11875` /
   `:11881`, `_ACCESS_CUT_ROUNDS = 8` at `:375`. It is a matcher-scaling
   problem with a worked counterexample, not a wall: zurl2's gap-16 rung came
   back complete at 144/144 in 4.17 s. Until it is fixed the ladder cannot
@@ -216,7 +216,7 @@ Still open, and now with measurements behind them (v3 gate.md §5-§6):
 - **An "abstain" answer for `dispatch_arms`** on a feature vector the evidence
   does not cover: `coaters == 0` with `strips` under `UNCOVERED_STRIPS = 85`
   is currently indistinguishable from a genuine sequence-pair block
-  (`dispatch.py:109-111`), and that is the 6-versus-31 regression above.
+  (`layout/hierarchy/dispatch.py:110-112`), and that is the 6-versus-31 regression above.
 - The other two adaptive memories, **neither of them planned, each for a
   stated reason**:
   - *A cross-build solved-block cache.* Deliberately NOT planned: related work

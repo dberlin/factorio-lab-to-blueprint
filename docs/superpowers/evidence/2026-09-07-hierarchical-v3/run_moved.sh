@@ -32,10 +32,24 @@ TMP=/tmp/v3gate
 # The five url_ids carrying the seven cells that moved in the paired round.
 ONLY=universe-matrix,super-magnetic-ring,plastic,magnetic-coil,quantum-chip
 
-PAT="scripts/audit"".py"
-
+# `pgrep` does NOT self-match: it excludes its own PID (procps-ng 4.0.6 here,
+# and every BSD does the same).  The plan's earlier warning that it "matches its
+# OWN command line and always returns a hit" was backwards, and its prescribed
+# replacement, `ps -eo args | grep -cE ...`, is the form that actually
+# self-matches, because `ps` lists the pipeline's own `grep`.  Reading that
+# literally cost this gate a wasted detached checkout.
+#
+# The `[s]` bracket handles the one false positive `pgrep -f` CAN produce: an
+# ENCLOSING `bash -c "... pattern ..."` whose argv contains the pattern.  The
+# literal text below reads `[s]cripts/audit\.py`, which the regex itself does
+# not accept, so no command line carrying this check can ever match it.
+#
+# Measured on this box with 9 real audit processes running: this form returned
+# exactly those 9 and did not include the invoking shell.  The narrower
+# `pgrep -fc 'python[0-9.]* +[^ ]*scripts/audit\.py'` is also self-match-proof
+# but matched only 2 of the 9, missing the forkserver children.
 audits_running() {
-  ps -eo args | grep -E "$PAT" | grep -v -e 'grep -' -e 'run_moved' -e 'run_guard' || true
+  pgrep -af '[s]cripts/audit\.py' || true
 }
 
 restore_branch() {

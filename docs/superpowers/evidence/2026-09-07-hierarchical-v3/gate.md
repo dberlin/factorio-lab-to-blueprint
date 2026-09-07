@@ -11,16 +11,36 @@ plan, and **no audit of this gate ever ran while another audit was running** —
 checked before each of the four audit invocations, which then WAITED (220–340 s
 on three of the four) rather than racing a sibling worktree.
 
-**A correction to the check the plan prescribes, earned here.** The plan warns
-that `pgrep -f audit.py` matches its OWN command line and prescribes
-`ps -eo args | grep -cE 'scripts/audit\.py'` instead. On this box **that form
-has the same defect**: `ps -eo args` lists the invoking shell's whole command
-line, which contains the pattern, so the count is 2 when nothing is running and
-`n + 2` when `n` audits are. Reading it literally cost one wasted detached
-checkout (recorded in `c3fe8116`). `run_guard.sh` and `run_moved.sh` therefore
-assemble the pattern at run time from two halves that never appear adjacent in
-any command line, exclude their own script name, and **print the matching lines
-next to the count**, so every number in §4 is auditable rather than asserted.
+**A correction to the check the plan prescribes, and it runs the OTHER way
+round.** The plan warned that `pgrep -f audit.py` "matches its OWN command line
+and always returns a hit" and prescribed
+`ps -eo args | grep -cE 'scripts/audit\.py'` instead. **That is backwards, and
+this gate first got it wrong in the same direction.**
+
+* **`pgrep` never self-matches.** It excludes its own PID — procps-ng 4.0.6
+  here, and every BSD does the same. Measured on this box with **9** real audit
+  processes running: `pgrep -af 'scripts/audit\.py'` returned exactly those 9
+  and did **not** include the invoking shell, whose command line contained the
+  pattern verbatim. The one false positive `pgrep -f` can produce is an
+  *enclosing* `bash -c "… pattern …"`, which the `[s]` bracket form removes,
+  because the literal text `[s]cripts/audit\.py` is not accepted by the regex
+  it spells.
+* **The prescribed replacement is the form that self-matches**, because
+  `ps -eo args` lists the pipeline's own `grep`. It reads 2 with nothing
+  running. Reading it literally cost this gate one wasted detached checkout
+  (recorded in `c3fe8116`), and an earlier revision of these scripts
+  "fixed" it by assembling the pattern at run time — treating the symptom on
+  the strength of the plan's wrong diagnosis.
+
+`run_guard.sh` and `run_moved.sh` now use `pgrep -af '[s]cripts/audit\.py'`
+and **print the matching lines next to the count**, so every number in §4 is
+auditable rather than asserted. The plan has been corrected at both sites.
+Avoid `pgrep -fc 'python[0-9.]* +[^ ]*scripts/audit\.py'` as the primary form:
+it is also self-match-proof, but it matched only **2 of those 9**, missing the
+forkserver children. **This is a script-text and docs correction only — nothing
+was re-run for it, and the behaviour of the four audit invocations already
+taken is unaffected**, because the run-time-assembled pattern they used
+excluded the same processes for a worse reason.
 
 This is the successor to `../2026-09-07-hierarchical-v2/gate.md`, which it
 supersedes. It gates seven tasks: Task 1 the stats carried into every refusal
@@ -99,8 +119,14 @@ directory.
 
 ### The clause-to-lever attribution the rule asks for
 
-* **Clause (b) is LEVER A (funding / dispatch).** It is the clause Tasks 2 and
-  3 exist to close, and it is not closed.
+* **Clause (b) is LEVER A (funding / dispatch), and it is charged on the
+  DISPATCH half.** The brief's literal A-signature — "a mall still refuses with
+  blocks unattempted" — is **absent**: `blocks_unattempted = 0` on every cell in
+  both rounds, so the FUNDING half of lever A did what it was built to do. What
+  fails is the half Task 3 shipped: the malls attempt every block and the
+  placers refuse 9 and 31 of them, with the one-arm rule measurably worse than
+  racing both on `mall/no-proliferator` (§3, §5 lever 3). It is the clause Tasks
+  2 and 3 exist to close, and it is not closed.
 * **Clause (c) is LEVER B (the oracle).** The brief's own attribution rule is
   "B if the cells compose and the router still refuses with
   `reservation_missing == 0`", and that is exactly this cell: it composes, it
@@ -173,8 +199,16 @@ Files: `large-{label}-{policy}-b{budget}-r{1,2}.{json,log,stdout.txt}` and
 `date`-to-`date` wall in `run_large.sh` and includes interpreter and dataset
 start-up. Round 1 is quoted with round 2 in parentheses wherever the two
 differ. **`area / best_known` is not computable on any cell** — nothing was
-emitted. **Validator errors by class are `n/a` on seven cells and NOT by
-omission**: `pipeline.build` raises `NoValidLayout` on all sixteen runs, so
+emitted. **One qualification, and it is the area column's only datapoint in
+three gates:** `titanium-glass/all-products` at 60 s got far enough to have a
+composed placement measured before it was refused — **area 11297 against a
+best-known 5727, i.e. 1.97x** (`certify-titanium-glass-all-products.json`,
+§2.3). That is a **REJECTED** placement, not a blueprint: it never emitted, it
+carries 4 `power.coverage` errors, and it is therefore not an `area /
+best_known` result in the sense §0 reports and certainly not one it gates. It
+is recorded because "no area exists anywhere" would now be false, and because a
+first blueprint on this cell would start from roughly that number.
+**Validator errors by class are `n/a` on seven cells and NOT by omission**: `pipeline.build` raises `NoValidLayout` on all sixteen runs, so
 there is no returned `Build` to convict. The eighth, `titanium-glass` at 60 s,
 did reach `certify`, and §2.3 reports its class breakdown in full.
 
@@ -323,9 +357,14 @@ Failure sites, in the order a build meets them, over sixteen runs:
 Per task, citing each implementer's own measurement as theirs:
 
 * **Task 1 (stats into every refusal, `d89b78e3`)** measured, on
-  `mall/all-products`, the line `blocks=52 blocks_unattempted=22 ... nogood_skips=36
-  recut_rounds=0` and noted that v2's harness spy had read 22 unattempted for
-  the same cell, so the CLI surface reproduced it. **This gate agrees, and is
+  `mall/all-products`, the line `blocks=52 blocks_unattempted=22 ...
+  nogood_skips=36 recut_rounds=0` and noted that v2's harness spy had read 22
+  unattempted for the same cell, so the CLI surface reproduced it. **That line
+  is inherited, not committed** — it is `inherited-numbers.md` §4, taken on a
+  tree before Task 2's funding fix, and it must not be read against
+  `t3-fix1-mall-all-products.log`, a different tree under Ruling R4 whose line
+  says `nogood_skips=40 recut_rounds=2`. The part of it this gate leans on is
+  `blocks_unattempted=22`, which v2 read independently. **This gate agrees, and is
   the proof the surface works**: every number in §2.1 came off that line with
   no monkeypatching, including two — `nogood_skips` and `player_fed` — that v2
   could only obtain by wrapping production functions, and one,
@@ -352,8 +391,8 @@ Per task, citing each implementer's own measurement as theirs:
   also confirms the implementer's own adverse finding rather than softening
   it: **on `mall/no-proliferator` the one-arm dispatch is worse than racing
   both arms.** Task 2's both-arms measurement left **6** blocks never placed
-  (that 6 is the implementer's own, and traces to no committed file — see §5's
-  provenance note); Task 3's one-arm dispatch leaves **31**, which is committed
+  (that 6 is the implementer's own, now rescued verbatim into
+  `inherited-numbers.md` §3); Task 3's one-arm dispatch leaves **31**, which is committed
   in `t3-r5-mall-no-proliferator.log` and which this gate measures twice more.
   The reviewer's explanation is confirmed by the dispatch column itself:
   `arm_dispatch_freeform = 0` on that cell, because the policy creates no spray
@@ -371,7 +410,8 @@ Per task, citing each implementer's own measurement as theirs:
   build here, because it never gets to speak.
 * **Task 5 (the trunk-partner doorstep, `e91886fb`/`b9473715`/`a2ecd5b2`)**
   measured belt3/all-products@60 going `reservation_missing` 0 → 102 with
-  `unrouted_cuts` 28 → **126**, then after Ruling R7's discard
+  `unrouted_cuts` 28 → **126** (that whole intermediate run is inherited, not
+  committed — `inherited-numbers.md` §1), then after Ruling R7's discard
   `reservation_missing=0 reservation_degraded=1 unrouted_cuts=18`, and
   **explicitly declined to claim 28 → 18 as an improvement** because the two
   runs are not a controlled pair. **This gate agrees with the implementer on
@@ -421,7 +461,12 @@ src tests` is empty).
 Files: `baseline-round1.{jsonl,txt}`, `candidate-round1.{jsonl,txt}`, their
 `-load.txt`, `compare-round1.txt`, `judge-round1.txt`, and `run_guard.sh`.
 
-Condensed from `judge-round1.txt`; every value is copied from it unedited.
+Condensed from `judge-round1.txt`; **every value is copied from it unedited,
+and one LABEL is not**: `judge.py` prints `wall-safety: candidate max 0.000 s
+vs baseline max 0.000 s -> OK`, and the line below adds the word *overshoot*,
+because the quantity is `wall_overshoot_s` — already net of each cell's own
+allowance — and "max 0.000 s" alone reads like a wall rather than an
+exceedance. No number was changed. Read `judge-round1.txt` unabridged.
 
 ```
 commits  : baseline 1ce8a0d  candidate c3fe811
@@ -438,6 +483,15 @@ gmean area ratio  all 0.99456 (-0.54 %)  freeform 0.99259  seq-pair 0.99654
 cells whose area moved at all: 7 of 72   -- larger 0, SMALLER 7
 total build wall: baseline 1470.2 s, candidate 1463.2 s  (199 s / 198 s wall)
 ```
+
+**A declared deviation from the brief's invocation.** The brief writes
+`--json > <half>.jsonl 2> <half>.txt`; `run_guard.sh` runs
+`--json <half>.jsonl > <half>.txt 2>&1`. On this master `--json` takes a PATH
+and **appends** to it (`scripts/audit.py` ~741: "append one JSON record per
+cell to this file"), so it is not a flag whose stdout can be redirected. The
+outputs are the same two files per half and all four are committed; the script
+deletes a stale target first, because appending twice would silently double it.
+The plan has been corrected at that site too.
 
 **Clause (d) as declared in §0 requires exactly three things, and all three
 hold: no cell CLEAN on the merge base and not CLEAN on the branch (0), 0
@@ -526,6 +580,24 @@ and on four fifths of clause (a)**; Lever C never ran. The three levers below
 are ranked by the size of the measured number behind them and by how close
 each stands to a first emitted blueprint.
 
+**One qualification on "four fifths", against this gate's own interest.** Those
+four are belt3 at both policies, zurl2, and titanium-glass at 15 s — but
+**zurl2 is not evidence against the oracle.** 69 of its 70 unrouted cuts in r1
+and 71 of 73 in r2 are `BUDGET`: the router ran out of clock, not ground, and
+its geometric refusals are 1 and 2. §3 and `oracle.md` both say so, and
+`oracle.md`'s own finding 3 declines to read zurl2's rung ordering as geometry
+for the same reason. So lever B is properly charged on **three** cells of
+demonstrated geometry — belt3 at both policies and titanium-glass at 15 s —
+plus a fourth that is clock-bound before it is ground-bound and would need a
+router wall it can finish on before it could testify either way.
+
+**Where the files cited below live**, given once so a reader in a year does not
+have to search: `compose.py`, `dispatch.py`, `partition.py` and `strategy.py`
+are under `src/flab2bp/layout/hierarchy/`; `freeform.py`, `validate.py` and
+`base.py` under `src/flab2bp/layout/`; `catalog.py` under `src/flab2bp/dsp/`;
+`cli.py` and `pipeline.py` under `src/flab2bp/`. The same holds for the
+citations in §2, §3 and §7.
+
 ### Lever 1 (headline): `_match_access_corridors` gives up WHOLESALE, and the trunk-goal oracle is therefore thrown away on every build
 
 `freeform.py:11875` — `for _round in range(_ACCESS_CUT_ROUNDS):` with
@@ -539,11 +611,13 @@ on an empty answer (Ruling R7) and re-asks v2's local-only question, counting
 rounds — ten production compositions out of ten.** That is this gate's own
 measurement, off the shipped stats line (§2.1). Tasks 4 and 5 are, on every
 cell this gate composed, computed and discarded. Before Ruling R7's discard
-existed, acting on the empty answer took belt3's `unrouted_cuts` to **126**;
-after it, 18 — and **that 126 is the one number in this section that traces to
-no committed file** (see the provenance note at the end of §5). The 28 it is
-measured against is v2's, from `../2026-09-07-hierarchical-v2/gate.md` §2.1;
-the 18 is this gate's, twice. Task 6's `oracle.md` shows
+existed, acting on the empty answer took belt3's `reservation_missing` to
+**102** and its `unrouted_cuts` to **126**; after it, 18. **That whole
+intermediate run was taken on a tree that no longer exists and is quoted
+verbatim in `inherited-numbers.md` §1** — see the provenance note at the end of
+§5 for the full list of such figures. The 28 it is measured against is v2's,
+from `../2026-09-07-hierarchical-v2/gate.md` §2.1; the 18 is this gate's,
+twice. Task 6's `oracle.md` shows
 the same give-up at *every* rung of the ladder, not only rung 0 — `assigned = 0`
 of 91 on all six belt3 rungs, 0 of 144 on five of six zurl2 rungs, on demands
 each reporting `reachable_options = 2`, i.e. the A\* had **proved two corridors
@@ -587,7 +661,8 @@ lanes, `coaters == 0` on every block, and `dispatch.py:110-112` can then only
 return `(ARM_SEQUENCE_PAIR,)`.
 
 The measured cost of that rule on this cell is **6 blocks never placed under
-both arms (Task 2) against 31 under one (Task 3, and twice more here)** — a
+both arms (Task 2, `inherited-numbers.md` §3) against 31 under one (Task 3, and
+twice more here)** — a
 5× regression on the clause the plan exists to close, on the one cell where
 the feature key has no signal to work with. The rule was correctly not tuned
 inside this plan. The lever is to give `dispatch_arms` an "abstain" answer for
@@ -595,28 +670,45 @@ a feature vector the evidence does not cover — `coaters == 0` with `strips`
 below `UNCOVERED_STRIPS = 85` is currently indistinguishable from a genuine
 sequence-pair block — and to re-measure both malls under it.
 
-### Provenance note: the two numbers here that no committed file carries
+### Provenance note: every figure in this gate that no committed file carried
+
+An earlier revision of this note said "two", and that was wrong — a
+wrong exhaustiveness claim in the gate's own honesty mechanism is worse than no
+claim, so here is the full list, and **all four are now committed**, quoted
+verbatim with their tree's commit, in **`inherited-numbers.md`** beside this
+file. Each came from an implementer's task report under `.superpowers/sdd/`,
+which is gitignored and is deleted when the plan finishes.
 
 Every other figure in this gate is either measured by it (the `large-*`, the
 `certify-*`, the `*-round1` and `moved-*` artifacts beside this file) or cited
 to a committed one (`oracle.md`, `corridor-spike.md`, the `t3-*` and `t3-r5-*`
-logs, v2's `gate.md`). **Two are not**, and both come from an implementer's own
-task report under `.superpowers/sdd/`, which is gitignored and therefore not
-part of the record:
+logs, v2's `gate.md`). These four are neither, and **none of them decides a
+gate clause**; all four sit in a RANKING or an agreement note:
 
-* **belt3's `unrouted_cuts = 126`** before Ruling R7's discard (lever 1). The
-  before-and-after states either side of it are committed — v2's 28 and this
-  gate's 18 — but the intermediate 126 was measured on a tree that no longer
-  exists and was never written to an evidence file.
-* **`mall/no-proliferator`'s 6 blocks never placed under BOTH arms** (lever 3),
-  from Task 2's Step 5 measurement. Its counterpart, 31 under one arm, IS
-  committed (`t3-r5-mall-no-proliferator.log`) and this gate reproduces it
-  twice; the 6 is what makes the comparison a regression rather than a
-  standalone number, and it rests on that report alone.
+| figure | where cited | tree | re-measured at HEAD? |
+| --- | --- | --- | --- |
+| belt3 `reservation_missing = 102` **and** `unrouted_cuts = 126`, pre-Ruling-R7 | §3 Task 5, §5 lever 1 | `e91886fb` | **No, and it cannot be** — R7 landed at `b9473715` and the behaviour is gone |
+| belt3 `unrouted_cuts = 18`, post-R7 | §3 Task 5, §5 lever 1 | `b9473715` | **Yes, twice** — `large-belt3-all-products-b60-r{1,2}.json`, agreeing on every field |
+| `mall/no-proliferator` **6** blocks never placed under BOTH arms | §3 Task 3, §5 lever 3 | `0bf58d3d` | **No, and it cannot be** — one-arm dispatch landed at `94c4edaf` |
+| mall/all-products `nogood_skips = 36` (and that line's `recut_rounds = 0`) | §3 Task 1 | `d89b78e3` | **No** |
 
-Neither carries a gate clause. They are quoted because a levers section that
-dropped them would understate the cost of two shipped decisions, and they are
-flagged here so a reader can weigh them accordingly.
+Two notes a sceptical reader will want, because both are traps:
+
+* **The Task 1 line is NOT `t3-fix1-mall-all-products.log`.** That committed log
+  is a different tree (Task 3 fix round 1, `69031212`, under Ruling R4's round
+  accounting, which Ruling R5 then reverted) and reads
+  `nogood_skips=40 recut_rounds=2` against Task 1's `36` and `0`. They agree on
+  `blocks=52 blocks_unattempted=22` and disagree on the other two; neither is a
+  re-run of the other, and **there are no `t1-*` evidence files** — Task 1
+  committed no build artifacts. What §3's Task 1 bullet actually rests on is
+  `blocks_unattempted=22`, which v2's harness spy independently read for the
+  same cell (`../2026-09-07-hierarchical-v2/gate.md` §2.1); the `nogood_skips`
+  figure carries nothing.
+* **The `6` is the load-bearing one.** It is what makes §5 lever 3 a
+  *regression* — 6 under both arms against 31 under one — rather than a
+  standalone number. Its counterpart is committed and measured three times
+  (`t3-r5-mall-no-proliferator.log` plus this gate's two rounds). The `6` rests
+  on `inherited-numbers.md` §3 alone.
 
 ## 6. The adaptive memories still open, and one residual risk
 
@@ -628,9 +720,11 @@ Neither memory is planned, and each says why. Both are recorded in
   and duplicating it would be two designs for one cache. The evidence for it
   keeps growing, and this gate can put a number on it: `mall/no-proliferator`
   names **31 refusing blocks in one refusal, 30 of them single-recipe — 9
-  `magnet`, 7 `iron-ingot`, 6 `electric-motor`, 2 each of `copper-ingot`,
-  `magnetic-coil` and `electromagnetic-turbine`** (counted from
-  `large-mall-no-proliferator-b60-r1.json`, identical in r2). Nine separately
+  `magnet`, 7 `iron-ingot`, 6 `electric-motor`, and 2 each of `copper-ingot`,
+  `magnetic-coil`, `electromagnetic-turbine` and `super-magnetic-ring`**; the
+  one multi-recipe block is `circuit-board, sorter-1, sorter-2` (counted from
+  `large-mall-no-proliferator-b60-r1.json`, identical in r2 — and 9+7+6+2+2+2+2
+  = 30, +1 = 31). Nine separately
   solved `magnet` blocks in one build, sixteen times over the sixteen runs, is
   the case for the cache stated as a measurement.
 * **A strip cap that moves with outcomes.** Deliberately NOT attached to the

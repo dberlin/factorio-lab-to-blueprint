@@ -8,13 +8,10 @@
 #
 # No `git stash`, no second worktree.
 #
-# ONE AUDIT AT A TIME.  The audit-count check below is the brief's
-# `ps -eo args | grep -cE 'scripts/audit\.py'` with ONE correction that the
-# brief's own warning implies: on this box `ps -eo args` lists the invoking
-# shell's whole command line too, so a bare count also matches THIS script's
-# own pattern, exactly the way the brief says `pgrep -f audit.py` does.  The
-# pattern is therefore assembled at run time from two halves that never appear
-# adjacent in any command line, and the matching lines are printed so the
+# ONE AUDIT AT A TIME.  The slot check is `pgrep -af '[s]cripts/audit\.py'`,
+# which corrects the plan's prescription in the opposite direction from the one
+# an earlier revision of this script assumed -- see `audits_running` below for
+# the measurement.  The matching lines are printed next to the count, so the
 # number is auditable rather than merely asserted.
 #
 # Usage: run_guard.sh <worktree-root>
@@ -30,10 +27,24 @@ BASE=1ce8a0d3
 BRANCH=hierarchical-v3
 TMP=/tmp/v3gate
 
-PAT="scripts/audit"".py"
-
+# `pgrep` does NOT self-match: it excludes its own PID (procps-ng 4.0.6 here,
+# and every BSD does the same).  The plan's earlier warning that it "matches its
+# OWN command line and always returns a hit" was backwards, and its prescribed
+# replacement, `ps -eo args | grep -cE ...`, is the form that actually
+# self-matches, because `ps` lists the pipeline's own `grep`.  Reading that
+# literally cost this gate a wasted detached checkout.
+#
+# The `[s]` bracket handles the one false positive `pgrep -f` CAN produce: an
+# ENCLOSING `bash -c "... pattern ..."` whose argv contains the pattern.  The
+# literal text below reads `[s]cripts/audit\.py`, which the regex itself does
+# not accept, so no command line carrying this check can ever match it.
+#
+# Measured on this box with 9 real audit processes running: this form returned
+# exactly those 9 and did not include the invoking shell.  The narrower
+# `pgrep -fc 'python[0-9.]* +[^ ]*scripts/audit\.py'` is also self-match-proof
+# but matched only 2 of the 9, missing the forkserver children.
 audits_running() {
-  ps -eo args | grep -E "$PAT" | grep -v -e 'grep -' -e 'run_guard' || true
+  pgrep -af '[s]cripts/audit\.py' || true
 }
 
 # ALWAYS return to the branch, on every exit path.  The first run of this

@@ -17,7 +17,8 @@
 - **`validate.certify` is the arbiter.** No player hand-back beyond the player-fed lane contract v2 shipped (`contracts.allocate_cuts`): a head for an item the parent spec does NOT belt in must be fully fed by cuts or the build refuses.
 - **Bounded time.** Every job's deadline stays `min(parent_deadline, job_start + block_budget)`, computed in the worker. The strategy may overshoot `--budget` only by `pipeline.RACE_COMPLETION_GRACE_S = 6.0`, as v2 recorded.
 - **Exact arithmetic** everywhere rates appear (`Fraction`, never `float`).
-- **ONE LAYOUT BUILD AT A TIME on this box, and never two audits at once.** Other agents run builds in sibling worktrees. Check `ps -eo args | grep -cE 'scripts/audit\.py'` before each audit invocation; note that a bare `pgrep -f audit.py` matches its OWN command line here and always returns a hit. `--budget 30` for single corpus builds; the gate's 60 s and 15 s as Task 8 states them.
+- **ONE LAYOUT BUILD AT A TIME on this box, and never two audits at once.** Other agents run builds in sibling worktrees. Check `pgrep -fc '[s]cripts/audit\.py'` before each audit invocation — the `[s]` bracket makes the pattern unable to match any command line that merely CONTAINS it (a check command's own text reads `[s]cripts/...`, which the regex does not accept), which is what stops an enclosing `bash -c "… pattern …"` from counting itself. `--budget 30` for single corpus builds; the gate's 60 s and 15 s as Task 8 states them.
+  - **Correction, measured on this box (Task 8).** An earlier revision of this bullet warned that `pgrep -f` "matches its OWN command line and always returns a hit" and prescribed `ps -eo args | grep -cE 'scripts/audit\.py'` instead. **That is backwards.** `pgrep` excludes its own PID (procps-ng 4.0.6 here, as do the BSDs), so it never self-matches; the only false positive it can produce is an *enclosing* shell whose argv contains the pattern, which the `[s]` form removes. What genuinely self-matches is the prescribed replacement, because `ps -eo args` lists the pipeline's own `grep`. Reading it literally cost Task 8 a wasted detached checkout. Verified here: with 9 real audit processes running, `pgrep -af 'scripts/audit\.py'` returned exactly those 9 and did not include the invoking shell. Avoid `pgrep -fc 'python[0-9.]* +[^ ]*scripts/audit\.py'` as the primary form: it is also self-match-proof but it matched only 2 of those 9, missing the forkserver children.
 - **Record `(uptime; vmstat 1 3 | tail -1)` into a `-load.txt` beside EVERY timing.** The box is 128 cores, never idle, and the load is I/O wait; never wait for an idle box.
 - **Reading code: use Serena's symbolic tools** — `mcp__serena__get_symbols_overview` and `mcp__serena__find_symbol` to read a symbol instead of paging a 22k-line file, `mcp__serena__find_referencing_symbols` to find call sites (grep misses them). **Editing: use Read/Edit, NOT Serena's editing tools.** Serena is a shared last-activation-wins server on this box and other agents are working in sibling worktrees; a Serena write from here can land in the wrong worktree.
 - **Process discipline:** work in `.claude/worktrees/hierarchical-v3` on branch `hierarchical-v3`; never `git stash`; never commit anything under `.superpowers/`; evidence goes to `docs/superpowers/evidence/2026-09-07-hierarchical-v3/`, any size — file size is never a reason to shrink or omit committed evidence. `git diff` is wired to difftastic: use `--no-ext-diff` for patches.
@@ -1847,10 +1848,23 @@ Beside each run, a `-load.txt` with `uptime` and one `vmstat 1 3` sample taken i
 Everything committed, `git status --short` empty. Then, exactly as v2's §5 ran it (controller ruling R13): `git checkout --detach $(git merge-base master hierarchical-v3)`, run the BASELINE half there writing to `/tmp/v3gate/` (the evidence directory does not exist at the merge base), `git checkout hierarchical-v3` immediately, verify HEAD and cleanliness, run the CANDIDATE half, copy the baseline half in. No `git stash`, no second worktree.
 
 ```bash
-ps -eo args | grep -cE 'scripts/audit\.py'      # must be 0 before EACH invocation
+pgrep -fc '[s]cripts/audit\.py'                 # must be 0 before EACH invocation
 (uptime; vmstat 1 3 | tail -1) > <half>-round1-load.txt
-uv run python scripts/audit.py --budget 30 --json > <half>-round1.jsonl 2> <half>-round1.txt
+uv run python scripts/audit.py --budget 30 --json <half>-round1.jsonl > <half>-round1.txt 2>&1
 ```
+
+Two corrections to that block, both measured in Task 8:
+
+* **The slot check.** `pgrep` does not self-match (it excludes its own PID); the
+  `ps -eo args | grep -cE` form an earlier revision prescribed DOES, because
+  `ps` lists the pipeline's own `grep`. The `[s]` bracket additionally stops an
+  enclosing `bash -c "… pattern …"` from counting itself. See the Global
+  Constraints bullet for the measurement.
+* **`--json` takes a PATH on this master and APPENDS to it** (`scripts/audit.py`
+  ~741: "append one JSON record per cell to this file"). It is not a flag whose
+  output can be redirected, so the JSONL is named as an argument and the
+  human-readable report is what goes to the redirect. Delete a stale target
+  first, or a second run doubles the file.
 
 Then `uv run python scripts/audit_compare.py baseline-round1.jsonl candidate-round1.jsonl > compare-round1.txt`. **`audit.py` prints `NOT CLEAN` on any refusal, so read the CLEAN COUNTS and the NAMED DIFFERING CELLS, not the banner.** If any cell differs, re-run just that URL on both trees before calling it a regression — v2's §5 found all six moved cells moving on BOTH trees, and a seventh whose instability was on the baseline side.
 
