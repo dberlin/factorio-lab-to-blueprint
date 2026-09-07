@@ -69,3 +69,43 @@ VERDICT
   This is the expected result: the change is a footprint erosion that is a
   no-op at width == height == 1, and `_Canvas.fits(x, y, 1, 1)` is the
   single-cell test it replaces, tile for tile.
+
+================================================================
+FIX ROUND 1 -- re-run after the review's Important 1 and 2
+
+Both amendments are claimed byte-identical on the DEFAULT arm BY CONSTRUCTION,
+and the reviewer is right that these two capture URLs cannot prove it: decoded,
+their only power nodes are the Tesla Towers the planner itself places, which do
+not exist in `canvas.buildings` when `_power_plan` runs --
+
+  URL A  items {2002: 10, 2302: 1, 2011: 2, 2201: 1}   power nodes {2201: 1}
+  URL B  items {2002: 97, 2302: 4, 2011: 20, 2304: 3, 2201: 3}  power nodes {2201: 3}
+
+-- so the existing-power-node keepout loop finds zero peers and never punches a
+halo into `free`.  The captures below are a regression check, not the argument.
+
+The argument is structural:
+
+  Important 1 (openness): the statement is now TEXTUALLY IDENTICAL to
+    263538df.  `git diff -U0 263538df -- src/flab2bp/layout/freeform.py` no
+    longer contains the `openness[...] += free[...]` statement at all; only
+    added comments surround it.  Identity, not measurement.
+
+  Important 2 (site-vs-site overlap): the added clearing is
+    `free[gx - (w-1) : gx + w, gy - (h-1) : gy + h] = False`.  At w = h = 1
+    that slice is exactly `free[gx:gx+1, gy:gy+1]` -- the single anchor cell.
+    The line above it clears the power-node spacing stamp, and offset (0, 0)
+    is one of its 21 cells:
+      rules.power_node_keepout_offsets(tesla.power_node, tesla.power_node)
+        -> 21 offsets at dz == 0, reach 2, (0, 0) present: True
+    So on the default arm the new statement writes False over a cell that is
+    already False.  A no-op, by construction.
+
+capture (regression check, both URLs, same method as above):
+
+  URL A  round-1 head payload 690d3fc033d6066ef9497db542d96b5e7f8345870e93ea0e59cdb17f77b470a8
+         task-4  base payload 690d3fc033d6066ef9497db542d96b5e7f8345870e93ea0e59cdb17f77b470a8
+  URL B  round-1 head payload 69abe119e9690fe366c38dcb14c1d77b1f027706ad30f077663ecc32e59acedc
+         task-4  base payload 69abe119e9690fe366c38dcb14c1d77b1f027706ad30f077663ecc32e59acedc
+
+VERDICT: BYTE IDENTICAL, still, against 263538df on both URLs.

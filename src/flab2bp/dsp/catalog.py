@@ -1068,6 +1068,24 @@ MODE_DRIVEN_MACHINE_ITEM_IDS: frozenset[int] = frozenset(
 #: sentence.  2208 was never in the distrusted set, and every other machine we
 #: place was, and stays, absent from it -- so this subtraction newly checks
 #: exactly one building.
+#:
+#: THE SENTENCE IS NOW FALSE FOR **2212** TOO, AND THIS SUBTRACTION DOES NOT
+#: COVER IT.
+#:
+#: The selectable power building makes the generator place a Satellite
+#: Substation whenever a build chooses one, and 2212 is not mode-driven, so it
+#: is not subtracted here and `validate.py` still suppresses its belt-collision
+#: findings.  That suppression is therefore LOAD-BEARING on the substation arm:
+#: a belt laid through a substation is a finding nobody reports.  It is left
+#: standing deliberately -- the footprint really is an unresolved measurement
+#: question and guessing at it would be worse -- and the substitute guarantee
+#: is direct geometry rather than a certificate: see
+#: `TestALargePowerBuildingClaimsItsWholeFootprint` in
+#: `tests/layout/test_freeform.py`, which asserts over the finished placement
+#: that no belt, sorter or machine tile lies inside a placed substation.
+#: Resolving 2212's footprint properly retires both the suppression and those
+#: tests; until then, do not read a clean `certify` on a substation build as
+#: evidence that it has no belt collisions.
 UNPLACED_LOW_CONFIDENCE_FOOTPRINTS: frozenset[int] = (
     LOW_CONFIDENCE_FOOTPRINTS - MODE_DRIVEN_MACHINE_ITEM_IDS
 )

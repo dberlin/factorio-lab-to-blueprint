@@ -25670,6 +25670,42 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
                 overlaps = px < bx + bw and bx < px + pw and py < by + bh and by < py + ph
                 assert not overlaps, f"substation at {(px, py)} overlaps item {item} at {(bx, by)}"
 
+    def test_two_planned_substations_never_land_on_each_other(self) -> None:
+        """The greedy must not double-book ground it has already spent.
+
+        ``free`` is eroded ONCE, from the static ground, so it cannot know about
+        the towers this plan is itself placing; the only per-site clearing is
+        the power-node spacing halo, which substation-against-substation is 21
+        cells at a reach of two while two 5x5 footprints overlap out to four.
+        Sixty of the eighty-one overlapping anchor offsets were left standing.
+
+        3x3 machines at pitch 12 in a 40x40 limit is the field that reaches it:
+        the plan plants (20, 20), walks to the far corner, and then chooses
+        (24, 19) -- four tiles away, so legal by spacing and overlapping by
+        one column.  ``_place_power`` refused the whole pack with "planned tower
+        site (24, 19) was taken during routing", which was not even true: the
+        router took nothing, the planner booked it twice.
+
+        This asserts the PLAN, not the refusal, because a fix that merely made
+        the refusal honest would still throw the pack away.
+        """
+        canvas = _Canvas(limit=(0, 0, 40, 40), power_building=self._substation())
+        for x in range(2, 40, 12):
+            for y in range(2, 40, 12):
+                canvas.add(self._machine(x, y), solid=True)
+
+        sites = _power_plan(canvas, (0, 0, 40, 40), policy=BandPolicy("portable"))
+
+        assert len(sites) > 1, "this field needs several sites to be the case it is"
+        for index, (ax, ay) in enumerate(sites):
+            for bx, by in sites[index + 1 :]:
+                overlaps = ax < bx + 5 and bx < ax + 5 and ay < by + 5 and by < ay + 5
+                assert not overlaps, f"planned substations at {(ax, ay)} and {(bx, by)} overlap"
+
+        # And the plan is standable, which is the property the refusal denied.
+        canvas.keep_out.clear()
+        freeform._place_power(canvas, sites)
+
     def test_a_field_with_no_room_for_a_substation_is_refused(self) -> None:
         """Three-wide gaps hold no 5x5, and that is INFEASIBLE, not a squeeze.
 
@@ -25740,15 +25776,19 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
             if b.item_id == self.SUBSTATION_ID
         ]
         assert subs
+        #: The whole RECTANGLE of each carrier, not its anchor: a sorter is
+        #: 1x2 and a piler 2x1, so an anchor-only test would miss a carrier
+        #: hanging one tile into the substation.
         carriers = [
-            (b.x, b.y)
+            (b.x, b.y, b.width, b.height)
             for b in placement.buildings
             if catalog.is_belt(b.item_id) or catalog.is_sorter(b.item_id)
         ]
         for sx, sy, sw, sh in subs:
-            for cx, cy in carriers:
-                assert not (sx <= cx < sx + sw and sy <= cy < sy + sh), (
-                    f"belt/sorter tile {(cx, cy)} inside substation at {(sx, sy)}"
+            for cx, cy, cw, ch in carriers:
+                overlaps = sx < cx + cw and cx < sx + sw and sy < cy + ch and cy < sy + sh
+                assert not overlaps, (
+                    f"belt/sorter at {(cx, cy)} {(cw, ch)} inside substation at {(sx, sy)}"
                 )
 
     def test_no_machine_tile_sits_inside_a_substation(

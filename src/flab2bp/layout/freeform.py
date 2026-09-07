@@ -15599,10 +15599,15 @@ def _power_plan(
     # 2212 is in `catalog.LOW_CONFIDENCE_FOOTPRINTS` and its belt-collision
     # findings are suppressed.
     #
-    # This is :meth:`_Canvas.fits` written as a mask rather than a second
-    # occupancy model: eroding by the footprint asks `free`/`solid` of every
-    # tile of the rectangle, which is that predicate's own definition, and
-    # `_place_power` guards the same rectangle with the method itself.  The
+    # This is STRICTER THAN :meth:`_Canvas.fits`, not a second occupancy model:
+    # eroding by the footprint asks `free`/`solid` of every tile of the
+    # rectangle, which is that predicate's own definition, and then denies the
+    # cells `fits` would allow that a SITE may not use anyway -- a column
+    # blocked at any level rather than only at level 0, and anything outside
+    # `canvas.limit`.  Both of those were already in this fill before the
+    # footprint reached it.  `_place_power` guards the same rectangle with the
+    # method itself, so the looser predicate can only ever accept what this one
+    # already accepted.  The
     # erosion is a mask because this is the hot path -- one shifted `&` per
     # footprint tile against a per-cell Python call for each of ~29k cells on
     # `universe-matrix`.
@@ -15810,15 +15815,21 @@ def _power_plan(
     # How many free neighbours each cell has, for the tie-break. Taken once, on
     # the ground as packed: a tie-break does not need to track its own effects.
     #
-    # `open_ground`, not `free`: the question this asks is "would taking this
-    # cell out of play cut a routing channel", which is about the GROUND, not
-    # about where a footprint happens to fit.  Identical arrays on the 1x1
-    # default.
+    # `free`, deliberately, and NOT `open_ground`.  Reading the ground instead
+    # was tried and reverted: `free` is not `open_ground` even on the 1x1
+    # default, because the existing-power-node keepout loop above punches a halo
+    # into `free` before this runs.  On a canvas carrying one 3x3 power node
+    # that is 36 cells of differing openness, 16 of them legal candidates, and
+    # `key = score * 5 + openness` turns any score tie among them into a
+    # different site.  The corpus cannot currently reach it -- of the twelve
+    # power-node items only 2201/2202 and 2203/2205 have a halo escaping their
+    # own footprint and none of those is generator-placed -- but "unreachable
+    # today" is not a reason to move a tie-break inside a footprint fix.
     openness = np.zeros(shape, dtype=np.int32)
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-        openness[max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)] += (
-            open_ground[max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)]
-        )
+        openness[max(0, dx) : shape[0] + min(0, dx), max(0, dy) : shape[1] + min(0, dy)] += free[
+            max(0, -dx) : shape[0] + min(0, -dx), max(0, -dy) : shape[1] + min(0, -dy)
+        ]
 
     remaining = dark.copy()
     # `score` is maintained incrementally. Rebuilding it every round is the same
@@ -16103,6 +16114,30 @@ def _power_plan(
             gx - spacing_reach : gx + spacing_reach + 1,
             gy - spacing_reach : gy + spacing_reach + 1,
         ] &= ~spacing_stamp
+        # AND EVERY ANCHOR WHOSE FOOTPRINT WOULD LAND ON THIS ONE.
+        #
+        # `free` is eroded ONCE, from the static ground, so it knows nothing
+        # about the towers this loop is itself placing.  The spacing halo is the
+        # only per-site clearing there is and it is not the right rule for this:
+        # substation-against-substation it is 21 cells, `dx**2 + dy**2 <= 7`, a
+        # reach of two -- while two 5x5 footprints overlap out to `|dx| <= 4`.
+        # Sixty of the eighty-one overlapping anchor offsets were left standing,
+        # and the greedy duly planned two substations into each other:
+        # 3x3 machines at pitch 12 inside a 40x40 limit planned (20, 20) and
+        # then (24, 19), and `_place_power` refused the pack with "planned tower
+        # site (24, 19) was taken during routing" -- a message that was not even
+        # true, because nothing took it during routing.  It failed CLOSED, which
+        # is why it was a refused build rather than a pasted collision, but a
+        # build refused for a site the planner itself double-booked is a bug in
+        # the planner.
+        #
+        # At 1x1 this slice is the single cell `(gx, gy)`, which the spacing
+        # stamp has already cleared -- offset (0, 0) is one of its 21 -- so the
+        # default arm cannot move, by construction rather than by measurement.
+        free[
+            gx - (tower.width - 1) : gx + tower.width,
+            gy - (tower.height - 1) : gy + tower.height,
+        ] = False
         linked[gx - link : gx + link + 1, gy - link : gy + link + 1] |= link_stamp
         win = (slice(gx - reach, gx + reach + 1), slice(gy - reach, gy + reach + 1))
         newly = remaining[win] & disc_stamp
