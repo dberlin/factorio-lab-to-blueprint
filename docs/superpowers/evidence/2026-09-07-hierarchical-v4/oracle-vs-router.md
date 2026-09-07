@@ -1,3 +1,11 @@
+> **Dated note, added 2026-09-07 by Task 5b.** The belt3 and zurl2 numbers in this
+> document were measured at commits `733fe203` ("before and after the partial commit") and
+> `66d721ed` ("add the load table and reconcile the belt3 missing=91 figure") — **before**
+> Task 4b's top-up landed (`d2deb691`/`e02bd31a`). They describe an intermediate tree, not
+> the branch's shipped state. The v4 gate, which re-runs all eight gate cells at the
+> branch's final HEAD, is the measurement that supersedes them. **belt3 and zurl2 were not
+> re-run for this note** — do not re-run them here; wait for the gate.
+
 # Task 3: does the corridor oracle now predict the router?
 
 Controlled before/after measurement of two large gate cells --

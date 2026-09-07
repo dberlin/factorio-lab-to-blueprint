@@ -1,67 +1,81 @@
-# titanium-glass / all-products, `--budget 60`, after the composition power pass (Task 5)
+# titanium-glass / all-products, `--budget 60` — before and after the partial top-up
 
 `flab2bp.__file__` = `/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4/src/flab2bp/__init__.py`
-(confirmed inside the worktree before either run.)
+(confirmed inside the worktree before every run below.)
 
-HEAD at both runs: `d12694fa9d6f7f93bec47b12907d0614b25cc9f3` (this is also the SHA the
-brief calls the diff base against `src`/`tests`).
+This document now carries two measurements of the same cell:
 
-## Headline: REFUSED, both rounds, bit-identical — and NOT on `power.coverage`
+- **BEFORE** (Task 5, HEAD `d12694fa9d6f7f93bec47b12907d0614b25cc9f3`): the branch had
+  **REGRESSED** this cell relative to v3 — it refused at the router, never reaching
+  `validate.certify`, where v3 had reached certify and refused only on `power.coverage`.
+  This is the measured regression that justifies Task 4b existing.
+- **AFTER** (Task 5b, this document's own measurement, HEAD `e02bd31ac08ff4015f161ef19ff0f04e2277fb9e`,
+  i.e. after Task 4b's partial top-up): re-measured below. **No production code was changed
+  to produce this document.**
 
-Neither round emitted a blueprint. `titanium-glass-b60.blueprint.txt` (r1) and
-`titanium-glass-b60-r2.blueprint.txt` (r2) do not exist (0 bytes / not created).
+## Headline: the top-up changes the verdict, but not deterministically
 
-This is **not** the v3 outcome re-measured. v3 reached `validate.certify` with
-`unrouted_cuts=0` and refused there with four `power.coverage` findings — one check,
-nothing else wrong. In this v4 measurement the cell refuses **before compose ever reaches
-certify**, on `unrouted_cuts=4`. `validate.certify` is never called, so there is no
-`errors_by_check` to report and `certify_probe.py` was **not run** — the brief's own
-"if it emits" and "if it refuses [via certify]" gate both point to it being pointless
-here (nothing to certify: no `Build`, no placement handed to the validator at all).
+Two rounds at the required protocol (`--budget 60 --band portable --candidate-policy
+all-products`, `probe.py`, no monkeypatching) **both EMITTED**, bit-identical to each other:
+116 machines, 11297 tiles, 5994 buildings, exit 0, no `VALIDATION ERRORS` line. Neither round
+prints a `stats` line — `probe.py` only ever captures that line on the refusal path (see its
+own docstring), so `reservation_degraded`/`reservation_partial`/`reservation_missing`/
+`power_infill_towers`/`power_uncovered_tiles`/`unrouted_cuts` are **absent, not zero**, for
+these two rounds specifically.
 
-So none of Step 3's three named shapes fit as written — this is a fourth shape the brief
-did not anticipate: **the router itself refuses first**, upstream of the point where the
-power infill's own success or failure would even matter. Reported here exactly as it is,
-not forced into one of the three boxes.
+To confirm the certify report the brief asks for ("`-o` writing a file is NOT the claim"),
+`certify_probe.py` was run on the identical argv **twice**, because the first attempt did not
+corroborate the two rounds:
 
-## The refusal, verbatim (identical in both rounds)
+- **certify attempt 1: REFUSED** (exit 3), `certifications: []` — `validate.certify` was
+  **never called**. The refusal happened at a later, different stage than Task 5's: DSP
+  latitude band/orientation finalization, not the router's cut-routing pass, and not
+  `power.coverage`. Verbatim: `composed placement refused finalization: no legal DSP latitude
+  band/orientation accepts the final placement: band 200 game.addon_splitter_clearance
+  (3418, 6049): Splitter connection body enters the Spray Coater projected lateral keepout.`
+  Its stats line (present, because this run refused) reads `compose_gap=2 cut_lanes=26
+  port_demands=31 power_infill_towers=2 power_uncovered_tiles=0 reservation_degraded=1
+  reservation_missing=0 reservation_partial=1 unrouted_cuts=0` — full line below.
+- **certify attempt 2: EMITTED** (exit 0), matching r1/r2 exactly (area 11297, buildings
+  5994), and this time `validate.certify` **was** called and returned `ok: true, errors_total:
+  0, errors_by_check: {}`.
 
-```
-flab2bp: no valid layout for all-products after 60s: hierarchical/all-products: unrouted
-cut(s): titanium-glass: block 5 lane head 3857: no port access corridor (held=0 wants=1
-options=4); titanium-glass: block 5 lane head 3835: no port access corridor (held=0
-wants=1 options=4); glass: block 1 lane head 587: no port access corridor (held=0 wants=1
-options=9); titanium-glass: block 2 -> block 5: BUDGET. Treat a spec that cannot be laid
-out in the requested budget as a layout-model defect until shown otherwise.
-```
+So across four runs of the identical argv: three emitted (r1, r2, certify-attempt-2) with
+bit-identical output, and one (certify-attempt-1) refused at a stage neither r1/r2 nor Task
+5's measurement exercised. **This is reported as a genuine finding, not smoothed over**: this
+cell's outcome is not perfectly deterministic run-to-run at this budget. The compose-stage
+numbers visible in certify-attempt-1's refusal (`unrouted_cuts=0`, `reservation_missing=0`)
+are consistent with — not proven identical to — whatever compose stage produced r1/r2/attempt-2's
+identical final output, because the divergence point (band/orientation finalization) is
+strictly *after* compose in the pipeline. No load spike explains the one refusal: its
+`-load.txt` (`runnable_5s_mean=35.2`) is not the highest of the four (`45`, `37`, `35.2`,
+`42.8`), so this is not attributed to CPU pressure.
 
-Four unrouted cuts, matching `unrouted_cuts=4` in the stats line:
+**On the strength of the certify report that did fire (certify-attempt-2): this is the first
+blueprint this project has ever emitted from `--strategy hierarchical` with a clean certify
+report** (`errors_total: 0`). It is not claimed on the strength of the CLI's own truncated
+output alone, per the brief's warning that `-o` writing a file is not the claim.
 
-1. `titanium-glass: block 5 lane head 3857` — `no port access corridor (held=0 wants=1 options=4)`
-2. `titanium-glass: block 5 lane head 3835` — `no port access corridor (held=0 wants=1 options=4)`
-3. `glass: block 1 lane head 587` — `no port access corridor (held=0 wants=1 options=9)`
-4. `titanium-glass: block 2 -> block 5` — `BUDGET`
+## Both rounds, walls and loads (the required two-round protocol)
 
-## The `no port access corridor (held=0 …)` count — the controller decision point
-
-**Count on titanium-glass, both rounds: 3.** (Task 3's belt3/zurl2 finding — a class with
-zero occurrences at the merge base — reproduces here too, and at nonzero count on the
-single most consequential gate cell in this plan.) `grep -c` on both `.log` files
-independently confirms 3 in each.
-
-## Both rounds, walls and loads
-
-| round | in-process `wall_s` (probe.py) | shell wall (`shellwall.txt`) | `-load.txt` (runnable_5s_mean) | exit | emitted? |
+| round | in-process `wall_s` | shell wall | `-load.txt` (runnable_5s_mean) | exit | emitted? |
 |---|---|---|---|---|---|
-| r1 | 42.77 | 44.32 | 18.0 | 3 | REFUSED |
-| r2 | 40.81 | 42.13 | 16.2 | 3 | REFUSED |
+| r1 (after-topup) | 28.68 | 30.03 | 45 | 0 | **EMITTED** |
+| r2 (after-topup) | 27.29 | 28.92 | 37 | 0 | **EMITTED** |
 
-Both loads are well under the 64 threshold; recorded immediately before each run, never
-waited on, per the box-discipline rule.
+Both loads well under the 64 threshold; recorded immediately before each run, never waited
+on. Neither round's `.json` sidecar carries a `stats` object (`{}`), by `probe.py`'s
+documented success-path behavior.
 
-Budget is 60 s + `RACE_COMPLETION_GRACE_S = 6.0` = 66 s ceiling; both walls are under that.
+Extra certify-confirmation runs (not part of the two-round protocol, run to obtain the
+`errors_by_check` the brief requires):
 
-## Full stats line, both rounds (byte-identical)
+| run | in-process `wall_s` | shell wall | `-load.txt` | exit | emitted? | reached `certify`? |
+|---|---|---|---|---|---|---|
+| certify attempt 1 | n/a (crash path, no `wall_s` field written — see log) | 36.88 | 35.2 | 3 | REFUSED | **no** — `certifications: []` |
+| certify attempt 2 | n/a | 29.79 | 42.8 | 0 | EMITTED | **yes** — `ok: true` |
+
+## Full stats line — BEFORE (Task 5, both rounds, byte-identical)
 
 ```
 stats hierarchical/all-products: arm_dispatch_both=0 arm_dispatch_freeform=5
@@ -71,63 +85,130 @@ recut_rounds=0 reservation_degraded=5 reservation_missing=3 reservation_partial=
 resplits=0 unrouted_cuts=4
 ```
 
-Confirmed identical between r1 and r2 by a programmatic diff of the two JSON sidecars
-(`exit`, `refusals`, `stats` all `MATCH`; only the `blueprint.path` field differs, because
-r1 and r2 write to different filenames by design).
+Refusal (both rounds, byte-identical):
 
-## Reading the new-since-v3 keys
+```
+flab2bp: no valid layout for all-products after 60s: hierarchical/all-products: unrouted
+cut(s): titanium-glass: block 5 lane head 3857: no port access corridor (held=0 wants=1
+options=4); titanium-glass: block 5 lane head 3835: no port access corridor (held=0
+wants=1 options=4); glass: block 1 lane head 587: no port access corridor (held=0 wants=1
+options=9); titanium-glass: block 2 -> block 5: BUDGET.
+```
 
-- **`power_infill_towers=1`, `power_uncovered_tiles=0`.** Task 4's composition-power-infill
-  step DID run and, on whatever partial canvas `_route_all` produced before the cut-routing
-  failure surfaced, it stood 1 tower and found nothing it could not cover. This is
-  informative but not dispositive: `unrouted_cuts=4 > 0` means the composition as a whole
-  is still invalid regardless of what the infill did, so `compose` raises `NoValidLayout`
-  on the unrouted-cut path, not the power-coverage path. **This is not the "wall already
-  spent" failure string** (`"composition power infill: did not run, the composition's wall
-  was already spent before it could start"`) — that string does not appear in either log —
-  and it is not the `_Unpowerable` "site taken between plan and stand" string either. The
-  infill ran and reports a clean, if small, result; it just never gets to matter because
-  three of the four cuts fail earlier in `_route_all` on port access, and the fourth on
-  budget.
-- **`reservation_partial=5`, `reservation_degraded=5`, `reservation_missing=3`.** All three
-  keys are nonzero. Per the v3/v4 stats-key notes, `reservation_degraded == 0` together with
-  `reservation_partial == 0` would be "the matcher converged outright"; that is not the case
-  here. `reservation_partial=5 == reservation_degraded=5` here (Task 2's accounting: every
-  degraded rung is a partial commit, none is a wholesale give-up) — consistent with the
-  matcher committing surveyed partials rather than returning `{}` wholesale, but still
-  leaving `reservation_missing=3` demands with no corridor at all, which is exactly what
-  surfaces as the three `no port access corridor (held=0 …)` cuts above.
+**The `no port access corridor (held=0 …)` count, BEFORE: 3.**
 
-## Explicit comparison to v3
+## Full stats line — AFTER, certify attempt 1 (the only after-topup run with a stats line)
 
-v3 (same cell, same budget, same policy): composed, wired all 26 cut lanes
-(`unrouted_cuts=0`), reached `validate.certify`, refused with **exactly four
-`power.coverage` findings, one check, nothing else wrong** — 5993 buildings, area 11297
-(1.97x of best-known 5727), 80 splitters, 61 Tesla towers, 76/80 splitters covered.
+```
+stats hierarchical/all-products: arm_dispatch_both=0 arm_dispatch_freeform=5
+arm_dispatch_sequence_pair=1 blocks=6 blocks_unattempted=0 compose_gap=2 cut_lanes=26
+nogood_skips=0 player_fed=0 port_demands=31 power_infill_towers=2 power_uncovered_tiles=0
+recut_rounds=0 reservation_degraded=1 reservation_missing=0 reservation_partial=1
+resplits=0 unrouted_cuts=0
+```
 
-v4 (this measurement, Task 1/2/4 all present): does **not** reach `validate.certify` at
-all. `unrouted_cuts=4` (was 0), `cut_lanes=26` still (unchanged spec), and the refusal is
-entirely a router-side "unrouted cut(s)" failure — three `no port access corridor
-(held=0 …)` plus one `BUDGET`. There is therefore **no `errors_by_check` to compare against
-v3's `{power.coverage: 4}`** — the comparison point does not exist in this run because
-compose never gets far enough to produce it. Whatever Task 4's infill would or would not
-have fixed on the FULL composed canvas is now moot for this cell: something upstream
-(consistent with Task 1/2's partial-commit change to `_match_access_corridors`, per the
-`reservation_partial`/`reservation_missing` split above and Task 3's prior finding of this
-exact new failure class on belt3/zurl2) blocks the composition before power coverage is
-even evaluated.
+Refusal text (this run only, band/orientation finalization, not the router):
 
-**This is not the first blueprint this project has emitted from `--strategy hierarchical`.**
-Lever 2 (the power infill) did not get a fair test on this cell at this budget: it ran, it
-covered what it saw, but the composition it belongs to never reaches certification because
-of an unrelated, earlier router refusal that did not exist in v3's measurement of this same
-cell.
+```
+flab2bp: no valid layout for all-products after 60s: hierarchical/all-products: composed
+placement refused finalization: no legal DSP latitude band/orientation accepts the final
+placement: band 200 game.addon_splitter_clearance (3418, 6049): Splitter connection body
+enters the Spray Coater projected lateral keepout.
+```
 
-## Certification
+**The `no port access corridor (held=0 …)` count, AFTER (this run): 0.** No occurrence of
+that string anywhere in this refusal — the refusal is not a corridor/port-access failure at
+all. `unrouted_cuts=0` confirms every one of the 26 cut lanes routed.
 
-Not run. Neither round emitted a blueprint (`-o` target does not exist in either round), so
-there is no `Build`/placement to hand to `certify_probe.py`, and running it would either
-crash on a missing artifact or silently re-run the whole build for no new information — the
-`.log`/`.json` sidecars already contain everything `cli.main` printed. `certify-titanium-
-glass.{json,log}` were therefore not created; their absence here is the record of that
-decision, per the brief's "report a null result as exactly that."
+## Before / after table
+
+| key | BEFORE (Task 5) | AFTER (certify attempt 1, only after-topup run with a stats line) | reading |
+|---|---:|---:|---|
+| `unrouted_cuts` | 4 | **0** | all 26 cut lanes now route, in the one run this is observable |
+| `no port access corridor (held=0…)` count | 3 | **0** | the number Task 4b exists to move — moved to 0 |
+| `reservation_missing` | 3 | **0** | driven to 0, per Task 4b's target — see caveat below |
+| `reservation_degraded` | 5 | **1** | ladder total fell — **see Ruling L1-C**, next |
+| `reservation_partial` | 5 | **1** | ladder total fell — **see Ruling L1-C**, next |
+| `power_infill_towers` | 1 | **2** | one more infill tower stood; area unchanged (11297 both) |
+| `power_uncovered_tiles` | 0 | 0 | unchanged |
+| `compose_gap` | 2 | 2 | unchanged |
+| reached `validate.certify`? | **no** | no (this run), **yes** (r1, r2, certify attempt 2) | see headline |
+| `errors_by_check` | n/a (never reached certify) | `{}` (certify attempt 2, `errors_total: 0`) | first clean hierarchical certify this project has produced |
+| area | n/a (refused, no `Build`) | **11297** (r1, r2, certify attempt 2) | same as v3's area |
+| buildings | n/a | **5994** | +1 vs v3's 5993 (one more Tesla tower) |
+| splitters (item 2020) | n/a | **80** | matches v3 exactly |
+| Tesla towers (item 2201) | n/a | **62** | v3 had 61; +1, consistent with the extra infill tower |
+
+**Caveat on `reservation_missing`, per the brief's required correction:** the numeric
+equality between `reservation_missing` (BEFORE: 3) and the `held=0` corridor-refusal count
+(BEFORE: 3) is supported only as a **numeric equality** by this evidence — the two counters
+are computed in different places and this document does not assert they are the same demands
+by construction, only that the two counts are **consistent with** that reading, both before
+and after.
+
+## Ruling L1-C — read this before concluding anything from `reservation_degraded`/`reservation_partial` falling
+
+A topped-up rung has an empty `missing`, so it is `complete`, so `compose.py`'s `if
+reservation.complete: return candidate` **ends the gap ladder at that rung**.
+`reservation_degraded` and `reservation_partial` are ladder **totals** across however many
+rungs the ladder walks before stopping, so a fall from `5/5` (BEFORE) to `1/1` (AFTER, the one
+run that shows it) is **the ladder stopping sooner, not the matcher converging more often**.
+This was ruled correct: property 2 cannot be satisfied without it, and it restores the
+pre-Task-1 shape under which v3's titanium-glass committed at `compose_gap = 2` and reached
+`certify`. A reader who sees 5 → 1 and concludes the oracle got better at matching has
+misread this document. It also means the composer now commits rung 0's narrower packing
+where before it could walk to a wider one — **area and `compose_gap` may move for that
+reason alone**. Here, `compose_gap` did not move (2 → 2), and area is unchanged from v3's
+figure (11297), but that is a fact about this cell, not a rule that generalizes.
+
+## Comparison to v3 (carried forward, unchanged from the original)
+
+v3 (same cell, same budget, same policy): composed, wired all 26 cut lanes (`unrouted_cuts=0`),
+reached `validate.certify`, refused with exactly four `power.coverage` findings, one check,
+nothing else wrong — 5993 buildings, area 11297 (1.97x of best-known 5727), 80 splitters, 61
+Tesla towers, 76 of 80 splitters covered, `{power.coverage: 4}`.
+
+AFTER (this measurement, when it emits — r1, r2, certify attempt 2, all bit-identical): 5994
+buildings, area 11297 (**1.9725859961585472**, i.e. still ≈1.97x of best-known 5727), 80
+splitters, 62 Tesla towers, `errors_by_check: {}` — **zero findings**, an improvement over
+v3's four `power.coverage` findings. This is the "power.coverage findings are now what
+convicts it" shape from the brief's Step 3 list only in the sense that power.coverage is now
+**fully resolved** rather than "finally getting a fair test and still convicting" — Lever 2
+(the composition power infill) got its fair test here and the extra tower it stands closes
+every gap v3 left open, on the runs where the build reaches that point at all.
+
+## Regression, named explicitly
+
+Task 5's BEFORE measurement is a **regression**: the hierarchical-v4 branch, at that
+commit, made `titanium-glass/all-products @ budget 60` **worse than the v3 tree** — v3
+reached `certify` and refused only on four `power.coverage` findings; the branch instead
+refused upstream at the router with `unrouted_cuts=4`, never reaching `certify` at all. Task
+4b's partial top-up is the repair for that regression, and this AFTER measurement shows the
+repair restores router convergence (`unrouted_cuts: 4 → 0`) and, in three of four runs,
+restores emission with a clean certify report — but the fourth run shows the restoration is
+not yet fully reliable at this budget: one run of four still refuses, at a different stage
+(band/orientation finalization) that Task 5's BEFORE measurement never reached either.
+
+## Neither of the two required rounds (r1, r2) directly show reservation/unrouted-cut counts
+
+Both required rounds emitted, and `probe.py` only ever captures the `stats` line on the
+refusal path — so `reservation_degraded`, `reservation_partial`, `reservation_missing`,
+`power_infill_towers`, `power_uncovered_tiles` and `unrouted_cuts` are simply **absent** from
+r1 and r2's own sidecars, not zero. The AFTER-column values in the table above for those keys
+come from certify attempt 1, the one after-topup run that refused and therefore printed a
+stats line. Its `area`/`buildings` figures were not directly observable (it refused before
+producing a `Build`); its `unrouted_cuts=0` and `reservation_missing=0` are consistent with,
+but not proof of, what compose produced in r1/r2/certify-attempt-2's identical successful
+output, since the divergence between the two outcomes happens strictly after compose, in
+band/orientation finalization.
+
+## Files
+
+- `titanium-glass-b60-after-topup-r{1,2}.{json,log,shellwall.txt}`, `-load.txt` — the two
+  required rounds, both EMITTED.
+- `titanium-glass-b60-after-topup.blueprint.txt` — the emitted blueprint (81256 bytes; both
+  rounds wrote the same file, matching each other byte-for-byte per the CLI's own report).
+- `titanium-glass-b60-after-topup-certify{,2}.{json,log,shellwall.txt}`, `-load.txt` — the
+  two certify-confirmation attempts (1: refused before certify; 2: emitted, certify clean).
+- `titanium-glass-b60-{r1,r2}.*` — **Task 5's original files, untouched**, the committed
+  record of the regression.
