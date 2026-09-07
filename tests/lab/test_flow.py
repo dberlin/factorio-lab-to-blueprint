@@ -538,6 +538,13 @@ class TestBoundaryRule:
         assert unsupplied_inputs(pristine, data, inputs) == ("proliferator-3",)
         assert unsupplied_inputs(pristine, data, inputs, exempt=frozenset({"proliferator-3"})) == ()
 
+    def test_an_explicit_empty_external_map_does_not_restore_flow_inputs(
+        self, pristine: FlowSelection, data: Dataset
+    ) -> None:
+        assert unsupplied_inputs(
+            pristine, data, {"fire-ice": Fraction(1)}, external={}
+        ) == ("fire-ice",)
+
 
 def _selection_fixture() -> FlowSelection:
     """A small selection with items, recipes, and a byproduct row of neither."""

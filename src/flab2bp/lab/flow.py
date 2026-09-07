@@ -961,6 +961,7 @@ def unsupplied_inputs(
     external_inputs: Mapping[str, Fraction],
     *,
     exempt: frozenset[str] = frozenset(),
+    external: Mapping[str, Fraction] | None = None,
 ) -> tuple[str, ...]:
     """Items we would ask the player to belt in that FactorioLab does not.
 
@@ -970,8 +971,12 @@ def unsupplied_inputs(
     pinning -- a flow containing no stone whose blueprint asked for stone.  With
     the selection pinned this must be empty; if it is not, the pin is leaking and
     the caller must refuse rather than ship the belt.
+
+    ``external`` reuses the same selection's already-derived external item map;
+    only ``None`` requests a fresh derivation.
     """
-    return tuple(sorted(set(external_inputs) - set(flow.external_items(data)) - exempt))
+    supplied = flow.external_items(data) if external is None else external
+    return tuple(sorted(set(external_inputs) - set(supplied) - exempt))
 
 
 def cross_check(
@@ -983,6 +988,7 @@ def cross_check(
     external_inputs: Mapping[str, Fraction],
     outputs: Mapping[str, Fraction] | None = None,
     display_rate: DisplayRate = DisplayRate.PerMinute,
+    external: Mapping[str, Fraction] | None = None,
 ) -> tuple[str, ...]:
     """Compare our exact solve against FactorioLab's exact numbers.
 
@@ -1005,6 +1011,9 @@ def cross_check(
     the caller must say which candidate it is comparing.  When a row has been
     through a spreadsheet its value is no longer exact, and the comparison says
     so rather than reporting a difference the file cannot actually support.
+
+    ``external`` may carry the same derived map used by the frontier boundary
+    check, avoiding a second row scan for the chosen candidate.
     """
     findings: list[str] = []
     per_second = _SECONDS_PER_PERIOD[display_rate]
@@ -1035,7 +1044,7 @@ def cross_check(
             f"{recipe_id}: the flow runs {by_recipe[recipe_id].machines} machine(s); we build none"
         )
 
-    supplied = flow.external_items(data)
+    supplied = flow.external_items(data) if external is None else external
     findings.extend(_rate_findings(flow, supplied, external_inputs, per_second, "belt in", "uses"))
     for item_id in sorted(set(supplied) - set(external_inputs)):
         findings.append(
