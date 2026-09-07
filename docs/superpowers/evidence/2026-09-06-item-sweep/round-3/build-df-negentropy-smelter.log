@@ -1,0 +1,26 @@
+sequence-pair / no-proliferator: 256 machines, 15096 tiles, 9838 buildings
+primary_band: 200
+certified_bands: 200
+inputs to belt in: coal, copper-ore, energy-shard, hydrogen, iron-ore, negentropy-singularity, organic-crystal, silicon-ore, stone, sulfuric-acid, titanium-ore, unipolar-magnet, water  (25 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-1 (6.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; 18 run(s) raised to conveyor-belt-2, conveyor-belt-3; stack 1; 0 piler(s)
+  entry lanes: coal 3 (needs 2 at 30/s)
+  entry lanes: hydrogen 2 (needs 1 at 30/s)
+  entry lanes: iron-ore 2 (needs 1 at 30/s)
+  entry lanes: organic-crystal 2 (needs 1 at 30/s)
+  entry lanes: silicon-ore 2 (needs 1 at 30/s)
+  entry lanes: stone 2 (needs 1 at 30/s)
+  entry lanes: sulfuric-acid 3 (needs 1 at 30/s)
+  entry lanes: titanium-ore 3 (needs 1 at 30/s)
+  entry lanes: water 2 (needs 1 at 30/s)
+  2 strategy/candidate pair(s) produced no layout:
+    freeform/all-products: the 30s deadline passed with no completed packing of 38 strips; 4 packs were routed in that time and the best of them still left 1 nets unrouted (worst 2), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec
+    sequence-pair/all-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout
+
+candidate           strategy      area  errors
+no-proliferator     sequence-pair   15096       0
+output-products     sequence-pair   15372       0
+no-proliferator     freeform     27789       0
+output-products     freeform     27789       0
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/item-sweep/docs/superpowers/evidence/2026-09-06-item-sweep/round-3/bp-df-negentropy-smelter.txt
