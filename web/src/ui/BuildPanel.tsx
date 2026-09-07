@@ -14,7 +14,6 @@ import {
   type BuildOptions,
   BuildRequestError,
   DEFAULT_OPTIONS,
-  isSettled,
   type Job,
   ProliferatorTier,
   projectSolve,
@@ -237,7 +236,7 @@ export function BuildPanel() {
             checked={options.trace}
             onChange={(event) => set('trace', event.target.checked)}
           />
-          Trace search (freeform, live)
+          Trace search (live)
         </label>
 
         <fieldset className="candidate-policies checkbox">
@@ -375,7 +374,19 @@ export function BuildPanel() {
 
       {busy && job && <Progress job={job} />}
 
-      {job && options.trace && <TracePanel jobId={job.id} active={!isSettled(job)} />}
+      {/* Gated on the JOB's own `options.trace` (I3), never the live form
+          checkbox above: unticking it mid-build must not disappear the
+          panel for a job that is still tracing, and ticking it during an
+          untraced build must not mount one that polls forever.
+
+          `active` is always `true` here (I4): `jobs.py`'s `finally` drains
+          the collector's LAST frames only after the job is already marked
+          terminal, so gating on `isSettled(job)` tore the panel down before
+          those frames -- and the `complete` handshake they carry
+          (`jobs.py:630`, `TracePanel.tsx`'s own `if (page.complete) return`)
+          -- ever had a chance to arrive. The panel now keeps polling on its
+          own until it observes `complete`, whatever the job's state is. */}
+      {job && job.options.trace && <TracePanel jobId={job.id} active={true} />}
 
       {requestError && (
         <p role="alert" className="error">

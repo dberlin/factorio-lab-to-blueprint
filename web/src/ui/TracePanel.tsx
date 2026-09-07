@@ -19,10 +19,27 @@ import { pollTrace, TRACE_POLL_MS, type TraceFrame } from '../api/trace';
 import { traceFrameLabel, traceFrameToBlueprint } from '../model/traceScene';
 import { useBlueprint } from '../state/BlueprintProvider';
 
+/** I5: how many CONSECUTIVE poll failures in a row before the live tail
+    actually gives up, rather than retrying forever. A single 500 or network
+    blip must not end it; enough in a row that retrying no longer looks
+    transient should. */
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
+/** Backoff cap for a failed poll, as a multiple of {@link TRACE_POLL_MS}. */
+const MAX_POLL_BACKOFF_MULTIPLE = 4;
+
 export function TracePanel({ jobId, active }: { jobId: string; active: boolean }) {
   const { loadSnapshot, setTraceFrame, traceShow, setTraceShow } = useBlueprint();
   const [frames, setFrames] = useState<TraceFrame[]>([]);
   const [dropped, setDropped] = useState(0);
+  // The ring's OWN eviction (I6) — a bounded window doing its job, reported
+  // separately from `dropped` (genuine stage-1/channel loss) so a reader is
+  // never told a healthy build lost data.
+  const [evicted, setEvicted] = useState(0);
+  // I5: set once the poll loop gives up after `MAX_CONSECUTIVE_POLL_FAILURES`
+  // in a row, so the UI says so instead of silently freezing while still
+  // reading "Live tail".
+  const [pollError, setPollError] = useState<string | null>(null);
   const [tailing, setTailing] = useState(true);
   // The frame the scrubber is pinned to while `tailing` is false, tracked by
   // `seq` rather than array index. The held-frames buffer is capped
@@ -43,9 +60,32 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
     // `next` straight back, with no arithmetic on it.
     let cursor = -1;
     let stopped = false;
+    // I5: consecutive failures, reset on every success. Not persisted across
+    // renders — a genuinely stalled poll re-mounting (new `jobId`) deserves a
+    // fresh run, not a carried-over count.
+    let failures = 0;
     (async () => {
       while (!stopped) {
-        const page = await pollTrace(jobId, cursor, controller.signal);
+        let page;
+        try {
+          page = await pollTrace(jobId, cursor, controller.signal);
+        } catch (cause) {
+          // An abort from cleanup below is the expected teardown path, not a
+          // failure to report.
+          if (stopped) return;
+          failures += 1;
+          if (failures > MAX_CONSECUTIVE_POLL_FAILURES) {
+            // The loop is stopping itself, permanently, for THIS mount — say
+            // so rather than leaving "Live tail" checked over a frame count
+            // that has quietly stopped moving.
+            setPollError(cause instanceof Error ? cause.message : String(cause));
+            return;
+          }
+          await new Promise((resolve) =>
+            setTimeout(resolve, TRACE_POLL_MS * Math.min(2 ** failures, MAX_POLL_BACKOFF_MULTIPLE)),
+          );
+          continue;
+        }
         // Aborting the in-flight request is not enough on its own: an abort
         // can lose the race against a response that already arrived (e.g. a
         // real build's `load()` settles the job and this effect is cleaned
@@ -54,14 +94,17 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
         // what actually stops a frame from a poll that was told to stop from
         // repainting over a fresh real result.
         if (stopped) return;
+        failures = 0;
+        setPollError(null);
         cursor = page.next;
-        // This total folds three counters together (server.py): the
-        // parent-side ring's own evictions, stage-1 overflow, and each raced
-        // arm's `TraceChannel` drops. A raced arm's share only lands once
-        // that arm settles, so a figure read mid-run is legitimately partial
-        // — never presented below as a final count (task-11-addendum.md
-        // Ruling 4).
+        // Genuine loss only (I6): stage-1 overflow at the parent, plus each
+        // raced arm's own `TraceChannel` drops, folded in once that arm
+        // settles — so a figure read mid-run is legitimately partial, never
+        // presented below as a final count (task-11-addendum.md Ruling 4).
+        // The ring's OWN eviction is reported separately as `evicted`: a
+        // bounded window doing its job, not data the search actually lost.
         setDropped(page.dropped);
+        setEvicted(page.evicted);
         if (page.frames.length > 0) {
           setFrames((held) => [...held, ...page.frames].slice(-256));
         }
@@ -82,6 +125,12 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
   const pinnedIndex = pinnedSeq === null ? -1 : frames.findIndex((f) => f.seq === pinnedSeq);
   const selectedIndex = tailing || pinnedIndex === -1 ? lastIndex : pinnedIndex;
   const shown = frames[selectedIndex];
+  // #16: when a pinned frame has aged out of the buffered window, the
+  // fallback above silently starts showing the newest frame while `tailing`
+  // stays unchecked -- the stated mode (pinned) and the actual behaviour
+  // (following newest) disagree. Only when NOT tailing: while tailing is on,
+  // following newest is exactly what is stated, not a surprise.
+  const pinnedExpired = !tailing && pinnedSeq !== null && pinnedIndex === -1;
 
   useEffect(() => {
     if (shown) {
@@ -97,6 +146,11 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
     return (
       <section className="trace-panel" data-testid="trace-panel">
         <p className="note">Waiting for the first search snapshot…</p>
+        {pollError && (
+          <output className="note warn" data-testid="trace-poll-stopped">
+            Live tail stopped: {pollError}
+          </output>
+        )}
       </section>
     );
   }
@@ -174,6 +228,15 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
         <span className="note" data-testid="trace-count">
           {frames.length} snapshot{frames.length === 1 ? '' : 's'} seen
         </span>
+        {evicted > 0 && (
+          // I6: the ring evicting its OLDEST frames past its bound is normal
+          // -- a rolling window doing exactly its job -- and reported here as
+          // plain informational text, not a warning, so a reader is never
+          // told a healthy build lost data.
+          <span className="note" data-testid="trace-evicted">
+            {evicted} older snapshot{evicted === 1 ? '' : 's'} rolled off the buffered window.
+          </span>
+        )}
         {dropped > 0 && (
           // An `<output>`, per the canvas caption's precedent (Toolbar.tsx):
           // this updates on every poll, and `<output>` carries an implicit
@@ -185,10 +248,29 @@ export function TracePanel({ jobId, active }: { jobId: string; active: boolean }
           // arm's share lands only at settlement, so this can still be a
           // partial mid-run figure), and it does not imply every drop is
           // congestion (`TraceChannel.offer` catches broadly, so a
-          // structurally unsendable event increments the same counter).
+          // structurally unsendable event increments the same counter). This
+          // is GENUINE loss (I6) -- the ring's own eviction is `evicted`
+          // above, never folded in here.
           <output className="note warn" data-testid="trace-dropped">
-            {dropped} snapshot(s) dropped — folds the parent-side ring with each raced arm's own
-            drops (added once that arm settles); not every drop means congestion.
+            {dropped} snapshot(s) dropped — a raced arm's own drops land once that arm settles, so
+            this can still be a partial mid-run figure; not every drop means congestion.
+          </output>
+        )}
+        {pollError && (
+          // I5: the poll loop gave up after repeated consecutive failures.
+          // Said here rather than left implicit, so "Live tail" checked and a
+          // frame count that has quietly stopped moving do not disagree.
+          <output className="note warn" data-testid="trace-poll-stopped">
+            Live tail stopped: {pollError}
+          </output>
+        )}
+        {pinnedExpired && (
+          // #16: the pinned snapshot aged out of the buffered window: say so,
+          // so the newest-frame fallback below is not mistaken for the pin
+          // still holding.
+          <output className="note warn" data-testid="trace-pin-expired">
+            Pinned snapshot expired — it aged out of the buffered window; showing the newest
+            snapshot instead.
           </output>
         )}
       </div>

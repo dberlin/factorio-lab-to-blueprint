@@ -71,7 +71,15 @@ export const TraceFrame = z.object({
 export const TracePage = z.object({
   frames: z.array(TraceFrame),
   next: z.number(),
+  /** Genuine loss only: stage-1 overflow at the parent, plus each raced arm's
+      own channel drops (folded in once that arm settles). Never the ring's
+      own eviction — see `evicted`. */
   dropped: z.number(),
+  /** The ring's OWN eviction of its oldest frames past its bound — a rolling
+      window doing its job, not data the search lost. Reported separately
+      from `dropped` so a healthy build past the window size is never told it
+      lost data. `.default(0)` covers callers/fixtures predating this field. */
+  evicted: z.number().default(0),
   complete: z.boolean(),
 });
 

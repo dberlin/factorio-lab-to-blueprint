@@ -192,6 +192,39 @@ test('a response that arrives after polling has been told to stop is discarded, 
   expect(loadSnapshotCalls.length).toBe(before);
 });
 
+// ---- I5: the poll loop tolerates transient failures rather than dying ----
+
+test('a transient poll failure is retried, not treated as the permanent end of the live tail', async () => {
+  const before = loadSnapshotCalls.length;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    if (calls === 1) return new Response('boom', { status: 500 });
+    return new Response(
+      JSON.stringify({ frames: [FRAME], next: 1, dropped: 0, evicted: 0, complete: true }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  }) as unknown as typeof fetch;
+
+  render(<TracePanel jobId="abc123" active={true} />);
+
+  await waitFor(() => expect(loadSnapshotCalls.length).toBeGreaterThan(before));
+  expect(calls).toBeGreaterThanOrEqual(2);
+  expect(screen.queryByTestId('trace-poll-stopped')).toBeNull();
+});
+
+test('the poll loop says so once it gives up after repeated consecutive failures', async () => {
+  globalThis.fetch = (async () => new Response('boom', { status: 500 })) as unknown as typeof fetch;
+
+  render(<TracePanel jobId="abc123" active={true} />);
+
+  // "Live tail" must not be left reading as live over a frame count that has
+  // quietly stopped moving -- the loop says it gave up.
+  expect(await screen.findByTestId('trace-poll-stopped', {}, { timeout: 5000 })).toHaveTextContent(
+    /live tail stopped/i,
+  );
+});
+
 // ---- Task 11: scrubber, live tail, lanes, dropped-frame honesty, metadata ----
 
 test('scrubbing turns the live tail off and loads the scrubbed frame', async () => {
@@ -237,6 +270,55 @@ test('re-checking live tail jumps back to the newest frame', async () => {
   fireEvent.click(tail);
   expect(tail).toBeChecked();
   expect(slider).toHaveValue(String(threeFrames.length - 1));
+});
+
+test('a pinned snapshot that ages out of the buffered window says so, rather than silently tracking newest', async () => {
+  // #16: the client buffers at most 256 frames (`.slice(-256)`); a flood of
+  // new ones can push a pinned frame out of that window entirely.
+  const first = { ...FRAME, seq: 1, t: 1 };
+  const flood: TraceFrame[] = Array.from({ length: 260 }, (_, i) => ({
+    ...FRAME,
+    seq: i + 2,
+    t: i + 2,
+  }));
+  const calls = serving(
+    { body: { frames: [first], next: 1, dropped: 0, evicted: 0, complete: false } },
+    {
+      body: {
+        frames: flood,
+        next: flood.at(-1)?.seq ?? 1,
+        dropped: 0,
+        evicted: 0,
+        complete: true,
+      },
+    },
+  );
+
+  render(<TracePanel jobId="abc123" active={true} />);
+  const slider = await screen.findByRole('slider', { name: /snapshot/i });
+
+  // Pin the only frame delivered so far.
+  fireEvent.keyDown(slider, { key: 'Home' });
+  expect(screen.getByRole('checkbox', { name: /live tail/i })).not.toBeChecked();
+  expect(screen.queryByTestId('trace-pin-expired')).toBeNull();
+
+  // The flood arrives and evicts the pinned frame from the client's window.
+  await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2));
+  expect(await screen.findByTestId('trace-pin-expired', {}, { timeout: 2000 })).toHaveTextContent(
+    /pinned snapshot expired/i,
+  );
+});
+
+test("the ring's own eviction is informational, not a warning -- a healthy build is not told it lost data", async () => {
+  serving({ body: { frames: [FRAME], next: 1, dropped: 0, evicted: 12, complete: true } });
+
+  render(<TracePanel jobId="abc123" active={true} />);
+
+  const evictedNote = await screen.findByTestId('trace-evicted');
+  expect(evictedNote).toHaveTextContent('12 older snapshots rolled off the buffered window.');
+  expect(evictedNote.tagName.toLowerCase()).not.toBe('output');
+  expect(evictedNote.className).not.toMatch(/warn/);
+  expect(screen.queryByTestId('trace-dropped')).toBeNull();
 });
 
 test('dropped frames are stated rather than hidden', async () => {
