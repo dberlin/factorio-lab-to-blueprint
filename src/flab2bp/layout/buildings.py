@@ -31,10 +31,13 @@ import bisect
 from collections.abc import Collection, Iterable, Iterator, Mapping, MutableSequence, Sequence
 from enum import Enum
 from fractions import Fraction
-from typing import overload
+from typing import TYPE_CHECKING, overload
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding
+
+if TYPE_CHECKING:
+    from flab2bp.layout.base import Placement
 
 
 class Kind(Enum):
@@ -479,11 +482,24 @@ class Buildings(_BuildingsQueries):
         self._by_tile = {k: tuple(v) for k, v in by_tile.items()}
         self._bounds = self._compute_bounds()
 
-    # NOTE: ``Buildings.of(placement)`` is deliberately NOT in this task.  It
-    # needs the ``Placement.buildings_index`` field, which Task 3 adds; writing
-    # it here would not type-check against a field that does not yet exist, and
-    # would require importing ``Placement`` from ``flab2bp.layout.base`` for no
-    # reason this task needs.  Task 3 Step 4 adds both the field and ``of``.
+    @classmethod
+    def of(cls, placement: Placement) -> Buildings:
+        """The shared index for a frozen ``Placement``, building it once.
+
+        Every caller that asks a question about ``placement`` -- ``bounds``
+        today, more of ``_BuildingsQueries`` as later tasks convert their call
+        sites -- gets the SAME index rather than each building its own: the
+        first call memoises it onto ``placement.buildings_index`` via
+        ``object.__setattr__`` (the field is ``init=False`` precisely so
+        ``dataclasses.replace`` never carries a stale one onto different
+        records), and every later call for that placement answers from it.
+        """
+        cached = placement.buildings_index
+        if cached is not None:
+            return cached
+        index = cls(placement.buildings)
+        object.__setattr__(placement, "buildings_index", index)
+        return index
 
 
 #: Record fields ``MutableBuildings.__setitem__`` treats as immutable after

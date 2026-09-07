@@ -37,6 +37,7 @@ from fractions import Fraction
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
 if TYPE_CHECKING:
+    from flab2bp.layout.buildings import Buildings
     from flab2bp.spec import BuildSpec
 
 
@@ -526,6 +527,12 @@ class Placement:
     frame: AreaFrame | None = None
     #: Explicit ownership handoff: pipeline completion is skipped only when set.
     completion: PlacementCompletion | None = None
+    #: Lazily built index over :attr:`buildings`, shared by every caller that
+    #: asks a question about this placement.  ``init=False`` so
+    #: :func:`dataclasses.replace` never carries one placement's index onto
+    #: another's records -- a stale index here would answer confidently and
+    #: wrongly, which is worse than being slow.
+    buildings_index: Buildings | None = field(default=None, init=False, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.completion is not None and self.frame is None:
@@ -533,12 +540,16 @@ class Placement:
 
     @property
     def bounds(self) -> tuple[int, int, int, int]:
-        """``(min_x, min_y, max_x, max_y)`` inclusive of every footprint tile."""
-        if not self.buildings:
-            return (0, 0, 0, 0)
-        xs = [b.x for b in self.buildings] + [b.x + b.width - 1 for b in self.buildings]
-        ys = [b.y for b in self.buildings] + [b.y + b.height - 1 for b in self.buildings]
-        return (min(xs), min(ys), max(xs), max(ys))
+        """``(min_x, min_y, max_x, max_y)`` inclusive of every footprint tile.
+
+        Answers from the placement's index.  This used to run four full list
+        comprehensions over ``buildings`` on every call, and it is called from
+        inside the freeform search loop and finalize's frame-candidate loop --
+        24+ traced call sites, several of them per placement candidate.
+        """
+        from flab2bp.layout.buildings import Buildings
+
+        return Buildings.of(self).bounds()
 
     @property
     def area(self) -> int:
