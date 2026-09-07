@@ -11,5 +11,6 @@ per-collection backend table and why each backend was chosen.
 from __future__ import annotations
 
 from flab2bp.indexed.reference_graph import ReferenceGraph
+from flab2bp.indexed.sorters import Sorters
 
-__all__: tuple[str, ...] = ("ReferenceGraph",)
+__all__: tuple[str, ...] = ("ReferenceGraph", "Sorters")
