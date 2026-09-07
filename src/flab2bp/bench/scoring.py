@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from flab2bp.bench.types import CellResult
+from flab2bp.indexed import Cells
 
 #: Below this relative margin the two strategies are declared equivalent on
 #: density and the tie-break moves on to time.  Area differences smaller than a
@@ -69,14 +70,7 @@ class Verdict:
 
 def _best_per_url(cells: Sequence[CellResult], strategy: str) -> dict[str, CellResult]:
     """The best valid candidate per URL, which is what the pipeline would ship."""
-    best: dict[str, CellResult] = {}
-    for cell in cells:
-        if cell.strategy != strategy or not cell.valid:
-            continue
-        current = best.get(cell.url_id)
-        if current is None or cell.area < current.area:
-            best[cell.url_id] = cell
-    return best
+    return Cells.of(cells).best_per_url(strategy=strategy)
 
 
 def compare(cells: Sequence[CellResult], baseline: str, challenger: str) -> Verdict:
