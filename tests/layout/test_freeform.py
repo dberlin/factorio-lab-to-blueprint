@@ -39,6 +39,7 @@ from flab2bp.layout.base import (
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.freeform import (
     _BLAME_MAX_WALL,
+    _DETERMINISTIC_PACK_STRIPS,
     _ENTRY_RING,
     _LEVEL_TOLL,
     _ROUTE_RING,
@@ -60,6 +61,7 @@ from flab2bp.layout.freeform import (
     _commit_paths,
     _connect_short_cuts,
     _dests,
+    _deterministic_pack_work,
     _direct_column_deltas,
     _direct_net_candidates,
     _direct_origin_deltas,
@@ -2623,8 +2625,9 @@ ALL_SPECS = [single_recipe_spec, two_stage_spec, magnetic_ring_spec, proliferate
 
 #: Freeform used to refuse any strip plan where one producer lane had to feed
 #: several consumer lanes, because a belt tile has one ``output_obj``.  It now
-#: taps a different TILE of the lane for each consumer and junctions there with
-#: a splitter, so the gap is closed and the marker that stood here is gone.
+#: closes the gap by having later nets branch off a sibling's committed path
+#: when they share a source lane (``_route``'s ``same_src``); ``_tap_source``
+#: builds the branch point as a splitter, so the marker that stood here is gone.
 #:
 #: Kept as a note rather than a marker: the tests it was attached to are the
 #: ones that prove the fan-out works, and they assert it directly now.
@@ -3172,6 +3175,31 @@ def test_greedy_seed_adds_only_requested_routing_clearance() -> None:
     assert freeform._routing_seed_clearance(large, sprayed_lanes=0) == 1
     assert freeform._routing_seed_clearance(large[:-1], sprayed_lanes=0) == 0
     assert freeform._routing_seed_clearance(large, sprayed_lanes=1) == 0
+
+
+class TestThePackWorkBoundScalesWithThePack:
+    """A 53-strip pack cannot have the same work bound as a 15-strip one.
+
+    Measured on `universe-matrix` (spec 2026-09-07-lane-fanout-design.md
+    section 4.1): at the fixed 0.02 units the 53-strip pack returned UNKNOWN
+    five solves out of five and produced no incumbent at all, giving up in
+    2.58s with 299s of a 300s budget unspent.
+    """
+
+    def test_the_calibrated_size_keeps_its_calibrated_bound(self) -> None:
+        assert _deterministic_pack_work(_DETERMINISTIC_PACK_STRIPS) == 0.02
+
+    def test_a_smaller_pack_is_not_given_more_work(self) -> None:
+        assert _deterministic_pack_work(4) <= 0.02
+
+    def test_a_much_larger_pack_is_given_proportionally_more(self) -> None:
+        small = _deterministic_pack_work(_DETERMINISTIC_PACK_STRIPS)
+        large = _deterministic_pack_work(53)
+        assert large > small, "a 53-strip pack must get more work than a 15-strip one"
+        assert large / small >= 53 / _DETERMINISTIC_PACK_STRIPS, (
+            "the bound must grow at least linearly in the strip count: a pack's "
+            "CP-SAT model grows at least that fast"
+        )
 
 
 # --- fallback --------------------------------------------------------------
@@ -6988,9 +7016,10 @@ class TestSolverActuallyRuns:
         """The gap this used to pin as unfixable, now closed.
 
         A belt tile has one ``output_obj``, so a lane feeding four consumers
-        cannot simply point at all four. It taps a different TILE of the lane
-        for each and puts a splitter there -- the lane keeps flowing past the
-        tap, and the branch draws from the junction.
+        cannot simply point at all four. Later nets branch off a sibling's
+        committed path instead (``_route``'s ``same_src``), and ``_tap_source``
+        builds that branch point as a splitter -- the lane keeps flowing past
+        the tap, and the branch draws from the junction.
 
         This test previously asserted the opposite (that the spec was refused),
         deliberately written to fail the moment the gap closed. It did.
@@ -8627,7 +8656,7 @@ def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
         fixed_at={},
         seed=None,
         time_budget_s=5.0,
-        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE,
     )
     assert outcome is not None
     windowed = outcome.pack
@@ -8648,7 +8677,7 @@ def test_pack_window_reports_its_exact_cp_sat_outcome() -> None:
         fixed_at={},
         seed=None,
         time_budget_s=5.0,
-        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE,
     )
     assert outcome is not None
     assert outcome.status == "OPTIMAL"
@@ -13148,6 +13177,48 @@ class TestOneLaneCanServeSeveralDestinations:
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=4.0)
+        report = _full_report(p, spec)
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
+        assert p.stats["route_failures"] == 0.0
+
+    def test_a_lane_serves_more_consumers_than_it_has_tiles(self) -> None:
+        """A producer lane plans and lays out with more consumer strips than tiles.
+
+        `_fanout_shortfall` did NOT fire for this fixture shape, before or
+        after its deletion: measured for consumers=3..8 (the vendored
+        dataset's cap on distinct `copper-ingot` consumers), `_merge_lanes`
+        packs the distinct one-machine dest groups onto exactly
+        `producer.width` lanes, and every merged key ends up with
+        `n_src == n_sink == 1` -- the guard was structurally inert here. The
+        guard's real firing shape was different: ONE dest group sharded into
+        many strips against one narrow producer lane --
+        `universe-matrix#37`, `n_src=1`, `n_sink=15`, `tiles=10`. The
+        regression evidence for removing the guard is therefore the corpus
+        control in
+        `docs/superpowers/evidence/2026-09-07-lane-fanout/gate/control-task2.md`,
+        not this test.
+
+        What this test does cover, and why it is still worth keeping: the
+        router's model of a shared source lane is not "one tap per TILE" --
+        nets that share a source lane branch off each other's committed paths
+        (`_route`'s `same_src` grouping), and `_tap_source` builds the
+        splitter on that path.  Measured on `universe-matrix`: a 10-tile lane
+        wired all twelve of its consumers
+        (spec 2026-09-07-lane-fanout-design.md section 2).
+        """
+        spec = one_machine_fan_out_spec(4)
+        strips = plan_strips(spec, strip_len=6)
+        producers = [s for s in strips if s.group_key.startswith("copper-ingot")]
+        assert len(producers) == 1, "one machine cannot be split across shards"
+        consumers = [s for s in strips if "copper-ingot" in s.in_lanes]
+        assert len(consumers) > producers[0].width, (
+            "this spec no longer exercises fan-out past the lane's tiles: "
+            f"{len(consumers)} consumer lane(s) against a {producers[0].width}-tile lane"
+        )
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            workers=DETERMINISTIC_WORKERS,
+        ).lay_out(spec, time_budget_s=8.0)
         report = _full_report(p, spec)
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
         assert p.stats["route_failures"] == 0.0
@@ -24337,12 +24408,14 @@ def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
 
     "no pack was ever produced" reads as a statement about the packing, and on
     the user's compressed-mall URL it was read that way: at 33 strips every one
-    of the fifteen candidate solves returned UNKNOWN inside the fixed
-    ``_DETERMINISTIC_PACK_WORK`` allowance, the sweep exhausted its candidates
-    in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and none of that
-    was in the sentence.  INFEASIBLE would have been a verdict; UNKNOWN is a
-    clock, and a refusal that cannot tell them apart sends the next reader to
-    the packer's model instead of to its work bound.
+    of the fifteen candidate solves returned UNKNOWN inside the
+    ``_deterministic_pack_work`` allowance that pack was given -- then a fixed
+    0.02 units for every size, the value ``_deterministic_pack_work`` still
+    gives at the calibrated fifteen-strip size -- the sweep exhausted its
+    candidates in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and
+    none of that was in the sentence.  INFEASIBLE would have been a verdict;
+    UNKNOWN is a clock, and a refusal that cannot tell them apart sends the
+    next reader to the packer's model instead of to its work bound.
     """
 
     def unknown_every_solve(

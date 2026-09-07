@@ -362,7 +362,21 @@ _RELATION_STRIP_PAIR = 2
 #: routing failed exact validation.  0.02 deterministic units reaches the same
 #: routable incumbent well inside its 0.6s wall allowance; 0.005 stopped before
 #: that incumbent existed.  The wall limit remains armed as the hard deadline.
-_DETERMINISTIC_PACK_WORK = 0.02
+#:
+#: IT SCALES WITH THE PACK, and the fixed constant was a defect.  0.02 was
+#: calibrated on fifteen strips and was handed unchanged to a 53-strip
+#: `universe-matrix` pack, which returned UNKNOWN on all five solves and
+#: produced no incumbent at all -- giving up in 2.58s with 299s of a 300s
+#: budget unspent.  See docs/superpowers/specs/2026-09-07-lane-fanout-design.md
+#: section 4.1.
+_DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE = 0.02
+
+
+def _deterministic_pack_work(strip_count: int) -> float:
+    """Deterministic CP-SAT units a pack of ``strip_count`` strips may spend."""
+    scale = max(1, strip_count) / _DETERMINISTIC_PACK_STRIPS
+    return _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE * scale
+
 
 #: Deterministic work allowed only for choosing among already rank-optimal port
 #: access assignments. The ranked solution remains the safe fallback; this
@@ -975,10 +989,14 @@ class Strip:
     #: a rate: ``_flank_lane``'s gap belt runs down the column east of its OWN
     #: machine, so with the drain outermost it crosses every south input lane
     #: and ``geom.belt_single_occupancy`` convicts the result.  Only the last
-    #: machine in a strip has a clear gap column.  That cap is why
-    #: ``universe-matrix`` refuses today -- 15 one-machine strips out-fan the
-    #: ``antimatter`` producer's lane -- and spec §9 R2 records the measurement
-    #: and names the next lever.
+    #: machine in a strip has a clear gap column.  That cap turns
+    #: ``universe-matrix#37`` into 15 one-machine strips.  It used
+    #: to refuse there, on ``_fanout_shortfall``'s theory that each consumer taps
+    #: a different TILE of the producer lane; that theory was measured wrong --
+    #: nets sharing a source lane branch off each other's committed paths
+    #: (``_route``'s ``same_src``), and a 10-tile lane wired all twelve of its
+    #: consumers.  See ``docs/superpowers/specs/2026-09-07-lane-fanout-design.md``
+    #: section 2, and section 4 for the two blockers behind it.
     drain_outermost: bool = False
     family_id: StripFamilyId | None = None
     machine_start: int = 0
@@ -4301,13 +4319,15 @@ def _feedback_objective_score(
 #: gets `share * _PACK_SHARE / len(heights)` and is followed by a 1.9-4.6 s
 #: preparation, so a repair that costs more than a second buys nothing.
 C_WINDOW_SECONDS = 1.0
-#: Deterministic work bound for a window solve.  A full pack of fifteen or more
-#: strips gets `_DETERMINISTIC_PACK_WORK` and is expected to stop at its first
-#: incumbent from a shelf warm start; a window has at most twelve free strips
-#: but no such guarantee, and is expected to close a small model, so it gets
-#: twenty-five times that allowance.  On an idle box this is the limit that
+#: Deterministic work bound for a window solve.  A full pack of fifteen or
+#: more strips gets `_deterministic_pack_work(len(strips))` and is expected
+#: to stop at its first incumbent from a shelf warm start; a window has at
+#: most twelve free strips but no such guarantee, and is expected to close a
+#: small model, so it gets this bound instead.  This constant is twenty-five
+#: times the *calibrated-size* allowance -- what a fifteen-strip pack gets --
+#: so larger packs narrow the ratio.  On an idle box this is the limit that
 #: fires; under `--jobs 16` the wall limit above fires first.
-C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK
+C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE
 #: One CP-SAT worker per window.  `pyproject.toml` records that a single solve
 #: already runs at ~700% CPU; a window must not race the packer for cores.
 C_WINDOW_WORKERS = 1
@@ -5239,7 +5259,7 @@ def _pack(
         # above remains the hard deadline if the machine cannot finish it.
         solver.parameters.max_deterministic_time = min(
             time_budget_s,
-            _DETERMINISTIC_PACK_WORK,
+            _deterministic_pack_work(len(strips)),
         )
     # A FUNCTION of `arrangement`, never a clock or a counter: two runs of the
     # same sweep must ask for the same arrangements in the same order, or the
@@ -6209,8 +6229,8 @@ class _Port:
         """This port moved to the ``k``-th tile of its own lane.
 
         Out-of-range or an unknown tile list leaves the port alone, so a caller
-        that asks for more taps than the lane has tiles degrades to sharing --
-        which the fan-out check then reports honestly rather than mis-linking.
+        that asks for more taps than the lane has tiles degrades to sharing.
+        Test-only: no production caller (see tests/layout/test_freeform.py).
         """
         if not self.tiles or not 0 <= k < len(self.tiles):
             return self
@@ -12383,10 +12403,11 @@ def _commit_paths(
     cells as goals; handing the answer to the linker is all this does.
 
     A belt tile has ONE ``output_obj``.  When a lane serves several consumers,
-    each of them taps a different tile of it (see ``_Port.at_tile``), and a tap
-    partway along a lane is a JUNCTION: the lane has to keep flowing east *and*
-    hand items to the branch.  ``_tap_source`` builds that as a splitter, which
-    is what the game uses and what the fixture corpus shows.
+    the later nets branch off a sibling's committed path (``_route``'s
+    ``same_src``) rather than off a further lane tile, and that branch point is
+    a JUNCTION: the lane has to keep flowing east *and* hand items to the
+    branch.  ``_tap_source`` builds that as a splitter, which is what the game
+    uses and what the fixture corpus shows.
 
     Before splitters existed, every such net rewrote the same lane-end tile and
     the last to commit won silently.  The earlier paths stayed on the grid as
@@ -19823,61 +19844,6 @@ def _place_proliferator_entry(
     )
 
 
-def _fanout_shortfall(strips: list[Strip]) -> list[str]:
-    """Producer lanes with fewer tiles than the consumers they must tap.
-
-    ``_build`` pairs the two sides of an edge cyclically -- ``srcs[k % len(srcs)]``
-    against ``sinks[k % len(sinks)]`` -- so whichever side is sharded further is
-    fully served.  More sinks than sources means a producer lane is reused, and
-    each reuse taps a different tile of that lane and junctions there.
-
-    That works right up to the point where the lane runs out of tiles: two taps
-    on one tile would need two splitters on one square.  A lane is as wide as
-    its strip, so this is rare -- but it is a property of the STRIP PLAN, decided
-    before any packing exists, and worth knowing before the height sweep rather
-    than after.  A spec that trips it refuses at every height and every budget,
-    and each attempt costs a full sweep plus the retry at
-    :data:`RETRY_BUDGET_S`.
-
-    Returns one description per offending edge, empty when the plan is servable.
-    """
-    src_lanes: dict[tuple[str, str, str, CargoDomain], int] = defaultdict(int)
-    src_tiles: dict[tuple[str, str, str, CargoDomain], int] = {}
-    sink_lanes: dict[tuple[str, str, CargoDomain], int] = defaultdict(int)
-    for s in strips:
-        for item, dest, cargo_domain in s.out_lanes:
-            for d in _dests(dest):
-                key = (s.group_key, item, d, cargo_domain)
-                src_lanes[key] += 1
-                src_tiles[key] = min(src_tiles.get(key, s.width), s.width)
-        for item in s.in_lanes:
-            sink_lanes[s.group_key, item, s.cargo_domain] += 1
-
-    out: list[str] = []
-    for (src_key, item, dest, cargo_domain), n_src in sorted(
-        src_lanes.items(),
-        key=lambda entry: (
-            entry[0][0],
-            entry[0][1],
-            entry[0][2],
-            entry[0][3].value,
-        ),
-    ):
-        n_sink = sink_lanes.get((dest, item, cargo_domain), 0)
-        if n_sink <= n_src:
-            continue
-        # Taps land on the narrowest lane of the group, so that is the one that
-        # can run out. Ceiling division: the reuse is spread round-robin.
-        per_lane = -(-n_sink // n_src)
-        tiles = src_tiles[src_key, item, dest, cargo_domain]
-        if per_lane > tiles:
-            out.append(
-                f"{item}: {src_key} lane is {tiles} tile(s) wide but must tap "
-                f"{per_lane} consumer lane(s) of {dest}"
-            )
-    return out
-
-
 def _drainable_by_port(strip: Strip) -> bool:
     """Can every output lane claim a distinct port facing the lane band?
 
@@ -20438,28 +20404,15 @@ class FreeformLayout:
         # generic routing miss. Structural failures are named before the one
         # requested-budget sweep instead.
         #
-        # Fan-out itself is no longer a shortfall: a lane serving several
-        # consumers taps a different tile for each and junctions there. What
-        # remains unservable is a lane with fewer TILES than taps to make, since
-        # two taps on one tile would need two splitters on one square.
-        # A machine no sorter can attach to is refused FIRST, because it is not
-        # a question about the packing at all: `_emit_strip` crashes on the
-        # empty lane it implies, so every later stage would be reporting a
-        # symptom of this one.
+        # A machine no sorter can attach to is the one structural refusal named
+        # before the sweep, because it is not a question about the packing at
+        # all: `_emit_strip` crashes on the empty lane it implies, so every
+        # later stage would be reporting a symptom of this one.
         unreachable = _machines_without_poses(strips)
         if unreachable:
             raise NoValidLayout(
                 "a machine in this spec has lanes to wire and no insert pose to "
                 "wire them to, so it would paste joined to nothing. " + "; ".join(unreachable[:3]),
-                spec_label=spec.label,
-                budget_s=0.0,
-            )
-
-        shortfall = _fanout_shortfall(strips)
-        if shortfall:
-            raise NoValidLayout(
-                "a producer lane has fewer tiles than the consumers it must tap, "
-                "so two junctions would have to share one tile. " + "; ".join(shortfall[:3]),
                 spec_label=spec.label,
                 budget_s=0.0,
             )
@@ -20701,20 +20654,23 @@ class FreeformLayout:
             # that returns UNKNOWN is the solve running out of its own
             # allowance, and the sentence above reads as the first while being
             # true of both.  The user's compressed-mall URL is the second: at 33
-            # strips all fifteen candidate solves ended UNKNOWN inside the fixed
-            # `_DETERMINISTIC_PACK_WORK` bound -- 0.02 units, calibrated on the
-            # fifteen-strip cell where a shelf warm start yields an incumbent at
-            # once -- and the sweep exhausted its candidates in 1.4s with 28.6s
-            # of a 30s ceiling never spent.  Raising that bound to 0.5 on the
-            # same spec turns all fifteen UNKNOWNs into four FEASIBLE packs, so
-            # the packing was never the thing that could not be found.
+            # strips all fifteen candidate solves ended UNKNOWN inside the
+            # `_deterministic_pack_work` bound that pack was given -- then a
+            # fixed 0.02 units for every size (0.02 is now only its value at
+            # the calibrated fifteen-strip size), calibrated on the
+            # fifteen-strip cell where a shelf warm start yields an incumbent
+            # at once -- and the sweep exhausted its candidates in 1.4s with
+            # 28.6s of a 30s ceiling never spent.  Raising that bound to 0.5 on
+            # the same spec turns all fifteen UNKNOWNs into four FEASIBLE
+            # packs, so the packing was never the thing that could not be
+            # found.
             solves = float(refusal_stats.get("pack_cp_solves", 0.0))
             unknown = float(refusal_stats.get("pack_cp_unknown", 0.0))
             if solves and unknown == solves:
                 unspent = max(0.0, budgets[-1] - (time.monotonic() - started))
                 work = (
-                    f", inside the {_DETERMINISTIC_PACK_WORK:g}-unit deterministic work "
-                    f"bound a pack of {len(strips)} strips is given"
+                    f", inside the {_deterministic_pack_work(len(strips)):g}-unit "
+                    f"deterministic work bound a pack of {len(strips)} strips is given"
                     if len(strips) >= _DETERMINISTIC_PACK_STRIPS
                     else ""
                 )
