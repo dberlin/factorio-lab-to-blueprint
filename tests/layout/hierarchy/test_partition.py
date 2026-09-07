@@ -3,6 +3,7 @@ from fractions import Fraction
 from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.hierarchy import partition
 from flab2bp.layout.strip_variants import _logical_strip_plans
+from flab2bp.spec import MachineMoveRecord
 from tests.layout.hierarchy.test_pressure import _chain, _chain_with_external
 
 
@@ -42,6 +43,26 @@ def test_composed_spec_matches_the_original_machine_counts():
     built = partition.composed_spec(spec, part.blocks)
     assert built.machine_count == spec.machine_count
     assert built.external_inputs == spec.external_inputs
+
+
+def test_partitioned_specs_preserve_machine_rank_provenance():
+    move = MachineMoveRecord(
+        recipe_id="ingot",
+        from_machine="assembling-machine-2",
+        to_machine="assembling-machine-1",
+        count_before=2,
+        count_after=2,
+    )
+    spec = _chain().model_copy(update={"machine_rank": "up-to", "machine_moves": (move,)})
+    part = partition.initial_partition(spec, strip_cap=12)
+
+    for block_index, block in enumerate(part.blocks):
+        sub = partition.sub_spec(spec, block, block_index)
+        assert sub.machine_rank == "up-to"
+        assert sub.machine_moves == (move,)
+    composed = partition.composed_spec(spec, part.blocks)
+    assert composed.machine_rank == "up-to"
+    assert composed.machine_moves == (move,)
 
 
 def test_composed_spec_declares_player_fed_block_deficits():
