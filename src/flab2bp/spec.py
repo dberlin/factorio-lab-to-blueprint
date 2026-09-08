@@ -20,7 +20,7 @@ from __future__ import annotations
 from enum import StrEnum
 from fractions import Fraction
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # `layout.base` imports only the standard library at runtime -- `BuildSpec`
 # itself is under TYPE_CHECKING there -- so this is not a cycle.  The refusal
@@ -119,6 +119,57 @@ class CoproductBufferProof(_Frozen):
     intrinsic_capacity: Fraction = Field(gt=0)
 
 
+class SelfLoopSeed(_Frozen):
+    """A recipe that consumes an item it also produces, and its one-off prime.
+
+    DSP machines paste EMPTY and a blueprint carries no inventory --
+    ``dsp.records.BlueprintBuilding`` has no inventory field -- so a loop whose
+    only source is itself holds zero items at t=0 and the block never starts.
+    The rates layer is right to net the loop away (``rates/solve.py:1306-1329``)
+    and the strip planner is right to build the recirculating lane; what neither
+    can express is that the lane must be filled once by hand.
+
+    ``seed_items`` is one full input batch per machine, so every machine in the
+    group can start its first craft at once.  It is sufficient because
+    ``net_per_craft`` is positive: the loop gains items from then on.
+    """
+
+    item_id: str
+    recipe_id: str
+    machine_item_id: str
+    machines: int = Field(gt=0)
+    consumed_per_craft: Fraction = Field(gt=0)
+    produced_per_craft: Fraction = Field(gt=0)
+    net_per_craft: Fraction = Field(gt=0)
+    seed_items: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _arithmetic_holds(self) -> SelfLoopSeed:
+        if self.net_per_craft != self.produced_per_craft - self.consumed_per_craft:
+            raise ValueError(
+                f"{self.recipe_id}: net_per_craft {self.net_per_craft} is not "
+                f"{self.produced_per_craft} - {self.consumed_per_craft}"
+            )
+        need = self.machines * self.consumed_per_craft
+        exact = -((-need.numerator) // need.denominator)
+        if self.seed_items != exact:
+            raise ValueError(
+                f"{self.recipe_id}: seed_items {self.seed_items} is not the "
+                f"{exact} whole items {self.machines} machine(s) need to start"
+            )
+        return self
+
+
+class MachineMoveRecord(_Frozen):
+    """One recipe the ``up-to`` rule moved to a lower-tier machine."""
+
+    recipe_id: str
+    from_machine: str
+    to_machine: str
+    count_before: int = Field(gt=0)
+    count_after: int = Field(gt=0)
+
+
 class BuildSpec(_Frozen):
     """One complete, self-consistent thing to build.
 
@@ -155,6 +206,15 @@ class BuildSpec(_Frozen):
     #: Sorter tiers the save can build, slowest first.  Every tier by default
     #: so a spec built without a request keeps today's behaviour.
     sorter_item_ids: tuple[str, ...] = ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
+    #: How FactorioLab's machine rank was read for this candidate.
+    machine_rank: str = "exact"
+    #: Under ``up-to``, every recipe whose machine moved down a tier.
+    machine_moves: tuple[MachineMoveRecord, ...] = ()
+    #: The power building every power site places.  A FactorioLab id, resolved
+    #: to a ``catalog.Building`` once by the layout stage.  The default keeps
+    #: the Tesla Tower, so a spec built without a choice lays out exactly as it
+    #: did before the choice existed.
+    power_tower_item_id: str = "tesla-tower"
     #: FactorioLab's belt stack (``ist``): the cargo stack the player's bus
     #: carries.  1 when the URL says nothing.  Never above 4, the game's
     #: largest pile (``catalog.PILER_MAX_STACK``).
@@ -188,15 +248,34 @@ class BuildSpec(_Frozen):
     #: lane that exists anyway, such as an external input belt.
     spray_lanes: dict[str, bool] = Field(default_factory=dict)
 
-    #: Items whose lane must be physically SPLIT in two, because the same item
-    #: feeds both a proliferated and an unproliferated consumer. Spraying a
-    #: shared lane would proliferate the unproliferated consumer's input too,
-    #: silently over-producing it and desyncing the build from these rates.
+    #: Items where the same lane feeds both a proliferated and an
+    #: unproliferated consumer. This is now a REPORT, not a correctness
+    #: constraint: sharing the lane sprays the unproliferated consumer's
+    #: input too, which over-produces it and desyncs the build from these
+    #: rates -- and the user ruled that acceptable (2026-09-07,
+    #: "over-proliferating is fine if it makes life easier"). A placement
+    #: that shares one of these lanes is no longer refused for it; it is
+    #: still named, in ``prolif.sprayed_cargo_reaches_machines``'s findings,
+    #: as a ``Severity.WARNING``.
     lanes_requiring_split: frozenset[str] = Field(default_factory=frozenset)
 
     #: Startup-liveness certificates derived from exact recipe batches and the
     #: selected machine's game-defined internal output capacity.
     coproduct_buffer_proofs: tuple[CoproductBufferProof, ...] = ()
+
+    #: Items a group both consumes and produces.  Steady-state correct and dead
+    #: on paste until primed; see :class:`SelfLoopSeed`.
+    self_loop_seeds: tuple[SelfLoopSeed, ...] = ()
+
+    @field_validator("machine_rank")
+    @classmethod
+    def _known_machine_rank(cls, value: str) -> str:
+        from flab2bp.rates.machine_choice import MachineRank
+
+        allowed = tuple(rank.value for rank in MachineRank)
+        if value not in allowed:
+            raise ValueError(f"machine_rank must be one of {', '.join(allowed)}; got {value!r}")
+        return value
 
     @model_validator(mode="after")
     def _tiers_are_ordered(self) -> BuildSpec:
@@ -216,6 +295,16 @@ class BuildSpec(_Frozen):
                 "sorter at all cannot feed a machine"
             )
         return self
+
+    @field_validator("power_tower_item_id")
+    @classmethod
+    def _known_power_tower(cls, value: str) -> str:
+        from flab2bp.dsp import catalog
+
+        if value not in catalog.POWER_TOWER_CHOICES.values():
+            allowed = ", ".join(sorted(catalog.POWER_TOWER_CHOICES.values()))
+            raise ValueError(f"power_tower_item_id must be one of {allowed}; got {value!r}")
+        return value
 
     @model_validator(mode="after")
     def _stacks_align(self) -> BuildSpec:

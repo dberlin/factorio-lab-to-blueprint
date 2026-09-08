@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import sys
+from fractions import Fraction
 from pathlib import Path
 from typing import cast
 
@@ -18,6 +20,7 @@ from flab2bp import cli, pipeline
 from flab2bp.layout.base import LayoutAttemptFailure, NoValidLayout, PlacementStats
 from flab2bp.layout.observe import SearchEvent, SearchPhase
 from flab2bp.rates.candidates import CandidatePolicy
+from flab2bp.spec import SelfLoopSeed
 from flab2bp.web.trace import frame_json
 
 #: The reported deuteron-fuel-rod URL (see ``tests/test_pipeline.py``'s
@@ -38,6 +41,40 @@ def deuteron_build() -> pipeline.Build:
         strategy="sequence-pair",
         candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
     )
+
+
+def _build_with_self_loop_seed(build: pipeline.Build) -> pipeline.Build:
+    """Graft a fake hydrogen self-loop seed onto a real build's spec.
+
+    ``deuteron_build``'s own placement has no x-ray-cracking machine, so
+    ``markers.self_loop_prime_heads`` legitimately finds no head for it -- this
+    is also the "the loop cannot be located in this placement" case the CLI
+    must report honestly rather than crash on.
+    """
+    seed = SelfLoopSeed(
+        item_id="hydrogen",
+        recipe_id="x-ray-cracking",
+        machine_item_id="chemical-plant",
+        machines=4,
+        consumed_per_craft=Fraction(2),
+        produced_per_craft=Fraction(3),
+        net_per_craft=Fraction(1),
+        seed_items=8,
+    )
+    return dataclasses.replace(
+        build,
+        spec=build.spec.model_copy(update={"self_loop_seeds": (seed,)}),
+    )
+
+
+def test_cli_reports_the_self_loop_prime(
+    deuteron_build: pipeline.Build,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    build = _build_with_self_loop_seed(deuteron_build)
+    cli._report(build, out=sys.stdout)
+    out = capsys.readouterr().out
+    assert "prime once (self-loop): hydrogen 8 items" in out
 
 
 def test_cli_reports_how_many_entry_lanes_an_item_needs(
@@ -106,6 +143,27 @@ def test_cli_reports_an_infeasible_spec_as_a_refusal_not_a_crash(
     err = capsys.readouterr().err
     assert "iron-ore" in err
     assert "Traceback" not in err
+
+
+def test_cli_rejects_an_unknown_power_tower() -> None:
+    with pytest.raises(SystemExit) as caught:
+        cli.build_parser().parse_args(["https://example/x", "--power-tower", "none"])
+    assert caught.value.code == 2
+
+
+@pytest.mark.parametrize("selection", [None, "tesla", "substation", "wireless"])
+def test_cli_preserves_explicit_power_choice(
+    selection: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def inspect_build(_url: str, **kwargs: object) -> pipeline.Build:
+        assert kwargs["power_tower"] == selection
+        raise KeyError("stop before solving")
+
+    monkeypatch.setattr(pipeline, "build", inspect_build)
+    args = ["https://example/x"]
+    if selection is not None:
+        args.extend(("--power-tower", selection))
+    assert cli.main(args) == 2
 
 
 def test_trace_jsonl_defaults_to_none() -> None:

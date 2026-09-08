@@ -65,7 +65,6 @@ from flab2bp.layout.freeform import (
     _direct_net_candidates,
     _DirectCandidate,
     _exact_projection_pair,
-    _fanout_shortfall,
     _greedy_pack,
     _minimum_pack_width,
     _Pack,
@@ -4980,15 +4979,6 @@ def _production_run(
                 spec_label=spec.label,
                 budget_s=time_budget_s,
             )
-        shortfall = _fanout_shortfall(strips)
-        if shortfall:
-            raise NoValidLayout(
-                "a producer lane has fewer tiles than the consumers it must tap, "
-                "so two junctions would have to share one tile. " + "; ".join(shortfall[:3]),
-                spec_label=spec.label,
-                budget_s=0.0,
-            )
-
         instance_ids, variant_tables = _variant_search_inputs(
             spec,
             strips,

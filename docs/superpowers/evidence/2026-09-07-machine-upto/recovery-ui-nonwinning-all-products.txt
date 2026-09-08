@@ -1,0 +1,118 @@
+electromagnetic-matrix 60/min (all products)
+488 buildings
+1 area(s)
+game 0.10.34.28529
+belt numbers
+sorter ties
+endpoint icons
+machines
+ghosted
+solid
+hidden
+Q/E rotate · O top-down · drag orbit · scroll zoom
+FactorioLab URL
+Build
+Strategy
+best (freeform + sequence-pair, smallest valid wins)
+freeform
+sequence-pair
+hierarchical (explicit only: block decomposition, experimental; may overshoot the budget by its settlement phase)
+Latitude band
+Portable (smallest + up to two wider)
+5 × 20 (height × width)
+5 × 40 (height × width)
+5 × 80 (height × width)
+5 × 100 (height × width)
+10 × 160 (height × width)
+10 × 200 (height × width)
+15 × 300 (height × width)
+15 × 400 (height × width)
+25 × 500 (height × width)
+25 × 600 (height × width)
+50 × 800 (height × width)
+160 × 1000 (height × width)
+Proliferator tier
+URL selection (Mk.III if unspecified)
+None
+Mk.I
+Mk.II
+Mk.III
+Machine ranking
+Exact (the URL’s machine)
+Up to (fewest machines at or below it)
+Trace search (live)
+Candidate policies
+all-products
+output-products
+no-proliferator
+Budget (s/layout)
+Name
+Flow export (optional)
+Fetch FactorioLab flow automatically
+Runs FactorioLab in a server-side browser and pins its solved recipe selection.
+
+Budget is per layout. freeform runs 1 layout per candidate, so 3 candidates × 1 strategies × 30s is up to 90s of solving, plus rates, validation and encoding on top.
+
+electromagnetic-matrix 60/min (all products)
+Copy blueprint string
+electromagnetic-matrix 60/min (all products)
+Showing
+freeform / all-products
+Machines
+8
+Machine ranking
+Up to
+circuit-board: assembling-machine-3 → assembling-machine-1 (1 → 1)
+copper-ingot: plane-smelter → arc-smelter (1 → 1)
+iron-ingot: plane-smelter → arc-smelter (1 → 1)
+magnet: plane-smelter → arc-smelter (1 → 1)
+magnetic-coil: assembling-machine-3 → assembling-machine-1 (1 → 1)
+Area
+783 tiles
+primary_band
+160
+certified_bands
+160, 200
+Buildings
+488
+Makes
+electromagnetic-matrix 60/min
+Belt in
+copper-ore, iron-ore, proliferator-3 (4 marked with icons)
+Belts
+conveyor-belt-1, 0 run(s) raised to nothing (ceiling conveyor-belt-3)
+Solved in
+15.7s on the server
+
+Recipe selection derived, not pinned — FactorioLab's own choice of which recipe makes what was re-solved here rather than read from a flow export. Select automatic flow fetch above to run FactorioLab's solve in a server-side browser, or paste or upload a flow export to pin it (the CLI's --fetch-flow or --flow).
+
+This URL carried no technology set, so a fully-researched save is assumed: belt ceiling 26.55 (lab level 9), vertical belt construction yes. If your save is not fully researched, the belts here may climb higher than it allows.
+
+4 warning(s). The blueprint is valid and will run; these are things to look at before you paste it.
+
+belt.termination: belt run 3 (head building 51 at (8,24), carrying 'electromagnetic-matrix') runs 7 of its 21 tiles past its last tap and then stops; those tiles serve nothing
+belt.termination: belt run 19 (head building 465 at (28,13), carrying 'proliferator-3') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+belt.termination: belt run 23 (head building 471 at (0,25), carrying 'proliferator-3') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+flow.external_entry_points: 'iron-ore' is belted in at 2 separate lanes ((1,0), (16,0)); the player must connect a supply to every one of them
+candidate	strategy	area	errors	blueprint
+no-proliferator	freeform	612	0	view
+output-products	freeform	714	0	view
+all-products	freeform	783	0	selected
+Blueprint string
+Load
+or URL
+Fetch
+BUILDINGS
+433	Conveyor Belt Mk.I
+20	Sorter Mk.I
+10	Splitter
+9	Spray Coater
+6	Tesla Tower
+3	Arc Smelter
+3	Matrix Lab
+2	Sorter Mk.II
+2	Assembling Machine Mk.I
+RAW MATERIALS
+867	Iron Ore
+858	Stone
+107.5	Copper Ore

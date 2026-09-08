@@ -18,6 +18,7 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
 )
 from flab2bp.rates.candidates import CandidatePolicy
+from flab2bp.rates.machine_choice import MachineRank
 
 
 class _BuildKwargs(TypedDict, total=False):
@@ -25,6 +26,7 @@ class _BuildKwargs(TypedDict, total=False):
     band: BandSelection
     candidate_policies: tuple[CandidatePolicy, ...]
     time_budget_s: float
+    machine_rank: MachineRank
     #: `None` when the user did not pass `--sequence-islands`, which is the
     #: signal that `pipeline.build` should resolve the count itself.
     sequence_islands: int | None
@@ -334,6 +336,36 @@ def test_cli_band_choices_are_exact_and_reach_pipeline(
 
     with pytest.raises(SystemExit) as exc_info:
         cli.main(["iron-ingot", "--band", "240"])
+    assert exc_info.value.code == 2
+
+
+def test_cli_machine_rank_choices_are_exact_and_reach_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: list[object] = []
+
+    def fake_build(url: str, **kwargs: Unpack[_BuildKwargs]) -> SimpleNamespace:
+        del url
+        received.append(kwargs["machine_rank"])
+        return SimpleNamespace(
+            blueprint="BLUEPRINT",
+            report=SimpleNamespace(errors=()),
+        )
+
+    monkeypatch.setattr(pipeline, "build", fake_build)
+    monkeypatch.setattr(cli, "_report", lambda build, *, verbose: None)
+
+    parser = cli.build_parser()
+    action = next(item for item in parser._actions if item.dest == "machine_rank")
+    assert tuple(action.choices) == ("exact", "up-to")
+    assert action.default == "exact"
+
+    for choice in ("exact", "up-to"):
+        assert cli.main(["iron-ingot", "--machine-rank", choice]) == 0
+    assert received == [MachineRank.EXACT, MachineRank.UP_TO]
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["iron-ingot", "--machine-rank", "sometimes"])
     assert exc_info.value.code == 2
 
 

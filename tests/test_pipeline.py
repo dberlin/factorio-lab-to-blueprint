@@ -19,6 +19,7 @@ import pytest
 
 from flab2bp import cli, pipeline
 from flab2bp.dsp import catalog, codec
+from flab2bp.lab import params as P
 from flab2bp.lab.data import load_vendored
 from flab2bp.lab.flow import canonicalize_dataset, canonicalize_request
 from flab2bp.lab.techs import belt_rules_for_url
@@ -43,7 +44,7 @@ from flab2bp.rates.candidates import (
     _build_candidates_canonical,
     build_candidates,
 )
-from flab2bp.spec import BeltTier, BuildSpec, BuildSpecSet, MachineGroup
+from flab2bp.spec import BeltTier, BuildSpec, BuildSpecSet, MachineGroup, MachineMoveRecord
 from flab2bp.web.payload import describe
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
@@ -63,6 +64,26 @@ def _title_spec(
     label: str = "all-products",
 ) -> BuildSpec:
     return BuildSpec(groups=(), outputs=outputs, label=label)
+
+
+def test_exact_machine_rank_does_not_change_the_description() -> None:
+    assert pipeline._machine_rank_note(BuildSpec(groups=(), machine_rank="exact")) == ""
+
+
+def test_up_to_description_reports_each_move_and_its_counts() -> None:
+    move = MachineMoveRecord(
+        recipe_id="iron-ingot",
+        from_machine="plane-smelter",
+        to_machine="arc-smelter",
+        count_before=2,
+        count_after=2,
+    )
+    spec = BuildSpec(groups=(), machine_rank="up-to", machine_moves=(move,))
+    note = pipeline._machine_rank_note(spec)
+
+    for value in ("up-to", move.recipe_id, move.from_machine, move.to_machine, "2->2"):
+        assert value in note
+    assert "up-to" in pipeline._machine_rank_note(BuildSpec(groups=(), machine_rank="up-to"))
 
 
 def test_generated_title_under_the_game_limit_is_unchanged() -> None:
@@ -291,6 +312,75 @@ def completed_layout(monkeypatch: pytest.MonkeyPatch) -> Placement:
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     return completed
+
+
+@pytest.mark.parametrize(
+    ("explicit", "rank", "expected"),
+    [
+        (None, None, "tesla-tower"),
+        (None, ["arc-smelter"], "tesla-tower"),
+        (
+            None,
+            ["arc-smelter", "wireless-power-tower", "satellite-substation"],
+            "wireless-power-tower",
+        ),
+        (None, ["satellite-substation", "wireless-power-tower"], "satellite-substation"),
+        ("tesla", ["satellite-substation"], "tesla-tower"),
+        ("substation", ["wireless-power-tower"], "satellite-substation"),
+    ],
+)
+def test_power_tower_precedence(
+    explicit: str | None, rank: list[str] | None, expected: str
+) -> None:
+    request = dataclasses.replace(parse_url(SMALL_URL), machine_rank_ids=rank)
+    assert pipeline._resolve_power_tower(explicit, request) == expected
+
+
+def test_unknown_power_choice_is_not_replaced_by_url_selection() -> None:
+    with pytest.raises(ValueError, match="power_tower"):
+        pipeline._resolve_power_tower("invalid", parse_url(SMALL_URL))
+
+
+def test_hashed_url_power_choice_reaches_the_blueprint_description(
+    completed_layout: Placement,
+) -> None:
+    mod_hash = P.load_mod_hash("dsp")
+    item = P.n_to_id(mod_hash.items.index("electromagnetic-matrix"))
+    tower = P.n_to_id(mod_hash.machines.index("satellite-substation"))
+    inner = f"o={item}*60&mmr={tower}&v=11"
+    url = f"https://factoriolab.github.io/dsp/flow?z={P.deflate(inner)}&v=11"
+    result = pipeline.build(
+        url,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=1,
+        time_budget_s=0.5,
+    )
+    assert result.spec.power_tower_item_id == "satellite-substation"
+    assert "; power: Satellite Substation" in codec.decode(result.blueprint).header.description
+    assert describe(result)["power_building"] == "Satellite Substation"
+
+
+def test_explicit_tesla_keeps_default_blueprint_bytes(completed_layout: Placement) -> None:
+    implicit = pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=1,
+        time_budget_s=0.5,
+    )
+    explicit = pipeline.build(
+        SMALL_URL,
+        strategy="freeform",
+        power_tower="tesla",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        workers=1,
+        time_budget_s=0.5,
+    )
+    assert implicit.placement.description == explicit.placement.description
+    assert codec.encode(implicit.placement, timestamp=0) == codec.encode(
+        explicit.placement, timestamp=0
+    )
 
 
 def test_completed_backend_output_skips_duplicate_completion(
@@ -727,20 +817,19 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
 
     started = time.monotonic()
 
-    # Measured 2026-09-01: since commit 8161392 sped up preparation, this build
-    # now *succeeds* at time_budget_s=10.0 (~10.3s wall) instead of exhausting
-    # the deadline. 1.5s is small enough that exact preparation is still
-    # reliably cancelled mid-flight (verified: NoValidLayout, 3/3 runs).
-    #
-    # THE CEILING IS 2.0s, MEASURED: at 2.0 the solver sometimes SUCCEEDS on
+    # Re-measured 2026-09-07 (hierarchical v4 Task 6, `exact-floor.md`): the
+    # 2026-09-01 budget of 1.5s no longer exhausts -- preparation got faster
+    # again -- so this build SUCCEEDED at 1.5s and the test was red on master.
+    # THE CEILING IS 1.25s, MEASURED: at 1.25s the solver sometimes SUCCEEDS on
     # this URL, so the budget has to stay strictly below it or the test is
     # flaky rather than wrong. The mechanism is deliberately a real cell that
     # exhausts inside exact preparation rather than a mechanised clock,
     # because what is under test is that the preparation path itself honours
-    # the deadline -- a faked clock would prove that the fake fired.
+    # the deadline -- a faked clock would prove that the fake fired. 1.0s
+    # refused 3 of 3 runs.
     #
     # So this budget is a moving target by design: the next preparation
-    # speedup that makes 1.5s enough to finish will fail here with
+    # speedup that makes 1.0s enough to finish will fail here with
     # `DID NOT RAISE NoValidLayout`. That failure is the test working. Lower
     # the budget until the refusal is reliable again (and re-measure the
     # ceiling), rather than relaxing the assertion.
@@ -750,7 +839,7 @@ def test_all_products_sequence_pair_honours_the_exact_layout_deadline(
     # can never see a `_PreparationDeadline` raised in one of them. One island
     # is the in-process path this test exists to guard, and it is the path a
     # `--sequence-islands 1` build still takes.
-    budget = 1.5
+    budget = 1.0
     with pytest.raises(NoValidLayout, match="deadline exhausted"):
         pipeline.build(
             DEADLINE_REGRESSION_URL,

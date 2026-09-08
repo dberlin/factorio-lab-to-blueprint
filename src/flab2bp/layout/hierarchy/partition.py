@@ -303,6 +303,7 @@ def sub_spec(spec: BuildSpec, block: list[Unit], index: int) -> BuildSpec:
         outputs=outputs,
         surplus_outputs={},
         belt_item_id=spec.belt_item_id,
+        power_tower_item_id=spec.power_tower_item_id,
         belt_items_per_second=spec.belt_items_per_second,
         belt_upgrades=spec.belt_upgrades,
         sorter_item_ids=spec.sorter_item_ids,
@@ -310,6 +311,8 @@ def sub_spec(spec: BuildSpec, block: list[Unit], index: int) -> BuildSpec:
         sorter_pick_stacks=spec.sorter_pick_stacks,
         sorter_place_stacks=spec.sorter_place_stacks,
         piler_unlocked=spec.piler_unlocked,
+        machine_rank=spec.machine_rank,
+        machine_moves=spec.machine_moves,
         label=f"{spec.label}#block{index}",
         belt_required_edges=frozenset(
             edge for edge in spec.belt_required_edges if edge[0] in recipes and edge[1] in recipes
@@ -327,6 +330,7 @@ def sub_spec(spec: BuildSpec, block: list[Unit], index: int) -> BuildSpec:
             for p in spec.coproduct_buffer_proofs
             if p.producer_recipe_id in recipes and p.consumer_recipe_id in recipes
         ),
+        self_loop_seeds=tuple(s for s in spec.self_loop_seeds if s.recipe_id in recipes),
     )
 
 
@@ -401,6 +405,7 @@ def composed_spec(
         outputs=outputs,
         surplus_outputs=surplus,
         belt_item_id=spec.belt_item_id,
+        power_tower_item_id=spec.power_tower_item_id,
         belt_items_per_second=spec.belt_items_per_second,
         belt_upgrades=spec.belt_upgrades,
         sorter_item_ids=spec.sorter_item_ids,
@@ -408,11 +413,14 @@ def composed_spec(
         sorter_pick_stacks=spec.sorter_pick_stacks,
         sorter_place_stacks=spec.sorter_place_stacks,
         piler_unlocked=spec.piler_unlocked,
+        machine_rank=spec.machine_rank,
+        machine_moves=spec.machine_moves,
         label=f"{spec.label}#composed",
         belt_required_edges=spec.belt_required_edges,
         spray_lanes=spec.spray_lanes,
         lanes_requiring_split=spec.lanes_requiring_split,
         coproduct_buffer_proofs=spec.coproduct_buffer_proofs,
+        self_loop_seeds=spec.self_loop_seeds,
     )
 
 

@@ -7,7 +7,14 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "src"))
 from flab2bp.layout import freeform  # noqa: E402
 
-freeform._DETERMINISTIC_PACK_WORK = float(sys.argv[2])  # diagnosis only
+# diagnosis only: probe a FIXED deterministic-work bound, independent of strip
+# count, replicating the pre-scaling world this probe was written to diagnose.
+# `_DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE` alone would not do this: it is
+# read through `_deterministic_pack_work(strip_count)`, which scales it by
+# `strip_count / _DETERMINISTIC_PACK_STRIPS`, so assigning it would apply
+# sys.argv[2] only at exactly fifteen strips and something else everywhere
+# else -- not the uniform fixed bound this probe's argv[2] asks for.
+freeform._deterministic_pack_work = lambda _strip_count: float(sys.argv[2])
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402

@@ -1,0 +1,19 @@
+{"command": ["uv", "run", "python", "scripts/audit.py", "--only", "information-matrix", "--budget", "30", "--jobs", "8", "--strategy", "both", "--max-seconds", "3600", "--json", "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/docs/superpowers/evidence/2026-09-07-machine-upto/parallel-gates-h2vHbpn2/round-exact/information-matrix.jsonl", "--machine-rank", "exact"], "provenance": {"arm": "exact", "mode": "round", "commit": "f148a4c3c6d662e3e19ba28f9a397507c1342220", "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto", "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/src/flab2bp/__init__.py"}}
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]    18s freeform  large    information-matrix/no-proliferator power=1 budget=30s CLEAN     17.1s  <-- 17s
+  . [  2/6]    26s freeform  large    information-matrix/all-products power=1 budget=30s   CLEAN     25.2s  <-- 25s
+  . [  3/6]    29s freeform  large    information-matrix/output-products power=1 budget=30s CLEAN     27.2s  <-- 27s
+  . [  4/6]    32s sequence-pair large    information-matrix/output-products power=1 budget=30s CLEAN     30.3s  <-- 30s
+  . [  5/6]    33s sequence-pair large    information-matrix/all-products power=1 budget=30s   CLEAN     31.2s  <-- 31s
+  . [  6/6]    33s sequence-pair large    information-matrix/no-proliferator power=1 budget=30s CLEAN     31.6s  <-- 32s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 27s freeform information-matrix/output-products power=1 budget=30s, 25s freeform information-matrix/all-products power=1 budget=30s, 17s freeform information-matrix/no-proliferator power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s sequence-pair information-matrix/no-proliferator power=1 budget=30s, 31s sequence-pair information-matrix/all-products power=1 budget=30s, 30s sequence-pair information-matrix/output-products power=1 budget=30s
+
+33s wall, 6/6 cells
+3 cells completed after their own requested search deadline; the largest completion tail was 1.6s. Emission, detailed routing already in flight, and validation finish atomically.
+
+exit_code=0

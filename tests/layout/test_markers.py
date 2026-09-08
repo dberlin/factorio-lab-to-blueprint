@@ -8,7 +8,7 @@ from fractions import Fraction
 from flab2bp.dsp import catalog, codec
 from flab2bp.layout import markers
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
-from flab2bp.spec import BuildSpec
+from flab2bp.spec import BuildSpec, SelfLoopSeed
 
 
 def _belt(
@@ -130,3 +130,121 @@ def test_splitter_port_belts_are_not_encoded_as_external_endpoints() -> None:
     assert decoded.buildings[6].parameters == catalog.belt_marker(catalog.item_id("gear"))
     assert decoded.buildings[9].parameters == ()
     assert marked.stats.get("input_markers") == 1
+
+
+def _machine(*, x: int, y: int, recipe_id: int) -> PlacedBuilding:
+    return PlacedBuilding(item_id=0, model_index=0, x=x, y=y, recipe_id=recipe_id)
+
+
+def _self_loop_placement() -> Placement:
+    """A one-machine hydrogen loop: the machine's own output sorter feeds a
+    belt run that returns via its own input sorter, head at (3, 21).
+
+    Buildings 4-5 are a second, unrelated hydrogen sorter/belt pair feeding
+    the SAME machine from an external belt this group never produced -- the
+    same-item-different-run case ``spec.BuildSpec.planning_stack`` names
+    (``universe-matrix``'s hydrogen, fed both externally and internally).
+    It must NOT be picked as the loop head: proof that identification comes
+    from the sorter graph, never from the item name alone.
+    """
+    x_ray_cracking = catalog.recipe_id("x-ray-cracking")
+    return Placement(
+        buildings=(
+            _machine(x=0, y=0, recipe_id=x_ray_cracking),  # 0: the sole group machine
+            _sorter(source=0, destination=2, item="hydrogen"),  # 1: group's OUTPUT sorter
+            _belt(3, 21, item="hydrogen", output=3),  # 2: the loop head
+            _sorter(source=2, destination=0, item="hydrogen"),  # 3: group's INPUT sorter
+            _belt(10, 10, item="hydrogen", output=5, input_obj=None),  # 4: unrelated external head
+            _sorter(source=4, destination=0, item="hydrogen"),  # 5: an external input sorter
+        )
+    )
+
+
+def _self_loop_spec() -> BuildSpec:
+    return BuildSpec(
+        groups=(),
+        self_loop_seeds=(
+            SelfLoopSeed(
+                item_id="hydrogen",
+                recipe_id="x-ray-cracking",
+                machine_item_id="chemical-plant",
+                machines=4,
+                consumed_per_craft=Fraction(2),
+                produced_per_craft=Fraction(3),
+                net_per_craft=Fraction(1),
+                seed_items=8,
+            ),
+        ),
+    )
+
+
+def test_self_loop_lane_head_is_marked() -> None:
+    """The tile the player drops the seed on carries the item's icon.
+
+    `mark_external_belts` marked only heads whose item is in
+    `spec.external_inputs`, and a self-loop item never is -- so the reporting
+    URL's 107-tile hydrogen lane began at an unlabelled belt at (3,21) that
+    looked exactly like a forgotten input.
+    """
+    placement = _self_loop_placement()  # hydrogen loop, head at (3, 21)
+    spec = _self_loop_spec()
+    heads = markers.self_loop_prime_heads(placement, spec)
+    assert set(heads) == {"hydrogen"}
+    head = placement.buildings[heads["hydrogen"]]
+    assert (head.x, head.y) == (3, 21)
+
+    marked = markers.mark_external_belts(placement, spec)
+    assert marked.buildings[heads["hydrogen"]].parameters == catalog.belt_marker(
+        catalog.item_id("hydrogen")
+    )
+    assert marked.stats["self_loop_prime_markers"] == 1
+    # The unrelated external run feeding the same machine (buildings 4-5) is
+    # untouched -- graph position picked the loop, not the item name.
+    assert marked.buildings[4].parameters == ()
+
+
+def _self_loop_placement_series_tap() -> Placement:
+    """Two machines fed IN SERIES off one shared belt, head at (3, 21).
+
+    The real corpus shape design section 1.2 decodes: one run collects from
+    every machine's own output sorter and feeds every machine's own input
+    sorter in series, each input sorter TAPPING an interior tile of the run
+    (its ``input_obj`` names a belt mid-run, buildings 7 and 8 below) while
+    the run's own forward chain carries on past both taps to an open surplus
+    tail (building 6's ``output_obj`` is ``None``) -- it never terminates AT
+    a sorter the way the single-machine fixture above does.  Measured against
+    the real ``reforming-refine`` corpus (20 machines): every one of its input
+    sorters taps an interior tile this way, so a walk that only recognised a
+    terminal ``output_obj`` landing on a sorter returned no head for it at
+    all.
+    """
+    x_ray_cracking = catalog.recipe_id("x-ray-cracking")
+    return Placement(
+        buildings=(
+            _machine(x=0, y=0, recipe_id=x_ray_cracking),  # 0
+            _machine(x=0, y=5, recipe_id=x_ray_cracking),  # 1
+            _sorter(source=0, destination=3, item="hydrogen"),  # 2: OUTPUT sorter
+            _belt(3, 21, item="hydrogen", output=4),  # 3: the loop head
+            _belt(3, 22, item="hydrogen", output=5),  # 4: tapped by sorter 7
+            _belt(3, 23, item="hydrogen", output=6),  # 5: tapped by sorter 8
+            _belt(3, 24, item="hydrogen", output=None),  # 6: open surplus tail
+            _sorter(source=4, destination=0, item="hydrogen"),  # 7: INPUT sorter, taps 4
+            _sorter(source=5, destination=1, item="hydrogen"),  # 8: INPUT sorter, taps 5
+        )
+    )
+
+
+def test_self_loop_lane_head_is_found_for_a_multi_machine_series_tap() -> None:
+    """An interior tap closes the loop exactly as a terminal one does.
+
+    Without this, no multi-machine self-loop group -- the shape the design's
+    own real corpus example decodes -- could ever be identified: only a
+    single-machine loop whose run happens to terminate right at the sorter
+    would be found.
+    """
+    placement = _self_loop_placement_series_tap()
+    spec = _self_loop_spec()
+    heads = markers.self_loop_prime_heads(placement, spec)
+    assert set(heads) == {"hydrogen"}
+    head = placement.buildings[heads["hydrogen"]]
+    assert (head.x, head.y) == (3, 21)

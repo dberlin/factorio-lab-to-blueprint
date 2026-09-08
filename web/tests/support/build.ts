@@ -26,6 +26,8 @@ export const B_BLUEPRINT = readFileSync(
 export function anAttemptDetail(overrides: Partial<AttemptDetail> = {}): AttemptDetail {
   return {
     machines: 9,
+    machine_rank: 'exact',
+    machine_moves: [],
     buildings: 42,
     primary_band: 160,
     certified_bands: [160, 200],
@@ -68,6 +70,9 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
     strategy: 'freeform',
     candidate: 'no-proliferator',
     machines: 9,
+    machine_rank: 'exact',
+    machine_moves: [],
+    power_building: 'Tesla Tower',
     pilers: 0,
     area: 575,
     primary_band: 160,
@@ -103,6 +108,8 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
         area: merged.area,
         detail: anAttemptDetail({
           machines: merged.machines,
+          machine_rank: merged.machine_rank,
+          machine_moves: merged.machine_moves,
           buildings: merged.buildings,
           primary_band: merged.primary_band,
           certified_bands: merged.certified_bands,

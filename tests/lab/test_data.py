@@ -328,6 +328,28 @@ def test_total_recipe_machines(ds: Dataset) -> None:
     assert ds.machine("arc-smelter").total_recipe is False
 
 
+def test_only_two_vendored_recipes_consume_what_they_produce() -> None:
+    """The self-loop set is exactly two recipes, and a dataset bump must say so.
+
+    Both are net-POSITIVE oil-refinery recipes, which is what makes a one-off
+    prime sufficient: after the first craft the loop sustains itself.
+    """
+    ds = load_vendored()
+    loops = {
+        r.id: sorted(set(r.inputs) & set(r.outputs))
+        for r in ds.recipes
+        if set(r.inputs) & set(r.outputs)
+    }
+    assert loops == {
+        "x-ray-cracking": ["hydrogen"],
+        "reforming-refine": ["refined-oil"],
+    }
+    assert ds.recipe("x-ray-cracking").outputs["hydrogen"] == Fraction(3)
+    assert ds.recipe("x-ray-cracking").inputs["hydrogen"] == Fraction(2)
+    assert ds.recipe("reforming-refine").outputs["refined-oil"] == Fraction(3)
+    assert ds.recipe("reforming-refine").inputs["refined-oil"] == Fraction(2)
+
+
 # --------------------------------------------------------------------------
 # Hash index
 # --------------------------------------------------------------------------

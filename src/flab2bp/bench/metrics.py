@@ -10,12 +10,19 @@ from __future__ import annotations
 from flab2bp.bench.types import Metrics
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings, Kind
+
+# Supply towers are not production machines. Other power nodes, including
+# Ray Receivers and Energy Exchangers, still produce items and accept sorters.
+_SUPPLY_TOWER_IDS = frozenset(
+    catalog.item_id(lab_id) for lab_id in catalog.POWER_TOWER_CHOICES.values()
+)
 
 
 def _is_machine(b: PlacedBuilding) -> bool:
     if catalog.is_belt(b.item_id) or catalog.is_sorter(b.item_id):
         return False
-    if b.item_id in (catalog.SPLITTER_ID, catalog.TESLA_TOWER_ID):
+    if b.item_id == catalog.SPLITTER_ID or b.item_id in _SUPPLY_TOWER_IDS:
         return False
     try:
         return catalog.building(b.item_id).occupies_tiles
@@ -59,19 +66,20 @@ def measure(placement: Placement) -> Metrics:
         for x, y, _z in b.tiles():
             occupied.add((x, y))
 
-    machines = sum(1 for b in buildings if _is_machine(b))
-    belt_tiles = sum(1 for b in buildings if catalog.is_belt(b.item_id))
-    sorters = sum(1 for b in buildings if catalog.is_sorter(b.item_id))
-    towers = sum(1 for b in buildings if b.item_id == catalog.TESLA_TOWER_ID)
+    index = Buildings.of(placement)
+    belt_tiles = index.count_by_kind(Kind.BELT)
+    sorters = index.count_by_kind(Kind.SORTER)
+    towers = sum(catalog.building(buildings[i].item_id).is_power_node for i in index.machines())
 
-    machine_indices = {i for i, b in enumerate(buildings) if _is_machine(b)}
-    direct_inserts = sum(
-        1
-        for b in buildings
-        if catalog.is_sorter(b.item_id)
-        and b.input_obj in machine_indices
-        and b.output_obj in machine_indices
-    )
+    # Piler occupies tiles and satisfies this metric's historical machine
+    # predicate, although the domain index classifies it as OTHER.
+    machine_indices = {
+        i
+        for i in (*index.machines(), *index.by_item(catalog.PILER_ID))
+        if _is_machine(buildings[i])
+    }
+    machines = len(machine_indices)
+    direct_inserts = len(index.sorters_between(machine_indices, machine_indices))
 
     altitude_levels = len({b.z for b in buildings})
 

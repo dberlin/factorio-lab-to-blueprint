@@ -19,6 +19,7 @@ nothing in ``lab``, so the direction is the one that was already there.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from fractions import Fraction
 from functools import lru_cache
 
@@ -27,7 +28,7 @@ from flab2bp.lab.data import load_vendored
 from flab2bp.lab.schema import Dataset, Item
 from flab2bp.lab.url import LabRequest, parse_url
 
-__all__ = ["belt_rules_for_url", "logistics_tiers_for_request"]
+__all__ = ["belt_rules_for_url", "logistics_tiers_for_request", "unlocked_recipe_ids"]
 
 
 def _belt_rules(url: str, dataset: Dataset) -> catalog.BeltAltitudeRules:
@@ -62,6 +63,34 @@ def belt_rules_for_url(url: str, dataset: Dataset | None = None) -> catalog.Belt
     return _belt_rules(url, dataset)
 
 
+def unlocked_recipe_ids(request: LabRequest, dataset: Dataset) -> frozenset[str]:
+    """Everything this request's save can build.
+
+    A thing is unlocked when some researched technology item lists it in
+    ``recipe_unlock``.  ``None`` for the researched set means every
+    technology, as :func:`belt_rules_for_url` documents -- FactorioLab's
+    ``settings-store.ts`` defaults an absent set to the full technology list,
+    not to the empty one.
+
+    Belts, sorters, and (under ``machine_rank=up-to``) machine candidates all
+    gate on this one set, so that a save which cannot build a Plane Smelter
+    cannot be handed one by any of them.
+    """
+    return _unlocked_recipe_ids(request, dataset.items)
+
+
+def _unlocked_recipe_ids(request: LabRequest, items: Iterable[Item]) -> frozenset[str]:
+    """Share unlock semantics with the preclassified logistics item collection."""
+    researched = request.researched_technology_ids
+    unlocked: set[str] = set()
+    for item in items:
+        if item.technology is None:
+            continue
+        if researched is None or item.id in researched:
+            unlocked.update(item.technology.recipe_unlock)
+    return frozenset(unlocked)
+
+
 def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalog.LogisticsTiers:
     """The belts and sorters this request's save can build.
 
@@ -75,13 +104,8 @@ def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalo
     ``("sorter-1",)``: it cannot build belts either, and refusing every build
     over it would help nobody.
     """
-    # Three independent full passes over `dataset.items` fused into one: which
-    # `unlocked` items are even ELIGIBLE (has a technology / is a belt / is a
-    # sorter with a known rate) does not depend on `unlocked` itself, only the
-    # FINAL filtering below does -- and `unlocked` cannot be known until every
-    # technology item has been seen, so that filtering stays a second step
-    # over these much smaller candidate lists rather than over `dataset.items`
-    # again. Predicates copied byte-for-byte from what they replace.
+    # Classify all items once; unlock filtering then visits only technology
+    # records, using the same rule as machine eligibility.
     technology_items: list[Item] = []
     belt_candidates: list[Item] = []
     sorter_candidates: list[Item] = []
@@ -94,11 +118,7 @@ def logistics_tiers_for_request(request: LabRequest, dataset: Dataset) -> catalo
             sorter_candidates.append(item)
 
     researched = request.researched_technology_ids
-    unlocked: set[str] = set()
-    for item in technology_items:
-        assert item.technology is not None
-        if researched is None or item.id in researched:
-            unlocked.update(item.technology.recipe_unlock)
+    unlocked = _unlocked_recipe_ids(request, technology_items)
 
     floor_id = request.belt_id or "conveyor-belt-1"
     floor_speed = dataset.belt_speed(floor_id)

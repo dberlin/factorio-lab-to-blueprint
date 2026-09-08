@@ -14,6 +14,14 @@ import { aJob, anAttempt, aResult, restoreFetch, serving } from '../support/buil
 
 afterEach(restoreFetch);
 
+test('machine rank accepts only exact and up-to without changing the default', () => {
+  expect(DEFAULT_OPTIONS.machine_rank).toBe('exact');
+  expect(BuildOptions.parse({ ...DEFAULT_OPTIONS, machine_rank: 'up-to' }).machine_rank).toBe(
+    'up-to',
+  );
+  expect(BuildOptions.safeParse({ ...DEFAULT_OPTIONS, machine_rank: 'upto' }).success).toBe(false);
+});
+
 test('candidate policy schema defaults to all three UI choices', () => {
   expect(CandidatePolicy.options).toEqual(['no-proliferator', 'all-products', 'output-products']);
   expect(DEFAULT_OPTIONS.candidate_policies).toEqual([
@@ -63,6 +71,7 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   expect(body.url).toBe('https://example.invalid/x');
   expect(body.strategy).toBe('sequence-pair');
   expect(body.proliferator_tier).toBe('auto');
+  expect(body.power_tower).toBe('auto');
   expect(body.fetch_flow).toBe(false);
   expect(body.band).toBe('portable');
   expect(body.candidate_policies).toEqual(['all-products', 'output-products', 'no-proliferator']);
@@ -71,6 +80,15 @@ test('submit posts sequence-pair with its exact wire spelling', async () => {
   await submitBuild({ ...DEFAULT_OPTIONS, proliferator_tier: '1' });
   const explicit = BuildOptions.parse(JSON.parse(String(calls[1]?.init?.body)));
   expect(explicit.proliferator_tier).toBe('1');
+});
+
+test('unknown power tower selections are rejected before submitting', async () => {
+  const calls = serving({ status: 202, body: aJob() });
+  const pending = Reflect.apply(submitBuild, undefined, [
+    { ...DEFAULT_OPTIONS, power_tower: 'none' },
+  ]);
+  await expect(pending).rejects.toThrow();
+  expect(calls).toHaveLength(0);
 });
 
 test('default options and submitted bodies omit the retired power option', async () => {

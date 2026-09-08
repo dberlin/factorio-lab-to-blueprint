@@ -462,6 +462,48 @@ def test_exact_paste_order_reproduces_the_last_merge_feeder_winning() -> None:
     assert C.belt_collisions(_model40_perpendicular_merge(branch_first=False)) == []
 
 
+def test_paste_input_links_and_reverse_choices_reconstruct_a_real_merge() -> None:
+    """Direct coverage for the two reverse ``output`` reconstructions.
+
+    ``paste_input_links`` (last-writer-wins, what the paste path itself would
+    record) and ``_reverse_input_choices`` (every writer, what
+    :func:`stable_belt_collisions` reasons over for order-independence) both
+    now derive from one shared ``_predecessors_by_output`` index instead of
+    each re-walking ``previews``.  Reuses ``_model40_perpendicular_merge`` --
+    an actual DSP merge shape, a Splitter branch and an opposing belt both
+    feeding one perpendicular belt -- rather than a synthetic index soup.
+    """
+    previews = _model40_perpendicular_merge(branch_first=True)
+    # previews: [0 splitter, 1 branch, 2 opposing, 3 centre, 4 onward]
+    links = C.paste_input_links(previews)
+    choices = C._reverse_input_choices(previews)
+    print("paste_input_links:", links)
+    print("_reverse_input_choices:", choices)
+
+    # Non-vacuous: the merge at belt index 3 genuinely has two feeders.
+    assert choices[3] == (1, 2)
+    # Last writer at the merge is the higher ascending index.
+    assert links[3] == 2
+    # The single-feeder chain (centre -> onward) agrees in both forms.
+    assert links[4] == 3
+    assert choices[4] == (3,)
+    # Nothing feeds the Splitter or either merge input; each falls back to
+    # its own recorded (possibly absent) input.
+    assert links[0] is None
+    assert choices[0] == (None,)
+    assert links[1] == 0  # branch's recorded input is the Splitter
+    assert choices[1] == (0,)
+    assert links[2] is None
+    assert choices[2] == (None,)
+
+    # branch_first=False swaps which preview sits at index 1 vs 2, but the
+    # SET of feeders at the merge -- and which one wins as last-writer -- must
+    # still be the higher of the two ascending indices, not a fixed preview.
+    swapped = _model40_perpendicular_merge(branch_first=False)
+    assert C._reverse_input_choices(swapped)[3] == (1, 2)
+    assert C.paste_input_links(swapped)[3] == 2
+
+
 @pytest.mark.parametrize("branch_first", [True, False])
 def test_order_stable_collision_rejects_every_serialization(branch_first: bool) -> None:
     """Any feeder may become the reverse link after blueprint canonicalization."""

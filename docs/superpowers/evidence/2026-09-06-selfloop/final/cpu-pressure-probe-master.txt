@@ -1,0 +1,4 @@
+# cpu_pressure before:
+7.4
+# cpu_pressure after:
+34.2

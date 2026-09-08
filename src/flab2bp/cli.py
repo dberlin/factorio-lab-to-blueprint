@@ -28,6 +28,7 @@ from flab2bp.layout.observe import (
     SearchEvent,
 )
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
+from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.web.trace import TRACE_DRAIN_INTERVAL_S, frame_json
 
 
@@ -131,9 +132,17 @@ class _CliTraceWriter:
             self._drain_once()
 
 
-def _report(build: pipeline.Build, *, verbose: bool) -> None:
-    """Everything except the blueprint itself goes to stderr."""
-    out = sys.stderr
+def _report(build: pipeline.Build, *, verbose: bool = False, out: TextIO | None = None) -> None:
+    """Everything except the blueprint itself goes to stderr by default.
+
+    ``out`` defaults to ``None`` rather than ``sys.stderr`` directly: a default
+    argument binds once, at function-definition time, and ``capsys`` swaps in
+    a fresh ``sys.stderr`` object per test -- binding the real stream eagerly
+    would keep pointing at whatever object existed at import time and silently
+    stop being captured.
+    """
+    if out is None:
+        out = sys.stderr
     frame = build.placement.frame
     if frame is None:
         raise ValueError("successful build placement has no area frame")
@@ -159,6 +168,27 @@ def _report(build: pipeline.Build, *, verbose: bool) -> None:
         # Say it rather than let someone discover it while staring at an
         # unlabelled belt in game.
         print(f"  WARNING: no icon placed for {sorted(unmarked)}", file=out)
+
+    # A self-loop recipe's block is dead on paste until a player hand-fills its
+    # loop lane once (design §9 R3, "prime once and warn" -- never a permanent
+    # external input, since the loop is steady-state correct on its own).
+    prime_heads = markers.self_loop_prime_heads(build.placement, build.spec)
+    for seed in build.spec.self_loop_seeds:
+        head_index = prime_heads.get(seed.item_id)
+        if head_index is not None:
+            tile = build.placement.buildings[head_index]
+            where = f" at ({tile.x},{tile.y})"
+        else:
+            # Honest rather than a crash: the loop's own placement should
+            # always be locatable, but a report is a bad place to raise.
+            where = ""
+        print(
+            f"prime once (self-loop): {seed.item_id} {seed.seed_items} items"
+            f" onto the marked belt{where}"
+            f" -- {seed.recipe_id} consumes what it produces, so the block will"
+            f" not start until the loop has items in it",
+            file=out,
+        )
 
     # Say whether the selection was pinned. "No findings" and "nothing was
     # checked" read identically in silence, and only one of them is reassuring.
@@ -370,6 +400,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_candidate_policy_argument(ap)
     ap.add_argument(
+        "--machine-rank",
+        choices=[rank.value for rank in MachineRank],
+        default=MachineRank.EXACT.value,
+        help=(
+            "how to read the URL's machine rank: 'exact' always uses the "
+            "ranked producer (FactorioLab's behaviour, the default); 'up-to' "
+            "treats it as a speed ceiling and uses the slowest unlocked "
+            "producer that needs the same number of machines"
+        ),
+    )
+    ap.add_argument(
         "--flow",
         type=Path,
         help="FactorioLab CSV export (the list view's 'download as CSV'). Pins "
@@ -403,6 +444,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="build only from candidates that spray nothing, so no Spray Coaters "
         "are emitted. Refuses rather than falling back if every candidate this "
         "URL produces is proliferated.",
+    )
+    ap.add_argument(
+        "--power-tower",
+        choices=tuple(pipeline.POWER_TOWER_CHOICES),
+        default=None,
+        help="power building (default: first power tower in the URL's machine "
+        "rank, otherwise Tesla Tower)",
     )
     ap.add_argument("--budget", type=float, default=15.0, help="solver seconds per layout")
     ap.add_argument(
@@ -527,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
                 strategy=args.strategy,
                 band=args.band,
                 candidate_policies=candidate_policies,
+                machine_rank=MachineRank(args.machine_rank),
                 time_budget_s=args.budget,
                 sequence_islands=sequence_islands,
                 name=args.name,
@@ -535,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
                 fetch_timeout_s=args.fetch_timeout,
                 browser=args.browser,
                 no_proliferator=args.no_proliferator,
+                power_tower=args.power_tower,
                 workers=args.workers,
                 race=args.race,
                 share=args.share,

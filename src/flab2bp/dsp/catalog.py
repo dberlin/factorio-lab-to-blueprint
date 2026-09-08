@@ -227,6 +227,21 @@ SPLITTER_MODEL_INDICES = frozenset((38, 39, 40))
 SPRAY_COATER_ID = 2313
 FRACTIONATOR_ID = 2314
 TESLA_TOWER_ID = 2201
+
+#: The power buildings a build may choose between, keyed by the name the CLI,
+#: the web UI and ``BuildSpec`` use.  The values are FactorioLab ids, resolved
+#: through :func:`get_item_id` like every other id the spec carries.
+POWER_TOWER_CHOICES: dict[str, str] = {
+    "tesla": "tesla-tower",
+    "substation": "satellite-substation",
+    "wireless": "wireless-power-tower",
+}
+
+#: The choice a build gets when nothing says otherwise.  Keeping this the Tesla
+#: Tower is what makes the default arm byte-identical to the era before the
+#: choice existed.
+DEFAULT_POWER_TOWER: str = "tesla-tower"
+
 MATRIX_LAB_IDS = (2901, 2902)
 STORAGE_STACK_IDS = (2020, 2101, 2102, 2106)
 
@@ -1053,6 +1068,24 @@ MODE_DRIVEN_MACHINE_ITEM_IDS: frozenset[int] = frozenset(
 #: sentence.  2208 was never in the distrusted set, and every other machine we
 #: place was, and stays, absent from it -- so this subtraction newly checks
 #: exactly one building.
+#:
+#: THE SENTENCE IS NOW FALSE FOR **2212** TOO, AND THIS SUBTRACTION DOES NOT
+#: COVER IT.
+#:
+#: The selectable power building makes the generator place a Satellite
+#: Substation whenever a build chooses one, and 2212 is not mode-driven, so it
+#: is not subtracted here and `validate.py` still suppresses its belt-collision
+#: findings.  That suppression is therefore LOAD-BEARING on the substation arm:
+#: a belt laid through a substation is a finding nobody reports.  It is left
+#: standing deliberately -- the footprint really is an unresolved measurement
+#: question and guessing at it would be worse -- and the substitute guarantee
+#: is direct geometry rather than a certificate: see
+#: `TestALargePowerBuildingClaimsItsWholeFootprint` in
+#: `tests/layout/test_freeform.py`, which asserts over the finished placement
+#: that no belt, sorter or machine tile lies inside a placed substation.
+#: Resolving 2212's footprint properly retires both the suppression and those
+#: tests; until then, do not read a clean `certify` on a substation build as
+#: evidence that it has no belt collisions.
 UNPLACED_LOW_CONFIDENCE_FOOTPRINTS: frozenset[int] = (
     LOW_CONFIDENCE_FOOTPRINTS - MODE_DRIVEN_MACHINE_ITEM_IDS
 )
@@ -1729,6 +1762,23 @@ def building(item_id: int) -> Building:
         return _load()[item_id]
     except KeyError:
         raise KeyError(f"no DSP building with item id {item_id}") from None
+
+
+def power_tower_building(factoriolab_id: str) -> Building:
+    """Resolve a power-building lab id to its catalog record.
+
+    The record carries everything a power site needs -- item id, model index,
+    footprint, cover radius, link distance and the ``power_node`` view the
+    ``PowerTooClose`` tier consumes -- so no caller needs a second record and
+    no caller needs a radius constant of its own.
+    """
+    item_id = get_item_id(factoriolab_id)
+    if item_id is None:
+        raise ValueError(f"unknown power building: {factoriolab_id!r}")
+    info = building(item_id)
+    if not info.is_power_node:
+        raise ValueError(f"{factoriolab_id!r} is not a power node")
+    return info
 
 
 def footprint(item_id: int) -> tuple[int, int]:

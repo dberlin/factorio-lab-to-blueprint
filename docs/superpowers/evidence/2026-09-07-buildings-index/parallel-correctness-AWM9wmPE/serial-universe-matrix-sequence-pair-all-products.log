@@ -1,0 +1,11 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+1 cells of stress, 1 at a time, 128 CP-SAT workers each, cap 3600s
+  . [  1/1]    35s sequence-pair stress   universe-matrix/all-products power=1 budget=30s      CLEAN     35.1s  <-- 35s
+
+=== sequence-pair: 1/1 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 35s sequence-pair universe-matrix/all-products power=1 budget=30s
+
+35s wall, 1/1 cells
+1 cells completed after their own requested search deadline; the largest completion tail was 5.1s. Emission, detailed routing already in flight, and validation finish atomically.
+
+EXIT=0

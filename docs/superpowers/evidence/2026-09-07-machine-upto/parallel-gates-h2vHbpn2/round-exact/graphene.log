@@ -1,0 +1,18 @@
+{"command": ["uv", "run", "python", "scripts/audit.py", "--only", "graphene", "--budget", "30", "--jobs", "8", "--strategy", "both", "--max-seconds", "3600", "--json", "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/docs/superpowers/evidence/2026-09-07-machine-upto/parallel-gates-h2vHbpn2/round-exact/graphene.jsonl", "--machine-rank", "exact"], "provenance": {"arm": "exact", "mode": "round", "commit": "f148a4c3c6d662e3e19ba28f9a397507c1342220", "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto", "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/src/flab2bp/__init__.py"}}
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     3s freeform  small    graphene/no-proliferator power=1 budget=30s          CLEAN      1.6s
+  . [  2/6]     5s freeform  small    graphene/all-products power=1 budget=30s             CLEAN      4.0s
+  . [  3/6]     5s freeform  small    graphene/output-products power=1 budget=30s          CLEAN      4.3s
+  . [  4/6]    33s sequence-pair small    graphene/all-products power=1 budget=30s             CLEAN     31.4s  <-- 31s
+  . [  5/6]    33s sequence-pair small    graphene/output-products power=1 budget=30s          CLEAN     31.8s  <-- 32s
+  . [  6/6]    34s sequence-pair small    graphene/no-proliferator power=1 budget=30s          CLEAN     32.4s  <-- 32s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s sequence-pair graphene/no-proliferator power=1 budget=30s, 32s sequence-pair graphene/output-products power=1 budget=30s, 31s sequence-pair graphene/all-products power=1 budget=30s
+
+34s wall, 6/6 cells
+3 cells completed after their own requested search deadline; the largest completion tail was 2.4s. Emission, detailed routing already in flight, and validation finish atomically.
+
+exit_code=0

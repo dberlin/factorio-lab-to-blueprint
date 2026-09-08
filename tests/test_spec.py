@@ -5,10 +5,11 @@ from __future__ import annotations
 from fractions import Fraction
 
 import pytest
+from pydantic import ValidationError
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import NoValidLayout
-from flab2bp.spec import MAX_CARGO_STACK, BeltTier, BuildSpec, MachineGroup
+from flab2bp.spec import MAX_CARGO_STACK, BeltTier, BuildSpec, MachineGroup, SelfLoopSeed
 
 
 def _group() -> MachineGroup:
@@ -28,6 +29,18 @@ def test_no_upgrades_means_the_floor_is_the_ceiling() -> None:
     assert spec.belt_tiers == (BeltTier(item_id="conveyor-belt-2", items_per_second=Fraction(12)),)
     assert spec.lane_capacity == Fraction(12)
     assert spec.sorter_item_ids == ("sorter-1", "sorter-2", "sorter-3", "sorter-4")
+
+
+def test_a_spec_defaults_to_exact_machine_ranking() -> None:
+    spec = BuildSpec(groups=(_group(),))
+
+    assert spec.machine_rank == "exact"
+    assert spec.machine_moves == ()
+
+
+def test_a_spec_rejects_an_unknown_machine_rank() -> None:
+    with pytest.raises(ValidationError, match="machine_rank"):
+        BuildSpec(groups=(_group(),), machine_rank="whatever")
 
 
 def test_upgrades_follow_the_floor_and_raise_the_capacity() -> None:
@@ -316,3 +329,43 @@ def test_the_external_override_beats_the_specs_own_classification() -> None:
     # deuterium is produced by classification: what the sorter places, 3.
     assert spec.planning_stack("deuterium") == 3
     assert spec.planning_stack("deuterium", external=True) == 2
+
+
+def test_build_spec_defaults_to_the_tesla_tower() -> None:
+    spec = BuildSpec(groups=())
+    assert spec.power_tower_item_id == "tesla-tower"
+
+
+def test_build_spec_accepts_every_power_tower_choice() -> None:
+    for lab_id in catalog.POWER_TOWER_CHOICES.values():
+        assert BuildSpec(groups=(), power_tower_item_id=lab_id).power_tower_item_id == lab_id
+
+
+def test_build_spec_refuses_a_power_tower_it_cannot_place() -> None:
+    with pytest.raises(ValidationError):
+        BuildSpec(groups=(), power_tower_item_id="assembling-machine-1")
+
+
+def test_self_loop_seed_arithmetic_cannot_lie() -> None:
+    with pytest.raises(ValidationError):
+        SelfLoopSeed(
+            item_id="hydrogen",
+            recipe_id="x-ray-cracking",
+            machine_item_id="oil-refinery",
+            machines=4,
+            consumed_per_craft=Fraction(2),
+            produced_per_craft=Fraction(3),
+            net_per_craft=Fraction(2),  # wrong: 3 - 2 = 1
+            seed_items=8,
+        )
+    with pytest.raises(ValidationError):
+        SelfLoopSeed(
+            item_id="hydrogen",
+            recipe_id="x-ray-cracking",
+            machine_item_id="oil-refinery",
+            machines=4,
+            consumed_per_craft=Fraction(2),
+            produced_per_craft=Fraction(3),
+            net_per_craft=Fraction(1),
+            seed_items=4,  # wrong: ceil(4 * 2) = 8
+        )

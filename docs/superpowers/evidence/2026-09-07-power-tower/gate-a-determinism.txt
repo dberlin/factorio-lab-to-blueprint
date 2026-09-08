@@ -1,0 +1,19 @@
+Gate (a) deterministic controls: PASS 12/12 cell byte identities.
+Baseline a140151893ad0d7bcf115e1b34b2aca8f2201ea4; candidate632296de737a63d8bd0132f367a64802d1501327 (formatting-only working-tree changes per Main).
+One baseline round, two candidate rounds; workers1, budget30s, timestamp0.
+All36 raw rows CLEAN, all saved blueprint files byte-identical across the three occurrences of each cell; recorded SHA256 matches saved encoded bytes excluding the file newline.
+This is a read-only comparison of completed evidence, not a new gate execution or proof of 72-cell byte parity. The corpus uses128 workers and has four area/tower movers; see gate-b-table.md.
+
+cell | towers | area | SHA256 (base=head0=head1)
+iron-ingot/freeform/no-proliferator | 1 | 63 | 91f978c4bb2000a741532c42ce8a3b3514732eb36f226e535c083efa504d9dc2
+iron-ingot/freeform/all-products | 1 | 104 | 353c69bea7bceb9b5b6bccf8015b4e5efc3d330273a2b478d406cacb8463e369
+iron-ingot/freeform/output-products | 1 | 104 | df28d050567d07287d4227f48d9e720e33462922e9eb4a0b02591535a66de185
+iron-ingot/sequence-pair/no-proliferator | 1 | 63 | 9424fdb3247f63f03afb2b07b985d5674d1cd1b453b4a11edf871e7bea6f3b72
+iron-ingot/sequence-pair/all-products | 1 | 104 | 0f0b25c29a8f4bfc7d8962422443eaa41d4e6004e36d2c2cded4f5bd3bd7359c
+iron-ingot/sequence-pair/output-products | 1 | 104 | 1d5025d3fd96f248fea6b83dc1e9c8d1911b33a3162960b69d29672bb3bb65b5
+magnetic-coil/freeform/no-proliferator | 2 | 198 | c74f9c346fb4dd15303b59cb5517a78bd2a71baceee308b6de81c338f2ea0fa9
+magnetic-coil/freeform/all-products | 3 | 323 | f6a001f944c9a734b0a1a31679dfcf8f99d543d103f7cce0d97ea27fe5a2380c
+magnetic-coil/freeform/output-products | 3 | 304 | ff4b56c8dc188c93ca95e8f6d34acc8441ad45569d5314570919a96c17e969c7
+magnetic-coil/sequence-pair/no-proliferator | 2 | 260 | 2816a76f2d4ebaf2615de2dcf0821adbdbb4bb1837b2abb1513502b10630b14e
+magnetic-coil/sequence-pair/all-products | 3 | 342 | a73d55af54793a4f85caa941251f74a92a9ce9f4f47b3a0a4e031b05f05c7516
+magnetic-coil/sequence-pair/output-products | 3 | 304 | 6817d0fa075f5a2ca9eed4a99de3ddb6a3d6acebaf7fd6939801944b4c40e47c

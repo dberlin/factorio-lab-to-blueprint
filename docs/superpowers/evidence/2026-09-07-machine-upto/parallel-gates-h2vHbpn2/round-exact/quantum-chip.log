@@ -1,0 +1,19 @@
+{"command": ["uv", "run", "python", "scripts/audit.py", "--only", "quantum-chip", "--budget", "30", "--jobs", "8", "--strategy", "both", "--max-seconds", "3600", "--json", "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/docs/superpowers/evidence/2026-09-07-machine-upto/parallel-gates-h2vHbpn2/round-exact/quantum-chip.jsonl", "--machine-rank", "exact"], "provenance": {"arm": "exact", "mode": "round", "commit": "f148a4c3c6d662e3e19ba28f9a397507c1342220", "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto", "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/src/flab2bp/__init__.py"}}
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]    18s freeform  stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     17.1s  <-- 17s
+  . [  2/6]    29s freeform  stress   quantum-chip/output-products power=1 budget=30s      CLEAN     28.2s  <-- 28s
+  . [  3/6]    32s sequence-pair stress   quantum-chip/all-products power=1 budget=30s         CLEAN     30.5s  <-- 30s
+  . [  4/6]    32s sequence-pair stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     31.1s  <-- 31s
+  . [  5/6]    33s freeform  stress   quantum-chip/all-products power=1 budget=30s         CLEAN     31.7s  <-- 32s
+  . [  6/6]    35s sequence-pair stress   quantum-chip/output-products power=1 budget=30s      CLEAN     33.9s  <-- 34s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s freeform quantum-chip/all-products power=1 budget=30s, 28s freeform quantum-chip/output-products power=1 budget=30s, 17s freeform quantum-chip/no-proliferator power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 34s sequence-pair quantum-chip/output-products power=1 budget=30s, 31s sequence-pair quantum-chip/no-proliferator power=1 budget=30s, 30s sequence-pair quantum-chip/all-products power=1 budget=30s
+
+35s wall, 6/6 cells
+4 cells completed after their own requested search deadline; the largest completion tail was 3.9s. Emission, detailed routing already in flight, and validation finish atomically.
+
+exit_code=0

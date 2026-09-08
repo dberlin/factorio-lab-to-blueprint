@@ -1,0 +1,17 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4/docs/superpowers/evidence/2026-09-07-hierarchical-v4/titanium-glass-b60-after-topup-certify.blueprint.txt"
+ ],
+ "certifications": [],
+ "exit": 3
+}

@@ -1,0 +1,19 @@
+{"command": ["uv", "run", "python", "scripts/audit.py", "--only", "plastic", "--budget", "30", "--jobs", "8", "--strategy", "both", "--max-seconds", "3600", "--json", "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/docs/superpowers/evidence/2026-09-07-machine-upto/parallel-gates-h2vHbpn2/round-base/plastic.jsonl"], "provenance": {"arm": "base", "mode": "round", "commit": "ad8a6f80550e1fb91abe12d30e7efc379d2f8a8d", "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto-base", "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto-base/src/flab2bp/__init__.py"}}
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     5s freeform  small    plastic/no-proliferator power=1 budget=30s           CLEAN      3.3s
+  . [  2/6]    10s freeform  small    plastic/output-products power=1 budget=30s           CLEAN      8.6s
+  . [  3/6]    12s freeform  small    plastic/all-products power=1 budget=30s              CLEAN     11.2s  <-- 11s
+  . [  4/6]    31s sequence-pair small    plastic/output-products power=1 budget=30s           CLEAN     30.2s  <-- 30s
+  . [  5/6]    32s sequence-pair small    plastic/all-products power=1 budget=30s              CLEAN     30.4s  <-- 30s
+  . [  6/6]    33s sequence-pair small    plastic/no-proliferator power=1 budget=30s           CLEAN     31.8s  <-- 32s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 11s freeform plastic/all-products power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 32s sequence-pair plastic/no-proliferator power=1 budget=30s, 30s sequence-pair plastic/all-products power=1 budget=30s, 30s sequence-pair plastic/output-products power=1 budget=30s
+
+33s wall, 6/6 cells
+3 cells completed after their own requested search deadline; the largest completion tail was 1.8s. Emission, detailed routing already in flight, and validation finish atomically.
+
+exit_code=0

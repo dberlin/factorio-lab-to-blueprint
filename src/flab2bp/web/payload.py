@@ -24,6 +24,7 @@ from fractions import Fraction
 from typing import cast
 
 from flab2bp import pipeline
+from flab2bp.dsp import catalog
 from flab2bp.layout import markers, validate
 from flab2bp.layout.base import (
     LayoutAttemptFailure,
@@ -58,6 +59,53 @@ def _rates(values: dict[str, Fraction]) -> Json:
     result: Json = {}
     for item, rate in sorted(values.items()):
         result[item] = _rate(rate)
+    return result
+
+
+def _self_loop_seeds(spec: BuildSpec, placement: Placement) -> Json:
+    """The one-off prime every self-loop item needs, keyed by item.
+
+    Never a permanent external input (design §9 R3) -- this is the same
+    ``spec.self_loop_seeds`` the CLI's ``prime once (self-loop):`` line and
+    the blueprint description's ``PRIME ONCE`` note read, serialised for the
+    UI to show the same instruction.
+
+    The instruction is "put N items HERE", so ``head`` carries the tile too.
+    Without it the payload said how much to prime but not where, while both
+    other renderings of the same fact -- ``cli.py``'s line and
+    ``pipeline._prime_note`` -- name the tile.  ``None`` when the loop head
+    cannot be located, which is what those two print as an empty ``where``
+    rather than raising, and the UI should read it the same way.
+
+    Keyed by item for the callers that already index it that way, but a key
+    per item cannot hold two groups that self-loop the SAME item -- the second
+    would overwrite the first, silently dropping a prime a player must
+    perform.  That is latent today (the vendored dataset's two loop recipes use
+    different items) and is not left to chance: every seed for an item is also
+    listed under ``recipes``, so the count there is the number of primes and
+    the flat keys stay what they always were, the first seed's.
+    """
+    heads = markers.self_loop_prime_heads(placement, spec)
+    result: Json = {}
+    for s in spec.self_loop_seeds:
+        head_index = heads.get(s.item_id)
+        head: Json | None = None
+        if head_index is not None:
+            tile = placement.buildings[head_index]
+            # `z` as a string for the same reason `_rate` keeps a Fraction as
+            # one: a belt may sit at a half level and a float would round it.
+            head = {"x": tile.x, "y": tile.y, "z": str(tile.z)}
+        record: Json = {
+            "seed_items": s.seed_items,
+            "recipe": s.recipe_id,
+            "machines": s.machines,
+            "head": head,
+        }
+        existing = result.get(s.item_id)
+        if existing is None:
+            result[s.item_id] = {**record, "recipes": [record]}
+        else:
+            cast(list[Json], cast(Json, existing)["recipes"]).append(record)
     return result
 
 
@@ -101,6 +149,19 @@ def _belt_tiers(spec: BuildSpec, placement: Placement, report: validate.Report) 
     }
 
 
+def _machine_moves(spec: BuildSpec) -> list[JsonValue]:
+    return [
+        {
+            "recipe_id": move.recipe_id,
+            "from_machine": move.from_machine,
+            "to_machine": move.to_machine,
+            "count_before": move.count_before,
+            "count_after": move.count_after,
+        }
+        for move in spec.machine_moves
+    ]
+
+
 def _attempt_detail(attempt: pipeline.Attempt) -> Json:
     """One attempt's own facts: what IT belts in, makes, and costs.
 
@@ -116,12 +177,15 @@ def _attempt_detail(attempt: pipeline.Attempt) -> Json:
     unmarked = markers.unmarked_external_inputs(attempt.placement, spec)
     return {
         "machines": spec.machine_count,
+        "machine_rank": spec.machine_rank,
+        "machine_moves": _machine_moves(spec),
         "buildings": len(attempt.placement.buildings),
         "primary_band": frame.primary_band,
         "certified_bands": _array(frame.certified_bands),
         "title": attempt.placement.short_desc,
         "outputs": _rates(dict(spec.outputs)),
         "external_inputs": _rates(dict(spec.external_inputs)),
+        "self_loop_seeds": _self_loop_seeds(spec, attempt.placement),
         "input_markers": int(attempt.placement.stats.get("input_markers", 0)),
         "unmarked_inputs": _array(sorted(unmarked)),
         "belt_tiers": _belt_tiers(spec, attempt.placement, attempt.report),
@@ -201,6 +265,9 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "strategy": build.strategy,
         "candidate": build.spec.label,
         "machines": build.spec.machine_count,
+        "machine_rank": build.spec.machine_rank,
+        "machine_moves": _machine_moves(build.spec),
+        "power_building": catalog.power_tower_building(build.spec.power_tower_item_id).name,
         "pilers": int(build.placement.stats.get("pilers", 0)),
         "area": build.placement.area,
         "primary_band": frame.primary_band,
@@ -210,6 +277,7 @@ def describe(build: pipeline.Build, *, allow_invalid: bool = False) -> Json:
         "description": build.placement.description,
         "outputs": _rates(dict(build.spec.outputs)),
         "external_inputs": _rates(dict(build.spec.external_inputs)),
+        "self_loop_seeds": _self_loop_seeds(build.spec, build.placement),
         "input_markers": int(build.placement.stats.get("input_markers", 0)),
         "unmarked_inputs": _array(sorted(unmarked)),
         "flow_pinned": build.flow_pinned,

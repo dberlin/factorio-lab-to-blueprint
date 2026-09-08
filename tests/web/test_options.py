@@ -10,10 +10,23 @@ import pytest
 
 from flab2bp import pipeline
 from flab2bp.rates import DEFAULT_CANDIDATE_POLICIES, CandidatePolicy
+from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.web.jobs import WARN_TOTAL_SECONDS, InvalidOptions, Options, parse_options
 from flab2bp.web.payload import JsonValue
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
+
+
+@pytest.mark.parametrize("selection", [None, "auto", "tesla", "substation", "wireless"])
+def test_power_tower_selection_preserves_auto_and_named_choices(selection: str | None) -> None:
+    options = parse_options({"url": URL, "power_tower": selection})
+    assert options.power_tower == (None if selection in (None, "auto") else selection)
+
+
+@pytest.mark.parametrize("selection", ["none", "satellite-substation", 2212, [], {}])
+def test_invalid_power_tower_is_refused(selection: JsonValue) -> None:
+    with pytest.raises(InvalidOptions, match="power_tower"):
+        parse_options({"url": URL, "power_tower": selection})
 
 
 def test_fetch_flow_defaults_off_and_accepts_the_factorio_lab_origin() -> None:
@@ -82,6 +95,17 @@ def test_defaults_match_the_cli() -> None:
     assert not hasattr(options, "power")
     # The CLI refuses to emit an invalid blueprint unless asked; so does this.
     assert options.allow_invalid is False
+
+
+def test_machine_rank_defaults_to_exact_and_accepts_up_to() -> None:
+    assert parse_options({"url": URL}).machine_rank is MachineRank.EXACT
+    assert parse_options({"url": URL, "machine_rank": "exact"}).machine_rank is MachineRank.EXACT
+    assert parse_options({"url": URL, "machine_rank": "up-to"}).machine_rank is MachineRank.UP_TO
+
+
+def test_machine_rank_rejects_unknown_spelling() -> None:
+    with pytest.raises(InvalidOptions, match="machine_rank"):
+        parse_options({"url": URL, "machine_rank": "upto"})
 
 
 @pytest.mark.parametrize(

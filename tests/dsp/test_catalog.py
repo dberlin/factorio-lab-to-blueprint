@@ -1084,3 +1084,53 @@ def test_stacking_techs_table_is_the_provenance_for_the_level_tables() -> None:
         catalog.sorter_place_stack(_PILE_SORTER, level)
         for level in range(catalog.SORTER_STACKING_LEVELS + 1)
     ]
+
+
+def test_power_tower_choices_resolve_to_power_nodes() -> None:
+    assert catalog.POWER_TOWER_CHOICES == {
+        "tesla": "tesla-tower",
+        "substation": "satellite-substation",
+        "wireless": "wireless-power-tower",
+    }
+    assert catalog.DEFAULT_POWER_TOWER == "tesla-tower"
+    for lab_id in catalog.POWER_TOWER_CHOICES.values():
+        building = catalog.power_tower_building(lab_id)
+        assert building.is_power_node
+        assert building.cover_radius > 0
+        assert building.connect_distance > 0
+
+
+def test_power_tower_building_matches_the_measured_game_data() -> None:
+    tesla = catalog.power_tower_building("tesla-tower")
+    assert (tesla.item_id, tesla.width, tesla.height) == (2201, 1, 1)
+    assert (tesla.cover_radius, tesla.connect_distance) == (Fraction(21, 2), Fraction(45, 2))
+
+    substation = catalog.power_tower_building("satellite-substation")
+    assert (substation.item_id, substation.width, substation.height) == (2212, 5, 5)
+    assert (substation.cover_radius, substation.connect_distance) == (
+        Fraction(53, 2),
+        Fraction(107, 2),
+    )
+
+    wireless = catalog.power_tower_building("wireless-power-tower")
+    assert (wireless.item_id, wireless.width, wireless.height) == (2202, 1, 1)
+    assert (wireless.cover_radius, wireless.connect_distance) == (
+        Fraction(13, 2),
+        Fraction(91, 2),
+    )
+
+
+def test_power_tower_building_refuses_a_non_power_building() -> None:
+    with pytest.raises(ValueError, match="not a power"):
+        catalog.power_tower_building("assembling-machine-1")
+
+
+def test_power_tower_building_refuses_an_unknown_id() -> None:
+    with pytest.raises(ValueError, match="unknown"):
+        catalog.power_tower_building("no-such-building")
+
+
+def test_the_default_power_tower_is_the_tesla_tower_id() -> None:
+    assert catalog.power_tower_building(catalog.DEFAULT_POWER_TOWER).item_id == (
+        catalog.TESLA_TOWER_ID
+    )

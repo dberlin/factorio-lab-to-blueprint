@@ -1,0 +1,78 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[31mF[0m
+=================================== FAILURES ===================================
+[31m[1m______ test_all_products_sequence_pair_honours_the_exact_layout_deadline _______[0m
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f82b0b403e0>
+
+    [0m[37m@pytest[39;49;00m.mark.slow[90m[39;49;00m
+    [94mdef[39;49;00m[90m [39;49;00m[92mtest_all_products_sequence_pair_honours_the_exact_layout_deadline[39;49;00m([90m[39;49;00m
+        monkeypatch: pytest.MonkeyPatch,[90m[39;49;00m
+    ) -> [94mNone[39;49;00m:[90m[39;49;00m
+        [90m# Counts real firings of freeform._PreparationDeadline -- the cancellation[39;49;00m[90m[39;49;00m
+        [90m# 0d2a69b added inside exact sequence preparation (_prepare_routing_problem,[39;49;00m[90m[39;49;00m
+        [90m# _power_plan, _prospective_static_failure, _place_coaters). A subclass, not[39;49;00m[90m[39;49;00m
+        [90m# a bare stand-in: sequence_solver.py caught the original class by its own[39;49;00m[90m[39;49;00m
+        [90m# `from ... import _PreparationDeadline` binding at import time, so patching[39;49;00m[90m[39;49;00m
+        [90m# only `freeform._PreparationDeadline` -- where every `raise[39;49;00m[90m[39;49;00m
+        [90m# _PreparationDeadline` in that module resolves the name -- still lands in[39;49;00m[90m[39;49;00m
+        [90m# that `except` via isinstance, with no need to touch sequence_solver's copy.[39;49;00m[90m[39;49;00m
+        preparation_deadline_fires = [94m0[39;49;00m[90m[39;49;00m
+    [90m[39;49;00m
+        [94mclass[39;49;00m[90m [39;49;00m[04m[92m_CountingPreparationDeadline[39;49;00m(freeform._PreparationDeadline):[90m[39;49;00m
+            [94mdef[39;49;00m[90m [39;49;00m[92m__init__[39;49;00m([96mself[39;49;00m, *args: [96mobject[39;49;00m, **kwargs: [96mobject[39;49;00m) -> [94mNone[39;49;00m:[90m[39;49;00m
+                [96msuper[39;49;00m().[92m__init__[39;49;00m(*args, **kwargs)[90m[39;49;00m
+                [94mnonlocal[39;49;00m preparation_deadline_fires[90m[39;49;00m
+                preparation_deadline_fires += [94m1[39;49;00m[90m[39;49;00m
+    [90m[39;49;00m
+        monkeypatch.setattr(freeform, [33m"[39;49;00m[33m_PreparationDeadline[39;49;00m[33m"[39;49;00m, _CountingPreparationDeadline)[90m[39;49;00m
+    [90m[39;49;00m
+        started = time.monotonic()[90m[39;49;00m
+    [90m[39;49;00m
+        [90m# Measured 2026-09-01: since commit 8161392 sped up preparation, this build[39;49;00m[90m[39;49;00m
+        [90m# now *succeeds* at time_budget_s=10.0 (~10.3s wall) instead of exhausting[39;49;00m[90m[39;49;00m
+        [90m# the deadline. 1.5s is small enough that exact preparation is still[39;49;00m[90m[39;49;00m
+        [90m# reliably cancelled mid-flight (verified: NoValidLayout, 3/3 runs).[39;49;00m[90m[39;49;00m
+        [90m#[39;49;00m[90m[39;49;00m
+        [90m# THE CEILING IS 2.0s, MEASURED: at 2.0 the solver sometimes SUCCEEDS on[39;49;00m[90m[39;49;00m
+        [90m# this URL, so the budget has to stay strictly below it or the test is[39;49;00m[90m[39;49;00m
+        [90m# flaky rather than wrong. The mechanism is deliberately a real cell that[39;49;00m[90m[39;49;00m
+        [90m# exhausts inside exact preparation rather than a mechanised clock,[39;49;00m[90m[39;49;00m
+        [90m# because what is under test is that the preparation path itself honours[39;49;00m[90m[39;49;00m
+        [90m# the deadline -- a faked clock would prove that the fake fired.[39;49;00m[90m[39;49;00m
+        [90m#[39;49;00m[90m[39;49;00m
+        [90m# So this budget is a moving target by design: the next preparation[39;49;00m[90m[39;49;00m
+        [90m# speedup that makes 1.5s enough to finish will fail here with[39;49;00m[90m[39;49;00m
+        [90m# `DID NOT RAISE NoValidLayout`. That failure is the test working. Lower[39;49;00m[90m[39;49;00m
+        [90m# the budget until the refusal is reliable again (and re-measure the[39;49;00m[90m[39;49;00m
+        [90m# ceiling), rather than relaxing the assertion.[39;49;00m[90m[39;49;00m
+        [90m#[39;49;00m[90m[39;49;00m
+        [90m# `sequence_islands=1` is load-bearing, not tidiness: the default resolves[39;49;00m[90m[39;49;00m
+        [90m# to four SPAWNED children, and a counter monkeypatched into this process[39;49;00m[90m[39;49;00m
+        [90m# can never see a `_PreparationDeadline` raised in one of them. One island[39;49;00m[90m[39;49;00m
+        [90m# is the in-process path this test exists to guard, and it is the path a[39;49;00m[90m[39;49;00m
+        [90m# `--sequence-islands 1` build still takes.[39;49;00m[90m[39;49;00m
+        budget = [94m0.6[39;49;00m[90m[39;49;00m
+        [94mwith[39;49;00m pytest.raises(NoValidLayout, match=[33m"[39;49;00m[33mdeadline exhausted[39;49;00m[33m"[39;49;00m):[90m[39;49;00m
+            pipeline.build([90m[39;49;00m
+                DEADLINE_REGRESSION_URL,[90m[39;49;00m
+                strategy=[33m"[39;49;00m[33msequence-pair[39;49;00m[33m"[39;49;00m,[90m[39;49;00m
+                candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),[90m[39;49;00m
+                time_budget_s=budget,[90m[39;49;00m
+                sequence_islands=[94m1[39;49;00m,[90m[39;49;00m
+            )[90m[39;49;00m
+    [90m[39;49;00m
+        [94massert[39;49;00m time.monotonic() - started < budget + [94m2.5[39;49;00m[90m[39;49;00m
+        [90m# Without this, a deadline hit anywhere else (e.g. before the search loop[39;49;00m[90m[39;49;00m
+        [90m# ever reached a candidate) would also raise "deadline exhausted" and pass[39;49;00m[90m[39;49;00m
+        [90m# -- this is what actually proves the refusal happened during exact[39;49;00m[90m[39;49;00m
+        [90m# preparation, the code path 0d2a69b guarded.[39;49;00m[90m[39;49;00m
+>       [94massert[39;49;00m preparation_deadline_fires > [94m0[39;49;00m[90m[39;49;00m
+[1m[31mE       assert 0 > 0[0m
+
+[1m[31mtests/test_pipeline.py[0m:768: AssertionError
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m tests/test_pipeline.py::[1mtest_all_products_sequence_pair_honours_the_exact_layout_deadline[0m - assert 0 > 0
+[31m!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!![0m
+[31m[31m[1m1 failed[0m[31m in 1.07s[0m[0m
+uv run pytest  -x > "$EVID/deadline-${BUDGET}-run${RUN}.log" 2>&1  11.06s user 0.39s system 384% cpu 2.978 total

@@ -9,7 +9,15 @@ import pytest
 from flab2bp.dsp import catalog
 from flab2bp.layout import junction, slots
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
-from flab2bp.layout.freeform import PortAccessEvidence, PortAccessKind, PortAccessReservation
+from flab2bp.layout.buildings import Buildings
+from flab2bp.layout.freeform import (
+    PortAccessCorridor,
+    PortAccessDemand,
+    PortAccessEvidence,
+    PortAccessKind,
+    PortAccessReservation,
+    _Canvas,
+)
 from flab2bp.layout.hierarchy import compose
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import (
@@ -22,6 +30,25 @@ from flab2bp.spec import BuildSpec
 from tests.layout.hierarchy.conftest import chain_build_spec
 
 TwoSolvedBlocks = tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]
+
+
+@pytest.fixture
+def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``FLAB2BP_COATER_NODE=off``, the retained pre-2026-09-07 arm.
+
+    See the fixture of the same name in ``tests/layout/test_freeform.py``.  A
+    coater riding the consumer strip's widened west channel (``off``) is a
+    different placement from ``placed``'s free-standing four-tile node beside
+    the lane, so this test's recorded geometry is an ``off``-arm fact -- it is
+    pinned, not re-recorded, per the checklist below.  (Not the body-level
+    belt ban: ``ed3c1eb2`` retired that on measurement -- 0 of 60 body cells
+    were free at ban time, 60 of 60 already carried a committed belt, so it
+    was proved unable to fire.)
+
+    Deleting this fixture? See the retirement checklist, §14 of
+    ``docs/superpowers/evidence/2026-09-07-coater-placed-gate/README.md``.
+    """
+    monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
 
 
 def test_pack_blocks_keeps_a_two_tile_gap_and_prefers_a_band_legal_shape():
@@ -127,6 +154,7 @@ def _mixed_block(*, coater_seats: tuple[int, ...]) -> MixedBlock:
     return MixedBlock(buildings, sorter, splitter, machine, coaters, drops)
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
     """Kind by kind, because the differences are what the game enforces.
 
@@ -140,7 +168,7 @@ def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
     canvas = compose.canvas_for(chain_build_spec(), block.buildings, ramped=False, margin=4)
 
     # Index order is the composed list's own: every `_Port` indexes into it.
-    assert canvas.buildings == block.buildings
+    assert tuple(canvas.buildings) == tuple(block.buildings)
 
     assert (block.sorter.x, block.sorter.y) not in canvas.solid
     assert not any(key[:2] == (block.sorter.x, block.sorter.y) for key in canvas.blocked)
@@ -167,6 +195,29 @@ def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
     banned = set(canvas.belt_ban)
     assert any(abs(x - coater.x) <= 2 and abs(y - coater.y) <= 2 for x, y in banned)
     assert all(levels and min(levels) >= 1 for levels in canvas.belt_ban.values())
+
+
+@pytest.mark.parametrize(
+    ("power_id", "reserved_radius"), (("tesla-tower", 0), ("satellite-substation", 3))
+)
+def test_composed_power_clearance_blocks_cut_routes_without_widening_tesla(
+    power_id: str, reserved_radius: int
+) -> None:
+    power = catalog.power_tower_building(power_id)
+    tower = PlacedBuilding(
+        item_id=power.item_id,
+        model_index=power.model_index,
+        x=-(power.width // 2),
+        y=-(power.height // 2),
+        width=power.width,
+        height=power.height,
+    )
+    spec = chain_build_spec().model_copy(update={"power_tower_item_id": power_id})
+    canvas = compose.canvas_for(spec, [tower], ramped=False, margin=4)
+
+    assert not canvas.free((-reserved_radius, -reserved_radius, 0))
+    assert not canvas.free((reserved_radius, reserved_radius, 0))
+    assert canvas.free((reserved_radius + 1, 0, 0))
 
 
 def test_a_coater_drop_is_exempt_from_another_coaters_ban():
@@ -631,11 +682,22 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
 ):
     """An assignment of NOTHING is an unusable answer, not a geometric verdict.
 
-    `_match_access_corridors` returns `{}` wholesale when its validate/cut loop
-    gives up rather than when the ground runs out, and an empty reservation
-    stakes NO corridors -- so acting on one leaves the router worse off than
-    v2's local-only oracle.  The belt3 measurement had exactly that: all 102
-    demands discarded on a canvas the router still wired 65 of 89 cuts on.
+    This is the WHOLESALE give-up: `_match_access_corridors` returns `{}`
+    wholesale (rather than committing whatever partial its survey left
+    unconvicted) either directly -- an infeasible initial rank solve, or no
+    demand having a single free option while demands were raised -- or via
+    its `surrender()` fallback, which reaching is NECESSARY but not
+    SUFFICIENT for `{}`: `surrender()` hands back a non-empty partial unless
+    no partial was ever recorded, no `survey` callback was passed at all, its
+    survey is cut short by its own deadline, or the survey convicts every
+    demand the partial held.  Every one of those routes is `converged=False`.
+    So the mock scripts that too, or `pack_with_access`'s new
+    `goal_driven.converged` trigger would commit this empty answer directly
+    instead of falling back.
+    An empty reservation stakes NO corridors -- so acting on one leaves the
+    router worse off than v2's local-only oracle.  The belt3 measurement had
+    exactly that: all 102 demands discarded on a canvas the router still
+    wired 65 of 89 cuts on.
     """
     left, right, flows, spec, ramped = two_solved_blocks
     real = compose._reserve_port_access
@@ -646,7 +708,7 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
         reservation = real(canvas, demands, **kw)
         if kw.get("goals") is not None:
             assert demands, "the fixture must raise demands for this to be the unusable case"
-            return replace(reservation, assigned=(), missing=demands)
+            return replace(reservation, assigned=(), missing=demands, converged=False)
         return reservation
 
     monkeypatch.setattr(compose, "_reserve_port_access", empty_when_asked_about_trunks)
@@ -661,6 +723,434 @@ def test_an_empty_assignment_is_re_asked_as_the_local_only_question(
     assert packed.reservation.complete
     assert packed.gap == compose.GAP_LADDER[0]
     assert packed.degraded == 1
+
+
+def _reservation(
+    demands: list[PortAccessDemand], assigned_count: int, *, converged: bool
+) -> PortAccessReservation:
+    """A `PortAccessReservation` over the first `assigned_count` demands."""
+    served = demands[:assigned_count]
+    return PortAccessReservation(
+        assigned=tuple(
+            (demand, PortAccessCorridor((0, 0, 0), (0, 1, 0), demand.kind)) for demand in served
+        ),
+        missing=tuple(demands[assigned_count:]),
+        evidence=(),
+        converged=converged,
+    )
+
+
+def test_a_committed_partial_is_counted_as_partial_and_as_degraded(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # THE R7 RESIDUAL, PINNED. A one-corridor partial must never reach the
+    # stats line with reservation_degraded=0, because that pair -- degraded 0,
+    # missing 0 -- is the only way a reader can trust `missing`.
+    left, right, flows, spec, ramped = two_solved_blocks
+
+    def fake_reserve(canvas, demands, **kwargs):
+        if kwargs.get("goals"):
+            return _reservation(list(demands), 1, converged=False)
+        # The top-up (Task 4b) IS asked -- the partial left demands missing --
+        # but this ground serves none of them, so the committed reservation is
+        # still the one-corridor partial this test is about.
+        return _reservation(list(demands), 0, converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert len(packed.reservation.assigned) == 1
+    assert packed.partial >= 1
+    assert packed.degraded >= 1
+    # The docstring's own contract on `PackedCanvas.partial`: every partial is
+    # also degraded, so this can never invert.
+    assert packed.partial <= packed.degraded
+
+
+def test_a_wholesale_empty_answer_still_falls_back_to_the_local_only_oracle(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    left, right, flows, spec, ramped = two_solved_blocks
+    asked_local = 0
+
+    def fake_reserve(canvas, demands, **kwargs):
+        nonlocal asked_local
+        if kwargs.get("goals"):
+            return _reservation(list(demands), 0, converged=False)
+        asked_local += 1
+        return _reservation(list(demands), len(list(demands)), converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert asked_local >= 1
+    assert packed.degraded >= 1
+    assert packed.partial == 0
+
+
+def test_a_converged_answer_is_neither_partial_nor_degraded(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    left, right, flows, spec, ramped = two_solved_blocks
+
+    def fake_reserve(canvas, demands, **kwargs):
+        assert kwargs.get("goals"), "a converged trunk answer must not be re-asked"
+        return _reservation(list(demands), len(list(demands)), converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert packed.degraded == 0
+    assert packed.partial == 0
+
+
+def test_a_converged_but_empty_answer_does_not_bypass_the_local_only_oracle(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The restored structural guard: `converged=True` alone is not enough.
+
+    `_CorridorMatch` only reports `converged=True` with an empty assignment
+    for an EMPTY question (`not demands`) -- never a non-empty one. A
+    `converged=True, assigned=()` reservation while demands were raised is
+    therefore not a real answer, and the first branch's guard
+    (`goal_driven.assigned or not demands`) exists to stop it being committed
+    unchecked: without it, `reservation_degraded == 0` would sit beside
+    `missing == every demand`, exactly the failure mode this task exists to
+    close.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    asked_local = 0
+
+    def fake_reserve(canvas, demands, **kwargs):
+        nonlocal asked_local
+        if kwargs.get("goals"):
+            return _reservation(list(demands), 0, converged=True)
+        asked_local += 1
+        return _reservation(list(demands), len(list(demands)), converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert asked_local >= 1, "the empty-but-converged answer must not be committed unchecked"
+    assert packed.degraded >= 1
+    assert packed.partial == 0
+
+
+def test_a_committed_partial_is_topped_up_with_exactly_its_missing_demands(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TASK 4B: the partial's survivors AND a corridor for its convicted.
+
+    Before Task 1 a give-up returned `{}` wholesale and the `else` branch below
+    re-asked the LOCAL-ONLY oracle for every demand, so every lane head got a
+    corridor.  Committing a partial deleted that fallback for exactly the
+    demands the partial's own survey convicted, and `titanium-glass` met them at
+    the router as `no port access corridor (held=0 wants=1)` -- one unroutable
+    cut per missing demand.  The top-up restores the corridor without giving up
+    the partial: the survivors keep the corridors the trunk probe placed, and
+    the convicted get the local-only answer they used to get.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    raised: list[PortAccessDemand] = []
+    asked: list[tuple[PortAccessDemand, ...]] = []
+    held_seen: list[tuple[PortAccessDemand, ...]] = []
+
+    def fake_reserve(canvas, demands, **kwargs):
+        demand_list = list(demands)
+        if kwargs.get("goals"):
+            raised[:] = demand_list
+            return _reservation(demand_list, 1, converged=False)
+        asked.append(tuple(demand_list))
+        held_seen.append(tuple(kwargs.get("held") or ()))
+        return _reservation(demand_list, len(demand_list), converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert len(raised) >= 2, "the fixture must raise more demands than the partial serves"
+    assert asked == [tuple(raised[1:])], (
+        "the local-only oracle must be asked for the MISSING demands only, exactly once"
+    )
+    assert held_seen == [(raised[0],)], (
+        "the top-up must be told which corridors are already staked, or it would "
+        "re-use their cells and wipe them off the canvas"
+    )
+    # Property 1 and 2: the partial's assignment is kept whole and the top-up is
+    # added to it; `missing` is only what neither oracle could serve.
+    assert [demand for demand, _ in packed.reservation.assigned] == raised
+    assert packed.reservation.missing == ()
+
+
+def test_a_topped_up_partial_is_still_partial_degraded_and_never_converged(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE R7 RESIDUAL AFTER THE TOP-UP, PINNED.
+
+    A topped-up partial has an EMPTY `missing`, which is the shape a caller
+    reads as "every port is satisfiable".  It is only trustworthy beside
+    `reservation_degraded == 0`, and this reservation did not come from a
+    converged matcher -- so `converged` stays False and the rung keeps counting
+    as both partial and degraded.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+
+    def fake_reserve(canvas, demands, **kwargs):
+        demand_list = list(demands)
+        if kwargs.get("goals"):
+            return _reservation(demand_list, 1, converged=False)
+        return _reservation(demand_list, len(demand_list), converged=True)
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert packed.reservation.complete
+    assert packed.reservation.converged is False, (
+        "a complete-looking reservation from a non-converged matcher must not "
+        "report a trustworthy verdict"
+    )
+    assert packed.partial >= 1
+    assert packed.degraded >= 1
+    assert packed.partial <= packed.degraded
+
+
+def test_a_partial_with_nothing_missing_is_not_topped_up(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No missing demand, no second call: the top-up is not a second opinion."""
+    left, right, flows, spec, ramped = two_solved_blocks
+
+    def fake_reserve(canvas, demands, **kwargs):
+        demand_list = list(demands)
+        if kwargs.get("goals"):
+            return _reservation(demand_list, len(demand_list), converged=False)
+        raise AssertionError("a partial that serves every demand must not be topped up")
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert packed.reservation.complete
+    assert packed.reservation.converged is False
+    assert packed.partial >= 1
+
+
+def test_a_top_up_that_runs_out_of_clock_leaves_the_partial_intact(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The partial alone is a perfectly good answer.
+
+    Losing it to a top-up timeout would be strictly worse than never attempting
+    the top-up, so a spent clock degrades to "the partial as it stood" -- never
+    to a lost partial and never to an exception escaping the rung.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    raised: list[PortAccessDemand] = []
+
+    def fake_reserve(canvas, demands, **kwargs):
+        demand_list = list(demands)
+        if kwargs.get("goals"):
+            # RUNG 0's demands: the ladder keeps walking on an incomplete
+            # reservation and `best` is the FIRST of the equally-bad rungs.
+            if not raised:
+                raised[:] = demand_list
+            return _reservation(demand_list, 1, converged=False)
+        raise compose._PreparationDeadline
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    assert [demand for demand, _ in packed.reservation.assigned] == raised[:1]
+    assert packed.reservation.missing == tuple(raised[1:])
+    assert packed.reservation.converged is False
+    assert packed.partial >= 1
+
+
+def test_a_topped_up_partial_leaves_both_corridor_sets_on_the_canvas(
+    two_solved_blocks: TwoSolvedBlocks,
+) -> None:
+    """REAL GEOMETRY: the property the ROUTER depends on.
+
+    `_reserve_port_access` clears `canvas.reserved` on entry and REBINDS
+    `canvas.port_corridors` wholesale from its own assignments at the end, so a
+    naive second call takes the first call's corridors off the canvas even as
+    the merged Python object claims to hold them -- and `_route_all` reads the
+    canvas, not the object.  `held` is what makes the second call a top-up: the
+    staked cells are denied to it during enumeration and written back with its
+    own at the end.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    packing = compose._pack_at([left, right], flows, spec, gap=8, ramped=ramped, margin=8)
+    canvas = packing.canvas
+    bounds = canvas.limit
+    demands = list(compose._port_access_inventory(packing.nets).demands)
+    assert len(demands) >= 2
+
+    first = compose._reserve_port_access(canvas, demands[:1], boundary=None, bounds=bounds)
+    assert first.complete
+    staked = dict(first.assigned)
+    before = {key: set(corridors) for key, corridors in canvas.port_corridors.items()}
+    assert before, "the first call must actually stake something for this to prove anything"
+
+    topped = compose._reserve_port_access(
+        canvas, demands[1:], boundary=None, bounds=bounds, held=staked
+    )
+
+    assert topped.complete
+    assert dict(topped.assigned) | staked == dict(topped.assigned), (
+        "a demand the first call served is never re-assigned"
+    )
+    for key, corridors in before.items():
+        assert corridors <= set(canvas.port_corridors.get(key, ())), (
+            "the top-up wiped the corridors the first call staked off the canvas"
+        )
+    for demand in demands:
+        assert canvas.port_corridors.get(demand.cell), (
+            "every demand must end with a corridor ON THE CANVAS, not just in the object"
+        )
+    cells = [
+        cell
+        for corridors in canvas.port_corridors.values()
+        for corridor in corridors
+        for cell in (corridor.access, corridor.exit)
+    ]
+    assert len(cells) == len(set(cells)), "the top-up ran a corridor through the held one"
+    assert all(cell in canvas.reserved for cell in cells), (
+        "every corridor cell must be reserved, or the router will route over it"
+    )
+
+
+def test_a_top_up_that_expires_mid_enumeration_leaves_the_canvas_as_the_partial(
+    two_solved_blocks: TwoSolvedBlocks,
+) -> None:
+    """REAL GEOMETRY: the deadline degradation the ROUTER sees.
+
+    The object-level version of this is pinned above with a stubbed oracle, but
+    the brief's actual worry is the canvas: losing the partial to a top-up
+    timeout would be strictly worse than never attempting the top-up.  The
+    top-up's entry snapshot IS the partial -- the first call staked it -- so
+    `_reserve_port_access`'s restore puts back exactly that.  The `cancelled`
+    callback below passes the entry guard and fires inside the enumeration, so
+    the RESTORE path runs rather than the cheap pre-snapshot refusal.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    packing = compose._pack_at([left, right], flows, spec, gap=8, ramped=ramped, margin=8)
+    canvas = packing.canvas
+    bounds = canvas.limit
+    demands = list(compose._port_access_inventory(packing.nets).demands)
+    assert len(demands) >= 2
+
+    first = compose._reserve_port_access(canvas, demands[:1], boundary=None, bounds=bounds)
+    assert first.complete
+    staked_corridors = {key: set(corridors) for key, corridors in canvas.port_corridors.items()}
+    staked_reserved = dict(canvas.reserved)
+    assert staked_corridors
+
+    checks = 0
+
+    def spent_after_the_entry_guard() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 1
+
+    with pytest.raises(compose._PreparationDeadline):
+        compose._reserve_port_access(
+            canvas,
+            demands[1:],
+            boundary=None,
+            bounds=bounds,
+            cancelled=spent_after_the_entry_guard,
+            held=dict(first.assigned),
+        )
+
+    assert checks > 1, "the entry guard must have passed, or the restore path never ran"
+    assert {
+        key: set(corridors) for key, corridors in canvas.port_corridors.items()
+    } == staked_corridors, "a timed-out top-up took the partial's corridors off the canvas"
+    assert canvas.reserved == staked_reserved
+
+
+def test_the_topped_up_evidence_takes_each_field_from_the_call_that_knows_it(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both calls' evidence, merged FIELD-WISE rather than one shadowing the other.
+
+    `_reserve_port_access` raises exactly one entry per demand in its own
+    `missing`, so the top-up's demand set is a strict subset of the goal-driven
+    call's: any dict union resolves to one call's entry for every key and drops
+    the other's entirely.  The counts must come from the top-up, which counted
+    on the ground as it now stands; the trunk probe's `frontier`/`exhaustive`
+    must come from the goal-driven call, which is the only one that probes.
+    """
+    left, right, flows, spec, ramped = two_solved_blocks
+    wall = ((7, 7, 0), (7, 8, 0))
+
+    def fake_reserve(canvas, demands, **kwargs):
+        demand_list = list(demands)
+        if kwargs.get("goals"):
+            reservation = _reservation(demand_list, 1, converged=False)
+            return replace(
+                reservation,
+                evidence=tuple(
+                    PortAccessEvidence(
+                        demand=demand,
+                        held=0,
+                        wanted=1,
+                        local_options=12,
+                        reachable_options=9,
+                        exhaustive=True,
+                        frontier=wall,
+                    )
+                    for demand in reservation.missing
+                ),
+            )
+        # The top-up serves nothing, so every demand keeps an evidence entry --
+        # with the poorer, unprobed shape the local-only oracle really produces.
+        reservation = _reservation(demand_list, 0, converged=True)
+        return replace(
+            reservation,
+            evidence=tuple(
+                PortAccessEvidence(
+                    demand=demand,
+                    held=0,
+                    wanted=1,
+                    local_options=3,
+                    reachable_options=3,
+                    exhaustive=False,
+                    frontier=(),
+                )
+                for demand in reservation.missing
+            ),
+        )
+
+    monkeypatch.setattr(compose, "_reserve_port_access", fake_reserve)
+    packed = compose.pack_with_access(
+        [left, right], flows, spec, ramped=ramped, deadline=None, margin=8
+    )
+
+    merged = {evidence.demand: evidence for evidence in packed.reservation.evidence}
+    assert set(merged) == set(packed.reservation.missing)
+    for evidence in merged.values():
+        assert evidence.local_options == 3, (
+            "the printed option count must describe the ground with the partial staked"
+        )
+        assert evidence.reachable_options == 3
+        assert evidence.exhaustive is True, "the trunk probe's verdict must survive the top-up"
+        assert evidence.frontier == wall, "the trunk probe's wall must survive the top-up"
 
 
 def test_compose_reports_the_rung_and_the_reservation_it_committed(
@@ -702,6 +1192,54 @@ def test_compose_routes_one_cut_between_two_solved_blocks(two_solved_blocks: Two
     heads = {f.dst.building + result.blocks[1].base for f in flows}
     fed = {b.output_obj for b in result.placement.buildings if b.output_obj is not None}
     assert heads <= fed
+
+
+def test_composition_reports_a_tile_it_could_not_power_as_a_named_cut(
+    two_solved_blocks: TwoSolvedBlocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Also pins Property 1: the infill sees the ROUTED canvas, not a pre-routing one.
+
+    A stub that never looked at its `canvas` argument would pass identically
+    whether `plan_power_infill` ran before or after `_route_all` -- the two
+    positions are observationally different only in what the canvas holds.
+    Measured on this fixture (`chain_build_spec`'s two solved blocks, one cut,
+    two flows): the blocks carry 23 and 29 buildings and ZERO Splitters
+    between them; the canvas the stub is actually handed carries 82 buildings
+    and exactly one Splitter, which `_route_all`'s tap (`_tap_source`) is the
+    only thing in this pipeline that could have put there. Both checks below
+    are that evidence, not a guess about which is more robust.
+    """
+    captured: list[_Canvas] = []
+
+    def spy(
+        canvas: _Canvas, **kwargs: object
+    ) -> tuple[list[tuple[int, int]], tuple[tuple[int, int], ...]]:
+        captured.append(canvas)
+        return [], ((63, 3),)
+
+    monkeypatch.setattr(compose, "plan_power_infill", spy)
+
+    left, right, flows, spec, ramped = two_solved_blocks
+    pre_routing_buildings = len(left.buildings) + len(right.buildings)
+    pre_routing_splitters = sum(
+        b.item_id == catalog.SPLITTER_ID for b in (*left.buildings, *right.buildings)
+    )
+    result = compose.compose([left, right], flows, spec, gap=2, ramped=ramped, deadline=None)
+
+    assert result.power_uncovered == 1
+    assert any("power.coverage" in failure and "(63,3)" in failure for failure in result.failures)
+
+    assert len(captured) == 1, "plan_power_infill must be called exactly once"
+    routed_canvas = captured[0]
+    assert len(routed_canvas.buildings) > pre_routing_buildings, (
+        "the canvas plan_power_infill received must already carry the router's own "
+        "belts -- a pre-routing canvas would hold only the two blocks' own buildings"
+    )
+    routed_splitters = sum(b.item_id == catalog.SPLITTER_ID for b in routed_canvas.buildings)
+    assert routed_splitters > pre_routing_splitters, (
+        "the canvas must carry a Splitter the ROUTER created at a tap between the two "
+        "blocks -- neither block's own solved layout contains one"
+    )
 
 
 def test_compose_reports_an_unwired_cut_instead_of_handing_it_back(
@@ -917,32 +1455,21 @@ _DOUBLE_BACK = [
 
 def test_lane_takes_the_contiguous_segment_the_port_stands_in():
     buildings = _chain_belts(_DOUBLE_BACK)
+    index = Buildings(buildings)
     xs = lambda tiles: [buildings[i].x for i in tiles]  # noqa: E731
 
     # The last tile belongs to the segment the run came back to, not to the one
     # it started on -- even though both are at y == 0 and both are in this run.
-    assert xs(compose._lane(buildings, 10)) == [4, 5, 6]
+    assert xs(compose._lane(index, 10)) == [4, 5, 6]
     # And the first tile belongs to the segment it starts.
-    assert xs(compose._lane(buildings, 0)) == [0, 1, 2]
+    assert xs(compose._lane(index, 0)) == [0, 1, 2]
     # A tile in the middle of the far segment picks up the whole of it.
-    assert xs(compose._lane(buildings, 9)) == [4, 5, 6]
-
-
-def test_the_doorstep_neighbourhood_is_the_one_reserve_port_access_enumerates():
-    """`_NEIGHBOURS` duplicates `freeform._STEPS` by value, and unenforced.
-
-    `_free_doorstep`'s docstring claims its output "is exactly the
-    `access_cells` set `_reserve_port_access` enumerates" -- true only while
-    the two neighbourhoods agree, which nothing else in either module checks.
-    """
-    from flab2bp.layout.freeform import _STEPS
-
-    assert set(compose._NEIGHBOURS) == set(_STEPS)
+    assert xs(compose._lane(index, 9)) == [4, 5, 6]
 
 
 def test_port_no_longer_asserts_on_a_run_that_doubles_back_to_its_row():
     """`_Port.at_tile` addresses taps as ``x0 + k``, so the span must be the tiles."""
-    buildings = _chain_belts(_DOUBLE_BACK)
+    buildings = Buildings(_chain_belts(_DOUBLE_BACK))
     for index in (0, 9, 10):
         port = compose._port(buildings, index, machines=1)
         assert port.x1 - port.x0 + 1 == len(port.tiles)

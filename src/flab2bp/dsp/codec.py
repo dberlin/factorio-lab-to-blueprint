@@ -34,6 +34,7 @@ from flab2bp.dsp.rules import (
 )
 from flab2bp.dsp.writer import BinaryWriter
 from flab2bp.layout.base import Placement
+from flab2bp.layout.buildings import Buildings
 
 #: Game version stamped on blueprints we generate.
 DEFAULT_GAME_VERSION = "0.10.34.28529"
@@ -275,9 +276,8 @@ def placement_to_blueprint(
     local_offsets = [
         tile_to_local_offset(b.x, b.y, b.z, b.width, b.height) for b in placement.buildings
     ]
-    for index, building in enumerate(placement.buildings):
-        if not catalog.is_belt(building.item_id):
-            continue
+    for index in Buildings.of(placement).belts():
+        building = placement.buildings[index]
         anchors: list[tuple[float, float, float]] = []
         for peer_index, port in (
             (building.output_obj, building.output_to_slot),

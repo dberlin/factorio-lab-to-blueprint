@@ -1,0 +1,23 @@
+Gate (d): UNAVAILABLE / NOT PASS.
+
+This is an availability adjudication, NOT an oracle transcript. No .NET command, game launch, mod installation or paste-validation was run by this documentation task. No supplied power evidence contains a completed in-game CheckBuildConditions dump or actual game paste recording for a substation blueprint.
+
+The approved plan's claim that dotnet is on PATH does not establish that game assemblies or a running authorized game session are available. Required prerequisites remain the .NET SDK plus the game's Managed directory (Assembly-CSharp.dll and UnityEngine.CoreModule.dll, optionally via DSP_MANAGED), and for full paste conditions an available live game/save with the authorized tools/dsp-oracle BepInEx plugin or an actual paste-validation session. Availability is an explicit missing prerequisite, not certification evidence.
+
+The oracle/ C# executable exercises MatchInserter. Even a green pytest -m dotnet run would be snap-ladder differential evidence, not full substation paste validity. tools/dsp-oracle is the distinct in-game build-condition oracle: hover the exact generated blueprint at a recorded band/anchor, press F9, retain the next completed CheckBuildConditions dump with conditionCounts and previews, game version, blueprint bytes and screenshot. Main/user owns the unavailable authorized interactive prerequisite; no installation or execution is implied here.
+
+Available substitute evidence, with deliberately limited claims:
+- Python certify accepts reported substation freeform/no-proliferator, seven towers, area5130.
+- The helper records zero direct flat clearance-halo overlaps for that accepted output.
+- Catalog item2212/model68 has footprint5x5, clearance6x6, outward-rounded routing reservation7x7.
+- Existing halo tests and parent red/green software proof pass after the fix.
+- Actual saved browser screenshots show Substation selection/rendered large box/no endpoint icon; job JSON reports valid=true. Browser rendering is not a game paste.
+- Item2212 remains LOW_CONFIDENCE_FOOTPRINTS; some belt collision findings are suppressed. A clean Python report and flat mask cannot fill the missing physical evidence.
+- The real15s parent hierarchical CLI attempt refuses before composition (exit3), so it adds no successful parent or infill build proof.
+
+Candidate for eventual physical validation (not already validated):
+parallel-gates-xUhQwvAA/reported-substation/0-reported-freeform-no-proliferator.txt
+Recorded timestamp-normalized SHA256:52a0e7eda3477cd8d2909a109ff29885c336c04a7c98ecd98b2f1e1f88bc8f5f
+Measured source:632296de737a63d8bd0132f367a64802d1501327, with formatting-only working-tree changes per Main. Later cf4d16a4 affects parent hierarchical canvas, not this freeform arm.
+
+Gate (c) still fails independently (1/6 substation CLEAN). Physical availability would not erase its five refusals. See gate-b-table.md and gate-c-reported-urls.md for complete adjudication.

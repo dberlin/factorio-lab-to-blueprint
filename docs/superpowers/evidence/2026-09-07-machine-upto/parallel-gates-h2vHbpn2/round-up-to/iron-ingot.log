@@ -1,0 +1,18 @@
+{"command": ["uv", "run", "python", "scripts/audit.py", "--only", "iron-ingot", "--budget", "30", "--jobs", "8", "--strategy", "both", "--max-seconds", "3600", "--json", "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/docs/superpowers/evidence/2026-09-07-machine-upto/parallel-gates-h2vHbpn2/round-up-to/iron-ingot.jsonl", "--machine-rank", "up-to"], "provenance": {"arm": "up-to", "mode": "round", "commit": "f148a4c3c6d662e3e19ba28f9a397507c1342220", "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto", "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/src/flab2bp/__init__.py"}}
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     4s freeform  trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN      1.3s
+  . [  2/6]     5s freeform  trivial  iron-ingot/output-products power=1 budget=30s        CLEAN      2.5s
+  . [  3/6]     5s freeform  trivial  iron-ingot/all-products power=1 budget=30s           CLEAN      2.8s
+  . [  4/6]    27s sequence-pair trivial  iron-ingot/no-proliferator power=1 budget=30s        CLEAN     24.5s  <-- 25s
+  . [  5/6]    33s sequence-pair trivial  iron-ingot/all-products power=1 budget=30s           CLEAN     30.7s  <-- 31s
+  . [  6/6]    35s sequence-pair trivial  iron-ingot/output-products power=1 budget=30s        CLEAN     33.0s  <-- 33s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 33s sequence-pair iron-ingot/output-products power=1 budget=30s, 31s sequence-pair iron-ingot/all-products power=1 budget=30s, 25s sequence-pair iron-ingot/no-proliferator power=1 budget=30s
+
+35s wall, 6/6 cells
+2 cells completed after their own requested search deadline; the largest completion tail was 3.0s. Emission, detailed routing already in flight, and validation finish atomically.
+
+exit_code=0

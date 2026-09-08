@@ -1,0 +1,7 @@
+{
+  "arm": "base",
+  "mode": "controls",
+  "commit": "ad8a6f80550e1fb91abe12d30e7efc379d2f8a8d",
+  "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto-base",
+  "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto-base/src/flab2bp/__init__.py"
+}

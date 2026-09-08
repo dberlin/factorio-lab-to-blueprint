@@ -1,0 +1,77 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+| URL | policy | placer | base/exact/up-to status | area | belts | exact/up-to machines | machine kW | moves |
+|---|---|---|---|---|---|---|---|---|
+| casimir-crystal | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 1107.0/1107.0/1107.0 | 398/398/398 | 23/23 | 10800/10800 | none |
+| casimir-crystal | all-products | freeform | CLEAN/CLEAN/CLEAN | 1161.0/1161.0/1161.0 | 488/488/492 | 17/17 | 8100/8100 | none |
+| casimir-crystal | output-products | freeform | CLEAN/CLEAN/CLEAN | 1189.0/1189.0/1189.0 | 466/466/466 | 21/21 | 10080/10080 | none |
+| electromagnetic-matrix | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 609.0/609.0/609.0 | 166/166/166 | 9/9 | 3960/3420 | circuit-board: assembling-machine-2 → assembling-machine-1; magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| electromagnetic-matrix | all-products | freeform | CLEAN/CLEAN/CLEAN | 783.0/783.0/783.0 | 413/413/413 | 8/8 | 3600/3060 | circuit-board: assembling-machine-2 → assembling-machine-1; magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| electromagnetic-matrix | output-products | freeform | CLEAN/CLEAN/CLEAN | 696.0/696.0/696.0 | 247/247/247 | 9/9 | 3960/3420 | circuit-board: assembling-machine-2 → assembling-machine-1; magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| energy-matrix | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 616.0/616.0/616.0 | 139/139/139 | 10/10 | 4320/4320 | none |
+| energy-matrix | all-products | freeform | CLEAN/CLEAN/CLEAN | 780.0/780.0/780.0 | 204/204/204 | 8/8 | 3480/3480 | none |
+| energy-matrix | output-products | freeform | CLEAN/CLEAN/CLEAN | 650.0/650.0/650.0 | 184/184/184 | 9/9 | 3840/3840 | none |
+| graphene | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 363.0/363.0/363.0 | 70/70/70 | 5/5 | 2520/2520 | none |
+| graphene | all-products | freeform | CLEAN/CLEAN/CLEAN | 525.0/525.0/525.0 | 148/148/148 | 4/4 | 2160/2160 | none |
+| graphene | output-products | freeform | CLEAN/CLEAN/CLEAN | 429.0/429.0/429.0 | 127/127/127 | 5/5 | 2520/2520 | none |
+| information-matrix | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 7917.0/7917.0/7917.0 | 3436/3436/3436 | 97/97 | 47160/47160 | none |
+| information-matrix | all-products | freeform | CLEAN/CLEAN/CLEAN | 4292.0/4292.0/4292.0 | 2739/2739/2739 | 56/56 | 27900/27360 | circuit-board: assembling-machine-2 → assembling-machine-1 |
+| information-matrix | output-products | freeform | CLEAN/CLEAN/CLEAN | 5734.0/5734.0/5734.0 | 2674/2674/2674 | 84/84 | 41340/41340 | none |
+| iron-ingot | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 63.0/63.0/63.0 | 10/10/10 | 1/1 | 360/360 | none |
+| iron-ingot | all-products | freeform | CLEAN/CLEAN/CLEAN | 112.0/112.0/112.0 | 28/28/28 | 1/1 | 360/360 | none |
+| iron-ingot | output-products | freeform | CLEAN/CLEAN/CLEAN | 112.0/112.0/112.0 | 28/28/28 | 1/1 | 360/360 | none |
+| magnetic-coil | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 198.0/198.0/198.0 | 50/50/50 | 4/4 | 1620/1350 | magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| magnetic-coil | all-products | freeform | CLEAN/CLEAN/CLEAN | 336.0/336.0/336.0 | 126/126/126 | 3/3 | 1260/990 | magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| magnetic-coil | output-products | freeform | CLEAN/CLEAN/CLEAN | 340.0/342.0/342.0 | 118/104/104 | 4/4 | 1620/1350 | magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| plastic | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 760.0/760.0/760.0 | 198/198/198 | 9/9 | 6720/6720 | none |
+| plastic | all-products | freeform | CLEAN/CLEAN/CLEAN | 880.0/840.0/880.0 | 272/272/272 | 8/8 | 5760/5760 | none |
+| plastic | output-products | freeform | CLEAN/CLEAN/CLEAN | 819.0/819.0/819.0 | 276/276/276 | 9/9 | 6720/6720 | none |
+| processor | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 810.0/810.0/810.0 | 271/271/271 | 21/21 | 9000/9000 | none |
+| processor | all-products | freeform | CLEAN/CLEAN/CLEAN | 960.0/960.0/960.0 | 571/571/571 | 16/16 | 7020/6750 | circuit-board: assembling-machine-2 → assembling-machine-1 |
+| processor | output-products | freeform | CLEAN/CLEAN/CLEAN | 920.0/920.0/920.0 | 362/376/360 | 20/20 | 8640/8640 | none |
+| quantum-chip | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 5610.0/5610.0/5610.0 | 2133/2133/2133 | 87/87 | 109080/108000 | circuit-board: assembling-machine-3 → assembling-machine-2 |
+| quantum-chip | all-products | freeform | CLEAN/CLEAN/CLEAN | 4661.0/4661.0/4661.0 | 2922/2922/2922 | 49/49 | 60480/60480 | none |
+| quantum-chip | output-products | freeform | CLEAN/CLEAN/CLEAN | 4070.0/4070.0/4070.0 | 1851/1851/1851 | 76/76 | 95760/94680 | circuit-board: assembling-machine-3 → assembling-machine-2 |
+| super-magnetic-ring | no-proliferator | freeform | CLEAN/CLEAN/CLEAN | 2204.0/2166.0/2220.0 | 1103/1152/1248 | 58/58 | 25020/25020 | none |
+| super-magnetic-ring | all-products | freeform | CLEAN/CLEAN/CLEAN | 1968.0/1845.0/1968.0 | 1316/1457/1316 | 35/35 | 15480/14670 | magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| super-magnetic-ring | output-products | freeform | CLEAN/CLEAN/CLEAN | 2162.0/2160.0/2120.0 | 1279/1319/1224 | 52/52 | 22680/22680 | none |
+| universe-matrix | no-proliferator | freeform | REFUSED/REFUSED/REFUSED | 0.0/0.0/0.0 | 0/0/0 | 224/224 | None/None | none |
+| universe-matrix | all-products | freeform | REFUSED/REFUSED/REFUSED | 0.0/0.0/0.0 | 0/0/0 | 113/113 | None/None | electric-motor: assembling-machine-3 → assembling-machine-2; gear: assembling-machine-3 → assembling-machine-1; graviton-lens: assembling-machine-3 → assembling-machine-2; quantum-chip: assembling-machine-3 → assembling-machine-2; titanium-glass: assembling-machine-3 → assembling-machine-2 |
+| universe-matrix | output-products | freeform | REFUSED/REFUSED/REFUSED | 0.0/0.0/0.0 | 0/0/0 | 193/193 | None/None | none |
+| casimir-crystal | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 1092.0/1092.0/1092.0 | 411/411/411 | 23/23 | 10800/10800 | none |
+| casimir-crystal | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 1100.0/1100.0/1100.0 | 611/611/611 | 17/17 | 8100/8100 | none |
+| casimir-crystal | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 1100.0/1100.0/1100.0 | 461/461/461 | 21/21 | 10080/10080 | none |
+| electromagnetic-matrix | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 504.0/504.0/504.0 | 176/176/176 | 9/9 | 3960/3420 | circuit-board: assembling-machine-2 → assembling-machine-1; magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| electromagnetic-matrix | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 870.0/870.0/870.0 | 487/487/487 | 8/8 | 3600/3060 | circuit-board: assembling-machine-2 → assembling-machine-1; magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| electromagnetic-matrix | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 620.0/620.0/651.0 | 239/239/244 | 9/9 | 3960/3420 | circuit-board: assembling-machine-2 → assembling-machine-1; magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| energy-matrix | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 504.0/504.0/504.0 | 154/154/154 | 10/10 | 4320/4320 | none |
+| energy-matrix | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 820.0/820.0/820.0 | 176/176/176 | 8/8 | 3480/3480 | none |
+| energy-matrix | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 728.0/728.0/728.0 | 188/188/188 | 9/9 | 3840/3840 | none |
+| graphene | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 363.0/363.0/363.0 | 69/69/69 | 5/5 | 2520/2520 | none |
+| graphene | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 540.0/540.0/540.0 | 125/125/125 | 4/4 | 2160/2160 | none |
+| graphene | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 455.0/455.0/455.0 | 130/130/130 | 5/5 | 2520/2520 | none |
+| information-matrix | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 4560.0/4560.0/4560.0 | 2855/2855/2855 | 97/97 | 47160/47160 | none |
+| information-matrix | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 3472.0/3472.0/3472.0 | 2457/2457/2457 | 56/56 | 27900/27360 | circuit-board: assembling-machine-2 → assembling-machine-1 |
+| information-matrix | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 4800.0/4800.0/4800.0 | 2760/2760/2760 | 84/84 | 41340/41340 | none |
+| iron-ingot | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 63.0/63.0/63.0 | 10/10/10 | 1/1 | 360/360 | none |
+| iron-ingot | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 112.0/112.0/112.0 | 28/28/28 | 1/1 | 360/360 | none |
+| iron-ingot | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 112.0/112.0/112.0 | 28/28/28 | 1/1 | 360/360 | none |
+| magnetic-coil | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 230.0/230.0/230.0 | 51/51/51 | 4/4 | 1620/1350 | magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| magnetic-coil | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 345.0/345.0/345.0 | 117/117/117 | 3/3 | 1260/990 | magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| magnetic-coil | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 280.0/280.0/280.0 | 93/93/93 | 4/4 | 1620/1350 | magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| plastic | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 702.0/722.0/684.0 | 203/196/197 | 9/9 | 6720/6720 | none |
+| plastic | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 875.0/875.0/875.0 | 261/261/261 | 8/8 | 5760/5760 | none |
+| plastic | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 840.0/840.0/840.0 | 280/280/280 | 9/9 | 6720/6720 | none |
+| processor | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 810.0/810.0/810.0 | 297/297/297 | 21/21 | 9000/9000 | none |
+| processor | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 945.0/945.0/945.0 | 551/551/551 | 16/16 | 7020/6750 | circuit-board: assembling-machine-2 → assembling-machine-1 |
+| processor | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 840.0/840.0/840.0 | 372/372/372 | 20/20 | 8640/8640 | none |
+| quantum-chip | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 3692.0/3692.0/3692.0 | 2051/2051/2051 | 87/87 | 109080/108000 | circuit-board: assembling-machine-3 → assembling-machine-2 |
+| quantum-chip | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 3300.0/3300.0/3300.0 | 2136/2136/2136 | 49/49 | 60480/60480 | none |
+| quantum-chip | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 3680.0/3280.0/3280.0 | 2423/2052/2052 | 76/76 | 95760/94680 | circuit-board: assembling-machine-3 → assembling-machine-2 |
+| super-magnetic-ring | no-proliferator | sequence-pair | CLEAN/CLEAN/CLEAN | 2294.0/2294.0/2294.0 | 1278/1278/1278 | 58/58 | 25020/25020 | none |
+| super-magnetic-ring | all-products | sequence-pair | CLEAN/CLEAN/CLEAN | 1932.0/1932.0/1932.0 | 1238/1238/1238 | 35/35 | 15480/14670 | magnetic-coil: assembling-machine-2 → assembling-machine-1 |
+| super-magnetic-ring | output-products | sequence-pair | CLEAN/CLEAN/CLEAN | 2016.0/2016.0/2016.0 | 1345/1345/1345 | 52/52 | 22680/22680 | none |
+| universe-matrix | no-proliferator | sequence-pair | REFUSED/REFUSED/REFUSED | 0.0/0.0/0.0 | 0/0/0 | 224/224 | None/None | none |
+| universe-matrix | all-products | sequence-pair | REFUSED/REFUSED/REFUSED | 0.0/0.0/0.0 | 0/0/0 | 113/113 | None/None | electric-motor: assembling-machine-3 → assembling-machine-2; gear: assembling-machine-3 → assembling-machine-1; graviton-lens: assembling-machine-3 → assembling-machine-2; quantum-chip: assembling-machine-3 → assembling-machine-2; titanium-glass: assembling-machine-3 → assembling-machine-2 |
+| universe-matrix | output-products | sequence-pair | REFUSED/REFUSED/REFUSED | 0.0/0.0/0.0 | 0/0/0 | 193/193 | None/None | none |
+
+EXIT=0

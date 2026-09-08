@@ -1,0 +1,3 @@
+cpu_pressure_before = 6.4
+audit exit=0
+cpu_pressure_after = 6.6

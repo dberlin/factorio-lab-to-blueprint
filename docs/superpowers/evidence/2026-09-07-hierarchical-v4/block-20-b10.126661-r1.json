@@ -1,0 +1,4449 @@
+{
+  "attempts": [
+    {
+      "budget_stage": null,
+      "compact_width": 22,
+      "failure_kinds": {
+        "dynamic-access": 1
+      },
+      "height": 26,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+          "destination_family": {
+            "group_key": "steel#0",
+            "shard_index": 0
+          },
+          "item": "iron-ingot",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "internal",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 15,
+      "nets_routed": 14,
+      "origins": [
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          3,
+          14
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 4869,
+        "failures": [
+          {
+            "blocking_endpoints": [],
+            "blocking_nets": [],
+            "destination": [
+              0,
+              0,
+              0
+            ],
+            "expansions": 0,
+            "kind": "dynamic-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_strip": 0,
+              "item": "iron-ingot",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+                "destination_family": {
+                  "group_key": "steel#0",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "internal",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "internal",
+              "source_strip": null
+            },
+            "source": [
+              -3,
+              -2,
+              0
+            ],
+            "wall": []
+          }
+        ],
+        "iterations": 4,
+        "last_mile": {
+          "bounded": 0,
+          "commit_rejected": 0,
+          "expansions": 0,
+          "invocations": 1,
+          "nodes": 2,
+          "proved": 1,
+          "relation_evidence": "",
+          "relation_skipped_siblings": 0,
+          "relation_strips": [],
+          "restore_mismatch": 0,
+          "same_source_dropped": 0,
+          "seconds": 0.00039119902066886425,
+          "solved": 0
+        },
+        "routed": [
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "sulfuric-acid",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "sulfuric-acid",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "titanium-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": null,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": null,
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "titanium-alloy",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "titanium-alloy",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 2
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 0,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 1,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 1,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 2,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 1,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": null
+          }
+        ],
+        "status": "stranded"
+      },
+      "stranded_ports": []
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 22,
+      "failure_kinds": {
+        "dynamic-access": 1
+      },
+      "height": 26,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+          "destination_family": {
+            "group_key": "steel#0",
+            "shard_index": 0
+          },
+          "item": "iron-ingot",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "internal",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 15,
+      "nets_routed": 14,
+      "origins": [
+        [
+          3,
+          15
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          7
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 6155,
+        "failures": [
+          {
+            "blocking_endpoints": [],
+            "blocking_nets": [],
+            "destination": [
+              0,
+              15,
+              0
+            ],
+            "expansions": 0,
+            "kind": "dynamic-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_strip": 0,
+              "item": "iron-ingot",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+                "destination_family": {
+                  "group_key": "steel#0",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "internal",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "internal",
+              "source_strip": null
+            },
+            "source": [
+              -3,
+              -2,
+              0
+            ],
+            "wall": []
+          }
+        ],
+        "iterations": 4,
+        "last_mile": {
+          "bounded": 0,
+          "commit_rejected": 0,
+          "expansions": 0,
+          "invocations": 1,
+          "nodes": 2,
+          "proved": 1,
+          "relation_evidence": "",
+          "relation_skipped_siblings": 0,
+          "relation_strips": [],
+          "restore_mismatch": 0,
+          "same_source_dropped": 0,
+          "seconds": 0.0003434200771152973,
+          "solved": 0
+        },
+        "routed": [
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "sulfuric-acid",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "sulfuric-acid",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "titanium-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": null,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": null,
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "titanium-alloy",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "titanium-alloy",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 2
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 1,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 1,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 2,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 0,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 1,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": null
+          }
+        ],
+        "status": "stranded"
+      },
+      "stranded_ports": []
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 22,
+      "failure_kinds": {
+        "dynamic-access": 1
+      },
+      "height": 33,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+          "destination_family": {
+            "group_key": "steel#0",
+            "shard_index": 0
+          },
+          "item": "iron-ingot",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "internal",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 15,
+      "nets_routed": 14,
+      "origins": [
+        [
+          3,
+          15
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          7
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 6155,
+        "failures": [
+          {
+            "blocking_endpoints": [],
+            "blocking_nets": [],
+            "destination": [
+              0,
+              15,
+              0
+            ],
+            "expansions": 0,
+            "kind": "dynamic-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_strip": 0,
+              "item": "iron-ingot",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+                "destination_family": {
+                  "group_key": "steel#0",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "internal",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "internal",
+              "source_strip": null
+            },
+            "source": [
+              -3,
+              -2,
+              0
+            ],
+            "wall": []
+          }
+        ],
+        "iterations": 4,
+        "last_mile": {
+          "bounded": 0,
+          "commit_rejected": 0,
+          "expansions": 0,
+          "invocations": 1,
+          "nodes": 2,
+          "proved": 1,
+          "relation_evidence": "",
+          "relation_skipped_siblings": 0,
+          "relation_strips": [],
+          "restore_mismatch": 0,
+          "same_source_dropped": 0,
+          "seconds": 0.00033499416895210743,
+          "solved": 0
+        },
+        "routed": [
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "sulfuric-acid",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "sulfuric-acid",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "titanium-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": null,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": null,
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "titanium-alloy",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "titanium-alloy",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 2
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 1,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 1,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 2,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 0,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 1,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": null
+          }
+        ],
+        "status": "stranded"
+      },
+      "stranded_ports": []
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 22,
+      "failure_kinds": {
+        "dynamic-access": 1
+      },
+      "height": 33,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+          "destination_family": {
+            "group_key": "steel#0",
+            "shard_index": 0
+          },
+          "item": "iron-ingot",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "internal",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 15,
+      "nets_routed": 14,
+      "origins": [
+        [
+          3,
+          1
+        ],
+        [
+          3,
+          16
+        ],
+        [
+          3,
+          8
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 8017,
+        "failures": [
+          {
+            "blocking_endpoints": [],
+            "blocking_nets": [],
+            "destination": [
+              0,
+              1,
+              0
+            ],
+            "expansions": 0,
+            "kind": "dynamic-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_strip": 0,
+              "item": "iron-ingot",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+                "destination_family": {
+                  "group_key": "steel#0",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "internal",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "internal",
+              "source_strip": null
+            },
+            "source": [
+              -3,
+              -1,
+              0
+            ],
+            "wall": []
+          }
+        ],
+        "iterations": 4,
+        "last_mile": {
+          "bounded": 0,
+          "commit_rejected": 0,
+          "expansions": 0,
+          "invocations": 1,
+          "nodes": 2,
+          "proved": 1,
+          "relation_evidence": "",
+          "relation_skipped_siblings": 0,
+          "relation_strips": [],
+          "restore_mismatch": 0,
+          "same_source_dropped": 0,
+          "seconds": 0.0003436049446463585,
+          "solved": 0
+        },
+        "routed": [
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "sulfuric-acid",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "sulfuric-acid",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "titanium-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": null,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": null,
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "titanium-alloy",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "titanium-alloy",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 2
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 0,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 1,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 2,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 1,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 1,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": null
+          }
+        ],
+        "status": "stranded"
+      },
+      "stranded_ports": []
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 41,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 16,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          22,
+          0
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          22,
+          7
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  7,
+                  0
+                ],
+                [
+                  18,
+                  7,
+                  1
+                ]
+              ],
+              [
+                [
+                  -4,
+                  15,
+                  0
+                ],
+                [
+                  18,
+                  9,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 0,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              8,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 1,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              11,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                8,
+                1
+              ],
+              [
+                17,
+                7,
+                1
+              ],
+              [
+                18,
+                10,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            8,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 41,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 16,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          22,
+          1
+        ],
+        [
+          3,
+          8
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  8,
+                  0
+                ],
+                [
+                  18,
+                  8,
+                  1
+                ]
+              ],
+              [
+                [
+                  -4,
+                  16,
+                  0
+                ],
+                [
+                  18,
+                  10,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 0,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              9,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 1,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              12,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                9,
+                1
+              ],
+              [
+                17,
+                8,
+                1
+              ],
+              [
+                18,
+                11,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            9,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 41,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 21,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          22,
+          0
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          22,
+          7
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  7,
+                  0
+                ],
+                [
+                  18,
+                  7,
+                  1
+                ]
+              ],
+              [
+                [
+                  -4,
+                  15,
+                  0
+                ],
+                [
+                  18,
+                  9,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 0,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              8,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 1,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              11,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                8,
+                1
+              ],
+              [
+                17,
+                7,
+                1
+              ],
+              [
+                18,
+                10,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            8,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 41,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 21,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          22,
+          1
+        ],
+        [
+          3,
+          8
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  8,
+                  0
+                ],
+                [
+                  18,
+                  8,
+                  1
+                ]
+              ],
+              [
+                [
+                  -4,
+                  16,
+                  0
+                ],
+                [
+                  18,
+                  10,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 0,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              9,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 1,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              12,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                9,
+                1
+              ],
+              [
+                17,
+                8,
+                1
+              ],
+              [
+                18,
+                11,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            9,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 63,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 12,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          44,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          22,
+          0
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  10,
+                  0
+                ],
+                [
+                  18,
+                  2,
+                  1
+                ]
+              ],
+              [
+                [
+                  64,
+                  2,
+                  0
+                ],
+                [
+                  18,
+                  0,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 1,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              1,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              6,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                1,
+                1
+              ],
+              [
+                17,
+                0,
+                1
+              ],
+              [
+                18,
+                3,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            1,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 63,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 12,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          44,
+          1
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          22,
+          1
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  11,
+                  0
+                ],
+                [
+                  18,
+                  3,
+                  1
+                ]
+              ],
+              [
+                [
+                  64,
+                  3,
+                  0
+                ],
+                [
+                  18,
+                  1,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 1,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              2,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              7,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                2,
+                1
+              ],
+              [
+                17,
+                1,
+                1
+              ],
+              [
+                18,
+                4,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            2,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 22,
+      "failure_kinds": {
+        "dynamic-access": 1
+      },
+      "height": 26,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+          "destination_family": {
+            "group_key": "steel#0",
+            "shard_index": 0
+          },
+          "item": "iron-ingot",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "internal",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 15,
+      "nets_routed": 14,
+      "origins": [
+        [
+          3,
+          1
+        ],
+        [
+          3,
+          16
+        ],
+        [
+          3,
+          8
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 8017,
+        "failures": [
+          {
+            "blocking_endpoints": [],
+            "blocking_nets": [],
+            "destination": [
+              0,
+              1,
+              0
+            ],
+            "expansions": 0,
+            "kind": "dynamic-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_strip": 0,
+              "item": "iron-ingot",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+                "destination_family": {
+                  "group_key": "steel#0",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "internal",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "internal",
+              "source_strip": null
+            },
+            "source": [
+              -3,
+              -1,
+              0
+            ],
+            "wall": []
+          }
+        ],
+        "iterations": 4,
+        "last_mile": {
+          "bounded": 0,
+          "commit_rejected": 0,
+          "expansions": 0,
+          "invocations": 1,
+          "nodes": 2,
+          "proved": 1,
+          "relation_evidence": "",
+          "relation_skipped_siblings": 0,
+          "relation_strips": [],
+          "restore_mismatch": 0,
+          "same_source_dropped": 0,
+          "seconds": 0.00021087168715894222,
+          "solved": 0
+        },
+        "routed": [
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "sulfuric-acid",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "sulfuric-acid",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "titanium-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": null,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": null,
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "titanium-alloy",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "titanium-alloy",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 2
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 0,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 1,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 2,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 1,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 1,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": null
+          }
+        ],
+        "status": "stranded"
+      },
+      "stranded_ports": []
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 22,
+      "failure_kinds": {
+        "dynamic-access": 1
+      },
+      "height": 33,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+          "destination_family": {
+            "group_key": "steel#0",
+            "shard_index": 0
+          },
+          "item": "iron-ingot",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "internal",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 15,
+      "nets_routed": 14,
+      "origins": [
+        [
+          3,
+          0
+        ],
+        [
+          3,
+          15
+        ],
+        [
+          3,
+          7
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 8017,
+        "failures": [
+          {
+            "blocking_endpoints": [],
+            "blocking_nets": [],
+            "destination": [
+              0,
+              0,
+              0
+            ],
+            "expansions": 0,
+            "kind": "dynamic-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_strip": 0,
+              "item": "iron-ingot",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+                "destination_family": {
+                  "group_key": "steel#0",
+                  "shard_index": 0
+                },
+                "item": "iron-ingot",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "internal",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "internal",
+              "source_strip": null
+            },
+            "source": [
+              -3,
+              -2,
+              0
+            ],
+            "wall": []
+          }
+        ],
+        "iterations": 4,
+        "last_mile": {
+          "bounded": 0,
+          "commit_rejected": 0,
+          "expansions": 0,
+          "invocations": 1,
+          "nodes": 2,
+          "proved": 1,
+          "relation_evidence": "",
+          "relation_skipped_siblings": 0,
+          "relation_strips": [],
+          "restore_mismatch": 0,
+          "same_source_dropped": 0,
+          "seconds": 0.00021595507860183716,
+          "solved": 0
+        },
+        "routed": [
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "sulfuric-acid",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "sulfuric-acid",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "titanium-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "titanium-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": null,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": null,
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "external",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": null,
+            "item": "titanium-alloy",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": null,
+              "item": "titanium-alloy",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "external-output",
+              "source_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "external-output",
+            "source_strip": 2
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 0
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 2,
+            "item": "steel",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "steel",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              }
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": 1
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 0,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 1,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 2,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "titanium-alloy#1",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 2,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.UNSPRAYED",
+            "destination_strip": 1,
+            "item": "proliferator-3",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "proliferator-3",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "proliferator",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "proliferator",
+            "source_strip": null
+          },
+          {
+            "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+            "destination_strip": 1,
+            "item": "iron-ingot",
+            "logical_id": {
+              "cargo_domain": "CargoDomain.REQUIRES_SPRAY",
+              "destination_family": {
+                "group_key": "steel#0",
+                "shard_index": 0
+              },
+              "item": "iron-ingot",
+              "legacy_destination_strip": null,
+              "legacy_ordinal": null,
+              "legacy_source_strip": null,
+              "role": "internal",
+              "source_family": null
+            },
+            "ordinal": 0,
+            "role": "internal",
+            "source_strip": null
+          }
+        ],
+        "status": "stranded"
+      },
+      "stranded_ports": []
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 41,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 16,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          21,
+          0
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          22,
+          7
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  15,
+                  0
+                ],
+                [
+                  18,
+                  9,
+                  1
+                ]
+              ],
+              [
+                [
+                  42,
+                  7,
+                  0
+                ],
+                [
+                  18,
+                  7,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 1,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              8,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              11,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                8,
+                1
+              ],
+              [
+                17,
+                7,
+                1
+              ],
+              [
+                18,
+                10,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            8,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 41,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 21,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          22,
+          2
+        ],
+        [
+          3,
+          9
+        ],
+        [
+          22,
+          9
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  9,
+                  0
+                ],
+                [
+                  18,
+                  9,
+                  1
+                ]
+              ],
+              [
+                [
+                  -4,
+                  17,
+                  0
+                ],
+                [
+                  18,
+                  11,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 0,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              10,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 1,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              13,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                10,
+                1
+              ],
+              [
+                17,
+                9,
+                1
+              ],
+              [
+                18,
+                12,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            10,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    },
+    {
+      "budget_stage": null,
+      "compact_width": 63,
+      "failure_kinds": {
+        "static-access": 1
+      },
+      "height": 12,
+      "logical_failures": [
+        {
+          "cargo_domain": "CargoDomain.UNSPRAYED",
+          "destination_family": {
+            "group_key": "titanium-alloy#1",
+            "shard_index": 0
+          },
+          "item": "proliferator-3",
+          "legacy_destination_strip": null,
+          "legacy_ordinal": null,
+          "legacy_source_strip": null,
+          "role": "proliferator",
+          "source_family": null
+        }
+      ],
+      "nets_attempted": 1,
+      "nets_routed": 0,
+      "origins": [
+        [
+          44,
+          2
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          22,
+          2
+        ]
+      ],
+      "outline": [
+        [
+          22,
+          7
+        ],
+        [
+          19,
+          7
+        ],
+        [
+          22,
+          8
+        ]
+      ],
+      "packed_strips": 3,
+      "routing": {
+        "exhaustive": true,
+        "expansions": 0,
+        "failures": [
+          {
+            "blocking_endpoints": [
+              [
+                [
+                  -4,
+                  12,
+                  0
+                ],
+                [
+                  18,
+                  4,
+                  1
+                ]
+              ],
+              [
+                [
+                  64,
+                  4,
+                  0
+                ],
+                [
+                  18,
+                  2,
+                  1
+                ]
+              ]
+            ],
+            "blocking_nets": [
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 1,
+                "role": "proliferator",
+                "source_strip": null
+              },
+              {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_strip": 2,
+                "item": "proliferator-3",
+                "logical_id": {
+                  "cargo_domain": "CargoDomain.UNSPRAYED",
+                  "destination_family": {
+                    "group_key": "titanium-alloy#1",
+                    "shard_index": 0
+                  },
+                  "item": "proliferator-3",
+                  "legacy_destination_strip": null,
+                  "legacy_ordinal": null,
+                  "legacy_source_strip": null,
+                  "role": "proliferator",
+                  "source_family": null
+                },
+                "ordinal": 2,
+                "role": "proliferator",
+                "source_strip": null
+              }
+            ],
+            "destination": [
+              18,
+              3,
+              1
+            ],
+            "expansions": 0,
+            "kind": "static-access",
+            "net_id": {
+              "cargo_domain": "CargoDomain.UNSPRAYED",
+              "destination_strip": 2,
+              "item": "proliferator-3",
+              "logical_id": {
+                "cargo_domain": "CargoDomain.UNSPRAYED",
+                "destination_family": {
+                  "group_key": "titanium-alloy#1",
+                  "shard_index": 0
+                },
+                "item": "proliferator-3",
+                "legacy_destination_strip": null,
+                "legacy_ordinal": null,
+                "legacy_source_strip": null,
+                "role": "proliferator",
+                "source_family": null
+              },
+              "ordinal": 0,
+              "role": "proliferator",
+              "source_strip": null
+            },
+            "source": [
+              -4,
+              8,
+              0
+            ],
+            "wall": [
+              [
+                18,
+                3,
+                1
+              ],
+              [
+                17,
+                2,
+                1
+              ],
+              [
+                18,
+                5,
+                1
+              ]
+            ]
+          }
+        ],
+        "iterations": 0,
+        "last_mile": null,
+        "routed": [],
+        "status": "stranded"
+      },
+      "stranded_ports": [
+        {
+          "cell": [
+            18,
+            3,
+            1
+          ],
+          "held": 0,
+          "instance_id": {
+            "family_id": {
+              "group_key": "titanium-alloy#1",
+              "shard_index": 0
+            },
+            "machine_count": 6,
+            "machine_start": 0
+          },
+          "item": "proliferator-3",
+          "lane_id": "?",
+          "options": 0,
+          "strip_label": "titanium-alloy#1",
+          "wants": 1
+        }
+      ]
+    }
+  ],
+  "block": 20,
+  "budget_s": 10.12666118494235,
+  "captured_block_budget_s": 10.12666118494235,
+  "captured_round": 2,
+  "expected_archived_index": 20,
+  "ok": false,
+  "reason": "route evidence from 15 packs at candidate heights 12, 16, 21, 26, 33: failure kinds dynamic-access=6, static-access=9; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility",
+  "recipes": [
+    "steel",
+    "titanium-alloy"
+  ],
+  "skipped_heights": [],
+  "stats": {
+    "alns_applied": 0.0,
+    "alns_choices": 0.0,
+    "alns_encode_errors": 0.0,
+    "alns_evaluations": 15.0,
+    "alns_operators": "destroy:failed-endpoints:0|destroy:band-boundary:0|repair:sequence-reinsert:0|repair:local-exact-pack:0",
+    "alns_routing_seconds": 0.0,
+    "alns_skipped_no_goods": 0.0,
+    "alns_window_accepted": 0.0,
+    "alns_window_seconds": 0.0,
+    "alns_window_solves": 0.0,
+    "attempts": 15.0,
+    "budget_unspent_s": 0.0,
+    "certify_skipped": 0.0,
+    "compaction_time_s": 0.0,
+    "detailed_route_time_s": 0.41135633806698024,
+    "distinct_assignments": 15.0,
+    "evaluations": 15.0,
+    "finalization_time_s": 0.0,
+    "pack_cp_deterministic_time_s": 0.009023873317084503,
+    "pack_cp_feasible": 1.0,
+    "pack_cp_infeasible": 0.0,
+    "pack_cp_last_best_bound": 20768.0,
+    "pack_cp_last_objective": 20768.0,
+    "pack_cp_last_status": "OPTIMAL",
+    "pack_cp_model_invalid": 0.0,
+    "pack_cp_optimal": 14.0,
+    "pack_cp_solves": 15.0,
+    "pack_cp_unknown": 0.0,
+    "pack_cp_wall_time_s": 0.18083320697769523,
+    "pack_time_s": 0.1950846491381526,
+    "pack_window_distinct_submodels": 0.0,
+    "pack_window_feasible": 0.0,
+    "pack_window_infeasible": 0.0,
+    "pack_window_model_invalid": 0.0,
+    "pack_window_optimal": 0.0,
+    "pack_window_repeated_submodel_seconds": 0.0,
+    "pack_window_repeated_submodels": 0.0,
+    "pack_window_solves": 0.0,
+    "pack_window_unknown": 0.0,
+    "preparation_time_s": 6.443556044483557,
+    "skipped_heights": 0.0,
+    "stale_draws": 0.0,
+    "stale_stop": 0.0,
+    "validation_time_s": 0.0,
+    "window_accepted": 0.0,
+    "window_solves": 0.0
+  },
+  "units": [
+    {
+      "count": 11,
+      "group": "recipe_id='steel' machine_item_id='negentropy-smelter' count=11 proliferator_mode=<ProliferatorMode.PRODUCTS: 'products'> inputs_per_machine={'iron-ingot': Fraction(3968, 1375)} outputs_per_machine={'steel': Fraction(992, 825)}",
+      "uid": 2000002
+    },
+    {
+      "count": 6,
+      "group": "recipe_id='titanium-alloy' machine_item_id='negentropy-smelter' count=6 proliferator_mode=<ProliferatorMode.PRODUCTS: 'products'> inputs_per_machine={'steel': Fraction(24, 25), 'sulfuric-acid': Fraction(48, 25), 'titanium-ingot': Fraction(24, 25)} outputs_per_machine={'titanium-alloy': Fraction(6, 5)}",
+      "uid": 2000003
+    }
+  ],
+  "wall_s": 7.328826766926795,
+  "workers": 4
+}

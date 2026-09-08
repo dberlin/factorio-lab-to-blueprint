@@ -3,6 +3,7 @@ from fractions import Fraction
 from flab2bp.layout.freeform import plan_strips
 from flab2bp.layout.hierarchy import partition
 from flab2bp.layout.strip_variants import _logical_strip_plans
+from flab2bp.spec import MachineMoveRecord
 from tests.layout.hierarchy.test_pressure import _chain, _chain_with_external
 
 
@@ -44,6 +45,26 @@ def test_composed_spec_matches_the_original_machine_counts():
     assert built.external_inputs == spec.external_inputs
 
 
+def test_partitioned_specs_preserve_machine_rank_provenance():
+    move = MachineMoveRecord(
+        recipe_id="ingot",
+        from_machine="assembling-machine-2",
+        to_machine="assembling-machine-1",
+        count_before=2,
+        count_after=2,
+    )
+    spec = _chain().model_copy(update={"machine_rank": "up-to", "machine_moves": (move,)})
+    part = partition.initial_partition(spec, strip_cap=12)
+
+    for block_index, block in enumerate(part.blocks):
+        sub = partition.sub_spec(spec, block, block_index)
+        assert sub.machine_rank == "up-to"
+        assert sub.machine_moves == (move,)
+    composed = partition.composed_spec(spec, part.blocks)
+    assert composed.machine_rank == "up-to"
+    assert composed.machine_moves == (move,)
+
+
 def test_composed_spec_declares_player_fed_block_deficits():
     spec = _chain_with_external("ingot")
     part = partition.initial_partition(spec, strip_cap=2)
@@ -79,6 +100,19 @@ def test_strip_count_is_the_packed_count_not_the_logical_plan_count(mall_all_pro
     packed = partition.strip_count(spec, block)
     assert packed >= logical
     assert packed == len(plan_strips(partition.sub_spec(spec, block, 0)))
+
+
+def test_sub_spec_and_composed_spec_keep_the_power_tower_choice():
+    """D10: a sub-block that loses the choice silently reverts to the Tesla
+    Tower, so both rebuild sites (``sub_spec`` and ``composed_spec``) must
+    carry it forward from the parent."""
+    spec = _chain().model_copy(update={"power_tower_item_id": "satellite-substation"})
+    part = partition.initial_partition(spec, strip_cap=12)
+    for block in part.blocks:
+        sub = partition.sub_spec(spec, block, 0)
+        assert sub.power_tower_item_id == "satellite-substation"
+    composed = partition.composed_spec(spec, part.blocks)
+    assert composed.power_tower_item_id == "satellite-substation"
 
 
 def test_split_block_of_one_unit_splits_the_count():
