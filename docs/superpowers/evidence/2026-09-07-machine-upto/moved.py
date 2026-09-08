@@ -21,7 +21,7 @@ from flab2bp.rates.candidates import DEFAULT_CANDIDATE_POLICIES, build_candidate
 from flab2bp.rates.machine_choice import MachineRank
 from flab2bp.spec import BuildSpec
 
-from run_gate import POLICIES, STRATEGIES, URL_IDS, read_rows
+from run_gate import BASE_SHA, POLICIES, STRATEGIES, URL_IDS, read_rows, record_candidate_identity
 
 
 def invariant_view(spec: BuildSpec) -> dict[str, object]:
@@ -37,13 +37,41 @@ def invariant_view(spec: BuildSpec) -> dict[str, object]:
     }
 
 
+def load_layouts(directory: Path, commit: str):
+    """Reject stale/mixed evidence before any rates or table output is produced."""
+    identity_path = directory / "candidate-provenance.json"
+    identity = json.loads(identity_path.read_text())
+    if identity.get("commit") != commit:
+        raise RuntimeError("candidate layout identity differs from rates measurement SHA")
+    record_candidate_identity(directory, identity)
+    expected = {(strategy, url_id, index) for strategy in STRATEGIES
+                for url_id in URL_IDS for index in range(3)}
+    layouts = {}
+    for arm in ("base", "exact", "up-to"):
+        records = read_rows(directory / f"{arm}.jsonl")
+        mapped = {(row["strategy"], row["url_id"], row["spec_index"]): row for row in records}
+        if len(records) != 72 or set(mapped) != expected:
+            raise RuntimeError(f"{arm}: incomplete or duplicate 72-cell layout round")
+        if arm != "base" and any(
+            row.get("commit") != commit or row.get("machine_rank") != arm for row in records
+        ):
+            raise RuntimeError(f"{arm}: layout provenance differs from rates measurement SHA")
+        if arm == "base" and any(
+            not str(row.get("commit", "")).startswith(BASE_SHA) for row in records
+        ):
+            raise RuntimeError("base: layout provenance differs from pinned baseline SHA")
+        layouts[arm] = mapped
+    return layouts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--layouts", type=Path)
     args = parser.parse_args()
-    data = canonicalize_dataset(load_vendored())
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    layouts = load_layouts(args.layouts, commit) if args.layouts is not None else None
+    data = canonicalize_dataset(load_vendored())
     rows = []
     for entry in URL_CORPUS:
         if entry.url_id not in URL_IDS:
@@ -80,17 +108,10 @@ def main() -> int:
     if len(rows) != 72:
         raise RuntimeError(f"expected 72 rate records, got {len(rows)}")
     args.out.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows))
-    if args.layouts is not None:
+    if layouts is not None:
         metrics = {(row["machine_rank"], row["url_id"], row["spec_index"]): row for row in rows}
         expected = {(strategy, url_id, index) for strategy in STRATEGIES
                     for url_id in URL_IDS for index in range(3)}
-        layouts = {}
-        for arm in ("base", "exact", "up-to"):
-            records = read_rows(args.layouts / f"{arm}.jsonl")
-            mapped = {(row["strategy"], row["url_id"], row["spec_index"]): row for row in records}
-            if len(records) != 72 or set(mapped) != expected:
-                raise RuntimeError(f"{arm}: incomplete or duplicate 72-cell layout round")
-            layouts[arm] = mapped
         print("| URL | policy | placer | base/exact/up-to status | area | belts | exact/up-to machines | machine kW | moves |")
         print("|---|---|---|---|---|---|---|---|---|")
         for strategy, url_id, index in sorted(expected):
