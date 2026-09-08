@@ -38,6 +38,24 @@ def pressure() -> float:
     return sum(float(line.split()[0]) for line in lines[-5:]) / 5
 
 
+def record_candidate_identity(out: Path, identity: dict[str, str]) -> None:
+    """Bind all candidate controls, rounds and reported cells to one checkout."""
+    path = out / "candidate-provenance.json"
+    if path.exists() and json.loads(path.read_text()) != identity:
+        raise RuntimeError(f"refusing to mix candidate provenance in {path}")
+    # Also refuse stale evidence made before the shared identity file existed.
+    for mode in ("round", "controls", "reported"):
+        for arm in ("exact", "up-to"):
+            previous = out / f"{mode}-{arm}-provenance.json"
+            if previous.exists():
+                provenance = json.loads(previous.read_text())
+                if any(provenance.get(key) != value for key, value in identity.items()):
+                    raise RuntimeError(f"refusing stale candidate provenance in {previous}")
+    if not path.exists():
+        with path.open("x") as target:
+            target.write(json.dumps(identity, indent=2) + "\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("round", "controls", "reported"))
@@ -60,6 +78,10 @@ def main() -> int:
     ).strip()
     if not Path(imported).resolve().is_relative_to(root):
         raise RuntimeError(f"wrong checkout imported: {imported}")
+    if args.arm != "base":
+        record_candidate_identity(
+            out, {"commit": commit, "checkout": str(root), "imported": imported}
+        )
     key = f"{args.mode}-{args.arm}"
     provenance_path = out / f"{key}-provenance.json"
     provenance = {"arm": args.arm, "mode": args.mode, "commit": commit, "checkout": str(root), "imported": imported}
