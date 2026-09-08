@@ -120,6 +120,9 @@ The former test that pinned the generic PACKER wording was replaced rather than
 re-pinned. The recovery worker did not run these tests. Main subsequently ran
 all four focused/real-block regressions with exit 0; see `recovery-task8-tests.log`.
 Ruff, formatter check and mypy also exited 0 in the `recovery-final-*.log` files.
+Main also ran the complete `tests/layout/test_freeform.py` and
+`tests/layout/hierarchy` groups; both exited 0. Their full outputs are retained
+in `recovery-full-freeform.log` and `recovery-full-hierarchy.log`.
 
 ## Required next evidence
 
