@@ -282,9 +282,174 @@ class _InlinePool:
         assert callable(fn)
         return [fn(job) for job in jobs]  # type: ignore[union-attr]
 
+    def __enter__(self) -> _InlinePool:
+        return self
 
-def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
+    def __exit__(self, *args: object) -> None:
+        pass
+
+
+def test_identical_recut_children_do_not_create_unfunded_waves(
     chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two equal children need one five-second wave, not two."""
+
+    class _Clock:
+        now = time.monotonic()
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = _Clock()
+    started = clock.now
+
+    def refuse_parent(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        if shape_key_from_spec(args[0]) == (("iron-ingot", 2),):
+            # Of the initial 24s block wall, leave 7.5s for the child round.
+            clock.now = started + 16.5
+            return (
+                {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 0.0},
+                None,
+            )
+        return _REAL_SOLVE_BLOCK(args)
+
+    monkeypatch.setattr(strategy, "time", clock)
+    monkeypatch.setattr(strategy, "_solve_block", refuse_parent)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=4,
+        strip_cap=2,
+        block_strategy="freeform",
+    )
+    layout._executor_factory = lambda _width: _InlinePool()  # type: ignore[assignment,return-value]
+    placement = layout.lay_out(chain_spec, time_budget_s=40.0)
+    assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+    assert validate.certify(placement, chain_spec, expect_power=True).ok
+
+
+def test_a_ten_second_no_good_is_retried_at_the_funded_fifteen_seconds(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shared shape refused at 10s becomes solvable at the next round's 15s."""
+    from dataclasses import replace
+
+    class _Clock:
+        now = time.monotonic()
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = _Clock()
+    started = clock.now
+    partition = initial_partition(chain_spec, strip_cap=2)
+    blocks = [
+        child
+        for block in partition.blocks
+        for child in (
+            strategy.split_block(list(block), attempt=0)
+            if strategy.shape_key(list(block)) == (("iron-ingot", 2),)
+            else [list(block)]
+        )
+    ]
+    monkeypatch.setattr(
+        strategy, "initial_partition", lambda *_args, **_kwargs: replace(partition, blocks=blocks)
+    )
+
+    def budget_sensitive(args: strategy._BlockJob) -> tuple[dict[str, object], Placement | None]:
+        if shape_key_from_spec(args[0]) == (("iron-ingot", 1),) and args[2] <= 10.0:
+            # R=60, L=3, two unique seed jobs -> 10s. After the consumer
+            # places, R=30, L=2, one unique job -> 15s (raw slots give 7.5s).
+            clock.now = started + 30.0
+            return (
+                {"strategy": args[1], "verdict": "REFUSED: forced", "ok": False, "wall_s": 10.0},
+                None,
+            )
+        return _REAL_SOLVE_BLOCK(args)
+
+    retried = False
+
+    def retry_unchanged(
+        entries: list[_Entry], still: list[int], **kwargs: object
+    ) -> tuple[list[_Entry], bool]:
+        # Allow one unchanged retry, isolating funding from split policy.
+        nonlocal retried
+        progress = not retried
+        retried = True
+        return entries, progress
+
+    monkeypatch.setattr(strategy, "time", clock)
+    monkeypatch.setattr(strategy, "_solve_block", budget_sensitive)
+    monkeypatch.setattr(strategy, "_recut", retry_unchanged)
+    layout = HierarchicalLayout(
+        belt_vertical_construction=True,
+        band_policy=BandPolicy.parse("portable"),
+        workers=4,
+        strip_cap=2,
+        block_strategy="freeform",
+    )
+    layout._executor_factory = lambda _width: _InlinePool()  # type: ignore[assignment,return-value]
+    placement = layout.lay_out(chain_spec, time_budget_s=100.0)
+    assert placement.completion is PlacementCompletion.COMPACTED_AND_FINALIZED
+    assert validate.certify(placement, chain_spec, expect_power=True).ok
+
+
+def test_a_remembered_budget_breakpoint_funds_the_remaining_block(
+    chain_spec: BuildSpec, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unseen job can use 10s when a second job is remembered at 10s."""
+    entries = [_Entry(list(block)) for block in initial_partition(chain_spec, strip_cap=2).blocks]
+    nogood = strategy._ShapeNoGood()
+    nogood.record(strategy.shape_key(entries[1].units), "freeform", 10.0)
+
+    def needs_ten_seconds(
+        args: strategy._BlockJob,
+    ) -> tuple[dict[str, object], Placement | None]:
+        if args[2] < 10.0:
+            return (
+                {
+                    "strategy": args[1],
+                    "verdict": "REFUSED: insufficient wall",
+                    "ok": False,
+                    "wall_s": args[2],
+                },
+                None,
+            )
+        return _REAL_SOLVE_BLOCK(args)
+
+    monkeypatch.setattr(strategy, "_solve_block", needs_ten_seconds)
+    plan = strategy._plan_round(
+        entries,
+        [0, 1],
+        [("freeform",), ("freeform",)],
+        nogood=nogood,
+        width=1,
+        remaining=15.0,
+        rounds_left=1,
+    )
+    _layout()._solve_round(
+        chain_spec,
+        entries,
+        [0, 1],
+        pool=_InlinePool(),  # type: ignore[arg-type]
+        plan=plan,
+        deadline=time.monotonic() + 60.0,
+        nogood=nogood,
+    )
+    assert entries[0].placement is not None, entries[0].verdicts
+    assert entries[1].placement is None
+
+
+@pytest.mark.parametrize(
+    ("spent", "retry_budget", "should_retry"),
+    [(0.05, 20.0, True), (10.0, 10.0, False), (20.0, 20.0, False)],
+)
+def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
+    chain_spec: BuildSpec,
+    monkeypatch: pytest.MonkeyPatch,
+    spent: float,
+    retry_budget: float,
+    should_retry: bool,
 ) -> None:
     """A job whose wall was clipped to nothing has not answered for its shape.
 
@@ -309,7 +474,7 @@ def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
                 "strategy": args[1],
                 "verdict": "REFUSED: deadline exhausted",
                 "ok": False,
-                "wall_s": 0.05,
+                "wall_s": spent,
             },
             None,
         )
@@ -329,27 +494,40 @@ def test_a_deadline_clipped_refusal_is_not_remembered_at_the_full_budget(
     arms_by_slot = [
         layout._arms_for(spec, entries[index], arm_cache, block_budget=20.0) for index in todo
     ]
-    round_args = dict(
-        pool=_InlinePool(),
-        block_budget=20.0,
-        deadline=time.monotonic() + 600.0,
-        nogood=nogood,
-        arms_by_slot=arms_by_slot,
-    )
-    layout._solve_round(spec, entries, todo, **round_args)  # type: ignore[arg-type]
+
+    def run_round(remaining: float) -> None:
+        plan = strategy._plan_round(
+            entries,
+            todo,
+            arms_by_slot,
+            nogood=nogood,
+            width=2,
+            remaining=remaining,
+            rounds_left=1,
+        )
+        layout._solve_round(
+            spec,
+            entries,
+            todo,
+            pool=_InlinePool(),  # type: ignore[arg-type]
+            plan=plan,
+            deadline=time.monotonic() + 600.0,
+            nogood=nogood,
+        )
+
+    run_round(40.0)
     assert offered, "the first round must have offered every block to a placer"
 
     shape = strategy.shape_key(entries[0].units)
-    assert nogood.remembers(shape, "sequence-pair", 0.05), (
+    assert nogood.remembers(shape, "sequence-pair", spent), (
         "the refusal is still evidence about the wall the job actually got"
     )
-    assert not nogood.remembers(shape, "sequence-pair", 20.0), (
-        "a 0.05s refusal says nothing about what the shape does with 20s"
-    )
+    assert nogood.remembers(shape, "sequence-pair", retry_budget) is not should_retry
 
     offered.clear()
-    layout._solve_round(spec, entries, todo, **round_args)  # type: ignore[arg-type]
-    assert offered, "a round asking at the full budget must still offer the shape"
+    run_round(2.0 * retry_budget)
+    assert bool(offered) is should_retry
+    assert all(entry.placement is None and entry.verdicts for entry in entries)
 
 
 def test_a_cut_whose_every_child_is_a_known_no_good_is_spent_without_a_solve() -> None:
