@@ -11996,14 +11996,73 @@ def _splitter_at(x: int) -> PlacedBuilding:
     return PlacedBuilding(item_id=catalog.SPLITTER_ID, model_index=38, x=x, y=0, width=2, height=2)
 
 
+def test_piler_transit_cycle_is_rejected_by_router_admission() -> None:
+    """Retained graph-only regression, using the real canvas owner."""
+    piler = catalog.building(catalog.PILER_ID)
+    placement = Placement(
+        buildings=(
+            replace(_linked_belt(0, 1), carries_item="gear"),
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
+            replace(_linked_belt(2, 0), input_obj=1, carries_item="gear"),
+        )
+    )
+    canvas = _Canvas(buildings=list(placement.buildings))
+    assert freeform._leads_back(canvas, 0, {2})
+    assert freeform._committed_path_closes_cycle(canvas, [0])
+    report = validate.validate(placement, only=("belt.acyclic",), expect_power=False)
+    assert any(f.check == "belt.acyclic" for f in report.errors)
+
+
+def test_serial_piler_merge_stays_admissible_until_relinked_into_cycle() -> None:
+    piler = catalog.building(catalog.PILER_ID)
+    canvas = _Canvas(
+        buildings=[
+            _linked_belt(0, 1),
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
+            replace(_linked_belt(2, 3), input_obj=1),
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=3, y=0),
+            replace(_linked_belt(4, None), input_obj=3),
+            _linked_belt(5, 0),
+            _linked_belt(6, 0),
+        ]
+    )
+    assert not freeform._leads_back(canvas, 0, {5, 6})
+    assert not freeform._committed_path_closes_cycle(canvas, [0, 5, 6])
+    canvas.buildings[4] = replace(canvas.buildings[4], output_obj=5)
+    assert freeform._leads_back(canvas, 0, {5})
+    assert freeform._committed_path_closes_cycle(canvas, [5])
+    assert not freeform._committed_path_closes_cycle(canvas, [6])
+
+
+def test_output_tail_nets_cross_pilers_without_crossing_cargo_domains() -> None:
+    piler = catalog.building(catalog.PILER_ID)
+    canvas = _Canvas(
+        buildings=[
+            replace(_linked_belt(0, 1), carries_item="gear"),
+            PlacedBuilding(item_id=catalog.PILER_ID, model_index=piler.model_index, x=1, y=0),
+            replace(_linked_belt(2, None), input_obj=1, carries_item="gear"),
+        ]
+    )
+    port = _Port(0, 0, 0, 0, 0)
+    output = _Net(port, port, "gear")
+    assert [net.source.belt for net in freeform._output_tail_nets(canvas, (output,))] == [2]
+    canvas = _Canvas(
+        buildings=[
+            canvas.buildings[0],
+            canvas.buildings[1],
+            replace(canvas.buildings[2], carries_item="iron-ingot"),
+        ]
+    )
+    assert [net.source.belt for net in freeform._output_tail_nets(canvas, (output,))] == [0]
+
+
 class TestCommittedPathClosesCycle:
     """`_committed_path_closes_cycle` answers "is any committed belt on a loop"."""
 
     def _reference(self, canvas: _Canvas, indices: list[int]) -> bool:
-        successors = freeform._splitter_successors(canvas)
         return any(
             (onward := canvas.buildings[index].output_obj) is not None
-            and freeform._leads_back(canvas, onward, {index}, successors)
+            and freeform._leads_back(canvas, onward, {index})
             for index in indices
         )
 

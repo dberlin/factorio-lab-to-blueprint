@@ -12977,13 +12977,8 @@ def _commit_paths(
                 ),
                 reason="unstable-belt-keepout",
             )
-    splitter_successors = _splitter_successors(canvas)
     for i, indices in laid.items():
-        if i in unlinked or not _committed_path_closes_cycle(
-            canvas,
-            indices,
-            splitter_successors,
-        ):
+        if i in unlinked or not _committed_path_closes_cycle(canvas, indices):
             continue
         unlinked.append(i)
         record(i, paths[i][-1], "sink", reason="belt-cycle")
@@ -13138,15 +13133,6 @@ def _source_for(
     return None
 
 
-def _splitter_successors(canvas: _Canvas) -> dict[int, tuple[int, ...]]:
-    """Index every belt branch fed by a splitter."""
-    return {
-        splitter: canvas.buildings.splitter_successors(splitter)
-        for splitter in canvas.buildings.by_item(catalog.SPLITTER_ID)
-        if canvas.buildings.splitter_successors(splitter)
-    }
-
-
 def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
     """Move shared output taps past their internal consumers.
 
@@ -13157,7 +13143,6 @@ def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
     upstream source reaches that tail through the committed merges, and one
     exterior belt carries the actual surplus left after the consumers draw.
     """
-    successors = _splitter_successors(canvas)
     selected: dict[int, _Net] = {}
     limit = canvas.limit
 
@@ -13185,8 +13170,8 @@ def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
             if index in seen or building is None:
                 continue
             seen.add(index)
-            if building.item_id == catalog.SPLITTER_ID:
-                stack.extend(successors.get(index, ()))
+            if building.item_id in (catalog.SPLITTER_ID, catalog.PILER_ID):
+                stack.extend(canvas.buildings.transport_successors(index))
                 continue
             if not catalog.is_belt(building.item_id) or building.carries_item != net.item:
                 continue
@@ -13194,7 +13179,7 @@ def _output_tail_nets(canvas: _Canvas, nets: Sequence[_Net]) -> list[_Net]:
                 if building.z.denominator == 1:
                     tails.append(index)
                 continue
-            stack.append(building.output_obj)
+            stack.extend(canvas.buildings.transport_successors(index))
 
         if not tails:
             selected.setdefault(net.src.belt, net)
@@ -13234,7 +13219,6 @@ def _leads_back(
     canvas: _Canvas,
     start: int,
     own: set[int],
-    splitter_successors: Mapping[int, Sequence[int]] | None = None,
 ) -> bool:
     """Does flow leaving ``start`` come back to this path?
 
@@ -13245,10 +13229,9 @@ def _leads_back(
     loop.  The validator reports it as ``belt.acyclic``, and it is a real fault:
     the game would run items round it forever.
 
-    Splitters are followed, not stopped at: they carry no ``output_obj`` of
-    their own, so a link-following walk misses exactly the loops a fan-out
-    router most easily builds.  Same rule as ``validate._belt_successors``, so
-    what this refuses to build is what that refuses to accept.
+    Splitters and Pilers are followed through the shared transport adjacency,
+    just as the validator follows them; cargo and endpoint policy stay with
+    their respective consumers.
     """
     seen: set[int] = set()
     stack = [start]
@@ -13260,21 +13243,13 @@ def _leads_back(
         if i in seen or b is None:
             continue
         seen.add(i)
-        if b.item_id == catalog.SPLITTER_ID:
-            stack.extend(
-                canvas.buildings.splitter_successors(i)
-                if splitter_successors is None
-                else splitter_successors.get(i, ())
-            )
-        elif catalog.is_belt(b.item_id) and b.output_obj is not None:
-            stack.append(b.output_obj)
+        stack.extend(canvas.buildings.transport_successors(i))
     return False
 
 
 def _committed_path_closes_cycle(
     canvas: _Canvas,
     indices: Sequence[int],
-    splitter_successors: Mapping[int, Sequence[int]] | None = None,
 ) -> bool:
     """Whether flow from any committed belt can return to that same belt.
 
@@ -13283,9 +13258,8 @@ def _committed_path_closes_cycle(
     the belt graph reachable from ``indices`` answers that for every index at
     once; the per-index walk it replaces re-traversed the same graph once per
     committed cell (30k walks and 3.4M visits on ``universe-matrix``) and was
-    the largest single cost of ``_commit_paths``.  Edges are the same ones
-    ``_leads_back`` follows: a Splitter to each branch fed from it, a belt to
-    its ``output_obj``; anything else has no successors.
+    the largest single cost of ``_commit_paths``. Edges are the shared directed
+    transport edges that ``_leads_back`` and the validator also follow.
     """
     buildings = canvas.buildings
     n = len(buildings)
@@ -13293,17 +13267,7 @@ def _committed_path_closes_cycle(
     if not wanted:
         return False
 
-    def successors(i: int) -> tuple[int, ...]:
-        b = buildings[i]
-        if b.item_id == catalog.SPLITTER_ID:
-            return (
-                buildings.splitter_successors(i)
-                if splitter_successors is None
-                else tuple(splitter_successors.get(i, ()))
-            )
-        if catalog.is_belt(b.item_id) and b.output_obj is not None:
-            return (b.output_obj,)
-        return ()
+    successors = buildings.transport_successors
 
     order = [-1] * n
     low = [0] * n

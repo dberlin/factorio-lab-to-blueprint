@@ -3521,26 +3521,6 @@ def _port_dock(ctx: Context) -> Iterable[Finding]:
         )
 
 
-def _belt_successors(ctx: Context, i: int) -> tuple[int, ...]:
-    """Where items on building ``i`` go next, flow boundaries included.
-
-    A splitter or piler has no ``output_obj`` of its own, so following links
-    alone stops dead at one.  Its successors are the belts that named it as
-    their ``input_obj`` -- which is how a loop that closes THROUGH a boundary,
-    the shape a fan-out router most easily produces, stays invisible to a
-    link-following walk.
-    """
-    bs = ctx.placement.buildings
-    if ctx.kinds[i] in (Kind.SPLITTER, Kind.PILER):
-        return ctx.junction_out.get(i, ())
-    o = bs[i].output_obj
-    if o is None or not (0 <= o < len(bs)):
-        return ()
-    if ctx.kinds[o] in (Kind.BELT, Kind.SPLITTER, Kind.PILER):
-        return (o,)
-    return ()
-
-
 @check("belt.acyclic")
 def _acyclic(ctx: Context) -> Iterable[Finding]:
     """No belt path returns to itself, following flow boundaries as well as links.
@@ -3566,7 +3546,9 @@ def _acyclic(ctx: Context) -> Iterable[Finding]:
             continue
         colour[start] = 1
         path: list[int] = [start]
-        stack: list[tuple[int, Iterator[int]]] = [(start, iter(_belt_successors(ctx, start)))]
+        stack: list[tuple[int, Iterator[int]]] = [
+            (start, iter(ctx.buildings_index.transport_successors(start)))
+        ]
         while stack:
             node, pending = stack[-1]
             nxt = next(pending, None)
@@ -3593,7 +3575,7 @@ def _acyclic(ctx: Context) -> Iterable[Finding]:
                 continue
             colour[nxt] = 1
             path.append(nxt)
-            stack.append((nxt, iter(_belt_successors(ctx, nxt))))
+            stack.append((nxt, iter(ctx.buildings_index.transport_successors(nxt))))
 
 
 #: Belt tiles a lane may run past its last tap before the overshoot is called
@@ -4661,7 +4643,7 @@ def _belt_reaches_any(ctx: Context, start: int, targets: set[int], item: str) ->
         seen.add(index)
         if index in targets:
             return True
-        pending.extend(_belt_successors(ctx, index))
+        pending.extend(ctx.buildings_index.transport_successors(index))
         for sorter_index in sorters.drawing_from_carrying(index, item):
             destination = sorters.building(sorter_index).output_obj
             if (
@@ -5368,11 +5350,11 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
     A SORTER FROM BELT TO BELT IS AN EDGE, NOT A SOURCE -- a lane-to-lane
     transfer, which is how a trunk is tapped onto a branch without spending a
     splitter.  It carries whatever it draws, sprayed or not, so it has to be
-    FOLLOWED: ``_belt_successors`` reads ``output_obj`` and splitters and stops
-    dead at one of these, which would leave every branch fed only by a transfer
-    reading as clean whatever its trunk carries.  ``_build_graph`` already links
-    the two runs, so the branch's head is not mistaken for a source; what is
-    missing there is the tile-level edge, supplied here by ``sorter_hops``.
+    FOLLOWED: transport adjacency excludes sorter transfers, so it would leave
+    every branch fed only by a transfer reading as clean whatever its trunk
+    carries. ``_build_graph`` already links the two runs, so the branch's head
+    is not mistaken for a source; the tile-level edge is supplied here by
+    ``sorter_hops``.
 
     Cargo AT the coater's own tile counts as sprayed.  The coater is an addon on
     that belt and the items pass through it there, which is why both strategies
@@ -5439,7 +5421,7 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
         if b in dirty:
             continue
         dirty.add(b)
-        for nxt in chain(_belt_successors(ctx, b), sorter_hops(b)):
+        for nxt in chain(ctx.buildings_index.transport_successors(b), sorter_hops(b)):
             if nxt in dirty or nxt in rides or not carries(nxt):
                 continue
             stack.append(nxt)
