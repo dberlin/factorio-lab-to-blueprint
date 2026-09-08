@@ -8,11 +8,8 @@
 #
 # No `git stash`, no second worktree.
 #
-# ONE AUDIT AT A TIME.  The slot check is `pgrep -af '[s]cripts/audit\.py'`,
-# which corrects the plan's prescription in the opposite direction from the one
-# an earlier revision of this script assumed -- see `audits_running` below for
-# the measurement.  The matching lines are printed next to the count, so the
-# number is auditable rather than merely asserted.
+# Independent worktrees may run audits concurrently under the user's revised
+# execution rule. This checkout's baseline and candidate halves stay sequential.
 #
 # Usage: run_guard.sh <worktree-root>
 #
@@ -27,25 +24,6 @@ BASE=1d2a790c
 BRANCH=hierarchical-v4
 TMP=$(mktemp -d /tmp/v4gate.XXXXXX)
 
-# `pgrep` does NOT self-match: it excludes its own PID (procps-ng 4.0.6 here,
-# and every BSD does the same).  The plan's earlier warning that it "matches its
-# OWN command line and always returns a hit" was backwards, and its prescribed
-# replacement, `ps -eo args | grep -cE ...`, is the form that actually
-# self-matches, because `ps` lists the pipeline's own `grep`.  Reading that
-# literally cost this gate a wasted detached checkout.
-#
-# The `[s]` bracket handles the one false positive `pgrep -f` CAN produce: an
-# ENCLOSING `bash -c "... pattern ..."` whose argv contains the pattern.  The
-# literal text below reads `[s]cripts/audit\.py`, which the regex itself does
-# not accept, so no command line carrying this check can ever match it.
-#
-# Measured on this box with 9 real audit processes running: this form returned
-# exactly those 9 and did not include the invoking shell.  The narrower
-# `pgrep -fc 'python[0-9.]* +[^ ]*scripts/audit\.py'` is also self-match-proof
-# but matched only 2 of the 9, missing the forkserver children.
-audits_running() {
-  pgrep -af '[s]cripts/audit\.py' || true
-}
 
 # ALWAYS return to the branch, on every exit path.  The first run of this
 # script refused the slot AFTER detaching and left the worktree on the merge
@@ -77,37 +55,11 @@ restore_branch() {
 }
 trap restore_branch EXIT
 
-# WAIT for the slot rather than refuse it: this box is shared and a sibling
-# worktree's audit can start at any moment, so refusing turns a queue into a
-# retry loop driven by hand.  Checked before EVERY audit invocation, as the
-# plan's constraint requires, and the matching lines are printed each time.
-wait_for_slot() {
-  local waited=0 lines n
-  while :; do
-    lines="$(audits_running)"
-    n="$(printf '%s' "$lines" | grep -c . || true)"
-    if [ "$n" = "0" ]; then
-      echo "audit-count check: 0 (slot free after ${waited}s)"
-      return 0
-    fi
-    if [ "$waited" = "0" ]; then
-      echo "audit-count check: $n -- waiting for the slot"
-      printf '%s\n' "$lines" | cut -c1-120
-    fi
-    sleep 20
-    waited=$((waited + 20))
-    if [ "$waited" -gt 5400 ]; then
-      echo "GIVING UP: the audit slot was busy for ${waited}s" >&2
-      exit 2
-    fi
-  done
-}
 
 half() {  # <name> <outdir>
   local name="$1" out="$2"
   mkdir -p "$out"
   rm -f "$out/$name-round1.jsonl"          # --json APPENDS
-  wait_for_slot
   load_sample "$out/$name-round1-load.txt"
   echo "=== $name half: HEAD $(git rev-parse --short HEAD) ==="
   uv run python scripts/audit.py --budget 30 --json "$out/$name-round1.jsonl" \
@@ -120,9 +72,6 @@ half() {  # <name> <outdir>
 [ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || { echo "REFUSING: not on $BRANCH" >&2; exit 2; }
 echo "start: on $BRANCH at $(git rev-parse --short HEAD), tree clean"
 
-# Queue for the slot BEFORE detaching, so the worktree does not sit on the
-# merge base waiting for somebody else's audit to finish.
-wait_for_slot
 
 # --- baseline half, on the detached merge base -------------------------
 git checkout --detach "$BASE"
