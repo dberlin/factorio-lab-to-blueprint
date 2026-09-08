@@ -1,0 +1,91 @@
+{
+  "archive_root": "/home/dannyb/sources/flab-worktree-archives/2026-09-08",
+  "verified_regular_files": 42680,
+  "archives": [
+    {
+      "name": "design-solver-portfolio",
+      "original_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/design-solver-portfolio",
+      "verified_source_files": 1618,
+      "archive_sha256": "813763fe209f08158c7ae3bb6b1aaeb0e43ad80b31230edb3a4eded3f2c9ec94"
+    },
+    {
+      "name": "exp-channelized",
+      "original_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-channelized",
+      "verified_source_files": 1371,
+      "archive_sha256": "d357bbead6d2507ab252676bc58802b7f067d674a24cc225f2389047a5f7fee5"
+    },
+    {
+      "name": "exp-lifetime-order",
+      "original_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-lifetime-order",
+      "verified_source_files": 1332,
+      "archive_sha256": "ec54dce229a885d4d8f8b5e566e5f78f4e91d727b8f06f352d8f6db26ff8d3a9"
+    },
+    {
+      "name": "exp-sink-coalesced",
+      "original_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-sink-coalesced",
+      "verified_source_files": 1332,
+      "archive_sha256": "c8c1f1aa510eb2ab4d992d49fe024de2b38bda144b97b8f5d5b7bb4061c7ae50"
+    },
+    {
+      "name": "exp-sink-lifetime",
+      "original_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-sink-lifetime",
+      "verified_source_files": 1332,
+      "archive_sha256": "9e6f4c97e37749deb14d31ac066dc2c27a1a4efdf9e023922b95ea70e63ed395"
+    },
+    {
+      "name": "flab-topology-experiments",
+      "original_path": "/home/dannyb/sources/flab-topology-experiments",
+      "verified_source_files": 20150,
+      "archive_sha256": "380babb172a6c8d6b29c90720ebf3010354418632043761b1befcd4fee24cf8d"
+    },
+    {
+      "name": "abstraction-original",
+      "original_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original",
+      "verified_source_files": 4307,
+      "archive_sha256": "8cf3a1d5a65203e179c88d4cc3e60e34c44844c98bbce8e53294d8986de17e85"
+    },
+    {
+      "name": "hierarchical-v5",
+      "original_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v5",
+      "verified_source_files": 6633,
+      "archive_sha256": "84063721dd5bf0eacb4fd7b4f49fa94dd6cca935b43b038e0bab30ca1f63e40e"
+    },
+    {
+      "name": "abstraction-general",
+      "original_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general",
+      "verified_source_files": 4605,
+      "archive_sha256": "6a16ac819a301703dfd8c1e2bb38a786fd4028c68049d4b6ee8a1df30d656942"
+    }
+  ],
+  "excluded_generated_content": [
+    ".venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "web/dist",
+    ".git administrative files (text retained in archive manifests)"
+  ],
+  "branches_deleted": false,
+  "protected_worktree": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/plan-feasibility-first",
+  "remaining_active_worktree": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v6",
+  "removal_verified": true,
+  "removed_worktrees": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/design-solver-portfolio",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-channelized",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-lifetime-order",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-sink-coalesced",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/exp-sink-lifetime",
+    "/home/dannyb/sources/flab-topology-experiments",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-original",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v5",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/abstraction-general"
+  ],
+  "remaining_worktrees": [
+    "/home/dannyb/sources/factorio-lab-to-blueprint",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v6",
+    "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/plan-feasibility-first"
+  ],
+  "worktree_registry": "worktree /home/dannyb/sources/factorio-lab-to-blueprint\nHEAD 39fa229acf8fda8b4cbf584e993e147fff65c156\nbranch refs/heads/master\n\nworktree /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v6\nHEAD 62b6f3db43d1634204c7e5d92313d51afeb450cc\nbranch refs/heads/hierarchical-v6\n\nworktree /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/plan-feasibility-first\nHEAD 38cc435bd46ea2728b9b8e8960478347a6070239\nbranch refs/heads/plan-feasibility-first\n\n"
+}

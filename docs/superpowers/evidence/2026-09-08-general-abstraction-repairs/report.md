@@ -58,3 +58,5 @@ Earlier broad Python routing/module commands exceeded the150-second bound. They 
 ## Evidence retention
 
 [retained-artifacts.json](retained-artifacts.json) records selected feature-worktree evidence hashes. Fresh master evidence was added afterward. Full scratch scripts, specimens and unpromoted experiments are preserved in retirement archives outside the repository; they are not new production APIs or permanent tests. Worktree removal does not promote archived experiment code. The protected `plan-feasibility-first` worktree is excluded from retirement.
+
+All nine stale worktrees were removed only after independent archive/source hash verification of42,680 regular files. Branches remain intact. The final registry contains only master, active hierarchical-v6 and protected plan-feasibility-first. V6's immutable v5 source/evidence inputs were relocated outside Git worktrees; all120 source/dependency hashes and an actual owner replay agree. See [worktree-retirement.json](worktree-retirement.json) and [relocated-v5-baseline.json](relocated-v5-baseline.json).

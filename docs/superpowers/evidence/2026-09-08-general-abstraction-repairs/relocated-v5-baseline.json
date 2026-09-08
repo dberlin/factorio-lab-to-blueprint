@@ -1,0 +1,24 @@
+{
+  "baseline_root": "/home/dannyb/sources/flab-worktree-archives/2026-09-08/hierarchical-v5/baseline",
+  "revision": "62b6f3db",
+  "source_files_verified": 120,
+  "source_differences": [],
+  "final_manifest_sha256": "f8454adad8c2dc487301074ca9b936f66bac75969d58a504c031e94102b4da98",
+  "binding": {
+    "package": "/home/dannyb/sources/flab-worktree-archives/2026-09-08/hierarchical-v5/baseline/src/flab2bp/__init__.py",
+    "prefix": "/home/dannyb/sources/flab-worktree-archives/2026-09-08/hierarchical-v5/baseline/.venv",
+    "executable": "/home/dannyb/sources/flab-worktree-archives/2026-09-08/hierarchical-v5/baseline/.venv/bin/python"
+  },
+  "git_worktree": false,
+  "owner_smoke": {
+    "owner": "_commit_paths",
+    "input_sha256": "d8f08c998890b2b245281e14553f2aae317840b2ce675445540b2bf06f4a395c",
+    "old_output_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v6/docs/superpowers/evidence/2026-09-08-hierarchical-v6/mall-owner-none-commit-v5/result.json",
+    "relocated_output_path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v6/docs/superpowers/evidence/2026-09-08-hierarchical-v6/mall-owner-none-commit-archive-smoke-r1/result.json",
+    "error": null,
+    "outcome_equal": true,
+    "outcome": [
+      1
+    ]
+  }
+}
