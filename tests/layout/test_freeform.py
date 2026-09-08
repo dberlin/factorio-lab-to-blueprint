@@ -39,6 +39,7 @@ from flab2bp.layout.base import (
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.freeform import (
     _BLAME_MAX_WALL,
+    _DETERMINISTIC_PACK_STRIPS,
     _ENTRY_RING,
     _LEVEL_TOLL,
     _ROUTE_RING,
@@ -60,6 +61,7 @@ from flab2bp.layout.freeform import (
     _commit_paths,
     _connect_short_cuts,
     _dests,
+    _deterministic_pack_work,
     _direct_column_deltas,
     _direct_net_candidates,
     _direct_origin_deltas,
@@ -145,6 +147,27 @@ from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode
 from tests.layout.conftest import one_recipe_spec
 
 type SpecFactory = Callable[[], BuildSpec]
+
+
+@pytest.fixture
+def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``FLAB2BP_COATER_NODE=off``, the retained pre-2026-09-07 arm.
+
+    The default arm is ``placed``, where the Spray Coater is a free-standing
+    four-tile node beside the consumer lane rather than an addon riding the
+    consumer strip's own widened channel.  Under ``placed`` there is no
+    machine/Coater relation for a strip channel to clear at all --
+    ``_staged_static_clearance_keys`` returns the empty set by construction --
+    so every test of the staged-static clearance machinery, of the on-channel
+    seat, and every recorded pack geometry captured before the flip is a test
+    of the ``off`` arm and says so here.  ``off`` is reachable for one release
+    as the A/B control; ``tests/layout/test_coater_node.py`` covers the
+    ``placed`` node's geometry.
+
+    Deleting this fixture? See the retirement checklist, §14 of
+    ``docs/superpowers/evidence/2026-09-07-coater-placed-gate/README.md``.
+    """
+    monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
 
 
 def _identity_finalizer(
@@ -2391,6 +2414,7 @@ def _coater_strip_with_variant() -> Strip:
     return next(strip for strip in strips if freeform._staged_static_clearance_keys(strip))
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_clearance_keys_memo_is_transparent() -> None:
     strip = _coater_strip_with_variant()
     # `_coater_strip_with_variant` calls `plan_strips`, which itself populates
@@ -2546,6 +2570,7 @@ def test_direct_alignment_key_classifies_every_candidate_field() -> None:
     assert read & candidate_fields == freeform._DIRECT_ALIGNMENT_KEY_FIELDS
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_clearance_key_classifies_every_strip_field() -> None:
     """Every ``Strip`` field is either in the clearance memo key or declared unread.
 
@@ -2600,8 +2625,9 @@ ALL_SPECS = [single_recipe_spec, two_stage_spec, magnetic_ring_spec, proliferate
 
 #: Freeform used to refuse any strip plan where one producer lane had to feed
 #: several consumer lanes, because a belt tile has one ``output_obj``.  It now
-#: taps a different TILE of the lane for each consumer and junctions there with
-#: a splitter, so the gap is closed and the marker that stood here is gone.
+#: closes the gap by having later nets branch off a sibling's committed path
+#: when they share a source lane (``_route``'s ``same_src``); ``_tap_source``
+#: builds the branch point as a splitter, so the marker that stood here is gone.
 #:
 #: Kept as a note rather than a marker: the tests it was attached to are the
 #: ones that prove the fan-out works, and they assert it directly now.
@@ -2787,7 +2813,17 @@ class TestPlanStrips:
         assert s.band_rows == s.ph, "the band reserves clearance, not footprint"
         assert s.height == 3 + s.band_rows + 2 == 9
 
-    def test_low_rate_proliferated_inputs_share_one_coater_lane(self) -> None:
+    def test_low_rate_proliferated_inputs_still_get_one_lane_each(self) -> None:
+        """RENAMED from `..._share_one_coater_lane`, which is now a banned build.
+
+        It used to plan the same spec twice: once ordinarily (three single-item
+        lanes) and once with `prefer_shared_proliferation=True`, asserting that
+        the preference merged all three ingredients onto ONE belt above to save
+        two Spray Coaters.  Spec §9 R1 removed the preference and the merge with
+        it -- fewer coaters is not worth a belt whose items must interleave
+        exactly -- so the second half of the test has no call to make and the
+        first half is the whole assertion.
+        """
         spec = BuildSpec(
             groups=(
                 group(
@@ -2804,23 +2840,28 @@ class TestPlanStrips:
             belt_items_per_second=F(30),
         )
 
-        default = plan_strips(spec, strip_len=6)
-        default_inputs = default[0].in_above + default[0].in_below
-        assert len(default_inputs) == 3
-        assert all(len(lane) == 1 for lane in default_inputs)
+        strips = plan_strips(spec, strip_len=6)
+        lanes = strips[0].in_above + strips[0].in_below
+        assert len(lanes) == 3
+        assert all(len(lane) == 1 for lane in lanes)
 
-        families = generate_strip_families(
-            spec,
-            prefer_shared_proliferation=True,
-        )
-        strips = plan_strips(spec, strip_len=6, families=families)
+    def test_a_wide_lab_seats_every_ingredient_on_its_own_lane(self) -> None:
+        """RENAMED, twice, and this is the name that lasts.
 
-        assert strips[0].in_above == (("gear", "iron-ingot", "magnetic-coil"),)
-        assert strips[0].in_below == ()
+        It was `..._leaves_wide_lab_plan_unchanged`, asserting that a
+        `prefer_shared_proliferation` plan equalled the ordinary one -- true, and
+        true for the wrong reason: BOTH ladders put three ingredients on one belt
+        above and three on one below, because five south rows could not carry six
+        lanes.  Freeing the drain row (spec §9 R2) split them and it became
+        `..._now_diverges_from_the_ordinary_ladder`, pinning `preferred !=
+        ordinary` as a tripwire for this task.
 
-    def test_shared_proliferation_preference_leaves_wide_lab_plan_unchanged(
-        self,
-    ) -> None:
+        The tripwire has fired.  §9 R1's executor corollary collapsed the mixing
+        ladder, `prefer_shared_proliferation` is deleted, and there is one plan
+        again -- six ingredients, six single-item lanes, product out east.  The
+        assertion is now about the seating itself rather than about two plans
+        agreeing, because there is no longer a second plan to compare against.
+        """
         ingredients = (
             "antimatter",
             "electromagnetic-matrix",
@@ -2845,13 +2886,8 @@ class TestPlanStrips:
             belt_items_per_second=F(30),
         )
 
-        ordinary = generate_strip_families(spec)
-        preferred = generate_strip_families(
-            spec,
-            prefer_shared_proliferation=True,
-        )
-
-        assert preferred == ordinary
+        (wide,) = [family for family in generate_strip_families(spec) if family.flank_outputs]
+        assert [lane.items for lane in wide.input_lanes] == [(item,) for item in ingredients]
 
     def test_a_four_input_recipe_lays_out_and_validates(self) -> None:
         """Planning it is not enough -- it has to emit and pass the neutral judge.
@@ -2903,7 +2939,14 @@ class TestPlanStrips:
         )
 
     def test_the_ceiling_is_the_machines_insert_POSES_not_its_rows(self) -> None:
-        """Five ingredients on an assembler: three above, two below, output below.
+        """Five ingredients on an assembler: three sorters above, two below.
+
+        AMENDED 2026-09-07 (spec §9 R1): the sums below are unchanged and the
+        seating under them is not.  It used to be `('a', 'b', 'c')` on ONE belt
+        above and `('d', 'e')` on ONE below, with the output on the south face;
+        the mixing ladder is gone, so it is five single-item lanes with the
+        output flanked east.  The counts this test is about -- three sorters on
+        the north face, two on the south -- are what the poses carry either way.
 
         THIS SAID TWELVE, AND TWELVE NEEDED TWELVE SLOTS THAT DO NOT EXIST.  An
         Assembling Machine offers a lane THREE insert poses per face, and a slot
@@ -2924,29 +2967,41 @@ class TestPlanStrips:
         assert sum(len(lane) for lane in strips[0].in_above) == 3
         assert sum(len(lane) for lane in strips[0].in_below) == 2
 
-    def test_six_ingredients_seat_once_the_product_leaves_east(self) -> None:
-        """Six fit when the output flanks; seven still do not, and must not.
+    def test_five_ingredients_seat_once_the_product_leaves_east(self) -> None:
+        """RENAMED from `test_six_ingredients_seat_once_the_product_leaves_east`.
 
-        THIS TEST USED TO ASSERT THAT SIX REFUSED, and it was right about the
-        arithmetic and wrong about the building.  An Assembling Machine defines
-        TWELVE insert poses, three per side, and a lane-fed strip was reading two
-        of the four sides.  Six ingredients and a product is seven connections
-        into six slots only if the east face does not exist.
+        Its history is worth keeping because the number has moved twice.  It
+        first asserted that SIX refused, which was right about the arithmetic and
+        wrong about the building: an Assembling Machine defines TWELVE insert
+        poses, three per side, and a lane-fed strip was reading two of the four
+        sides.  It then asserted that six SEATED once the product flanked east --
+        and that seating, measured 2026-09-07, was
+        `(('a', 'b', 'c'),)` above and `(('d', 'e', 'f'),)` below: TWO MIXED
+        BELTS.  `len(in_lanes) == 6` counts items, not lanes, so it read as six
+        lanes and was two.  Spec §9 R1 bans that build, so six refuses again --
+        this time on the honest ground that an assembler has three reachable rows
+        above and only two below, and six single-item lanes need six rows.
 
-        Seven ingredients still refuse, and that is the half of this test that
-        matters.  The north and south faces carry three sorters each and the east
-        face carries the product; the ceiling moved from six connections to
-        seven, it did not go away.  If a change makes seven pass, it has relaxed
-        ``game.slot_occupancy`` rather than used another face.
+        Five is the number that flanking actually buys, and it is asserted here
+        so the east face keeps a live test: unflanked, the output's south column
+        leaves room for four ingredients; flanked, the south face is handed back
+        whole and the fifth seats.
+
+        Seven ingredients refuse in both worlds, and that is still the half that
+        guards `game.slot_occupancy`: if a change makes seven pass, it has
+        relaxed the slot rule rather than used another face.
 
         2026-09-05: the refusal comes back as ``NoValidLayout`` rather than a
         raw ``ValueError`` -- ``generate_strip_families`` is the refusal
         boundary now, and this families-less ``plan_strips`` call falls back
         to it internally.
         """
-        strips = plan_strips(self._many_input_spec(6), strip_len=6)
-        assert strips[0].flank_outputs, "six must seat by flanking, not by doubling up"
-        assert len(strips[0].in_lanes) == 6
+        strips = plan_strips(self._many_input_spec(5), strip_len=6)
+        assert strips[0].flank_outputs, "five must seat by flanking, not by doubling up"
+        assert [len(lane) for lane in strips[0].in_above] == [1, 1, 1]
+        assert [len(lane) for lane in strips[0].in_below] == [1, 1]
+        with pytest.raises(NoValidLayout, match="cannot be seated"):
+            plan_strips(self._many_input_spec(6), strip_len=6)
         with pytest.raises(NoValidLayout, match="insert pose"):
             plan_strips(self._many_input_spec(7), strip_len=6)
 
@@ -2958,8 +3013,13 @@ class TestPlanStrips:
         flanked output is not on that face at all.  Charging it anyway rations
         away the column the flank exists to free, and it shows up as a lane
         trimmed one tile short of the column it was actually given.
+
+        FIXTURE MOVED 6 -> 5 (spec §9 R1): six ingredients used to flank and seat
+        as two mixed belts, which is now a refusal.  Five flanks on the merits,
+        with two single-item lanes below, so the property this test is about is
+        unchanged and still has a strip to read it off.
         """
-        strips = plan_strips(self._many_input_spec(6), strip_len=6)
+        strips = plan_strips(self._many_input_spec(5), strip_len=6)
         s = strips[0]
         assert s.flank_outputs and s.out_lanes, "this strip must have both to mean anything"
         assert s.column_offset(s.in_below[0]) == 0
@@ -2974,6 +3034,23 @@ class TestPlanStrips:
         """
         with pytest.raises(NoValidLayout, match="cannot be seated"):
             plan_strips(self._many_input_spec(13), strip_len=6)
+
+
+def test_seat_inputs_uses_the_freed_south_row_only_when_flanked() -> None:
+    """The drain-row waiver is scoped to the flanked path and nothing else.
+
+    A flanked output's drain lane carries NO sorter -- ``_flank_lane`` puts the
+    only sorter on the machine's east face and runs a gap belt south into the
+    lane -- so the row it takes need not be one a sorter can reach, and the
+    seating search may spend all ``below_cap`` reachable rows on inputs.
+    Unflanked, the output lane really does need a sorter-reachable row under the
+    band, so the reservation still binds and six ingredients still refuse.
+    """
+    six = ("a", "b", "c", "d", "e", "f")
+    above, below = freeform._seat_inputs(six, 1, 3, 3, columns=3, flank_outputs=True)
+    assert [len(lane) for lane in (*above, *below)] == [1, 1, 1, 1, 1, 1]
+    with pytest.raises(ValueError, match="cannot be seated"):
+        freeform._seat_inputs(six, 1, 3, 3, columns=3)
 
 
 class TestASideCarriesAsManyLanesAsItsPosesAllow:
@@ -3098,6 +3175,31 @@ def test_greedy_seed_adds_only_requested_routing_clearance() -> None:
     assert freeform._routing_seed_clearance(large, sprayed_lanes=0) == 1
     assert freeform._routing_seed_clearance(large[:-1], sprayed_lanes=0) == 0
     assert freeform._routing_seed_clearance(large, sprayed_lanes=1) == 0
+
+
+class TestThePackWorkBoundScalesWithThePack:
+    """A 53-strip pack cannot have the same work bound as a 15-strip one.
+
+    Measured on `universe-matrix` (spec 2026-09-07-lane-fanout-design.md
+    section 4.1): at the fixed 0.02 units the 53-strip pack returned UNKNOWN
+    five solves out of five and produced no incumbent at all, giving up in
+    2.58s with 299s of a 300s budget unspent.
+    """
+
+    def test_the_calibrated_size_keeps_its_calibrated_bound(self) -> None:
+        assert _deterministic_pack_work(_DETERMINISTIC_PACK_STRIPS) == 0.02
+
+    def test_a_smaller_pack_is_not_given_more_work(self) -> None:
+        assert _deterministic_pack_work(4) <= 0.02
+
+    def test_a_much_larger_pack_is_given_proportionally_more(self) -> None:
+        small = _deterministic_pack_work(_DETERMINISTIC_PACK_STRIPS)
+        large = _deterministic_pack_work(53)
+        assert large > small, "a 53-strip pack must get more work than a 15-strip one"
+        assert large / small >= 53 / _DETERMINISTIC_PACK_STRIPS, (
+            "the bound must grow at least linearly in the strip count: a pack's "
+            "CP-SAT model grows at least that fast"
+        )
 
 
 # --- fallback --------------------------------------------------------------
@@ -6914,9 +7016,10 @@ class TestSolverActuallyRuns:
         """The gap this used to pin as unfixable, now closed.
 
         A belt tile has one ``output_obj``, so a lane feeding four consumers
-        cannot simply point at all four. It taps a different TILE of the lane
-        for each and puts a splitter there -- the lane keeps flowing past the
-        tap, and the branch draws from the junction.
+        cannot simply point at all four. Later nets branch off a sibling's
+        committed path instead (``_route``'s ``same_src``), and ``_tap_source``
+        builds that branch point as a splitter -- the lane keeps flowing past
+        the tap, and the branch draws from the junction.
 
         This test previously asserted the opposite (that the spec was refused),
         deliberately written to fail the moment the gap closed. It did.
@@ -8479,6 +8582,7 @@ def _plastic_pack_inputs() -> tuple[
     return strips, height, bound, candidates
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_pack_model_with_no_pinned_strips_is_the_model_pack_built_before_the_split() -> None:
     """The split must not change one byte of the production model.
 
@@ -8552,7 +8656,7 @@ def test_pack_window_over_every_strip_reproduces_the_full_pack() -> None:
         fixed_at={},
         seed=None,
         time_budget_s=5.0,
-        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE,
     )
     assert outcome is not None
     windowed = outcome.pack
@@ -8573,7 +8677,7 @@ def test_pack_window_reports_its_exact_cp_sat_outcome() -> None:
         fixed_at={},
         seed=None,
         time_budget_s=5.0,
-        deterministic_work=freeform._DETERMINISTIC_PACK_WORK,
+        deterministic_work=freeform._DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE,
     )
     assert outcome is not None
     assert outcome.status == "OPTIMAL"
@@ -9851,6 +9955,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     )
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_plan_strips_preselects_projection_risk_clearance_for_direct_preparation() -> None:
     freeform._staged_static_preclearance_proved.cache_clear()
     spec = proliferated_spec()
@@ -9941,6 +10046,7 @@ def test_proved_clean_same_strip_relation_skips_only_its_redundant_projection(
     assert [index for index, _building in retained] == [1, 2]
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_plan_time_projection_risks_are_batched_and_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -9973,6 +10079,7 @@ def test_plan_time_projection_risks_are_batched_and_cached(
     assert len(proved) == len(set(proved))
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10011,6 +10118,7 @@ def test_static_clearance_requirement_regenerates_a_distinct_lane_variant(
     assert strip_pose_id(replacement.physical_variant) == pose_id
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10103,6 +10211,7 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     assert rejected == [failure]
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -10840,6 +10949,59 @@ class TestProliferatorIsActuallySupplied:
                 f"one of the sprayed lanes {sorted(spec.spray_lanes)}"
             )
 
+    def test_a_severed_supply_tree_is_convicted_on_a_real_build(self) -> None:
+        """``prolif.coater_supply_is_fed``, mutation-tested on a real placement.
+
+        The clean build is asserted clean first, then ONE link is cut: the belt
+        feeding the coater's approach belt loses its ``output_obj``.  That is
+        precisely a ``_proliferator_supply_tree`` that never reached the node.
+        Both port belts still carry ``proliferator-3`` and still sit where the
+        addon rules want them, so every label-reading check stays clean -- which
+        is why this check had to exist.
+        """
+        spec = proliferated_spec()
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
+        assert not _full_report(p, spec).by_check("prolif.coater_supply_is_fed")
+
+        ctx = validate._context(p, spec, _id_map_for(spec), 256, catalog.DEFAULT_MAX_BELT_Z, True)
+        rides = validate._coater_rides(ctx)
+        assert rides, "fixture must produce at least one coater"
+        coater_index = sorted(rides.values())[0]
+        supply = validate._belt_in_addon_area(ctx, p.buildings[coater_index], area=1)
+        assert supply is not None
+        approach = next(
+            i
+            for i, b in enumerate(p.buildings)
+            if ctx.kinds[i] is validate.Kind.BELT and b.output_obj == supply
+        )
+        feeder = next(
+            i
+            for i, b in enumerate(p.buildings)
+            if ctx.kinds[i] is validate.Kind.BELT and b.output_obj == approach
+        )
+
+        buildings = list(p.buildings)
+        buildings[feeder] = replace(buildings[feeder], output_obj=None)
+        severed = replace(p, buildings=tuple(buildings))
+
+        findings = _full_report(severed, spec).by_check("prolif.coater_supply_is_fed")
+        assert len(findings) == 1, [f.message for f in findings]
+        assert findings[0].severity is validate.Severity.ERROR
+        assert findings[0].detail["coater"] == coater_index
+        assert findings[0].detail["supply_belt"] == supply
+
+        # The gap: the checks that read labels rather than flow stay clean on it.
+        blind = validate.validate(
+            severed,
+            spec,
+            ids=_id_map_for(spec),
+            only={"prolif.coaters_are_supplied", "game.addon_supply", "game.addon_facing"},
+            expect_power=True,
+        )
+        assert not blind.errors, [f.message for f in blind.errors]
+
     def test_no_proliferator_spec_places_no_supply_lane(self) -> None:
         """The machinery must cost nothing when proliferation is off."""
         spec = two_stage_spec()
@@ -10848,6 +11010,61 @@ class TestProliferatorIsActuallySupplied:
         ).lay_out(spec, time_budget_s=0.5)
         assert p.stats["spray_coaters"] == 0
         assert not [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+
+
+#: Every check that judges a Spray Coater.  Task 7's gate greps for the two
+#: ``prolif.coater_*`` names, so they are spelled out here rather than derived.
+COATER_ARBITERS = (
+    "prolif.coater_rides_one_run",
+    "prolif.sprayed_cargo_reaches_machines",
+    "prolif.coaters_are_supplied",
+    "prolif.coater_supply_is_fed",
+    "game.addon_supply",
+    "game.addon_facing",
+    "game.addon_corner",
+)
+
+
+@pytest.mark.parametrize("placer", ["freeform", "sequence-pair"])
+def test_every_coater_arbiter_is_green_on_a_placed_build(placer: str) -> None:
+    """The placed coater node must satisfy every check that judges a coater.
+
+    Asserted on the NAMED checks rather than on ``report.ok``: a broad
+    assertion turns any unrelated regression in either placer into a mystery
+    here, and the point of this test is to say which coater property broke.
+
+    ERROR severity only.  ``prolif.sprayed_cargo_reaches_machines`` has a clause
+    that is downgraded to WARNING later in this plan, and an assertion of "no
+    findings at all" would forbid a change the same plan mandates.
+
+    The coater count is asserted first, because a build with no coater satisfies
+    every one of these checks by having nothing to judge.
+    """
+    from flab2bp.layout.sequence_solver import SequencePairLayout, SequenceSolverConfig
+
+    spec = proliferated_spec()
+    if placer == "freeform":
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+        ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
+    else:
+        p = SequencePairLayout(
+            band_policy=BandPolicy("portable"),
+            islands=1,
+            config=SequenceSolverConfig.test(),
+        ).lay_out(spec, time_budget_s=2.0)
+
+    coaters = [b for b in p.buildings if b.item_id == catalog.SPRAY_COATER_ID]
+    assert coaters, f"{placer} placed no Spray Coater; the arbiters below judge nothing"
+
+    report = _full_report(p, spec)
+    convicted = [
+        f
+        for name in COATER_ARBITERS
+        for f in report.by_check(name)
+        if f.severity is validate.Severity.ERROR
+    ]
+    assert not convicted, "\n".join(f"{f.check}: {f.message}" for f in convicted)
 
 
 class TestSortersCanCarryTheirDemand:
@@ -11060,9 +11277,11 @@ def five_input_spec() -> BuildSpec:
     ``miniature-particle-collider`` takes five things and makes one, in an
     assembler.  Five is the most a lane-fed machine can carry -- three insert
     poses on the north face and three on the south, one of the south three spent
-    on the output lane -- and an assembler's ROW caps are tighter than that, so
-    seating five forces a shared lane.  That is what keeps mixed lanes under
-    test now that six ingredients are refused.
+    on the output lane -- and an assembler has only two reachable rows below, so
+    five single-item lanes seat only once the product leaves EAST and gives the
+    south face its third column back.  Before spec §9 R1 the planner never got
+    that far: it bought the row by putting three items on one belt above and two
+    on another below, unflanked, which is the build the user reported starving.
 
     Deliberately a real recipe, not a synthesised one: a made-up name plans
     perfectly well and then dies at ``catalog.recipe_id``, so a synthetic-only
@@ -11095,7 +11314,8 @@ def six_input_spec() -> BuildSpec:
 
     ``universe-matrix`` takes antimatter plus all five lower matrices and runs in
     a Matrix Lab.  Six inputs plus one output is seven lanes, and two sides of
-    three cannot carry that one-item-per-lane -- which is what mixing is for.
+    three carry that one-item-per-lane only because the seventh leaves by the
+    EAST face and its drain row sits past sorter reach (spec §9 R2).
 
     Deliberately a real recipe, not a synthesised one: a made-up name plans
     perfectly well and then dies at ``catalog.recipe_id``, so a synthetic-only
@@ -11163,12 +11383,21 @@ def _lane_runs(p: Placement) -> dict[int, set[int]]:
 
 
 class TestMixedItemLanes:
-    """One item per lane is our simplification, not a DSP rule.
+    """One item per lane, and DSP's own designs are not a reason to relax it.
 
-    Measured across the fixture corpus, 236 of 1,288 real sorters carry a
-    filter, and ``falk-v7-mall-full`` filters 100% of its 196 -- bus designs
-    where several items share a belt and filtered sorters pick off the one they
-    want.
+    RENAMED IN SPIRIT, not in letter: the class name is left alone because it is
+    still where a mixed input lane would be caught, but nothing under it asserts
+    that we PRODUCE one any more.  Spec §9 R1 bans it absolutely.
+
+    The measurement that used to justify mixing is still true and is kept because
+    it is the strongest argument against the ruling: across the fixture corpus
+    236 of 1,288 real sorters carry a filter, and ``falk-v7-mall-full`` filters
+    100% of its 196 -- human bus designs where several items share a belt and
+    filtered sorters pick off the one they want.  Those work because a bus is fed
+    to saturation from outside.  A lane we emit is fed by the exact production
+    that consumes it, so an item that runs ahead fills the belt and backs the
+    others up; the user reported that build.  Filtering picks WHICH item a sorter
+    takes and controls the interleaving not at all.
     """
 
     def test_a_six_ingredient_recipe_builds_with_its_product_leaving_east(self) -> None:
@@ -11248,36 +11477,75 @@ class TestMixedItemLanes:
                 f"({sorted(lane_reachable)}); the east face was never used"
             )
 
-    def test_a_five_ingredient_recipe_still_mixes_and_validates(self) -> None:
-        """Mixing is not dead, it is bounded.  Five fits, and has to keep fitting.
+    def test_a_five_ingredient_recipe_seats_one_item_per_lane_and_validates(self) -> None:
+        """RENAMED from `..._still_mixes_and_validates`, which asserted the ban.
 
-        Without this, the column bound could tighten to "one item per lane" and
-        every mixed-lane test above would still pass by refusing.
+        It asserted `max(len(lane) ...) > 1` -- that five ingredients on an
+        Assembling Machine produced at least one shared belt -- and its docstring
+        said mixing "is not dead, it is bounded".  Spec §9 R1 killed it: an input
+        lane carries one item, not chosen and not forced.
+
+        Five is still the interesting number, and it still builds.  An assembler
+        has three reachable rows above and two below and three insert poses per
+        face, so five single-item lanes fit only if the product stops charging
+        the south face a column -- which is exactly what flanking it east does.
+        Measured before the ban the planner took the cheaper unflanked answer,
+        `('frame-material', 'graphene', 'processor')` above and
+        `('super-magnetic-ring', 'titanium-alloy')` below; it now flanks instead.
+
+        The `report.ok` half is unchanged and is what stops the rename from being
+        a way to pass by refusing: the placement is still emitted and still
+        judged by the neutral validator.
         """
         spec = five_input_spec()
         strips = plan_strips(spec, strip_len=6)
-        assert max(len(lane) for lane in strips[0].in_above + strips[0].in_below) > 1
+        lanes = strips[0].in_above + strips[0].in_below
+        assert len(lanes) == 5, lanes
+        assert all(len(lane) == 1 for lane in lanes), lanes
+        assert strips[0].flank_outputs, "five single-item lanes need the east face"
         p = FreeformLayout(
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec)
         assert report.ok, "\n".join(f"{f.check}: {f.message}" for f in report.errors[:8])
 
-    def test_every_sorter_on_a_mixed_lane_is_filtered(self) -> None:
-        """An unfiltered sorter on a shared lane grabs whatever passes.
+    def test_no_input_belt_is_drawn_from_under_two_filters(self) -> None:
+        """REPURPOSED from `test_every_sorter_on_a_mixed_lane_is_filtered`.
 
-        That starves the machine that needed the other item, and nothing about
-        the paste looks wrong -- so this is correctness, not tidiness.
+        That test asserted the mitigation: a sorter on a shared lane carries a
+        filter, so it takes only its own item rather than grabbing whatever
+        passes.  The user's report is why the mitigation is not enough --
+        filtering controls WHICH item each sorter takes and nothing controls the
+        interleaving on the belt, so whichever item the machines are not short of
+        fills it and the others back up.  Spec §9 R1 bans the lane instead.
+
+        So the same signal is read for the opposite verdict, on the same fixture
+        that used to be the canonical mixed-lane spec: `_lane_runs` finds no belt
+        run drawn from under two different filters, because the emitter filters a
+        sorter only when `len(lane) > 1` and no lane is.
+
+        The guard below is what keeps this from passing vacuously -- an empty map
+        means "nothing shared" only if there were sorters feeding from belts at
+        all, and a placement that emitted none would satisfy the assertion while
+        proving nothing.
         """
         spec = five_input_spec()
         p = FreeformLayout(
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
-        shared = _lane_runs(p)
-        assert shared, "a five-input strip must produce at least one mixed lane"
-        assert any(len(f) > 1 for f in shared.values()), (
-            "expected some belt to be drawn from under two different filters"
+        belts = {i for i, b in enumerate(p.buildings) if catalog.is_belt(b.item_id)}
+        feeding = [
+            b
+            for b in p.buildings
+            if catalog.is_sorter(b.item_id) and b.input_obj is not None and b.input_obj in belts
+        ]
+        assert len(feeding) >= len(spec.groups[0].inputs_per_machine), (
+            "the spec must emit a sorter per ingredient or this proves nothing"
         )
+        assert not any(b.filter_id for b in feeding), (
+            "a filtered sorter means the emitter drew two items from one belt"
+        )
+        assert _lane_runs(p) == {}, _lane_runs(p)
 
     def test_unmixed_lanes_stay_unfiltered(self) -> None:
         """The signal only means something if it is absent when lanes are pure.
@@ -13017,6 +13285,48 @@ class TestOneLaneCanServeSeveralDestinations:
         assert report.ok, "\n".join(f.message for f in report.errors[:5])
         assert p.stats["route_failures"] == 0.0
 
+    def test_a_lane_serves_more_consumers_than_it_has_tiles(self) -> None:
+        """A producer lane plans and lays out with more consumer strips than tiles.
+
+        `_fanout_shortfall` did NOT fire for this fixture shape, before or
+        after its deletion: measured for consumers=3..8 (the vendored
+        dataset's cap on distinct `copper-ingot` consumers), `_merge_lanes`
+        packs the distinct one-machine dest groups onto exactly
+        `producer.width` lanes, and every merged key ends up with
+        `n_src == n_sink == 1` -- the guard was structurally inert here. The
+        guard's real firing shape was different: ONE dest group sharded into
+        many strips against one narrow producer lane --
+        `universe-matrix#37`, `n_src=1`, `n_sink=15`, `tiles=10`. The
+        regression evidence for removing the guard is therefore the corpus
+        control in
+        `docs/superpowers/evidence/2026-09-07-lane-fanout/gate/control-task2.md`,
+        not this test.
+
+        What this test does cover, and why it is still worth keeping: the
+        router's model of a shared source lane is not "one tap per TILE" --
+        nets that share a source lane branch off each other's committed paths
+        (`_route`'s `same_src` grouping), and `_tap_source` builds the
+        splitter on that path.  Measured on `universe-matrix`: a 10-tile lane
+        wired all twelve of its consumers
+        (spec 2026-09-07-lane-fanout-design.md section 2).
+        """
+        spec = one_machine_fan_out_spec(4)
+        strips = plan_strips(spec, strip_len=6)
+        producers = [s for s in strips if s.group_key.startswith("copper-ingot")]
+        assert len(producers) == 1, "one machine cannot be split across shards"
+        consumers = [s for s in strips if "copper-ingot" in s.in_lanes]
+        assert len(consumers) > producers[0].width, (
+            "this spec no longer exercises fan-out past the lane's tiles: "
+            f"{len(consumers)} consumer lane(s) against a {producers[0].width}-tile lane"
+        )
+        p = FreeformLayout(
+            band_policy=BandPolicy("portable"),
+            workers=DETERMINISTIC_WORKERS,
+        ).lay_out(spec, time_budget_s=8.0)
+        report = _full_report(p, spec)
+        assert report.ok, "\n".join(f.message for f in report.errors[:5])
+        assert p.stats["route_failures"] == 0.0
+
 
 class TestPowerClaimsItsGroundBeforeRouting:
     """Coverage cannot be whatever the router leaves behind.
@@ -14114,6 +14424,93 @@ class TestAShardThatCannotFeedItself:
             "empty the test below proves nothing"
         )
         assert _join_shard_islands([*cut, (10, 11)], supply, demand, F(0)) == []
+
+    def test_the_repair_goes_to_the_lane_that_can_absorb_it(self) -> None:
+        """An extra net delivers at most what its RECEIVING lane draws.
+
+        ``df-strange-annihilation-fuel-rod`` at 2/min, copper-ingot, measured:
+        two shards of two smelters, one lane each plus a sibling. The deficit
+        island owes 2/15 on one lane and 16/15 on the other against 1 item/s of
+        supply -- 3/15 short -- and the surplus island has exactly 3/15 spare.
+
+        Aiming the repair at the least-tapped lane sends it to the 2/15 one,
+        where no more than 2/15 can ever arrive; the island stays 1/15 short and
+        ``flow.conservation`` convicts the placement, which is what refused this
+        item. The hungriest lane is the one that can take the whole transfer.
+        """
+        pairs = [(213, 199), (216, 815), (224, 906), (227, 917), (213, 216), (224, 227)]
+        supply = {213: F(1), 216: F(0), 224: F(1), 227: F(0)}
+        demand = {199: F(2, 15), 815: F(16, 15), 906: F(4, 15), 917: F(8, 15)}
+
+        extra = _join_shard_islands(pairs, supply, demand, F(0))
+
+        # The SINK is what this test is about. Which of the surplus island's two
+        # sibling lanes sources it is the `(taps, belt)` tie-break, and both
+        # physically carry the item, so pinning it here would fail a future
+        # change to a rule this test says nothing about.
+        assert [sink for _source, sink in extra] == [815], (
+            "the repair must land on the 16/15 lane, which can absorb the whole "
+            f"3/15 deficit; got {extra}"
+        )
+        assert all(source in (224, 227) for source, _sink in extra), (
+            f"the source must be the surplus island's lane; got {extra}"
+        )
+
+    def test_a_deficit_wider_than_one_lane_buys_a_second_net(self) -> None:
+        """Capping the transfer at the lane is only honest if the loop goes on.
+
+        One strip making 1 item/s into two lanes that draw 2 each: 3 short, and
+        no single lane can take more than 2 of it. Crediting the whole 3 to the
+        first net would leave the island 1 short and the validator would say so.
+        """
+        pairs = [(10, 30), (11, 31), (10, 11), (20, 32)]
+        supply = {10: F(1), 11: F(0), 20: F(5)}
+        demand = {30: F(2), 31: F(2), 32: F(1)}
+
+        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(20, 30), (20, 31)]
+
+    def test_one_starving_lane_may_be_belted_by_two_surplus_islands(self) -> None:
+        """A lane's shortfall can be owed by more than one island.
+
+        Three shards of one producer: one owing 12 against 2 of its own, and two
+        with 4 and 6 to spare. Neither surplus covers the 10 alone, so both must
+        belt the starving lane -- letting a lane receive only one net ever would
+        leave it 4 short and refuse the build.
+        """
+        pairs = [(10, 30), (20, 31), (40, 32)]
+        supply = {10: F(2), 20: F(10), 40: F(10)}
+        demand = {30: F(12), 31: F(6), 32: F(4)}
+
+        # Largest surplus first, so the 6 comes before the 4.
+        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(40, 30), (20, 30)]
+
+    def test_a_lane_already_fed_from_inside_is_not_the_one_aimed_at(self) -> None:
+        """The hungriest lane is not always the one that can take a delivery.
+
+        Lane 101 draws 10 and one of the island's own producers already makes
+        exactly that, with nowhere else to put it; lane 102 draws 8 and gets 3.
+        Aiming at the hungriest lane would deliver into a full one. The
+        least-tapped lane that can hold the transfer is the right target, and
+        here it is also the starving one.
+        """
+        pairs = [(1, 101), (2, 102), (2, 101), (3, 103)]
+        supply = {1: F(10), 2: F(3), 3: F(5)}
+        demand = {101: F(10), 102: F(8), 103: F(0)}
+
+        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(3, 102)]
+
+    def test_a_lane_that_draws_nothing_is_never_belted(self) -> None:
+        """A zero-draw lane would take a zero transfer, and the loop would spin.
+
+        Its exclusion is what makes termination an argument rather than a hope,
+        so it is pinned: the call returns, and it returns the one net that can
+        actually carry something.
+        """
+        pairs = [(10, 30), (10, 31), (20, 32)]
+        supply = {10: F(1), 20: F(5)}
+        demand = {30: F(0), 31: F(3), 32: F(1)}
+
+        assert _join_shard_islands(pairs, supply, demand, F(0)) == [(20, 31)]
 
     def test_what_the_player_belts_in_is_one_global_allocation(self) -> None:
         """The one external rate can cover either island's shortfall."""
@@ -17706,6 +18103,7 @@ class TestTheMergeFrontierWithdrawsSitesAJunctionCannotHold:
         assert {(-1, 0, 0), (0, -1, 0), (0, 1, 0)} <= got, sorted(got)
 
 
+@pytest.mark.usefixtures("off_arm")
 class TestASprayedLaneEitherGetsACoaterOrRefuses:
     """``_place_coaters`` may not ``continue`` past a lane it cannot seat.
 
@@ -18019,7 +18417,7 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
         )
 
     def test_a_lane_too_short_to_seat_a_coater_is_refused(self) -> None:
-        """One tile: ``_coater_seat`` has no tile with a lane tile either side."""
+        """One tile: ``_coater_seats`` has no tile with a lane tile either side."""
         canvas, spec, strips, ports = self._fixture(1)
         with pytest.raises(freeform._Unseatable, match="tile"):
             freeform._place_coaters(
@@ -18524,6 +18922,79 @@ class TestASprayedLaneEitherGetsACoaterOrRefuses:
             )
 
 
+def _canvas_with_straight_lane_at(x: int, y: int, z: int) -> tuple[_Canvas, _Port]:
+    """A clean 3-tile lane whose middle tile is the coater's second-tile seat.
+
+    ``_coater_seats`` returns ``port.tiles[1]`` as the sole interior seat of a
+    3-tile lane, and a Spray Coater's 1x3 body at ``Facing.EAST`` covers
+    exactly the lane's three tiles -- ``(x - 1, y)``, ``(x, y)``, ``(x + 1,
+    y)`` -- see ``catalog.oriented_footprint``.  Nothing here feeds the head
+    from more than one predecessor, so this is the control the merged fixture
+    below is measured against.
+    """
+    canvas = _Canvas()
+    head = canvas.add(_belt(x - 1, y, item="iron-ingot"))
+    mid = canvas.add(_belt(x, y, item="iron-ingot"))
+    tail = canvas.add(_belt(x + 1, y, item="iron-ingot"))
+    canvas.buildings[head] = replace(canvas.buildings[head], z=F(z), output_obj=mid)
+    canvas.buildings[mid] = replace(canvas.buildings[mid], z=F(z), output_obj=tail)
+    canvas.buildings[tail] = replace(canvas.buildings[tail], z=F(z))
+    port = _Port(
+        head,
+        x - 1,
+        y,
+        x - 1,
+        x + 1,
+        (head, mid, tail),
+        1,
+        z,
+        cargo_domain=CargoDomain.REQUIRES_SPRAY,
+    )
+    return canvas, port
+
+
+def _canvas_with_lane_merge_at(x: int, y: int, z: int) -> tuple[_Canvas, _Port]:
+    """The same lane, with two predecessors feeding its head belt.
+
+    Mirrors the reporting URL's measured case in
+    ``validate._coater_rides_one_run``: belt#0 at ``(53, 20, 0)`` had
+    predecessors ``[817, 1872]`` and sat under coater#768's body.  The head
+    tile here is ``(x - 1, y)``, one of the coater's three body tiles, so a
+    seat chooser that does not check for a merge would seat a coater on it.
+    """
+    canvas, port = _canvas_with_straight_lane_at(x, y, z)
+    head = port.tiles[0]
+    predecessor_a = canvas.add(_belt(x - 2, y - 1, item="iron-ingot"))
+    predecessor_b = canvas.add(_belt(x - 2, y + 1, item="iron-ingot"))
+    canvas.buildings[predecessor_a] = replace(
+        canvas.buildings[predecessor_a], z=F(z), output_obj=head
+    )
+    canvas.buildings[predecessor_b] = replace(
+        canvas.buildings[predecessor_b], z=F(z), output_obj=head
+    )
+    return canvas, port
+
+
+@pytest.mark.usefixtures("off_arm")
+def test_coater_seat_rejects_a_tile_with_a_belt_merge() -> None:
+    """A seat whose body covers a merge is not a seat, however short the lane.
+
+    The seat search used to answer only "is this drop cell free and is the
+    lane long enough".  The reporting URL seated two coaters over 2-into-1
+    merges that way, and `prolif.coater_rides_one_run` now convicts every
+    such placement -- so ``_coater_seats``' merge predicate has to agree with
+    the validator on a canvas where the merge already exists.  Pinned to the
+    ``off`` arm: under the default ``placed`` node the candidate window starts
+    one tile later (``1 + half_span``), so a 3-tile control lane offers no
+    seat at all and the clean control below would be vacuous.
+    """
+    canvas, port = _canvas_with_lane_merge_at(x=53, y=20, z=0)
+    assert freeform._coater_seats(canvas, port, west_channel=2) == ()
+
+    clean_canvas, clean_port = _canvas_with_straight_lane_at(x=53, y=20, z=0)
+    assert freeform._coater_seats(clean_canvas, clean_port, west_channel=2) == ((53, 20),)
+
+
 # --- belt docked into a building PORT ---------------------------------------
 
 
@@ -18859,6 +19330,7 @@ def test_staged_static_effective_anchor_ranges_replace_padding_cross_product(
     assert tuple(anchor for interval in ranges for anchor in interval) == tuple(sorted(reference))
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_projection_risk_uses_one_exact_pair_per_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -18981,6 +19453,7 @@ def band_160_all_products_spec() -> BuildSpec:
     )
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_clearance_reuses_only_the_same_physical_relation() -> None:
     policy = BandPolicy("portable")
     spec = band_160_all_products_spec()
@@ -19100,6 +19573,7 @@ def test_all_products_band_160_cold_proof_reaches_a_valid_layout(
     assert validate.certify(placement, spec, expect_power=True).ok
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_plan_strips_batches_all_exact_preclearance_relations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -19142,6 +19616,7 @@ def test_plan_strips_batches_all_exact_preclearance_relations(
     )
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_batched_relation_anchor_collection_cancels_without_caching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -19193,6 +19668,7 @@ def test_batched_relation_anchor_collection_cancels_without_caching(
     assert not freeform._STAGED_STATIC_RELATION_RISK_CACHE
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_staged_static_preclearance_cancels_inside_cold_proof_without_caching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -24036,12 +24512,14 @@ def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
 
     "no pack was ever produced" reads as a statement about the packing, and on
     the user's compressed-mall URL it was read that way: at 33 strips every one
-    of the fifteen candidate solves returned UNKNOWN inside the fixed
-    ``_DETERMINISTIC_PACK_WORK`` allowance, the sweep exhausted its candidates
-    in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and none of that
-    was in the sentence.  INFEASIBLE would have been a verdict; UNKNOWN is a
-    clock, and a refusal that cannot tell them apart sends the next reader to
-    the packer's model instead of to its work bound.
+    of the fifteen candidate solves returned UNKNOWN inside the
+    ``_deterministic_pack_work`` allowance that pack was given -- then a fixed
+    0.02 units for every size, the value ``_deterministic_pack_work`` still
+    gives at the calibrated fifteen-strip size -- the sweep exhausted its
+    candidates in 1.4s and refused with 28.6s of a 30s ceiling unspent -- and
+    none of that was in the sentence.  INFEASIBLE would have been a verdict;
+    UNKNOWN is a clock, and a refusal that cannot tell them apart sends the
+    next reader to the packer's model instead of to its work bound.
     """
 
     def unknown_every_solve(
@@ -24163,10 +24641,18 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
     `(125, 160, 100, 80, 60)`, with height 160's greedy seed 258 wide, dying at
     the pre-pack seed gate while `_minimum_pack_width` (92) let it through.
     Task 2's strip re-seating (77898a9) changed this cell to 57 strips: its
-    tallest candidate height is now 161, not 160, and that height's real greedy
-    seed is 139 wide, not 258 -- well under the ~200 width where
-    `envelope.frame_candidates` starts refusing height 161 (measured directly:
-    empty at width 200, non-empty at width 150).  A corpus-wide scan (every
+    tallest candidate height was then 161, not 160.  THE DRAIN-ROW TASK (spec
+    §9 R2) MOVES IT AGAIN, and only the height keyed below moves: this cell is
+    69 strips now, up from 57, because a flanked strip whose drain has moved out
+    past sorter reach is CAPPED AT ONE MACHINE -- `_flank_lane`'s gap belt would
+    otherwise cross the south input lanes -- so the one flanked Matrix Lab
+    family became 15 one-machine strips of 6x12 where it was 3 of 30x8.  It
+    schedules `(166, 130, 104, 83, 62)` unmodified and
+    `(130, 104, 83, 154, 62)` with the seed widened, so the tallest height is
+    166 and the boundary height it yields to is still 154.  That height's real
+    greedy seed is 138 wide, not 258 -- well under the ~200 width where
+    `envelope.frame_candidates` starts refusing the tallest height (measured
+    directly at 161: empty at width 200, non-empty at width 150).  A corpus-wide scan (every
     ``URL_CORPUS`` entry, every ``CandidatePolicy``, 36 buildable candidates)
     found the fix changes `_band_policy_candidate_heights`'s output for NONE
     of them post-Task-2: this specific defect no longer reproduces live
@@ -24178,7 +24664,7 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
     height whose seed narrowed under Task 2, holding every other height's real,
     unmodified seed.  That is the minimal patch that makes the historical defect
     observable again: with only `_minimum_pack_width` (64) as witness, height
-    161 survives; with `max(_minimum_pack_width, realised_width)` (258) it dies
+    166 survives; with `max(_minimum_pack_width, realised_width)` (258) it dies
     at `frame_candidates` and boundary height 154 takes its slot -- R1's §2/§3
     mechanism, on real strips, with one real historical number substituted for
     a value the corpus no longer produces.
@@ -24198,9 +24684,9 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
 
     real_greedy_pack = freeform._greedy_pack
 
-    def widened_seed_at_161(strips_: list[Strip], height: int) -> freeform._Pack:
+    def widened_seed_at_the_tallest(strips_: list[Strip], height: int) -> freeform._Pack:
         pack = real_greedy_pack(strips_, height)
-        if height != 161:
+        if height != 166:
             return pack
         box_rights = {
             index: pack.at[index][0] - strip.west_channel + _box(strip)[0]
@@ -24217,11 +24703,11 @@ def test_the_schedule_replaces_the_over_band_height_with_the_boundary(
         at[rightmost] = (x + added_width, y)
         return replace(pack, at=at, width=pack.width + added_width)
 
-    monkeypatch.setattr(freeform, "_greedy_pack", widened_seed_at_161)
+    monkeypatch.setattr(freeform, "_greedy_pack", widened_seed_at_the_tallest)
 
     heights = freeform._band_policy_candidate_heights(strips, BandPolicy("portable"))
 
-    assert 161 not in heights
+    assert 166 not in heights
     assert 154 in heights
 
 
@@ -25264,6 +25750,7 @@ def test_self_consuming_requested_output_routes_from_late_tail() -> None:
     assert late[0].source.belt == tail_index
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_broke7_boundary_access_rematches_equal_box_pair() -> None:
     spec, strips, formerly_refusing, swapped = _broke7_fixture()
     assert formerly_refusing.width == swapped.width
@@ -25287,6 +25774,7 @@ def test_broke7_boundary_access_rematches_equal_box_pair() -> None:
     )
 
 
+@pytest.mark.usefixtures("off_arm")
 @pytest.mark.parametrize(("height", "width", "origins", "routes"), _BROKE7_RECORDED_PACKS)
 def test_broke7_recorded_pack_outcomes_after_boundary_role_repair(
     height: int,

@@ -35,7 +35,15 @@ _CARDINAL_YAWS = (0.0, 90.0, 180.0, 270.0)
 
 
 class CargoDomain(Enum):
-    """Treatment identity that must remain disjoint while cargo is routed."""
+    """Treatment identity that must remain disjoint while cargo is routed.
+
+    STAYS under a node arm, and is load-bearing there rather than vestigial: it
+    is what types the coater node's two ports, so a producer net into the
+    node's IN-PORT and the node's OUT-PORT net to the consumer lane head are
+    both well-typed and a net that mixed the two would be refused.
+    ``freeform._Net.__post_init__`` raises "net ports must share one cargo
+    domain" on exactly that.
+    """
 
     UNSPRAYED = "unsprayed"
     REQUIRES_SPRAY = "requires-spray"
@@ -57,6 +65,11 @@ class _LogicalStripPlan:
     in_below: tuple[tuple[str, ...], ...]
     mode_params: tuple[int, ...] = ()
     flank_outputs: bool = False
+    #: The flanked output's drain lane sits on the OUTERMOST south row, past
+    #: sorter reach, because `in_below` filled every reachable one.  Derived in
+    #: `_logical_strip_plans` as `flank and len(in_below) == below_cap`; see
+    #: `freeform.Strip.drain_outermost` for why a drain may have that row.
+    drain_outermost: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +481,10 @@ class StripFamily:
     #: Emitted through east-side gap belts by legacy Freeform. East-face
     #: attachments are not yet representable as cardinal lane variants.
     flank_outputs: bool = False
+    #: Carried from `_LogicalStripPlan.drain_outermost` onto every `Strip` this
+    #: family realizes: the flanked drain row moved out past sorter reach so an
+    #: input lane could have the row it was holding.
+    drain_outermost: bool = False
     #: Machines per strip so that no lane this family owns exceeds the
     #: effective lane capacity (multiple-belts design, section 4.1).  0 means
     #: uncapped, which is what every hand-built family gets; the planner's
@@ -805,8 +822,12 @@ def _input_stack(items: tuple[str, ...], spec: BuildSpec | None) -> int:
     """
     if spec is None:
         return 1
-    # `default` guards a lane with no items: `LogicalLane` rejects one, but
-    # `input_lane_fits` is handed candidate lanes before any lane exists.
+    # `default` is now unreachable and is left as a total-function guard rather
+    # than a live case.  It existed for `input_lane_fits`, which was handed
+    # candidate lanes before any lane existed and could therefore be handed an
+    # empty one; spec §9 R8 deleted that caller, and every surviving caller
+    # passes a `LogicalLane`'s items, which `__post_init__` forbids from being
+    # empty.  `min()` of an empty sequence raises, so the default stays.
     return min((spec.planning_stack(item) for item in items), default=1)
 
 
@@ -1161,13 +1182,16 @@ def _seat_both_fed_outermost(
 
     The two sides count rows in OPPOSITE directions -- `Strip.row_of_input`
     returns `in_above.index(lane)` for an `in_above` lane and
-    `first_row_below_band + len(out_lanes) + in_below.index(lane)` for an
+    `first_row_below_band + _south_input_offset + in_below.index(lane)` for an
     `in_below` one -- so north wants the both-fed lane FIRST and south wants it
-    LAST.
+    LAST.  The offset is `len(out_lanes)` normally and 0 once a flanked drain
+    has moved out past sorter reach, which changes which ROW the last south lane
+    lands on but never which lane is last.
 
     Defaults make direct helper calls unconstrained.  Production supplies the
     exact caps and face-column count used by `_seat_inputs`, including the one
-    south output row and column where applicable.
+    south output row and column where applicable -- and a FLANKED output is the
+    exception to both: it costs the south face no column and no reachable row.
     """
     if not both_fed:
         return in_above, in_below
@@ -1202,7 +1226,24 @@ def _seat_both_fed_outermost(
     face_columns = total_items + (1 if n_sinks and not flank_outputs else 0)
     if columns is not None:
         face_columns = columns
-    south_output_rows = 1 if n_sinks else 0
+    # A flanked output charges the south side NEITHER a reachable row nor a
+    # column: its drain carries no sorter and may sit past `below_cap`, which is
+    # the third copy of that charge and the one that would otherwise reject the
+    # wider seating `_seat_inputs` just produced.
+    #
+    # THIS DOES WIDEN WHAT `fits` ACCEPTS, and an earlier version of this
+    # comment claimed the opposite.  `fits` is only ever consulted on the
+    # cross-side candidates below -- the early return above takes every case
+    # that does not move a lane between sides -- and those candidates change
+    # `len(candidate_below)` by one.  With the output's row charge waived, a
+    # candidate whose south side then holds exactly `below_cap` lanes is
+    # accepted where it used to be rejected, so the per-side split this returns
+    # can differ from the one `_seat_inputs` handed in, and that can turn
+    # `drain_outermost` on.  What still holds is the part that matters: `fits`
+    # goes on charging every INPUT lane its row and its column, so no input can
+    # be moved past `below_cap` or past the face's poses.  Only the output's
+    # row and column charge is waived, and only when it leaves east.
+    south_output_rows = 1 if n_sinks and not flank_outputs else 0
     south_output_columns = 1 if n_sinks and not flank_outputs else 0
 
     def fits(
@@ -1249,11 +1290,7 @@ def _seat_both_fed_outermost(
     raise ValueError("two both-fed lanes cannot be placed on opposite outer rows within the caps")
 
 
-def _logical_strip_plans(
-    spec: BuildSpec,
-    *,
-    prefer_shared_proliferation: bool = False,
-) -> tuple[_LogicalStripPlan, ...]:
+def _logical_strip_plans(spec: BuildSpec) -> tuple[_LogicalStripPlan, ...]:
     """Allocate lane shards, admitting exact two-face output overflow.
 
     The historical planner budgets outputs only on the face below the machine
@@ -1355,24 +1392,20 @@ def _logical_strip_plans(
             if boundary or not destinations:
                 sinks.append((item, "", CargoDomain.UNSPRAYED))
 
-        prefer_shared_inputs = (
-            prefer_shared_proliferation and group.proliferated and len(input_items) >= 3
-        )
-        group_input_rates = tuple(group.inputs.items())
-
-        def input_lane_fits(
-            lane: tuple[str, ...],
-            input_rates: tuple[tuple[str, Fraction], ...] = group_input_rates,
-            machine_count: int = group.count,
-        ) -> bool:
-            total = sum(
-                (rate * machine_count for item, rate in input_rates if item in lane),
-                spec.lane_capacity * 0,
-            )
-            # One belt, one cargo size: a shared lane is judged at the smallest
-            # stack any of its items was planned at (`_input_stack`).
-            return total <= spec.lane_capacity * _input_stack(lane, spec)
-
+        # `_seat_inputs` used to take a per-lane rate predicate here
+        # (`input_lane_fits`: does the sum of this lane's items fit one belt at
+        # the smallest stack any of them was planned at?).  It existed for
+        # SHARED lanes, which spec §9 R1 has now banned outright, and it is gone
+        # with them.  It is not repurposable as a check on single-item lanes: it
+        # summed `group.count` machines, the WHOLE group across every strip,
+        # whereas a lane only ever serves one strip and `_machine_cap` below
+        # already caps a strip at `capacity // rate` machines.  Measured
+        # 2026-09-07 by keeping it: 28 failures in this file's own suite alone,
+        # all 28 a lane refused on the whole group's rate -- 24 quoting
+        # "1 ingredients cannot be seated", two "3" and one "7", and one
+        # surfacing as a regex mismatch whose actual message says the same
+        # thing.  Spec §9 R8 lists them; the evidence capture is at
+        # docs/superpowers/evidence/2026-09-06-selfloop/task5/.
         probe = slots.probe_building(group.item_id, group.yaw)
         columns = len(slots.attachable_columns(probe, -1)) or 1
 
@@ -1444,10 +1477,7 @@ def _logical_strip_plans(
                 len(sinks),
                 above_cap,
                 below_cap,
-                max_per_lane=group.width,
                 columns=columns,
-                prefer_shared=prefer_shared_inputs,
-                lane_fits=input_lane_fits if prefer_shared_inputs else None,
                 seating_fits=seating_servable,
             )
         except ValueError as exc:
@@ -1460,11 +1490,8 @@ def _logical_strip_plans(
                     len(sinks),
                     above_cap,
                     below_cap,
-                    max_per_lane=group.width,
                     columns=columns,
                     flank_outputs=True,
-                    prefer_shared=prefer_shared_inputs,
-                    lane_fits=input_lane_fits if prefer_shared_inputs else None,
                     seating_fits=lambda above, below: seating_servable(
                         above, below, flank_outputs=True
                     ),
@@ -1500,10 +1527,23 @@ def _logical_strip_plans(
         except ValueError as exc:
             raise ValueError(f"recipe {group.recipe_id!r}: {exc}") from None
 
+        # THE FLANKED DRAIN'S ROW IS NOT ONE OF THE `below_cap` REACHABLE ONES
+        # once the inputs have taken them all.  `below_cap - len(in_below)` is
+        # how many reachable rows are left, and on a Matrix Lab seating six
+        # single-item lanes that is exactly 0 -- which `_shard_sinks` reads as
+        # "no room left on the south side for any output lane" and refuses.  A
+        # flanked output has room whatever the inputs did: it carries no sorter,
+        # so it takes the row PAST reach (spec §9 R2, `Strip.drain_outermost`).
+        # One lane, because one east gap belt per machine drains into one belt.
+        drain_outermost = _drain_moves_outermost(flank, in_below, below_cap)
         south_columns = len(slots.attachable_columns(probe, group.pitch_h))
         out_capacity = below_cap - len(in_below)
         if flank:
-            out_capacity = min(out_capacity, 1)
+            # `min(out_capacity, 1)` used to say this, and said 0 as soon as the
+            # inputs took every reachable row.  Flanking happens only for a
+            # single sink, so the honest answer is the constant: one drain lane,
+            # on a row the reach caps do not ration.
+            out_capacity = 1
         elif south_columns:
             out_capacity = min(
                 out_capacity,
@@ -1634,9 +1674,34 @@ def _logical_strip_plans(
                     in_below=in_below,
                     mode_params=group.mode_params,
                     flank_outputs=flank,
+                    drain_outermost=drain_outermost,
                 )
             )
     return tuple(plans)
+
+
+def _drain_moves_outermost(
+    flank: bool,
+    in_below: tuple[tuple[str, ...], ...],
+    below_cap: int,
+) -> bool:
+    """Must a flanked output's drain lane take the row past sorter reach?
+
+    Only when the south INPUT lanes have taken every sorter-reachable row on
+    that side, which is what `len(in_below) == below_cap` says (spec §9 R2).
+
+    `below_cap > 0` IS PART OF THE QUESTION, not a defensive extra.  A side with
+    no reachable row at all also satisfies `0 == 0`, and 22 (building, yaw)
+    pairs in the catalog have a zero side cap -- an Oil Refinery at yaw 0, a
+    Battlefield Analysis Base at yaw 0 and a Vertical Launching Silo at 180 have
+    `below_cap == 0` AND a flankable east face.  There the drain has not been
+    pushed anywhere: `in_below` is empty, the gap belt crosses nothing, and the
+    row map is the pre-2026-09-07 one.  Saying True there would move the drain
+    for no reason, make `Strip.drain_outermost`'s own doc-comment false, and
+    charge the family the one-machine cap for nothing.  No corpus plan reaches
+    that shape today; the guard is here so the flag means what it says.
+    """
+    return flank and below_cap > 0 and len(in_below) == below_cap
 
 
 def _legacy_side_lane_caps(item_id: int, yaw: float, band_rows: int) -> tuple[int, int]:
@@ -1954,11 +2019,17 @@ def _machine_cap(group: _Group, spec: BuildSpec) -> int:
     is the floor of capacity over the largest per-machine single-item rate.
     A machine whose one rate exceeds the capacity cannot be served by any
     strip length; that is refused here, early and with the numbers, instead
-    of late by ``flow.belt_capacity``. This cap is computed per single item, so
-    a merged lane carrying several items at once can still exceed capacity
-    even when every one of those items is individually under the cap --
-    ``flow.belt_capacity`` at validation is the backstop for that case. A
-    group with neither inputs nor outputs returns 0 (uncapped).
+    of late by ``flow.belt_capacity``. A group with neither inputs nor outputs
+    returns 0 (uncapped).
+
+    THIS IS THE RATE GATE, and since spec §9 R1 it is the whole of it.  The cap
+    is computed per single item, and the docstring used to name the one case
+    that left uncovered: "a merged lane carrying several items at once can still
+    exceed capacity even when every one of those items is individually under the
+    cap", with ``flow.belt_capacity`` at validation as the backstop.  No input
+    lane carries several items any more, so that gap is closed by construction
+    rather than by a second check -- §9 R8 records why the seating-time
+    predicate that used to sit beside this one was deleted instead of kept.
     """
     cap: int | None = None
     for item, rate in (*group.inputs.items(), *group.outputs.items()):
@@ -1979,23 +2050,14 @@ def _machine_cap(group: _Group, spec: BuildSpec) -> int:
     return max(1, cap) if cap is not None else 0
 
 
-def generate_strip_families(
-    spec: BuildSpec,
-    *,
-    prefer_shared_proliferation: bool = False,
-) -> tuple[StripFamily, ...]:
+def generate_strip_families(spec: BuildSpec) -> tuple[StripFamily, ...]:
     """Generate deterministic pose-valid variants for every logical lane shard."""
     from flab2bp.layout.freeform import _adapt
 
     groups = _adapt(spec)
     families: list[StripFamily] = []
     try:
-        plans = tuple(
-            _logical_strip_plans(
-                spec,
-                prefer_shared_proliferation=prefer_shared_proliferation,
-            )
-        )
+        plans = tuple(_logical_strip_plans(spec))
     except (ValueError, KeyError) as exc:
         # `_logical_strip_plans` and `_merge_lanes` speak ValueError to each
         # other; every caller of this function -- both strategies, the race
@@ -2052,6 +2114,29 @@ def generate_strip_families(
                     break
         unique = {candidate.variant_id: candidate for candidate in generated}
         variants = tuple(sorted(unique.values(), key=lambda candidate: candidate.sort_key))
+        # ONE MACHINE PER STRIP ONCE THE DRAIN HAS MOVED, and the reason is the
+        # belt column rather than any rate: `freeform._flank_lane` runs each
+        # machine's gap belt down the column immediately EAST OF ITS OWN
+        # MACHINE (`m.x + pw - 1`), from that machine's east pose south to the
+        # output lane.  While the drain sat innermost that column crossed
+        # nothing.  With the drain outermost it has to cross every south INPUT
+        # lane, and those lanes run the full width of the strip -- measured, the
+        # emitted blueprint is convicted by `geom.belt_single_occupancy`, three
+        # cells in one column, one per south lane.
+        #
+        # An input lane stops at its own last attachment,
+        # `(machines - 1) * pw + last_column + 1`, so only the LAST machine's
+        # gap column is clear of it; solving `gx_k < that` puts every earlier
+        # machine inside a lane.  There is no middle cap: it is one machine or a
+        # collision.  Mirroring the drain to the north gives the same picture,
+        # and elevating the crossing does not fit `RAMP_TILES_PER_LEVEL`.
+        #
+        # Gated on `drain_outermost`, so this reaches exactly the flanked plans
+        # that needed the freed row -- in this corpus, `universe-matrix#37` and
+        # nothing else.  Its cost is recorded in spec §9 R2 rather than hidden:
+        # 15 one-machine strips fan out further than the `antimatter` producer's
+        # lane can tap, so that block REFUSES.  The next lever is the producer
+        # lane, which is a bus/junction problem and not this module's.
         families.append(
             StripFamily(
                 family_id=family_id,
@@ -2065,7 +2150,10 @@ def generate_strip_families(
                 variants=variants,
                 mode_params=plan.mode_params,
                 flank_outputs=plan.flank_outputs,
-                machine_cap=_machine_cap(groups[plan.group_key], spec),
+                drain_outermost=plan.drain_outermost,
+                machine_cap=(
+                    1 if plan.drain_outermost else _machine_cap(groups[plan.group_key], spec)
+                ),
             )
         )
     return tuple(families)

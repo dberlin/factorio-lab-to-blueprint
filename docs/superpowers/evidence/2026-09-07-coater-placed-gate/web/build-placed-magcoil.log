@@ -1,0 +1,21 @@
+# NOTE (2026-09-07, task 6 fix round 1): the "arm=off" line below is a stale
+# probe label, not the actual arm. This build ran from the coater-placed
+# branch checkout with FLAB2BP_COATER_NODE unset, which under this branch's
+# env-var contract means PLACED. probe_cell.py defaulted an unset env var
+# to the string 'off' directly instead of asking coater_mode(); fixed at
+# the source in probe_cell.py (docs/superpowers/evidence/2026-09-07-exp-
+# coater-node/probes/probe_cell.py). Annotated in place rather than
+# re-run: freeform's CP-SAT search is not reproducible across runs at
+# workers>1, so re-running would produce a different digest/positions and
+# invalidate the run-boundaries.txt / icon-counts.txt / screenshot evidence
+# already measured against this exact blueprint. The arm really is
+# "placed" -- confirmed by area=336 and coater_merges=0 matching the
+# gate's own placed-arm figures for this cell, and by digest 1968e4eaec6fda33
+# being the file this task's other measurements (run-boundaries.txt,
+# icon-counts.txt) were taken from.
+arm=off cell=magnetic-coil/all-products strategy=freeform
+wall=2.7s buildings=155 coaters=4 belts=134 coater_merges=0
+area=336.0 belt_tiles=134
+  WARNING belt.termination: belt run 2 (head building 17 at (8,17), carrying 'magnetic-coil') runs 6 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 10 (head building 147 at (0,17), carrying 'proliferator-3') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=1968e4eaec6fda33

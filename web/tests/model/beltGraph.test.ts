@@ -7,6 +7,8 @@ import {
   buildBeltRuns,
   computeBeltHeadings,
   inferCarried,
+  isBelt,
+  runIndexForBelt,
 } from '../../src/model/beltGraph';
 import { buildCatalog } from '../../src/model/catalog';
 
@@ -203,6 +205,111 @@ test('real fixture: 12-s-purple splits at its merge point', () => {
   const runs = buildBeltRuns(parsed);
   expect(runs.length).toBe(23);
   expect(runs.reduce((n, r) => n + r.belts.length, 0)).toBe(2640);
+});
+
+/**
+ * Task 6 (coater-placed plan): the `placed` arm's coater node is a
+ * free-standing four-tile belt run n0->n1->n2->n3, with the Spray Coater
+ * addon (item 2313) riding n2 -- the third tile -- at the SAME (x, y, z) as
+ * that belt (`seat_x = ox + 1 + half_span` in
+ * `src/flab2bp/layout/freeform.py`'s `_coater_node_site_is_clear`, half_span
+ * 1 for the coater's 3-tile footprint). n0 is the in-port every producer net
+ * and merge sinks into, so its LOCAL inbound count can be 1 (single
+ * producer) or >= 2 (a genuine many-to-one merge) -- `buildBeltRuns`
+ * segments by exactly that count, starting a new run at any belt whose
+ * inbound is not exactly 1.
+ *
+ * Finds n0..n3 for a coater by walking the blueprint's own belt link graph
+ * (not by geometry alone), and reports which `buildBeltRuns` run each tile
+ * landed in. Measured on two saved evidence blueprints
+ * (`docs/superpowers/evidence/2026-09-07-coater-placed-gate/web/`,
+ * `placed` arm, `FLAB2BP_COATER_NODE` unset): 39 coaters total, one of which
+ * (`magnetic-coil`/`all-products` reported-URL fixture, coater at (5,7,0))
+ * has n0 inbound == 2, a real merge. In every one of the 39, n0..n3 landed
+ * in exactly one run -- `buildBeltRuns` stopping "before" a merge point
+ * only cuts what comes BEFORE n0, never inside the node itself, because n1,
+ * n2 and n3 always have inbound exactly 1 by construction (a straight
+ * belt-to-belt chain). See task-6-report.md for the full measurement.
+ */
+function coaterNodeTiles(
+  bp: Blueprint,
+): { coaterIndex: number; n0: number; n1: number; n2: number; n3: number }[] {
+  const next = beltSuccessors(bp);
+  const byPos = new Map<string, BlueprintBuilding>();
+  for (const b of bp.buildings) if (isBelt(b.itemId)) byPos.set(`${b.x},${b.y},${b.z}`, b);
+  const prevOf = (index: number): BlueprintBuilding | undefined =>
+    bp.buildings.find((b) => isBelt(b.itemId) && next.get(b.index) === index);
+
+  const nodes: { coaterIndex: number; n0: number; n1: number; n2: number; n3: number }[] = [];
+  for (const c of bp.buildings) {
+    if (c.itemId !== 2313) continue; // Spray Coater
+    const n2 = byPos.get(`${c.x},${c.y},${c.z}`);
+    if (!n2) continue;
+    const n1 = prevOf(n2.index);
+    const n0 = n1 ? prevOf(n1.index) : undefined;
+    const n3Idx = next.get(n2.index);
+    if (n1 === undefined || n0 === undefined || n3Idx === undefined) continue;
+    nodes.push({ coaterIndex: c.index, n0: n0.index, n1: n1.index, n2: n2.index, n3: n3Idx });
+  }
+  return nodes;
+}
+
+test('coater node: n0..n3 land in exactly one run, merge or not (magnetic-coil, no merges)', () => {
+  const parsed = parseBlueprint(readFileSync('tests/fixtures/coater-node-magcoil.txt', 'utf8'));
+  const runs = buildBeltRuns(parsed);
+  const inbound = new Map<number, number>();
+  for (const target of beltSuccessors(parsed).values())
+    inbound.set(target, (inbound.get(target) ?? 0) + 1);
+  const nodes = coaterNodeTiles(parsed);
+
+  expect(nodes.length).toBe(4); // this fixture has 4 coaters, per the evidence log
+  for (const n of nodes) {
+    expect(inbound.get(n.n0) ?? 0).toBe(1); // this fixture has no merges under any coater
+    const runOf = (i: number) => runIndexForBelt(i, runs);
+    const r0 = runOf(n.n0);
+    expect(r0).not.toBeNull();
+    expect(runOf(n.n1)).toBe(r0);
+    expect(runOf(n.n2)).toBe(r0);
+    expect(runOf(n.n3)).toBe(r0);
+  }
+});
+
+test('coater node: a genuine merge at n0 still keeps n0..n3 in one run, and freeInput stays false', () => {
+  const parsed = parseBlueprint(
+    readFileSync('tests/fixtures/coater-node-reported-all-products.txt', 'utf8'),
+  );
+  const runs = buildBeltRuns(parsed);
+  const inbound = new Map<number, number>();
+  for (const target of beltSuccessors(parsed).values())
+    inbound.set(target, (inbound.get(target) ?? 0) + 1);
+  const nodes = coaterNodeTiles(parsed);
+
+  expect(nodes.length).toBe(35); // this fixture has 35 coaters, per the evidence log
+
+  const merged = nodes.filter((n) => (inbound.get(n.n0) ?? 0) >= 2);
+  // At least one coater in this fixture rides a genuine many-to-one merge at
+  // n0 -- the case the run-segmentation rule is meant to be tested against.
+  expect(merged.length).toBeGreaterThan(0);
+
+  for (const n of nodes) {
+    const runOf = (i: number) => runIndexForBelt(i, runs);
+    const r0 = runOf(n.n0);
+    expect(r0).not.toBeNull();
+    // n0..n3 are always one run, whether n0's own inbound is 1 (n0 continues
+    // the upstream producer's run) or >= 2 (n0 starts its own run, which
+    // still carries n1, n2, n3 forward with it -- a merge only ever cuts
+    // what comes BEFORE n0).
+    expect(runOf(n.n1)).toBe(r0);
+    expect(runOf(n.n2)).toBe(r0);
+    expect(runOf(n.n3)).toBe(r0);
+    // freeInput requires inbound(head) === 0; n0's inbound is always >= 1 by
+    // construction (something always feeds the node), so the run's own head
+    // (n0 itself, when n0 starts the run) is never flagged as a free input
+    // -- the endpoint-icon flood the brief's failure mode describes does not
+    // arise structurally for this node.
+    const run = runs[r0 as number];
+    if (run?.belts[0] === n.n0) expect(run.freeInput).toBe(false);
+  }
 });
 
 const testCatalog = buildCatalog({

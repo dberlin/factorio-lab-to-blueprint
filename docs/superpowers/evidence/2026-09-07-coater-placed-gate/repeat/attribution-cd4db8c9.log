@@ -1,0 +1,15 @@
+# Attribution probe: branch HEAD ff0d3d2c with cd4db8c9's sequence_solver.py hunks REVERTED
+# (the two west_channel lifts for sprayed strips restored), everything else unchanged.
+# worktree: /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/coater-placed-nolift  HEAD: ff0d3d2cc79d5c45c1b5e91b40c37d94dfe0c5e3  dirty: sequence_solver.py only
+### nolift run1 2026-09-07T09:36:59-04:00
+wall=22.9s buildings=4228 coaters=35 belts=3959 coater_merges=0
+area=5325.0 belt_tiles=3959
+digest=572d4d69d4a6ea35
+### nolift run2 2026-09-07T09:37:28-04:00
+wall=21.6s buildings=4228 coaters=35 belts=3959 coater_merges=0
+area=5325.0 belt_tiles=3959
+digest=572d4d69d4a6ea35
+### nolift run3 2026-09-07T09:37:52-04:00
+wall=21.0s buildings=4228 coaters=35 belts=3959 coater_merges=0
+area=5325.0 belt_tiles=3959
+digest=572d4d69d4a6ea35

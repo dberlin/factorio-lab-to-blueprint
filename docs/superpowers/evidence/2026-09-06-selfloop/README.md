@@ -481,3 +481,159 @@ exists except the start-up obligation itself. There is nothing to copy from a
 The design and the plan that follow are
 `docs/superpowers/specs/2026-09-06-self-loop-recipes-design.md` and
 `docs/superpowers/plans/2026-09-06-self-loop-recipes.md`.
+
+---
+
+## Gate result
+
+Task 10, run 2026-09-07. Branch `selfloop` @ `3780840ca3985ac5299dfba0cacf305cb2f2a6f4`
+against master `0d88d247a5916b341926a6cf043536fcf2412d24`. Artefacts and the
+long-form table are in `gate/`; `gate/verdict.md` is the full write-up.
+
+CPU pressure below is the five-second mean of runnable processes
+(`vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}'`) — **not** load
+average, which on this box is mostly I/O wait (128 cores; below 64 is fine).
+
+| step | verdict |
+|---|---|
+| 1 — reported AMM URL | **PASS** (check 3 vacuous, see below) |
+| 1a — `universe-matrix` CLEAN with six single-item lanes | **FAIL** (expected, ruling T3-B) |
+| 2 — `reforming-refine` self-loop seed | **PASS** |
+| 4 — candidate corpus round | ran: 72/72 cells, 66 CLEAN, 6 REFUSED, 0 INVALID |
+| 5 — `audit_compare` | **FAIL** (verbatim below) |
+
+### Step 1 — the four checks
+
+Build: `uv run flab2bp "<AMM-URL>" --budget 30 -v`, exit **0**, wall **2:31.21**,
+CPU **345 %**, `cpu_pressure` **6.4** before / **5.4** after.
+
+1. `errors 0` for the winning cell — **PASS**: `no-proliferator sequence-pair 2760 0`.
+2. No `SHARED-INPUT-RUN` in `gate/decode-amm-after.txt` — **PASS**, count **0**
+   (master's blueprint at the same commit has **2**).
+3. No `MERGE POINT` on a coater body, one RUN per addon area 1 — **PASS but
+   VACUOUS**: count **0**, because the winning `no-proliferator` candidate places
+   **zero Spray Coaters**. Master's blueprint has **3** merge points near
+   coaters, one (`belt#0 (53,20,0)`) on coater#768's body. The new check does
+   bite upstream: three of the four refused strategy/candidate pairs name
+   `prolif.coater_rides_one_run` in their refusal text.
+4. The CLI prime line — **PASS**, verbatim:
+   `prime once (self-loop): hydrogen 8 items onto the marked belt at (23,19) -- x-ray-cracking consumes what it produces, so the block will not start until the loop has items in it`
+
+Cost on the reported URL, measured against master at the baseline commit
+(`gate/build-amm-master.log`, wall 2:18.73, `cpu_pressure` 8.8 / 11): master
+built **6 of 6** strategy/candidate pairs with `errors 0` and won at 2652 tiles;
+the branch builds **2 of 6** and wins at **2760 tiles (+4.07 %)**.
+
+### Step 1a — `universe-matrix` — FAIL
+
+Build exit **3**, wall **0:14.46**, CPU **1392 %**, `cpu_pressure` **6** before /
+**6.6** after. No blueprint was produced, so checks 2 and 3 have no artefact to
+run on. Refusal verbatim:
+
+```
+a producer lane has fewer tiles than the consumers it must tap, so two junctions would have
+to share one tile. antimatter: mass-energy-storage#23 lane is 10 tile(s) wide but must tap
+15 consumer lane(s) of universe-matrix#37
+```
+
+(`no-proliferator` needs 15; `all-products` and `output-products` need 12.)
+
+The seating half of ruling R2 *did* work — `gate/probe_flanked_rows.py` plans the
+strips directly and every flanked strip on the branch comes back as:
+
+```
+universe-matrix#37 machines=1 box_height=12 width=6 drain_outermost=True
+  in_above 3 lane(s): [['antimatter'], ['electromagnetic-matrix'], ['energy-matrix']]
+  in_below 3 lane(s): [['gravity-matrix'], ['information-matrix'], ['structure-matrix']]
+  out_lanes 1
+```
+
+Six distinct single-item lanes, exactly as R2 predicted. The block still refuses,
+downstream, because capping a moved-drain flanked strip at one machine turns
+`universe-matrix#37` into 12–15 strips and a 10-tile producer lane cannot fan out
+that far. **Next lever: the producer-lane fan-out** — a bus/junction problem,
+out of this plan's scope (spec §9 R2). No exemption was reinstated and nothing
+was tuned to recover the cell.
+
+### Step 2 — PASS
+
+`uv run pytest tests/rates/test_candidates.py -k reforming_refine_self_loop_seeds -q`
+→ exit **0** (pytest prints no summary line on this box). `cpu_pressure` **23.4**
+before / **10.4** after. The test asserts `net_per_craft == 1`,
+`seed_items == machines * 2` (machines 20) and `"refined-oil" not in
+spec.external_inputs`. Hydrogen *is* external here and correctly so — for
+`reforming-refine` the looped item is `refined-oil` (ruling T7-A).
+
+### Steps 4 and 5 — the paired corpus round
+
+Baseline 3:19.27 wall, `cpu_pressure` 6.4 / 6.6, 72/72 CLEAN.
+Candidate 2:57.95 wall, `cpu_pressure` 7.4 / 5.2, 66/72 CLEAN. Both cython.
+
+`audit_compare` verdict line, verbatim as measured:
+
+```
+clean 66  refused 6  invalid 0  crashed 0  paired 66  area ratio 1.0022  p95 31.1s
+```
+
+then six `FAIL REFUSED:` lines (all `universe-matrix`), `FAIL p95 wall 31.1s
+exceeds 30.0s`, and `FAIL`. `--regressions-only` names the same six cells and
+nothing else.
+
+| axis | freeform | sequence-pair |
+|---|---|---|
+| CLEAN / REFUSED / INVALID, baseline | 36 / 0 / 0 | 36 / 0 / 0 |
+| CLEAN / REFUSED / INVALID, candidate | 33 / 3 / 0 | 33 / 3 / 0 |
+| CLEAN → not CLEAN | `universe-matrix/{no-proliferator, all-products, output-products}` | same three |
+| not CLEAN → CLEAN | none | none |
+| geomean area ratio, cells CLEAN in both (n=33) | **1.005848** (+0.585 %) | **0.998654** (−0.135 %) |
+| `detailed_route_time_s` p50 / p95 | 0.145 / 5.018 → 0.130 / 5.194 | 0.874 / 3.294 → 0.874 / 3.161 |
+| `global_route_time_s` p50 / p95 | **not exposed for this arm** | 0.226 / 5.404 → 0.208 / 4.996 |
+| wall seconds p50 / p95 | 5.468 / 28.767 → 5.053 / 27.638 | 29.729 / 31.323 → 29.977 / 31.241 |
+| rip-up rounds (`stats.repair_iterations`) p50 / p95 | 1.0 / 3.0 → 1.0 / 2.4 | 1.0 / 1.4 → 1.0 / 2.0 |
+| specs whose strip count grew | **0 of 33** | **0 of 33** |
+
+Six paired cells moved in area at all (five freeform up, one sequence-pair down;
+biggest `information-matrix/all-products` 4760 → 5159). **None is a lane-seating
+change**: `gate/probe_strip_rows.py` plans every stress-corpus spec on both trees
+and `universe-matrix` is the ONLY spec whose strip plan differs in any of strips,
+flanked strips, total `box_height`, tallest `box_height`, input lanes or mixed
+lanes. Corpus-wide mixed input lanes at plan time: **master 14 → branch 0**.
+
+### The drain-row move, separate from the un-mixing
+
+`universe-matrix#37` is the only flanked plan in the corpus, and it refuses, so
+the audit cannot show its rows. Measured from `plan_strips` on both trees:
+
+| | master | branch |
+|---|---|---|
+| `in_above` / `in_below` | 1 lane of 3 items / 1 lane of 3 items | 3 lanes of 1 item / 3 lanes of 1 item |
+| `box_height` | **8** (1 + 5 band + 1 out + 1) | **12** (3 + 5 + 1 + 3) |
+| machines per flanked strip | 5 or 6 | 1 |
+| flanked strips (no-prolif / all / output) | 3 / 2 / 2 | 15 / 12 / 12 |
+| spec strips (no-prolif / all / output) | 57 / 46 / 53 | 69 / 56 / 63 |
+
+**+4 rows, split 1 / 3, measured by counterfactual** — `probe_flanked_rows.py`
+runs `_seat_inputs` on the six ingredients at the measured caps
+`_side_lane_caps(2901, 0.0, 5) == (3, 3)`:
+
+* with the drain **outermost** (`below_cap=3`): six single-item lanes, 0 mixed;
+* with the drain **innermost** (`below_cap=2`, master's rationing, since
+  `out_capacity = below_cap - len(in_below)`): **REFUSES** — five lanes for six
+  items.
+
+So **+1 row is the drain move's own** (the third south row it returns to the
+inputs, without which the seating refuses) and **+3 are the un-mixing** (two
+above, one below). Reported separately, not netted, and not reported as +1.
+**Cells that gained a strip ROW in the audit: 0 in both arms** — only because the
+one spec affected refuses before it produces an area.
+
+### Reading
+
+Coverage 72/72 → 66/72, six cells lost, all `universe-matrix`, all REFUSED
+rather than INVALID; zero cells gained. Density flat on paired cells, and the
+corpus measurement says none of that movement is this branch's doing. Route time
+no worse in any percentile. The rule did not pay for itself in coverage and did
+not cost measurable route time; on the reported URL it removed both reported
+defects from the shipped blueprint at the cost of four candidate/strategy pairs
+and +4.07 % area on the winner. **The ruling stands whatever the area number
+says (§9 R1); the numbers are above.**

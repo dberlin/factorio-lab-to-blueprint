@@ -31,6 +31,25 @@ from tests.layout.hierarchy.conftest import chain_build_spec
 TwoSolvedBlocks = tuple[Placement, Placement, list[LaneFlow], BuildSpec, bool]
 
 
+@pytest.fixture
+def off_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``FLAB2BP_COATER_NODE=off``, the retained pre-2026-09-07 arm.
+
+    See the fixture of the same name in ``tests/layout/test_freeform.py``.  A
+    coater riding the consumer strip's widened west channel (``off``) is a
+    different placement from ``placed``'s free-standing four-tile node beside
+    the lane, so this test's recorded geometry is an ``off``-arm fact -- it is
+    pinned, not re-recorded, per the checklist below.  (Not the body-level
+    belt ban: ``ed3c1eb2`` retired that on measurement -- 0 of 60 body cells
+    were free at ban time, 60 of 60 already carried a committed belt, so it
+    was proved unable to fire.)
+
+    Deleting this fixture? See the retirement checklist, §14 of
+    ``docs/superpowers/evidence/2026-09-07-coater-placed-gate/README.md``.
+    """
+    monkeypatch.setenv("FLAB2BP_COATER_NODE", "off")
+
+
 def test_pack_blocks_keeps_a_two_tile_gap_and_prefers_a_band_legal_shape():
     sizes = [(40, 30), (40, 30), (40, 30), (40, 30)]
     offsets, width, height = compose.pack_blocks(sizes, gap=2)
@@ -134,6 +153,7 @@ def _mixed_block(*, coater_seats: tuple[int, ...]) -> MixedBlock:
     return MixedBlock(buildings, sorter, splitter, machine, coaters, drops)
 
 
+@pytest.mark.usefixtures("off_arm")
 def test_canvas_for_registers_each_building_kind_the_way_freeform_does():
     """Kind by kind, because the differences are what the game enforces.
 

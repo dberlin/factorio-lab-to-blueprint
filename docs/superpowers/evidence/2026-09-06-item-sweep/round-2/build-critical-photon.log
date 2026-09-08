@@ -1,0 +1,16 @@
+freeform / no-proliferator: 2 machines, 207 tiles, 31 buildings
+primary_band: 32
+certified_bands: 32, 40, 60
+inputs to belt in: none  (0 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-1 (6.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; no run needed more than the floor; stack 1; 0 piler(s)
+
+candidate           strategy      area  errors
+no-proliferator     freeform       207       0
+no-proliferator     sequence-pair     207       0
+all-products        freeform       207       0
+all-products        sequence-pair     207       0
+output-products     freeform       207       0
+output-products     sequence-pair     207       0
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/item-sweep/docs/superpowers/evidence/2026-09-06-item-sweep/round-2/bp-critical-photon.txt

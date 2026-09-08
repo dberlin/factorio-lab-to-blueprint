@@ -1,0 +1,24 @@
+
+=== universe-matrix / no-proliferator ===
+OFFENDS antimatter: mass-energy-storage#23 -> universe-matrix#37 (1 src lane(s), 15 sink lane(s), narrowest src 10 tiles)
+  producer group: strips=1 machines=1 pw=10 widths=[10] tail_extension=0 TOTAL TILE BUDGET=10
+  per-strip out_lanes=[2] flank_outputs=[False] drain_outermost=[False]
+  sharding counterfactual (n = producer strips for this item):
+    n=1   machines/strip=1   width=10   taps/lane=15  still short
+  tiles needed on the existing lane: 15; have 10; SHORTFALL 5
+
+=== universe-matrix / all-products ===
+OFFENDS antimatter: mass-energy-storage#23 -> universe-matrix#37 (1 src lane(s), 12 sink lane(s), narrowest src 10 tiles)
+  producer group: strips=1 machines=1 pw=10 widths=[10] tail_extension=0 TOTAL TILE BUDGET=10
+  per-strip out_lanes=[3] flank_outputs=[False] drain_outermost=[False]
+  sharding counterfactual (n = producer strips for this item):
+    n=1   machines/strip=1   width=10   taps/lane=12  still short
+  tiles needed on the existing lane: 12; have 10; SHORTFALL 2
+
+=== universe-matrix / output-products ===
+OFFENDS antimatter: mass-energy-storage#23 -> universe-matrix#37 (1 src lane(s), 12 sink lane(s), narrowest src 10 tiles)
+  producer group: strips=1 machines=1 pw=10 widths=[10] tail_extension=0 TOTAL TILE BUDGET=10
+  per-strip out_lanes=[2] flank_outputs=[False] drain_outermost=[False]
+  sharding counterfactual (n = producer strips for this item):
+    n=1   machines/strip=1   width=10   taps/lane=12  still short
+  tiles needed on the existing lane: 12; have 10; SHORTFALL 2

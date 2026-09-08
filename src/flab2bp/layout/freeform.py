@@ -63,7 +63,9 @@ from __future__ import annotations
 import hashlib
 import heapq
 import math
+import os
 import statistics
+import sys
 import time
 from array import array
 from bisect import bisect_left, bisect_right
@@ -104,6 +106,7 @@ from flab2bp.layout.base import (
     ProjectionFailureRecord,
 )
 from flab2bp.layout.belt_tiers import retier_belts
+from flab2bp.layout.coater_mode import coater_mode
 from flab2bp.layout.finalize import ProjectionNoGood
 from flab2bp.layout.observe import SearchEvent, SearchObserver, SearchPhase, stranded_endpoints
 from flab2bp.layout.piling import LaneLoad, MergePlan, PilerPlan, plan_merges
@@ -359,7 +362,21 @@ _RELATION_STRIP_PAIR = 2
 #: routing failed exact validation.  0.02 deterministic units reaches the same
 #: routable incumbent well inside its 0.6s wall allowance; 0.005 stopped before
 #: that incumbent existed.  The wall limit remains armed as the hard deadline.
-_DETERMINISTIC_PACK_WORK = 0.02
+#:
+#: IT SCALES WITH THE PACK, and the fixed constant was a defect.  0.02 was
+#: calibrated on fifteen strips and was handed unchanged to a 53-strip
+#: `universe-matrix` pack, which returned UNKNOWN on all five solves and
+#: produced no incumbent at all -- giving up in 2.58s with 299s of a 300s
+#: budget unspent.  See docs/superpowers/specs/2026-09-07-lane-fanout-design.md
+#: section 4.1.
+_DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE = 0.02
+
+
+def _deterministic_pack_work(strip_count: int) -> float:
+    """Deterministic CP-SAT units a pack of ``strip_count`` strips may spend."""
+    scale = max(1, strip_count) / _DETERMINISTIC_PACK_STRIPS
+    return _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE * scale
+
 
 #: Deterministic work allowed only for choosing among already rank-optimal port
 #: access assignments. The ranked solution remains the safe fallback; this
@@ -944,6 +961,43 @@ class Strip:
     #: when this is set, and the extra column is the belt's.  Clearance is what
     #: the collider needs, so a belt inside it would paste as a collision.
     flank_outputs: bool = False
+    #: Has the flanked output's drain lane been pushed to the OUTERMOST south
+    #: row, past sorter reach, because the south INPUT lanes filled every
+    #: sorter-reachable row?
+    #:
+    #: True moves the drain to ``first_row_below_band + len(in_below)`` and
+    #: starts the south inputs at offset 0; False keeps the pre-2026-09-07 map
+    #: exactly -- drain innermost, inputs pushed out by ``len(out_lanes)``.
+    #:
+    #: The drain may have that row because it carries NO SORTER: ``_flank_lane``
+    #: puts the only sorter on the machine's east face and runs a gap belt south
+    #: into the lane.  ``_side_lane_caps`` counts a CONTIGUOUS run outward from
+    #: the band, so the row past ``below_cap`` has no ``attachable_columns`` at
+    #: all -- fine for a drain, useless to an input.  ``sorter_span`` therefore
+    #: returns 0 for it BY DESIGN, and ``_machines_without_poses`` already skips
+    #: flanked strips.
+    #:
+    #: Derived once, in ``_logical_strip_plans``, by
+    #: ``strip_variants._drain_moves_outermost``: flanked, ``below_cap > 0``,
+    #: and ``len(in_below) == below_cap``.  A spec that never needed the freed
+    #: row keeps today's seating and today's area, which is the user's ruling in
+    #: spec §9 R2.  A side with NO reachable row is not "filled" -- ``0 == 0``
+    #: would say it was, and there is nothing to push the drain past.
+    #:
+    #: IT ALSO CAPS THE FAMILY AT ONE MACHINE PER STRIP, in
+    #: ``generate_strip_families``, and the reason is a belt column rather than
+    #: a rate: ``_flank_lane``'s gap belt runs down the column east of its OWN
+    #: machine, so with the drain outermost it crosses every south input lane
+    #: and ``geom.belt_single_occupancy`` convicts the result.  Only the last
+    #: machine in a strip has a clear gap column.  That cap turns
+    #: ``universe-matrix#37`` into 15 one-machine strips.  It used
+    #: to refuse there, on ``_fanout_shortfall``'s theory that each consumer taps
+    #: a different TILE of the producer lane; that theory was measured wrong --
+    #: nets sharing a source lane branch off each other's committed paths
+    #: (``_route``'s ``same_src``), and a 10-tile lane wired all twelve of its
+    #: consumers.  See ``docs/superpowers/specs/2026-09-07-lane-fanout-design.md``
+    #: section 2, and section 4 for the two blockers behind it.
+    drain_outermost: bool = False
     family_id: StripFamilyId | None = None
     machine_start: int = 0
     west_channel: int = WEST_CHANNEL
@@ -1006,6 +1060,19 @@ class Strip:
     def first_row_below_band(self) -> int:
         """Row index of the first lane under the machine band."""
         return self.machine_row + self.band_rows
+
+    @property
+    def _south_input_offset(self) -> int:
+        """Rows between the band and the first south INPUT lane.
+
+        The output lanes sit between the two unless :attr:`drain_outermost` has
+        moved the flanked drain past them, in which case the inputs start
+        against the band and the drain takes the row after the last of them.
+        The two halves of that swap are here and in :meth:`row_of_output`, and
+        they must move together or a sorter is drawn to a row the belt is not
+        on.
+        """
+        return 0 if self.drain_outermost else len(self.out_lanes)
 
     def sorter_span(self, row: int) -> int:
         """Tiles a sorter crosses between lane ``row`` and the machine it serves.
@@ -1121,7 +1188,7 @@ class Strip:
             side_index = index
         else:
             index = self.in_below.index(lane)
-            row = self.first_row_below_band + len(self.out_lanes) + index
+            row = self.first_row_below_band + self._south_input_offset + index
             side = "north"
             side_index = len(self.out_lanes) + index
         offset = self.column_offset(lane)
@@ -1178,7 +1245,7 @@ class Strip:
             lane = self.lane_of_input(item)
             if lane in self.in_above:
                 return self.in_above.index(lane)
-            return self.first_row_below_band + len(self.out_lanes) + self.in_below.index(lane)
+            return self.first_row_below_band + self._south_input_offset + self.in_below.index(lane)
         return self.machine_row + self._input_attachment_plan(item).lane_y
 
     def row_of_output(self, k: int) -> int:
@@ -1194,7 +1261,12 @@ class Strip:
         if planned is not None:
             return self.machine_row + planned.lane_y
         if self.flank_outputs or self.takes_belt_ports:
-            return self.first_row_below_band + k
+            # `drain_outermost` is set only on a FLANKED strip, so a belt-port
+            # host keeps `first_row_below_band + k` whatever its lane counts:
+            # its dock run is drawn from the machine's own port and does not get
+            # to sit past a sorter's reach.
+            drain_offset = len(self.in_below) if self.drain_outermost else 0
+            return self.first_row_below_band + drain_offset + k
         return self.machine_row + self._output_attachment_plan(k).lane_y
 
     def input_lane_tiles(self, lane: tuple[str, ...]) -> int:
@@ -1314,6 +1386,9 @@ _UNREAD_BY_STAGED_CLEARANCE: frozenset[str] = frozenset(
         "port_dock_plan",
         "mode_params",
         "flank_outputs",
+        # Read only by the row map's FLANKED branch, and a flanked strip has no
+        # `physical_variant` -- the gate above returns before any key is built.
+        "drain_outermost",
         "family_id",
         "machine_start",
         "tail_extension",
@@ -1329,6 +1404,16 @@ def _staged_static_clearance_keys(
 
     Memoized on :data:`_STAGED_CLEARANCE_KEYS_MEMO`.
     """
+    if coater_mode().is_node:
+        # No addon rides this strip's channel under a node arm, so there is no
+        # machine/Coater relation for the channel to clear.
+        #
+        # This empty return is also what keeps `_COATER_WEST_CHANNEL` and the
+        # freeform channel lift below INERT under `placed` without a further
+        # guard: the lift maxes over these relations and there are none.  Both
+        # stay, because `off` is the retained A/B control for one release and
+        # is the only arm that reaches them.
+        return frozenset()
     if strip.cargo_domain is not CargoDomain.REQUIRES_SPRAY or strip.physical_variant is None:
         return frozenset()
     if not strip.in_lanes or strip.machines <= 0:
@@ -2070,9 +2155,18 @@ def _check_shared_lane_capacity(
 ) -> None:
     """A shared lane must carry the SUM of its items within the belt tier.
 
+    PERMANENTLY INERT SINCE SPEC §9 R1, and left in place deliberately.  Its
+    body is ``if len(lane) < 2: continue`` and no lane reaches it with two items
+    any more, so it never rejects anything and never will while the ban holds.
+    That is not a bug to fix by deleting it: it is the check a later ruling
+    readmitting a shared lane would need on day one, and removing it is not the
+    mixing ban's call to make.  Read it as a dormant guard, not a live one --
+    the same status as ``StripVariant.attachment_plan``'s per-item column
+    assignment, which is dormant for the same reason.
+
     Only shared lanes are checked.  A single-item lane is left exactly as it
-    was, so this cannot reject a spec that already worked -- mixing is the new
-    thing, so mixing is what gets the new constraint.
+    was, so this cannot reject a spec that already worked -- mixing was the new
+    thing, so mixing is what got the new constraint.
 
     ``stack`` is the LANE's, taken from the ``LogicalLane`` the family already
     planned rather than re-derived here: one belt has one cargo size, and the
@@ -2183,25 +2277,45 @@ def _seat_inputs(
     n_sinks: int,
     above_cap: int,
     below_cap: int,
-    max_per_lane: int,
     columns: int,
     *,
     flank_outputs: bool = False,
-    prefer_shared: bool = False,
-    lane_fits: Callable[[tuple[str, ...]], bool] | None = None,
     seating_fits: Callable[[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]], bool]
     | None = None,
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]]:
     """Seat ingredients into lanes above and below the machine band.
 
-    Tries one item per lane first by default, preserving ordinary layouts.
-    ``prefer_shared`` reverses that order for proliferation lanes whose caller
-    supplies an exact throughput predicate: fewer lanes then mean fewer Coaters
-    and avoid an unroutable wall of adjacent supply terminals.
+    ONE ITEM PER LANE, or no seating at all.  Spec §9 R1 bans a mixed input
+    lane absolutely -- not chosen and not forced -- because nothing controls the
+    interleaving on a belt carrying two items into a machine: whichever item the
+    machines are not short of fills the belt and the others back up, and the
+    machines starve.  The user reported exactly that build.
 
-    Mixing is capped at ``max_per_lane`` -- the machine's width -- because two
-    sorters serving one machine from one lane cannot share an anchor, so each
-    item on a shared lane needs its own column across that width.
+    So this searches ONE split, not a ladder.  It used to try one item per lane
+    first and then climb -- two to a lane, then three, up to a ``max_per_lane``
+    cap -- and a ``prefer_shared`` flag reversed the climb for proliferated
+    groups to save Spray Coaters.  All of it is gone, the cap parameter with it:
+    a bound on how far mixing may go is machinery for a thing that may not
+    happen at all.  A seating that cannot fit one item per lane raises,
+    :func:`~flab2bp.layout.strip_variants._logical_strip_plans` turns that into
+    a refusal, and the audit says REFUSED, which is the truth.  The alternative
+    is worse and not cheaper: an emitted mixed lane is an ERROR under
+    ``flow.lane_single_item``, so the cell would come back INVALID having paid a
+    full routing pass to discover it.  Here the emitter really does agree with
+    the validator rather than race it, because a lane's items are settled at
+    seating time and nothing downstream adds one.
+
+    That is NOT true of the coater seat chooser this used to be compared to.
+    ``prolif.coater_rides_one_run`` has two clauses and :func:`_coater_seats`
+    enforces only the second; the first convicts a belt merge the ROUTER makes,
+    long after the seat is chosen, so no pre-routing filter can agree with it
+    (spec §9 R9).  Do not cite the coater path as the model for this one.
+
+    A ``lane_fits`` per-lane rate predicate went with them, and deliberately was
+    not kept as a seam for single-item lanes: it summed the WHOLE group's
+    throughput across every strip against one belt, while a lane serves one
+    strip, and :func:`~flab2bp.layout.strip_variants._machine_cap` is already the
+    single-item rate gate.  Spec §9 R8 records the measurement.
 
     ``above_cap`` and ``below_cap`` are THIS MACHINE's rows per side, from
     :func:`_side_lane_caps`, and they are not both ``SORTER_MAX_REACH``: a
@@ -2212,9 +2326,11 @@ def _seat_inputs(
     LANES, this counts SORTERS.  Every item on a side needs its own column,
     because a machine slot holds exactly one connection -- see
     :data:`~flab2bp.dsp.rules.CONN_SLOTS_PER_OBJECT` and
-    ``validate.game.slot_occupancy``.  Mixing two items onto one lane saves a
-    row and saves no column at all, so without this bound "mix harder" walks
-    straight past the real limit.
+    ``validate.game.slot_occupancy``.  Mixing two items onto one lane saved a
+    row and saved no column at all, which is why "mix harder" used to walk
+    straight past the real limit without this bound; with the ladder gone,
+    ``columns`` is simply what refuses a side carrying more ingredients than the
+    face has insert poses.
 
     It was missing, and what it cost was not hypothetical.  ``universe-matrix``
     takes six ingredients and produces one, and a Matrix Lab offers three
@@ -2226,12 +2342,26 @@ def _seat_inputs(
     left to surface downstream as an unfed machine.
 
     ``flank_outputs`` says the product leaves by the machines' EAST face, so the
-    output lane costs a ROW below the band and no COLUMN on it.  That is the one
-    degree of freedom that seats seven connections on a building that offers six
-    per pair of faces, and it is why ``universe-matrix`` seats at all: three
-    ingredients mixed onto one lane above, three onto one below, and the product
-    out east.  It changes only the column arithmetic here -- the rows, the reach
-    caps and the mixing ladder are the same for both.
+    output lane costs no COLUMN on the south face, and the ROW it costs need not
+    be one a sorter can reach.  That is the one degree of freedom that seats
+    seven connections on a building that offers six per pair of faces, and it is
+    why ``universe-matrix`` seats at all: a Matrix Lab carries all six
+    ingredients on six SINGLE-ITEM lanes, three above and three below, with the
+    product out east.
+
+    The drain row is where that sixth lane comes from.  A flanked output's lane
+    carries no sorter at all -- ``_flank_lane`` puts the only one on the east
+    face and runs a gap belt south into the lane -- so the drain can sit on the
+    row PAST ``below_cap``, which is the first row with no ``attachable_columns``
+    and therefore useless to an input.  ``below_cap`` still bounds the input
+    lanes above (an input lane may never sit past reach); only the output's
+    reservation is waived, and only when flanked.  Spec §9 R2 records the
+    ruling, and §9 R1 is why it had to be made: the seating this replaced put
+    three ingredients on one belt above and three on one below, and a belt
+    carrying two items into a machine starves it however the sorters filter.
+    That seating is not a fallback any more, it is unreachable -- the row had to
+    be freed or the Matrix Lab would refuse, because ``flow.lane_single_item``
+    convicts the mixed alternative and this function no longer offers it.
 
     ``seating_fits`` judges a whole candidate split rather than one lane: it is
     where the caller asks whether the ROWS this split implies can be served at
@@ -2245,23 +2375,26 @@ def _seat_inputs(
     Returns ``(above, below)``.  ``below`` shares the south side with the output
     lanes, so it is kept as small as possible.
     """
-    # The output lane still needs its ROW under the band even when flanked -- the
-    # gap belts drain into it -- so only the column charge goes away.
+    # The output lane still needs its ROW under the band even when flanked --
+    # the gap belts drain into it -- but that row need not be one a SORTER can
+    # reach, because the drain carries no sorter.  So the column charge goes
+    # away entirely and the row charge moves outward, past `below_cap`, where
+    # `Strip.row_of_output` seats it once `drain_outermost` says the inputs
+    # took every reachable row.
     out_columns = 0 if flank_outputs else (1 if n_sinks else 0)
     n = len(items)
     if n == 0:
         return (), ()
-    mix_sizes = (
-        range(max(1, max_per_lane), 0, -1) if prefer_shared else range(1, max(1, max_per_lane) + 1)
-    )
+    # One rung, and it is deliberately a one-element tuple rather than an
+    # inlined `k = 1`: the ladder is what spec §9 R1 removed, and leaving its
+    # shape visible says that the next rung is not missing, it is banned.
+    mix_sizes = (1,)
 
     def search(
         require_servable: bool,
     ) -> tuple[tuple[tuple[str, ...], ...], tuple[tuple[str, ...], ...]] | None:
         for k in mix_sizes:
             lanes = [tuple(items[i : i + k]) for i in range(0, n, k)]
-            if lane_fits is not None and any(not lane_fits(lane) for lane in lanes):
-                continue
             # The split point is searched rather than fixed at `above_cap`.
             # Filling the north side first was harmless while only ROWS were
             # rationed -- a full north side left the whole south side for the
@@ -2274,8 +2407,8 @@ def _seat_inputs(
             for a in range(min(len(lanes), above_cap), -1, -1):
                 above, below = tuple(lanes[:a]), tuple(lanes[a:])
                 if len(below) > below_cap:
-                    continue  # more lanes than that side can hold; mix harder
-                if n_sinks and below_cap - len(below) <= 0:
+                    continue  # more lanes than that side can hold; try the other split
+                if n_sinks and not flank_outputs and below_cap - len(below) <= 0:
                     continue  # no room left below for an output lane
                 if sum(len(lane) for lane in above) > columns:
                     continue  # more sorters than the north face has slots
@@ -2296,10 +2429,12 @@ def _seat_inputs(
     flanked = " with the product leaving east" if flank_outputs else ""
     raise ValueError(
         f"{n} ingredients cannot be seated{flanked}: {above_cap} lane(s) above "
-        f"and {below_cap} below carrying at most {max_per_lane} items each, over "
-        f"a face that offers {columns} insert pose(s) per side, leaves no room "
-        f"for {n} ingredient sorter(s) and the output lane. A machine slot holds "
-        f"one connection, so two sorters cannot share a column"
+        f"and {below_cap} below, each carrying ONE item, over a face that offers "
+        f"{columns} insert pose(s) per side, leaves no room for {n} ingredient "
+        f"sorter(s) and the output lane. A machine slot holds one connection, so "
+        f"two sorters cannot share a column, and spec §9 R1 forbids merging two "
+        f"items onto one belt to save a row -- nothing controls the interleaving "
+        f"and the machines starve"
     )
 
 
@@ -2536,7 +2671,10 @@ def plan_strips(
             for lane in sorted(family.output_lanes, key=lambda lane: lane.side_index)
         )
         group = groups[family.group_key]
-        needs_coater_keepout = any(
+        # EXPERIMENT: a node arm takes the coater OFF this strip's channel, so
+        # the strip stops paying `_COATER_WEST_CHANNEL` for it.  That is the
+        # trade the measurement is about: the node buys its own ground back.
+        needs_coater_keepout = (not coater_mode().is_node) and any(
             lane.cargo_domain is CargoDomain.REQUIRES_SPRAY for lane in family.input_lanes
         )
         realized: tuple[tuple[int, int, StripVariant | None], ...]
@@ -2651,6 +2789,7 @@ def plan_strips(
                 physical_variant=physical_variant,
                 mode_params=family.mode_params,
                 flank_outputs=family.flank_outputs,
+                drain_outermost=family.drain_outermost,
                 family_id=family.family_id,
                 machine_start=machine_start,
                 west_channel=west_channel,
@@ -2967,6 +3106,10 @@ _UNREAD_BY_DIRECT_GEOMETRY: frozenset[str] = frozenset(
         "model_index",
         "mw",
         "mh",
+        # `drain_outermost` moves rows only on a FLANKED strip, and a flanked
+        # strip has no `physical_variant`, so `_direct_geometry_key` returns
+        # `None` for it and no two strips this memo keys can disagree about it.
+        "drain_outermost",
         "box_height",
         "physical_variant",
         "port_dock_plan",
@@ -3184,6 +3327,10 @@ _UNREAD_BY_DIRECT_CANDIDATE: frozenset[str] = frozenset(
         "model_index",
         "mw",
         "mh",
+        # Same argument as in :data:`_UNREAD_BY_DIRECT_GEOMETRY`: the pair key
+        # inherits that key's `None` gate, so a flanked strip -- the only kind
+        # whose drain row can move -- never reaches this memo.
+        "drain_outermost",
         "box_height",
         "mode_params",
         "family_id",
@@ -3904,7 +4051,10 @@ def _staged_static_clearance_requirement(
 
 
 def _nets_between(strips: list[Strip]) -> list[tuple[int, int]]:
-    """Strip index pairs that will need a belt route."""
+    """Strip index pairs that will need a belt route.
+
+    The pairs come off ``out_lanes`` -> destination group key.
+    """
     by_group: dict[str, list[int]] = defaultdict(list)
     for i, s in enumerate(strips):
         by_group[s.group_key].append(i)
@@ -4169,13 +4319,15 @@ def _feedback_objective_score(
 #: gets `share * _PACK_SHARE / len(heights)` and is followed by a 1.9-4.6 s
 #: preparation, so a repair that costs more than a second buys nothing.
 C_WINDOW_SECONDS = 1.0
-#: Deterministic work bound for a window solve.  A full pack of fifteen or more
-#: strips gets `_DETERMINISTIC_PACK_WORK` and is expected to stop at its first
-#: incumbent from a shelf warm start; a window has at most twelve free strips
-#: but no such guarantee, and is expected to close a small model, so it gets
-#: twenty-five times that allowance.  On an idle box this is the limit that
+#: Deterministic work bound for a window solve.  A full pack of fifteen or
+#: more strips gets `_deterministic_pack_work(len(strips))` and is expected
+#: to stop at its first incumbent from a shelf warm start; a window has at
+#: most twelve free strips but no such guarantee, and is expected to close a
+#: small model, so it gets this bound instead.  This constant is twenty-five
+#: times the *calibrated-size* allowance -- what a fifteen-strip pack gets --
+#: so larger packs narrow the ratio.  On an idle box this is the limit that
 #: fires; under `--jobs 16` the wall limit above fires first.
-C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK
+C_WINDOW_DETERMINISTIC_WORK = 25 * _DETERMINISTIC_PACK_WORK_AT_CALIBRATED_SIZE
 #: One CP-SAT worker per window.  `pyproject.toml` records that a single solve
 #: already runs at ~700% CPU; a window must not race the packer for cores.
 C_WINDOW_WORKERS = 1
@@ -5107,7 +5259,7 @@ def _pack(
         # above remains the hard deadline if the machine cannot finish it.
         solver.parameters.max_deterministic_time = min(
             time_budget_s,
-            _DETERMINISTIC_PACK_WORK,
+            _deterministic_pack_work(len(strips)),
         )
     # A FUNCTION of `arrangement`, never a clock or a counter: two runs of the
     # same sweep must ask for the same arrangements in the same order, or the
@@ -5232,6 +5384,12 @@ def _coater_keepout_hits(
     the machine and the paste reports ``Collide with other object``.  Reserve
     the one-cell lateral row around the coater's real oriented 3x1 body; do not
     inflate its long axis, where its predecessor and successor must stand.
+
+    STAYS under a node arm, and is asked TWICE: once from
+    :func:`_coater_node_site_is_clear`, to reject a site whose addon body would
+    clip a machine, and once from :func:`_place_coaters` on the seat it finally
+    commits.  A belt addon's collider reaches machines a belt does not, so
+    "these four tiles are free belt ground" is not the same question.
     """
     width, height = catalog.oriented_footprint(
         catalog.SPRAY_COATER_ID,
@@ -6071,8 +6229,8 @@ class _Port:
         """This port moved to the ``k``-th tile of its own lane.
 
         Out-of-range or an unknown tile list leaves the port alone, so a caller
-        that asks for more taps than the lane has tiles degrades to sharing --
-        which the fan-out check then reports honestly rather than mis-linking.
+        that asks for more taps than the lane has tiles degrades to sharing.
+        Test-only: no production caller (see tests/layout/test_freeform.py).
         """
         if not self.tiles or not 0 <= k < len(self.tiles):
             return self
@@ -6550,7 +6708,11 @@ def _emit_strip(
         # `WEST_CHANNEL` and `_pack` offsets every strip by it, so `ox - 1` is
         # this strip's channel column and belongs to nobody else.  The drop
         # cell is unchanged, still `(ox - 1, y)` one LEVEL up.
-        if need and s.cargo_domain is CargoDomain.REQUIRES_SPRAY:
+        # EXPERIMENT: under a node arm nothing rides this lane, so it is an
+        # ORDINARY lane geometrically -- no prepended head, no two-tile floor,
+        # no widened channel.  That is the point of the arm: normal collision
+        # rules seat the coater on its own object instead.
+        if need and s.cargo_domain is CargoDomain.REQUIRES_SPRAY and not coater_mode().is_node:
             need = min(max(need, 2), width)
             lane_starts_west.add(row)
         lane_tiles_of[row] = need
@@ -12434,10 +12596,11 @@ def _commit_paths(
     cells as goals; handing the answer to the linker is all this does.
 
     A belt tile has ONE ``output_obj``.  When a lane serves several consumers,
-    each of them taps a different tile of it (see ``_Port.at_tile``), and a tap
-    partway along a lane is a JUNCTION: the lane has to keep flowing east *and*
-    hand items to the branch.  ``_tap_source`` builds that as a splitter, which
-    is what the game uses and what the fixture corpus shows.
+    the later nets branch off a sibling's committed path (``_route``'s
+    ``same_src``) rather than off a further lane tile, and that branch point is
+    a JUNCTION: the lane has to keep flowing east *and* hand items to the
+    branch.  ``_tap_source`` builds that as a splitter, which is what the game
+    uses and what the fixture corpus shows.
 
     Before splitters existed, every such net rewrote the same lane-end tile and
     the last to commit won silently.  The earlier paths stayed on the grid as
@@ -13949,6 +14112,11 @@ class _Unseatable(NoValidLayout):
     it and tries the next, exactly as it does for :class:`_Unpowerable`; if no
     height can seat the coaters the spec is refused, which is the honest answer
     and not the quiet one.
+
+    STAYS under a node arm, and gains a NEW raise site: "no free ground for the
+    ... Spray Coater node near the lane head", when `_coater_node_site` finds
+    no clear 6x3 ring within its radius.  A pack that cannot site a node is not
+    a pack, for exactly the reason a pack that cannot seat a coater is not.
     """
 
     def __init__(
@@ -13968,6 +14136,10 @@ class _Unseatable(NoValidLayout):
                 f"{message}: band {failure.band} {failure.check} "
                 f"{failure.buildings}: {failure.detail}"
             )
+        if os.environ.get("FLAB2BP_COATER_TRACE"):
+            # EXPERIMENT: the sweep swallows this and reports only the check
+            # name, so an arm comparison cannot see WHICH lane refused or why.
+            print(f"UNSEATABLE {message}", file=sys.stderr, flush=True)
         super().__init__(message)
 
 
@@ -14902,7 +15074,13 @@ def _projected_coater_junction_bans_by_frame(
     splitter_index: int,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[frozenset[Cell], ...]:
-    """Exact Splitter bans retained separately for each finalizer frame."""
+    """Exact Splitter bans retained separately for each finalizer frame.
+
+    STAYS under a node arm.  Splitter-versus-coater clearance is a pack-level
+    fact about a COMMITTED coater, and `placed` commits coaters -- it moves
+    where they sit, not whether they exist.  Measured on the small proliferated
+    fixture: six calls under `placed`.
+    """
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
     min_x, min_y, max_x, max_y = junction_bounds
@@ -16397,6 +16575,27 @@ def _join_shard_islands(
     with remaining deficit.  Largest balances are paired first, with root order
     as the deterministic tie-breaker, so the repair buys no avoidable edge.
 
+    **Which LANE of the deficit island receives it is not free either.**  One
+    belt arrives at one lane, and a lane can take no more than its own
+    consumers draw, so each lane carries a residual credit and a transfer is
+    only ever credited up to it.  Sending the whole island deficit down
+    whichever lane happened to be least tapped is how
+    ``df-strange-annihilation-fuel-rod`` refused: copper-ingot's deficit island
+    drew 2/15 on one lane and 16/15 on the other against 1 item/s of its own,
+    the repair went to the 2/15 lane, and ``flow.conservation`` reported the
+    placement 1/15 short -- precisely the part of the 3/15 that lane could
+    never have accepted.  A deficit wider than any single lane buys a second
+    net rather than being declared repaired by the first, and a lane whose
+    shortfall is owed by two different surplus islands may be belted twice.
+
+    The least-tapped lane stays the target whenever it can hold the whole
+    transfer, and the hungriest is reached for only when spreading would
+    under-deliver.  The hungriest lane is by construction the most crowded --
+    :func:`_merge_lanes` packs the most destinations onto the lane with the most
+    draw, and each tap at a lane end is a side of a four-sided junction -- so
+    preferring it unconditionally would aim every repair at the junctions least
+    able to take one.
+
     ``pairs`` are belt indices ``(producer lane, consumer lane)`` already
     linked, ``supply``/``demand`` are items/second per lane, and ``external``
     is the one global rate the player belts in.  It may be allocated among all
@@ -16448,16 +16647,52 @@ def _join_shard_islands(
     surpluses = {r: value for r, value in balance.items() if value > 0}
 
     extra: list[tuple[int, int]] = []
+    # How much more each lane could still receive.  A belt delivers into the
+    # island through ONE lane, and that lane can never take more than its own
+    # consumers draw, so this is the bound on what any repair aimed there can
+    # carry.  It is a RESIDUAL rather than a one-shot flag: two surplus islands
+    # may each owe part of one lane's shortfall, and refusing the second belt
+    # would leave that deficit standing.
+    credit = dict(demand)
     while remaining_deficit > external and surpluses and deficits:
         source_root = min(surpluses, key=lambda r: (-surpluses[r], r))
         sink_root = min(deficits, key=lambda r: (-deficits[r], r))
+        takers = [belt for belt in sinks[sink_root] if credit[belt] > 0]
+        if not takers:
+            # Unreachable while any lane of a deficit island still draws --
+            # a deficit means demand exceeds supply, so some lane has credit.
+            # Kept as the loop's termination backstop, because a lane whose
+            # credit is spent must never be chosen again: the transfer would be
+            # zero and this would spin.
+            remaining_deficit -= deficits.pop(sink_root)
+            continue
+        want = min(surpluses[source_root], deficits[sink_root])
+        # The least-tapped lane is still the right target WHENEVER it can hold
+        # the whole transfer.  A producer lane end becomes a junction under
+        # `_tap_source` and a junction has four sides, and the hungriest lane is
+        # by construction the most crowded one -- `_merge_lanes` packs the most
+        # destinations onto the lane with the most draw -- so aiming every
+        # repair at it would crowd exactly the junctions least able to take it.
+        #
+        # Reach for the hungriest lane only when spreading would UNDER-DELIVER.
+        # That is what `df-strange-annihilation-fuel-rod` needed: copper-ingot's
+        # deficit island drew 2/15 on one lane and 16/15 on the other against
+        # 1 item/s of its own, the least-tapped rule sent the whole 3/15 down
+        # the 2/15 lane, and `flow.conservation` convicted the placement 1/15
+        # short -- precisely the part that lane could never have accepted.
+        able = [belt for belt in takers if credit[belt] >= want]
+        sink_belt = (
+            min(able, key=lambda belt: (taps[belt], belt))
+            if able
+            else min(takers, key=lambda belt: (-credit[belt], taps[belt], belt))
+        )
         source_belt = min(srcs[source_root], key=lambda belt: (taps[belt], belt))
-        sink_belt = min(sinks[sink_root], key=lambda belt: (taps[belt], belt))
         extra.append((source_belt, sink_belt))
         taps[source_belt] += 1
         taps[sink_belt] += 1
 
-        transferred = min(surpluses[source_root], deficits[sink_root])
+        transferred = min(want, credit[sink_belt])
+        credit[sink_belt] -= transferred
         surpluses[source_root] -= transferred
         deficits[sink_root] -= transferred
         remaining_deficit -= transferred
@@ -16826,6 +17061,69 @@ def _prepare_routing_problem(
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
+    # The Spray Coater as a real node (``FLAB2BP_COATER_NODE=placed``, the
+    # default; ``off`` is the one-release A/B control).
+    #
+    # One node per sprayed input lane -- a four-tile belt run with the addon on
+    # its third tile (see `_COATER_NODE_TILES`) -- emitted here and then seated
+    # by the ORDINARY `_place_coaters` machinery below, which is the whole
+    # reason the node is shaped like a lane: every keepout, projected-static,
+    # addon-supply and splitter check that governs a coater on a strip channel
+    # governs it here unchanged.
+    #
+    # Two rewirings make it a node rather than a decoration:
+    #
+    #   * every producer net and every external-input run that used to sink
+    #     into the CONSUMER lane's head now sinks into the node's IN-PORT --
+    #     which is where merges belong, and where they now land by
+    #     construction rather than by a seat-index argument;
+    #   * one new net carries the node's OUT-PORT to the consumer lane head,
+    #     which is an ordinary unsprayed lane geometrically: no widened
+    #     channel, no prepended head, no coater keep-out, no west-channel lift.
+    #
+    # `placed` searches free ground beside the lane head after the pack, so the
+    # packer is untouched and only the router sees the extra net.
+    coater_node_links: list[tuple[str, _Port, _Port]] = []
+    if coater_mode().is_node:
+        for strip_index, s in enumerate(strips):
+            if s.cargo_domain is not CargoDomain.REQUIRES_SPRAY:
+                continue
+            for item in dict.fromkeys(s.in_lanes):
+                consumer_port = strip_in_ports[strip_index].get(item)
+                if consumer_port is None:
+                    continue
+                site = _coater_node_site(canvas, (consumer_port.x, consumer_port.y))
+                if site is None:
+                    raise _Unseatable(
+                        f"no free ground for the {item} Spray Coater node near "
+                        f"the lane head at ({consumer_port.x}, {consumer_port.y})"
+                    )
+                node_in, node_out = _emit_coater_node(
+                    canvas,
+                    site[0],
+                    site[1],
+                    item=item,
+                    belt_id=belt_id,
+                    belt_model=belt_model,
+                    machines=consumer_port.machines,
+                    owner_strip=strip_index,
+                )
+                for belt in node_in.tiles:
+                    strip_of_belt[belt] = strip_index
+                # The node becomes the sink every producer and every external
+                # run aims at.  The consumer's own head keeps its role as the
+                # lane the sorters draw from, and is fed by the node.
+                strip_in_ports[strip_index][item] = node_in
+                for key, ports in list(in_ports.items()):
+                    if key[0] != s.group_key or key[1] != item:
+                        continue
+                    in_ports[key] = [
+                        node_in if port.belt == consumer_port.belt else port for port in ports
+                    ]
+                coater_node_links.append((item, node_out, consumer_port))
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+
     # Nets rewarded as direct inserts never silently fall back to an ordinary
     # route. The exact strip/item/domain promise is either emitted and recorded,
     # or retained below as STATIC_ACCESS evidence.
@@ -17011,6 +17309,19 @@ def _prepare_routing_problem(
                     cargo_domain=cargo_domain,
                 )
             )
+    # EXPERIMENT: the node's own out-net.  Appended AFTER `_join_shard_islands`
+    # so the island analysis keeps seeing the flow graph it was built for: the
+    # node is transparent to supply and demand, which are still credited to the
+    # in-port (it carries the consumer's `machines`) and the producer lanes.
+    for node_item, node_out, node_sink in coater_node_links:
+        nets.append(
+            _Net(
+                src=node_out,
+                dst=node_sink,
+                item=node_item,
+                cargo_domain=CargoDomain.REQUIRES_SPRAY,
+            )
+        )
     wanted, carried, shared_external_groups = _plan_shared_external_inputs(
         spec,
         strips,
@@ -18447,11 +18758,219 @@ def _bridge(
     return None
 
 
+#: Belt tiles one Spray Coater NODE occupies, west to east.
+#:
+#: ===== =========================================================
+#: index meaning
+#: ===== =========================================================
+#: 0     **item-in port** -- the router's sink, where every producer merge
+#:       lands, and the cell the proliferator APPROACH belt sits over at
+#:       level 1.  Deliberately west of the body: a merge under the body is
+#:       the defect the node exists to make impossible, and a router path
+#:       turning onto this tile is legal only because the addon does not
+#:       ride it (``game.addon_corner`` reads the ridden belt's two
+#:       neighbours, not the run).
+#: 1     a plain belt.  The proliferator DROP sits over it at level 1 --
+#:       ``slots.addon_supply_cell(..., area=1)`` at yaw 90 is one tile west
+#:       of the seat, one level up.
+#: 2     the SEAT.  The oriented 3x1 body covers tiles 1, 2 and 3.
+#: 3     **item-out port**, and the only tile the node's out-net leaves
+#:       from.  Its own successor is the route, which may turn: the ridden
+#:       belt is tile 2 and its outgoing step to tile 3 is on the axis.
+#: ===== =========================================================
+#:
+#: Four is the minimum that gives the ridden belt a straight predecessor AND a
+#: straight successor while keeping both ports off the body.  It is exactly
+#: today's ``_COATER_WEST_CHANNEL = 3`` channel plus the strip's own column 0,
+#: lifted out of the strip and made a free-standing object.
+_COATER_NODE_TILES = 4
+
+
+def _emit_coater_node(
+    canvas: _Canvas,
+    ox: int,
+    oy: int,
+    *,
+    item: str,
+    belt_id: int,
+    belt_model: int,
+    machines: int,
+    owner_strip: int | None,
+) -> tuple[_Port, _Port]:
+    """Lay one packed Spray Coater node's belt run and return its two ports.
+
+    The coater itself is NOT placed here: ``_place_coaters`` does that, from
+    the in-port, using exactly the seat search, keepout, projected-static,
+    addon-supply and splitter certification it already runs for a strip lane.
+    That is the point of the node being a four-tile lane -- every rule that
+    governs a coater on a strip's channel governs it here unchanged.
+    """
+    indices: list[int] = []
+    for k in range(_COATER_NODE_TILES):
+        indices.append(
+            canvas.add(
+                PlacedBuilding(
+                    item_id=belt_id,
+                    model_index=belt_model,
+                    x=ox + k,
+                    y=oy,
+                    width=1,
+                    height=1,
+                    yaw=Facing.EAST.value,
+                    carries_item=item,
+                    owner_strip=owner_strip,
+                )
+            )
+        )
+    for a, b in zip(indices, indices[1:], strict=False):
+        canvas.buildings[a] = _relink(canvas.buildings[a], output_obj=b)
+    tiles = tuple(indices)
+    x1 = ox + _COATER_NODE_TILES - 1
+    node_in = _Port(
+        indices[0],
+        ox,
+        oy,
+        ox,
+        x1,
+        tiles,
+        machines,
+        cargo_domain=CargoDomain.REQUIRES_SPRAY,
+    )
+    node_out = _Port(
+        indices[-1],
+        x1,
+        oy,
+        ox,
+        x1,
+        tiles,
+        machines,
+        cargo_domain=CargoDomain.REQUIRES_SPRAY,
+    )
+    return node_in, node_out
+
+
+def _coater_node_site_is_clear(canvas: _Canvas, ox: int, oy: int) -> bool:
+    """Can a four-tile node with its drop and approach stand at ``(ox, oy)``?
+
+    Ordinary collision rules and nothing else -- which is the user's whole
+    point about a packed object: the seat does not need a bespoke keep-out
+    zone if the object is a real object.  The coater's own body keepout is
+    still asked, because a belt addon's collider reaches machines a belt does
+    not.
+    """
+    # The SAME rectangle the packed arm gives CP-SAT: the four belt tiles with
+    # one free cell on every side.  That ring is what `_coater_keepout_hits`
+    # reserves, and -- measured -- it is also what keeps the node's belts far
+    # enough from a machine for the spherical projection not to convict them:
+    # without it `information-matrix/all-products` refused on `geom.collide`
+    # at bands 160 and 200 with the node belts sitting against a machine
+    # (evidence README section 5.2).  DO NOT NARROW THE RING: the first
+    # `placed` implementation demanded only the four belt tiles and the two
+    # level-1 cells, and that is the version those refusals came from.
+    for k in range(-1, _COATER_NODE_TILES + 1):
+        for dy in (-1, 0, 1):
+            if not canvas.free((ox + k, oy + dy, 0)):
+                return False
+    # Level 1 over tiles 0 and 1: the proliferator approach and drop.
+    if not canvas.free((ox, oy, 1)) or not canvas.free((ox + 1, oy, 1)):
+        return False
+    seat_x = ox + 1 + _coater_body_half_span(Facing.EAST.value)
+    probe = PlacedBuilding(
+        item_id=catalog.SPRAY_COATER_ID,
+        model_index=catalog.building(catalog.SPRAY_COATER_ID).model_index,
+        x=seat_x,
+        y=oy,
+        z=Fraction(0),
+        width=1,
+        height=1,
+        yaw=Facing.EAST.value,
+    )
+    return not _coater_keepout_hits(canvas.buildings, probe)
+
+
+def _coater_node_site(
+    canvas: _Canvas,
+    near: tuple[int, int],
+    *,
+    radius: int = 48,
+) -> tuple[int, int] | None:
+    """Free ground for one node, nearest the lane head it feeds.
+
+    Variant C's whole placement rule.  Candidates are ordered by Chebyshev
+    ring and, within a ring, by how far the node's OUT port ends up from the
+    lane head it must reach -- a node whose east end is beside its consumer is
+    a short net, and a short net is the only thing the router cares about
+    here.  West-of-and-level-with the head therefore wins whenever it is free,
+    which is the same cell today's inline coater already occupies.
+    """
+    hx, hy = near
+    best: tuple[int, int, int] | None = None
+    for ring in range(0, radius + 1):
+        found: list[tuple[int, int, int]] = []
+        if ring == 0:
+            offsets: Iterable[tuple[int, int]] = ((0, 0),)
+        else:
+            offsets = (
+                [(dx, -ring) for dx in range(-ring, ring + 1)]
+                + [(dx, ring) for dx in range(-ring, ring + 1)]
+                + [(-ring, dy) for dy in range(-ring + 1, ring)]
+                + [(ring, dy) for dy in range(-ring + 1, ring)]
+            )
+        for dx, dy in offsets:
+            # The node's east tile is the one that has to reach the head.
+            ox = hx + dx - _COATER_NODE_TILES
+            oy = hy + dy
+            if not _coater_node_site_is_clear(canvas, ox, oy):
+                continue
+            out_x = ox + _COATER_NODE_TILES - 1
+            cost = abs(out_x - hx) + abs(oy - hy)
+            found.append((cost, ox, oy))
+        if found:
+            best = min(found)
+            break
+    if best is None:
+        return None
+    return best[1], best[2]
+
+
+def _coater_body_half_span(yaw: float) -> int:
+    """Tiles the 1x3 body reaches either side of its seat ALONG the lane.
+
+    At yaw 90 the oriented footprint is ``(3, 1)`` and this is 1; at yaw 0 it is
+    ``(1, 3)`` and this is 0, correctly, because the body then does not extend
+    along an east-west lane at all.  Derived rather than written as ``1`` so the
+    seat rule below is exercised for both, and so a future rotated coater cannot
+    silently keep the old arithmetic.
+    """
+    return (catalog.oriented_footprint(catalog.SPRAY_COATER_ID, yaw)[0] - 1) // 2
+
+
+def _coater_seat_candidate_indices(
+    port: _Port, west_channel: int, *, start: int = 1
+) -> tuple[int, ...]:
+    """The straight interior tiles a coater could ride, BEFORE any predicate.
+
+    Split out of :func:`_coater_seats` so the refusal it feeds can tell the two
+    reasons for an empty seat list apart: a lane too short to hold a straight
+    seat at all (this returns nothing) versus a perfectly long lane every one of
+    whose candidates a predicate skipped (this returns tiles and
+    ``_coater_seats`` still returns none).  Duplicating the arithmetic at the
+    call site instead is how those two drift apart.
+
+    ``start`` is the first candidate index: 1 in production, ``1 + half_span``
+    under the ``FLAB2BP_COATER_NODE`` narrow-seat experiment (see
+    :func:`_coater_seats`).
+    """
+    stop = min(len(port.tiles) - 1, west_channel)
+    return tuple(port.tiles[start:stop])
+
+
 def _coater_seats(
     canvas: _Canvas,
     port: _Port,
     *,
     west_channel: int,
+    yaw: float = Facing.EAST.value,
 ) -> tuple[tuple[int, int], ...]:
     """Straight seats before the first possible machine pickup, in flow order.
 
@@ -18461,71 +18980,182 @@ def _coater_seats(
     take unsprayed cargo before it reaches the Coater.  Index zero is the routing
     turn and the last tile has no successor; only the bounded interior channel
     offsets between them are candidates.
+
+    Under a node arm the first candidate index is ``1 + half_span`` rather than
+    ``1``: index 0 is the lane HEAD, the one cell of the lane a router path can
+    reach and therefore the cell every many-to-one merge lands on, and a seat at
+    index ``half_span`` or less puts the 3x1 body over it.  That is the reported
+    defect (``belt#0 (53,20,0) pred=[817, 1872]`` on coater#771's body).  At
+    ``west_channel = 3`` this leaves exactly one candidate, ``ox - 1``; the
+    staged-static clearance lift to 4 leaves two.
+
+    **This is the path production seats coaters from** -- ``_place_coaters``
+    calls this, not :func:`_coater_seat` (spec section 9 R7: a predicate added
+    only to ``_coater_seat`` is dead code, since nothing in ``src/`` calls it).
+
+    **Only ONE of ``prolif.coater_rides_one_run``'s two clauses is actually
+    enforced here** (spec section 9 R9).  A candidate is skipped when it would
+    have an ambiguous addon-area-1 supply
+    (:func:`_coater_candidate_has_ambiguous_supply`, the validator's second
+    clause) -- and that predicate is STRICTER than the validator, so it can
+    only cost seats, never miss one.  :func:`_coater_candidate_rides_a_merge`,
+    the first clause, is called but **filters nothing**: ``_place_coaters``
+    runs BEFORE routing, and the merges that clause convicts are made by the
+    ROUTER afterwards.  At seat time no candidate body tile carries a belt with
+    two predecessors, so it returns ``False`` every time.  Filtering before
+    routing can never catch a merge routing has not created yet; the validator
+    stays the only thing that catches clause 1, and it catches it after a whole
+    build has been spent.  The next lever is named in section 9 R9.
+
+    ``_place_coaters`` treats an empty result exactly as it treats a lane with
+    no legal seat at all: an :class:`_Unseatable` refusal, never a silently
+    skipped coater.
+
+    Index zero is excluded for a second reason as well: the game reads BOTH
+    ends of the belt an addon rides and refuses the addon when either
+    disagrees with its axis, so a seat needs a lane tile either side of it.
+    See :func:`flab2bp.dsp.rules.addon_ride_is_straight`.
+
+    **Why the seat is upstream of every sorter.**  A coater sprays what passes
+    THROUGH it, so everything a machine takes has to reach the coater first.
+    An input lane is emitted west to east and linked the same way --
+    ``_emit_strip`` chains ``indices[k].output_obj = indices[k + 1]`` -- and
+    the feeding net sinks into ``lane_idx[row][0]``, which is why ``_Port.x``
+    is the lane's WEST end.  So an input lane flows west to east, its head is
+    ``port.x``, and every sorter on it draws from a tile at or after the head.
+    A seat after the first machine-facing tile would let that consumer take
+    unsprayed cargo, which is why ``stop`` is ``west_channel``.
+
+    **The measurement that made this rule.**  The seat used to be ``port.x1``,
+    the lane's east end, on the reasoning that it is nearest the east margin
+    the drop belt lived in.  That is the DOWNSTREAM end: the last belt of the
+    chain, with no ``output_obj`` and nothing after it.  Measured over five
+    clean proliferated freeform placements (``energy-matrix``, ``graphene``,
+    ``plastic``, ``processor``, ``magnetic-coil``), **all 12 coaters were the
+    last belt of their own chain and all 12 had zero pickups anywhere
+    downstream of them** -- every sorter on every sprayed lane drew from a tile
+    the cargo reached before the coater.  The spray was applied to cargo
+    dead-ended at the end of a belt.  Spine on the same five specs seats 0 of
+    12 at the tail.  So the blueprint pasted, the coaters were supplied,
+    ``prolif.coaters_are_supplied`` passed -- and not one proliferated recipe
+    would have run proliferated.  That is the failure this ordering prevents,
+    and it is the reason the rule is not a matter of taste.
     """
-    stop = min(len(port.tiles) - 1, west_channel)
-    return tuple(
-        (canvas.buildings[index].x, canvas.buildings[index].y) for index in port.tiles[1:stop]
+    start = 1 + _coater_body_half_span(yaw) if coater_mode().is_node else 1
+    seats: list[tuple[int, int]] = []
+    for index in _coater_seat_candidate_indices(port, west_channel, start=start):
+        x, y = canvas.buildings[index].x, canvas.buildings[index].y
+        if _coater_candidate_rides_a_merge(canvas, x, y, port.z):
+            continue
+        if _coater_candidate_has_ambiguous_supply(canvas, x, y, port.z):
+            continue
+        seats.append((x, y))
+    return tuple(seats)
+
+
+def _coater_candidate_rides_a_merge(canvas: _Canvas, x: int, y: int, z: int) -> bool:
+    """Would a coater seated at ``(x, y, z)`` ride a belt merge under its body?
+
+    Mirrors ``validate._coater_body_tiles`` and
+    ``validate._coater_belt_predecessor_counts``, for a coater not yet placed:
+    a belt on a tile the coater's ``Facing.EAST`` 1x3 body would cover is a
+    merge when two or more BELT buildings feed it via ``output_obj``.
+
+    **In production this returns ``False`` for every candidate, and therefore
+    filters nothing** (spec section 9 R9).  ``_place_coaters`` seats coaters
+    BEFORE routing -- it has to, because each coater needs a proliferator net
+    routed to its drop belt -- and a belt merge is something the ROUTER makes
+    afterwards.  At seat time no candidate's body tiles carry a belt with two
+    belt predecessors, so the ``any(...)`` below is never satisfied.  The
+    reported URL's decode shows it directly: the merge point is ``belt#0`` --
+    index 0, laid down with the strips -- and its two predecessors are ``817``
+    and ``1872``, neither of which existed when its seat was picked
+    (``evidence/2026-09-06-selfloop/gate/coater-amm-master.txt:12``).
+
+    It is kept, not deleted, because it is the honest statement of what clause
+    1 means and it costs one cheap scan; it would start biting the moment
+    seating moves after routing.  Do not read a passing candidate as evidence
+    that clause 1 holds.
+
+    Separately, and even if it did run late enough to bite, it is LOOSER than
+    ``prolif.coater_rides_one_run``'s first clause, by controller ruling (fix
+    round 1, task 2): that check also convicts a body spanning two DISTINCT
+    ``ctx.run_of`` values with no single merged tile among them, which needs
+    the validator's whole-graph run assignment.  The canvas has no such map at
+    seat-selection time, and building one here was ruled out rather than
+    invented for one candidate at a time.
+
+    The validator is the ONLY thing that enforces clause 1, and it does so
+    after a whole build has been spent.  The next lever -- enforcing it where
+    the merge is created -- is named in spec section 9 R9.
+    """
+    width, height = catalog.oriented_footprint(catalog.SPRAY_COATER_ID, Facing.EAST.value)
+    body_tiles = {
+        (x + dx, y + dy)
+        for dx in range(-(width // 2), width // 2 + 1)
+        for dy in range(-(height // 2), height // 2 + 1)
+    }
+    bs = canvas.buildings
+    predecessor_counts: dict[int, int] = defaultdict(int)
+    for b in bs:
+        if not catalog.is_belt(b.item_id):
+            continue
+        o = b.output_obj
+        if o is None or not 0 <= o < len(bs) or not catalog.is_belt(bs[o].item_id):
+            continue
+        predecessor_counts[o] += 1
+    return any(
+        catalog.is_belt(b.item_id) and b.z == z and (b.x, b.y) in body_tiles
+        for i, b in enumerate(bs)
+        if predecessor_counts.get(i, 0) >= 2
     )
 
 
-def _coater_seat(canvas: _Canvas, port: _Port) -> tuple[int, int] | None:
-    """The lane tile a Spray Coater rides: its SECOND, one east of the head.
+def _coater_candidate_has_ambiguous_supply(canvas: _Canvas, x: int, y: int, z: int) -> bool:
+    """Would a coater seated at ``(x, y, z)`` have >1 belt near its addon area 1?
 
-    THE SECOND TILE IS THE FIRST ONE WITH A LANE TILE ON BOTH SIDES, and that is
-    the whole of why it is not the first.  A sprayed lane is emitted starting one
-    column west of the strip (see ``_emit_strip``), so its head is the tile the
-    router sinks into and its second tile is column 0 of the strip -- upstream of
-    every sorter, exactly where the head used to be, and with a predecessor that
-    is a lane tile running east rather than whatever direction the router
-    happened to arrive from.
+    Mirrors ``validate._coater_supply_area_candidates`` for a coater not yet
+    placed: every belt within :data:`~flab2bp.dsp.rules.ADDON_AREA_RADIUS` of
+    the addon area 1 position, at ``Facing.EAST``.
 
-    The predecessor is the half that was missing.  The game reads BOTH ends of
-    the belt an addon rides -- ``GetBeltInputBeltPose`` and
-    ``GetBeltOutputBeltPose``, each tested against the addon's axis -- and
-    refuses the addon when either disagrees.  Six of the twenty coaters on the
-    blueprint the user pasted arrived from the south and left to the east on the
-    coater's own tile.  See :func:`flab2bp.dsp.rules.addon_ride_is_straight`.
-
-    ``None`` when the lane is too short to offer such a tile, which a caller
-    must treat as "no coater here" rather than seating one anyway.
-
-    **A coater sprays what passes THROUGH it, so everything a machine takes has
-    to reach the coater first.**  An input lane is emitted west to east and
-    linked the same way -- ``_emit_strip`` chains ``indices[k].output_obj =
-    indices[k + 1]`` -- and the feeding net sinks into ``lane_idx[row][0]``,
-    which is why ``_Port.x`` is the lane's WEST end.  So an input lane flows
-    west to east, its head is ``port.x``, and every sorter on it draws from a
-    tile at or after the head.
-
-    This used to seat the coater at ``port.x1``, the lane's east end, on the
-    reasoning that it is nearest the east margin the drop belt lived in.  That
-    is the DOWNSTREAM end: the last belt of the chain, with no ``output_obj``
-    and nothing after it.  Measured over five clean proliferated freeform
-    placements (``energy-matrix``, ``graphene``, ``plastic``, ``processor``,
-    ``magnetic-coil``), **all 12 coaters were the last belt of their own chain
-    and all 12 had zero pickups anywhere downstream of them** -- every sorter on
-    every sprayed lane drew from a tile the cargo reached before the coater.
-    The spray was applied to cargo dead-ended at the end of a belt.  Spine on
-    the same five specs seats 0 of 12 at the tail.  So the blueprint pasted, the
-    coaters were supplied, ``prolif.coaters_are_supplied`` passed -- and not one
-    proliferated recipe would have run proliferated.
-
-    The routing follows the correctness.  At ``Facing.EAST`` the drop belt is
-    one tile BEHIND the coater, so a tail seat put the drop *inside* the lane,
-    hemmed between the machine band and the neighbouring lanes' coater bans; a
-    head seat puts it one tile west of the strip, in the ``WEST_CHANNEL``
-    column, which is reserved corridor at level 0 and empty at level 1.  The
-    second-tile seat keeps that cell exactly.  The coater has not moved at all
-    -- it still rides column 0 of the strip; what moved is the lane's HEAD,
-    west into the channel -- so the drop cell is the same tile it always was,
-    one level above the new head.
+    STRICTER than ``prolif.coater_rides_one_run``'s second clause, which
+    convicts only when those belts span two or more DISTINCT ``ctx.run_of``
+    values (spec section 9 R6) -- the same whole-graph run map this module
+    does not build at seat-selection time (see
+    :func:`_coater_candidate_rides_a_merge`).  This candidate never sees the
+    coater's own future ``approach``/``supply`` pair -- ``_place_coaters``
+    creates those belts AFTER a seat is chosen, so R6's fix does not need
+    reproducing here at all -- but a pre-existing belt pair that happens to be
+    one clean run (which the validator would clear) is still refused as a
+    seat here.  The safe direction: never offers a seat the validator would
+    convict, at the cost of occasionally declining one it would accept.  R7's
+    own cost note is this exact trade; the gate counts it.
     """
-    seats = _coater_seats(
-        canvas,
-        port,
-        west_channel=max(0, len(port.tiles) - 1),
+    want = slots.addon_supply_position(
+        catalog.SPRAY_COATER_ID,
+        x=x,
+        y=y,
+        z=Fraction(z),
+        yaw=Facing.EAST.value,
+        area=1,
     )
-    return seats[0] if seats else None
+    reach = math.ceil(rules.ADDON_AREA_RADIUS / colliders.GRID_ARC)
+    anchor_x = math.floor(float(want[0]))
+    anchor_y = math.floor(float(want[1]))
+    candidates = 0
+    for b in canvas.buildings:
+        if not catalog.is_belt(b.item_id):
+            continue
+        if not (anchor_x - reach <= b.x <= anchor_x + reach):
+            continue
+        if not (anchor_y - reach <= b.y <= anchor_y + reach):
+            continue
+        distance = rules.world_gap(float(want[0] - b.x), float(want[1] - b.y), float(want[2] - b.z))
+        if distance < rules.ADDON_AREA_RADIUS:
+            candidates += 1
+            if candidates > 1:
+                return True
+    return False
 
 
 def _reserve_staged_coater_belt_ban(
@@ -18537,13 +19167,30 @@ def _reserve_staged_coater_belt_ban(
     cx, cy = staged.port.host_x, staged.port.host_y
     drop = (staged.port.x, staged.port.y)
     need = colliders.belt_crossing_height(staged.coater.model_index)
-    span = (
-        catalog.oriented_footprint(
-            catalog.SPRAY_COATER_ID,
-            staged.port.yaw,
-        )[0]
-        - 1
-    ) // 2 + 1
+    body_half = _coater_body_half_span(staged.port.yaw)
+    span = body_half + 1
+    if coater_mode().is_node:
+        # The area-1 rival cell -- and only that.  DO NOT delete this along
+        # with the body-level clause that used to stand beside it: the rival is
+        # a LEVEL-1 cell that is not part of the node at all, so nothing about
+        # the node being a free-standing run makes it structural.  It is the
+        # cell mirroring the drop across the seat, at the drop's own level, and
+        # it is exactly the reported area-1 ambiguity: coater#768 with the drop
+        # at (53,20,1) and a cargo lane at (55,20,1), both inside the 1.0
+        # radius on opposite sides of the seat at (54,20,0).
+        #
+        # The body's OWN level was banned here too, to stop `_merge_frontier`
+        # OFFERING a body tile as a merge goal -- the one path by which a
+        # second predecessor could reach a cell the coater covers, since A*
+        # cannot step onto an occupied belt.  The frontier offers only cells
+        # `_Canvas.free` accepts, so that ban could only bite on a body cell
+        # that was free when it was written.  Measured over three proliferated
+        # specs and 60 committed body cells: 0 were free and 60 carried the
+        # node's own belt, already on the canvas by staging time.  The clause
+        # could not change a routing decision, so it is gone.  See
+        # `test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_there`.
+        rival = (2 * cx - staged.port.x, 2 * cy - staged.port.y)
+        canvas.belt_ban.setdefault(rival, set()).add(staged.port.z)
     for dx in range(-span, span + 1):
         for dy in range(-span, span + 1):
             tile = (cx + dx, cy + dy)
@@ -18598,7 +19245,8 @@ def _place_coaters(
       while looking perfectly healthy.  Each coater gets a one-tile ``drop``
       belt one tile behind it, which a proliferator net is routed to.
     * **It must sit at the lane's HEAD, where the items arrive.**  See
-      :func:`_coater_seat`.
+      :func:`_coater_seats`, whose docstring carries the measurement that made
+      that rule.
     * **Only ``REQUIRES_SPRAY`` lanes are coated.**  The destination-derived
       cargo domain is authoritative even for uniform sprayed demand; the
       item-level split set merely records coexistence.
@@ -18673,16 +19321,48 @@ def _place_coaters(
                     f"the {item} lane is marked {port.cargo_domain.value}, so "
                     "a Spray Coater cannot be placed on it"
                 )
+            # Under a node arm this port is the NODE's four-tile run, not the
+            # consumer strip's channel, and the strip's own ``west_channel`` is
+            # back to ``WEST_CHANNEL`` because no addon rides it.  The node's
+            # whole interior is the candidate set, which under the narrowed
+            # seat rule is the single tile 2.
+            #
+            # Everything from here down STAYS UNCHANGED under a node arm -- the
+            # seat search, the projected-static checks, the addon-supply
+            # routing and the splitter certification.  That is the point of
+            # shaping the node like a four-tile lane: every rule that governs a
+            # coater on a strip channel governs it here with no special case.
+            # The arithmetic that yields one candidate is derived, not
+            # hard-coded: `seat_channel = len(port.tiles) - 1 = 3` and
+            # `_coater_seats` starts at `1 + half_span = 2`.  Measured on the
+            # small proliferated fixture: six seat searches, each offering
+            # exactly one candidate.
+            seat_channel = len(port.tiles) - 1 if coater_mode().is_node else strip.west_channel
             seats = _coater_seats(
                 canvas,
                 port,
-                west_channel=strip.west_channel,
+                west_channel=seat_channel,
             )
             if not seats:
+                # An empty seat list has TWO causes and they want different
+                # fixes, so the refusal must not blame the wrong one.  Before
+                # the seat predicates existed only the first was possible.
+                offered = _coater_seat_candidate_indices(port, strip.west_channel)
+                if not offered:
+                    raise _Unseatable(
+                        f"the {item} lane at ({port.x}, {port.y}) is "
+                        f"{len(port.tiles)} tile(s) long, and a coater needs a "
+                        f"tile with a lane tile on both sides of it to ride "
+                        f"straight"
+                    )
                 raise _Unseatable(
                     f"the {item} lane at ({port.x}, {port.y}) is "
-                    f"{len(port.tiles)} tile(s) long, and a coater needs a tile "
-                    f"with a lane tile on both sides of it to ride straight"
+                    f"{len(port.tiles)} tile(s) long and offers {len(offered)} "
+                    f"straight seat(s), but a coater at every one of them would "
+                    f"have more than one belt near its addon area 1 or ride a "
+                    f"belt merge under its body -- the two things "
+                    f"prolif.coater_rides_one_run convicts, so seating one here "
+                    f"would build a layout our own validator rejects"
                 )
             failure_reasons: list[str] = []
             projected_failures: list[
@@ -19517,61 +20197,6 @@ def _place_proliferator_entry(
     )
 
 
-def _fanout_shortfall(strips: list[Strip]) -> list[str]:
-    """Producer lanes with fewer tiles than the consumers they must tap.
-
-    ``_build`` pairs the two sides of an edge cyclically -- ``srcs[k % len(srcs)]``
-    against ``sinks[k % len(sinks)]`` -- so whichever side is sharded further is
-    fully served.  More sinks than sources means a producer lane is reused, and
-    each reuse taps a different tile of that lane and junctions there.
-
-    That works right up to the point where the lane runs out of tiles: two taps
-    on one tile would need two splitters on one square.  A lane is as wide as
-    its strip, so this is rare -- but it is a property of the STRIP PLAN, decided
-    before any packing exists, and worth knowing before the height sweep rather
-    than after.  A spec that trips it refuses at every height and every budget,
-    and each attempt costs a full sweep plus the retry at
-    :data:`RETRY_BUDGET_S`.
-
-    Returns one description per offending edge, empty when the plan is servable.
-    """
-    src_lanes: dict[tuple[str, str, str, CargoDomain], int] = defaultdict(int)
-    src_tiles: dict[tuple[str, str, str, CargoDomain], int] = {}
-    sink_lanes: dict[tuple[str, str, CargoDomain], int] = defaultdict(int)
-    for s in strips:
-        for item, dest, cargo_domain in s.out_lanes:
-            for d in _dests(dest):
-                key = (s.group_key, item, d, cargo_domain)
-                src_lanes[key] += 1
-                src_tiles[key] = min(src_tiles.get(key, s.width), s.width)
-        for item in s.in_lanes:
-            sink_lanes[s.group_key, item, s.cargo_domain] += 1
-
-    out: list[str] = []
-    for (src_key, item, dest, cargo_domain), n_src in sorted(
-        src_lanes.items(),
-        key=lambda entry: (
-            entry[0][0],
-            entry[0][1],
-            entry[0][2],
-            entry[0][3].value,
-        ),
-    ):
-        n_sink = sink_lanes.get((dest, item, cargo_domain), 0)
-        if n_sink <= n_src:
-            continue
-        # Taps land on the narrowest lane of the group, so that is the one that
-        # can run out. Ceiling division: the reuse is spread round-robin.
-        per_lane = -(-n_sink // n_src)
-        tiles = src_tiles[src_key, item, dest, cargo_domain]
-        if per_lane > tiles:
-            out.append(
-                f"{item}: {src_key} lane is {tiles} tile(s) wide but must tap "
-                f"{per_lane} consumer lane(s) of {dest}"
-            )
-    return out
-
-
 def _drainable_by_port(strip: Strip) -> bool:
     """Can every output lane claim a distinct port facing the lane band?
 
@@ -20198,28 +20823,15 @@ class FreeformLayout:
         # generic routing miss. Structural failures are named before the one
         # requested-budget sweep instead.
         #
-        # Fan-out itself is no longer a shortfall: a lane serving several
-        # consumers taps a different tile for each and junctions there. What
-        # remains unservable is a lane with fewer TILES than taps to make, since
-        # two taps on one tile would need two splitters on one square.
-        # A machine no sorter can attach to is refused FIRST, because it is not
-        # a question about the packing at all: `_emit_strip` crashes on the
-        # empty lane it implies, so every later stage would be reporting a
-        # symptom of this one.
+        # A machine no sorter can attach to is the one structural refusal named
+        # before the sweep, because it is not a question about the packing at
+        # all: `_emit_strip` crashes on the empty lane it implies, so every
+        # later stage would be reporting a symptom of this one.
         unreachable = _machines_without_poses(strips)
         if unreachable:
             raise NoValidLayout(
                 "a machine in this spec has lanes to wire and no insert pose to "
                 "wire them to, so it would paste joined to nothing. " + "; ".join(unreachable[:3]),
-                spec_label=spec.label,
-                budget_s=0.0,
-            )
-
-        shortfall = _fanout_shortfall(strips)
-        if shortfall:
-            raise NoValidLayout(
-                "a producer lane has fewer tiles than the consumers it must tap, "
-                "so two junctions would have to share one tile. " + "; ".join(shortfall[:3]),
                 spec_label=spec.label,
                 budget_s=0.0,
             )
@@ -20460,20 +21072,23 @@ class FreeformLayout:
             # that returns UNKNOWN is the solve running out of its own
             # allowance, and the sentence above reads as the first while being
             # true of both.  The user's compressed-mall URL is the second: at 33
-            # strips all fifteen candidate solves ended UNKNOWN inside the fixed
-            # `_DETERMINISTIC_PACK_WORK` bound -- 0.02 units, calibrated on the
-            # fifteen-strip cell where a shelf warm start yields an incumbent at
-            # once -- and the sweep exhausted its candidates in 1.4s with 28.6s
-            # of a 30s ceiling never spent.  Raising that bound to 0.5 on the
-            # same spec turns all fifteen UNKNOWNs into four FEASIBLE packs, so
-            # the packing was never the thing that could not be found.
+            # strips all fifteen candidate solves ended UNKNOWN inside the
+            # `_deterministic_pack_work` bound that pack was given -- then a
+            # fixed 0.02 units for every size (0.02 is now only its value at
+            # the calibrated fifteen-strip size), calibrated on the
+            # fifteen-strip cell where a shelf warm start yields an incumbent
+            # at once -- and the sweep exhausted its candidates in 1.4s with
+            # 28.6s of a 30s ceiling never spent.  Raising that bound to 0.5 on
+            # the same spec turns all fifteen UNKNOWNs into four FEASIBLE
+            # packs, so the packing was never the thing that could not be
+            # found.
             solves = float(refusal_stats.get("pack_cp_solves", 0.0))
             unknown = float(refusal_stats.get("pack_cp_unknown", 0.0))
             if solves and unknown == solves:
                 unspent = max(0.0, budgets[-1] - (time.monotonic() - started))
                 work = (
-                    f", inside the {_DETERMINISTIC_PACK_WORK:g}-unit deterministic work "
-                    f"bound a pack of {len(strips)} strips is given"
+                    f", inside the {_deterministic_pack_work(len(strips)):g}-unit "
+                    f"deterministic work bound a pack of {len(strips)} strips is given"
                     if len(strips) >= _DETERMINISTIC_PACK_STRIPS
                     else ""
                 )

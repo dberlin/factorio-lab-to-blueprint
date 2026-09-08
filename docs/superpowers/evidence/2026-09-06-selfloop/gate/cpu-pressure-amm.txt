@@ -1,0 +1,4 @@
+cpu_pressure BEFORE amm build (vmstat 1 6 mean runnable):
+6.4
+cpu_pressure AFTER amm build:
+5.4

@@ -1,0 +1,84 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+Spray Coater footprint: (1, 3)
+addon_areas: (AddonSupplyPose(dx=Fraction(0, 1), dy=Fraction(0, 1), dz=Fraction(0, 1), area=0), AddonSupplyPose(dx=Fraction(0, 1), dy=Fraction(-5, 4), dz=Fraction(1, 1), area=1))
+ADDON_AREA_RADIUS: 1.0
+
+=== coater#768 at (54.0,20.0,0.0) yaw=90.0 ===
+  belts within 2.5 tiles:
+    belt#600 (55.0,18.0,0.0) run 22 items=[] pred=[] succ=601
+    belt#601 (56.0,18.0,0.0) run 22 items=[] pred=[600] succ=602
+    belt#1872 (53.0,19.0,0.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] pred=[1871] succ=0
+    belt#817 (52.0,20.0,0.0) run 27 items=[] pred=[816] succ=0
+    belt#0 (53.0,20.0,0.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] pred=[817, 1872] succ=1   <<< MERGE POINT (2 predecessors)
+    belt#1 (54.0,20.0,0.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] pred=[0] succ=2
+    belt#2 (55.0,20.0,0.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] pred=[1] succ=3
+    belt#3 (56.0,20.0,0.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] pred=[2] succ=4
+    belt#816 (52.0,21.0,0.0) run 27 items=[] pred=[815] succ=817
+    belt#1886 (54.0,18.0,1.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] pred=[1885] succ=1871
+    belt#1871 (54.0,19.0,1.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] pred=[1870, 1886] succ=1872   <<< MERGE POINT (2 predecessors)
+    belt#1870 (55.0,19.0,1.0) run 22 items=[] pred=[1869] succ=1871
+    belt#1869 (56.0,19.0,1.0) run 22 items=[] pred=[1868] succ=1870
+    belt#766 (52.0,20.0,1.0) run 59 items=[] pred=[1285] succ=767
+    belt#767 (53.0,20.0,1.0) run 59 items=[] pred=[766] succ=None
+    belt#812 (55.0,20.0,1.0) run 27 items=[] pred=[811] succ=813
+    belt#811 (56.0,20.0,1.0) run 27 items=[] pred=[810] succ=812
+    belt#1285 (52.0,21.0,1.0) run 59 items=[] pred=[1284] succ=766
+    belt#815 (53.0,21.0,1.0) run 27 items=[] pred=[814] succ=816
+    belt#814 (54.0,21.0,1.0) run 27 items=[] pred=[813] succ=815
+    belt#813 (55.0,21.0,1.0) run 27 items=[] pred=[812] succ=814
+    belt#1577 (54.0,19.0,2.0) run 9 items=[] pred=[1576] succ=1578
+    belt#1576 (55.0,19.0,2.0) run 9 items=[] pred=[1575] succ=1577
+    belt#1575 (56.0,19.0,2.0) run 9 items=[] pred=[1574] succ=1576
+    belt#1578 (54.0,20.0,2.0) run 9 items=[] pred=[1577] succ=1579
+    belt#1579 (54.0,21.0,2.0) run 9 items=[] pred=[1578] succ=1580
+    belt#1582 (52.0,22.0,2.0) run 9 items=[] pred=[1581] succ=1583
+    belt#1581 (53.0,22.0,2.0) run 9 items=[] pred=[1580] succ=1582
+    belt#1580 (54.0,22.0,2.0) run 9 items=[] pred=[1579] succ=1581
+    belt#1483 (53.0,18.0,3.0) run 5 items=[] pred=[1482] succ=1484
+    belt#1543 (54.0,18.0,3.0) run 1 items=[] pred=[1542] succ=1544
+    belt#1482 (53.0,19.0,3.0) run 5 items=[] pred=[1481] succ=1483
+    belt#1542 (54.0,19.0,3.0) run 1 items=[] pred=[1541] succ=1543
+    belt#1480 (52.0,20.0,3.0) run 5 items=[] pred=[1479] succ=1481
+    belt#1481 (53.0,20.0,3.0) run 5 items=[] pred=[1480] succ=1482
+    belt#1541 (54.0,20.0,3.0) run 1 items=[] pred=[1540] succ=1542
+    belt#1538 (52.0,21.0,3.0) run 1 items=[] pred=[1537] succ=1539
+    belt#1539 (53.0,21.0,3.0) run 1 items=[] pred=[1538] succ=1540
+    belt#1540 (54.0,21.0,3.0) run 1 items=[] pred=[1539] succ=1541
+    belt#1537 (52.0,22.0,3.0) run 1 items=[] pred=[1536] succ=1538
+  area 0 (yaw+) -> world (54.00,20.00,0.00); nearest belt#1 (54.0,20.0,0.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] dist=0.000
+  area 0 (yaw-) -> world (54.00,20.00,0.00); nearest belt#1 (54.0,20.0,0.0) run 7 items=['frame-material', 'optical-grating-crystal', 'super-magnetic-ring'] dist=0.000
+  area 1 (yaw+) -> world (55.25,20.00,1.00); nearest belt#812 (55.0,20.0,1.0) run 27 items=[] dist=0.250
+  area 1 (yaw-) -> world (52.75,20.00,1.00); nearest belt#767 (53.0,20.0,1.0) run 59 items=[] dist=0.250
+
+=== coater#771 at (54.0,26.0,0.0) yaw=90.0 ===
+  belts within 2.5 tiles:
+    belt#2035 (52.0,24.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] pred=[2034] succ=2036
+    belt#2036 (52.0,25.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] pred=[2035] succ=2037
+    belt#2037 (53.0,25.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] pred=[2036] succ=19
+    belt#19 (53.0,26.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] pred=[830, 2037] succ=20   <<< MERGE POINT (2 predecessors)
+    belt#20 (54.0,26.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] pred=[19] succ=21
+    belt#21 (55.0,26.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] pred=[20] succ=22
+    belt#22 (56.0,26.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] pred=[21] succ=23
+    belt#830 (53.0,27.0,0.0) run 28 items=[] pred=[829] succ=19
+    belt#954 (52.0,28.0,0.0) run 42 items=[] pred=[953] succ=345
+    belt#345 (53.0,28.0,0.0) run 42 items=[] pred=[954] succ=346
+    belt#346 (54.0,28.0,0.0) run 42 items=[] pred=[345] succ=347
+    belt#347 (55.0,28.0,0.0) run 42 items=[] pred=[346] succ=348
+    belt#348 (56.0,28.0,0.0) run 42 items=[] pred=[347] succ=349
+    belt#769 (52.0,26.0,1.0) run 61 items=[] pred=[1346] succ=770
+    belt#770 (53.0,26.0,1.0) run 61 items=[] pred=[769] succ=None
+    belt#1346 (52.0,27.0,1.0) run 61 items=[] pred=[1345] succ=769
+    belt#829 (53.0,28.0,1.0) run 28 items=[] pred=[828] succ=830
+    belt#1418 (52.0,26.0,2.0) run 63 items=[] pred=[1417] succ=1419
+    belt#1419 (52.0,27.0,2.0) run 63 items=[] pred=[1418] succ=1420
+    belt#1420 (52.0,28.0,2.0) run 63 items=[] pred=[1419] succ=1421
+    belt#1421 (53.0,28.0,2.0) run 63 items=[] pred=[1420] succ=1422
+    belt#1422 (54.0,28.0,2.0) run 63 items=[] pred=[1421] succ=1423
+    belt#1535 (52.0,24.0,3.0) run 1 items=[] pred=[1534] succ=1536
+    belt#1534 (52.0,25.0,3.0) run 1 items=[] pred=[1533] succ=1535
+    belt#1533 (52.0,26.0,3.0) run 1 items=[] pred=[1532] succ=1534
+  area 0 (yaw+) -> world (54.00,26.00,0.00); nearest belt#20 (54.0,26.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] dist=0.000
+  area 0 (yaw-) -> world (54.00,26.00,0.00); nearest belt#20 (54.0,26.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] dist=0.000
+  area 1 (yaw+) -> world (55.25,26.00,1.00); nearest belt#21 (55.0,26.0,0.0) run 16 items=['quantum-chip', 'titanium-alloy'] dist=1.031
+  area 1 (yaw-) -> world (52.75,26.00,1.00); nearest belt#770 (53.0,26.0,1.0) run 61 items=[] dist=0.250
+

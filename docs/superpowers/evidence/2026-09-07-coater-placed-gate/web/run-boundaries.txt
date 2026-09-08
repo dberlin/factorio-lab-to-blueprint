@@ -1,0 +1,240 @@
+
+=== placed-freeform-magcoil.bp.txt — 4 coater(s), 14 run(s) total ===
+  coater#43@(5,5,0):
+    n0#25@(3,5,0) inbound=1 run=4
+    n1#26@(4,5,0) inbound=1 run=4
+    n2#27@(5,5,0) inbound=1 run=4
+    n3#28@(6,5,0) inbound=1 run=4
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#46@(12,3,0):
+    n0#29@(10,3,0) inbound=1 run=5
+    n1#30@(11,3,0) inbound=1 run=5
+    n2#31@(12,3,0) inbound=1 run=5
+    n3#32@(13,3,0) inbound=1 run=5
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#49@(5,11,0):
+    n0#33@(3,11,0) inbound=1 run=0
+    n1#34@(4,11,0) inbound=1 run=0
+    n2#35@(5,11,0) inbound=1 run=0
+    n3#36@(6,11,0) inbound=1 run=0
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#52@(5,13,0):
+    n0#37@(3,13,0) inbound=1 run=1
+    n1#38@(4,13,0) inbound=1 run=1
+    n2#39@(5,13,0) inbound=1 run=1
+    n3#40@(6,13,0) inbound=1 run=1
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  (reported 4/4 coaters)
+
+=== placed-freeform-all-products.bp.txt — 35 coater(s), 133 run(s) total ===
+  coater#769@(5,7,0):
+    n0#627@(3,7,0) inbound=2 run=25
+    n1#628@(4,7,0) inbound=1 run=25
+    n2#629@(5,7,0) inbound=1 run=25
+    n3#630@(6,7,0) inbound=1 run=25
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#772@(7,5,0):
+    n0#631@(5,5,0) inbound=1 run=7
+    n1#632@(6,5,0) inbound=1 run=7
+    n2#633@(7,5,0) inbound=1 run=7
+    n3#634@(8,5,0) inbound=1 run=7
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#775@(5,9,0):
+    n0#635@(3,9,0) inbound=1 run=29
+    n1#636@(4,9,0) inbound=1 run=29
+    n2#637@(5,9,0) inbound=1 run=29
+    n3#638@(6,9,0) inbound=1 run=29
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#778@(5,13,0):
+    n0#639@(3,13,0) inbound=1 run=57
+    n1#640@(4,13,0) inbound=1 run=57
+    n2#641@(5,13,0) inbound=1 run=57
+    n3#642@(6,13,0) inbound=1 run=57
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#781@(5,11,0):
+    n0#643@(3,11,0) inbound=1 run=31
+    n1#644@(4,11,0) inbound=1 run=31
+    n2#645@(5,11,0) inbound=1 run=31
+    n3#646@(6,11,0) inbound=1 run=31
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#784@(5,15,0):
+    n0#647@(3,15,0) inbound=1 run=4
+    n1#648@(4,15,0) inbound=1 run=4
+    n2#649@(5,15,0) inbound=1 run=4
+    n3#650@(6,15,0) inbound=1 run=4
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#787@(5,17,0):
+    n0#651@(3,17,0) inbound=1 run=32
+    n1#652@(4,17,0) inbound=1 run=32
+    n2#653@(5,17,0) inbound=1 run=32
+    n3#654@(6,17,0) inbound=1 run=32
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#790@(5,19,0):
+    n0#655@(3,19,0) inbound=1 run=122
+    n1#656@(4,19,0) inbound=1 run=122
+    n2#657@(5,19,0) inbound=1 run=122
+    n3#658@(6,19,0) inbound=1 run=122
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#793@(5,23,0):
+    n0#659@(3,23,0) inbound=1 run=20
+    n1#660@(4,23,0) inbound=1 run=20
+    n2#661@(5,23,0) inbound=1 run=20
+    n3#662@(6,23,0) inbound=1 run=20
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#796@(5,35,0):
+    n0#663@(3,35,0) inbound=1 run=34
+    n1#664@(4,35,0) inbound=1 run=34
+    n2#665@(5,35,0) inbound=1 run=34
+    n3#666@(6,35,0) inbound=1 run=34
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#799@(5,37,0):
+    n0#667@(3,37,0) inbound=1 run=35
+    n1#668@(4,37,0) inbound=1 run=35
+    n2#669@(5,37,0) inbound=1 run=35
+    n3#670@(6,37,0) inbound=1 run=35
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#802@(5,43,0):
+    n0#671@(3,43,0) inbound=1 run=9
+    n1#672@(4,43,0) inbound=1 run=9
+    n2#673@(5,43,0) inbound=1 run=9
+    n3#674@(6,43,0) inbound=1 run=9
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#805@(5,45,0):
+    n0#675@(3,45,0) inbound=1 run=36
+    n1#676@(4,45,0) inbound=1 run=36
+    n2#677@(5,45,0) inbound=1 run=36
+    n3#678@(6,45,0) inbound=1 run=36
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#808@(5,47,0):
+    n0#679@(3,47,0) inbound=1 run=121
+    n1#680@(4,47,0) inbound=1 run=121
+    n2#681@(5,47,0) inbound=1 run=121
+    n3#682@(6,47,0) inbound=1 run=121
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#811@(5,52,0):
+    n0#683@(3,52,0) inbound=1 run=5
+    n1#684@(4,52,0) inbound=1 run=5
+    n2#685@(5,52,0) inbound=1 run=5
+    n3#686@(6,52,0) inbound=1 run=5
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#814@(5,54,0):
+    n0#687@(3,54,0) inbound=1 run=10
+    n1#688@(4,54,0) inbound=1 run=10
+    n2#689@(5,54,0) inbound=1 run=10
+    n3#690@(6,54,0) inbound=1 run=10
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#817@(17,5,0):
+    n0#691@(15,5,0) inbound=1 run=37
+    n1#692@(16,5,0) inbound=1 run=37
+    n2#693@(17,5,0) inbound=1 run=37
+    n3#694@(18,5,0) inbound=1 run=37
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#820@(12,5,0):
+    n0#695@(10,5,0) inbound=1 run=38
+    n1#696@(11,5,0) inbound=1 run=38
+    n2#697@(12,5,0) inbound=1 run=38
+    n3#698@(13,5,0) inbound=1 run=38
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#823@(17,3,0):
+    n0#699@(15,3,0) inbound=1 run=39
+    n1#700@(16,3,0) inbound=1 run=39
+    n2#701@(17,3,0) inbound=1 run=39
+    n3#702@(18,3,0) inbound=1 run=39
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#826@(15,17,0):
+    n0#703@(13,17,0) inbound=1 run=40
+    n1#704@(14,17,0) inbound=1 run=40
+    n2#705@(15,17,0) inbound=1 run=40
+    n3#706@(16,17,0) inbound=1 run=40
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#829@(15,24,0):
+    n0#707@(13,24,0) inbound=1 run=41
+    n1#708@(14,24,0) inbound=1 run=41
+    n2#709@(15,24,0) inbound=1 run=41
+    n3#710@(16,24,0) inbound=1 run=41
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#832@(15,26,0):
+    n0#711@(13,26,0) inbound=1 run=42
+    n1#712@(14,26,0) inbound=1 run=42
+    n2#713@(15,26,0) inbound=1 run=42
+    n3#714@(16,26,0) inbound=1 run=42
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#835@(15,33,0):
+    n0#715@(13,33,0) inbound=1 run=43
+    n1#716@(14,33,0) inbound=1 run=43
+    n2#717@(15,33,0) inbound=1 run=43
+    n3#718@(16,33,0) inbound=1 run=43
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#838@(15,35,0):
+    n0#719@(13,35,0) inbound=1 run=44
+    n1#720@(14,35,0) inbound=1 run=44
+    n2#721@(15,35,0) inbound=1 run=44
+    n3#722@(16,35,0) inbound=1 run=44
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#841@(15,37,0):
+    n0#723@(13,37,0) inbound=1 run=14
+    n1#724@(14,37,0) inbound=1 run=14
+    n2#725@(15,37,0) inbound=1 run=14
+    n3#726@(16,37,0) inbound=1 run=14
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#844@(15,52,0):
+    n0#727@(13,52,0) inbound=1 run=22
+    n1#728@(14,52,0) inbound=1 run=22
+    n2#729@(15,52,0) inbound=1 run=22
+    n3#730@(16,52,0) inbound=1 run=22
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#847@(15,54,0):
+    n0#731@(13,54,0) inbound=1 run=47
+    n1#732@(14,54,0) inbound=1 run=47
+    n2#733@(15,54,0) inbound=1 run=47
+    n3#734@(16,54,0) inbound=1 run=47
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#850@(41,7,0):
+    n0#735@(39,7,0) inbound=1 run=48
+    n1#736@(40,7,0) inbound=1 run=48
+    n2#737@(41,7,0) inbound=1 run=48
+    n3#738@(42,7,0) inbound=1 run=48
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#853@(41,9,0):
+    n0#739@(39,9,0) inbound=1 run=49
+    n1#740@(40,9,0) inbound=1 run=49
+    n2#741@(41,9,0) inbound=1 run=49
+    n3#742@(42,9,0) inbound=1 run=49
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#856@(41,16,0):
+    n0#743@(39,16,0) inbound=1 run=50
+    n1#744@(40,16,0) inbound=1 run=50
+    n2#745@(41,16,0) inbound=1 run=50
+    n3#746@(42,16,0) inbound=1 run=50
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#859@(41,18,0):
+    n0#747@(39,18,0) inbound=1 run=51
+    n1#748@(40,18,0) inbound=1 run=51
+    n2#749@(41,18,0) inbound=1 run=51
+    n3#750@(42,18,0) inbound=1 run=51
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#862@(41,31,0):
+    n0#751@(39,31,0) inbound=1 run=54
+    n1#752@(40,31,0) inbound=1 run=54
+    n2#753@(41,31,0) inbound=1 run=54
+    n3#754@(42,31,0) inbound=1 run=54
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#865@(41,42,0):
+    n0#755@(39,42,0) inbound=1 run=6
+    n1#756@(40,42,0) inbound=1 run=6
+    n2#757@(41,42,0) inbound=1 run=6
+    n3#758@(42,42,0) inbound=1 run=6
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#868@(41,44,0):
+    n0#759@(39,44,0) inbound=1 run=23
+    n1#760@(40,44,0) inbound=1 run=23
+    n2#761@(41,44,0) inbound=1 run=23
+    n3#762@(42,44,0) inbound=1 run=23
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  coater#871@(41,46,0):
+    n0#763@(39,46,0) inbound=1 run=55
+    n1#764@(40,46,0) inbound=1 run=55
+    n2#765@(41,46,0) inbound=1 run=55
+    n3#766@(42,46,0) inbound=1 run=55
+    -> n1,n2,n3 in one run: true; distinct runs across n0..n3: 1
+  (reported 35/35 coaters)

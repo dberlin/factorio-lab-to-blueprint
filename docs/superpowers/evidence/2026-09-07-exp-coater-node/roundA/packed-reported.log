@@ -1,0 +1,24 @@
+### packed freeform no-proliferator
+arm=packed cell=reported/no-proliferator strategy=freeform
+wall=6.9s buildings=2472 coaters=0 belts=2239 coater_merges=0
+area=4125.0 belt_tiles=2239
+  WARNING belt.termination: belt run 1 (head building 7 at (3,8), carrying 'advanced-mining-machine') runs 11 of its 16 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 64 at (14,11), carrying 'assembling-machine-3') runs 15 of its 17 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 447 at (78,20), carrying 'plane-smelter') runs 7 of its 8 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 21 (head building 609 at (120,19), carrying 're-composing-assembler') runs 8 of its 9 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 26 (head building 748 at (134,10), carrying 'hydrogen') runs 7 of its 98 tiles past its last tap and then stops; those tiles serve nothing
+digest=f027ff6f87bf6078
+### packed freeform all-products
+arm=packed cell=reported/all-products strategy=freeform
+REFUSED/CRASH NoValidLayout: no valid layout for all-products after 30s: no packing of 53 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+### packed freeform output-products
+arm=packed cell=reported/output-products strategy=freeform
+wall=18.5s buildings=3516 coaters=5 belts=3285 coater_merges=0
+area=4470.0 belt_tiles=3285
+  WARNING belt.termination: belt run 0 (head building 7 at (3,8), carrying 'advanced-mining-machine') runs 11 of its 16 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 3 (head building 64 at (13,11), carrying 'assembling-machine-3') runs 16 of its 18 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 14 (head building 400 at (65,19), carrying 'plane-smelter') runs 13 of its 14 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 20 (head building 567 at (105,19), carrying 're-composing-assembler') runs 13 of its 14 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 25 (head building 706 at (115,19), carrying 'hydrogen') runs 12 of its 101 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 71 (head building 3466 at (0,26), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=0b95645e2004a488

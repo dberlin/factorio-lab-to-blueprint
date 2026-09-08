@@ -1,0 +1,28 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+== no-proliferator ==
+strips 57  tallest box_height 10  total box_height 409
+flanked strips 3
+  x3 identical:
+  universe-matrix#37 machines=5 box_height=8 width=30 drain_outermost=ABSENT
+    in_above 1 lane(s): [['antimatter', 'electromagnetic-matrix', 'energy-matrix']]
+    in_below 1 lane(s): [['gravity-matrix', 'information-matrix', 'structure-matrix']]
+    out_lanes 1
+
+== all-products ==
+strips 46  tallest box_height 10  total box_height 338
+flanked strips 2
+  x2 identical:
+  universe-matrix#37 machines=6 box_height=8 width=36 drain_outermost=ABSENT
+    in_above 1 lane(s): [['antimatter', 'electromagnetic-matrix', 'energy-matrix']]
+    in_below 1 lane(s): [['gravity-matrix', 'information-matrix', 'structure-matrix']]
+    out_lanes 1
+
+== output-products ==
+strips 53  tallest box_height 10  total box_height 384
+flanked strips 2
+  x2 identical:
+  universe-matrix#37 machines=6 box_height=8 width=36 drain_outermost=ABSENT
+    in_above 1 lane(s): [['antimatter', 'electromagnetic-matrix', 'energy-matrix']]
+    in_below 1 lane(s): [['gravity-matrix', 'information-matrix', 'structure-matrix']]
+    out_lanes 1
+

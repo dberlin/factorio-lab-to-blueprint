@@ -1,0 +1,23 @@
+=== arm=seat round=1 strategy=both ===
+commit: c51d9a5e
+uptime before:  00:00:24 up 22 days,  5:46, 10 users,  load average: 17.88, 20.60, 23.55
+2026-09-07T00:00:24-04:00
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+72 cells, 1 at a time, 128 CP-SAT workers each, cap 7200s
+  . [  1/72]    11s freeform  stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     11.4s  <-- 11s
+  X [  2/72]    16s freeform  stress   quantum-chip/all-products power=1 budget=30s         REFUSED    5.0s
+  . [  3/72]    30s freeform  stress   quantum-chip/output-products power=1 budget=30s      CLEAN     13.9s  <-- 14s
+  . [  4/72]    60s sequence-pair stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     29.9s  <-- 30s
+  X [  5/72]    91s sequence-pair stress   quantum-chip/all-products power=1 budget=30s         REFUSED   30.7s  <-- 31s
+  . [  6/72]   121s sequence-pair stress   quantum-chip/output-products power=1 budget=30s      CLEAN     30.0s  <-- 30s
+  . [  7/72]   152s freeform  stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     31.0s  <-- 31s
+  X [  8/72]   157s freeform  stress   universe-matrix/all-products power=1 budget=30s      REFUSED    5.0s
+  X [  9/72]   162s freeform  stress   universe-matrix/output-products power=1 budget=30s   REFUSED    4.8s
+  . [ 10/72]   192s sequence-pair stress   universe-matrix/no-proliferator power=1 budget=30s   CLEAN     29.6s  <-- 30s
+  X [ 11/72]   221s sequence-pair stress   universe-matrix/all-products power=1 budget=30s      REFUSED   29.1s  <-- 29s
+  X [ 12/72]   251s sequence-pair stress   universe-matrix/output-products power=1 budget=30s   REFUSED   30.4s  <-- 30s
+audit exit: 139
+uptime after audit:  00:09:38 up 22 days,  5:55, 10 users,  load average: 13.64, 16.53, 20.35
+2026-09-07T00:09:38-04:00
+uptime after reported:  00:11:38 up 22 days,  5:57, 10 users,  load average: 21.26, 18.11, 20.42
+2026-09-07T00:11:38-04:00

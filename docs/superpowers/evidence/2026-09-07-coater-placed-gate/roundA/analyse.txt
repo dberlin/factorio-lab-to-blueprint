@@ -1,0 +1,35 @@
+arms: baseline, placed
+cells present in every arm: 72
+cells CLEAN in every arm: 72
+
+arm       cells  CLEAN  REFUSED  INVALID  CRASH  merges  coaters    areaGM  rt p50  rt p95   ripups     nets
+------------------------------------------------------------------------------------------------------------
+baseline     72     72        0        0      0       9      412    1091.8     0.7     6.6       83     1375
+placed       72     72        0        0      0       0      428    1125.7     0.7     6.7       82     1819
+  (merges/coaters are totals over ALL that arm's cells; areaGM, routing seconds, rip-ups and nets are over the cells clean in both arms)
+
+per strategy CLEAN / cells
+  baseline  freeform=36/36 sequence-pair=36/36
+  placed    freeform=36/36 sequence-pair=36/36
+
+movers against `baseline`
+  placed: +0 clean, -0 clean
+
+pairwise area against `baseline`, over the cells clean in BOTH arms
+  placed    n= 72    1091.8 ->   1125.7   +3.11%  (38 larger, 10 smaller, 24 equal)
+
+belt tiles and nets over the PROLIFERATED cells clean in both arms
+  baseline  n= 48  belt_tiles=  80860  nets=   1027  coaters=  412
+  placed    n= 48  belt_tiles=  84720  nets=   1471  coaters=  428
+  belt_tiles placed vs baseline: 80860 -> 84720  +4.77%
+  nets placed vs baseline: 1027 -> 1471  +43.23%
+
+proliferated cells only (the cells the switch can move)
+  baseline  48/48 clean, 9 coater-merge findings
+  placed    48/48 clean, 0 coater-merge findings
+
+coater-merge findings per cell (any arm, any count)
+  baseline  freeform/information-matrix/all-products: 1
+  baseline  freeform/universe-matrix/all-products: 3
+  baseline  sequence-pair/super-magnetic-ring/output-products: 1
+  baseline  sequence-pair/universe-matrix/all-products: 4

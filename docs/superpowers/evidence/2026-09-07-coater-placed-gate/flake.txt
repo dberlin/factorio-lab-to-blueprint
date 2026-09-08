@@ -1,0 +1,33 @@
+baseline: 72 cells; status flakes=0; area differs on 7/72; coater_merges differs on 0
+  area sequence-pair/universe-matrix/no-proliferator: A=17836 B=21420 +20.1%
+  area sequence-pair/universe-matrix/output-products: A=16340 B=17820 +9.1%
+  area freeform/magnetic-coil/output-products: A=266 B=285 +7.1%
+  area freeform/plastic/all-products: A=850 B=820 -3.5%
+  area sequence-pair/information-matrix/output-products: A=4826 B=4905 +1.6%
+  area freeform/super-magnetic-ring/output-products: A=2080 B=2052 -1.3%
+placed: 72 cells; status flakes=0; area differs on 7/72; coater_merges differs on 0
+  area sequence-pair/universe-matrix/all-products: A=28539 B=18724 -34.4%
+  area freeform/universe-matrix/no-proliferator: A=39312 B=31898 -18.9%
+  area freeform/super-magnetic-ring/no-proliferator: A=2156 B=2220 +3.0%
+  area freeform/electromagnetic-matrix/output-products: A=696 B=714 +2.6%
+  area freeform/super-magnetic-ring/output-products: A=2120 B=2080 -1.9%
+  area freeform/magnetic-coil/output-products: A=340 B=342 +0.6%
+
+roundA: biggest per-cell area moves, placed vs baseline
+  freeform/magnetic-coil/output-products: 266 -> 340 +27.8%
+  freeform/universe-matrix/no-proliferator: 31898 -> 39312 +23.2%
+  freeform/quantum-chip/all-products: 3840 -> 4661 +21.4%
+  freeform/electromagnetic-matrix/output-products: 576 -> 696 +20.8%
+  sequence-pair/electromagnetic-matrix/output-products: 576 -> 693 +20.3%
+  freeform/energy-matrix/output-products: 572 -> 650 +13.6%
+  sequence-pair/energy-matrix/output-products: 572 -> 650 +13.6%
+  sequence-pair/universe-matrix/all-products: 25168 -> 28539 +13.4%
+roundB: biggest per-cell area moves, placed vs baseline
+  sequence-pair/universe-matrix/all-products: 25168 -> 18724 -25.6%
+  freeform/electromagnetic-matrix/output-products: 576 -> 714 +24.0%
+  freeform/quantum-chip/all-products: 3825 -> 4661 +21.9%
+  sequence-pair/electromagnetic-matrix/output-products: 576 -> 693 +20.3%
+  freeform/magnetic-coil/output-products: 285 -> 342 +20.0%
+  sequence-pair/universe-matrix/no-proliferator: 21420 -> 17836 -16.7%
+  freeform/energy-matrix/output-products: 572 -> 650 +13.6%
+  sequence-pair/energy-matrix/output-products: 572 -> 650 +13.6%

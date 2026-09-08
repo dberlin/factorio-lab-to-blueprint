@@ -1,9 +1,75 @@
 # The Spray Coater as a placed node — design
 
 Date: 2026-09-07. Branch `design-coater-node`, cut from `master` at `0d88d247`.
-Status: **design agreed, planned as immediately executable** — see
-`docs/superpowers/plans/2026-09-07-coater-node.md`. Scheduled to start after the
-cheap seat-predicate fix on branch `selfloop` lands.
+
+---
+
+> ## STATUS: SUPERSEDED — this design's recommendation is the arm that lost
+>
+> **Superseded 2026-09-07 by
+> `docs/superpowers/evidence/2026-09-07-exp-coater-node/README.md`, and
+> implemented instead by
+> `docs/superpowers/plans/2026-09-07-coater-placed.md`.**
+>
+> This design recommended **variant A, the seat fix** (§5.1–§5.2): narrow
+> `_coater_seats` to start at `1 + half_span` so the 3x1 body cannot cover the
+> lane head, and ban the body's own level so `_merge_frontier` cannot offer one
+> as a goal. The user challenged the design's case against a real placed node —
+> *"You should test making it a real packable machine or a separately placed
+> coater node, and see what actually happens. It may be a horrible idea, but if
+> so, the evidence you are making is a really weak case against it."*
+>
+> All four arms were then built and measured at `--budget 30`, two rounds, the
+> full 72-cell corpus:
+>
+> | arm | CLEAN | coater bodies over a merge | area vs `off` | belt vs `off` |
+> |---|---|---|---|---|
+> | `off` (master) | 71–72 / 72 | 5 / 9 | — | — |
+> | `seat` (**this design**) | **48 / 72** | 0 | +4.0–4.7 % | — |
+> | `packed` (CP-SAT object) | 34 / 36 (refuses `universe-matrix`) | 0 | +4.1–4.9 % | +50 % |
+> | **`placed` (post-pack ring search)** | **72 / 72** | **0** | **+2.7–2.9 %** | **+1.4 %** |
+>
+> The reported URL builds 6/6 with zero findings under `placed`, against 6/6
+> with six coater bodies over a merge under `off`.
+>
+> **`seat` is the only arm that is worse than doing nothing.** Its mechanism is
+> this design's own Risk 1, and the design's estimate of it was wrong by an
+> order of magnitude: at `west_channel = 3` the narrowed rule leaves exactly one
+> candidate, `ox - 1`, whose body reaches into the machine band, so
+> `_coater_keepout_hits` convicts the only seat that cleared the machines.
+> Measured, that is **half the corpus** — 24 named cells, zero gained — not the
+> countable margin §7 predicted. Raising `_COATER_WEST_CHANNEL` to 4 (open
+> question 3) is a *precondition* for A, not a fallback, and it was never
+> measured.
+>
+> **The user has ruled that density may be paid for correctness. `placed` ships
+> as the default.** Branch `coater-node` is retained unmerged for its evidence
+> only.
+>
+> **What in this document is still binding**, and travels with the `placed`
+> plan:
+>
+> * §4's migration table, for every row that is not about the seat rule — which
+>   mechanisms stay and why;
+> * §5.4, the over-proliferation ruling applied: the `forbids_spray` clause of
+>   `prolif.sprayed_cargo_reaches_machines` drops to WARNING, and the hard split
+>   stays only for differing spray modes on one item;
+> * §4's *Relationship to the `selfloop` cheap fix*: `prolif.coater_rides_one_run`
+>   stays forever as the arbiter, and its status changes from *the fix* to *the
+>   regression test* — which is exactly what `placed` delivers and A did not,
+>   because under `placed` the merge cell is the node's in-port by construction;
+> * §6.2's net-cost prediction (+55 % input-side nets), which measured
+>   **+38–43 %** and is the same for every node arm.
+>
+> **What is superseded:** §3's recommendation, §5.1 and §5.2 (the seat narrowing
+> and the body-level goal ban as *the fix*), §5.3's `CoaterNode` record, the
+> "cheapest version that makes both properties structural" argument, and the old
+> plan `docs/superpowers/plans/2026-09-07-coater-node.md`. §5.4 of that plan's
+> Option-C rejection is also refuted by §5.4 of the evidence README: the
+> packer's object model *can* express a three-port belt object, and the domain
+> transition that looked like a blocker was not one.
+
+---
 
 ## 0. The request
 

@@ -1,0 +1,42 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[31mF[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[31m                                                 [100%][0m
+=================================== FAILURES ===================================
+[31m[1m_______ test_coater_body_spanning_two_runs_without_a_merge_is_convicted ________[0m
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_coater_body_spanning_two_runs_without_a_merge_is_convicted[39;49;00m() -> [94mNone[39;49;00m:[90m[39;49;00m
+    [90m    [39;49;00m[33m"""The untested half of the first clause, and the message it must produce.[39;49;00m
+    [33m[39;49;00m
+    [33m    ``_coater_rides_one_run``'s first clause fires on ``merged or[39;49;00m
+    [33m    len(distinct_runs) >= 2``.  Every existing test drives the ``merged`` half;[39;49;00m
+    [33m    the Task 1 review flagged the run half as shipped-but-unexercised, and it is[39;49;00m
+    [33m    the half that actually convicts on the reported URL's freeform builds.[39;49;00m
+    [33m[39;49;00m
+    [33m    Here two belts under the coater's 1x3 body belong to different runs and[39;49;00m
+    [33m    NOTHING merges -- ``merged`` is empty.  The clause must still fire, and the[39;49;00m
+    [33m    message must name only the reason that fired.  It used to name both[39;49;00m
+    [33m    unconditionally and read "belt(s) ``[]`` on its body tiles have two or more[39;49;00m
+    [33m    predecessors, and its body tiles carry 2 distinct belt runs", which[39;49;00m
+    [33m    contradicts itself: an empty list cannot have two predecessors.  A refusal[39;49;00m
+    [33m    that names a merge the reader will not find is worse than no detail at all.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        placement = _coater_placement(merge_under_body=[94mFalse[39;49;00m, two_runs_under_body=[94mTrue[39;49;00m)[90m[39;49;00m
+        report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=[94mFalse[39;49;00m)[90m[39;49;00m
+        findings = [f [94mfor[39;49;00m f [95min[39;49;00m report.errors [94mif[39;49;00m f.check == [33m"[39;49;00m[33mprolif.coater_rides_one_run[39;49;00m[33m"[39;49;00m][90m[39;49;00m
+        [94massert[39;49;00m findings, [f.check [94mfor[39;49;00m f [95min[39;49;00m report.errors][90m[39;49;00m
+        message = findings[[94m0[39;49;00m].message[90m[39;49;00m
+        [94massert[39;49;00m [33m"[39;49;00m[33mdistinct belt runs[39;49;00m[33m"[39;49;00m [95min[39;49;00m message, message[90m[39;49;00m
+        [94massert[39;49;00m findings[[94m0[39;49;00m].detail[[33m"[39;49;00m[33mmerged_belts[39;49;00m[33m"[39;49;00m] == [], findings[[94m0[39;49;00m].detail[90m[39;49;00m
+        [90m# The clause that did NOT fire must not be asserted.[39;49;00m[90m[39;49;00m
+>       [94massert[39;49;00m [33m"[39;49;00m[33mbelt(s) [] [39;49;00m[33m"[39;49;00m [95mnot[39;49;00m [95min[39;49;00m message, message[90m[39;49;00m
+[1m[31mE       AssertionError: coater 6 rides a belt merge under its body: belt(s) [] on its body tiles have two or more predecessors, and its body tiles carry 2 distinct belt runs; a coater carries no connection of its own and needs one lane, not a merge whose joined flows have no arrangement that keeps its recipe's proportion[0m
+[1m[31mE       assert 'belt(s) [] ' not in "coater 6 ri...s proportion"[0m
+[1m[31mE         [0m
+[1m[31mE         'belt(s) [] ' is contained here:[0m
+[1m[31mE         ?           ^^^^^^^^^^^^^^^^^[0m
+[1m[31mE           its body: belt(s) [] on its body tiles have two or more predecessors, and its body tiles carry 2 distinct belt runs; a coater carries no connection of its own and needs one lane, not a merge whose joined flows have no arrangement that keeps its recipe's proportion[0m
+[1m[31mE         ?           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[31mtests/layout/test_validate.py[0m:1812: AssertionError
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m tests/layout/test_validate.py::[1mtest_coater_body_spanning_two_runs_without_a_merge_is_convicted[0m - AssertionError: coater 6 rides a belt merge under its body: belt(s) [] on i...
+EXIT=1

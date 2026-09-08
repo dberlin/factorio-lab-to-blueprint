@@ -388,6 +388,10 @@ def _coater_belt_ban(canvas: _Canvas, index: int, belt_model: int) -> None:
     carry those belts, but only at the drop's own altitude, and a lookup that
     silently returned the ground belt under the Coater instead would be a wrong
     answer wearing a right one's clothes.
+
+    STAYS under a node arm.  This reconstructs the ban from a COMMITTED
+    building and never asks who seated it, so it is agnostic to whether that
+    Coater rode a strip channel (`off`) or its own four-tile node (`placed`).
     """
     coater = canvas.buildings[index]
     drop = slots.addon_supply_cell(

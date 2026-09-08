@@ -1,0 +1,18 @@
+sequence-pair / no-proliferator: 18 machines, 775 tiles, 526 buildings
+primary_band: 100
+certified_bands: 100, 120, 160
+inputs to belt in: coal, copper-ore, iron-ore  (5 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-1 (6.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; no run needed more than the floor; stack 1; 0 piler(s)
+  entry lanes: copper-ore 2 (needs 1 at 30/s)
+  entry lanes: iron-ore 2 (needs 1 at 30/s)
+
+candidate           strategy      area  errors
+no-proliferator     sequence-pair     775       0
+no-proliferator     freeform       832       0
+output-products     sequence-pair     924       0
+output-products     freeform       928       0
+all-products        freeform      1080       0
+all-products        sequence-pair    1152       0
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/item-sweep/docs/superpowers/evidence/2026-09-06-item-sweep/round-3/bp-df-missile-set.txt

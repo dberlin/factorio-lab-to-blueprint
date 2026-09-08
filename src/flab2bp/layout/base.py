@@ -485,6 +485,7 @@ class PlacementStats(TypedDict, total=False):
     search_energy: float
     seed: int
     seeds: float
+    self_loop_prime_markers: int
     shared_pack_candidates: float
     shared_pack_closures: float
     shared_pack_wall_time_s: float

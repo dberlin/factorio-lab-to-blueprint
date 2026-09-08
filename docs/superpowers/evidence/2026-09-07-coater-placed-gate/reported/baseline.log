@@ -1,0 +1,78 @@
+=== reported arm=baseline ===
+root: /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/coater-placed-base
+commit: 2e861af02b6a5062792f8d21fca009b64aee5ab6
+cpu pressure before (runnable, 5s mean): 17
+2026-09-07T09:27:46-04:00
+### baseline freeform no-proliferator
+arm=off cell=reported/no-proliferator strategy=freeform
+wall=7.2s buildings=2472 coaters=0 belts=2239 coater_merges=0
+area=4125.0 belt_tiles=2239
+  WARNING belt.termination: belt run 1 (head building 7 at (3,8), carrying 'advanced-mining-machine') runs 11 of its 16 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 64 at (14,11), carrying 'assembling-machine-3') runs 15 of its 17 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 447 at (78,20), carrying 'plane-smelter') runs 7 of its 8 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 21 (head building 609 at (120,19), carrying 're-composing-assembler') runs 8 of its 9 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 26 (head building 748 at (134,10), carrying 'hydrogen') runs 7 of its 98 tiles past its last tap and then stops; those tiles serve nothing
+digest=f027ff6f87bf6078
+### baseline freeform all-products
+arm=off cell=reported/all-products strategy=freeform
+  MERGE-UNDER-BODY coater#763@(14,28,0) belt#0@(13, 28, Fraction(0, 1)) pred=[1086, 2936]
+  MERGE-UNDER-BODY coater#766@(14,34,0) belt#19@(13, 34, Fraction(0, 1)) pred=[1118, 3311]
+wall=27.8s buildings=3472 coaters=32 belts=3220 coater_merges=2
+area=3819.0 belt_tiles=3220
+  WARNING belt.termination: belt run 1 (head building 11 at (17,33), carrying 'advanced-mining-machine') runs 36 of its 41 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 89 at (10,63), carrying 'assembling-machine-3') runs 6 of its 8 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 15 (head building 453 at (8,52), carrying 'plane-smelter') runs 20 of its 21 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 21 (head building 594 at (5,42), carrying 're-composing-assembler') runs 34 of its 35 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 26 (head building 722 at (5,18), carrying 'hydrogen') runs 11 of its 83 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 63 (head building 3345 at (56,65), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+  WARNING belt.termination: belt run 93 (head building 3390 at (0,65), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=b0db9ff9aed8c3c4
+### baseline freeform output-products
+arm=off cell=reported/output-products strategy=freeform
+  MERGE-UNDER-BODY coater#768@(104,4,0) belt#0@(103, 4, Fraction(0, 1)) pred=[787, 1655]
+  MERGE-UNDER-BODY coater#771@(104,10,0) belt#19@(103, 10, Fraction(0, 1)) pred=[799, 1106]
+wall=13.3s buildings=2348 coaters=2 belts=2127 coater_merges=2
+area=3612.0 belt_tiles=2127
+  WARNING belt.termination: belt run 1 (head building 11 at (107,9), carrying 'advanced-mining-machine') runs 12 of its 17 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 72 at (67,11), carrying 'assembling-machine-3') runs 16 of its 18 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 408 at (25,23), carrying 'plane-smelter') runs 7 of its 8 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 22 (head building 575 at (61,14), carrying 're-composing-assembler') runs 17 of its 18 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 27 (head building 714 at (31,15), carrying 'hydrogen') runs 8 of its 99 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 63 (head building 2305 at (0,10), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=a314d3e170eacca9
+### baseline sequence-pair no-proliferator
+arm=off cell=reported/no-proliferator strategy=sequence-pair
+wall=26.6s buildings=2042 coaters=0 belts=1823 coater_merges=0
+area=2700.0 belt_tiles=1823
+  WARNING belt.termination: belt run 1 (head building 7 at (47,26), carrying 'advanced-mining-machine') runs 8 of its 13 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 64 at (3,11), carrying 'assembling-machine-3') runs 10 of its 12 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 447 at (27,29), carrying 'plane-smelter') runs 20 of its 21 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 21 (head building 609 at (53,10), carrying 're-composing-assembler') runs 6 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+digest=a3c121b6d2fcae8d
+### baseline sequence-pair all-products
+arm=off cell=reported/all-products strategy=sequence-pair
+wall=18.9s buildings=3457 coaters=32 belts=3206 coater_merges=0
+area=3408.0 belt_tiles=3206
+  WARNING belt.termination: belt run 1 (head building 11 at (34,27), carrying 'advanced-mining-machine') runs 40 of its 45 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 89 at (31,18), carrying 'assembling-machine-3') runs 40 of its 42 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 15 (head building 453 at (51,34), carrying 'plane-smelter') runs 25 of its 26 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 21 (head building 594 at (24,24), carrying 're-composing-assembler') runs 32 of its 33 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 26 (head building 722 at (41,14), carrying 'hydrogen') runs 25 of its 97 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 77 (head building 3338 at (1,47), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+  WARNING belt.termination: belt run 87 (head building 3353 at (1,0), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=4eb839397a5b900a
+### baseline sequence-pair output-products
+arm=off cell=reported/output-products strategy=sequence-pair
+  MERGE-UNDER-BODY coater#768@(50,3,0) belt#0@(49, 3, Fraction(0, 1)) pred=[785, 1612]
+  MERGE-UNDER-BODY coater#771@(50,9,0) belt#19@(49, 9, Fraction(0, 1)) pred=[796, 1789]
+wall=27.3s buildings=1986 coaters=2 belts=1773 coater_merges=2
+area=2769.0 belt_tiles=1773
+  WARNING belt.termination: belt run 1 (head building 11 at (53,8), carrying 'advanced-mining-machine') runs 11 of its 16 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 5 (head building 72 at (41,30), carrying 'assembling-machine-3') runs 10 of its 12 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 16 (head building 408 at (64,21), carrying 'plane-smelter') runs 6 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 22 (head building 575 at (64,11), carrying 're-composing-assembler') runs 6 of its 7 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 27 (head building 714 at (28,20), carrying 'hydrogen') runs 14 of its 105 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 63 (head building 1945 at (0,9), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=e0990741adbd5db9
+cpu pressure after (runnable, 5s mean): 8.6
+ARM baseline REPORTED DONE 2026-09-07T09:30:04-04:00
