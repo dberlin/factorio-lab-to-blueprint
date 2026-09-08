@@ -45,6 +45,7 @@ __all__ = [
     "IdMap",
     "Report",
     "Severity",
+    "judge_placement",
     "validate",
 ]
 
@@ -6770,6 +6771,30 @@ def belt_run_demands(
     if ctx.unresolved_machines():
         return ctx.runs, {}, stacks
     return ctx.runs, _run_demand(ctx), stacks
+
+
+def judge_placement(
+    placement: Placement,
+    spec: BuildSpec,
+    *,
+    ids: IdMap,
+    belt_rules: cat.BeltAltitudeRules,
+    expect_power: bool,
+) -> Report:
+    """Judge production-equivalent output against its resolved save policy.
+
+    Construction and admission must use the same researched ceiling and slope
+    permission. Arbitrary-placement diagnostics retain ``validate`` defaults;
+    production-equivalent callers must supply the complete policy explicitly.
+    """
+    return validate(
+        placement,
+        spec,
+        ids=ids,
+        expect_power=expect_power,
+        max_belt_z=belt_rules.max_z,
+        belt_vertical_construction=belt_rules.vertical_construction,
+    )
 
 
 def certify(placement: Placement, spec: BuildSpec, *, expect_power: bool) -> Report:
