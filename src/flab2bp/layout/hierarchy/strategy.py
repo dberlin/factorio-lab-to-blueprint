@@ -17,18 +17,18 @@ runtime lookup) buy nothing: ``_new_layout`` is a two-branch constructor call
 and nothing else.  :func:`_block_layout` is that call, written out, at module
 scope where mypy and the import graph can both see it.
 
-HOW THE BUDGET IS DIVIDED.  A round's jobs are
-``sum(len(self._arms_for(block)) for block in todo)`` -- ``blocks x arms``
-only when every block races both arms, which one-arm dispatch
-(``hierarchy.dispatch``, v3 Task 3) makes the exception rather than the rule
--- run ``_pool_width()`` at a time, so the round takes ``ceil(jobs / width)`` WAVES and
-one block's wall is the round's remaining wall divided by ``rounds_left x
-waves``, clamped to ``[BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S]`` -- see
-:func:`allowed_recut_rounds` for ``rounds_left``.
+HOW THE BUDGET IS DIVIDED.  Offered ``(shape, arm)`` jobs are grouped once,
+in source order, with every consuming block retained for result fanout.
+Funding considers wave-derived budgets and remembered-budget breakpoints,
+bounded by ``[BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S]``. In descending budget
+order, the first candidate affordable for its actual eligible work is selected.
+A remembered threshold is itself eligible as a budget: equality skips that job
+and may free wall for others. All jobs remembered at the ceiling require no
+submissions. See :func:`allowed_recut_rounds` for ``rounds_left``.
 :func:`settlement_reserve_s` comes off the top, because composing, ROUTING EVERY
 CUT LANE, compacting, finalizing and certifying happen after the last block and
-have no budget of their own.  A round is refused only when ``remaining /
-waves`` itself is under the floor -- the seed round is exempt even then: a
+have no budget of their own. A non-seed round is refused only when its actual
+active waves cannot fit at the floor -- the seed round is exempt even then: a
 build that refuses having attempted nothing reports nothing, so its share is
 floored to ``BLOCK_BUDGET_MIN_S`` instead and it runs anyway.  The per-job wall
 is combined with the parent's deadline inside :func:`_solve_block`, at job
@@ -126,6 +126,7 @@ from __future__ import annotations
 import math
 import multiprocessing
 import time
+from bisect import bisect_left
 from collections.abc import Callable
 from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
@@ -161,10 +162,9 @@ from flab2bp.layout.sequence_solver import SequencePairLayout
 from flab2bp.layout.slots import SlotUndetermined, assign_sorter_slots
 from flab2bp.spec import BuildSpec
 
-#: Floor and ceiling on one block's own wall.  A block gets the round's wall
-#: divided by the number of WAVES the pool needs to run the round's jobs, and a
-#: round whose share falls below the floor is not started at all: a solve that
-#: cannot reach an exact layout only spends the wall the settlement needs.
+#: Floor and ceiling on one block's own wall. Funding counts unique eligible
+#: jobs, not their consumers. Non-seed rounds must afford their actual waves
+#: at the floor; the clipped seed always runs.
 BLOCK_BUDGET_MIN_S = 5.0
 BLOCK_BUDGET_MAX_S = 20.0
 #: Bounds and share of :func:`settlement_reserve_s`.
@@ -509,6 +509,83 @@ class _Entry:
     arms_tried: frozenset[str] = frozenset()
 
 
+_WorkKey = tuple[ShapeKey, str]
+_GroupedWork = tuple[tuple[_WorkKey, tuple[int, ...]], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RoundPlan:
+    """Final funding and stable fanout for exactly the jobs a round submits."""
+
+    budget_s: float
+    waves: int
+    active: _GroupedWork
+    remembered: _GroupedWork
+    keys_by_slot: tuple[tuple[_WorkKey, ...], ...]
+    skipped_slots: int
+
+
+def _plan_round(
+    entries: list[_Entry],
+    todo: list[int],
+    arms_by_slot: list[tuple[str, ...]],
+    *,
+    nogood: _ShapeNoGood,
+    width: int,
+    remaining: float,
+    rounds_left: int,
+) -> _RoundPlan:
+    """Group once, then maximize funding using final-budget memo eligibility."""
+    slots_by_key: dict[_WorkKey, list[int]] = {}
+    keys_by_slot: list[tuple[_WorkKey, ...]] = []
+    raw_jobs = 0
+    for slot, (index, arms) in enumerate(zip(todo, arms_by_slot, strict=True)):
+        shape = shape_key(entries[index].units)
+        keys = tuple((shape, arm) for arm in arms)
+        keys_by_slot.append(keys)
+        raw_jobs += len(keys)
+        for key in keys:
+            slots_by_key.setdefault(key, []).append(slot)
+
+    thresholds = sorted(nogood.refused.get(key, -math.inf) for key in slots_by_key)
+    budget = BLOCK_BUDGET_MAX_S
+    actual_waves = 0
+    if bisect_left(thresholds, BLOCK_BUDGET_MAX_S):
+        candidates = {BLOCK_BUDGET_MIN_S, BLOCK_BUDGET_MAX_S}
+        candidates.update(
+            threshold
+            for threshold in thresholds
+            if BLOCK_BUDGET_MIN_S <= threshold <= BLOCK_BUDGET_MAX_S
+        )
+        round_share = remaining / rounds_left
+        candidates.update(
+            min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, round_share / waves))
+            for waves in range(1, math.ceil(len(thresholds) / width) + 1)
+        )
+        for budget in sorted(candidates, reverse=True):
+            actual_waves = math.ceil(bisect_left(thresholds, budget) / width)
+            if not actual_waves or budget <= min(
+                BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, round_share / actual_waves)
+            ):
+                break
+        else:
+            raise AssertionError("the five-second floor is always an admitted candidate")
+
+    active: list[tuple[_WorkKey, tuple[int, ...]]] = []
+    remembered: list[tuple[_WorkKey, tuple[int, ...]]] = []
+    for key, slots in slots_by_key.items():
+        target = remembered if nogood.remembers(*key, budget) else active
+        target.append((key, tuple(slots)))
+    return _RoundPlan(
+        budget,
+        actual_waves,
+        tuple(active),
+        tuple(remembered),
+        tuple(keys_by_slot),
+        raw_jobs - len(active),
+    )
+
+
 class HierarchicalLayout:
     """Decompose a spec into blocks, solve them apart, and wire them back up."""
 
@@ -571,21 +648,8 @@ class HierarchicalLayout:
         # answer (but only at the same budget), and `_ShapeNoGood`'s
         # docstring for why this is a local too.
         arm_cache: dict[tuple[ShapeKey, float], tuple[str, ...]] = {}
-        # Seeded before the first round has computed its own `block_budget`
-        # (below, from `share`): the round loop needs SOME budget to offer
-        # `_arms_for` before it can size itself off `_arms_for`'s own answer.
-        # STILL NEEDED AFTER TASK 7 FIX ROUND 1, which made `arms_by_slot`
-        # (below) the round's ONE `_arms_for` computation, at the budget the
-        # round STARTS with -- this variable, not the fresh value the round
-        # goes on to compute for itself.  Round 1 has no prior round to carry
-        # a value from, so it still needs an initial one before that first
-        # computation.  `BLOCK_BUDGET_MIN_S` is a fine seed because it changes
-        # nothing that matters -- every real per-block budget this rule can
-        # ever produce is below `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S` anyway
-        # (`BLOCK_BUDGET_MAX_S` is a whole second under it), so the abstain
-        # branch is unconditional either way. From round 2 on this holds the
-        # PRIOR round's real `block_budget`, computed below and never
-        # recomputed here.
+        # Arm discovery runs once at the prior round's budget (the floor for
+        # the seed). Every funded budget stays below the exact-arm threshold.
         block_budget = BLOCK_BUDGET_MIN_S
         # ONE POOL FOR THE WHOLE BUILD, not one per round: a re-cut starts a
         # new round with more (smaller) blocks, and building a fresh pool for
@@ -627,42 +691,13 @@ class HierarchicalLayout:
                 todo = [index for index, entry in enumerate(entries) if entry.placement is None]
                 if not todo:
                     break
-                # COMPUTED ONCE PER ROUND, HERE, AND REUSED BELOW -- not
-                # re-derived by `_solve_round` under a second, fresher
-                # `block_budget` (Task 7 fix round 1; a review of the
-                # original Task 7 commit caught this).  This uses the
-                # budget THIS round STARTS with -- last round's `block_budget`,
-                # or the seed on round 1 -- because the round's OWN
-                # `block_budget` is not known yet: it is computed below,
-                # from `waves`, which is computed from `jobs`, which is
-                # computed from THIS list, so the round cannot fund itself
-                # before counting its own jobs.  Before this fix,
-                # `_solve_round` called `_arms_for` again with the freshly
-                # computed `block_budget`, which (a) ran
-                # `dispatch.block_features`'s `plan_strips` -- `_arms_for`'s
-                # own docstring calls it "the only expensive thing here" --
-                # a SECOND time per shape per round on the unguarded
-                # orchestrator path, spending exactly the wall this task
-                # made scarce by racing more arms, and (b) meant `jobs`,
-                # `waves` and the stats below could describe a different arm
-                # set than the one `_solve_round` actually funded and
-                # solved.  Passing `arms_by_slot` straight through removes
-                # both: one `_arms_for` answer per block this round, shared
-                # by `jobs`, the stats loop, and `_solve_round`.
+                # Discover offered arms once. Grouping, funding and submission
+                # use this same answer; wave enumeration never plans strips.
                 arms_by_slot = [
                     self._arms_for(spec, entries[index], arm_cache, block_budget=block_budget)
                     for index in todo
                 ]
-                jobs = sum(len(arms) for arms in arms_by_slot)
-                # COUNTED HERE, NOT AFTER `_solve_round` RETURNS (v3 Task 3,
-                # Ruling P3): by then `_solve_round` has already widened
-                # `entries[index].arms_tried`, so `_arms_for`'s widening
-                # branch would return the FULL arm set for every block just
-                # solved and this would count `arm_dispatch_both` for all of
-                # them.  Reusing the SAME `arms_by_slot` the `jobs` line just
-                # built -- not a second `_arms_for` call -- gives the
-                # identical once-per-block-per-round numbers with the correct
-                # attribution.
+                # Attribute dispatch before `_solve_round` widens arms_tried.
                 for chosen in arms_by_slot:
                     if len(chosen) > 1:
                         stats.arm_dispatch_both += 1.0
@@ -670,47 +705,53 @@ class HierarchicalLayout:
                         stats.arm_dispatch_freeform += 1.0
                     else:
                         stats.arm_dispatch_sequence_pair += 1.0
-                waves = math.ceil(jobs / width)
+                # Funding is based on unique jobs eligible at its FINAL budget,
+                # not raw consumers or the prior round's no-good threshold.
                 remaining = deadline - time.monotonic() - reserve
-                attempted = any(entry.verdicts for entry in entries)
                 # FUND THE ROUNDS THAT CAN STILL RUN, not the wall divided by
                 # a block count the NEXT round will have grown.  `rounds_left`
                 # is this round plus the re-cuts still permitted.
                 rounds_left = 1 + allowed_recuts - recut_rounds
-                share = remaining / rounds_left / waves
-                if remaining / waves < BLOCK_BUDGET_MIN_S:
-                    if attempted:
-                        stats.blocks_unattempted = float(
-                            sum(1 for entry in entries if not entry.verdicts)
+                plan = _plan_round(
+                    entries,
+                    todo,
+                    arms_by_slot,
+                    nogood=nogood,
+                    width=width,
+                    remaining=remaining,
+                    rounds_left=rounds_left,
+                )
+                block_budget = plan.budget_s
+                if (
+                    plan.waves
+                    and remaining < plan.waves * BLOCK_BUDGET_MIN_S
+                    and any(entry.verdicts for entry in entries)
+                ):
+                    stats.blocks_unattempted = float(
+                        sum(1 for entry in entries if not entry.verdicts)
+                    )
+                    raise refuse(
+                        _block_refusal(
+                            entries,
+                            todo,
+                            why=(
+                                f"{remaining:.1f}s left over {plan.waves} wave(s) is under "
+                                f"the {BLOCK_BUDGET_MIN_S:g}s a block solve is given "
+                                f"at all"
+                            ),
                         )
-                        raise refuse(
-                            _block_refusal(
-                                entries,
-                                todo,
-                                why=(
-                                    f"{remaining:.1f}s left over {waves} wave(s) is under "
-                                    f"the {BLOCK_BUDGET_MIN_S:g}s a block solve is given "
-                                    f"at all"
-                                ),
-                            )
-                        )
-                    # THE SEED ROUND ALWAYS RUNS.  A build that refuses having
-                    # attempted nothing tells nobody anything, and the job's
-                    # own deadline is still clipped to the parent's, so the
-                    # floor can only spend into the settlement reserve, never
-                    # past `--budget`.
-                    share = BLOCK_BUDGET_MIN_S
-                block_budget = min(BLOCK_BUDGET_MAX_S, max(BLOCK_BUDGET_MIN_S, share))
+                    )
+                # The clipped seed still runs; later rounds may borrow
+                # their floor from future rounds, never the parent deadline.
                 started = time.monotonic()
                 stats.nogood_skips += self._solve_round(
                     spec,
                     entries,
                     todo,
                     pool=pool,
-                    block_budget=block_budget,
+                    plan=plan,
                     deadline=deadline,
                     nogood=nogood,
-                    arms_by_slot=arms_by_slot,
                 )
                 block_wall += time.monotonic() - started
                 still = [index for index in todo if entries[index].placement is None]
@@ -787,6 +828,7 @@ class HierarchicalLayout:
                 spec,
                 gap=DEFAULT_GAP,
                 ramped=self.ramped,
+                policy=self.band_policy,
                 # The PARENT's wall, not the reserve. The reserve is what the
                 # block rounds were made to leave behind for the router; it is
                 # not a second, tighter ceiling to then judge the router by.
@@ -974,26 +1016,17 @@ class HierarchicalLayout:
         todo: list[int],
         *,
         pool: Executor,
-        block_budget: float,
+        plan: _RoundPlan,
         deadline: float,
         nogood: _ShapeNoGood,
-        arms_by_slot: list[tuple[str, ...]],
     ) -> int:
         """Solve every block in ``todo`` with every arm; smallest valid wins.
 
         ``pool`` is the ONE pool `lay_out` built for the whole build, opened
         and closed there -- this method never constructs or shuts one down.
 
-        ``arms_by_slot`` -- index-aligned to ``todo`` -- is `lay_out`'s ROUND
-        LOOP's own `_arms_for` answer, computed ONCE there (Task 7 fix round
-        1) and passed straight through, rather than this method calling
-        `_arms_for` again itself.  Re-deriving it here used to happen under a
-        DIFFERENT, freshly-recomputed `block_budget` than the one `jobs` and
-        the dispatch stats were counted under in the round loop -- a second
-        `dispatch.block_features`/`plan_strips` call per shape per round, and
-        an attribution mismatch between what the stats claimed ran and what
-        this method actually funded.  Taking the list as given keeps both in
-        lockstep by construction.
+        ``plan`` is the round loop's finalized budget and grouped work.
+        No grouping or no-good eligibility is recomputed here.
 
         A JOB IS KEYED BY ``(shape, arm)``, NOT BY ``(block, arm)``.
         ``_recut``'s "halve" attempt on a single-recipe block routinely hands
@@ -1020,22 +1053,9 @@ class HierarchicalLayout:
         ``(block, arm)`` pairs this round did NOT hand to a placer -- a
         remembered no-good or a same-round duplicate.
         """
-        shapes = [shape_key(entries[index].units) for index in todo]
-        # `(shape, arm) -> todo-slots that need this exact question answered`,
-        # insertion-ordered so the FIRST slot to need a key is the one whose
-        # sub-spec actually gets built and solved.
-        slots_by_key: dict[tuple[ShapeKey, str], list[int]] = {}
-        for slot in range(len(todo)):
-            for arm in arms_by_slot[slot]:
-                slots_by_key.setdefault((shapes[slot], arm), []).append(slot)
-
+        block_budget = plan.budget_s
         jobs: list[_BlockJob] = []
-        job_keys: list[tuple[ShapeKey, str]] = []
-        skipped = 0
-        for (key, arm), slots in slots_by_key.items():
-            if nogood.remembers(key, arm, block_budget):
-                skipped += len(slots)
-                continue
+        for (_key, arm), slots in plan.active:
             index = todo[slots[0]]
             jobs.append(
                 (
@@ -1050,10 +1070,6 @@ class HierarchicalLayout:
                     deadline,
                 )
             )
-            job_keys.append((key, arm))
-            # Every OTHER slot sharing this key is answered without a job of
-            # its own -- see the docstring's "AT MOST ONCE".
-            skipped += len(slots) - 1
         try:
             # `_solve_block` is resolved from the module globals at call time,
             # which is what lets a test substitute the worker.
@@ -1083,8 +1099,8 @@ class HierarchicalLayout:
             {"verdict": "REFUSED: shape already refused this build (no-good)", "ok": False},
             None,
         )
-        outcome_by_key: dict[tuple[ShapeKey, str], tuple[dict[str, object], Placement | None]] = {}
-        for job_key, result in zip(job_keys, results, strict=True):
+        outcome_by_key = dict.fromkeys((key for key, _slots in plan.remembered), skip_record)
+        for (job_key, _slots), result in zip(plan.active, results, strict=True):
             record, _placement = result
             # Only a genuine placer REFUSAL says anything about the SHAPE.
             # "POOL FAILED" and a placer CRASH are infrastructure failures --
@@ -1116,16 +1132,18 @@ class HierarchicalLayout:
             outcome_by_key[job_key] = result
 
         for slot, index in enumerate(todo):
-            slot_arms = arms_by_slot[slot]
-            outcomes = [outcome_by_key.get((shapes[slot], arm), skip_record) for arm in slot_arms]
+            slot_keys = plan.keys_by_slot[slot]
+            outcomes = [outcome_by_key[key] for key in slot_keys]
             winners = [placement for _record, placement in outcomes if placement is not None]
             entries[index].verdicts = tuple(
                 str(record.get("verdict", "no verdict")) for record, _placement in outcomes
             )
-            entries[index].arms_tried = entries[index].arms_tried | set(slot_arms)
+            entries[index].arms_tried = entries[index].arms_tried | {
+                arm for _shape, arm in slot_keys
+            }
             if winners:
                 entries[index].placement = min(winners, key=lambda p: p.area)
-        return skipped
+        return plan.skipped_slots
 
 
 def _recut(

@@ -7,7 +7,8 @@ from typing import NamedTuple
 import pytest
 
 from flab2bp.dsp import catalog
-from flab2bp.layout import junction, slots
+from flab2bp.layout import finalize, freeform, junction, slots
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Facing, PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.freeform import (
@@ -24,6 +25,8 @@ from flab2bp.layout.route_feedback import (
     DetailedRouteResult,
     DetailedRouteStatus,
     NetFailure,
+    NetId,
+    NetRole,
     RouteFailureKind,
 )
 from flab2bp.spec import BuildSpec
@@ -244,6 +247,119 @@ def test_a_coater_drop_is_exempt_from_another_coaters_ban():
 
     assert peer_drop in banned_alone, "the first Coater must ban that cell on its own"
     assert peer_drop not in banned_both
+
+
+@pytest.mark.parametrize("source_y", (18, 19), ids=("projected-overlap", "nearby-clear"))
+def test_composed_cut_respects_copied_coater_projected_clearance(
+    source_y: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A copied Coater must constrain new taps, not just new belt cells.
+
+    Reduced from the retained titanium compose return: Coater1264 at (5,16)
+    and newly routed ground support Splitter5996 at (5,18), beneath its
+    level-2 live branch. Only packing is replaced, to hold this stage input
+    fixed; routing and power are real.
+    """
+    monkeypatch.setenv("FLAB2BP_COATER_NODE", "placed")
+    spec = chain_build_spec()
+    belt_id = catalog.get_item_id(spec.belt_item_id) or 2001
+    belt_model = catalog.building(belt_id).model_index
+    coater = _coater(5, 16)
+    buildings = [
+        PlacedBuilding(
+            item_id=belt_id,
+            model_index=belt_model,
+            x=x,
+            y=y,
+            carries_item="iron-ingot",
+            output_obj=onward,
+            z=Fraction(2),
+        )
+        for x, y, onward in (
+            (4, source_y, 1),
+            (5, source_y, 2),
+            (6, source_y, None),
+            (5, 24, None),
+        )
+    ]
+    buildings.append(coater)
+    tower = catalog.power_tower_building(spec.power_tower_item_id)
+    buildings.append(
+        PlacedBuilding(
+            item_id=tower.item_id,
+            model_index=tower.model_index,
+            x=0,
+            y=20,
+            width=tower.width,
+            height=tower.height,
+        )
+    )
+    canvas = compose.canvas_for(spec, buildings, ramped=False, margin=2)
+    source = freeform._Port(belt=1, x=5, y=source_y, x0=5, x1=5, tiles=(1,), z=2)
+    destination = freeform._Port(belt=3, x=5, y=24, x0=5, x1=5, tiles=(3,), z=2)
+    packed = compose.PackedCanvas(
+        buildings=buildings,
+        blocks=[],
+        canvas=canvas,
+        nets=[
+            freeform._Net(
+                src=source,
+                dst=destination,
+                item="iron-ingot",
+                net_id=NetId(0, 1, "iron-ingot", NetRole.INTERNAL, 0),
+            )
+        ],
+        reservation=PortAccessReservation((), (), ()),
+        gap=2,
+    )
+    monkeypatch.setattr(compose, "pack_with_access", lambda *args, **kwargs: packed)
+    result = compose.compose([], [], spec, gap=2, ramped=False, deadline=None)
+    splitters = [
+        (index, building)
+        for index, building in enumerate(result.placement.buildings)
+        if building.item_id == catalog.SPLITTER_ID
+    ]
+    # The nearby control must route the branch while retaining its original
+    # successor: rejecting every possible tap cannot satisfy this regression.
+    if source_y == 19:
+        assert result.routed == 1 and result.failures == ()
+        assert splitters
+        assert canvas.buildings[1].output_obj != 2
+        assert any(building.output_obj == 2 for building in canvas.buildings)
+    else:
+        assert splitters or result.unrouted_cuts == 1
+
+    bounds = result.placement.bounds
+    frames = freeform._junction_projection_frames(bounds, bounds, BandPolicy("portable"))
+    assert frames
+    failures = []
+    for frame in frames:
+        materialized_coater = finalize.materialize_frame_building(
+            coater, bounds=frame.bounds, candidate=frame.candidate
+        )
+        failures.append(
+            [
+                failure
+                for index, splitter in splitters
+                for projection in frame.projections
+                if (
+                    failure := finalize.projected_coater_splitter_failure(
+                        (4, freeform._collision_pose(materialized_coater)),
+                        (
+                            index,
+                            freeform._collision_pose(
+                                finalize.materialize_frame_building(
+                                    splitter, bounds=frame.bounds, candidate=frame.candidate
+                                )
+                            ),
+                        ),
+                        projection,
+                    )
+                )
+                is not None
+            ]
+        )
+    assert any(not frame_failures for frame_failures in failures), failures
 
 
 def test_pack_with_access_widens_the_gap_until_every_port_has_a_corridor(

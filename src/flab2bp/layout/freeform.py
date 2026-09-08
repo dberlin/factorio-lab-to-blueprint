@@ -15438,6 +15438,52 @@ def _projected_coater_junction_bans_by_frame(
     return tuple(frozenset(banned) for banned in banned_by_frame)
 
 
+def _prepare_coater_junction_geometry(
+    buildings: Sequence[PlacedBuilding],
+    capacity: tuple[int, int, int, int],
+    policy: BandPolicy,
+    *,
+    already_banned: frozenset[Cell] = frozenset(),
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[frozenset[Cell], tuple[frozenset[Cell], ...]]:
+    """Prepare new Splitter stacks against actual committed Coater geometry.
+
+    A cell is unconditionally forbidden only when every reachable finalizer
+    frame rejects it. Keep the individual frame bans for the router to retain
+    one common legal frame across all selected taps.
+    """
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    indexed = buildings if isinstance(buildings, MutableBuildings) else Buildings(buildings)
+    coaters = tuple((index, buildings[index]) for index in indexed.by_item(catalog.SPRAY_COATER_ID))
+    if not coaters:
+        return already_banned, ()
+    frames = _junction_projection_frames(
+        finalize._cleanup_survivor_bounds(
+            Placement(buildings=tuple(buildings)), cancelled=cancelled
+        ),
+        capacity,
+        policy,
+        cancelled=cancelled,
+    )
+    frame_bans = _projected_coater_junction_bans_by_frame(
+        coaters,
+        frames,
+        capacity,
+        already_banned=already_banned,
+        splitter_index=len(buildings),
+        cancelled=cancelled,
+    )
+    if not frame_bans:
+        return already_banned, frame_bans
+    universal = set(frame_bans[0])
+    for frame_ban in frame_bans[1:]:
+        universal.intersection_update(frame_ban)
+    if cancelled is not None and cancelled():
+        raise _PreparationDeadline
+    return already_banned | universal, frame_bans
+
+
 def _projection_envelope(
     occupied: tuple[int, int, int, int],
     limit: tuple[int, int, int, int],
@@ -18044,19 +18090,6 @@ def _prepare_routing_problem(
     )
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
-    junction_frames = (
-        _junction_projection_frames(
-            finalize._cleanup_survivor_bounds(
-                Placement(buildings=tuple(canvas.buildings)),
-                cancelled=cancelled,
-            ),
-            capacity,
-            policy,
-            cancelled=cancelled,
-        )
-        if coater_list and junction_possible
-        else ()
-    )
     junction_ban = (
         _prepared_junction_ban(
             canvas.buildings,
@@ -18068,27 +18101,15 @@ def _prepare_routing_problem(
         if junction_possible or power_sites
         else frozenset()
     )
-    projection_coaters = tuple(
-        (index, canvas.buildings[index])
-        for index in canvas.buildings.by_item(catalog.SPRAY_COATER_ID)
-    )
-    junction_frame_bans = (
-        _projected_coater_junction_bans_by_frame(
-            projection_coaters,
-            junction_frames,
+    junction_frame_bans: tuple[frozenset[Cell], ...] = ()
+    if coater_list and junction_possible:
+        junction_ban, junction_frame_bans = _prepare_coater_junction_geometry(
+            canvas.buildings,
             capacity,
-            already_banned=set(junction_ban),
-            splitter_index=len(canvas.buildings),
+            policy,
+            already_banned=junction_ban,
             cancelled=cancelled,
         )
-        if projection_coaters and junction_frames
-        else ()
-    )
-    if junction_frame_bans:
-        universally_projected_ban = set(junction_frame_bans[0])
-        for frame_ban in junction_frame_bans[1:]:
-            universally_projected_ban.intersection_update(frame_ban)
-        junction_ban = junction_ban | universally_projected_ban
     if cancelled is not None and cancelled():
         raise _PreparationDeadline
 
@@ -19321,16 +19342,18 @@ def _coater_candidate_has_ambiguous_supply(canvas: _Canvas, x: int, y: int, z: i
     return False
 
 
-def _reserve_staged_coater_belt_ban(
+def _reserve_coater_belt_ban(
     canvas: _Canvas,
-    staged: _StagedCoater,
+    coater: PlacedBuilding,
     belt_model: int,
 ) -> None:
     """Price the committed Coater's exact collider for later belt routes."""
-    cx, cy = staged.port.host_x, staged.port.host_y
-    drop = (staged.port.x, staged.port.y)
-    need = colliders.belt_crossing_height(staged.coater.model_index)
-    body_half = _coater_body_half_span(staged.port.yaw)
+    cx, cy = coater.x, coater.y
+    supply = slots.addon_supply_cell(coater.item_id, x=cx, y=cy, z=coater.z, yaw=coater.yaw, area=1)
+    drop = supply[:2]
+    pose = _collision_pose(coater)
+    need = colliders.belt_crossing_height(coater.model_index)
+    body_half = _coater_body_half_span(coater.yaw)
     span = body_half + 1
     if coater_mode().is_node:
         # The area-1 rival cell -- and only that.  DO NOT delete this along
@@ -19352,8 +19375,8 @@ def _reserve_staged_coater_belt_ban(
         # node's own belt, already on the canvas by staging time.  The clause
         # could not change a routing decision, so it is gone.  See
         # `test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_there`.
-        rival = (2 * cx - staged.port.x, 2 * cy - staged.port.y)
-        canvas.belt_ban.setdefault(rival, set()).add(staged.port.z)
+        rival = (2 * cx - supply[0], 2 * cy - supply[1])
+        canvas.belt_ban.setdefault(rival, set()).add(supply[2])
     for dx in range(-span, span + 1):
         for dy in range(-span, span + 1):
             tile = (cx + dx, cy + dy)
@@ -19373,7 +19396,7 @@ def _reserve_staged_coater_belt_ban(
                 )
                 if colliders.belt_crossings(
                     [probe],
-                    [staged.projected_pair[1]],
+                    [pose],
                     directly_over_only=True,
                 ):
                     canvas.belt_ban.setdefault(tile, set()).add(level)
@@ -20040,7 +20063,7 @@ def _place_coaters(
         coater_index = len(canvas.buildings)
         assert coater_index == candidate.port.coater
         canvas.buildings.append(candidate.coater)
-        _reserve_staged_coater_belt_ban(canvas, candidate, belt_model)
+        _reserve_coater_belt_ban(canvas, candidate.coater, belt_model)
         out.append(candidate.port)
 
     # Every drop is exempt from every overlapping Coater ban: it is a required
