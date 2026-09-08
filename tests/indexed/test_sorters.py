@@ -155,3 +155,5 @@ def test_order_follows_the_rows_given_not_littletable_internals() -> None:
     assert index.drawing_from(1) == (30, 5, 17)
     assert index.drawing_from_carrying(2, "gear") == (100, 2)
     assert index.carrying("gear") == (100, 2)
+    assert index.carrying_or_unknown("gear") == (30, 5, 100, 17, 2)
+    assert index.carrying_or_unknown("absent") == (30, 5, 17)

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING
 
 import littletable
@@ -108,6 +109,10 @@ class Sorters:
     def carrying(self, item: str) -> tuple[int, ...]:
         """Sorters resolved to ``item``, in placement order."""
         return self._ordered(self._table.by.item[item])
+
+    def carrying_or_unknown(self, item: str) -> tuple[int, ...]:
+        """Named and unattributable cargo, interleaved in placement order."""
+        return self._ordered(chain(self._table.by.item[item], self._table.by.item[None]))
 
     def drawing_from_carrying(self, source: int, item: str) -> tuple[int, ...]:
         """Sorters drawing from ``source`` that carry ``item``."""
