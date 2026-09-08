@@ -1,0 +1,49 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "no-proliferator",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v4/mall-no-proliferator-b60-r1.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "docs/superpowers/evidence/2026-09-07-hierarchical-v4/mall-no-proliferator-b60-r1.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for no-proliferator after 60s: hierarchical/no-proliferator: 6 block(s) never placed, out of re-cut round(s) after 2 of 2 the 36.0s round wall allows: block 50 (magnetic-coil): REFUSED: deadline exhausted before finding an exact layout; block 51 (magnetic-coil): REFUSED: deadline exhausted before finding an exact layout; block 52 (magnetic-coil): REFUSED: deadline exhausted before finding an exact layout; block 53 (magnetic-coil): REFUSED: deadline exhausted before finding an exact layout; block 71 (electromagnetic-turbine): REFUSED: deadline exhausted before finding an exact layout; block 72 (electromagnetic-turbine): REFUSED: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/no-proliferator": {
+   "arm_dispatch_both": "125",
+   "arm_dispatch_freeform": "0",
+   "arm_dispatch_sequence_pair": "0",
+   "blocks": "83",
+   "blocks_unattempted": "0",
+   "compose_gap": "0",
+   "cut_lanes": "0",
+   "nogood_skips": "142",
+   "player_fed": "0",
+   "port_demands": "0",
+   "power_infill_towers": "0",
+   "power_uncovered_tiles": "0",
+   "recut_rounds": "2",
+   "reservation_degraded": "0",
+   "reservation_missing": "0",
+   "reservation_partial": "0",
+   "resplits": "2",
+   "unrouted_cuts": "0"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 21.26
+}

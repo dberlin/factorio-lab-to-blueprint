@@ -1,0 +1,24 @@
+# NOTE (2026-09-07, task 6 fix round 1): the "arm=off" line below is a stale
+# probe label, not the actual arm. This build ran from the coater-placed
+# branch checkout with FLAB2BP_COATER_NODE unset, which under this branch's
+# env-var contract means PLACED. probe_cell.py defaulted an unset env var
+# to the string 'off' directly instead of asking coater_mode(); fixed at
+# the source in probe_cell.py (docs/superpowers/evidence/2026-09-07-exp-
+# coater-node/probes/probe_cell.py). Annotated in place rather than
+# re-run: freeform's CP-SAT search is not reproducible across runs at
+# workers>1, so re-running would produce a different digest/positions and
+# invalidate the run-boundaries.txt / icon-counts.txt evidence already
+# measured against this exact blueprint. The arm really is "placed" --
+# confirmed by digest 248ca68195dbf468 matching the gate's own roundC
+# placed-arm row for reported/freeform/all-products exactly (README §12).
+arm=off cell=reported/all-products strategy=freeform
+wall=28.9s buildings=4262 coaters=35 belts=3993 coater_merges=0
+area=5100.0 belt_tiles=3993
+  WARNING belt.termination: belt run 0 (head building 7 at (8,12), carrying 'advanced-mining-machine') runs 19 of its 24 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 3 (head building 64 at (8,33), carrying 'assembling-machine-3') runs 47 of its 49 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 13 (head building 359 at (18,49), carrying 'plane-smelter') runs 32 of its 33 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 19 (head building 477 at (44,32), carrying 're-composing-assembler') runs 36 of its 37 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 24 (head building 588 at (44,57), carrying 'hydrogen') runs 29 of its 99 tiles past its last tap and then stops; those tiles serve nothing
+  WARNING belt.termination: belt run 61 (head building 4091 at (67,69), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+  WARNING belt.termination: belt run 89 (head building 4133 at (0,73), carrying 'proliferator-2') runs 2 tiles and no sorter touches any of them; the whole lane is wasted
+digest=248ca68195dbf468

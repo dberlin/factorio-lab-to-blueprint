@@ -477,6 +477,44 @@ def test_indexed_attachment_lookup_preserves_order_and_ignores_non_belts() -> No
     ]
 
 
+def test_node_index_splitters_matches_the_item_id_filter_it_replaced() -> None:
+    """``_NodeIndex.build`` now tags splitters in its existing single pass.
+
+    ``_issues`` used to re-scan every node with ``if splitter.item_id !=
+    catalog.SPLITTER_ID: continue``; that filter now lives on
+    ``_NodeIndex.splitters``, populated inside the SAME pass that already
+    walks every node to build the belt-side reverse maps. Reuses the mixed
+    splitter/assembler/sorter/belt fixture from the attachment-order test
+    above and checks the field directly against the filter it replaced,
+    reimplemented here exactly as it read before this task.
+    """
+    splitter_model = catalog.building(catalog.SPLITTER_ID).model_index
+    belt_model = catalog.building(2002).model_index
+    sorter_model = catalog.building(2011).model_index
+    assembler_model = catalog.building(2303).model_index
+    buildings = (
+        PlacedBuilding(catalog.SPLITTER_ID, splitter_model, 0, 0),
+        PlacedBuilding(2303, assembler_model, 0, 0, output_obj=0),
+        PlacedBuilding(2011, sorter_model, 0, 0, output_obj=0),
+        PlacedBuilding(2002, belt_model, 0, 0, output_obj=0),
+        PlacedBuilding(catalog.SPLITTER_ID, splitter_model, 0, 0),
+        PlacedBuilding(2002, belt_model, 0, 0, z=Fraction(1), input_obj=4, output_obj=6),
+        PlacedBuilding(2002, belt_model, 0, 1, z=Fraction(1)),
+        PlacedBuilding(2303, assembler_model, 0, 0, input_obj=4),
+    )
+    nodes = splitter_ports._raw_placement_nodes(buildings)
+    index = splitter_ports._NodeIndex.build(nodes)
+
+    old_filtered = tuple(n for n in nodes if n.item_id == catalog.SPLITTER_ID)
+
+    print("old per-call filter ids:", [n.id for n in old_filtered])
+    print("index.splitters ids:", [n.id for n in index.splitters])
+
+    # Non-vacuous: two real splitters, at positions 0 and 4, both included.
+    assert [n.id for n in index.splitters] == [0, 4]
+    assert index.splitters == old_filtered
+
+
 def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> None:
     wired = slots.assign_belt_slots(_minimal_broken_shape())
     frame = AreaFrame(56, 42, 160, (160,), False)
@@ -560,6 +598,39 @@ def test_corrected_construction_path_emits_only_game_valid_splitter_ports() -> N
         if issue.code == "position"
     ]
     assert [(issue.splitter, issue.belt) for issue in position_issues] == [(2, 1)]
+
+
+def test_splitter_anchor_fixup_iterates_only_belts() -> None:
+    """``placement_to_blueprint``'s anchor fixup now walks
+    ``Buildings.of(placement).belts()`` instead of every building filtered
+    inline by ``catalog.is_belt``. Confirm a non-belt building that also
+    happens to name the Splitter as its ``output_obj`` is never visited --
+    its local offset must land at its own tile, exactly as the old ``if not
+    catalog.is_belt(building.item_id): continue`` guaranteed by skipping it.
+    """
+    wired = slots.assign_belt_slots(_minimal_broken_shape())
+    stray_model = catalog.building(2303).model_index
+    stray_machine = PlacedBuilding(2303, stray_model, 10, 10, output_obj=2)
+    buildings = wired + (stray_machine,)
+    frame = AreaFrame(56, 42, 160, (160,), False)
+    placement = Placement(buildings=buildings, frame=frame)
+
+    blueprint = codec.placement_to_blueprint(placement, timestamp=0)
+    stray_index = len(wired)
+    stray_out = blueprint.buildings[stray_index]
+    splitter_out = blueprint.buildings[2]
+    expected = codec.tile_to_local_offset(10, 10, Fraction(0), 1, 1)
+
+    print("stray machine emitted offset:", (stray_out.x, stray_out.y, stray_out.z))
+    print("splitter port anchor offset:", (splitter_out.x, splitter_out.y, splitter_out.z))
+    print("expected untouched offset:", expected)
+
+    # Non-vacuous: the stray building really references the Splitter, and its
+    # emitted position is genuinely different from the Splitter's own.
+    stray_pos = (stray_out.x, stray_out.y, stray_out.z)
+    splitter_pos = (splitter_out.x, splitter_out.y, splitter_out.z)
+    assert stray_pos != splitter_pos
+    assert stray_pos == expected
 
 
 def test_foreign_four_port_model_is_not_a_supported_splitter_variant() -> None:

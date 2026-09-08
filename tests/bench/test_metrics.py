@@ -56,6 +56,24 @@ def _substation(x: int, y: int) -> PlacedBuilding:
     return PlacedBuilding(item_id=2212, model_index=68, x=x, y=y, width=5, height=5)
 
 
+def _tower(x: int, y: int) -> PlacedBuilding:
+    return PlacedBuilding(
+        item_id=catalog.TESLA_TOWER_ID,
+        model_index=catalog.building(catalog.TESLA_TOWER_ID).model_index,
+        x=x,
+        y=y,
+    )
+
+
+def _coater(x: int, y: int) -> PlacedBuilding:
+    return PlacedBuilding(
+        item_id=catalog.SPRAY_COATER_ID,
+        model_index=catalog.building(catalog.SPRAY_COATER_ID).model_index,
+        x=x,
+        y=y,
+    )
+
+
 def test_measures_geometry_from_buildings_not_stats() -> None:
     # stats claims an absurd area; the harness must ignore it.
     placement = Placement(
@@ -161,3 +179,29 @@ def test_power_producers_remain_machines_and_direct_insert_endpoints(item_id: in
     assert metrics.direct_inserts == 2
     # Categories overlap: the producer is also a member of the power network.
     assert metrics.towers == 4
+
+
+def test_machine_metrics_include_piler_but_exclude_tower_and_coater() -> None:
+    piler = catalog.building(catalog.PILER_ID)
+    placement = Placement(
+        buildings=(
+            _assembler(0, 0),
+            _assembler(10, 0),
+            _tower(20, 0),
+            _coater(21, 0),
+            PlacedBuilding(
+                item_id=catalog.PILER_ID,
+                model_index=piler.model_index,
+                x=25,
+                y=0,
+            ),
+            _sorter(4, 0, inp=0, out=4),
+            _sorter(15, 0, inp=4, out=1),
+            _sorter(20, 0, inp=0, out=2),
+            _sorter(21, 0, inp=3, out=1),
+        )
+    )
+    measured = measure(placement)
+    assert measured.machines == 3
+    assert measured.direct_inserts == 2
+    assert measured.towers == 1

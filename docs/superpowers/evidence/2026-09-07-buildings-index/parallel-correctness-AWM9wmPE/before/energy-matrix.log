@@ -1,0 +1,11 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+freeform / output-products: 9 machines, 572 tiles, 224 buildings
+primary_band: 60
+certified_bands: 60, 80, 100
+inputs to belt in: coal, hydrogen, proliferator-3  (3 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-2 (12.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; no run needed more than the floor; stack 1; 0 piler(s)
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/buildings-index/docs/superpowers/evidence/2026-09-07-buildings-index/parallel-correctness-AWM9wmPE/before/energy-matrix.blueprint.txt
+
+EXIT=0

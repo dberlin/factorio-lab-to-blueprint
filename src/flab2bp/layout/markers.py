@@ -20,6 +20,7 @@ from dataclasses import replace
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings
 from flab2bp.spec import BuildSpec
 
 
@@ -137,33 +138,28 @@ def self_loop_prime_heads(placement: Placement, spec: BuildSpec) -> dict[str, in
     """
     buildings = placement.buildings
     heads: dict[str, int] = {}
+    if not spec.self_loop_seeds:
+        return heads
+    indexed = Buildings.of(placement)
     for seed in spec.self_loop_seeds:
         try:
             dsp_recipe = catalog.recipe_id(seed.recipe_id)
         except KeyError:
             continue
-        group_machines = {
-            i
-            for i, b in enumerate(buildings)
-            if b.recipe_id == dsp_recipe
-            and not catalog.is_belt(b.item_id)
-            and not catalog.is_sorter(b.item_id)
-        }
+        group_machines = indexed.machines_for_recipe(dsp_recipe)
         if not group_machines:
             continue
-        output_sorters = [
+        output_sorters = sorted(
             i
-            for i, b in enumerate(buildings)
-            if catalog.is_sorter(b.item_id)
-            and b.carries_item == seed.item_id
-            and b.input_obj in group_machines
-        ]
+            for machine in group_machines
+            for i in indexed.sorters_out_of(machine)
+            if buildings[i].carries_item == seed.item_id
+        )
         input_sorters = {
             i
-            for i, b in enumerate(buildings)
-            if catalog.is_sorter(b.item_id)
-            and b.carries_item == seed.item_id
-            and b.output_obj in group_machines
+            for machine in group_machines
+            for i in indexed.sorters_into(machine)
+            if buildings[i].carries_item == seed.item_id
         }
         if not output_sorters or not input_sorters:
             continue

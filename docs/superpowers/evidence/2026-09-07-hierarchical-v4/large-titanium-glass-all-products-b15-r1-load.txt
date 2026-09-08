@@ -1,0 +1,4 @@
+runnable_5s_mean=19
+# mean of vmstat's r column over 5 one-second samples (vmstat 1 6, first discarded).
+# CPU pressure, not load average: this box's load average is mostly I/O wait.
+# Under 64 is fine on these 128 cores.  Recorded, never waited on.

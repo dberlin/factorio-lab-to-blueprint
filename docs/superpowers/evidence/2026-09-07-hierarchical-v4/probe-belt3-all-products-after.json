@@ -1,0 +1,47 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?o=conveyor-belt-3*1080&ibe=conveyor-belt-3&rex=P*Y*d*k*u*BN*BU*BX*Bk~Bl*Bs*CF~CG*CQ~CR&mmr=arc-smelter~assembling-machine-2~chemical-plant~matrix-lab&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v4/belt3-after.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "docs/superpowers/evidence/2026-09-07-hierarchical-v4/belt3-after.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for all-products after 60s: hierarchical/all-products: unrouted cut(s): electric-motor: block 7 lane head 5033: no port access corridor (held=0 wants=1 options=5); magnet: block 7 lane head 5251: no port access corridor (held=0 wants=1 options=3); magnetic-coil: block 7 lane head 5499: no port access corridor (held=0 wants=1 options=5); magnetic-coil: block 7 lane head 5478: no port access corridor (held=0 wants=1 options=5); magnetic-coil: block 8 lane head 7353: no port access corridor (held=0 wants=1 options=3); gear: block 8 lane head 7304: no port access corridor (held=0 wants=1 options=3); magnetic-coil: block 9 lane head 8324: no port access corridor (held=0 wants=1 options=3); gear: block 9 lane head 8275: no port access corridor (held=0 wants=1 options=3); magnet: block 0 lane head 926: no port access corridor (held=0 wants=1 options=6); copper-ingot: block 4 lane head 2975: no port access corridor (held=0 wants=1 options=9); copper-ingot: block 4 lane head 2978: no port access corridor (held=0 wants=1 options=9); energetic-graphite: block 3 lane head 2765: no port access corridor (held=0 wants=1 options=9); energetic-graphite: block 3 lane head 2768: no port access corridor (held=0 wants=1 options=9); electric-motor: block 8 lane head 7424: no port access corridor (held=0 wants=1 options=9); graphene: block 2 lane head 2646: no port access corridor (held=0 wants=1 options=6); magnetic-coil: block 7 lane head 5465: no port access corridor (held=0 wants=1 options=9); electric-motor: block 8 -> block 7: COMMIT_LINK; electric-motor: block 8 -> block 7: SEALED_POCKET; electric-motor: block 8 -> block 7: SEALED_POCKET; gear: block 5 -> block 8: DYNAMIC_ACCESS; iron-ingot: block 1 -> block 10: COMMIT_LINK; iron-ingot: block 1 -> block 8: COMMIT_LINK; iron-ingot: block 1 -> block 8: SEALED_POCKET; iron-ingot: block 1 -> block 8: SEALED_POCKET; iron-ingot: block 1 -> block 8: SEALED_POCKET; iron-ingot: block 1 -> block 9: DYNAMIC_ACCESS; magnet: block 0 -> block 7: DYNAMIC_ACCESS; magnet: block 0 -> block 7: DYNAMIC_ACCESS; magnet: block 0 -> block 7: SEALED_POCKET; magnetic-coil: block 7 -> block 8: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 8: DYNAMIC_ACCESS; magnetic-coil: block 7 -> block 9: SEALED_POCKET. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/all-products": {
+   "arm_dispatch_both": "2",
+   "arm_dispatch_freeform": "7",
+   "arm_dispatch_sequence_pair": "5",
+   "blocks": "11",
+   "blocks_unattempted": "0",
+   "compose_gap": "4",
+   "cut_lanes": "89",
+   "nogood_skips": "2",
+   "player_fed": "0",
+   "port_demands": "102",
+   "recut_rounds": "2",
+   "reservation_degraded": "5",
+   "reservation_missing": "16",
+   "reservation_partial": "5",
+   "resplits": "2",
+   "unrouted_cuts": "32"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 60.44
+}

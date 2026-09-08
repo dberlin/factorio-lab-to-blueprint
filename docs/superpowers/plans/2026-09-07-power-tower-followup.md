@@ -14,12 +14,14 @@ Implementation handoff, not a gate pass. Completed measurements are adjudicated 
 
 R9's original acceptance is superseded by R12. Existing recovery halo tests and the later parent canvas red/green proof pass; this is software reservation evidence, not independent review approval or full physical safety. Item 2212 remains low-confidence; certification suppresses some substation/belt collision findings. Full paste evidence must use the game's live build-condition oracle or an actual paste, not infer safety from a clean Python certificate. Gate(b) records56/72 substation CLEAN versus66/72 default; gate(c) records1/6 versus2/6, so the six-CLEAN requirement fails. All refusals remain failures.
 
-R8 is unchanged: `_power_plan`'s coverage scoring/stamping is anchor-centred, while emitted substation coverage is centred on the actual footprint. This can cause false refusals or `power.coverage` rejection. It cannot justify accepting a dark layout; classify each gate refusal explicitly. Default Tesla scoring and tie-breaking remain untouched.
+R8 is fixed in the integration with master `f162d9e1`: candidate sites and emitted buildings retain their anchors; coverage scoring, spreading, stamping and incremental removal use the actual footprint centre. The frozen pre-integration planner fails the east/west boundary regressions; the corrected planner passes all five centre/infill regressions. Tesla's 1x1 centre offset remains zero. These later source changes are outside the original gate measurements above.
 
 The C# `oracle/` program exercises `MatchInserter`; it is not a full paste validator. `tools/dsp-oracle` is the in-game BepInEx build-condition oracle: hover a generated blueprint and press F9 to capture the next completed `CheckBuildConditions` verdict. Save that JSON alongside the exact blueprint, game version, band/anchor and screenshot.
 
-The actual15s hierarchical CLI smoke (`recovery-parent-substation.log`) exits3:
-both child blocks refuse before composition. It does not prove the parent route
-or `plan_power_infill` works end-to-end. Main owns the remaining selected-record
-infill seam after hierarchy merge and its actual composed-build proof. Missing
-game/.NET prerequisites are recorded in `gate-d-dotnet.txt`, not counted as PASS.
+Integration runtime evidence (Main's archived integration ledger):
+
+- Hierarchical iron-ingot at 60/min with `--power-tower wireless` exits0: one machine, 70 tiles, 15 buildings, certified bands32/40/60. This exercises a non-default selected power building through actual composition.
+- Hierarchical iron-ingot and titanium-ingot with substation still exit3 before composition. The direct iron-ingot diagnostic captures `_Unpowerable`: all63 demand tiles lack a legal tower site on the packed canvas. This is a 7x7-clearance standing-ground refusal, not an observed certificate rejection; the CLI's generic `power.coverage` summary does not distinguish them.
+- All15 failures caused by the integration's incorrect `Buildings.of(sequence)` call pass serially after using the sequence constructor. The full affected-suite run also retains the inherited band160 and two-stage-alignment failures; it is not a clean full-suite result.
+
+The selected-record infill and clearance regressions pass, but the failed substation CLI runs do not establish an end-to-end composed-substation build. Missing game/.NET prerequisites remain recorded in `gate-d-dotnet.txt`, not counted as PASS.

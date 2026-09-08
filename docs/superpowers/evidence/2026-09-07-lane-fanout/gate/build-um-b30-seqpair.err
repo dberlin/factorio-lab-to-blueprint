@@ -1,0 +1,26 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+flab2bp: no valid layout for no-proliferator, all-products, output-products after 30s: sequence-pair/no-proliferator: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout; sequence-pair/all-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout; sequence-pair/output-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; island 1: deadline exhausted before finding an exact layout; island 2: deadline exhausted before finding an exact layout; island 3: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+Command exited with non-zero status 3
+	Command being timed: "uv run flab2bp https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11 --budget 30 --strategy sequence-pair -v -o /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/lane-fanout/docs/superpowers/evidence/2026-09-07-lane-fanout/gate/bp-um-b30-seqpair.txt"
+	User time (seconds): 462.19
+	System time (seconds): 7.24
+	Percent of CPU this job got: 495%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:34.68
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 245464
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 4
+	Minor (reclaiming a frame) page faults: 3266692
+	Voluntary context switches: 7582
+	Involuntary context switches: 13317
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 2
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 3

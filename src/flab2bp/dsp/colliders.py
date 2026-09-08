@@ -1606,6 +1606,27 @@ def _resolve(previews: Sequence[Preview], j: int | None) -> int | None:
     return j if j is not None and 0 <= j < len(previews) else None
 
 
+def _predecessors_by_output(previews: Sequence[Preview]) -> dict[int, tuple[int, ...]]:
+    """The reverse ``output`` index, shared by both reconstructions below.
+
+    ``Buildings.by_output_obj`` builds the identical one-pass reverse-adjacency
+    map for ``PlacedBuilding`` records, but ``colliders.py`` never receives
+    those -- callers convert to this module's own ``Preview`` first (see the
+    module-level scope note), and ``Buildings`` is typed for ``PlacedBuilding``
+    alone. This is the same technique, kept local: one pass builds ``j ->
+    every belt preview whose (resolved) output names j``, in ascending
+    preview-index order, and :func:`paste_input_links` (last writer) and
+    :func:`_reverse_input_choices` (every writer) both read it instead of each
+    re-walking ``previews`` with its own slightly different loop body.
+    """
+    feeders: dict[int, list[int]] = {}
+    for i, p in enumerate(previews):
+        j = _resolve(previews, p.output)
+        if p.is_belt and j is not None and previews[j].is_belt:
+            feeders.setdefault(j, []).append(i)
+    return {j: tuple(v) for j, v in feeders.items()}
+
+
 def paste_input_links(previews: Sequence[Preview]) -> tuple[int | None, ...]:
     """``BuildPreview.input`` as the paste path leaves it, per preview.
 
@@ -1628,10 +1649,8 @@ def paste_input_links(previews: Sequence[Preview]) -> tuple[int | None, ...]:
     :func:`stable_belt_collisions`, not treat this tuple as serialization-stable.
     """
     links: list[int | None] = [_resolve(previews, p.input) for p in previews]
-    for i, p in enumerate(previews):
-        j = _resolve(previews, p.output)
-        if p.is_belt and j is not None and previews[j].is_belt:
-            links[j] = i
+    for j, feeders in _predecessors_by_output(previews).items():
+        links[j] = feeders[-1]
     return tuple(links)
 
 
@@ -1811,14 +1830,10 @@ def _reverse_input_choices(
     previews: Sequence[Preview],
 ) -> tuple[tuple[int | None, ...], ...]:
     """Every reverse input DSP's last-writer reconstruction can leave behind."""
-    feeders: list[set[int]] = [set() for _ in previews]
-    for i, preview in enumerate(previews):
-        output = _resolve(previews, preview.output)
-        if preview.is_belt and output is not None and previews[output].is_belt:
-            feeders[output].add(i)
+    predecessors = _predecessors_by_output(previews)
     return tuple(
-        tuple(sorted(own)) if own else (_resolve(previews, preview.input),)
-        for preview, own in zip(previews, feeders, strict=True)
+        predecessors[i] if i in predecessors else (_resolve(previews, preview.input),)
+        for i, preview in enumerate(previews)
     )
 
 

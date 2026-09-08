@@ -566,10 +566,27 @@ class HierarchicalLayout:
         # THIS CALL'S OWN no-good memo -- see `_ShapeNoGood`'s docstring for
         # why it is a local rather than `self._nogood`.
         nogood = _ShapeNoGood()
-        # THIS CALL'S OWN arm-dispatch cache, keyed on `ShapeKey`: see
+        # THIS CALL'S OWN arm-dispatch cache, keyed on `(ShapeKey, budget)`: see
         # `_arms_for`'s docstring for why two same-shaped blocks share an
-        # answer, and `_ShapeNoGood`'s docstring for why this is a local too.
-        arm_cache: dict[ShapeKey, tuple[str, ...]] = {}
+        # answer (but only at the same budget), and `_ShapeNoGood`'s
+        # docstring for why this is a local too.
+        arm_cache: dict[tuple[ShapeKey, float], tuple[str, ...]] = {}
+        # Seeded before the first round has computed its own `block_budget`
+        # (below, from `share`): the round loop needs SOME budget to offer
+        # `_arms_for` before it can size itself off `_arms_for`'s own answer.
+        # STILL NEEDED AFTER TASK 7 FIX ROUND 1, which made `arms_by_slot`
+        # (below) the round's ONE `_arms_for` computation, at the budget the
+        # round STARTS with -- this variable, not the fresh value the round
+        # goes on to compute for itself.  Round 1 has no prior round to carry
+        # a value from, so it still needs an initial one before that first
+        # computation.  `BLOCK_BUDGET_MIN_S` is a fine seed because it changes
+        # nothing that matters -- every real per-block budget this rule can
+        # ever produce is below `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S` anyway
+        # (`BLOCK_BUDGET_MAX_S` is a whole second under it), so the abstain
+        # branch is unconditional either way. From round 2 on this holds the
+        # PRIOR round's real `block_budget`, computed below and never
+        # recomputed here.
+        block_budget = BLOCK_BUDGET_MIN_S
         # ONE POOL FOR THE WHOLE BUILD, not one per round: a re-cut starts a
         # new round with more (smaller) blocks, and building a fresh pool for
         # it would pay a spawned process pool's own start-up again for jobs
@@ -610,19 +627,43 @@ class HierarchicalLayout:
                 todo = [index for index, entry in enumerate(entries) if entry.placement is None]
                 if not todo:
                     break
-                jobs = sum(len(self._arms_for(spec, entries[index], arm_cache)) for index in todo)
+                # COMPUTED ONCE PER ROUND, HERE, AND REUSED BELOW -- not
+                # re-derived by `_solve_round` under a second, fresher
+                # `block_budget` (Task 7 fix round 1; a review of the
+                # original Task 7 commit caught this).  This uses the
+                # budget THIS round STARTS with -- last round's `block_budget`,
+                # or the seed on round 1 -- because the round's OWN
+                # `block_budget` is not known yet: it is computed below,
+                # from `waves`, which is computed from `jobs`, which is
+                # computed from THIS list, so the round cannot fund itself
+                # before counting its own jobs.  Before this fix,
+                # `_solve_round` called `_arms_for` again with the freshly
+                # computed `block_budget`, which (a) ran
+                # `dispatch.block_features`'s `plan_strips` -- `_arms_for`'s
+                # own docstring calls it "the only expensive thing here" --
+                # a SECOND time per shape per round on the unguarded
+                # orchestrator path, spending exactly the wall this task
+                # made scarce by racing more arms, and (b) meant `jobs`,
+                # `waves` and the stats below could describe a different arm
+                # set than the one `_solve_round` actually funded and
+                # solved.  Passing `arms_by_slot` straight through removes
+                # both: one `_arms_for` answer per block this round, shared
+                # by `jobs`, the stats loop, and `_solve_round`.
+                arms_by_slot = [
+                    self._arms_for(spec, entries[index], arm_cache, block_budget=block_budget)
+                    for index in todo
+                ]
+                jobs = sum(len(arms) for arms in arms_by_slot)
                 # COUNTED HERE, NOT AFTER `_solve_round` RETURNS (v3 Task 3,
                 # Ruling P3): by then `_solve_round` has already widened
                 # `entries[index].arms_tried`, so `_arms_for`'s widening
                 # branch would return the FULL arm set for every block just
                 # solved and this would count `arm_dispatch_both` for all of
-                # them.  Counting from the SAME `_arms_for` calls the `jobs`
-                # line already made -- cached on `ShapeKey`, so this is a
-                # cache hit, not a second feature computation -- gives the
+                # them.  Reusing the SAME `arms_by_slot` the `jobs` line just
+                # built -- not a second `_arms_for` call -- gives the
                 # identical once-per-block-per-round numbers with the correct
                 # attribution.
-                for index in todo:
-                    chosen = self._arms_for(spec, entries[index], arm_cache)
+                for chosen in arms_by_slot:
                     if len(chosen) > 1:
                         stats.arm_dispatch_both += 1.0
                     elif chosen[0] == dispatch.ARM_FREEFORM:
@@ -669,7 +710,7 @@ class HierarchicalLayout:
                     block_budget=block_budget,
                     deadline=deadline,
                     nogood=nogood,
-                    arm_cache=arm_cache,
+                    arms_by_slot=arms_by_slot,
                 )
                 block_wall += time.monotonic() - started
                 still = [index for index in todo if entries[index].placement is None]
@@ -759,10 +800,25 @@ class HierarchicalLayout:
         stats.compose_gap = float(composition.gap)
         stats.port_demands = float(composition.port_demands)
         stats.reservation_degraded = float(composition.reservation_degraded)
+        stats.reservation_partial = float(composition.reservation_partial)
+        stats.power_infill_towers = float(composition.power_infill)
+        stats.power_uncovered_tiles = float(composition.power_uncovered)
         stats.reservation_missing = float(composition.reservation_missing)
-        stats.unrouted_cuts = float(len(composition.failures))
+        # `composition.unrouted_cuts` is the router/reservation prefix of
+        # `failures`, counted BEFORE the power infill's per-tile findings are
+        # appended -- not `len(composition.failures)`, which would let four
+        # dark splitter tiles read as four unrouted cuts even though nothing
+        # failed to route.  Ruling: this column stays comparable across the
+        # v2/v3/v4 gates (Task 9 §2.1), so power infill's own count
+        # (`power_uncovered_tiles`, above) never leaks into it.
+        stats.unrouted_cuts = float(composition.unrouted_cuts)
         if composition.failures:
-            raise refuse("unrouted cut(s): " + "; ".join(composition.failures))
+            # The 400-char cap matches the composer-crash message just above:
+            # a large refusal (measured: 900 uncovered tiles from one 2500-tile
+            # blob) must not turn into a ~90 KB message.  The FULL detail stays
+            # in `composition.failures` and in the stats above -- only this
+            # joined, human-readable string is capped.
+            raise refuse(("unrouted cut(s): " + "; ".join(composition.failures))[:400])
 
         # The spec the composition is JUDGED against is the one re-derived from
         # the blocks, not the one that was asked for: splitting rounds machine
@@ -840,14 +896,28 @@ class HierarchicalLayout:
         return (self.block_strategy,)
 
     def _arms_for(
-        self, spec: BuildSpec, entry: _Entry, cache: dict[ShapeKey, tuple[str, ...]]
+        self,
+        spec: BuildSpec,
+        entry: _Entry,
+        cache: dict[tuple[ShapeKey, float], tuple[str, ...]],
+        *,
+        block_budget: float,
     ) -> tuple[str, ...]:
         """Which arms this block is offered this round.
 
-        Cached on `ShapeKey` for the build: `sub_spec` is a pure function of
-        the units (its `index` argument reaches only a diagnostic label -- see
-        `_solve_round`'s docstring), so two same-shaped blocks score the same
-        features, and `plan_strips` is the only expensive thing here.
+        Cached on `(ShapeKey, block_budget)` for the build: `sub_spec` is a
+        pure function of the units (its `index` argument reaches only a
+        diagnostic label -- see `_solve_round`'s docstring), so two
+        same-shaped blocks funded at the same budget score the same features,
+        and `plan_strips` is the only expensive thing here.
+
+        THE CACHE KEY CARRIES THE BUDGET.  Two rounds of one build hand the
+        same shape different per-block budgets (`clamp(remaining / rounds_left
+        / waves, 5, 20)`), and the answer legitimately differs across
+        `dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S` -- so a shape-only key would
+        serve a later, better-funded round with an earlier round's answer.
+        `plan_strips` still runs at most once per (shape, budget), which is
+        what the cache is for.
 
         A block that has already been offered its dispatched arm and refused
         gets the FULL set.
@@ -868,12 +938,14 @@ class HierarchicalLayout:
         arms = self._arms()
         if len(arms) < 2:
             return arms
-        key = shape_key(entry.units)
+        key = (shape_key(entry.units), block_budget)
         chosen = cache.get(key)
         if chosen is None:
             try:
                 chosen = dispatch.dispatch_arms(
-                    dispatch.block_features(sub_spec(spec, entry.units, 0)), arms
+                    dispatch.block_features(sub_spec(spec, entry.units, 0)),
+                    arms,
+                    budget_s=block_budget,
                 )
             except Exception:  # noqa: BLE001 - a crashed feature vector races both arms, not an abort
                 chosen = arms
@@ -905,12 +977,23 @@ class HierarchicalLayout:
         block_budget: float,
         deadline: float,
         nogood: _ShapeNoGood,
-        arm_cache: dict[ShapeKey, tuple[str, ...]],
+        arms_by_slot: list[tuple[str, ...]],
     ) -> int:
         """Solve every block in ``todo`` with every arm; smallest valid wins.
 
         ``pool`` is the ONE pool `lay_out` built for the whole build, opened
         and closed there -- this method never constructs or shuts one down.
+
+        ``arms_by_slot`` -- index-aligned to ``todo`` -- is `lay_out`'s ROUND
+        LOOP's own `_arms_for` answer, computed ONCE there (Task 7 fix round
+        1) and passed straight through, rather than this method calling
+        `_arms_for` again itself.  Re-deriving it here used to happen under a
+        DIFFERENT, freshly-recomputed `block_budget` than the one `jobs` and
+        the dispatch stats were counted under in the round loop -- a second
+        `dispatch.block_features`/`plan_strips` call per shape per round, and
+        an attribution mismatch between what the stats claimed ran and what
+        this method actually funded.  Taking the list as given keeps both in
+        lockstep by construction.
 
         A JOB IS KEYED BY ``(shape, arm)``, NOT BY ``(block, arm)``.
         ``_recut``'s "halve" attempt on a single-recipe block routinely hands
@@ -937,7 +1020,6 @@ class HierarchicalLayout:
         ``(block, arm)`` pairs this round did NOT hand to a placer -- a
         remembered no-good or a same-round duplicate.
         """
-        arms_by_slot = [self._arms_for(spec, entries[index], arm_cache) for index in todo]
         shapes = [shape_key(entries[index].units) for index in todo]
         # `(shape, arm) -> todo-slots that need this exact question answered`,
         # insertion-ordered so the FIRST slot to need a key is the one whose
@@ -1143,6 +1225,9 @@ class _StrategyStats:
     compose_gap: float = 0.0
     port_demands: float = 0.0
     reservation_degraded: float = 0.0
+    reservation_partial: float = 0.0
+    power_infill_towers: float = 0.0
+    power_uncovered_tiles: float = 0.0
     reservation_missing: float = 0.0
     unrouted_cuts: float = 0.0
     arm_dispatch_freeform: float = 0.0

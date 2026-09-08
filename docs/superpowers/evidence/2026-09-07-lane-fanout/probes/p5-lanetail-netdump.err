@@ -1,0 +1,26 @@
+flab2bp: no valid layout for all-products after 120s: freeform/all-products: the 120s deadline passed with no completed packing of 53 strips; 5 packs were routed in that time and the best of them still left 1 nets unrouted (worst 54), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+  stats freeform/all-products: alns_applied=1 alns_choices=2 alns_encode_errors=0 alns_evaluations=6 alns_operators=destroy:failed-endpoints:1|destroy:band-boundary:1|repair:sequence-reinsert:0|repair:local-exact-pack:2 alns_routing_seconds=32.4213 alns_skipped_no_goods=0 alns_window_accepted=1 alns_window_seconds=0.290984 alns_window_solves=1 attempts=6 budget_unspent_s=0 certify_skipped=0 compaction_time_s=0 detailed_route_time_s=64.8006 distinct_assignments=6 evaluations=6 finalization_time_s=0 pack_cp_deterministic_time_s=8.06521 pack_cp_feasible=5 pack_cp_infeasible=0 pack_cp_last_best_bound=2.11208e+07 pack_cp_last_objective=4.14052e+07 pack_cp_last_status=FEASIBLE pack_cp_model_invalid=0 pack_cp_optimal=1 pack_cp_solves=6 pack_cp_unknown=0 pack_cp_wall_time_s=25.3326 pack_time_s=25.1122 pack_window_distinct_submodels=1 pack_window_feasible=0 pack_window_infeasible=0 pack_window_model_invalid=0 pack_window_optimal=1 pack_window_repeated_submodel_seconds=0 pack_window_repeated_submodels=0 pack_window_solves=1 pack_window_unknown=0 preparation_time_s=27.556 skipped_heights=0 stale_draws=0 stale_stop=0 validation_time_s=0 window_accepted=1 window_solves=1
+Command exited with non-zero status 3
+	Command being timed: "uv run --project /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/lane-fanout flab2bp https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11 --budget 120 --candidate-policy all-products --strategy freeform -v -o /tmp/bp-um-p5.txt"
+	User time (seconds): 130.26
+	System time (seconds): 0.49
+	Percent of CPU this job got: 106%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:02.48
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 228308
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 200232
+	Voluntary context switches: 136
+	Involuntary context switches: 896
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 1990
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 3

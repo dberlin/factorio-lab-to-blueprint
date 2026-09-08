@@ -1,0 +1,49 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJwlx7uOwjAUhOG3OcUUKAYWhWKaY4mgVRaBEBAogRQWayVyuKTys6PEzf.NNNzAZHkmDdcnzBbD0ArTXBp-YH6kod0PtyZ-hxQSqHsgk8Bd4pLQG2Ak0Fbp223yL1Em1sfkMpEPeFoY8TyPdWPLsd3YFkZc3VMn4q41rbjuybmEuucWJ5xxxwMv9FhAN9ADtILeoI-o.9Ap7CraQrwP7GIbXSzFtx0LedOYL5cQRDE_&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "docs/superpowers/evidence/2026-09-07-hierarchical-v4/large-mall-all-products-b60-r2.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "docs/superpowers/evidence/2026-09-07-hierarchical-v4/large-mall-all-products-b60-r2.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for all-products after 60s: hierarchical/all-products: 9 block(s) never placed, out of re-cut round(s) after 2 of 2 the 36.0s round wall allows: block 20 (steel, titanium-alloy): REFUSED: route evidence from 15 packs at candidate heights 12, 16, 21, 26, 33: failure kinds dynamic-access=6, static-access=9; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility; block 26 (copper-ingot): REFUSED: route evidence from 15 packs at candidate heights 9, 12, 16, 20, 25: failure kinds dynamic-access=15; the same logical net copper-ore/internal failed in every retained pack; investigate that NET-LEVEL routing constraint, not a wholesale packing impossibility; block 27 (copper-ingot): REFUSED: route evidence from 15 packs at candidate heights 9, 12, 16, 20, 25: failure kinds dynamic-access=15; the same logical net copper-ore/internal failed in every retained pack; investigate that NET-LEVEL routing constraint, not a wholesale packing impossibility; block 28 (magnetic-coil): REFUSED: the 9.62265s deadline passed with no completed packing of 4 strips; 11 packs were routed in that time and the best of them still left 1 nets unrouted (worst 5), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec; block 29 (electric-motor): REFUSED: route evidence from 15 packs at candidate heights 15, 20, 26, 32, 41: failure kinds dynamic-access=4, static-access=13; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility; block 30 (electric-motor): REFUSED: route evidence from 15 packs at candidate heights 15, 20, 26, 32, 41: failure kinds dynamic-access=4, static-access=13; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility; block 31 (electric-motor): REFUSED: no pack was ever routed: 1 lane head could not obtain the belt approaches they need (proliferator-3 into ? at (26, 2, 0) (wants 1, held 0, 0 free side(s))); this is a PORT-SEATING defect independent of the packing -- every candidate height produced the same 1 failures; block 32 (conveyor-belt-1, conveyor-belt-2, electromagnetic-turbine): REFUSED: the 9.62265s deadline passed with no completed packing of 5 strips; 11 packs were routed in that time and the best of them still left 1 nets unrouted (worst 5), so a longer clock alone would not have wired this spec; 1 other pack stopped during exact preparation. This is a REFUSAL and not a verdict on the spec; block 33 (electromagnetic-turbine): REFUSED: route evidence from 15 packs at candidate heights 13, 18, 23, 28, 36: failure kinds dynamic-access=13, static-access=9; no logical net failed in every retained pack; investigate the DENSITY/SEARCH-SPACE explored, not a proved impossibility. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/all-products": {
+   "arm_dispatch_both": "13",
+   "arm_dispatch_freeform": "44",
+   "arm_dispatch_sequence_pair": "6",
+   "blocks": "39",
+   "blocks_unattempted": "0",
+   "compose_gap": "0",
+   "cut_lanes": "0",
+   "nogood_skips": "25",
+   "player_fed": "0",
+   "port_demands": "0",
+   "power_infill_towers": "0",
+   "power_uncovered_tiles": "0",
+   "recut_rounds": "2",
+   "reservation_degraded": "0",
+   "reservation_missing": "0",
+   "reservation_partial": "0",
+   "resplits": "2",
+   "unrouted_cuts": "0"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 37.05
+}

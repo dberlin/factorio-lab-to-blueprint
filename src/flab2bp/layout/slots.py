@@ -86,6 +86,7 @@ from flab2bp.dsp.rules import (
     world_gap,
 )
 from flab2bp.layout.base import Facing, PlacedBuilding
+from flab2bp.layout.buildings import Buildings
 
 __all__ = [
     "ADDON_FROM_SLOT",
@@ -741,11 +742,12 @@ def sorter_seat_boxes(
     ``skip`` leaves one index out, for a caller re-testing a sorter it has
     already appended.
     """
+    index = Buildings(buildings)
     out = []
-    for i, b in enumerate(buildings):
-        if i == skip or not cat.is_sorter(b.item_id):
+    for i in index.sorters():
+        if i == skip:
             continue
-        seat = seated_sorter(b, buildings)
+        seat = seated_sorter(buildings[i], buildings)
         if seat is not None:
             out.append(colliders.sorter_box(seat))
     return out

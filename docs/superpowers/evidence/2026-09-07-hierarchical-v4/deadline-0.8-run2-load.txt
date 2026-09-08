@@ -1,0 +1,1 @@
+runnable_5s_mean=9.2

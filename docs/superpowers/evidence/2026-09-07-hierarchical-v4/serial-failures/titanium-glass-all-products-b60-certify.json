@@ -1,0 +1,41 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4/docs/superpowers/evidence/2026-09-07-hierarchical-v4/serial-failures/titanium-glass-all-products-b60-certify.blueprint.txt"
+ ],
+ "certifications": [
+  {
+   "all_item_ids": {
+    "2003": 5326,
+    "2011": 328,
+    "2012": 22,
+    "2013": 3,
+    "2014": 9,
+    "2020": 80,
+    "2201": 62,
+    "2302": 23,
+    "2304": 89,
+    "2309": 4,
+    "2313": 48
+   },
+   "area": 11297,
+   "buildings_total": 5994,
+   "convicted": [],
+   "convicted_item_ids": {},
+   "errors_by_check": {},
+   "errors_total": 0,
+   "ok": true,
+   "power_coverage_findings": 0
+  }
+ ],
+ "exit": 0
+}

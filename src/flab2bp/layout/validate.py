@@ -34,6 +34,7 @@ from flab2bp.dsp import codec, colliders, params, rules, splitter_ports
 from flab2bp.dsp import colliders as dsp_colliders
 from flab2bp.layout import markers, slots
 from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings
 from flab2bp.spec import BuildSpec, MachineGroup
 
 __all__ = [
@@ -304,6 +305,7 @@ class _SorterPeers:
 @dataclass(frozen=True)
 class Context:
     placement: Placement
+    buildings_index: Buildings
     spec: BuildSpec | None
     ids: IdMap | None
     soft_width: int
@@ -392,14 +394,24 @@ class Context:
     def of_kind(self, kind: Kind) -> Iterator[tuple[int, PlacedBuilding]]:
         """Every building of one kind, with its index, in placement order.
 
-        Bucketed once per kind rather than rescanned per call.  Thirty-odd call
-        sites walk this, several of them from inside a per-sorter loop, so the
-        rescan was the largest single cost in the flow checks.
+        Belt, sorter and junction buckets come directly from the shared
+        Buildings index.  The validator's finer machine/power/addon
+        classification still uses its exact local predicate.
         """
         got = self.cache.of_kind.get(kind)
         if got is None:
+            if kind is Kind.BELT:
+                candidates = self.buildings_index.belts()
+            elif kind is Kind.SORTER:
+                candidates = self.buildings_index.sorters()
+            elif kind is Kind.SPLITTER:
+                candidates = self.buildings_index.by_item(cat.SPLITTER_ID)
+            elif kind is Kind.PILER:
+                candidates = self.buildings_index.by_item(cat.PILER_ID)
+            else:
+                candidates = self.buildings_index.machines()
             got = tuple(
-                (i, b) for i, b in enumerate(self.placement.buildings) if self.kinds[i] is kind
+                (i, self.placement.buildings[i]) for i in candidates if self.kinds[i] is kind
             )
             self.cache.of_kind[kind] = got
         return iter(got)
@@ -758,6 +770,7 @@ def _context(
     max_belt_z: Fraction,
     belt_vertical_construction: bool,
 ) -> Context:
+    building_index = Buildings.of(placement)
     kinds = tuple(_kind(b) for b in placement.buildings)
     occ: dict[tuple[int, int, Fraction], list[int]] = defaultdict(list)
     blocking: dict[tuple[int, int, Fraction], list[int]] = defaultdict(list)
@@ -776,7 +789,8 @@ def _context(
     runs, run_of = _build_runs(placement.buildings, kinds)
     j_in: dict[int, list[int]] = defaultdict(list)
     j_out: dict[int, list[int]] = defaultdict(list)
-    for i, b in enumerate(placement.buildings):
+    for i in building_index.belts():
+        b = placement.buildings[i]
         if kinds[i] is not Kind.BELT:
             continue
         o, n = b.output_obj, b.input_obj
@@ -803,6 +817,7 @@ def _context(
     succ, pred = _build_graph(placement.buildings, kinds, runs, run_of, j_in, j_out)
     return Context(
         placement=placement,
+        buildings_index=building_index,
         spec=spec,
         ids=ids,
         soft_width=soft_width,
@@ -2127,14 +2142,7 @@ def _addon_belt_line_distance(
         if belt.output_obj is not None
         and 0 <= belt.output_obj < len(buildings)
         and ctx.kinds[belt.output_obj] is Kind.BELT
-        else next(
-            (
-                index
-                for index, candidate in ctx.of_kind(Kind.BELT)
-                if candidate.output_obj == belt_index
-            ),
-            None,
-        )
+        else next(iter(ctx.buildings_index.belts_into(belt_index)), None)
     )
     if neighbour_index is None:
         return None
@@ -2316,16 +2324,20 @@ def _addon_rides(
     checks below able to convict a yaw we did.
     """
     bs = ctx.placement.buildings
+    index = ctx.buildings_index
     forward: dict[int, int] = {}
     backward: dict[int, int] = {}
-    for i, b in enumerate(bs):
-        if not cat.is_belt(b.item_id):
+    for belt_index in index.belts():
+        belt = bs[belt_index]
+        following = belt.output_obj
+        if (
+            following is None
+            or index.by_index(following) is None
+            or ctx.kinds[following] is not Kind.BELT
+        ):
             continue
-        j = b.output_obj
-        if j is None or not 0 <= j < len(bs) or not cat.is_belt(bs[j].item_id):
-            continue
-        forward[i] = j
-        backward.setdefault(j, i)
+        forward[belt_index] = following
+        backward.setdefault(following, belt_index)
 
     for i, b in enumerate(bs):
         try:
@@ -2336,9 +2348,10 @@ def _addon_rides(
             continue
         ride = next(
             (
-                k
-                for k, o in enumerate(bs)
-                if cat.is_belt(o.item_id) and (o.x, o.y, o.z) == (b.x, b.y, b.z)
+                candidate
+                for candidate in index.at_tile(b.x, b.y, b.z)
+                if ctx.kinds[candidate] is Kind.BELT
+                and (bs[candidate].x, bs[candidate].y) == (b.x, b.y)
             ),
             None,
         )
@@ -4072,13 +4085,13 @@ def _internal_seeds(ctx: Context) -> tuple[set[int], set[int]]:
     # any belt with more than one predecessor, so a MERGE POINT heads its own
     # run while being perfectly well fed.  Reading `input_obj` here reported
     # every such merge as unsourced.
-    fed_by_belt: set[int] = set()
-    for i, b in enumerate(bs):
-        if ctx.kinds[i] is not Kind.BELT:
-            continue
-        o = b.output_obj
-        if o is not None and 0 <= o < len(bs) and ctx.kinds[o] is Kind.BELT:
-            fed_by_belt.add(o)
+    fed_by_belt = {
+        output
+        for i in ctx.buildings_index.belts()
+        if (output := bs[i].output_obj) is not None
+        and 0 <= output < len(bs)
+        and ctx.kinds[output] is Kind.BELT
+    }
     seeds |= {r for r, run in enumerate(ctx.runs) if run.head in fed_by_belt}
 
     # A belt DOCKED INTO A PORT is a source and a drain in exactly the sense
@@ -4123,28 +4136,20 @@ def _run_components(ctx: Context) -> dict[int, int]:
 
 
 def _close_over_junctions(ctx: Context, seeds: set[int]) -> set[int]:
-    """Every run reachable from ``seeds`` through splitters.
-
-    Sourcing is TRANSITIVE THROUGH JUNCTIONS.  A splitter with something feeding
-    it sources every run drawn from it, and those runs may feed further
-    junctions -- a chain of splitters is exactly how one lane comes to serve four
-    consumers.  A single lookup would credit the first hop and report the rest as
-    dry, reporting the splitter as the very defect it fixes, so this is a
-    fixpoint.
-    """
-    sourced = set(seeds)
-    changed = True
-    while changed:
-        changed = False
-        for j, taps in ctx.junction_out.items():
-            if not any(fr in sourced for fr in ctx.runs_feeding_junction(j)):
+    """Every run reachable from ``seeds`` through the prebuilt flow graph."""
+    seen: set[Node] = {(RUN, run) for run in seeds}
+    pending = deque(seen)
+    while pending:
+        node = pending.popleft()
+        for following in ctx.succ.get(node, ()):
+            # Preserve the old junction-only closure; native run-to-run merge
+            # and sorter-transfer edges are not part of this query.
+            if following[0] == node[0]:
                 continue
-            for belt in taps:
-                tapped = ctx.run_of.get(belt)
-                if tapped is not None and tapped not in sourced:
-                    sourced.add(tapped)
-                    changed = True
-    return sourced
+            if following not in seen:
+                seen.add(following)
+                pending.append(following)
+    return {index for kind, index in seen if kind == RUN}
 
 
 @check("flow.lane_sourced", needs_spec=True, needs_groups=True)
@@ -4617,15 +4622,15 @@ def _belt_reaches_any(ctx: Context, start: int, targets: set[int], item: str) ->
         if index in targets:
             return True
         pending.extend(_belt_successors(ctx, index))
-        pending.extend(
-            sorter.output_obj
-            for sorter_index, sorter in ctx.of_kind(Kind.SORTER)
-            if sorter.input_obj == index
-            and sorter.output_obj is not None
-            and 0 <= sorter.output_obj < len(ctx.kinds)
-            and ctx.kinds[sorter.output_obj] in (Kind.BELT, Kind.SPLITTER)
-            and _sorter_item(ctx, sorter_index) == item
-        )
+        for sorter_index in ctx.buildings_index.sorters_out_of(index):
+            sorter = ctx.placement.buildings[sorter_index]
+            if (
+                sorter.output_obj is not None
+                and 0 <= sorter.output_obj < len(ctx.kinds)
+                and ctx.kinds[sorter.output_obj] in (Kind.BELT, Kind.SPLITTER)
+                and _sorter_item(ctx, sorter_index) == item
+            ):
+                pending.append(sorter.output_obj)
     return False
 
 
@@ -5199,6 +5204,108 @@ def _coater_rides_one_run(ctx: Context) -> Iterable[Finding]:
             )
 
 
+def _coater_port_belts(ctx: Context) -> frozenset[int]:
+    """The belts a Spray Coater node made for its OWN proliferator port.
+
+    Two per coater: the supply belt the game attaches, on
+    ``slots.addon_supply_cell(..., area=1)``, and whatever belt feeds it -- the
+    approach belt, one tile further out.  ``_belt_in_addon_area`` picks the
+    supply belt by exactly the rule ``game.addon_supply`` and
+    ``prolif.coaters_are_supplied`` pick it by, so all three name the same tile.
+
+    These are collected because they are the belts whose ``carries_item`` label
+    must NOT be taken as evidence that the player fills them; see
+    :func:`_coater_supply_is_fed`.
+    """
+    port: set[int] = set()
+    for _ride, coater_index in _coater_rides(ctx).items():
+        supply = _belt_in_addon_area(ctx, ctx.placement.buildings[coater_index], area=1)
+        if supply is None:
+            continue
+        port.add(supply)
+        port.update(i for i, b in ctx.of_kind(Kind.BELT) if b.output_obj == supply and i != supply)
+    return frozenset(port)
+
+
+@check("prolif.coater_supply_is_fed", needs_spec=True)
+def _coater_supply_is_fed(ctx: Context) -> Iterable[Finding]:
+    """The belt in a coater's addon area 1 must be fed by something.
+
+    ``prolif.coaters_are_supplied`` asks whether a belt CARRYING proliferator
+    sits in area 1.  It cannot ask whether anything ever puts proliferator on
+    that belt, because ``carries_item`` is a label the emitter writes, not a
+    flow.  A Spray Coater node's proliferator port is two belts of the node's
+    own making -- the supply belt on ``slots.addon_supply_cell(..., area=1)``
+    and the approach belt one tile further out -- and the run they form is
+    joined to the external proliferator entry by
+    ``freeform._proliferator_supply_tree``.  If that join is missing, the node
+    is a coater with a two-belt stub beside it: it pastes, the machines run,
+    the recipe runs unproliferated, and every other check passes.
+
+    Sourcedness is asked the same way ``flow.lane_sourced`` asks it, over the
+    same run graph and the same junction closure, so the two cannot disagree
+    about what "fed" means.
+
+    ONE NARROWING, and without it this check has no content.  ``flow.lane_sourced``
+    exempts any run carrying an external input, on the ground that the player
+    fills it from outside.  Proliferator IS an external input, and both port
+    belts are labelled with it, so a severed stub inherits that exemption and
+    reads as fed -- MEASURED on a ``proliferated_spec`` build: severing the
+    entry's link to the approach belt left the port on its own two-tile run,
+    still ``_external_item``-exempt, and the whole placement still validated
+    with zero errors.  So the exemption is asked of the run's tiles OTHER than
+    the node's own port belts.  On the same build unsevered, the port shares a
+    seven-tile run with the entry belt at ``(0, 9, 0)``, which carries
+    ``proliferator-3`` and is not a port belt, so the exemption is earned and
+    the coater is clean.  Nothing else about sourcedness changes: internal
+    seeds, run-to-run feeding and the junction closure are ``flow.lane_sourced``'s
+    verbatim.
+
+    The narrowing is exactly the difference between "labelled proliferator" and
+    "reachable from a proliferator source", which is the difference this check
+    exists to state.  A run that is only two belts a coater put beside itself is
+    not somewhere the player can belt into: it is one tile from the coater body,
+    inside the block, and the tool -- not the player -- chose the cell.
+    """
+    assert ctx.spec is not None
+    bs = ctx.placement.buildings
+    rides = _coater_rides(ctx)
+    if not rides:
+        return
+
+    external = set(ctx.spec.external_inputs)
+    port_belts = _coater_port_belts(ctx)
+    _drains, seeds = _internal_seeds(ctx)
+    for r, run in enumerate(ctx.runs):
+        rest = tuple(i for i in run.indices if i not in port_belts)
+        if not rest:
+            continue
+        outside_the_port = BeltRun(indices=rest, tier_item_id=run.tier_item_id)
+        if _external_item(ctx, outside_the_port, external) is not None:
+            seeds.add(r)
+    sourced = _close_over_junctions(ctx, seeds)
+
+    for _ride, coater_index in sorted(rides.items()):
+        supply = _belt_in_addon_area(ctx, bs[coater_index], area=1)
+        if supply is None:
+            continue  # no belt there at all: game.addon_supply's finding, not this one
+        run_index = ctx.run_of.get(supply)
+        if run_index is not None and run_index in sourced:
+            continue
+        b = bs[supply]
+        yield Finding(
+            "prolif.coater_supply_is_fed",
+            Severity.ERROR,
+            f"coater {coater_index}'s proliferator supply belt {supply} at "
+            f"({b.x},{b.y},{b.z}) is on belt run {run_index}, which is reachable "
+            "from no source: nothing inside the blueprint puts proliferator onto "
+            "it and no run outside the node's own two port belts brings it in, so "
+            "the coater sprays nothing and its lane runs unproliferated",
+            (coater_index, supply),
+            {"coater": coater_index, "supply_belt": supply, "run": run_index},
+        )
+
+
 def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
     """Belt tiles ``item`` can reach WITHOUT having passed a Spray Coater.
 
@@ -5305,9 +5412,24 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
 
     So the question is asked from the MACHINE's end, which is where correctness
     lives.  A proliferated group must draw each sprayed ingredient downstream
-    of a coater.  For an item in ``lanes_requiring_split``, an unproliferated
-    group must draw upstream of every coater; sharing the sprayed branch would
-    silently over-produce it.
+    of a coater -- that half stays ``Severity.ERROR``: it is a silent rate
+    miss, the entire reason this check exists.  For an item in
+    ``lanes_requiring_split``, an unproliferated group drawing downstream of a
+    coater over-produces that item's proliferator cost -- under the user's
+    ruling (2026-09-07, "over-proliferating is fine if it makes life
+    easier") that half is only ``Severity.WARNING``: the build still pastes,
+    still runs, and still hits its rate, so refusing the placement over it
+    would refuse an otherwise legal build.  The finding still names the item
+    and still fires, because the build should still be told.
+
+    ``lanes_requiring_split`` itself is UNCHANGED by that ruling and stays
+    mandatory where two consumers of one item want *different* proliferator
+    modes: a Spray Coater holds one proliferator item and
+    ``RateSolution.tier`` is global to the solve, so one physical lane cannot
+    carry two proliferator tiers at once.  That split is a geometry
+    requirement, not a cost opinion, and the WARNING above never applies to
+    it -- it applies only to a shared-tier lane an unproliferated consumer
+    happens to also draw from.
 
     ``prolif.coaters_are_supplied`` cannot answer this and never could.  It asks
     whether proliferator reaches the coater; it says nothing about whether the
@@ -5364,6 +5486,7 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
                 if not wrong_side:
                     continue
                 if requires_spray:
+                    severity = Severity.ERROR
                     message = (
                         f"sorter {i} feeds machine {m} with {item}, which "
                         f"{ctx.recipe_of(m)} is proliferated on, from belt {src} at "
@@ -5372,16 +5495,25 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
                         "would paste, run, and quietly miss its rate"
                     )
                 else:
+                    # The user's ruling, 2026-09-07: over-proliferation is
+                    # acceptable if it makes life easier.  This lane's coater
+                    # sprays cargo for a proliferated sibling consumer, and
+                    # this unproliferated machine draws from the same sprayed
+                    # branch -- it over-produces `item`'s proliferator cost,
+                    # by design.  Nothing breaks and no rate is missed, so
+                    # this is a WARNING, not the ERROR that would refuse an
+                    # otherwise legal placement.
+                    severity = Severity.WARNING
                     message = (
                         f"sorter {i} feeds unproliferated machine {m} with {item} "
                         f"from belt {src} at ({bs[src].x}, {bs[src].y}) after it "
-                        "passed a Spray Coater. This item requires physically split "
-                        "sprayed and unsprayed lanes; sharing this branch would "
-                        "silently over-produce"
+                        "passed a Spray Coater. The build over-produces "
+                        f"{item}'s proliferator cost by design -- over-proliferation "
+                        "is acceptable"
                     )
                 yield Finding(
                     "prolif.sprayed_cargo_reaches_machines",
-                    Severity.ERROR,
+                    severity,
                     message,
                     (i, m, src),
                     {"item": item, "machine": m, "belt": src},

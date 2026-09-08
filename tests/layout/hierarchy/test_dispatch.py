@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 
-from flab2bp.layout.hierarchy import dispatch
+from flab2bp.layout.hierarchy import dispatch, strategy
 from flab2bp.layout.hierarchy.dispatch import BlockFeatures
 
 _BOTH = ("freeform", "sequence-pair")
@@ -37,6 +37,13 @@ def test_a_large_block_goes_to_sequence_pair_whether_or_not_it_is_coated():
 def test_a_block_above_the_belt_capacity_branch_races_both_arms():
     got = dispatch.dispatch_arms(BlockFeatures(strips=5, coaters=2, items_above_one_belt=8), _BOTH)
     assert got == _BOTH
+
+
+def test_the_exact_preparation_floor_is_inside_the_block_budget_range_or_above_it() -> None:
+    # A floor below BLOCK_BUDGET_MIN_S would mean the rule can never fire and
+    # the constant is dead; the measurement is what decides which side it is
+    # on, so this only pins that it is a real second and not a placeholder.
+    assert dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S >= strategy.BLOCK_BUDGET_MIN_S
 
 
 def test_a_block_bigger_than_the_evidence_covers_races_both_arms():
@@ -81,3 +88,38 @@ def test_items_above_one_belt_uses_the_fastest_tier_and_the_cargo_stack(chain_sp
 
 def test_block_features_counts_the_blocks_own_spray_lanes(chain_spec):
     assert dispatch.block_features(chain_spec).coaters == len(chain_spec.spray_lanes)
+
+
+def test_a_coater_free_block_below_the_exact_floor_races_both_arms() -> None:
+    features = dispatch.BlockFeatures(strips=4, coaters=0, items_above_one_belt=0)
+    arms = (dispatch.ARM_FREEFORM, dispatch.ARM_SEQUENCE_PAIR)
+
+    assert (
+        dispatch.dispatch_arms(features, arms, budget_s=dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S - 0.1)
+        == arms
+    )
+
+
+def test_a_coater_free_block_at_or_above_the_floor_still_goes_to_sequence_pair() -> None:
+    features = dispatch.BlockFeatures(strips=4, coaters=0, items_above_one_belt=0)
+    arms = (dispatch.ARM_FREEFORM, dispatch.ARM_SEQUENCE_PAIR)
+
+    assert dispatch.dispatch_arms(
+        features, arms, budget_s=dispatch.SEQUENCE_PAIR_EXACT_FLOOR_S
+    ) == (dispatch.ARM_SEQUENCE_PAIR,)
+
+
+def test_a_coatered_block_below_the_floor_is_unaffected() -> None:
+    # The floor is about sequence-pair's exact preparation. A block the rule
+    # sends to FREEFORM is not funded against that floor at all.
+    features = dispatch.BlockFeatures(strips=3, coaters=2, items_above_one_belt=0)
+    arms = (dispatch.ARM_FREEFORM, dispatch.ARM_SEQUENCE_PAIR)
+
+    assert dispatch.dispatch_arms(features, arms, budget_s=1.0) == (dispatch.ARM_FREEFORM,)
+
+
+def test_omitting_the_budget_keeps_the_v3_answer_exactly() -> None:
+    features = dispatch.BlockFeatures(strips=4, coaters=0, items_above_one_belt=0)
+    arms = (dispatch.ARM_FREEFORM, dispatch.ARM_SEQUENCE_PAIR)
+
+    assert dispatch.dispatch_arms(features, arms) == (dispatch.ARM_SEQUENCE_PAIR,)

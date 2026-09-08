@@ -1,0 +1,32 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJzLt3Uq0zI1MFDLt3VK1jI0MNDSMgSxs5DYkQi2uZaRAVzcScsYSb0RjF2CYDolaxmZwtiVIOUIvYZwThUSuwCJHQFmw3SUI.PCtAwtLS2hMoEgC0GMMCijFEWjIdzIzKRUW2e1otQK23i13Nwi28g6pzrXukC1MltDQwBw4z6V&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4/docs/superpowers/evidence/2026-09-07-hierarchical-v4/titanium-glass-b60-after-topup.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 81256,
+  "exists": true,
+  "path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4/docs/superpowers/evidence/2026-09-07-hierarchical-v4/titanium-glass-b60-after-topup.blueprint.txt"
+ },
+ "built": {
+  "area": "11297",
+  "buildings": "5994",
+  "candidate": "all-products",
+  "machines": "116",
+  "strategy": "hierarchical"
+ },
+ "exit": 0,
+ "refusals": [],
+ "stats": {},
+ "validation_errors": {},
+ "wall_s": 28.68
+}

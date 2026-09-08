@@ -42,6 +42,44 @@ ARM_SMALL_STRIPS = 6
 UNCOVERED_ITEMS_ABOVE_ONE_BELT = 8
 UNCOVERED_STRIPS = 85
 
+#: The smallest per-block budget at which `sequence-pair` produced an exact
+#: layout for EVERY coater-free mall block measured in
+#: `docs/superpowers/evidence/2026-09-07-hierarchical-v4/exact-floor.md`.
+#: Below it, the arm gives up in one of TWO ways, both terminal for the
+#: block's OWN preparation, not just for the wall it was given:
+#:   * "deadline exhausted before finding an exact layout"
+#:     (`sequence_solver.py:1602`, `deadline_reached()`) -- the search was
+#:     still finding new candidates when the wall ran out; a longer budget
+#:     COULD have helped.
+#:   * "expansion budget exhausted before finding an exact layout"
+#:     (`sequence_solver.py:1603`, `self.budget.shared_left == 0`) -- the
+#:     search exhausted its own candidate space on its own accounting, a
+#:     termination independent of the wall clock. A longer budget CANNOT
+#:     help here: nothing was still running when it gave up.
+#: 31 of `mall/no-proliferator`'s 54 blocks hit one of these two in the v3
+#: gate, on an arm the rule had chosen for them.
+#:
+#: THIS IS A MEASUREMENT, NOT A TUNING KNOB.  Re-measure it with
+#: `floor_probe.py` before changing it; a value picked to make a cell pass is
+#: the thing the `UNCOVERED_*` thresholds exist to avoid.
+#:
+#: Measured 2026-09-07: none of the five swept mall blocks (one each of
+#: `magnet`, `iron-ingot`, `electric-motor`, `super-magnetic-ring`, and the
+#: `circuit-board`/`processor`/`sorter-1`/`sorter-2`/`sorter-3` block)
+#: produced an exact layout at ANY swept budget from `BLOCK_BUDGET_MIN_S`
+#: (5.0s) through `BLOCK_BUDGET_MAX_S` (20.0s) -- all 25 cells refused. 15 of
+#: those 25 (`magnet`, `iron-ingot`, `electric-motor` -- three of the five
+#: shapes, at every swept budget) refused via EXPANSION BUDGET EXHAUSTED, so
+#: for those three shapes no per-block budget at all -- not just none up to
+#: 20.0s -- is expected to help; only the other 10 (`super-magnetic-ring` and
+#: the multi-recipe block) refused via the wall clock. So per the stated rule
+#: this is `BLOCK_BUDGET_MAX_S + 1.0`: no per-block budget the funding rule
+#: can ever hand a coater-free block is above this floor, and for the
+#: majority of the measured shapes that is true independent of the floor's
+#: exact value -- which makes the abstain this constant drives STRONGER, not
+#: weaker, than "raise the budget and it will eventually work" would suggest.
+SEQUENCE_PAIR_EXACT_FLOOR_S = 21.0
+
 
 @dataclass(frozen=True, slots=True)
 class BlockFeatures:
@@ -99,7 +137,9 @@ def block_features(sub: BuildSpec) -> BlockFeatures:
     )
 
 
-def dispatch_arms(features: BlockFeatures, arms: tuple[str, ...]) -> tuple[str, ...]:
+def dispatch_arms(
+    features: BlockFeatures, arms: tuple[str, ...], *, budget_s: float | None = None
+) -> tuple[str, ...]:
     """The arms this block is offered THIS round, narrowest first.
 
     THE ANSWER IS ALWAYS A SUBSET OF ``arms``.  The rule below names
@@ -112,6 +152,18 @@ def dispatch_arms(features: BlockFeatures, arms: tuple[str, ...]) -> tuple[str, 
     not on offer falls back to racing the whole offered set -- the same honest
     answer the two `UNCOVERED_*` branches give when the evidence does not
     cover the block.
+
+    A THIRD UNCOVERED REGION, AND IT IS ABOUT THE CLOCK RATHER THAN THE SHAPE.
+    The cross-tab above is a ratio between two arms that both FINISHED.  A
+    coater-free block funded below `SEQUENCE_PAIR_EXACT_FLOOR_S` has no such
+    ratio, because the sequence-pair arm does not finish: it is cancelled
+    inside exact preparation and refuses "deadline exhausted before finding an
+    exact layout".  The v3 gate measured 31 of `mall/no-proliferator`'s 54
+    blocks doing exactly that, against 6 unplaced when both arms were raced.
+    So an underfunded coater-free block is evidence the cross-tab does not
+    cover, and it gets the same answer the other two uncovered regions get.
+    ``budget_s=None`` means "no budget was supplied", which keeps v3's answer
+    for every caller that does not pass one.
     """
     if len(arms) < 2:
         return arms
@@ -122,6 +174,12 @@ def dispatch_arms(features: BlockFeatures, arms: tuple[str, ...]) -> tuple[str, 
     if features.coaters > 0 and features.strips <= ARM_SMALL_STRIPS:
         chosen = ARM_FREEFORM
     else:
+        if (
+            features.coaters == 0
+            and budget_s is not None
+            and budget_s < SEQUENCE_PAIR_EXACT_FLOOR_S
+        ):
+            return arms
         chosen = ARM_SEQUENCE_PAIR
     return (chosen,) if chosen in arms else arms
 
@@ -130,6 +188,7 @@ __all__ = [
     "ARM_FREEFORM",
     "ARM_SEQUENCE_PAIR",
     "ARM_SMALL_STRIPS",
+    "SEQUENCE_PAIR_EXACT_FLOOR_S",
     "UNCOVERED_ITEMS_ABOVE_ONE_BELT",
     "UNCOVERED_STRIPS",
     "BlockFeatures",

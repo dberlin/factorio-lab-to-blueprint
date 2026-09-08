@@ -1075,6 +1075,39 @@ def _coater_on_a_run(yaw: float, *, along_y: bool = False) -> Placement:
     )
 
 
+def test_indexed_addon_ride_keeps_the_first_belt_and_exact_neighbours() -> None:
+    placement = _coater_on_a_run(90.0)
+    ctx = _context(placement, None, None, 256, DEFAULT_MAX_BELT_Z, True)
+    rides = tuple(validate_module._addon_rides(ctx))
+    assert rides == ((2, 1, (1, 0, 0.0), None),)
+    for kind in Kind:
+        expected = tuple(
+            (index, building)
+            for index, building in enumerate(placement.buildings)
+            if _kind(building) is kind
+        )
+        assert tuple(ctx.of_kind(kind)) == expected
+
+
+def test_junction_closure_does_not_follow_sorter_transfer_edges() -> None:
+    placement = place(
+        belt(0, 0, out=1),
+        splitter(1, 0),
+        belt(2, 0, inp=1),
+        belt(4, 0),
+        sorter(2, 0, 4, 0, inp=2, out=3),
+    )
+    ctx = _context(placement, None, None, 256, DEFAULT_MAX_BELT_Z, True)
+    source = ctx.run_of[0]
+    through_junction = ctx.run_of[2]
+    transfer_only = ctx.run_of[3]
+    assert transfer_only != through_junction
+    assert validate_module._close_over_junctions(ctx, {source}) == {
+        source,
+        through_junction,
+    }
+
+
 def test_game_addon_facing_clean_along_the_run() -> None:
     """The negative control, and the reversal the game accepts.
 
@@ -1732,7 +1765,7 @@ def _coater_placement(
     merge_under_body: bool,
     second_belt_in_supply_area: bool = False,
     one_run_two_belts_in_supply_area: bool = False,
-    two_runs_under_body: bool = False,
+    body_spans_two_runs: bool = False,
 ) -> Placement:
     """A coater at yaw 90 riding a straight lane, optionally spoiled.
 
@@ -1754,18 +1787,26 @@ def _coater_placement(
     radius membership, but one run carries one item, so there is no rotation
     ambiguity and the clause must NOT fire.
 
-    ``two_runs_under_body`` CUTS the link from the body tile at (9, 5) to the
-    ridden tile at (10, 5).  Nothing merges anywhere, so no belt has two
-    predecessors, but the body now spans two distinct runs -- the other half of
-    the first clause, which is what ``len(distinct_runs) >= 2`` convicts on its
-    own.
+    ``body_spans_two_runs`` is the RUNS-ONLY clause on the BODY tiles, with NO
+    merge anywhere: it severs (9, 5, 0)'s link into (10, 5, 0) by dropping its
+    ``out``, so ``_build_runs`` starts a fresh run at (10, 5, 0) for lack of
+    any predecessor -- not because two chains point at it.  (9, 5, 0) keeps
+    its own single predecessor from (8, 5, 0), so no belt anywhere gets a
+    second predecessor and ``merged`` stays empty. The two runs still meet: one
+    covers body tile (9, 5, 0), the other covers body tiles (10, 5, 0) and
+    (11, 5, 0), so ``distinct_runs`` over the body is exactly 2. This is the
+    fixture for the message-construction bug (spec review I2): with ``merged``
+    empty, the old message read "rides a belt merge under its body: belt(s)
+    [] ... have two or more predecessors, and its body tiles carry 2 distinct
+    belt runs" -- a merge diagnosis with no evidence, for a defect that is not
+    a merge.
     """
     buildings: list[PlacedBuilding] = [
         belt(7, 5, out=1),
         belt(8, 5, out=2),
-        # Body tile (dx=-1): the merge target when spoiled, and the cut point
-        # when the body is made to span two runs.
-        belt(9, 5) if two_runs_under_body else belt(9, 5, out=3),
+        # body tile (dx=-1): the merge target when spoiled by `merge_under_body`;
+        # its own link onward is severed instead when `body_spans_two_runs`.
+        belt(9, 5, out=None if body_spans_two_runs else 3),
         belt(10, 5, out=4),  # the coater's own ridden tile (dx=0)
         belt(11, 5, out=5),  # body tile (dx=+1)
         belt(12, 5),
@@ -1797,37 +1838,6 @@ def test_coater_over_a_belt_merge_is_convicted() -> None:
     assert "merge" in findings[0].message
 
 
-def test_coater_body_spanning_two_runs_without_a_merge_is_convicted() -> None:
-    """The untested half of the first clause, and the message it must produce.
-
-    ``_coater_rides_one_run``'s first clause fires on ``merged or
-    len(distinct_runs) >= 2``.  Every existing test drives the ``merged`` half;
-    the Task 1 review flagged the run half as shipped-but-unexercised, and it is
-    the half that actually convicts on the reported URL's freeform builds.
-
-    Here two belts under the coater's 1x3 body belong to different runs and
-    NOTHING merges -- ``merged`` is empty.  The clause must still fire, and the
-    message must name only the reason that fired.  It used to name both
-    unconditionally and read "belt(s) ``[]`` on its body tiles have two or more
-    predecessors, and its body tiles carry 2 distinct belt runs", which
-    contradicts itself: an empty list cannot have two predecessors.  A refusal
-    that names a merge the reader will not find is worse than no detail at all.
-    """
-    placement = _coater_placement(merge_under_body=False, two_runs_under_body=True)
-    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
-    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
-    assert findings, [f.check for f in report.errors]
-    message = findings[0].message
-    assert "distinct belt runs" in message, message
-    assert findings[0].detail["merged_belts"] == [], findings[0].detail
-    # The clause that did NOT fire must not be asserted -- not in the reason,
-    # not in the lead, and not in the rationale.  All three used to claim a
-    # merge unconditionally.
-    assert "belt(s) [] " not in message, message
-    assert "have two or more predecessors" not in message, message
-    assert "merge" not in message, message
-
-
 def test_coater_on_a_single_run_is_clean() -> None:
     placement = _coater_placement(merge_under_body=False)
     report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
@@ -1854,7 +1864,9 @@ def test_coater_supply_area_with_two_belts_of_two_runs_is_convicted() -> None:
     assert findings
     assert "addon area 1" in findings[0].message
     assert "distinct belt runs" in findings[0].message
-    assert len(findings[0].detail["runs"]) >= 2
+    runs = findings[0].detail["runs"]
+    assert isinstance(runs, list)
+    assert len(runs) >= 2
 
 
 def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None:
@@ -1872,6 +1884,120 @@ def test_coater_supply_area_with_two_belts_of_one_run_is_not_convicted() -> None
     report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
     findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
     assert not findings, [f.message for f in findings]
+
+
+def test_coater_body_spans_two_runs_with_no_merge_is_convicted() -> None:
+    """The runs-only body clause, fired with ``merged`` EMPTY.
+
+    Final-review finding I2: the message construction used to assume
+    ``merged`` was non-empty, so when only this clause fired it read "rides a
+    belt merge under its body: belt(s) [] on its body tiles have two or more
+    predecessors, and its body tiles carry 2 distinct belt runs" -- a merge
+    diagnosis with an empty evidence list, for a defect that is not a merge.
+    ``test_coater_supply_area_with_two_belts_of_two_runs_is_convicted`` above
+    exercises the ADDON-AREA runs clause, not this one; this fixture severs a
+    BODY-internal link instead (see ``_coater_placement``'s
+    ``body_spans_two_runs`` docstring) so no belt anywhere has two
+    predecessors and only the body-runs clause can fire.
+    """
+    placement = _coater_placement(merge_under_body=False, body_spans_two_runs=True)
+    report = validate(placement, _coater_spec(), ids=IdMap(), expect_power=False)
+    findings = [f for f in report.errors if f.check == "prolif.coater_rides_one_run"]
+    assert findings, [f.check for f in report.errors]
+    assert len(findings) == 1, [f.message for f in findings]
+    message = findings[0].message
+    assert "has a body spanning more than one belt run" in message
+    assert "rides a belt merge" not in message
+    assert not findings[0].detail["merged_belts"]
+    assert len(findings[0].detail["distinct_runs"]) >= 2
+
+
+def _fed_coater_node(*, severed: bool) -> Placement:
+    """A Spray Coater node whose proliferator port is fed, or is a stub.
+
+    The geometry is the placed node's, measured on a real ``proliferated_spec``
+    build: the coater rides a host belt, its supply belt sits on
+    ``slots.addon_supply_cell(..., area=1)`` one tile west and one level up, and
+    an approach belt one tile further out feeds it.  ``freeform``'s
+    ``_proliferator_supply_tree`` then joins the approach to the proliferator
+    entry, which is the belt at ``(-3, 0, 1)`` here.
+
+    ``severed`` cuts exactly that join -- the entry belt's ``output_obj`` goes
+    to ``None`` -- which is what a build whose supply tree never routed looks
+    like.  Nothing else moves: both port belts still CARRY ``proliferator-3``,
+    which is why ``prolif.coaters_are_supplied`` and ``game.addon_supply`` still
+    pass on it.
+    """
+    return place(
+        belt(0, 0, carries="ore"),
+        belt(-3, 0, 1, out=None if severed else 2, carries="proliferator-3"),
+        belt(-2, 0, 1, out=3, carries="proliferator-3"),
+        belt(-1, 0, 1, carries="proliferator-3"),
+        _coater(0, 0),
+    )
+
+
+def _coater_node_context(placement: Placement) -> Context:
+    return _context(placement, COATER_SPEC, IdMap(), 256, DEFAULT_MAX_BELT_Z, True)
+
+
+def test_coater_supply_is_fed_clean_when_the_supply_tree_reaches_the_node() -> None:
+    """The fed node passes -- and the check actually looked at a coater.
+
+    The second assertion is the vacuity guard.  ``prolif.coater_supply_is_fed``
+    iterates the coaters that exist, so "no findings" alone is equally
+    consistent with "there was no coater here to judge"; asserting
+    ``_coater_rides`` is non-empty on the SAME context separates "everything it
+    looked at was fine" from "it looked at nothing".
+    """
+    placement = _fed_coater_node(severed=False)
+    report = validate(
+        placement,
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"prolif.coater_supply_is_fed"},
+        expect_power=False,
+    )
+    assert not report.errors, [f.message for f in report.errors]
+    assert validate_module._coater_rides(_coater_node_context(placement))
+
+
+def test_coater_supply_is_fed_convicts_a_node_whose_port_is_a_stub() -> None:
+    """Severing the supply tree's last link must convict exactly that coater."""
+    placement = _fed_coater_node(severed=True)
+    report = validate(
+        placement,
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"prolif.coater_supply_is_fed"},
+        expect_power=False,
+    )
+    findings = [
+        f
+        for f in report.errors
+        if f.check == "prolif.coater_supply_is_fed" and f.severity is Severity.ERROR
+    ]
+    assert len(findings) == 1, [f.message for f in report.errors]
+    assert findings[0].detail["coater"] == 4
+    assert findings[0].detail["supply_belt"] == 3
+    assert "4" in findings[0].message
+
+
+def test_coater_supply_stub_still_passes_the_checks_that_cannot_see_it() -> None:
+    """The gap this check closes, stated as a test.
+
+    A severed node's two port belts still CARRY proliferator and still sit where
+    the addon rules want them, so the label-reading checks are clean on a coater
+    that will never spray anything.
+    """
+    report = validate(
+        _fed_coater_node(severed=True),
+        COATER_SPEC,
+        ids=IdMap(),
+        only={"prolif.coaters_are_supplied", "game.addon_supply", "game.addon_facing"},
+        expect_power=False,
+    )
+    assert not report.errors, [f.message for f in report.errors]
 
 
 def test_game_inserter_data_fires_on_a_far_column_of_a_wide_machine() -> None:
@@ -5663,6 +5789,134 @@ def test_sprayed_cargo_still_fires_across_a_hop_with_no_coater_anywhere() -> Non
     """Without this the clause above could be passing by switching the check off."""
     r = validate(_hop_scene(coated=False), _sprayed_spec(), ids=_SPRAYED_IDS)
     assert fired(r, SPRAYED_REACHES), errors(r)
+
+
+# --- prolif.sprayed_cargo_reaches_machines: the over-proliferation ruling ---
+#
+# The user's ruling, 2026-09-07: "over-proliferating is fine if it makes life
+# easier."  A Spray Coater sprays everything that rides its belt tile, so once
+# one consumer of an item needs it sprayed, any OTHER consumer sharing that
+# physical lane gets sprayed too, whether it asked for it or not.  That used
+# to be an ERROR (``forbids_spray``); it is now a WARNING that still names the
+# item.  The other half -- a proliferated consumer that never got sprayed at
+# all (``requires_spray``) -- is a silent rate miss and stays an ERROR.
+
+_SPLIT_LANE_IDS = IdMap(
+    recipes={"magnetic-coil": 6, "gear": 7},
+    items={"assembling-machine-2": ASSEMBLER, "copper-ore": 1001},
+)
+
+
+def _split_lane_spec() -> BuildSpec:
+    """One item, ``copper-ore``, feeds two consumers wanting different
+    proliferator modes: SPEED on ``magnetic-coil``, NONE on ``gear``.
+
+    A Spray Coater holds one proliferator item and ``RateSolution.tier``
+    (``solve.py:118``) is global to the solve, so there is no such thing as
+    spraying just the ``magnetic-coil`` branch and not the ``gear`` branch --
+    proliferation is a property of the LANE, not the consumer.  Physically
+    separating the two draws is therefore still the only way to avoid
+    over-producing ``gear``'s input, which is exactly what
+    ``lanes_requiring_split`` marks this item for.  That marking is UNCHANGED
+    by the over-proliferation ruling; what changes is only the severity this
+    check reports once a placement shares the branch anyway.
+    """
+    return BuildSpec(
+        groups=(
+            MachineGroup(
+                recipe_id="magnetic-coil",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                proliferator_mode=ProliferatorMode.SPEED,
+                inputs_per_machine={"copper-ore": Fraction(1)},
+                outputs_per_machine={"magnetic-coil": Fraction(1)},
+            ),
+            MachineGroup(
+                recipe_id="gear",
+                machine_item_id="assembling-machine-2",
+                count=1,
+                proliferator_mode=ProliferatorMode.NONE,
+                inputs_per_machine={"copper-ore": Fraction(1)},
+                outputs_per_machine={"gear": Fraction(1)},
+            ),
+        ),
+        external_inputs={"copper-ore": Fraction(8), "proliferator-3": Fraction(1, 2)},
+        spray_lanes={"copper-ore": True},
+        lanes_requiring_split=frozenset({"copper-ore"}),
+    )
+
+
+def _split_lane_scene(*, coater_at: int | None) -> Placement:
+    """A six-tile ``copper-ore`` lane feeding both consumers of
+    ``_split_lane_spec``.
+
+    Sorter A taps tile 1, upstream of a coater riding tile 2, into the
+    proliferated (``magnetic-coil``) group: unsprayed cargo reaching a
+    proliferated machine, the still-ERROR case.  Sorter B taps tile 4,
+    downstream of the same coater, into the unproliferated (``gear``) group:
+    sprayed cargo reaching an unproliferated machine, the now-WARNING case.
+    ``coater_at`` rides the given tile unless ``None``, matching the seam
+    ``_sprayed_scene`` uses above.
+    """
+    lane = [belt(x, 0, out=x + 1 if x < 5 else None, carries="copper-ore") for x in range(6)]
+    parts: list[PlacedBuilding] = [
+        *lane,
+        machine(0, 1, recipe_id=6),  # magnetic-coil, proliferated -- index 6
+        machine(4, 1, recipe_id=7),  # gear, unproliferated -- index 7
+        sorter(1, 0, 1, 1, inp=1, out=6),  # unsprayed pickup -> proliferated group
+        sorter(4, 0, 4, 1, inp=4, out=7),  # sprayed pickup -> unproliferated group
+        belt(-1, 0, 1, carries="proliferator-3"),
+    ]
+    if coater_at is not None:
+        parts.append(_coater(coater_at, 0))
+    return place(*parts)
+
+
+def test_a_shared_lane_through_a_node_warns_rather_than_refusing() -> None:
+    """Over-proliferation is a WARNING: the user ruled it acceptable.
+
+    A sprayed lane that reaches an unproliferated consumer over-produces that
+    consumer's proliferator cost.  It does not break the build, it does not
+    miss a rate, and forbidding it refuses a legal placement.  The build is
+    still told, so it reaches the report.
+    """
+    r = validate(_split_lane_scene(coater_at=2), _split_lane_spec(), ids=_SPLIT_LANE_IDS)
+    findings = r.by_check(SPRAYED_REACHES)
+    over = [f for f in findings if "over-produce" in f.message]
+    assert over, "the case must still be reported"
+    assert all(f.severity is Severity.WARNING for f in over)
+
+
+def test_a_machine_eating_unsprayed_cargo_is_still_an_ERROR() -> None:
+    """The requires_spray half is untouched: a proliferated machine eating
+    cargo that never passed a coater still misses its rate silently, which is
+    the whole reason this check exists."""
+    r = validate(_split_lane_scene(coater_at=2), _split_lane_spec(), ids=_SPLIT_LANE_IDS)
+    findings = r.by_check(SPRAYED_REACHES)
+    missed = [f for f in findings if "miss its rate" in f.message]
+    assert missed, "a proliferated machine drawing unsprayed cargo must still be reported"
+    assert all(f.severity is Severity.ERROR for f in missed)
+
+
+def test_a_shared_lane_serving_differing_proliferator_modes_keeps_severities_apart() -> None:
+    """Step 4's differing-mode case: two consumers of ONE item want different
+    proliferator modes (SPEED vs NONE) at once.  A coater cannot spray one
+    consumer's share of a shared lane and not the other's -- proliferation
+    rides the item, not the machine -- so this split stays geometrically
+    mandatory regardless of the over-proliferation ruling.  What the ruling
+    changes is only which half of a violated split is fatal: the same report,
+    from the same shared-lane placement, must carry BOTH an ERROR (the
+    proliferated consumer's rate miss) AND a WARNING (the unproliferated
+    consumer's over-production) side by side, each attributed to its own
+    finding and never swapped.
+    """
+    r = validate(_split_lane_scene(coater_at=2), _split_lane_spec(), ids=_SPLIT_LANE_IDS)
+    findings = r.by_check(SPRAYED_REACHES)
+    by_severity = {f.severity: f for f in findings}
+    assert Severity.ERROR in by_severity, [f.message for f in findings]
+    assert Severity.WARNING in by_severity, [f.message for f in findings]
+    assert "miss its rate" in by_severity[Severity.ERROR].message
+    assert "over-produce" in by_severity[Severity.WARNING].message
 
 
 # --- belt.port_dock: the connection a Ray Receiver takes ---------------------

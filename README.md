@@ -191,6 +191,20 @@ run is the one failure nobody discovers until they are standing in front of it i
 DSP's blueprint checksum is a *variant* of MD5 — two altered init constants and eight altered
 round constants, not derivable from `sin()`. See `dsp/md5f.py`.
 
+## Gate result
+
+On 2026-09-07, the `lane-fanout` branch's final gate ran two rounds of the stress-tier corpus
+(72 cells, both placers) against the master `a1401518` baseline: **FAIL**. Coverage held at
+66/72 CLEAN in both rounds, with zero regressions against baseline (0/72 cells moved status in
+either direction) and a paired area ratio of 1.000000 (round 1) / 0.999424 (round 2) on the 66
+cells CLEAN in both arms. The six `universe-matrix` cells this branch's work targets (both
+placers × `no-proliferator`/`all-products`/`output-products`) remain REFUSED in both rounds — the
+fan-out guard this branch deleted no longer fires (no candidate refusal says "must tap"), but two
+other, pre-existing blockers do: the freeform packer's clock-limited packing shortfall and the
+sequence-pair per-island exact-layout search's non-convergence. Full measurements, verbatim
+refusal text, and the ranked residual blockers are in
+`docs/superpowers/evidence/2026-09-07-lane-fanout/gate/verdict.md`.
+
 ## Development
 
 Run the Python and web gates relevant to the files changed:

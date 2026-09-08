@@ -1,0 +1,209 @@
+src/flab2bp/layout/freeform.py --- 1/7 --- Text (1000.5 KiB exceeded DFT_BYTE_LIMIT)
+  362 #: routing failed exact validatio    362 #: routing failed exact validatio
+  ... n.  0.02 deterministic units reac    ... n.  0.02 deterministic units reac
+  ... hes the same                         ... hes the same
+  363 #: routable incumbent well inside    363 #: routable incumbent well inside
+  ...  its 0.6s wall allowance; 0.005 s    ...  its 0.6s wall allowance; 0.005 s
+  ... topped before                        ... topped before
+  364 #: that incumbent existed.  The w    364 #: that incumbent existed.  The w
+  ... all limit remains armed as the ha    ... all limit remains armed as the ha
+  ... rd deadline.                         ... rd deadline.
+  365 _DETERMINISTIC_PACK_WORK = 0.02      365 _DETERMINISTIC_PACK_WORK = float(
+  ...                                      ... os.environ.get("FLAB2BP_PROBE_PAC
+  ...                                      ... K_WORK", "0.02"))
+  366                                      366 
+  367 #: Deterministic work allowed onl    367 #: Deterministic work allowed onl
+  ... y for choosing among already rank    ... y for choosing among already rank
+  ... -optimal port                        ... -optimal port
+  368 #: access assignments. The ranked    368 #: access assignments. The ranked
+  ...  solution remains the safe fallba    ...  solution remains the safe fallba
+  ... ck; this                             ... ck; this
+
+src/flab2bp/layout/freeform.py --- 2/7 --- Text (1000.5 KiB exceeded DFT_BYTE_LIMIT)
+ 6781             need = min(max(need,    6781             need = min(max(need, 
+ .... 2), width)                          .... 2), width)
+ 6782             lane_starts_west.add(   6782             lane_starts_west.add(
+ .... row)                                .... row)
+ 6783         lane_tiles_of[row] = need   6783         lane_tiles_of[row] = need
+ ....                                     6784     out_lane_tiles = width + (s.t
+ ....                                     .... ail_extension if (not s.pilers an
+ ....                                     .... d s.tail_extension) else 0)
+ 6784     for k, (item, _dest, _cargo_d   6785     for k, (item, _dest, _cargo_d
+ .... omain) in enumerate(s.out_lanes):   .... omain) in enumerate(s.out_lanes):
+ 6785         lane_item_of[s.row_of_out   6786         lane_item_of[s.row_of_out
+ .... put(k)] = item                      .... put(k)] = item
+ 6786         lane_tiles_of[s.row_of_ou   6787         lane_tiles_of[s.row_of_ou
+ .... tput(k)] = width                    .... tput(k)] = out_lane_tiles
+ 6787                                     6788 
+ 6788     lane_idx: dict[int, list[int]   6789     lane_idx: dict[int, list[int]
+ .... ] = {}                              .... ] = {}
+ 6789     for row in range(s.height):     6790     for row in range(s.height):
+
+src/flab2bp/layout/freeform.py --- 3/7 --- Text (1000.5 KiB exceeded DFT_BYTE_LIMIT)
+19908             for d in _dests(dest)  19909             for d in _dests(dest)
+..... :                                  ..... :
+19909                 key = (s.group_ke  19910                 key = (s.group_ke
+..... y, item, d, cargo_domain)          ..... y, item, d, cargo_domain)
+19910                 src_lanes[key] +=  19911                 src_lanes[key] +=
+.....  1                                 .....  1
+19911                 src_tiles[key] =   19912                 lane_tiles = s.wi
+..... min(src_tiles.get(key, s.width),   ..... dth + (s.tail_extension if not s.
+..... s.width)                           ..... pilers else 0)
+.....                                    19913                 src_tiles[key] = 
+.....                                    ..... min(src_tiles.get(key, lane_tiles
+.....                                    ..... ), lane_tiles)
+19912         for item in s.in_lanes:    19914         for item in s.in_lanes:
+19913             sink_lanes[s.group_ke  19915             sink_lanes[s.group_ke
+..... y, item, s.cargo_domain] += 1      ..... y, item, s.cargo_domain] += 1
+19914                                    19916 
+
+src/flab2bp/layout/freeform.py --- 4/7 --- Text (1000.5 KiB exceeded DFT_BYTE_LIMIT)
+19937 19939     return out
+19938 19940 
+19939 19941 
+..... 19942 def _probe_dump_failures(attempts) -> None:  # type: ignore[no-untyped-def]
+..... 19943     """THROWAWAY PROBE: which nets does the router actually fail on?"""
+..... 19944     ranked = sorted(attempts, key=lambda a: a.routing.failed_count)
+..... 19945     print(
+..... 19946         f"PROBE attempts={len(ranked)} failed_counts={[a.routing.failed_count for a in ranked]}",
+..... 19947         file=sys.stderr,
+..... 19948     )
+..... 19949     for a in ranked[:2]:
+..... 19950         by_item: dict[tuple[str, str], int] = defaultdict(int)
+..... 19951         for f in a.routing.failures:
+..... 19952             by_item[f.net_id.item, f.kind.value] += 1
+..... 19953         print(
+..... 19954             f"PROBE failed={a.routing.failed_count} by (item, kind): "
+..... 19955             f"{sorted(by_item.items(), key=lambda e: -e[1])[:12]}",
+..... 19956             file=sys.stderr,
+..... 19957         )
+..... 19958         pairs: dict[tuple[int | None, int | None], int] = defaultdict(int)
+..... 19959         for f in a.routing.failures:
+..... 19960             pairs[f.net_id.source_strip, f.net_id.destination_strip] += 1
+..... 19961         print(
+..... 19962             f"PROBE   (src_strip,dst_strip): {sorted(pairs.items(), key=lambda e: -e[1])[:12]}",
+..... 19963             file=sys.stderr,
+..... 19964         )
+..... 19965 
+..... 19966 
+..... 19967 def _probe_extend_producer_tails(strips: list[Strip]) -> list[Strip]:
+..... 19968     """THROWAWAY PROBE (lever a): buy each short producer lane the tiles it lacks.
+..... 19969 
+..... 19970     Not a design; a measurement.  Sizes `tail_extension` on every strip whose
+..... 19971     output lane `_fanout_shortfall` would convict, so the lane run emitted by
+..... 19972     `_emit_strip` is long enough to give every consumer its own tap tile.
+..... 19973     """
+..... 19974     src_lanes: dict[tuple[str, str, str, CargoDomain], int] = defaultdict(int)
+..... 19975     src_tiles: dict[tuple[str, str, str, CargoDomain], int] = {}
+..... 19976     sink_lanes: dict[tuple[str, str, CargoDomain], int] = defaultdict(int)
+..... 19977     for s in strips:
+..... 19978         for item, dest, cargo_domain in s.out_lanes:
+..... 19979             for d in _dests(dest):
+..... 19980                 key = (s.group_key, item, d, cargo_domain)
+..... 19981                 src_lanes[key] += 1
+..... 19982                 src_tiles[key] = min(src_tiles.get(key, s.width), s.width)
+..... 19983         for item in s.in_lanes:
+..... 19984             sink_lanes[s.group_key, item, s.cargo_domain] += 1
+..... 19985 
+..... 19986     need_by_group: dict[str, int] = defaultdict(int)
+..... 19987     for (src_key, item, dest, cargo_domain), n_src in src_lanes.items():
+..... 19988         n_sink = sink_lanes.get((dest, item, cargo_domain), 0)
+..... 19989         if n_sink <= n_src:
+..... 19990             continue
+..... 19991         per_lane = -(-n_sink // n_src)
+..... 19992         tiles = src_tiles[src_key, item, dest, cargo_domain]
+..... 19993         if per_lane > tiles:
+..... 19994             need_by_group[src_key] = max(need_by_group[src_key], per_lane - tiles)
+..... 19995 
+..... 19996     if not need_by_group:
+..... 19997         return strips
+..... 19998     out: list[Strip] = []
+..... 19999     for s in strips:
+..... 20000         extra = need_by_group.get(s.group_key, 0)
+..... 20001         if extra and not s.pilers:
+..... 20002             out.append(replace(s, tail_extension=s.tail_extension + extra))
+..... 20003         else:
+..... 20004             out.append(s)
+..... 20005     return out
+..... 20006 
+..... 20007 
+19940 20008 def _drainable_by_port(strip: Strip) -> bool:
+
+src/flab2bp/layout/freeform.py --- 5/7 --- Text (1000.5 KiB exceeded DFT_BYTE_LIMIT)
+20514                 budget_s=0.0,      20582                 budget_s=0.0,
+20515             )                      20583             )
+20516                                    20584 
+20517         shortfall = _fanout_short  20585         if os.environ.get("FLAB2B
+..... fall(strips)                       ..... P_PROBE_LANE_TAIL"):
+.....                                    20586             strips = _probe_exten
+.....                                    ..... d_producer_tails(strips)
+.....                                    20587         shortfall = [] if os.envi
+.....                                    ..... ron.get("FLAB2BP_PROBE_NO_FANOUT_
+.....                                    ..... GUARD") else _fanout_shortfall(st
+.....                                    ..... rips)
+20518         if shortfall:              20588         if shortfall:
+20519             raise NoValidLayout(   20589             raise NoValidLayout(
+20520                 "a producer lane   20590                 "a producer lane 
+..... has fewer tiles than the consumer  ..... has fewer tiles than the consumer
+..... s it must tap, "                   ..... s it must tap, "
+
+src/flab2bp/layout/freeform.py --- 6/7 --- Text (1000.5 KiB exceeded DFT_BYTE_LIMIT)
+20674 20744                 )
+20675 20745             )
+20676 20746             failed_counts = [attempt.routing.failed_count for attempt in routing_attempts]
+..... 20747             if os.environ.get("FLAB2BP_PROBE_NET_DUMP"):
+..... 20748                 _probe_dump_failures(routing_attempts)
+20677 20749             tried = (
+20678 20750                 "1 pack was"
+20679 20751                 if len(routing_attempts) == 1
+
+src/flab2bp/layout/freeform.py --- 7/7 --- Text (1000.5 KiB exceeded DFT_BYTE_LIMIT)
+20738 20810         # sentence would misname.  Only claim the seed gate when EVERY
+20739 20811         # candidate that reached it was skipped; otherwise stay neutral and let
+20740 20812         # `over_band` supply whatever skip count there was.
+..... 20813         if False:
+..... 20814             ranked = sorted(attempts, key=lambda a: a.routing.failed_count)
+..... 20815             print(
+..... 20816                 f"PROBE attempts={len(attempts)} "
+..... 20817                 f"failed_counts={[a.routing.failed_count for a in ranked]}",
+..... 20818                 file=sys.stderr,
+..... 20819             )
+..... 20820             for a in ranked[:2]:
+..... 20821                 by_item: dict[tuple[str, str], int] = defaultdict(int)
+..... 20822                 for f in a.routing.failures:
+..... 20823                     by_item[f.net_id.item, f.kind.value] += 1
+..... 20824                 print(
+..... 20825                     f"PROBE best attempt failed={a.routing.failed_count} "
+..... 20826                     f"by (item, kind): {sorted(by_item.items(), key=lambda e: -e[1])[:12]}",
+..... 20827                     file=sys.stderr,
+..... 20828                 )
+..... 20829                 srcs: dict[tuple[int | None, int | None], int] = defaultdict(int)
+..... 20830                 for f in a.routing.failures:
+..... 20831                     srcs[f.net_id.source_strip, f.net_id.destination_strip] += 1
+..... 20832                 print(
+..... 20833                     f"PROBE   (src_strip,dst_strip) histogram: "
+..... 20834                     f"{sorted(srcs.items(), key=lambda e: -e[1])[:12]}",
+..... 20835                     file=sys.stderr,
+..... 20836                 )
+20741 20837         if attempts:
+20742 20838             base = (
+20743 20839                 f"no packing of {len(strips)} strips could be wired at any candidate "
+
+src/flab2bp/layout/sequence_solver.py --- 1/2 --- Python
+   9    9 
+  10   10 import inspect
+  11   11 import math
+  ..   12 import os
+  12   13 import time
+  13   14 from collections.abc import Callable, Mapping, Sequence
+  14   15 from dataclasses import dataclass, field, replace
+
+src/flab2bp/layout/sequence_solver.py --- 2/2 --- Python
+4970 4971                 spec_label=spec.label,
+4971 4972                 budget_s=time_budget_s,
+4972 4973             )
+4973 4974         shortfall = [] if os.environ.get("FLAB2BP_PROBE_NO_FANOUT_GUARD") else _fanout_shortfall(strips)
+4974 4975         if shortfall:
+4975 4976             raise NoValidLayout(
+4976 4977                 "a producer lane has fewer tiles than the consumers it must tap, "
+
