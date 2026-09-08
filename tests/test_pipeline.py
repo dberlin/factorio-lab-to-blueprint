@@ -750,6 +750,113 @@ class TestFlowText:
             )
 
 
+PARTIAL_SUPPLY_URL = (
+    "https://factoriolab.github.io/dsp/list?o=gear*60&o=iron-ingot*30*0*1"
+    "&mmr=arc-smelter~assembling-machine-2&v=11"
+)
+PARTIAL_SUPPLY_FLOW = "\n".join(
+    (
+        f'"{PARTIAL_SUPPLY_URL}"',
+        "Item,Items,Recipe,Machines,Machine",
+        "gear,=60,gear,=1,assembling-machine-2",
+        "iron-ingot,=30,iron-ingot,=1/2,arc-smelter",
+        "iron-ore,=30,iron-vein,,mining-machine",
+    )
+)
+
+
+@pytest.mark.slow
+def test_partial_supplied_intermediate_is_admitted_through_build() -> None:
+    """A declared belt remains legal even when the pinned flow crafts its remainder."""
+    result = pipeline.build(
+        PARTIAL_SUPPLY_URL,
+        flow_text=PARTIAL_SUPPLY_FLOW,
+        strategy="freeform",
+        band="160",
+        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+        time_budget_s=3.0,
+    )
+    assert result.spec.external_inputs == {
+        "iron-ingot": Fraction(1, 2),
+        "iron-ore": Fraction(1, 2),
+    }
+    assert {group.recipe_id: group.count for group in result.spec.groups} == {
+        "gear": 1,
+        "iron-ingot": 1,
+    }
+    assert result.spec.outputs == {"gear": Fraction(1)}
+    assert result.flow_pinned
+
+
+def test_undeclared_input_is_refused_despite_a_declared_partial_supply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A candidate's own requested belts never grant it new authorization."""
+    from flab2bp.lab.flow import FlowError
+
+    original = pipeline._build_candidates_canonical
+
+    def stray_candidate(*args: object, **kwargs: object) -> BuildSpecSet:
+        candidates = original(*args, **kwargs)  # type: ignore[arg-type]
+        return BuildSpecSet(
+            candidates=tuple(
+                spec.model_copy(
+                    update={"external_inputs": {**spec.external_inputs, "stone": Fraction(1)}},
+                )
+                for spec in candidates.candidates
+            )
+        )
+
+    monkeypatch.setattr(pipeline, "_build_candidates_canonical", stray_candidate)
+    with pytest.raises(FlowError, match="stone"):
+        pipeline.build(
+            PARTIAL_SUPPLY_URL,
+            flow_text=PARTIAL_SUPPLY_FLOW,
+            strategy="freeform",
+            candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
+            time_budget_s=3.0,
+        )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("flow_mode", "expected_inputs"),
+    [
+        (None, {"iron-ore", "proliferator-2"}),
+        ("", {"iron-ore"}),
+        ("proliferator-2-speed", {"iron-ore", "proliferator-2"}),
+    ],
+    ids=["no-flow", "unsprayed-flow", "sprayed-flow"],
+)
+def test_proliferator_input_admission_preserves_flow_policy(
+    flow_mode: str | None, expected_inputs: set[str]
+) -> None:
+    url = (
+        "https://factoriolab.github.io/dsp/list?o=iron-ingot*60"
+        "&mmr=arc-smelter&mps=proliferator-2-products&v=11"
+    )
+    text = None
+    if flow_mode is not None:
+        text = "\n".join(
+            (
+                f'"{url}"',
+                "Item,Items,Recipe,Machines,Machine,Modules",
+                f'iron-ingot,=60,iron-ingot,=1,arc-smelter,"1 {flow_mode}"',
+                "iron-ore,=60,iron-vein,,mining-machine,",
+            )
+        )
+    result = pipeline.build(
+        url,
+        flow_text=text,
+        strategy="freeform",
+        band="160",
+        candidate_policies=(CandidatePolicy.ALL_PRODUCTS,),
+        time_budget_s=3.0,
+    )
+    assert set(result.spec.external_inputs) == expected_inputs
+    assert result.spec.outputs == {"iron-ingot": Fraction(1)}
+
+
 #: ``iron-ore`` is mining-only in the vendored dataset -- no assembler recipe
 #: outputs it -- and an Output objective forces its extraction option off (see
 #: ``rates.solve._resolve_chain``), so nothing can ever craft it. That makes

@@ -862,8 +862,9 @@ def build(
     # legal and present, so dropping the illegal ones keeps the build while
     # honouring the boundary. If NONE survive we refuse, naming each.
     flow_external = selection.external_items(data) if selection is not None else None
+    authorized_extra_inputs: frozenset[str] = frozenset()
     if selection is not None:
-        exempt = (
+        proliferator_allowance = (
             frozenset(
                 i
                 for spec in spec_set.candidates
@@ -878,12 +879,17 @@ def build(
         # It has to be exempt: a partial supply is netted, so FactorioLab's
         # export shows the item's recipe running for the remainder and
         # `external_items` cannot see the supply at all.
-        exempt |= frozenset(supplied_rates(data, request))
+        request_supplies = supplied_rates(data, request)
+        authorized_extra_inputs = frozenset(request_supplies) | proliferator_allowance
         legal: list[tuple[BuildSpec, tuple[str, ...]]] = []
         illegal: list[tuple[BuildSpec, tuple[str, ...]]] = []
         for spec in spec_set.candidates:
             stray = unsupplied_inputs(
-                selection, data, spec.external_inputs, exempt=exempt, external=flow_external
+                selection,
+                data,
+                spec.external_inputs,
+                exempt=authorized_extra_inputs,
+                external=flow_external,
             )
             (legal if not stray else illegal).append((spec, stray))
         if not legal:
@@ -1432,9 +1438,9 @@ def build(
     if selection is not None:
         # The boundary rule is a REFUSAL, not a finding: an input FactorioLab's
         # flow does not contain is the stone bug itself, and shipping the belt
-        # would change the inputs the player chose. Proliferator is the one
-        # known exemption -- FactorioLab builds it, we belt it in, and removing
-        # that asymmetry is separate work that moves the layout stage.
+        # would change the inputs the player chose. The same request-owned
+        # authorization admits declared supplies and, only for a sprayed flow,
+        # the known external-proliferator asymmetry.
         # A post-condition on what we actually chose. The candidate filter above
         # should have made this unreachable; it is here because "should have" is
         # not a guarantee, and shipping the belt is the failure we cannot take
@@ -1443,11 +1449,7 @@ def build(
             selection,
             data,
             chosen_spec.external_inputs,
-            exempt=(
-                frozenset(i for i in chosen_spec.external_inputs if i.startswith("proliferator"))
-                if selection.uses_proliferator
-                else frozenset()
-            ),
+            exempt=authorized_extra_inputs,
             external=flow_external,
         )
         if stray:
