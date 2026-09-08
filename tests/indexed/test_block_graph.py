@@ -180,3 +180,12 @@ def test_successors_are_ascending_and_deduplicated() -> None:
 
 def test_successors_excludes_a_self_loop() -> None:
     assert BlockGraph.of(2, [(0, 0), (0, 1)]).successors(0) == (1,)
+
+
+def test_graph_queries_and_repeated_ordering_preserve_cycle_breaking() -> None:
+    graph = BlockGraph.of(4, iter(((0, 2), (2, 1), (1, 2), (0, 2), (3, 3))))
+    assert graph.topological_order() == (0, 3, 1, 2)
+    assert graph.has_cycle()
+    assert graph.successors(0) == (2,)
+    assert graph.successors(3) == ()
+    assert graph.topological_order() == (0, 3, 1, 2)

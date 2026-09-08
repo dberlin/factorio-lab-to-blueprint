@@ -37,11 +37,10 @@ Kahn's-algorithm transcription silently changes:
    there is no "acyclic prefix" behaviour to fall back on, and a hierarchy
    round with a cyclic block graph must not silently lose blocks.
 
-Backend: networkx (Ruling 4's default) for the graph itself -- `in_degree`
-and `successors` feed the two heaps above, and `has_cycle` is a genuine use
-of `nx.is_directed_acyclic_graph`. Whether the per-round `DiGraph` build pays
-for itself at the real block counts is Task 20's measurement to make behind
-this same abstraction, not this module's to pre-empt.
+Backend: plain adjacency and two heaps for ordering. Task 20 measured eager
+networkx construction slower than the original scan on every observed real
+block graph, while the plain-heap alternative was faster. Graph-only queries
+retain networkx, built lazily so partition ordering does not pay that cost.
 """
 
 from __future__ import annotations
@@ -60,13 +59,27 @@ class BlockGraph:
     counted in `has_cycle` -- mirroring `_topo_order`'s own skip.
     """
 
-    __slots__ = ("_digraph", "_node_count")
+    __slots__ = ("_adjacency", "_digraph", "_indegree", "_node_count")
 
     def __init__(self, node_count: int, edges: Iterable[tuple[int, int]]) -> None:
-        digraph: nx.DiGraph = nx.DiGraph()
-        digraph.add_nodes_from(range(node_count))
-        digraph.add_edges_from((src, dst) for src, dst in edges if src != dst)
-        self._digraph = digraph
+        adjacency: dict[int, dict[int, None]] = {node: {} for node in range(node_count)}
+        indegree = dict.fromkeys(range(node_count), 0)
+        for src, dst in edges:
+            if src == dst:
+                continue
+            if src not in adjacency:
+                adjacency[src] = {}
+                indegree[src] = 0
+            if dst not in adjacency:
+                adjacency[dst] = {}
+                indegree[dst] = 0
+            peers = adjacency[src]
+            if dst not in peers:
+                peers[dst] = None
+                indegree[dst] += 1
+        self._adjacency = adjacency
+        self._indegree = indegree
+        self._digraph: nx.DiGraph | None = None
         self._node_count = node_count
 
     @classmethod
@@ -74,13 +87,23 @@ class BlockGraph:
         """Build one round's block graph."""
         return cls(node_count, edges)
 
+    def _graph(self) -> nx.DiGraph:
+        if self._digraph is None:
+            graph: nx.DiGraph = nx.DiGraph()
+            graph.add_nodes_from(self._adjacency)
+            graph.add_edges_from(
+                (src, dst) for src, peers in self._adjacency.items() for dst in peers
+            )
+            self._digraph = graph
+        return self._digraph
+
     def successors(self, node: int) -> tuple[int, ...]:
         """Blocks that must follow ``node``, ascending and deduplicated."""
-        return tuple(sorted(self._digraph.successors(node)))
+        return tuple(sorted(self._graph().successors(node)))
 
     def has_cycle(self) -> bool:
         """Whether any block precedence cycle exists (self-loops excluded)."""
-        return not nx.is_directed_acyclic_graph(self._digraph)
+        return not nx.is_directed_acyclic_graph(self._graph())
 
     def topological_order(self) -> tuple[int, ...]:
         """Blocks in dependency order, exactly as master's `_topo_order` returns them.
@@ -96,7 +119,7 @@ class BlockGraph:
         the module docstring for why two heaps reproduce master's list-based
         walk exactly, in O(n log n) instead of O(n^2 log n).
         """
-        indegree: dict[int, int] = dict(self._digraph.in_degree())
+        indegree = self._indegree.copy()
         ready = [node for node in range(self._node_count) if indegree[node] == 0]
         heapq.heapify(ready)
         fallback = list(range(self._node_count))  # already ascending: a valid heap as-is
@@ -113,7 +136,7 @@ class BlockGraph:
                 continue
             seen.add(node)
             order.append(node)
-            for peer in self._digraph.successors(node):
+            for peer in self._adjacency[node]:
                 indegree[peer] -= 1
                 if indegree[peer] == 0 and peer not in seen:
                     heapq.heappush(ready, peer)
