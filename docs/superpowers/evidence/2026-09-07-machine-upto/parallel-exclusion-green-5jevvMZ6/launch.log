@@ -1,0 +1,5 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+controls-exact: retained 1 cells
+/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/docs/superpowers/evidence/2026-09-07-machine-upto/parallel-exclusion-green-5jevvMZ6/controls-exact.jsonl
+
+EXIT=0

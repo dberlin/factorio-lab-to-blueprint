@@ -109,14 +109,6 @@ def main() -> int:
             slug = "-".join(value for value in (url_id, policy, strategy) if value)
             chunk = chunks / f"{slug}.jsonl"
             if not chunk.exists():
-                audit = subprocess.run(
-                    ["pgrep", "-fc", r"python[0-9.]* +[^ ]*scripts/audit\.py"],
-                    capture_output=True, text=True,
-                )
-                if audit.returncode not in (0, 1):
-                    raise RuntimeError(audit.stderr)
-                if int(audit.stdout.strip() or "0"):
-                    raise RuntimeError("another audit is running; do not overlap gate rounds")
                 log_path = chunks / f"{slug}.log"
                 if log_path.exists():
                     raise RuntimeError(f"interrupted prior attempt retained at {log_path}; inspect, do not silently rerun")
