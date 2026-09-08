@@ -1,0 +1,25 @@
+FF.F                                                                     [100%]
+=================================== FAILURES ===================================
+_________ test_ordered_snapshot_restores_replaced_and_reinserted_paths _________
+tests/indexed/test_staked_paths.py:159: in test_ordered_snapshot_restores_replaced_and_reinserted_paths
+    assert tuple(paths) == (8, 3)
+           ^^^^^^^^^^^^
+E   TypeError: 'StakedPaths' object is not iterable
+_________ test_failed_cluster_preserves_order_beside_unrelated_stakes __________
+tests/layout/test_freeform.py:21390: in test_failed_cluster_preserves_order_beside_unrelated_stakes
+    assert tuple(live[0].items()) == saved[0]
+E   assert ((2, ((4, 4, ...(0, -1, 0),))) == ((0, ((0, -1,...((4, 4, 0),)))
+E     
+E     At index 0 diff: (2, ((4, 4, 0),)) != (0, ((0, -1, 0),))
+E     Use -v to get more diff
+________ test_reservation_abort_restores_held_corridor_precedence[True] ________
+tests/layout/test_freeform.py:21426: in test_reservation_abort_restores_held_corridor_precedence
+    assert (tuple(canvas.reserved.items()), tuple(canvas.port_corridors.items())) == before
+E   AssertionError: assert ((((1, 0, 0),..., 0, 0))), ()) == ((((9, 5, 0),...rrival'>))),))
+E     
+E     At index 0 diff: (((1, 0, 0), (0, 0, 0)), ((2, 0, 0), (0, 0, 0))) != (((9, 5, 0), (9, 6, 0)), ((1, 0, 0), (0, 0, 0)), ((2, 0, 0), (0, 0, 0)), ((0, 1, 0), (0, 0, 0)), ((0, 2, 0), (0, 0, 0)))
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED tests/indexed/test_staked_paths.py::test_ordered_snapshot_restores_replaced_and_reinserted_paths
+FAILED tests/layout/test_freeform.py::test_failed_cluster_preserves_order_beside_unrelated_stakes
+FAILED tests/layout/test_freeform.py::test_reservation_abort_restores_held_corridor_precedence[True]
