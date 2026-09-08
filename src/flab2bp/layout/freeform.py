@@ -93,6 +93,7 @@ from ortools.sat.python import cp_model
 
 from flab2bp.dsp import catalog, codec, colliders, params, planet, rules, splitter_ports
 from flab2bp.indexed import Nets, PortReservations, StakedPaths, UnionFind
+from flab2bp.indexed.staked_paths import StakedPathSnapshot
 from flab2bp.layout import finalize, junction, last_mile, route_kernel, slots, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
@@ -9529,8 +9530,7 @@ def _route_all(
     #: They are staked and unstaked together, always through `_stake`/`_unstake`,
     #: because `canvas.blocked`, `grid.occ` and `owner` disagreeing is a router
     #: that quietly routes through a committed belt.
-    paths: dict[int, tuple[Cell, ...]] = {}
-    staked_paths = StakedPaths(_STEPS)
+    paths = StakedPaths(_STEPS)
     owner: dict[Cell, int] = {}
     retired_roles: dict[tuple[Cell, str], PortAccessCorridor] = {}
     iterations = 0
@@ -9570,7 +9570,7 @@ def _route_all(
     #: heights reported `routed=0 failed=115` -- every net -- while their first
     #: round had routed roughly seventy of them. Rip-up-and-reroute is a search
     #: over rounds; keeping the incumbent is what makes it one.
-    best_paths: dict[int, tuple[Cell, ...]] = {}
+    best_paths: Mapping[int, tuple[Cell, ...]] = MappingProxyType({})
     best_failures: dict[int, NetFailure] = {}
     best_source_hints: dict[int, Cell] = {}
     best_path_taps: dict[int, Cell] = {}
@@ -9688,7 +9688,7 @@ def _route_all(
         )
 
     def _finish(
-        selected_paths: dict[int, tuple[Cell, ...]],
+        selected_paths: Mapping[int, tuple[Cell, ...]],
         selected_failures: dict[int, NetFailure],
         selected_source_hints: Mapping[int, Cell],
         selected_sink_hints: Mapping[int, Cell],
@@ -10085,8 +10085,7 @@ def _route_all(
     ) -> None:
         """Put a path down with the exact sibling endpoints it selected."""
         selected = hints
-        paths[index] = path
-        staked_paths.stake(index, path, linked_head=selected[2] is not None or index in path_tap)
+        paths.stake(index, path, linked_head=selected[2] is not None or index in path_tap)
         if selected[0] is not None:
             source_hint[index] = selected[0]
         else:
@@ -10123,8 +10122,9 @@ def _route_all(
                 grid.restore(cell)
         source_hint.pop(index, None)
         sink_hint.pop(index, None)
-        staked_paths.unstake(index)
-        for cell in paths.pop(index):
+        path = paths[index]
+        paths.unstake(index)
+        for cell in path:
             if canvas.blocked.get(cell, -1) == _TENTATIVE:
                 del canvas.blocked[cell]
                 grid.restore(cell)
@@ -10353,7 +10353,7 @@ def _route_all(
             else ()
         )
         owned_source_starts[index] = frozenset(set(starts) & owned_guard.keys())
-        reverse_link_guard = staked_paths.linked_heads()
+        reverse_link_guard = paths.linked_heads()
 
         destination_access = tuple((net.dst.x + dx, net.dst.y + dy, net.dst.z) for dx, dy in _STEPS)
         sink_provenance: dict[Cell, Cell] = {}
@@ -10496,13 +10496,13 @@ def _route_all(
             while queue and len(grown) <= _REPAIR_MAX_VICTIMS:
                 leant_on = queue.pop()
                 for cell in paths[leant_on]:
-                    for other in staked_paths.beside_in_scan_order(cell):
+                    for other in paths.beside_in_scan_order(cell):
                         if other in grown:
                             continue
                         if (
                             leant_on in src_group.get(other, ())
                             or leant_on in dst_group.get(other, ())
-                            or leant_on in staked_paths.sole_neighbours(other, owner)
+                            or leant_on in paths.sole_neighbours(other, owner)
                         ):
                             grown.add(other)
                             queue.append(other)
@@ -10592,7 +10592,7 @@ def _route_all(
                     (
                         (sibling, position)
                         for sibling in src_group.get(index, ())
-                        if (position := staked_paths.position_in(sibling, selected_tap)) is not None
+                        if (position := paths.position_in(sibling, selected_tap)) is not None
                     ),
                     None,
                 )
@@ -10662,6 +10662,7 @@ def _route_all(
             # swap is a transaction. Every displaced net must find a new route
             # or the whole thing is rolled back, which makes a repair pass
             # monotone: it can place a net or decline, never subtract one.
+            staked_before = paths.snapshot()
             saved = {
                 hurt: (
                     paths[hurt],
@@ -10736,6 +10737,7 @@ def _route_all(
                     was,
                     hints=(source_was, sink_was, tap_was),
                 )
+            paths.restore(staked_before)
             still.append(index)
         return still
 
@@ -10929,7 +10931,7 @@ def _route_all(
         for a difference no later reader can observe.
         """
         return (
-            dict(paths),
+            paths.snapshot(),
             dict(owner),
             bytes(grid.occ),
             tuple(sorted(grid.reserved)),
@@ -10943,8 +10945,7 @@ def _route_all(
         )
 
     def _restore_staked(
-        order: Sequence[int],
-        staked: Mapping[int, tuple[Cell, ...]],
+        staked: StakedPathSnapshot,
         held: Mapping[int, tuple[Cell | None, Cell | None, Cell | None]],
         before: tuple[object, ...],
     ) -> bool:
@@ -10959,9 +10960,10 @@ def _route_all(
         `_route_all` becomes a CRASH row in `scripts/audit.py` and fails the
         corpus gate on the very condition the gate is measuring.
         """
-        for index in order:
+        for index, path, _linked_head in staked:
             if index not in paths:
-                _stake(index, staked[index], hints=held[index])
+                _stake(index, path, hints=held[index])
+        paths.restore(staked)
         if before == _round_state():
             return True
         last_mile_counts["restore_mismatch"] += 1
@@ -11104,7 +11106,7 @@ def _route_all(
             )
             for index in every
         }
-        staked = {index: paths[index] for index in every}
+        staked = paths.snapshot()
         # Saved so the round gets its own table back whatever run 2 does to it;
         # `_restore_staked` rebuilds the same content from the paths, and this
         # is the belt to that braces.
@@ -11135,7 +11137,7 @@ def _route_all(
             planned_taps.update(taps_before)
             if release is not None:
                 _close_every_corridor(release)
-            _restore_staked(every, staked, held_all, before_all)
+            _restore_staked(staked, held_all, before_all)
             for table, snapshot in zip(rejections, saved, strict=True):
                 for index, cells in snapshot.items():
                     table[index].clear()
@@ -11238,7 +11240,7 @@ def _route_all(
         # because `_claim_junction_guard` computes its `excused` set from the
         # sibling paths already down.
         order = [index for index in paths if index in set(problem.nets)]
-        released = {index: paths[index] for index in order}
+        released = paths.snapshot()
         held = {
             index: (
                 source_hint.get(index),
@@ -11292,12 +11294,12 @@ def _route_all(
             for index in problem.nets:
                 if index in paths:
                     _unstake(index)
-            _restore_staked(order, released, held, before)
+            _restore_staked(released, held, before)
             last_mile_counts["commit_rejected"] += 1
             last_mile_counts["bounded"] += 1
             return round_stranded
 
-        restored = _restore_staked(order, released, held, before)
+        restored = _restore_staked(released, held, before)
         if result.outcome is last_mile.ClusterOutcome.PROVED and restored:
             last_mile_counts["proved"] += 1
             proved_round = round_index
@@ -11803,7 +11805,7 @@ def _route_all(
             # reference kept a snapshot; it now persists across rounds and is
             # mutated in place by the rip-up and by the repair, so keeping the
             # reference would make "the best round" mean "the last one".
-            fewest_failed, stale, best_paths = failed, 0, dict(paths)
+            fewest_failed, stale, best_paths = failed, 0, MappingProxyType(dict(paths))
             best_round = it
             best_failures = dict(round_failures)
             best_source_hints = {
