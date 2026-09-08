@@ -50,6 +50,7 @@ if TYPE_CHECKING:
         _reader: _ConnectionBase
         _writer: _ConnectionBase
 
+
 from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import Placement, ProjectionFailureRecord
@@ -329,10 +330,8 @@ class _StrategyRaceRequest:
     #: ``absolute_deadline``.
     soft_deadline: float
     band_policy: BandPolicy
-    belt_vertical_construction: bool
-    #: For the child's OWN ``validate.validate`` before it publishes an
-    #: incumbent: the bound must meet the standard the parent will apply.
-    max_belt_z: Fraction
+    #: The same save policy for strategy completion and published bounds.
+    belt_rules: catalog.BeltAltitudeRules
     workers: int
     arrangements: int | None
     sequence_islands: int
@@ -412,11 +411,6 @@ def _ordered(outcomes: Sequence[_StrategyRaceOutcome]) -> tuple[_StrategyRaceOut
     return tuple(by_strategy[name] for name in RACE_STRATEGIES if name in by_strategy)
 
 
-#: Referenced so ``catalog`` is not an unused import: the default belt ceiling a
-#: caller gets when it does not know the URL's technology set.
-DEFAULT_RACE_MAX_BELT_Z = catalog.DEFAULT_MAX_BELT_Z
-
-
 #: Set by the pool initializer in each child; ``None`` in the parent and when
 #: sharing is off.  A module global rather than a request field because a
 #: ``multiprocessing.Queue`` cannot be pickled as a TASK argument -- it reaches a
@@ -485,14 +479,14 @@ def _build_layout(
             band_policy=request.band_policy,
             workers=request.workers,
             arrangements=request.arrangements,
-            belt_vertical_construction=request.belt_vertical_construction,
+            belt_rules=request.belt_rules,
             portfolio_incumbent=portfolio_incumbent,
             publish_incumbent=publish_incumbent,
             observer=observer,
         )
     return SequencePairLayout(
         band_policy=request.band_policy,
-        belt_vertical_construction=request.belt_vertical_construction,
+        belt_rules=request.belt_rules,
         config=request.config,
         compact_seed_config=request.compact_seed_config,
         islands=request.sequence_islands,
@@ -585,13 +579,12 @@ def _run_race_leg(request: _StrategyRaceRequest) -> _StrategyRaceOutcome:
         # the parent will reject would prune the other arm on a promise nobody
         # keeps.  One extra validation per PUBLISHED incumbent, off the parent's
         # critical path.
-        report = validate.validate(
+        report = validate.judge_placement(
             placement,
             request.spec,
             ids=validate.id_map(request.spec),
             expect_power=True,
-            max_belt_z=request.max_belt_z,
-            belt_vertical_construction=request.belt_vertical_construction,
+            belt_rules=request.belt_rules,
         )
         if not report.ok:
             return
@@ -805,8 +798,7 @@ def run_strategy_race(
     *,
     time_budget_s: float,
     band_policy: BandPolicy,
-    belt_vertical_construction: bool,
-    max_belt_z: Fraction = DEFAULT_RACE_MAX_BELT_Z,
+    belt_rules: catalog.BeltAltitudeRules,
     workers: int | None = None,
     arrangements: int | None = None,
     sequence_islands: int = 1,
@@ -858,8 +850,7 @@ def run_strategy_race(
             time_budget_s=time_budget_s,
             soft_deadline=soft_deadline,
             band_policy=band_policy,
-            belt_vertical_construction=belt_vertical_construction,
-            max_belt_z=max_belt_z,
+            belt_rules=belt_rules,
             workers=workers_by_strategy[name],
             arrangements=arrangements,
             sequence_islands=sequence_islands,
@@ -1024,18 +1015,16 @@ class RacingLayout:
         *,
         workers: int | None = None,
         arrangements: int | None = None,
-        belt_vertical_construction: bool = True,
+        belt_rules: catalog.BeltAltitudeRules,
         sequence_islands: int = 1,
         share: bool = True,
-        max_belt_z: Fraction = DEFAULT_RACE_MAX_BELT_Z,
     ) -> None:
         self.band_policy = band_policy
         self.workers = workers
         self.arrangements = arrangements
-        self.belt_vertical_construction = belt_vertical_construction
+        self.belt_rules = belt_rules
         self.sequence_islands = sequence_islands
         self.share = share
-        self.max_belt_z = max_belt_z
 
     def _merge(self, outcomes: Sequence[_StrategyRaceOutcome]) -> Placement:
         """Pick one placement, by quality and then by name -- never by arrival.
@@ -1112,8 +1101,7 @@ class RacingLayout:
                 spec,
                 time_budget_s=time_budget_s,
                 band_policy=self.band_policy,
-                belt_vertical_construction=self.belt_vertical_construction,
-                max_belt_z=self.max_belt_z,
+                belt_rules=self.belt_rules,
                 workers=self.workers,
                 arrangements=self.arrangements,
                 sequence_islands=self.sequence_islands,

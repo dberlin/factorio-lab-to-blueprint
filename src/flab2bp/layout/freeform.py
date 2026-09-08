@@ -85,7 +85,6 @@ from flab2bp.layout.base import (
     NoValidLayout,
     PlacedBuilding,
     Placement,
-    PlacementCompletion,
     PlacementStats,
     ProjectionFailureRecord,
 )
@@ -4458,11 +4457,11 @@ class FreeformLayout:
         self,
         *,
         band_policy: BandPolicy,
+        belt_rules: catalog.BeltAltitudeRules,
         strip_len: int = 6,
         workers: int | None = None,
         direct_insert: bool = True,
         arrangements: int | None = None,
-        belt_vertical_construction: bool = True,
         portfolio_incumbent: Callable[[], tuple[int, int] | None] | None = None,
         publish_incumbent: Callable[[Placement], None] | None = None,
         #: Told what this sweep is doing, for a debugging view.  A SEPARATE
@@ -4475,6 +4474,7 @@ class FreeformLayout:
         observer: SearchObserver | None = None,
     ) -> None:
         self.band_policy = band_policy
+        self.belt_rules = belt_rules
         #: Whether ramps are REQUIRED.  The game's slope limit is conditional --
         #: ``!history.beltVerticalConstruction && num25 > 0.8f`` -- so a save
         #: WITH the tech has no slope limit and a belt may gain a whole level in
@@ -4485,7 +4485,7 @@ class FreeformLayout:
         #: master's 2, and made the one test class built from a real corpus URL
         #: fail 2 runs in 3: every net paid two tiles per level change and a
         #: stricter join rule, under a constraint these saves do not carry.
-        self.ramped = not belt_vertical_construction
+        self.ramped = not belt_rules.vertical_construction
         self.strip_len = strip_len
         #: CP-SAT search workers. ``None`` takes the module default (all
         #: cores); the bake-off pins ``DETERMINISTIC_WORKERS``.
@@ -6541,52 +6541,31 @@ class FreeformLayout:
                     completion_deadline = (
                         None if deadline is None else deadline + ATOMIC_COMPLETION_GRACE_S
                     )
-                    completion_cancelled = (
-                        None
-                        if completion_deadline is None
-                        else lambda completion_deadline=completion_deadline: (
-                            routing_domain._expired(completion_deadline)
-                        )
+                    projection = finalize.prepare_placement_completion(
+                        placement,
+                        spec,
+                        self.band_policy,
+                        belt_rules=self.belt_rules,
+                        expect_power=True,
+                        deadlines=finalize.PlacementCompletionDeadlines(
+                            completion_deadline, completion_deadline, completion_deadline
+                        ),
                     )
-                    compaction_started = time.monotonic()
-                    try:
-                        try:
-                            compacted = finalize.compact_open_boundary_belts_certified(
-                                placement,
-                                spec,
-                                expect_power=True,
-                                cancelled=completion_cancelled,
-                            )
-                        finally:
-                            compaction_elapsed = time.monotonic() - compaction_started
-                            compaction_time_s += compaction_elapsed
-                            compaction_reserve_s = max(
-                                compaction_reserve_s,
-                                compaction_elapsed,
-                            )
-                    except finalize.ProjectionCancelled:
-                        retain_attempt(_BuildBudgetStage.CERTIFICATION)
+                    compaction_elapsed = projection.timings.cleanup_s
+                    compaction_time_s += compaction_elapsed
+                    compaction_reserve_s = max(compaction_reserve_s, compaction_elapsed)
+                    finalize_elapsed = projection.timings.projection_s
+                    finalization_time_s += finalize_elapsed
+                    finalize_reserve_s = max(finalize_reserve_s, finalize_elapsed)
+                    if isinstance(projection, finalize.PlacementCompletionCancelled):
+                        retain_attempt(
+                            _BuildBudgetStage.CERTIFICATION
+                            if projection.phase == "cleanup"
+                            else _BuildBudgetStage.FINALIZATION
+                        )
                         break
-                    if routing_domain._expired(completion_deadline):
-                        retain_attempt(_BuildBudgetStage.CERTIFICATION)
-                        break
-                    placement = compacted.placement
-                    finalize_started = time.monotonic()
-                    try:
-                        try:
-                            placement = finalize.finalize_placement(
-                                placement,
-                                self.band_policy,
-                                cancelled=completion_cancelled,
-                            )
-                        finally:
-                            finalize_elapsed = time.monotonic() - finalize_started
-                            finalization_time_s += finalize_elapsed
-                            finalize_reserve_s = max(finalize_reserve_s, finalize_elapsed)
-                    except finalize.ProjectionCancelled:
-                        retain_attempt(_BuildBudgetStage.FINALIZATION)
-                        break
-                    except finalize.ProjectionRefusal as exc:
+                    placement = projection.candidate
+                    if isinstance(projection, finalize.PlacementProjectionRefused):
                         retain_attempt()
                         learned = False
                         exact_projection_pair: ExactProjectionPair | None = None
@@ -6595,7 +6574,7 @@ class FreeformLayout:
                         pitch_requirements = _projection_pitch_requirements(
                             placement,
                             strips,
-                            exc.failures,
+                            projection.refusal.failures,
                         )
                         from flab2bp.layout.strip_variants import (
                             StripInstanceId,
@@ -6617,7 +6596,7 @@ class FreeformLayout:
                                 strip,
                             )
                         for failure, pitch_requirement in zip(
-                            exc.failures,
+                            projection.refusal.failures,
                             pitch_requirements,
                             strict=True,
                         ):
@@ -6685,7 +6664,7 @@ class FreeformLayout:
                                 outline=tuple(_box(strip) for strip in strips),
                                 width=pack.width,
                                 origins=tuple(pack.at[index] for index in range(len(strips))),
-                                evidence=exc.failures,
+                                evidence=projection.refusal.failures,
                                 projection_pair=exact_projection_pair,
                             )
                             retry_key = _ExactRetryKey(
@@ -6765,9 +6744,10 @@ class FreeformLayout:
                             break
                         retain_attempt()
                         continue
-                    certify_started = time.monotonic()
-                    report = validate.certify(placement, spec, expect_power=True)
-                    validation_time_s += time.monotonic() - certify_started
+                    completion = finalize.complete_placement(projection)
+                    report = completion.report
+                    validation_elapsed = completion.timings.certification_s
+                    validation_time_s += validation_elapsed
                     if (
                         inbound_choice is not None
                         and window_choices.get((height, arrangement)) is inbound_choice
@@ -6780,7 +6760,7 @@ class FreeformLayout:
                         )
                     validation_reserve_s = max(
                         validation_reserve_s,
-                        time.monotonic() - certify_started,
+                        validation_elapsed,
                     )
                     if self.observer is not None and self.observer.due(SearchPhase.CERTIFIED):
                         self.observer.note(
@@ -6815,17 +6795,15 @@ class FreeformLayout:
                                 reason=report.errors[0].message,
                             )
                         )
-                    if routing_domain._expired(completion_deadline):
+                    if isinstance(completion, finalize.PlacementCertificationExpired) or (
+                        routing_domain._expired(completion_deadline)
+                    ):
                         retain_attempt(_BuildBudgetStage.CERTIFICATION)
                         break
-                    if report.errors:
+                    if isinstance(completion, finalize.PlacementInvalid):
                         retain_attempt()
                         continue
-                    if placement.frame is not None:
-                        placement = replace(
-                            placement,
-                            completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
-                        )
+                    placement = completion.placement
                     retain_attempt()
                     # The authority on what is returned, spelled inline rather than
                     # delegated to `_would_become_incumbent`: see that docstring for

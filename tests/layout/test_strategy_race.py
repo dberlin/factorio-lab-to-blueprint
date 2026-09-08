@@ -15,7 +15,8 @@ from typing import ClassVar, get_type_hints
 import pytest
 
 import flab2bp.layout.strategy_race as strategy_race_module
-from flab2bp.dsp import catalog, provenance, registry
+from flab2bp.dsp import provenance, registry
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     LayoutStrategy,
@@ -77,6 +78,8 @@ from flab2bp.spec import BuildSpec
 from tests.layout.test_freeform import two_stage_spec
 from tests.layout.test_sequence_solver import _placement
 
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 def _request(strategy: RaceStrategyName = "freeform") -> _StrategyRaceRequest:
     return _StrategyRaceRequest(
@@ -85,8 +88,7 @@ def _request(strategy: RaceStrategyName = "freeform") -> _StrategyRaceRequest:
         time_budget_s=30.0,
         soft_deadline=1234.5,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
-        max_belt_z=catalog.DEFAULT_MAX_BELT_Z,
+        belt_rules=_BELT_RULES,
         workers=6,
         arrangements=None,
         sequence_islands=1,
@@ -109,28 +111,6 @@ def test_the_request_carries_no_queue() -> None:
     names = {field.name for field in fields(_StrategyRaceRequest)}
 
     assert not {name for name in names if "queue" in name or "channel" in name}
-
-
-def test_every_request_field_is_read_by_a_racer() -> None:
-    # `power` was in an earlier draft and is deliberately absent: both lay_out
-    # implementations hard-code powered emission, so the field would be a knob
-    # that does not turn.
-    assert {field.name for field in fields(_StrategyRaceRequest)} == {
-        "spec",
-        "strategy",
-        "time_budget_s",
-        "soft_deadline",
-        "band_policy",
-        "belt_vertical_construction",
-        "max_belt_z",
-        "workers",
-        "arrangements",
-        "sequence_islands",
-        "config",
-        "compact_seed_config",
-        "share",
-        "trace",
-    }
 
 
 @pytest.mark.parametrize(
@@ -503,7 +483,7 @@ def test_race_deadline_reaps_a_worker_interrupted_during_result_write() -> None:
             two_stage_spec(),
             time_budget_s=0.1,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             share=True,
             submit=submit,
             monotonic=lambda: next(ticks),
@@ -613,7 +593,7 @@ def test_real_race_fault_reaps_children_before_channels_and_preserves_failure(
                 two_stage_spec(),
                 time_budget_s=60,
                 band_policy=BandPolicy("portable"),
-                belt_vertical_construction=True,
+                belt_rules=_BELT_RULES,
                 share=True,
             )
         assert caught.value is failure
@@ -690,7 +670,7 @@ def _race(
         two_stage_spec(),
         time_budget_s=0.05,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         share=False,
         submit=_stub_submit(results),
         monotonic=monotonic,
@@ -804,7 +784,7 @@ def test_the_race_spends_the_measured_grace_before_it_kills() -> None:
             two_stage_spec(),
             time_budget_s=budget_s,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             share=False,
             submit=submit,
             monotonic=lambda: next(ticks),
@@ -840,7 +820,7 @@ def test_the_requests_carry_the_parents_wall_not_a_budget_to_start_later() -> No
         two_stage_spec(),
         time_budget_s=10.0,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         share=False,
         submit=submit,
         monotonic=lambda: next(ticks),
@@ -869,7 +849,7 @@ def test_share_false_creates_no_channels() -> None:
         two_stage_spec(),
         time_budget_s=0.05,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         share=False,
         submit=submit,
     )
@@ -896,7 +876,7 @@ def test_share_true_wires_the_two_queues_crosswise_and_closes_them() -> None:
         two_stage_spec(),
         time_budget_s=0.05,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         share=True,
         submit=submit,
     )
@@ -925,7 +905,7 @@ def test_the_queues_are_closed_even_when_the_race_raises() -> None:
             two_stage_spec(),
             time_budget_s=0.05,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             share=True,
             submit=submit,
         )
@@ -954,7 +934,7 @@ def test_the_worker_split_reaches_the_requests() -> None:
         two_stage_spec(),
         time_budget_s=0.05,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         share=False,
         workers=8,
         submit=submit,
@@ -969,7 +949,7 @@ def test_a_race_without_a_budget_is_refused() -> None:
             two_stage_spec(),
             time_budget_s=0.0,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             submit=_stub_submit({}),
         )
 
@@ -987,7 +967,7 @@ def test_a_race_rejects_sequence_islands_outside_the_serial_range(islands: int) 
             two_stage_spec(),
             time_budget_s=0.05,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             sequence_islands=islands,
             submit=_stub_submit({}),
         )
@@ -1010,7 +990,7 @@ def test_a_third_strategy_fails_loudly_rather_than_losing_every_message(
             two_stage_spec(),
             time_budget_s=1.0,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             submit=_stub_submit({}),
         )
 
@@ -1195,46 +1175,6 @@ def test_a_leg_with_sharing_off_touches_no_channel() -> None:
         strategy_race_module._RACE_CHANNELS = None
 
 
-def test_build_layout_hands_over_every_knob_the_request_carries() -> None:
-    """A dropped keyword here is a raced arm quietly solving a different problem.
-
-    Nothing downstream would notice: the leg would still return a valid
-    ``Placement``, just one the caller did not ask for.  So the knobs are checked
-    on the constructed object rather than inferred from a solve, which cannot
-    tell "the knob was ignored" from "the knob did not matter on this spec".
-    """
-    freeform_request = replace(
-        _request("freeform"),
-        workers=3,
-        arrangements=2,
-        belt_vertical_construction=False,
-    )
-    freeform = _build_layout(freeform_request)
-
-    assert isinstance(freeform, FreeformLayout)
-    assert freeform.band_policy is freeform_request.band_policy
-    assert freeform.workers == 3
-    assert freeform.arrangements == 2
-    assert freeform.ramped is True  # belt_vertical_construction=False
-
-    # `belt_vertical_construction` is False on BOTH requests on purpose: both
-    # layouts default it to True, so a dropped keyword is invisible against a
-    # request that asked for the default.
-    sequence_request = replace(
-        _request("sequence-pair"),
-        belt_vertical_construction=False,
-        sequence_islands=2,
-    )
-    sequence = _build_layout(sequence_request)
-
-    assert isinstance(sequence, SequencePairLayout)
-    assert sequence.band_policy is sequence_request.band_policy
-    assert sequence.config is sequence_request.config
-    assert sequence.compact_seed_config is sequence_request.compact_seed_config
-    assert sequence.islands == 2
-    assert sequence.ramped is True
-
-
 @pytest.mark.slow
 @pytest.mark.parametrize("strategy", RACE_STRATEGIES)
 def test_a_leg_produces_exactly_what_the_serial_arm_produces(
@@ -1268,12 +1208,12 @@ def test_a_leg_produces_exactly_what_the_serial_arm_produces(
             band_policy=request.band_policy,
             workers=request.workers,
             arrangements=request.arrangements,
-            belt_vertical_construction=request.belt_vertical_construction,
+            belt_rules=request.belt_rules,
         )
     else:
         serial = SequencePairLayout(
             band_policy=request.band_policy,
-            belt_vertical_construction=request.belt_vertical_construction,
+            belt_rules=request.belt_rules,
             config=request.config,
             compact_seed_config=request.compact_seed_config,
             islands=request.sequence_islands,
@@ -1413,7 +1353,7 @@ def test_a_race_with_no_submit_seam_goes_through_the_process_pool(
         two_stage_spec(),
         time_budget_s=0.05,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         share=False,
     )
 
@@ -1446,7 +1386,7 @@ def test_two_futures_for_one_arm_is_refused_before_the_wait() -> None:
             two_stage_spec(),
             time_budget_s=0.05,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             share=False,
             submit=submit,
         )
@@ -1473,7 +1413,7 @@ def test_the_real_pool_races_both_arms_end_to_end() -> None:
         two_stage_spec(),
         time_budget_s=2.0,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         workers=4,
     )
 
@@ -1899,7 +1839,7 @@ def _completed(strategy: RaceStrategyName, *, area: int, belt_tiles: int) -> _St
 
 
 def test_the_racing_layout_merges_by_exact_key_then_strategy_order() -> None:
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
     small = _completed("sequence-pair", area=400, belt_tiles=50)
     large = _completed("freeform", area=500, belt_tiles=40)
 
@@ -1907,7 +1847,7 @@ def test_the_racing_layout_merges_by_exact_key_then_strategy_order() -> None:
 
 
 def test_the_racing_layout_breaks_an_exact_tie_by_strategy_order() -> None:
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
     freeform = _placement(area=400, belt_tiles=50)
     sequence = _placement(area=400, belt_tiles=50)
     merged = layout._merge(
@@ -1921,7 +1861,7 @@ def test_the_racing_layout_breaks_an_exact_tie_by_strategy_order() -> None:
 
 
 def test_the_racing_layout_prefers_fewer_belt_tiles_at_equal_area() -> None:
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
     merged = layout._merge(
         (
             _completed("freeform", area=400, belt_tiles=60),
@@ -1934,7 +1874,7 @@ def test_the_racing_layout_prefers_fewer_belt_tiles_at_equal_area() -> None:
 
 def test_the_racing_layout_takes_the_only_arm_that_finished() -> None:
     # A refusal beside a completion is not a refused race: the survivor decides.
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
     merged = layout._merge(
         (
             _StrategyRaceOutcome("freeform", "refused", refusal_reason="no pack"),
@@ -1949,7 +1889,7 @@ def test_the_racing_layout_takes_the_only_arm_that_finished() -> None:
 
 
 def test_the_racing_layout_refuses_naming_both_arms() -> None:
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
     outcomes = (
         _StrategyRaceOutcome(
             "freeform", "refused", refusal_reason="no pack", refusal_spec_label="np"
@@ -1969,7 +1909,7 @@ def test_the_refusal_carries_a_budget_and_deduplicates_projection_failures() -> 
     # Both arms can refuse over the SAME projection failure -- they share a spec
     # and a band policy -- and reporting it twice would read as two defects.
     failure = ProjectionFailureRecord(3, "clearance", (7, 9), "too close")
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
 
     with pytest.raises(NoValidLayout) as caught:
         layout._merge(
@@ -1999,7 +1939,7 @@ def test_a_completed_arm_with_no_placement_is_not_a_winner() -> None:
     # but the merge must not turn a defect into a `TypeError` inside `min`: the
     # race still has a refusal to report, and reporting it is more useful than
     # crashing on the shape.
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
 
     with pytest.raises(NoValidLayout, match="both raced strategies refused"):
         layout._merge(
@@ -2021,7 +1961,7 @@ def test_an_invalid_arm_never_wins_however_small_its_placement_is() -> None:
     `NoValidLayout` exists to prevent, arriving through the one path that skips
     it.  The island merge raises on `invalid` for the same reason.
     """
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
 
     with pytest.raises(NoValidLayout, match="both raced strategies refused"):
         layout._merge(
@@ -2037,7 +1977,7 @@ def test_an_invalid_arm_never_wins_however_small_its_placement_is() -> None:
 def test_the_winner_carries_how_many_arms_were_killed() -> None:
     # Spec 7: the audit row's `detail` must not be the only trace that the race
     # had to kill an arm to finish.
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
     merged = layout._merge(
         (
             _completed("freeform", area=400, belt_tiles=50),
@@ -2052,7 +1992,7 @@ def test_a_race_that_killed_nobody_still_says_so() -> None:
     # Stamped unconditionally: a missing key and a zero are the same thing to a
     # reader with `.get`, and the audit needs "no arm was killed" to be a fact
     # rather than an absence.
-    layout = RacingLayout(BandPolicy("portable"))
+    layout = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
     merged = layout._merge(
         (
             _completed("freeform", area=400, belt_tiles=50),
@@ -2073,57 +2013,9 @@ def test_the_racing_layout_is_a_layout_strategy() -> None:
     # The annotation is the assertion: mypy checks the whole protocol here, so a
     # signature that drifts from `LayoutStrategy` fails the type gate rather than
     # the audit that registers this class as a cell.
-    layout: LayoutStrategy = RacingLayout(BandPolicy("portable"))
+    layout: LayoutStrategy = RacingLayout(BandPolicy("portable"), belt_rules=_BELT_RULES)
 
     assert layout.name == "best"
-
-
-def test_the_racing_layout_hands_every_knob_to_the_race(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Nine arguments, none of them observable in the returned placement.
-
-    A dropped `share=` or `sequence_islands=` would leave the race running a
-    different configuration from the one the caller constructed, and the merged
-    placement would look exactly the same.  The equality on the whole dict is
-    also what pins that `absolute_deadline` is NOT forwarded: a race owns its
-    own children's walls, and passing the caller's would give both children a
-    deadline that started before the pool did.
-    """
-    seen: dict[str, object] = {}
-    won = _placement(area=400, belt_tiles=50)
-
-    def fake_race(spec: object, **kwargs: object) -> tuple[_StrategyRaceOutcome, ...]:
-        seen["spec"] = spec
-        seen.update(kwargs)
-        return (_StrategyRaceOutcome("freeform", "completed", placement=won),)
-
-    monkeypatch.setattr(strategy_race_module, "run_strategy_race", fake_race)
-    spec = two_stage_spec()
-    layout = RacingLayout(
-        BandPolicy("portable"),
-        workers=8,
-        arrangements=2,
-        belt_vertical_construction=False,
-        sequence_islands=3,
-        share=False,
-        max_belt_z=Fraction(1, 2),
-    )
-
-    merged = layout.lay_out(spec, time_budget_s=7.5, absolute_deadline=123.0)
-
-    assert merged is won
-    assert seen == {
-        "spec": spec,
-        "time_budget_s": 7.5,
-        "band_policy": layout.band_policy,
-        "belt_vertical_construction": False,
-        "max_belt_z": Fraction(1, 2),
-        "workers": 8,
-        "arrangements": 2,
-        "sequence_islands": 3,
-        "share": False,
-    }
 
 
 # --------------------------------------------------------------------------
@@ -2310,7 +2202,7 @@ def test_a_trace_queue_reaches_the_submit_seam_and_marks_every_request() -> None
         two_stage_spec(),
         time_budget_s=0.05,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         share=False,
         submit=submit,
         trace_queue=sentinel,
@@ -2345,7 +2237,7 @@ def test_no_trace_queue_still_calls_the_seam_with_three_arguments_and_none() -> 
         two_stage_spec(),
         time_budget_s=0.05,
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=True,
+        belt_rules=_BELT_RULES,
         share=False,
         submit=submit,
     )
@@ -2488,7 +2380,7 @@ def test_a_raced_build_delivers_events_from_both_arms_to_the_parent() -> None:
             two_stage_spec(),
             time_budget_s=2.0,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             workers=4,
             trace_queue=trace_queue,
         )

@@ -63,11 +63,14 @@ def crossed_holding_a_placement(spec: BuildSpec) -> tuple[float, Placement]:
     realistic case -- a child that finished exactly at the wall.  Everything the
     parent must still wait for after that instant is the tail.
     """
+    from flab2bp.bench.corpus import entry as corpus_entry
+    from flab2bp.lab.techs import belt_rules_for_url
     from flab2bp.layout.band_policy import BandPolicy
     from flab2bp.layout.freeform import FreeformLayout
 
     placement = FreeformLayout(
         band_policy=BandPolicy("portable"),
+        belt_rules=belt_rules_for_url(corpus_entry(CELL).url),
         workers=1,
         arrangements=1,
     ).lay_out(spec, time_budget_s=30.0)

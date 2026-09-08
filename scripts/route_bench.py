@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from flab2bp.bench.corpus import entry as corpus_entry  # noqa: E402
 from flab2bp.indexed.port_reservations import PortReservations  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
+from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import freeform, last_mile, routing_domain  # noqa: E402
 from flab2bp.layout.band_policy import BandPolicy  # noqa: E402
@@ -171,6 +172,7 @@ def capture(
     try:
         freeform.FreeformLayout(
             band_policy=BandPolicy("portable"),
+            belt_rules=belt_rules_for_url(entry.url),
             workers=1,
         ).lay_out(spec, time_budget_s=budget)
     except NoValidLayout:
@@ -259,6 +261,7 @@ def capture_clusters(
     try:
         freeform.FreeformLayout(
             band_policy=BandPolicy("portable"),
+            belt_rules=belt_rules_for_url(entry.url),
             workers=1,
         ).lay_out(spec, time_budget_s=budget)
     except NoValidLayout:

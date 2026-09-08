@@ -6,13 +6,13 @@ import math
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from functools import cache
+from functools import cache, partial
 from typing import Literal, cast
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.layout import slots
 from flab2bp.layout.band_policy import BandPolicy
-from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
+from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement, PlacementCompletion
 from flab2bp.layout.buildings import Buildings, Kind, kind_for
 from flab2bp.layout.validate import Report
 from flab2bp.layout.validate import certify as _certify
@@ -3752,6 +3752,7 @@ def _certified_side_fallback(
     spec: BuildSpec,
     *,
     expect_power: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     cancelled: Callable[[], bool] | None = None,
 ) -> tuple[Placement, int, Report | None]:
     """Use bounded side batches when structural pruning breaks addon geometry."""
@@ -3766,7 +3767,7 @@ def _certified_side_fallback(
         candidate = _remove_buildings(compacted, removed, cancelled=cancelled)
         if candidate is compacted or candidate.area >= compacted.area:
             return False
-        report = _certify(candidate, spec, expect_power=expect_power)
+        report = _certify(candidate, spec, belt_rules=belt_rules, expect_power=expect_power)
         if cancelled is not None and cancelled():
             raise ProjectionCancelled
         if report.errors:
@@ -3828,11 +3829,167 @@ class BoundaryCompactionResult:
     report: Report | None
 
 
+@dataclass(frozen=True, slots=True)
+class PlacementCompletionDeadlines:
+    """Existing phase clocks; absent acceptance does not inherit projection."""
+
+    cleanup: float | None
+    projection: float | None
+    acceptance: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementCompletionTimings:
+    cleanup_s: float
+    projection_s: float
+    certification_s: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementCompletionCancelled:
+    phase: Literal["cleanup", "projection"]
+    timings: PlacementCompletionTimings
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementProjectionRefused:
+    candidate: Placement
+    refusal: ProjectionRefusal
+    timings: PlacementCompletionTimings
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementProjectionReady:
+    """Projected geometry awaiting the strategy's own incumbent decision."""
+
+    candidate: Placement
+    spec: BuildSpec
+    belt_rules: catalog.BeltAltitudeRules
+    expect_power: bool
+    acceptance_deadline: float | None
+    timings: PlacementCompletionTimings
+    # This report is bound to candidate and the exact policy above. It never
+    # crosses a physical finalizer transform, even if both geometries pass.
+    _report: Report | None
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementCompleted:
+    placement: Placement
+    report: Report
+    timings: PlacementCompletionTimings
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementInvalid:
+    candidate: Placement
+    report: Report
+    timings: PlacementCompletionTimings
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementCertificationExpired:
+    candidate: Placement
+    report: Report
+    timings: PlacementCompletionTimings
+
+
+type PlacementCompletionResult = (
+    PlacementCompleted | PlacementInvalid | PlacementCertificationExpired
+)
+
+
+def _completion_expired(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def prepare_placement_completion(
+    placement: Placement,
+    spec: BuildSpec,
+    policy: BandPolicy,
+    *,
+    belt_rules: catalog.BeltAltitudeRules,
+    expect_power: bool,
+    deadlines: PlacementCompletionDeadlines,
+) -> PlacementProjectionReady | PlacementProjectionRefused | PlacementCompletionCancelled:
+    """Clean and project slot-assigned geometry without choosing an incumbent."""
+    cleanup_cancelled = (
+        None if deadlines.cleanup is None else partial(_completion_expired, deadlines.cleanup)
+    )
+    started = time.monotonic()
+    try:
+        compacted = compact_open_boundary_belts_certified(
+            placement,
+            spec,
+            belt_rules=belt_rules,
+            expect_power=expect_power,
+            cancelled=cleanup_cancelled,
+        )
+    except ProjectionCancelled:
+        return PlacementCompletionCancelled(
+            "cleanup", PlacementCompletionTimings(time.monotonic() - started, 0.0)
+        )
+    cleanup_s = time.monotonic() - started
+    if _completion_expired(deadlines.cleanup):
+        return PlacementCompletionCancelled("cleanup", PlacementCompletionTimings(cleanup_s, 0.0))
+    projection_cancelled = (
+        None if deadlines.projection is None else partial(_completion_expired, deadlines.projection)
+    )
+    started = time.monotonic()
+    try:
+        projected = finalize_placement(compacted.placement, policy, cancelled=projection_cancelled)
+    except ProjectionCancelled:
+        return PlacementCompletionCancelled(
+            "projection", PlacementCompletionTimings(cleanup_s, time.monotonic() - started)
+        )
+    except ProjectionRefusal as exc:
+        return PlacementProjectionRefused(
+            compacted.placement,
+            exc,
+            PlacementCompletionTimings(cleanup_s, time.monotonic() - started),
+        )
+    timings = PlacementCompletionTimings(cleanup_s, time.monotonic() - started)
+    # The hierarchy's strict projection clock ends inside the finalizer.
+    # None here preserves its absent post-projection/pre-certification guard.
+    if _completion_expired(deadlines.acceptance):
+        return PlacementCompletionCancelled("projection", timings)
+    report = compacted.report if projected is compacted.placement else None
+    return PlacementProjectionReady(
+        projected, spec, belt_rules, expect_power, deadlines.acceptance, timings, report
+    )
+
+
+def complete_placement(projected: PlacementProjectionReady) -> PlacementCompletionResult:
+    """Certify once after the caller's gate; stamp only an accepted clean result."""
+    report = projected._report
+    certification_s = 0.0
+    if report is None:
+        started = time.monotonic()
+        report = _certify(
+            projected.candidate,
+            projected.spec,
+            belt_rules=projected.belt_rules,
+            expect_power=projected.expect_power,
+        )
+        certification_s = time.monotonic() - started
+    timings = replace(projected.timings, certification_s=certification_s)
+    if _completion_expired(projected.acceptance_deadline):
+        return PlacementCertificationExpired(projected.candidate, report, timings)
+    if report.errors:
+        return PlacementInvalid(projected.candidate, report, timings)
+    return PlacementCompleted(
+        replace(projected.candidate, completion=PlacementCompletion.COMPACTED_AND_FINALIZED),
+        report,
+        timings,
+    )
+
+
 def compact_open_boundary_belts_certified(
     placement: Placement,
     spec: BuildSpec,
     *,
     expect_power: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     cancelled: Callable[[], bool] | None = None,
 ) -> BoundaryCompactionResult:
     """Prune structural belt leaves once, retaining exact certification."""
@@ -3874,7 +4031,9 @@ def compact_open_boundary_belts_certified(
     )
     removed_total = len(removed) if compacted is not placement else 0
     structural_report = (
-        _certify(compacted, spec, expect_power=expect_power) if compacted is not placement else None
+        _certify(compacted, spec, belt_rules=belt_rules, expect_power=expect_power)
+        if compacted is not placement
+        else None
     )
     if cancelled is not None and cancelled():
         raise ProjectionCancelled
@@ -3889,6 +4048,7 @@ def compact_open_boundary_belts_certified(
             placement,
             spec,
             expect_power=expect_power,
+            belt_rules=belt_rules,
             cancelled=cancelled,
         )
     elif tall_role:
@@ -3896,6 +4056,7 @@ def compact_open_boundary_belts_certified(
             compacted,
             spec,
             expect_power=expect_power,
+            belt_rules=belt_rules,
             cancelled=cancelled,
         )
         removed_total += side_removed
@@ -3917,6 +4078,7 @@ def compact_open_boundary_belts(
     spec: BuildSpec,
     *,
     expect_power: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     cancelled: Callable[[], bool] | None = None,
 ) -> Placement:
     """Prune structural belt leaves once, with a bounded certified fallback."""
@@ -3924,5 +4086,6 @@ def compact_open_boundary_belts(
         placement,
         spec,
         expect_power=expect_power,
+        belt_rules=belt_rules,
         cancelled=cancelled,
     ).placement

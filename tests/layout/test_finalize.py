@@ -14,10 +14,14 @@ import pytest
 
 from flab2bp.dsp import catalog, codec, colliders, planet, rules
 from flab2bp.dsp.records import BlueprintBuilding
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import finalize, freeform, routing_domain, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, PlacedBuilding, Placement
 from tests.layout.test_freeform import two_stage_spec
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -60,6 +64,31 @@ def _extent(width: int, height: int) -> tuple[PlacedBuilding, PlacedBuilding]:
         _belt(0, 0, output=None),
         _belt(width - 1, height - 1, output=None),
     )
+
+
+def test_certification_applies_the_complete_save_belt_policy() -> None:
+    placement = Placement(
+        buildings=(
+            _belt(0, 0, output=1),
+            replace(_belt(1, 0, output=None), z=Fraction(1)),
+        )
+    )
+    restricted = replace(_BELT_RULES, max_z=Fraction(0), vertical_construction=False)
+    restricted_report = validate.certify(
+        placement,
+        two_stage_spec(),
+        belt_rules=restricted,
+        expect_power=False,
+    )
+    developed_report = validate.certify(
+        placement,
+        two_stage_spec(),
+        belt_rules=_BELT_RULES,
+        expect_power=False,
+    )
+    checks = {"geom.altitude_range", "geom.altitude_step"}
+    assert checks <= {finding.check for finding in restricted_report.errors}
+    assert not checks.intersection(finding.check for finding in developed_report.errors)
 
 
 def _placed_from_blueprint(bs: Sequence[BlueprintBuilding]) -> tuple[PlacedBuilding, ...]:
@@ -428,6 +457,7 @@ def test_compaction_prunes_open_belt_leaves_to_a_structural_fixed_point(
     compacted = finalize.compact_open_boundary_belts(
         placement,
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
 
@@ -472,11 +502,13 @@ def test_compaction_preserves_connected_external_input_belts_inside_initial_boun
     first = finalize.compact_open_boundary_belts(
         placement,
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
     second = finalize.compact_open_boundary_belts(
         placement,
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
 
@@ -536,6 +568,7 @@ def test_structural_compaction_matches_wave_oracle_with_linear_work(
     compacted = finalize.compact_open_boundary_belts(
         placement,
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
     assert compacted.buildings == expected.buildings
@@ -554,6 +587,7 @@ def test_certified_compaction_skips_graph_without_an_initial_prunable_belt(
     result = finalize.compact_open_boundary_belts_certified(
         placement,
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
 
@@ -578,6 +612,7 @@ def test_certified_compaction_returns_the_exact_clean_report(
     result = finalize.compact_open_boundary_belts_certified(
         placement,
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
 
@@ -608,6 +643,7 @@ def test_framed_boundary_fallback_returns_unfinalized_smaller_geometry(
     compacted = finalize.compact_open_boundary_belts(
         placement,
         two_stage_spec(),
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
 
@@ -639,6 +675,7 @@ def test_compaction_preserves_original_when_certification_fails(
         finalize.compact_open_boundary_belts(
             placement,
             two_stage_spec(),
+            belt_rules=_BELT_RULES,
             expect_power=False,
         )
         is placement
@@ -3268,7 +3305,7 @@ def test_freeform_uses_shared_planet_finalization(
         "flab2bp.layout.freeform.finalize.finalize_placement",
         observed,
     )
-    placement = FreeformLayout(band_policy=policy).lay_out(
+    placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=policy).lay_out(
         two_stage_spec(),
         time_budget_s=0.5,
     )
@@ -3319,6 +3356,7 @@ def test_sequence_pair_uses_shared_planet_finalization(
         observed,
     )
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=policy,
         solver_factory=factory,
     ).lay_out(
@@ -3435,6 +3473,7 @@ def test_compact_open_boundary_belts_cancels_during_incremental_scan(
         finalize.compact_open_boundary_belts(
             placement,
             two_stage_spec(),
+            belt_rules=_BELT_RULES,
             expect_power=False,
             cancelled=cancelled,
         )
@@ -3837,7 +3876,9 @@ def test_band_target_width_rejects_an_implausible_core() -> None:
 
 
 def _two_stage_placement() -> Placement:
-    return freeform.FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+    return freeform.FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")
+    ).lay_out(
         two_stage_spec(),
         time_budget_s=0.5,
     )

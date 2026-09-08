@@ -9,6 +9,7 @@ from concurrent.futures import Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from flab2bp.dsp import catalog
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout, Placement, ProjectionFailureRecord
 from flab2bp.layout.compact_seed import CompactSeedConfig
@@ -33,7 +34,7 @@ class _SequenceIslandRequest:
     soft_deadline: float
     power: bool
     band_policy: BandPolicy
-    belt_vertical_construction: bool
+    belt_rules: catalog.BeltAltitudeRules
     strip_len: int
     config: SequenceSolverConfig
     island_id: int
@@ -150,7 +151,7 @@ def _run_sequence_island(request: _SequenceIslandRequest) -> _SequenceIslandOutc
             time_budget_s=request.time_budget_s,
             power=request.power,
             band_policy=request.band_policy,
-            belt_vertical_construction=request.belt_vertical_construction,
+            belt_rules=request.belt_rules,
             strip_len=request.strip_len,
             config=config,
             absolute_deadline=request.soft_deadline,
@@ -274,7 +275,7 @@ def run_sequence_islands(
     *,
     time_budget_s: float,
     band_policy: BandPolicy,
-    belt_vertical_construction: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     strip_len: int,
     config: SequenceSolverConfig,
     compact_seed_config: CompactSeedConfig,
@@ -307,7 +308,7 @@ def run_sequence_islands(
             soft_deadline=soft_deadline,
             power=True,
             band_policy=band_policy,
-            belt_vertical_construction=belt_vertical_construction,
+            belt_rules=belt_rules,
             strip_len=strip_len,
             config=config,
             island_id=island_id,

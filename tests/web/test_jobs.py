@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from flab2bp import pipeline
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout.band_policy import BAND_SELECTIONS
 from flab2bp.layout.base import (
     LayoutAttemptFailure,
@@ -25,6 +26,9 @@ from flab2bp.web import jobs as jobs_module
 from flab2bp.web.jobs import Builder, InvalidOptions, Options, parse_options, run_build
 from flab2bp.web.payload import Json, JsonValue
 from flab2bp.web.server import serve
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 URL = "https://factoriolab.github.io/dsp/flow?o=graphene*60&v=11"
 
@@ -576,7 +580,7 @@ def _terminated_trace_scenario(
             two_stage_spec(),
             time_budget_s=0.1,
             band_policy=BandPolicy("portable"),
-            belt_vertical_construction=True,
+            belt_rules=_BELT_RULES,
             share=False,
             trace_queue=trace_queue,
             submit=submit,

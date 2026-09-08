@@ -125,7 +125,7 @@ _STRATEGIES: dict[str, _StrategyFactory] = {
     "freeform": lambda workers, rules: FreeformLayout(
         band_policy=BandPolicy("portable"),
         workers=workers,
-        belt_vertical_construction=rules.vertical_construction,
+        belt_rules=rules,
     ),
     #: Islands, at the same count production runs, so the gate MEASURES the
     #: default rather than a shape no user gets.  `resolve_sequence_islands`
@@ -134,15 +134,14 @@ _STRATEGIES: dict[str, _StrategyFactory] = {
     #: instead of oversubscribing the box N times over.
     "sequence-pair": lambda workers, rules: SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=rules.vertical_construction,
+        belt_rules=rules,
         islands=resolve_sequence_islands("sequence-pair", workers, None),
     ),
     "best": lambda workers, rules: RacingLayout(
         BandPolicy("portable"),
         workers=workers,
-        belt_vertical_construction=rules.vertical_construction,
+        belt_rules=rules,
         sequence_islands=resolve_sequence_islands("best", workers, None),
-        max_belt_z=rules.max_z,
     ),
 }
 _DEFAULT_STRATEGIES = ("freeform", "sequence-pair")
@@ -379,7 +378,7 @@ def run_cell(job: Job, *, belt_rules: catalog.BeltAltitudeRules) -> Result:
                 band_policy=BandPolicy("portable"),
                 workers=job.workers,
                 arrangements=job.arrangements,
-                belt_vertical_construction=belt_rules.vertical_construction,
+                belt_rules=belt_rules,
             )
         else:
             strategy = make_strategy(job.workers, belt_rules)
@@ -413,6 +412,7 @@ def run_cell(job: Job, *, belt_rules: catalog.BeltAltitudeRules) -> Result:
             placement,
             spec,
             expect_power=True,
+            belt_rules=belt_rules,
         )
         try:
             placement = finalize.finalize_placement(placement, BandPolicy("portable"))

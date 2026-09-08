@@ -220,7 +220,7 @@ def _strategy_names(strategy: StrategyName) -> tuple[ExplicitStrategyName, ...]:
 def _new_layout(
     strategy: ExplicitStrategyName,
     *,
-    belt_vertical_construction: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     sequence_islands: int = 1,
     band_policy: BandPolicy,
     #: CP-SAT search workers for the one backend that has a multi-threaded
@@ -240,19 +240,19 @@ def _new_layout(
         # No island argument: islands live inside the sequence-pair backend, and
         # the hierarchical one runs its own children with one each.
         return HierarchicalLayout(
-            belt_vertical_construction=belt_vertical_construction,
+            belt_rules=belt_rules,
             band_policy=band_policy,
             workers=workers,
         )
     if strategy == "freeform":
         return FreeformLayout(
-            belt_vertical_construction=belt_vertical_construction,
+            belt_rules=belt_rules,
             band_policy=band_policy,
             workers=workers,
             observer=observer,
         )
     return SequencePairLayout(
-        belt_vertical_construction=belt_vertical_construction,
+        belt_rules=belt_rules,
         islands=sequence_islands,
         band_policy=band_policy,
         observer=observer,
@@ -984,7 +984,7 @@ def build(
         """
         layout = _new_layout(
             sname,
-            belt_vertical_construction=belt_rules.vertical_construction,
+            belt_rules=belt_rules,
             sequence_islands=islands,
             band_policy=policy,
             workers=workers if sname == "hierarchical" else worker_budget,
@@ -1033,8 +1033,7 @@ def build(
             candidate,
             time_budget_s=time_budget_s,
             band_policy=policy,
-            belt_vertical_construction=belt_rules.vertical_construction,
-            max_belt_z=belt_rules.max_z,
+            belt_rules=belt_rules,
             workers=candidate_workers,
             sequence_islands=resolve_sequence_islands(
                 strategy,
@@ -1196,6 +1195,7 @@ def build(
                         placement,
                         spec,
                         expect_power=True,
+                        belt_rules=belt_rules,
                     )
                 finally:
                     pipeline_compaction_time_s = time.monotonic() - phase_started

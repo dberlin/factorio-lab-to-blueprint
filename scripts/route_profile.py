@@ -36,7 +36,9 @@ from typing import Any, Protocol, TypedDict
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from flab2bp.bench.corpus import entry as corpus_entry  # noqa: E402
+from flab2bp.dsp import catalog  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
+from flab2bp.lab.techs import belt_rules_for_url  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import (  # noqa: E402
     finalize,
@@ -71,12 +73,13 @@ class _HeightRow(TypedDict):
     route_s: float | None
 
 
-def _strategy(name: str) -> _Strategy:
+def _strategy(name: str, *, belt_rules: catalog.BeltAltitudeRules) -> _Strategy:
     if name == "freeform":
 
         def freeform_layout(*, workers: int) -> freeform.FreeformLayout:
             return freeform.FreeformLayout(
                 band_policy=BandPolicy("portable"),
+                belt_rules=belt_rules,
                 workers=workers,
             )
 
@@ -87,6 +90,7 @@ def _strategy(name: str) -> _Strategy:
         del workers
         return SequencePairLayout(
             band_policy=BandPolicy("portable"),
+            belt_rules=belt_rules,
         )
 
     return sequence_pair
@@ -517,7 +521,9 @@ def heights(
     t0 = time.perf_counter()
     verdict = "OK"
     try:
-        _strategy(strategy)(workers=workers).lay_out(spec, time_budget_s=ceiling)
+        _strategy(strategy, belt_rules=belt_rules_for_url(corpus_entry(url_id).url))(
+            workers=workers
+        ).lay_out(spec, time_budget_s=ceiling)
     except NoValidLayout as exc:
         verdict = f"REFUSED: {exc.reason[:80]}"
     finally:
@@ -560,6 +566,7 @@ def main() -> int:
         )
 
     spec = _spec(args.url_id, args.candidate_policy)
+    belt_rules = belt_rules_for_url(corpus_entry(args.url_id).url)
     for run in range(args.repeat):
         tally = Tally()
         restore = install(tally)
@@ -570,9 +577,9 @@ def main() -> int:
         try:
             if prof is not None:
                 prof.enable()
-            placement = _strategy(args.strategy)(workers=args.workers).lay_out(
-                spec, time_budget_s=args.budget
-            )
+            placement = _strategy(args.strategy, belt_rules=belt_rules)(
+                workers=args.workers
+            ).lay_out(spec, time_budget_s=args.budget)
         except NoValidLayout as exc:
             verdict = f"REFUSED: {exc.reason[:90]}"
         finally:

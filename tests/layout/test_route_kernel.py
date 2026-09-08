@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import route_kernel, routing_domain
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import NoValidLayout
@@ -15,6 +16,9 @@ from flab2bp.layout.routing_domain import _PathSearchResult
 from flab2bp.spec import BuildSpec
 from scripts.route_bench import _snapshot
 from tests.layout.test_freeform import plastic_spec, two_stage_spec
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 Cell = tuple[int, int, int]
 Case = dict[str, Any]
@@ -76,9 +80,9 @@ def _capture_searches(spec: BuildSpec, budget_s: float) -> list[Case]:
 
     routing_domain._astar = spy
     try:
-        FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
-            spec, time_budget_s=budget_s
-        )
+        FreeformLayout(
+            belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1
+        ).lay_out(spec, time_budget_s=budget_s)
     except NoValidLayout:
         pass
     finally:

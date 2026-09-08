@@ -24,6 +24,7 @@ from ortools.sat.python import cp_model
 
 import flab2bp.layout.freeform as freeform_module
 from flab2bp.dsp import catalog, codec, colliders, planet, rules, splitter_ports
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import finalize, freeform, junction, last_mile, routing_domain, slots, validate
 from flab2bp.layout.band_policy import BandPolicy, BandSelection
 from flab2bp.layout.base import (
@@ -146,6 +147,9 @@ from flab2bp.layout.strip_variants import (
 )
 from flab2bp.spec import BeltTier, BuildSpec, MachineGroup, ProliferatorMode
 from tests.layout.conftest import one_recipe_spec
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 type SpecFactory = Callable[[], BuildSpec]
 
@@ -488,7 +492,7 @@ def test_lay_out_threads_one_strip_families_tuple_through_every_planner_call(
 
     monkeypatch.setattr(freeform, "_coarsen_saturated_strip_plan", recording_coarsen)
 
-    layout = FreeformLayout(band_policy=BandPolicy("portable"), workers=1)
+    layout = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1)
     layout.lay_out(spec, time_budget_s=4.0)
 
     # The initial attempt (forced to fail), the coarsest-legal retry, and the
@@ -771,11 +775,12 @@ def test_freeform_fractionator_path_emits_projection_valid_port_fanout() -> None
     spec = fractionator_spec()
 
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=1,
     ).lay_out(spec, time_budget_s=4.0)
 
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok, "\n".join(f"{finding.check}: {finding.message}" for finding in report.errors)
     assert not [building for building in placement.buildings if catalog.is_sorter(building.item_id)]
 
@@ -785,10 +790,11 @@ def test_sequence_pair_fractionator_path_emits_projection_valid_port_fanout() ->
 
     spec = fractionator_spec()
     placement = SequencePairLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
     ).lay_out(spec, time_budget_s=4.0)
 
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok, "\n".join(f"{finding.check}: {finding.message}" for finding in report.errors)
     assert not [building for building in placement.buildings if catalog.is_sorter(building.item_id)]
 
@@ -978,6 +984,7 @@ def test_surplus_reuses_a_consumer_lane_when_the_combined_rate_fits() -> None:
         for net in prepared.nets
     )
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=DETERMINISTIC_WORKERS,
     ).lay_out(spec, time_budget_s=1.0)
@@ -1055,6 +1062,7 @@ def test_self_consuming_refined_oil_feedback_routes_and_validates(
     report = validate.certify(
         placement,
         refined_oil_feedback_spec,
+        belt_rules=_BELT_RULES,
         expect_power=False,
     )
     assert not [finding for finding in report.errors if finding.check == "flow.lane_sourced"]
@@ -1073,6 +1081,7 @@ def test_freeform_routes_self_consuming_pinned_flow(
     refined_oil_feedback_spec: BuildSpec,
 ) -> None:
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=1,
     ).lay_out(
@@ -1082,6 +1091,7 @@ def test_freeform_routes_self_consuming_pinned_flow(
     assert validate.certify(
         placement,
         refined_oil_feedback_spec,
+        belt_rules=_BELT_RULES,
         expect_power=True,
     ).ok
 
@@ -1279,7 +1289,9 @@ def test_slope_limited_prepared_coater_routing_is_structured() -> None:
     if result.routing.status is DetailedRouteStatus.ROUTED:
         placement = result.placement
         assert placement is not None
-        assert not validate.certify(placement, spec, expect_power=False).errors
+        assert not validate.certify(
+            placement, spec, belt_rules=_BELT_RULES, expect_power=False
+        ).errors
     else:
         assert result.routing.failures
 
@@ -2920,6 +2932,7 @@ class TestPlanStrips:
         strips = plan_strips(spec, strip_len=6)
         assert len(strips[0].in_below) == 1, "the fourth ingredient must go below"
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         report = validate.validate(p, expect_power=True)
@@ -3233,6 +3246,7 @@ class TestPlacementProperties:
     ) -> None:
         spec = spec_fn()
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy(_LEGACY_BAND_BY_SPEC_LABEL[spec.label]),
         ).lay_out(spec, time_budget_s=1.0)
         tiles = blocking_tiles(placement)
@@ -3287,6 +3301,7 @@ class TestProliferationForbidsDirectInsertion:
     def test_belt_required_edges_are_never_direct_inserted(self) -> None:
         spec = proliferated_spec()
         layout = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         )
         p = layout.lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
@@ -3299,6 +3314,7 @@ class TestProliferationForbidsDirectInsertion:
         the previous test would prove nothing about the constraint.
         """
         layout = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         )
         p = layout.lay_out(two_stage_spec(), time_budget_s=0.5)
@@ -3307,6 +3323,7 @@ class TestProliferationForbidsDirectInsertion:
     def test_the_proliferated_spec_still_validates(self) -> None:
         """A silently under-producing build pastes cleanly, so the judge matters."""
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(
             proliferated_spec(),
@@ -4944,8 +4961,8 @@ def _install_injected_packs(
     monkeypatch.setattr(freeform, "_build", build)
     if forbid_finalization:
         monkeypatch.setattr(
-            validate,
-            "certify",
+            finalize,
+            "_certify",
             lambda *_args, **_kwargs: pytest.fail("a budgeted build reached validation"),
         )
         monkeypatch.setattr(
@@ -4955,8 +4972,8 @@ def _install_injected_packs(
         )
     else:
         monkeypatch.setattr(
-            validate,
-            "certify",
+            finalize,
+            "_certify",
             (
                 certifier
                 if certifier is not None
@@ -5016,6 +5033,7 @@ def _sweep_after_first_routing(
 
     attempts: list[freeform.PackAttempt] = []
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
         portfolio_incumbent=portfolio_incumbent,
@@ -5143,6 +5161,7 @@ def test_a_window_reentry_preserves_both_diversification_cuts_for_the_next_arran
     attempts: list[freeform.PackAttempt] = []
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=2,
     )._sweep(
@@ -5228,6 +5247,7 @@ def _lay_out_with_injected_packs(
     )
     absolute_deadline = None if deadline_after is None else time.monotonic() + deadline_after
     return FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=arrangements,
     ).lay_out(
@@ -5468,7 +5488,7 @@ def test_terminal_refusal_names_completion_stage_after_every_net_wired(
     monkeypatch.setattr(FreeformLayout, "_sweep", expire_after_routing)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(),
             time_budget_s=1.0,
         )
@@ -5500,6 +5520,7 @@ def test_sweep_validates_exact_compacted_and_finalized_placement_before_completi
         _placement: Placement,
         _spec: BuildSpec,
         *,
+        belt_rules: catalog.BeltAltitudeRules,
         expect_power: bool,
         cancelled: Callable[[], bool] | None = None,
     ) -> CompactionResult:
@@ -6355,6 +6376,7 @@ def test_fifteen_strip_pack_uses_reproducible_solver_budget(
     monkeypatch.setattr(freeform, "_pack", pack)
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=8,
         arrangements=1,
@@ -6421,6 +6443,7 @@ def test_route_aware_height_order_preserves_exact_candidate_set(
     monkeypatch.setattr(freeform, "_build", build)
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -6504,12 +6527,13 @@ def test_first_warm_start_substitution_is_width_bounded_and_attempt_neutral(
         _identity_finalizer,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -6586,8 +6610,8 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
     monkeypatch.setattr(freeform, "_pack", pack)
     monkeypatch.setattr(freeform, "_build", build)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(
@@ -6598,6 +6622,7 @@ def test_proof_scoped_route_feedback_uses_only_configured_width_slack(
 
     attempts: list[freeform.PackAttempt] = []
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=2,
     )._sweep(spec, strips, 1.0, attempts=attempts, session=OperatorSession())
@@ -6782,6 +6807,7 @@ def test_proof_scoped_feedback_routes_captured_output_products_at_existing_deadl
     assert len(plan_strips(spec, strip_len=6)) == 17
 
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=1,
     ).lay_out(spec, time_budget_s=4.0)
@@ -6995,6 +7021,7 @@ class TestSolverActuallyRuns:
         """
         spec = two_stage_spec()
         solved = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=2.0)
         greedy = fallback_placement(spec, band_policy=BandPolicy("portable"), power=True)
@@ -7029,6 +7056,7 @@ class TestSolverActuallyRuns:
         """
         spec = fan_out_spec(consumers=4)
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("100"),
         ).lay_out(spec, time_budget_s=2.0)
         report = _full_report(p, spec)
@@ -7044,6 +7072,7 @@ class TestSolverActuallyRuns:
         """
         with pytest.raises(NoValidLayout) as exc:
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             ).lay_out(two_stage_spec(), time_budget_s=0.0)
         assert "packer was never asked" in exc.value.reason
@@ -7085,6 +7114,7 @@ class TestSolverActuallyRuns:
         )
         with pytest.raises(NoValidLayout) as exc:
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             ).lay_out(two_stage_spec(), time_budget_s=1.0)
         assert validated
@@ -7128,8 +7158,8 @@ class TestSolverActuallyRuns:
         monkeypatch.setattr(freeform, "_pack", lambda *_args, **_kwargs: pack)
         monkeypatch.setattr(freeform, "_build", lambda *_args, **_kwargs: routed)
         monkeypatch.setattr(
-            validate,
-            "certify",
+            finalize,
+            "_certify",
             lambda *_args, **_kwargs: validate.Report(findings=()),
         )
 
@@ -7146,6 +7176,7 @@ class TestSolverActuallyRuns:
 
         with pytest.raises(NoValidLayout) as caught:
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             ).lay_out(two_stage_spec(), time_budget_s=1.0)
 
@@ -7258,6 +7289,7 @@ def test_port_driven_family_remains_directly_routable_with_pitch_mapping() -> No
 
     assert strip.physical_variant is None
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
     ).lay_out(spec, time_budget_s=4.0)
     _assert_energy_exchanger_port_routing(placement, spec)
@@ -7299,11 +7331,12 @@ def test_freeform_starts_projection_valid_without_pitch_retry(
     monkeypatch.setattr(freeform, "plan_strips", recording_plan_strips)
     spec = plastic_spec()
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         workers=1,
     ).lay_out(spec, time_budget_s=4.0)
 
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok
     assert not report.by_check("geom.collide")
     assert planned_pitches
@@ -7527,14 +7560,15 @@ def _sweep_with_pitch_feedback(
         pitch_requirements,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
 
     rejected: list[freeform._RefusalFinding] = []
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, rejected=rejected, session=OperatorSession())
@@ -7720,8 +7754,8 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
         pitch_requirements,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
@@ -7732,6 +7766,7 @@ def test_unaffordable_pitch_feedback_replans_later_base_height(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -7886,8 +7921,8 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
         pitch_requirements,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_candidate)
@@ -7898,6 +7933,7 @@ def test_geometry_replan_discards_feedback_width_and_direct_cuts_from_old_strips
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=2,
     )._sweep(spec, strips, 5.0, session=OperatorSession())
@@ -8247,8 +8283,8 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     monkeypatch.setattr(freeform, "_pack", pack_retry)
     monkeypatch.setattr(freeform, "_build", build)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_projection)
@@ -8259,6 +8295,7 @@ def test_projection_no_good_owned_strip_collision_learns_and_repacks(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -9924,8 +9961,8 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     monkeypatch.setattr(freeform, "_pack", pack_retry)
     monkeypatch.setattr(freeform, "_build", build)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(
@@ -9935,6 +9972,7 @@ def test_staged_static_pack_dependent_exhaustion_learns_exact_no_good(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -10198,6 +10236,7 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     rejected: list[freeform._RefusalFinding] = []
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, rejected=rejected, session=OperatorSession())
@@ -10311,8 +10350,8 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch.setattr(freeform, "_pack", pack_candidate)
     monkeypatch.setattr(freeform, "_build", build_candidate)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(
@@ -10322,6 +10361,7 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -10550,8 +10590,8 @@ def _sweep_with_repeated_exact_feedback(
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(finalize, "finalize_placement", finalize_or_refuse)
@@ -10562,6 +10602,7 @@ def _sweep_with_repeated_exact_feedback(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -10650,8 +10691,8 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
     monkeypatch.setattr(freeform, "_pack", pack_candidate)
     monkeypatch.setattr(freeform, "_build", build_candidate)
     monkeypatch.setattr(
-        validate,
-        "certify",
+        finalize,
+        "_certify",
         lambda *_args, **_kwargs: validate.Report(findings=()),
     )
     monkeypatch.setattr(
@@ -10666,6 +10707,7 @@ def test_unaffordable_base_height_is_not_started_after_valid_candidate(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=1,
     )._sweep(spec, strips, 1.0, session=OperatorSession())
@@ -10732,6 +10774,7 @@ class TestPower:
 
     def test_towers_appear_in_production_layout(self) -> None:
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(two_stage_spec(), time_budget_s=0.5)
 
@@ -10739,6 +10782,7 @@ class TestPower:
 
     def test_every_powered_building_is_covered(self) -> None:
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("160"),
         ).lay_out(magnetic_ring_spec(), time_budget_s=1.0)
         report = validate.validate(p, only=["power.coverage", "power.connectivity"])
@@ -10933,6 +10977,7 @@ class TestProliferatorIsActuallySupplied:
     def test_some_belt_carries_the_proliferator(self) -> None:
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         prolif = {i for i in spec.external_inputs if i.startswith("proliferator")}
@@ -10945,6 +10990,7 @@ class TestProliferatorIsActuallySupplied:
     def test_every_coater_has_a_sorter_drawing_from_a_supply_belt(self) -> None:
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         report = _full_report(p, spec)
@@ -10955,6 +11001,7 @@ class TestProliferatorIsActuallySupplied:
         """A coater on some unrelated belt sprays the wrong items."""
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         belt_at = {(b.x, b.y, b.z): b for b in p.buildings if catalog.is_belt(b.item_id)}
@@ -10980,6 +11027,7 @@ class TestProliferatorIsActuallySupplied:
         """
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         assert not _full_report(p, spec).by_check("prolif.coater_supply_is_fed")
@@ -11025,6 +11073,7 @@ class TestProliferatorIsActuallySupplied:
         """The machinery must cost nothing when proliferation is off."""
         spec = two_stage_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         assert p.stats["spray_coaters"] == 0
@@ -11064,10 +11113,12 @@ def test_every_coater_arbiter_is_green_on_a_placed_build(placer: str) -> None:
     spec = proliferated_spec()
     if placer == "freeform":
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
     else:
         p = SequencePairLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             islands=1,
             config=SequenceSolverConfig.test(),
@@ -11097,6 +11148,7 @@ class TestSortersCanCarryTheirDemand:
         """
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=PROLIFERATED_LAYOUT_TIME_BUDGET_S)
         over = _full_report(p, spec).by_check("flow.sorter_capacity")
@@ -11129,6 +11181,7 @@ class TestRealUrlCandidate:
         ).candidates
         spec = next(candidate for candidate in candidates if candidate.label == "no-proliferator")
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("160"),
         ).lay_out(spec, time_budget_s=2.0)
         sorters = [
@@ -11279,6 +11332,7 @@ class TestProducerWithManyConsumers:
         """
         spec = fan_out_spec(4)
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("160"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -11440,6 +11494,7 @@ class TestMixedItemLanes:
         strips = plan_strips(spec, strip_len=6)
         assert strips and all(s.flank_outputs for s in strips)
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec)
@@ -11460,6 +11515,7 @@ class TestMixedItemLanes:
         """
         spec = six_input_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         labs = {i for i, b in enumerate(p.buildings) if b.item_id == catalog.item_id("matrix-lab")}
@@ -11523,6 +11579,7 @@ class TestMixedItemLanes:
         assert all(len(lane) == 1 for lane in lanes), lanes
         assert strips[0].flank_outputs, "five single-item lanes need the east face"
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         report = _full_report(p, spec)
@@ -11550,6 +11607,7 @@ class TestMixedItemLanes:
         """
         spec = five_input_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=0.5)
         belts = {i for i, b in enumerate(p.buildings) if catalog.is_belt(b.item_id)}
@@ -11645,7 +11703,7 @@ def _assert_energy_exchanger_port_routing(
         assert product.yaw == product_dock.facing.value
         assert product.input_to_slot == rules.BELT_PORT_DRAW_TO_SLOT
 
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_an_energy_exchanger_placement_pastes_without_collisions() -> None:
@@ -11654,7 +11712,9 @@ def test_an_energy_exchanger_placement_pastes_without_collisions() -> None:
     Asked directly, with no LOW_CONFIDENCE filtering, the answer has to be none.
     """
     spec = mode_driven_spec()
-    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+    placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+        spec, time_budget_s=4.0
+    )
     ctx = validate._context(placement, spec, None, 0, Fraction(4), True)
     assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
 
@@ -11738,7 +11798,9 @@ def test_a_ray_receiver_strip_is_byte_identical_after_the_approach_change() -> N
     Pin the emitted geometry so a future widening of the rule cannot drift it.
     """
     spec = _ray_receiver_spec()
-    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=4.0)
+    placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+        spec, time_budget_s=4.0
+    )
     shape = [
         (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
     ]
@@ -11787,16 +11849,16 @@ def test_a_two_sink_exchanger_lays_out_with_one_wired_lane() -> None:
     drawing belt each, certify ok, zero collisions.
     """
     spec = _two_sink_exchanger_spec(count=3)  # count=1 does not route; see the fixture
-    placement = FreeformLayout(band_policy=BandPolicy.parse("portable")).lay_out(
-        spec, time_budget_s=4.0
-    )
+    placement = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")
+    ).lay_out(spec, time_budget_s=4.0)
     bs = placement.buildings
     exchangers = [i for i, b in enumerate(bs) if b.item_id == catalog.ENERGY_EXCHANGER_ID]
     assert exchangers
     for i in exchangers:
         drawing = [j for j, b in enumerate(bs) if b.input_obj == i]
         assert len(drawing) == 1, (i, drawing)
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     assert report.ok, report.errors
     ctx = validate._context(placement, spec, None, 0, F(4), True)
     assert colliders.stable_belt_collisions(validate._paste_previews(ctx)) == []
@@ -11805,9 +11867,9 @@ def test_a_two_sink_exchanger_lays_out_with_one_wired_lane() -> None:
 def test_a_ray_receiver_drain_is_byte_identical_after_the_lane_cap() -> None:
     """2208 is capped too: one drain port, one product, so nothing may move."""
     spec = _ray_receiver_spec()  # from Task 2 step 10
-    placement = FreeformLayout(band_policy=BandPolicy.parse("portable")).lay_out(
-        spec, time_budget_s=4.0
-    )
+    placement = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable")
+    ).lay_out(spec, time_budget_s=4.0)
     shape = [
         (b.item_id, b.x, b.y, b.z, b.yaw, b.output_obj, b.input_obj) for b in placement.buildings
     ]
@@ -11853,6 +11915,7 @@ class TestModeDrivenMachines:
 
         spec = mode_driven_spec()
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(spec, time_budget_s=4.0)
 
@@ -11882,6 +11945,7 @@ class TestModeDrivenMachines:
         above green.
         """
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
         ).lay_out(single_recipe_spec(), time_budget_s=0.5)
         smelters = [b for b in p.buildings if b.recipe_id]
@@ -11944,6 +12008,7 @@ class TestShardedGroupsAreFedOnEveryShard:
     def test_no_shard_is_left_starving(self) -> None:
         spec = sharded_consumer_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("100"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -11973,6 +12038,7 @@ class TestShardedGroupsAreFedOnEveryShard:
         ]
         assert len(producers) >= 2, "fixture must shard the producer"
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -12957,6 +13023,7 @@ class TestProliferatorSupplyIsOneReachableTree:
     def test_small_proliferated_factory_certifies_with_splitter_fanout(self) -> None:
         spec = proliferated_spec()
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=3.0)
@@ -12964,6 +13031,7 @@ class TestProliferatorSupplyIsOneReachableTree:
         report = validate.certify(
             placement,
             spec,
+            belt_rules=_BELT_RULES,
             expect_power=True,
         )
         assert not report.errors, "\n".join(f.message for f in report.errors)
@@ -13020,6 +13088,7 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
     def test_every_lane_the_player_must_fill_can_be_reached(self, factory: SpecFactory) -> None:
         spec = factory()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy(_LEGACY_BAND_BY_SPEC_LABEL[spec.label]),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=1.0)
@@ -13030,6 +13099,7 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
     def test_requested_products_leave_on_the_block_boundary(self) -> None:
         spec = single_recipe_spec()
         placement = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=1.0)
@@ -13056,6 +13126,7 @@ class TestTheExtentIsDecidedBeforeAnythingRoutes:
         """
         spec = proliferated_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=1.0)
@@ -13170,6 +13241,7 @@ class TestEveryShardDrainsEveryProduct:
                 "hydrogen",
             }, f"shard {s.out_lanes} cannot drain both products"
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=1.0)
@@ -13325,6 +13397,7 @@ class TestOneLaneCanServeSeveralDestinations:
     def test_the_merged_plan_lays_out_and_validates(self) -> None:
         spec = one_machine_fan_out_spec(4)
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=4.0)
@@ -13367,6 +13440,7 @@ class TestOneLaneCanServeSeveralDestinations:
             f"{len(consumers)} consumer lane(s) against a {producers[0].width}-tile lane"
         )
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=8.0)
@@ -13951,6 +14025,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
         compacted = finalize.compact_open_boundary_belts(
             Placement(buildings=tuple(canvas.buildings)),
             two_stage_spec(),
+            belt_rules=_BELT_RULES,
             expect_power=False,
         )
         assert compacted.bounds == (6, 6, 160, 10)
@@ -14115,6 +14190,7 @@ class TestPowerClaimsItsGroundBeforeRouting:
 
     def test_towers_still_cover_when_the_plan_claims_its_cells(self) -> None:
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("portable"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(proliferated_spec(), time_budget_s=1.0)
@@ -14608,6 +14684,7 @@ class TestAShardThatCannotFeedItself:
     def test_it_lays_out_and_conserves_flow(self) -> None:
         spec = starved_shard_spec()
         p = FreeformLayout(
+            belt_rules=_BELT_RULES,
             band_policy=BandPolicy("100"),
             workers=DETERMINISTIC_WORKERS,
         ).lay_out(spec, time_budget_s=0.5)
@@ -14642,6 +14719,7 @@ class TestTheTimeBudgetIsAWall:
         monkeypatch.setattr(FreeformLayout, "_sweep", refuse)
         with pytest.raises(NoValidLayout):
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             ).lay_out(magnetic_ring_spec(), time_budget_s=0.5)
 
@@ -14658,6 +14736,7 @@ class TestTheTimeBudgetIsAWall:
         # A deadline already in the past: every phase must decline to start.
         assert (
             FreeformLayout(
+                belt_rules=_BELT_RULES,
                 band_policy=BandPolicy("portable"),
             )._sweep(
                 spec,
@@ -17219,11 +17298,16 @@ class TestTheSlopeLimitIsConditional:
 
     def test_the_default_save_has_the_tech_so_is_not_ramped(self) -> None:
         """An absent technology set means every technology researched."""
-        assert freeform.FreeformLayout(band_policy=BandPolicy("portable")).ramped is False
+        assert (
+            freeform.FreeformLayout(
+                belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")
+            ).ramped
+            is False
+        )
         assert (
             freeform.FreeformLayout(
                 band_policy=BandPolicy("portable"),
-                belt_vertical_construction=False,
+                belt_rules=dataclasses.replace(_BELT_RULES, vertical_construction=False),
             ).ramped
             is True
         )
@@ -19264,7 +19348,7 @@ def test_freeform_band_120_dropped_height_has_actual_clean_layout_control(
     )
     assert result.routing.status is DetailedRouteStatus.ROUTED
     assert result.placement is not None
-    assert validate.certify(result.placement, spec, expect_power=False).ok
+    assert validate.certify(result.placement, spec, belt_rules=_BELT_RULES, expect_power=False).ok
     assert (
         finalize.finalize_placement(
             result.placement,
@@ -19617,12 +19701,13 @@ def test_all_products_band_160_cold_proof_reaches_a_valid_layout(
     monkeypatch.setattr(freeform, "_pack", lambda *_args, **_kwargs: pack)
 
     placement = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
     ).lay_out(spec, time_budget_s=15.0)
 
     assert placement.frame is not None
     assert placement.frame.primary_band == 160
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 @pytest.mark.usefixtures("off_arm")
@@ -20509,7 +20594,7 @@ def test_post_feedback_replan_deadline_is_a_typed_preparation_refusal(
         NoValidLayout,
         match="PREPARATION deadline passed while applying learned projection geometry",
     ) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(),
             time_budget_s=1.0,
         )
@@ -20520,9 +20605,9 @@ def test_post_feedback_replan_deadline_is_a_typed_preparation_refusal(
 def test_freeform_placement_records_route_backend() -> None:
     from flab2bp.layout import route_kernel
 
-    placement = FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
-        two_stage_spec(), time_budget_s=4.0
-    )
+    placement = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1
+    ).lay_out(two_stage_spec(), time_budget_s=4.0)
     assert placement.stats["route_backend"] == route_kernel.selected_backend()
     for key in (
         "planning_time_s",
@@ -20569,12 +20654,12 @@ def test_lay_out_raises_a_lane_that_needs_a_faster_belt() -> None:
         belt_items_per_second=F(12),
         belt_upgrades=(BeltTier(item_id="conveyor-belt-3", items_per_second=F(30)),),
     )
-    layout = FreeformLayout(band_policy=BandPolicy("portable"), workers=1)
+    layout = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1)
     placement = layout.lay_out(spec, time_budget_s=15.0)
     tiers = {b.item_id for b in placement.buildings if catalog.is_belt(b.item_id)}
     assert 2003 in tiers
     assert placement.stats["belt_runs_upgraded"] >= 1
-    assert validate.certify(placement, spec, expect_power=True).ok
+    assert validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 def test_shared_lane_capacity_is_judged_against_the_fastest_allowed_belt() -> None:
@@ -21315,9 +21400,9 @@ def test_a_pack_with_no_stranded_net_never_runs_the_cluster_search(
         return original(problem, environment)  # type: ignore[arg-type]
 
     monkeypatch.setattr(last_mile_module, "solve_cluster", counting)
-    placement = FreeformLayout(band_policy=BandPolicy("portable"), workers=1).lay_out(
-        plastic_spec(), time_budget_s=8.0
-    )
+    placement = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=1
+    ).lay_out(plastic_spec(), time_budget_s=8.0)
 
     # A pack that never routed would satisfy "the search never ran" for the
     # wrong reason, so the premise is asserted alongside the claim.
@@ -23079,7 +23164,9 @@ def _sweep_over_a_stranded_first_candidate(
         # Only `replan_strips_for_learned_geometry` reaches `plan_strips` from
         # inside `_sweep`; the harness planned its own strips before this.
         monkeypatch.setattr(freeform, "plan_strips", lambda *_args, **_kwargs: replanned_strips)
-    monkeypatch.setattr(validate, "certify", lambda *_args, **_kwargs: validate.Report(findings=()))
+    monkeypatch.setattr(
+        finalize, "_certify", lambda *_args, **_kwargs: validate.Report(findings=())
+    )
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
@@ -23091,6 +23178,7 @@ def _sweep_over_a_stranded_first_candidate(
     )
 
     result = FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         arrangements=2,
     )._sweep(spec, strips, time_budget_s, session=session, telemetry=telemetry)
@@ -23478,7 +23566,7 @@ def test_lay_out_arms_only_the_repair_operator_its_window_actually_runs(
         return Placement(buildings=(), stats={})
 
     monkeypatch.setattr(FreeformLayout, "_sweep", capture)
-    FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+    FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
         two_stage_spec(),
         time_budget_s=1.0,
     )
@@ -23898,7 +23986,7 @@ def test_a_repair_that_dies_after_routing_is_paid_on_the_pass_it_ran(
 @pytest.mark.slow
 def test_freeform_placement_stats_carry_the_operator_telemetry() -> None:
     """The whole `lay_out` path stamps the telemetry on a real corpus spec."""
-    placement = FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+    placement = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
         plastic_spec(), time_budget_s=15.0
     )
     for key in (
@@ -24142,7 +24230,7 @@ def test_lay_out_honours_an_absolute_deadline_from_another_process() -> None:
     An absolute deadline already in the past must refuse immediately rather than
     run for `time_budget_s` more seconds.
     """
-    layout = FreeformLayout(band_policy=BandPolicy("portable"))
+    layout = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"))
     started = time.monotonic()
 
     with pytest.raises(NoValidLayout):
@@ -24262,6 +24350,7 @@ def test_a_portfolio_bound_never_costs_the_placement(
     monkeypatch.setattr(freeform_module, "_portfolio_soft_deadline", recording)
 
     placement = freeform.FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         portfolio_incumbent=lambda: (1, 1),
     ).lay_out(two_stage_spec(), time_budget_s=20.0)
@@ -24307,9 +24396,9 @@ def test_without_a_portfolio_bound_the_sweep_sees_only_its_own_soft(
 
     monkeypatch.setattr(freeform_module, "_room_for_another", spying)
 
-    placement = freeform.FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
-        two_stage_spec(), time_budget_s=20.0
-    )
+    placement = freeform.FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")
+    ).lay_out(two_stage_spec(), time_budget_s=20.0)
 
     assert placement.area > 0
     assert len(set(seen)) == 1, "an unraced sweep charges every site its own single soft"
@@ -24323,6 +24412,7 @@ def test_the_sweep_publishes_every_incumbent_it_certifies(
     published: list[Placement] = []
 
     placement = freeform.FreeformLayout(
+        belt_rules=_BELT_RULES,
         band_policy=BandPolicy("portable"),
         publish_incumbent=published.append,
     ).lay_out(two_stage_spec(), time_budget_s=20.0)
@@ -24360,7 +24450,9 @@ def test_an_over_band_seed_is_skipped_and_never_reported_as_wired(
     skipped: list[int] = []
     rejected: list[freeform._RefusalFinding] = []
 
-    result = FreeformLayout(band_policy=BandPolicy("portable"), arrangements=1)._sweep(
+    result = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), arrangements=1
+    )._sweep(
         spec,
         strips,
         1.0,
@@ -24510,7 +24602,7 @@ def test_lay_out_names_the_skipped_seed_gate_when_every_height_was_skipped(
     monkeypatch.setattr(FreeformLayout, "_sweep", skip_every_height)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(), time_budget_s=1.0
         )
 
@@ -24541,7 +24633,7 @@ def test_lay_out_reports_a_neutral_refusal_when_no_pack_and_no_skip_explain_it(
     monkeypatch.setattr(FreeformLayout, "_sweep", produce_nothing)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(), time_budget_s=1.0
         )
 
@@ -24585,7 +24677,7 @@ def test_a_neutral_refusal_names_an_unknown_pack_solve_and_the_unspent_wall(
     monkeypatch.setattr(freeform, "_DETERMINISTIC_PACK_STRIPS", 1)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(), time_budget_s=30.0
         )
 
@@ -24632,7 +24724,9 @@ def test_lay_out_bounds_a_routed_refusal_to_the_recurring_net(
     monkeypatch.setattr(FreeformLayout, "_sweep", report_two_stranded_attempts)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(spec, time_budget_s=1.0)
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
+            spec, time_budget_s=1.0
+        )
 
     message = str(caught.value)
     assert "route evidence from 2 packs at candidate heights 20, 24" in message
@@ -24768,7 +24862,9 @@ def test_a_freeform_refusal_carries_the_sweep_s_own_counters(
     monkeypatch.setattr(freeform, "_candidate_heights", lambda _strips: [20])
     telemetry: dict[str, float | str] = {}
 
-    FreeformLayout(band_policy=BandPolicy("portable"), arrangements=1)._sweep(
+    FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), arrangements=1
+    )._sweep(
         spec,
         strips,
         1.0,
@@ -24878,7 +24974,7 @@ def test_a_freeform_refusal_carries_the_sweep_s_telemetry_end_to_end(
     monkeypatch.setattr(FreeformLayout, "_sweep", stub_sweep)
 
     with pytest.raises(NoValidLayout) as caught:
-        FreeformLayout(band_policy=BandPolicy("portable")).lay_out(
+        FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")).lay_out(
             two_stage_spec(), time_budget_s=1.0
         )
 
@@ -25926,10 +26022,12 @@ def test_one_recipe_negentropy_block_lays_out_at_five_and_six(
     spec, vertical = mall_all_products
     sub = one_recipe_spec(spec, "copper-ingot", count)
     layout = FreeformLayout(
-        belt_vertical_construction=vertical, band_policy=BandPolicy.parse("portable"), workers=8
+        belt_rules=dataclasses.replace(_BELT_RULES, vertical_construction=vertical),
+        band_policy=BandPolicy.parse("portable"),
+        workers=8,
     )
     placement = layout.lay_out(sub, time_budget_s=20.0)
-    assert validate.certify(placement, sub, expect_power=True).ok
+    assert validate.certify(placement, sub, belt_rules=_BELT_RULES, expect_power=True).ok
 
 
 @pytest.fixture
@@ -25953,7 +26051,9 @@ class _RecordingObserver:
 
 def test_freeform_reports_an_incumbent_to_its_observer(small_spec: BuildSpec) -> None:
     observer = _RecordingObserver()
-    layout = FreeformLayout(band_policy=BandPolicy.parse("portable"), observer=observer)
+    layout = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy.parse("portable"), observer=observer
+    )
     placement = layout.lay_out(small_spec, time_budget_s=0.5)
 
     incumbents = [e for e in observer.events if e.phase is SearchPhase.INCUMBENT]
@@ -25981,13 +26081,13 @@ def test_freeform_with_an_attached_observer_does_not_perturb_the_result(
     changed which candidate the sweep certifies as its incumbent.
     """
     band = BandPolicy.parse("portable")
-    a = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None).lay_out(
-        small_spec, time_budget_s=0.5
-    )
+    a = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=band, workers=DETERMINISTIC_WORKERS, observer=None
+    ).lay_out(small_spec, time_budget_s=0.5)
     observer = _RecordingObserver()
-    b = FreeformLayout(band_policy=band, workers=DETERMINISTIC_WORKERS, observer=observer).lay_out(
-        small_spec, time_budget_s=0.5
-    )
+    b = FreeformLayout(
+        belt_rules=_BELT_RULES, band_policy=band, workers=DETERMINISTIC_WORKERS, observer=observer
+    ).lay_out(small_spec, time_budget_s=0.5)
     assert (a.area, a.stats["belt_tiles"]) == (b.area, b.stats["belt_tiles"])
     assert observer.events, "an attached observer must actually receive events"
 
@@ -26425,7 +26525,7 @@ class TestALargePowerBuildingClaimsItsWholeFootprint:
         self, substation_build: tuple[BuildSpec, Placement]
     ) -> None:
         spec, placement = substation_build
-        report = validate.certify(placement, spec, expect_power=True)
+        report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
 
         assert not report.errors, [f.check for f in report.errors]
 
@@ -26605,7 +26705,7 @@ def test_the_mall_block_the_packer_convicted_is_placed_or_names_the_cause() -> N
     try:
         placement = FreeformLayout(
             band_policy=BandPolicy.parse("portable"),
-            belt_vertical_construction=belt_rules_for_url(url).vertical_construction,
+            belt_rules=belt_rules_for_url(url),
             workers=_BLOCK_WORKERS,
         ).lay_out(block_spec, time_budget_s=60.0)
     except NoValidLayout as refusal:
@@ -26623,5 +26723,5 @@ def test_the_mall_block_the_packer_convicted_is_placed_or_names_the_cause() -> N
         )
         assert "That is a PACKER defect" not in reason
     else:
-        report = validate.certify(placement, block_spec, expect_power=True)
+        report = validate.certify(placement, block_spec, belt_rules=_BELT_RULES, expect_power=True)
         assert report.ok, report.errors

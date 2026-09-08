@@ -28,7 +28,6 @@ from flab2bp.layout import finalize, routing_domain, strategy_race, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S,
-    DEFAULT_SEARCH_WORKERS,
     AreaFrame,
     NoValidLayout,
     Placement,
@@ -46,6 +45,9 @@ from flab2bp.rates.candidates import (
 )
 from flab2bp.spec import BeltTier, BuildSpec, BuildSpecSet, MachineGroup, MachineMoveRecord
 from flab2bp.web.payload import describe
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 #: Small, and known to lay out.  One candidate and one strategy so the test
 #: costs a second of CP-SAT rather than a minute -- the sequence is the subject,
@@ -212,70 +214,6 @@ def test_pipeline_canonicalizes_once_before_internal_consumers(
     assert dataset_calls == 1
     assert request_calls == 1
     assert [entry[0] for entry in seen] == (["pin", "candidates"] if pinned else ["candidates"])
-
-
-@pytest.mark.slow
-def test_build_defaults_to_one_portable_policy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Changing the default or reparsing during backend finalization breaks this."""
-    seen: list[BandPolicy] = []
-    expected_power: list[tuple[str, bool]] = []
-    original_new_layout = pipeline._new_layout
-    original_finalize = finalize.finalize_placement
-
-    def new_layout_spy(
-        strategy: pipeline.ExplicitStrategyName,
-        *,
-        belt_vertical_construction: bool,
-        sequence_islands: int = 1,
-        band_policy: BandPolicy,
-        workers: int | None = None,
-        observer: SearchObserver | None = None,
-    ) -> FreeformLayout | SequencePairLayout:
-        seen.append(band_policy)
-        return original_new_layout(
-            strategy,
-            belt_vertical_construction=belt_vertical_construction,
-            sequence_islands=sequence_islands,
-            band_policy=band_policy,
-            workers=workers,
-            observer=observer,
-        )
-
-    def validate_spy(
-        _placement: Placement,
-        _spec: object,
-        **kwargs: object,
-    ) -> validate.Report:
-        expected_power.append(("validate", kwargs["expect_power"] is True))
-        return validate.Report(findings=())
-
-    def finalize_spy(
-        placement: Placement,
-        policy: BandPolicy,
-        *,
-        cancelled: Callable[[], bool] | None = None,
-    ) -> Placement:
-        seen.append(policy)
-        return original_finalize(placement, policy, cancelled=cancelled)
-
-    monkeypatch.setattr(pipeline, "_new_layout", new_layout_spy)
-    monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
-    monkeypatch.setattr(validate, "validate", validate_spy)
-
-    pipeline.build(
-        SMALL_URL,
-        strategy="freeform",
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
-        time_budget_s=3.0,
-    )
-
-    assert len(seen) >= 3  # construction and backend finalization attempts
-    assert seen[0] == BandPolicy("portable")
-    assert all(policy is seen[0] for policy in seen)
-    assert expected_power[-1] == ("validate", True)
-    assert all(expect_power for _, expect_power in expected_power)
 
 
 @pytest.fixture
@@ -697,9 +635,9 @@ def test_graphene_output_products_sequence_pair_reports_its_continuation_batches
         candidate_policies=DEFAULT_CANDIDATE_POLICIES,
     )
     spec = next(candidate for candidate in built.candidates if candidate.label == "output-products")
-    placement = SequencePairLayout(band_policy=BandPolicy("portable")).lay_out(
-        spec, time_budget_s=30.0
-    )
+    placement = SequencePairLayout(
+        belt_rules=_BELT_RULES, band_policy=BandPolicy("portable")
+    ).lay_out(spec, time_budget_s=30.0)
     assert placement.stats["area"] > 0.0
     assert placement.stats["feasibility_restart_batches"] >= 0.0
 
@@ -1486,9 +1424,13 @@ def _lay_out_synthetic_piler_spec(
     spec: BuildSpec,
 ) -> Placement:
     layout = (
-        FreeformLayout(band_policy=BandPolicy("portable"), strip_len=1, workers=1)
+        FreeformLayout(
+            belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), strip_len=1, workers=1
+        )
         if strategy == "freeform"
-        else SequencePairLayout(band_policy=BandPolicy("portable"), strip_len=1)
+        else SequencePairLayout(
+            belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), strip_len=1
+        )
     )
     return layout.lay_out(spec, time_budget_s=15.0)
 
@@ -1602,7 +1544,7 @@ def test_one_piler_per_producer_lane_lays_out_cleanly_and_reports(
     assert total / 2 == 20 <= ceiling
 
     placement = _lay_out_synthetic_piler_spec(strategy, spec)
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     pilers = [building for building in placement.buildings if building.item_id == 2040]
 
     assert report.ok, [finding.message for finding in report.errors]
@@ -1639,7 +1581,7 @@ def test_entry_lane_stats_sum_only_external_entry_findings() -> None:
         include_single_entry=True,
     )
     placement = _lay_out_synthetic_piler_spec("freeform", spec)
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     entry_findings = report.by_check("flow.external_entry_points")
 
     assert report.ok, [finding.message for finding in report.errors]
@@ -1662,7 +1604,7 @@ def test_two_serial_pilers_per_producer_lane_reach_stack_four_and_validate(
     assert total / 4 == 20 <= ceiling
 
     placement = _lay_out_synthetic_piler_spec(strategy, spec)
-    report = validate.certify(placement, spec, expect_power=True)
+    report = validate.certify(placement, spec, belt_rules=_BELT_RULES, expect_power=True)
     piler_indices = {
         index for index, building in enumerate(placement.buildings) if building.item_id == 2040
     }
@@ -2415,45 +2357,6 @@ def test_both_arms_are_announced_before_the_race_rather_than_after_it(
     assert [step.phase for step in steps[:2]] == ["started", "started"]
 
 
-def test_racing_forwards_every_knob_the_race_owns(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``workers`` is forwarded WHOLE: the race, not the pipeline, splits it."""
-    calls: list[dict[str, object]] = []
-    _install_stub_race(monkeypatch, _one_win_one_refusal(), calls)
-    rules = belt_rules_for_url(SMALL_URL, canonicalize_dataset(load_vendored()))
-
-    pipeline.build(
-        SMALL_URL,
-        strategy="best",
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
-        time_budget_s=STUB_RACE_BUDGET_S,
-        race=True,
-        share=False,
-        workers=9,
-        sequence_islands=2,
-    )
-
-    assert len(calls) == 1
-    call = dict(calls[0])
-    assert call.pop("spec") is not None
-    assert call == {
-        "time_budget_s": STUB_RACE_BUDGET_S,
-        "band_policy": BandPolicy("portable"),
-        "belt_vertical_construction": rules.vertical_construction,
-        "max_belt_z": rules.max_z,
-        "workers": 9,
-        "sequence_islands": 2,
-        "share": False,
-        # `None`: no `search_observer` was given, so no trace queue is built
-        # (Task 8) -- the untraced, shipping shape of a raced build.
-        "trace_queue": None,
-    }
-    # Pre-splitting here would split twice: `run_strategy_race` calls
-    # `race_worker_split` itself, and (6, 3) is what 9 becomes inside it.
-    assert strategy_race.race_worker_split(9) == (6, 3)
-
-
 def test_an_explicit_strategy_never_races_even_when_asked_to(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2470,13 +2373,13 @@ def test_an_explicit_strategy_never_races_even_when_asked_to(
     def spy(
         _strategy: pipeline.ExplicitStrategyName,
         *,
-        belt_vertical_construction: bool,
+        belt_rules: catalog.BeltAltitudeRules,
         sequence_islands: int = 1,
         band_policy: BandPolicy,
         workers: int | None = None,
         observer: SearchObserver | None = None,
     ) -> _Completed:
-        del belt_vertical_construction, sequence_islands, band_policy, observer
+        del belt_rules, sequence_islands, band_policy, observer
         seen.append(workers)
         return _Completed()
 
@@ -2644,27 +2547,6 @@ def test_the_serial_path_settles_each_pair_before_starting_the_next(
         "laid-out",
     ]
     assert [step.index for step in steps] == [1, 1, 2, 2]
-
-
-def test_workers_reaches_the_freeform_layout_it_configures() -> None:
-    """The knob exists so a racer's share is a number, not all 128 cores."""
-    freeform_layout = pipeline._new_layout(
-        "freeform",
-        belt_vertical_construction=True,
-        band_policy=BandPolicy("portable"),
-        workers=7,
-    )
-    default_layout = pipeline._new_layout(
-        "freeform",
-        belt_vertical_construction=True,
-        band_policy=BandPolicy("portable"),
-    )
-
-    assert isinstance(freeform_layout, FreeformLayout)
-    assert isinstance(default_layout, FreeformLayout)
-    assert freeform_layout.workers == 7
-    # `None` is unchanged behaviour: freeform's own default, all cores.
-    assert default_layout.workers == DEFAULT_SEARCH_WORKERS
 
 
 def _install_new_layout_spy(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, object]]:

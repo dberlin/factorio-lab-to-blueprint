@@ -6779,7 +6779,13 @@ def judge_placement(
     )
 
 
-def certify(placement: Placement, spec: BuildSpec, *, expect_power: bool) -> Report:
+def certify(
+    placement: Placement,
+    spec: BuildSpec,
+    *,
+    belt_rules: cat.BeltAltitudeRules,
+    expect_power: bool,
+) -> Report:
     """Judge a strategy's own output, so it cannot return something broken.
 
     ``LayoutStrategy.lay_out`` promises a valid ``Placement`` or
@@ -6798,7 +6804,9 @@ def certify(placement: Placement, spec: BuildSpec, *, expect_power: bool) -> Rep
     Returns the report rather than raising, so the caller can put the failing
     check names into its own error message.
     """
-    return validate(placement, spec, ids=id_map(spec), expect_power=expect_power)
+    return judge_placement(
+        placement, spec, ids=id_map(spec), belt_rules=belt_rules, expect_power=expect_power
+    )
 
 
 def validate(

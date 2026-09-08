@@ -49,14 +49,14 @@ def available_strategies(*, belt_rules: catalog.BeltAltitudeRules) -> tuple[Stra
             "freeform",
             FreeformLayout(
                 band_policy=BandPolicy("portable"),
-                belt_vertical_construction=belt_rules.vertical_construction,
+                belt_rules=belt_rules,
             ),
         ),
         StrategyHandle(
             "sequence-pair",
             SequencePairLayout(
                 band_policy=BandPolicy("portable"),
-                belt_vertical_construction=belt_rules.vertical_construction,
+                belt_rules=belt_rules,
             ),
         ),
     )
@@ -85,6 +85,7 @@ def _run_cell(
             placement,
             spec,
             expect_power=True,
+            belt_rules=belt_rules,
         )
         try:
             placement = finalize.finalize_placement(placement, BandPolicy("portable"))

@@ -32,6 +32,7 @@ import pytest
 
 from flab2bp.dsp import catalog
 from flab2bp.dsp.records import is_belt
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import freeform, routing_domain
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.coater_mode import CoaterMode, coater_mode
@@ -39,6 +40,9 @@ from flab2bp.layout.freeform import _COATER_WEST_CHANNEL, FreeformLayout, plan_s
 from flab2bp.layout.routing_domain import WEST_CHANNEL, Strip, _Canvas, _Port
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec, MachineGroup, ProliferatorMode
+
+_BELT_RULES = belt_rules_for_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*60&v=11")
+
 
 PROLIFERATED_BUDGET_S = 4.0
 
@@ -253,7 +257,7 @@ def test_placed_bans_the_area_one_rival(
 
 def _build(arm: str, monkeypatch: pytest.MonkeyPatch) -> object:
     _arm(monkeypatch, arm)
-    strategy = FreeformLayout(band_policy=BandPolicy("portable"), workers=2)
+    strategy = FreeformLayout(belt_rules=_BELT_RULES, band_policy=BandPolicy("portable"), workers=2)
     return strategy.lay_out(_spec(), time_budget_s=PROLIFERATED_BUDGET_S)
 
 

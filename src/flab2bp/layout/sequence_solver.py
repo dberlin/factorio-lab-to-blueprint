@@ -18,8 +18,9 @@ from itertools import islice
 from types import MappingProxyType
 from typing import Protocol, TypedDict
 
+from flab2bp.dsp import catalog
 from flab2bp.indexed import Stages, StripPositions
-from flab2bp.layout import finalize, last_mile, route_kernel, validate
+from flab2bp.layout import finalize, last_mile, route_kernel
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     ATOMIC_COMPLETION_GRACE_S as ATOMIC_COMPLETION_GRACE_S,
@@ -28,7 +29,6 @@ from flab2bp.layout.base import (
     DETERMINISTIC_WORKERS,
     NoValidLayout,
     Placement,
-    PlacementCompletion,
     ProjectionFailureRecord,
 )
 from flab2bp.layout.compact_seed import (
@@ -4846,7 +4846,7 @@ def _production_run(
     band_policy: BandPolicy,
     strip_len: int,
     config: SequenceSolverConfig,
-    belt_vertical_construction: bool = True,
+    belt_rules: catalog.BeltAltitudeRules,
     absolute_deadline: float | None = None,
     compact_seed_attempt: int | None = None,
     compact_seed_base_seed: int | None = None,
@@ -5371,7 +5371,7 @@ def _production_run(
                 pack,
                 power=power,
                 policy=band_policy,
-                ramped=not belt_vertical_construction,
+                ramped=not belt_rules.vertical_construction,
                 **preparation_kwargs,
             )
         except _PreparationDeadline, finalize.ProjectionCancelled:
@@ -5541,65 +5541,33 @@ def _production_run(
 
     def certify(placement: Placement) -> ValidationVerdict:
         def budget_verdict() -> ValidationVerdict:
-            return ValidationVerdict(
-                False,
-                (),
-                None,
-                status=DetailedRouteStatus.BUDGET,
-            )
+            return ValidationVerdict(False, (), None, status=DetailedRouteStatus.BUDGET)
 
         completion_deadline = deadline + ATOMIC_COMPLETION_GRACE_S
-
-        def completion_deadline_reached() -> bool:
-            return time.monotonic() >= completion_deadline
-
-        def project(candidate: Placement) -> Placement:
-            finalizer_parameters = inspect.signature(finalize.finalize_placement).parameters
-            if "cancelled" in finalizer_parameters or any(
-                parameter.kind is inspect.Parameter.VAR_KEYWORD
-                for parameter in finalizer_parameters.values()
-            ):
-                return finalize.finalize_placement(
-                    candidate,
-                    band_policy,
-                    cancelled=completion_deadline_reached,
-                )
-            return finalize.finalize_placement(candidate, band_policy)
-
-        if completion_deadline_reached():
+        if time.monotonic() >= completion_deadline:
             return budget_verdict()
-        try:
-            compacted = finalize.compact_open_boundary_belts_certified(
-                placement,
-                spec,
-                expect_power=power,
-                cancelled=completion_deadline_reached,
-            )
-            if completion_deadline_reached():
-                return budget_verdict()
-            finalized = project(compacted.placement)
-        except finalize.ProjectionRefusal as exc:
-            return ValidationVerdict(False, exc.checks, None, exc.failures)
-        except finalize.ProjectionCancelled:
-            return budget_verdict()
-        if completion_deadline_reached():
-            return budget_verdict()
-        report = compacted.report
-        if report is None:
-            report = validate.certify(finalized, spec, expect_power=power)
-        if completion_deadline_reached():
-            return budget_verdict()
-        failures = tuple(sorted({finding.check for finding in report.errors}))
-        if failures:
-            return ValidationVerdict(False, failures, None)
-        return ValidationVerdict(
-            True,
-            (),
-            replace(
-                finalized,
-                completion=PlacementCompletion.COMPACTED_AND_FINALIZED,
+        projection = finalize.prepare_placement_completion(
+            placement,
+            spec,
+            band_policy,
+            belt_rules=belt_rules,
+            expect_power=power,
+            deadlines=finalize.PlacementCompletionDeadlines(
+                completion_deadline, completion_deadline, completion_deadline
             ),
         )
+        if isinstance(projection, finalize.PlacementCompletionCancelled):
+            return budget_verdict()
+        if isinstance(projection, finalize.PlacementProjectionRefused):
+            exc = projection.refusal
+            return ValidationVerdict(False, exc.checks, None, exc.failures)
+        completion = finalize.complete_placement(projection)
+        if isinstance(completion, finalize.PlacementCertificationExpired):
+            return budget_verdict()
+        if isinstance(completion, finalize.PlacementInvalid):
+            failures = tuple(sorted({finding.check for finding in completion.report.errors}))
+            return ValidationVerdict(False, failures, None)
+        return ValidationVerdict(True, (), completion.placement)
 
     family_by_id = {family.family_id: family for family in families}
     telemetry.pose_feasibility_rejects = sum(
@@ -6367,7 +6335,7 @@ class SequencePairLayout:
         self,
         *,
         band_policy: BandPolicy,
-        belt_vertical_construction: bool = True,
+        belt_rules: catalog.BeltAltitudeRules,
         strip_len: int = 6,
         config: SequenceSolverConfig | None = None,
         solver_factory: _SolverFactory | None = None,
@@ -6389,7 +6357,8 @@ class SequencePairLayout:
             raise ValueError("compact seed config must be exactly CompactSeedConfig")
         self._solver_factory: _SolverFactory | None = solver_factory
         self.band_policy = band_policy
-        self.ramped = not belt_vertical_construction
+        self.belt_rules = belt_rules
+        self.ramped = not belt_rules.vertical_construction
         self.strip_len = strip_len
         self.config = config or SequenceSolverConfig()
         self.compact_seed_config = compact_seed_config or CompactSeedConfig()
@@ -6462,7 +6431,7 @@ class SequencePairLayout:
                 spec,
                 time_budget_s=time_budget_s,
                 band_policy=self.band_policy,
-                belt_vertical_construction=not self.ramped,
+                belt_rules=self.belt_rules,
                 strip_len=self.strip_len,
                 config=self.config,
                 compact_seed_config=self.compact_seed_config,
@@ -6475,7 +6444,7 @@ class SequencePairLayout:
                 time_budget_s=time_budget_s,
                 power=True,
                 band_policy=self.band_policy,
-                belt_vertical_construction=not self.ramped,
+                belt_rules=self.belt_rules,
                 strip_len=self.strip_len,
                 config=self.config,
                 absolute_deadline=absolute_deadline,

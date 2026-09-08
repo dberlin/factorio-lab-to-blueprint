@@ -132,12 +132,12 @@ from concurrent.futures import Executor, ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Literal, cast
 
-from flab2bp.layout import finalize, validate
+from flab2bp.dsp import catalog
+from flab2bp.layout import finalize
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
     NoValidLayout,
     Placement,
-    PlacementCompletion,
     PlacementStats,
 )
 from flab2bp.layout.freeform import FreeformLayout
@@ -230,15 +230,14 @@ BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
 # a block is on this page, and nothing in `partition`, `contracts` or
 # `compose` needs to change to add one.
 #
-#   _BlockJob = (spec, arm, budget_s, vertical, workers, parent_deadline)
+#   _BlockJob = (spec, arm, budget_s, belt_rules, workers, parent_deadline)
 #     0 spec            a self-contained BuildSpec from `partition.sub_spec`:
 #                       boundary items are `external_inputs`/`outputs`, belt
 #                       tiers / sorter ladder / stack / piler travel verbatim,
 #                       and `spray_lanes` is RECOMPUTED for the block.
 #     1 arm             the solver's name, one of `BlockStrategyName`.
 #     2 budget_s        the round's per-block wall, in seconds.
-#     3 vertical        `belt_vertical_construction`; the composer's `ramped`
-#                       is its negation.
+#     3 belt_rules      the parent's complete researched save policy.
 #     4 workers         `_BLOCK_WORKERS` CP-SAT search workers for THIS block.
 #     5 parent_deadline absolute `time.monotonic()` deadline, or None.  The
 #                       WORKER combines it: `min(parent, start + budget_s)`.
@@ -256,7 +255,7 @@ BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
 #     A refusal and a crash are RESULTS, not aborts: one block must never take
 #     the other nine with it.
 #
-#   _block_layout(arm, *, vertical, workers) -> LayoutStrategy
+#   _block_layout(arm, *, belt_rules, workers) -> LayoutStrategy
 #     THE REGISTRY POINT (design §3.2).  A new solver is added HERE, named in
 #     `BlockStrategyName`, and given an arm-choice rule in
 #     `hierarchy.dispatch`.  It must implement
@@ -265,10 +264,10 @@ BlockStrategyName = Literal["freeform", "sequence-pair", "best"]
 #     `Placement` must pickle (it crosses a spawn boundary).  Candidates
 #     already named in `docs/speedup-idea-backlog.md`: the pre-generated block
 #     library, a revived `spine`, coater-composite strips.
-#: One block solve: ``(sub-spec, backend, budget, vertical construction, search
+#: One block solve: ``(sub-spec, backend, budget, researched belt rules, search
 #: workers, absolute deadline)``.  A plain tuple because it crosses a process
 #: boundary, and every member of it pickles.
-_BlockJob = tuple[BuildSpec, str, float, bool, int, float | None]
+_BlockJob = tuple[BuildSpec, str, float, catalog.BeltAltitudeRules, int, float | None]
 
 #: What a round builds its executor with, taking the pool width.  Swappable so
 #: a test that patches :func:`_solve_block` can run it in a thread, where the
@@ -337,7 +336,7 @@ def _spawn_pool(max_workers: int) -> Executor:
 def _block_layout(
     strategy: str,
     *,
-    vertical: bool,
+    belt_rules: catalog.BeltAltitudeRules,
     workers: int,
 ) -> FreeformLayout | SequencePairLayout:
     """Construct one block backend.  See the module docstring for why here.
@@ -352,13 +351,13 @@ def _block_layout(
     """
     if strategy == "freeform":
         return FreeformLayout(
-            belt_vertical_construction=vertical,
+            belt_rules=belt_rules,
             band_policy=BandPolicy.parse("portable"),
             workers=workers,
         )
     if strategy == "sequence-pair":
         return SequencePairLayout(
-            belt_vertical_construction=vertical,
+            belt_rules=belt_rules,
             band_policy=BandPolicy.parse("portable"),
             islands=1,
         )
@@ -386,12 +385,12 @@ def _solve_block(args: _BlockJob) -> tuple[dict[str, object], Placement | None]:
     clock with nothing left on it, and they refused instantly with "deadline
     exhausted"; that is why it is the worker, not the round, that does this.
     """
-    spec, strategy, budget_s, vertical, workers, parent_deadline = args
+    spec, strategy, budget_s, belt_rules, workers, parent_deadline = args
     started = time.monotonic()
     deadline = (
         started + budget_s if parent_deadline is None else min(parent_deadline, started + budget_s)
     )
-    layout = _block_layout(strategy, vertical=vertical, workers=workers)
+    layout = _block_layout(strategy, belt_rules=belt_rules, workers=workers)
     try:
         placement = layout.lay_out(spec, time_budget_s=budget_s, absolute_deadline=deadline)
     except NoValidLayout as exc:
@@ -594,7 +593,7 @@ class HierarchicalLayout:
     def __init__(
         self,
         *,
-        belt_vertical_construction: bool,
+        belt_rules: catalog.BeltAltitudeRules,
         band_policy: BandPolicy,
         workers: int | None = None,
         strip_cap: int = STRIP_CAP_DEFAULT,
@@ -604,8 +603,8 @@ class HierarchicalLayout:
         #: Whether ramps are REQUIRED; the composer's router takes this as
         #: ``ramped``.  Same conditional slope rule, and the same default, as
         #: ``FreeformLayout``.
-        self.ramped = not belt_vertical_construction
-        self.belt_vertical_construction = belt_vertical_construction
+        self.ramped = not belt_rules.vertical_construction
+        self.belt_rules = belt_rules
         self.workers = workers
         self.strip_cap = strip_cap
         self.block_strategy = block_strategy
@@ -888,26 +887,29 @@ class HierarchicalLayout:
             )
         except SlotUndetermined as exc:
             raise refuse(f"a composed link's slot could not be derived: {exc}") from exc
-        expired = lambda: time.monotonic() >= deadline  # noqa: E731
-        try:
-            placement = finalize.compact_open_boundary_belts(
-                placement, built, expect_power=True, cancelled=expired
-            )
-            placement = finalize.finalize_placement(placement, self.band_policy, cancelled=expired)
-        except finalize.ProjectionCancelled as exc:
-            raise refuse("budget expired finalizing the composed placement") from exc
-        except finalize.ProjectionRefusal as exc:
-            raise refuse(f"composed placement refused finalization: {exc}") from exc
-
-        # Uncancelled, deliberately: certification is the atomic completion step
-        # and there is nothing to hand back without it, so it runs under the
-        # pipeline's completion grace rather than under this strategy's wall.
-        report = validate.certify(placement, built, expect_power=True)
+        projection = finalize.prepare_placement_completion(
+            placement,
+            built,
+            self.band_policy,
+            belt_rules=self.belt_rules,
+            expect_power=True,
+            deadlines=finalize.PlacementCompletionDeadlines(deadline, deadline, None),
+        )
+        if isinstance(projection, finalize.PlacementCompletionCancelled):
+            raise refuse("budget expired finalizing the composed placement")
+        if isinstance(projection, finalize.PlacementProjectionRefused):
+            raise refuse(f"composed placement refused finalization: {projection.refusal}")
+        # The strict projection clock ends inside the finalizer. Certification
+        # has neither a new admission check nor a post-certification deadline.
+        completion = finalize.complete_placement(projection)
+        report = completion.report
         if not report.ok:
             raise refuse(
                 "composed placement failed validation: "
                 + "; ".join(f"{f.check}: {f.message}" for f in report.errors[:3])
             )
+        assert isinstance(completion, finalize.PlacementCompleted)
+        placement = completion.placement
 
         # NO `strips_max` HERE.  It was a diagnostic -- strips in the widest
         # block -- and v2 Task 2 made `partition.strip_count` call
@@ -929,7 +931,7 @@ class HierarchicalLayout:
                 },
             )
         )
-        return replace(placement, completion=PlacementCompletion.COMPACTED_AND_FINALIZED)
+        return placement
 
     def _arms(self) -> tuple[str, ...]:
         """Which backends each block is offered to."""
@@ -1062,7 +1064,7 @@ class HierarchicalLayout:
                     sub_spec(spec, entries[index].units, index),
                     arm,
                     block_budget,
-                    self.belt_vertical_construction,
+                    self.belt_rules,
                     _BLOCK_WORKERS,
                     # The PARENT's wall. `_solve_block` combines it with
                     # `block_budget` at job start, so a job in a later wave is

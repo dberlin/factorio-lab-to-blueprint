@@ -111,11 +111,11 @@ B_NAME = "freeform"
 STRATEGIES: dict[str, Callable[[catalog.BeltAltitudeRules], LayoutStrategy]] = {
     A_NAME: lambda rules: SequencePairLayout(
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=rules.vertical_construction,
+        belt_rules=rules,
     ),
     B_NAME: lambda rules: FreeformLayout(
         band_policy=BandPolicy("portable"),
-        belt_vertical_construction=rules.vertical_construction,
+        belt_rules=rules,
     ),
 }
 
@@ -141,6 +141,7 @@ class _LayoutCall:
             placement,
             self.spec,
             expect_power=True,
+            belt_rules=self.belt_rules,
         )
         finalized = finalize.finalize_placement(compacted, BandPolicy("portable"))
         return replace(

@@ -14,11 +14,9 @@ none of it survives here.
 
 The packing does survive, verbatim: ``_normalize``, :func:`pack_blocks` (the
 prototype's ``_shelf`` without its single-row mode), :func:`_skyline` and
-``_translate``.  Its two hard-won constants come with it -- a two-tile floor
-under the gap, because ``game.belt_collide`` prices a belt against a
-neighbour's build collider, and :data:`BAND_MAX_ROWS`, because
-``finalize.finalize_placement`` refuses a deeper paste with
-``game.blueprint_area``.
+``_translate``. The two-tile gap floor remains because ``game.belt_collide``
+prices a belt against a neighbour's build collider. Candidate admission uses
+the finalizer's exact requested band envelope, not a second latitude ceiling.
 """
 
 from __future__ import annotations
@@ -35,6 +33,7 @@ from flab2bp.layout import junction, slots
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings
+from flab2bp.layout.finalize import BandPolicySearchEnvelope, band_policy_search_envelope
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import Cell, DetailedRouteStatus, NetId, NetRole
 from flab2bp.layout.routing_domain import (
@@ -61,8 +60,6 @@ from flab2bp.layout.routing_domain import (
 from flab2bp.layout.strip_variants import CargoDomain
 from flab2bp.spec import BuildSpec
 
-#: Latitude rows in the tallest band; a deeper placement pastes on no band.
-BAND_MAX_ROWS = 160
 _PORTABLE_POLICY = BandPolicy("portable")
 
 #: The narrowest gap a packing may leave between two blocks.
@@ -86,9 +83,8 @@ MIN_GAP = 2
 #:
 #: The rungs double and then step, because the cost of a rung is a whole
 #: re-pack plus a whole reservation: a fine ladder would spend the composition's
-#: budget proving that 3 is as hopeless as 2.  16 is the top because a gap that
-#: wide already pushes a mall-sized packing past :data:`BAND_MAX_ROWS`, and a
-#: composition that cannot be pasted is not an answer.
+#: budget proving that 3 is as hopeless as 2. The measured ladder stops at 16;
+#: widening it is a separate search-policy decision, not band admission.
 GAP_LADDER = (2, 4, 6, 8, 12, 16)
 
 #: The share of the wall left on entry that rungs BEYOND THE FIRST may spend.
@@ -256,7 +252,9 @@ def _normalize(placement: Placement) -> tuple[Placement, int, int]:
     )
 
 
-def pack_blocks(sizes: list[tuple[int, int]], gap: int) -> tuple[list[tuple[int, int]], int, int]:
+def pack_blocks(
+    sizes: list[tuple[int, int]], gap: int, *, envelope: BandPolicySearchEnvelope
+) -> tuple[list[tuple[int, int]], int, int]:
     """Pack the blocks bottom-left, preferring a band-legal shape to a small one.
 
     Shelves are packed tallest-first (best-fit decreasing height), which trades
@@ -274,12 +272,9 @@ def pack_blocks(sizes: list[tuple[int, int]], gap: int) -> tuple[list[tuple[int,
     real scale, but a caller that finalizes a composition has to expect that
     refusal and cannot read a block's own certification as still holding.
 
-    The tallest DSP latitude band holds :data:`BAND_MAX_ROWS` rows, and
-    ``finalize_placement`` refuses anything deeper with ``game.blueprint_area``
-    (``EBuildCondition.BlueprintAreaCrossTropic``).  On the 935-machine mall the
-    minimum-AREA packing was 247x205 and could not be pasted at all, so the
-    sweep prefers a legal shape over a small one and only falls back to the
-    smallest illegal shape when nothing fits.
+    Prefer the smallest packing the requested exact envelope can project,
+    including rotation and circumference. If none of these finite candidates
+    fits, retain the smallest diagnostic fallback for the existing refusal path.
     """
     gap = max(gap, MIN_GAP)
     best: tuple[int, list[tuple[int, int]], int, int] | None = None
@@ -295,7 +290,7 @@ def pack_blocks(sizes: list[tuple[int, int]], gap: int) -> tuple[list[tuple[int,
         candidate = (width * height, offsets, width, height)
         if fallback is None or candidate[0] < fallback[0]:
             fallback = candidate
-        if min(width, height) > BAND_MAX_ROWS:
+        if not envelope.frame_candidates(width, height):
             continue
         if best is None or candidate[0] < best[0]:
             best = candidate
@@ -680,6 +675,7 @@ def _pack_at(
     gap: int,
     ramped: bool,
     margin: int,
+    envelope: BandPolicySearchEnvelope,
 ) -> _Packing:
     """Lay the blocks out at one ``gap`` and build the router's view of them.
 
@@ -688,7 +684,9 @@ def _pack_at(
     ``_Net``'s port tiles are all derived from the gap.
     """
     normalized = [_normalize(p) for p in placements]
-    offsets, _width, _height = pack_blocks([(w, h) for _, w, h in normalized], gap)
+    offsets, _width, _height = pack_blocks(
+        [(w, h) for _, w, h in normalized], gap, envelope=envelope
+    )
 
     buildings: list[PlacedBuilding] = []
     blocks: list[BlockPlaced] = []
@@ -891,6 +889,7 @@ def pack_with_access(
     ramped: bool,
     deadline: float | None,
     margin: int,
+    envelope: BandPolicySearchEnvelope,
     gap: int = MIN_GAP,
 ) -> PackedCanvas:
     """Pack at widening gaps until every port has a corridor, and commit that one.
@@ -962,7 +961,9 @@ def pack_with_access(
         if not first and _spent(ladder_deadline):
             break
         rung_deadline = deadline if first else ladder_deadline
-        packing = _pack_at(placements, flows, spec, gap=rung, ramped=ramped, margin=margin)
+        packing = _pack_at(
+            placements, flows, spec, gap=rung, ramped=ramped, margin=margin, envelope=envelope
+        )
         bounds = packing.canvas.limit
         assert bounds is not None  # canvas_for always sets it
         demands = _port_access_inventory(packing.nets).demands
@@ -1121,8 +1122,7 @@ def pack_with_access(
         if reservation.complete:
             return candidate
         # STRICTLY fewer, so the NARROWEST of the equally-bad rungs wins: a
-        # wider packing that serves no more ports is pure area, and area is what
-        # `BAND_MAX_ROWS` refuses a paste over.
+        # wider packing that serves no more ports only spends physical extent.
         if best is None or len(reservation.missing) < len(best.reservation.missing):
             best = candidate
     assert best is not None  # `rungs` is never empty, so the first rung ran
@@ -1183,6 +1183,9 @@ def compose(
     outside the packed boxes the router may use; it exists so a test can wall
     the composition in at 0 and see the router NAME the cut it cannot make.
     """
+    # These are complete physical block boxes. Optional routing margin is free
+    # canvas, not a guaranteed emitted rim; later routed geometry is finalized.
+    envelope = band_policy_search_envelope(policy, perimeter=0)
     try:
         packed = pack_with_access(
             placements,
@@ -1192,6 +1195,7 @@ def compose(
             deadline=deadline,
             margin=_limit_margin,
             gap=gap,
+            envelope=envelope,
         )
     except _PackingDeadline as expired:
         return _budget_refusal(expired.packing)
@@ -1318,7 +1322,6 @@ def compose(
 
 
 __all__ = [
-    "BAND_MAX_ROWS",
     "GAP_LADDER",
     "LADDER_WALL_SHARE",
     "RESERVE_WALL_SHARE",
