@@ -148,3 +148,25 @@ def test_linked_heads_drop_replaced_and_unstaked_taps_only() -> None:
     assert index.linked_heads() == frozenset({shared[0]})
     index.stake(2, ((4, 4, 0),))
     assert index.linked_heads() == frozenset()
+
+
+def test_ordered_snapshot_restores_replaced_and_reinserted_paths() -> None:
+    paths = StakedPaths(_STEPS)
+    repeated = ((0, 0, 0), (1, 0, 0), (0, 0, 0))
+    paths.stake(8, repeated, linked_head=True)
+    paths.stake(3, ((0, 2, 0),))
+    paths.stake(8, repeated, linked_head=True)
+    assert tuple(paths) == (8, 3)
+    saved = paths.snapshot()
+    scan = paths.beside_in_scan_order((0, 1, 0))
+
+    paths.unstake(8)
+    paths.stake(8, ((9, 9, 0),))
+    paths.stake(5, ())
+    paths.restore(saved)
+
+    assert tuple(paths.items()) == ((8, repeated), (3, ((0, 2, 0),)))
+    assert paths.beside_in_scan_order((0, 1, 0)) == scan
+    assert paths.linked_heads() == frozenset({(0, 0, 0)})
+    assert paths.position_in(8, (0, 0, 0)) == 0
+    assert paths.nets() == (3, 8)
