@@ -1,0 +1,26 @@
+flab2bp: no valid layout for all-products after 300s: freeform/all-products: no packing of 53 strips could be wired at any candidate height; every pack the sweep produced left nets unrouted. That is a PACKER defect -- it is producing packs its own router cannot wire -- and it is reported rather than papered over with a looser packing. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+  stats freeform/all-products: alns_applied=1 alns_choices=2 alns_encode_errors=0 alns_evaluations=11 alns_operators=destroy:failed-endpoints:1|destroy:band-boundary:1|repair:sequence-reinsert:0|repair:local-exact-pack:2 alns_routing_seconds=22.1655 alns_skipped_no_goods=0 alns_window_accepted=1 alns_window_seconds=0.238113 alns_window_solves=1 attempts=11 budget_unspent_s=13.9041 certify_skipped=0 compaction_time_s=0 detailed_route_time_s=173.164 distinct_assignments=11 evaluations=11 finalization_time_s=0 pack_cp_deterministic_time_s=18.0631 pack_cp_feasible=10 pack_cp_infeasible=0 pack_cp_last_best_bound=1.56351e+07 pack_cp_last_objective=3.90419e+12 pack_cp_last_status=FEASIBLE pack_cp_model_invalid=0 pack_cp_optimal=1 pack_cp_solves=11 pack_cp_unknown=0 pack_cp_wall_time_s=57.7454 pack_time_s=57.6195 pack_window_distinct_submodels=1 pack_window_feasible=0 pack_window_infeasible=0 pack_window_model_invalid=0 pack_window_optimal=1 pack_window_repeated_submodel_seconds=0 pack_window_repeated_submodels=0 pack_window_solves=1 pack_window_unknown=0 preparation_time_s=50.9236 skipped_heights=0 stale_draws=0 stale_stop=0 validation_time_s=0 window_accepted=1 window_solves=1
+Command exited with non-zero status 3
+	Command being timed: "uv run --project /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/lane-fanout flab2bp https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11 --budget 300 --candidate-policy all-products --strategy freeform -v -o /tmp/bp-um-p3.txt"
+	User time (seconds): 294.47
+	System time (seconds): 2.26
+	Percent of CPU this job got: 102%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 4:48.57
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 286616
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 71
+	Minor (reclaiming a frame) page faults: 1375012
+	Voluntary context switches: 90
+	Involuntary context switches: 2303
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 1981
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 3

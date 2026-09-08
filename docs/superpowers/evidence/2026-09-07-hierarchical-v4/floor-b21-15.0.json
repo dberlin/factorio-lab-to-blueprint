@@ -1,0 +1,14 @@
+{
+  "block": 21,
+  "budget_s": 15.0,
+  "ok": false,
+  "recipes": [
+    "circuit-board",
+    "processor",
+    "sorter-1",
+    "sorter-2",
+    "sorter-3"
+  ],
+  "verdict": "no valid layout for no-proliferator#block21 after 15s: deadline exhausted before finding an exact layout; exact validation failures: flow.conservation, geom.collide; no legal DSP latitude band/orientation accepts the final placement: band 100 geom.collide (807, 810): build colliders intersect; band 120 geom.collide (807, 810): build colliders intersect; band 160 geom.collide (807, 810): build colliders intersect; band 160 geom.collide (814, 817): build colliders intersect; band 200 geom.collide (814, 817): build colliders intersect. Treat a spec that cannot be laid out in the requested budget ",
+  "wall_s": 13.034
+}

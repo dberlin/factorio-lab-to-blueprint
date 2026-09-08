@@ -1,0 +1,5 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+flab2bp: no valid layout for all-products after 15s: hierarchical/all-products: 2 block(s) never placed, out of re-cut round(s) after 0 of 0 the 9.0s round wall allows: block 6 (electromagnetic-turbine, magnetic-coil, super-magnetic-ring): REFUSED: deadline exhausted before finding an exact layout; block 7 (electric-motor, gear): REFUSED: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+  stats hierarchical/all-products: arm_dispatch_both=1 arm_dispatch_freeform=4 arm_dispatch_sequence_pair=4 blocks=9 blocks_unattempted=0 compose_gap=0 cut_lanes=0 nogood_skips=0 player_fed=0 port_demands=0 power_infill_towers=0 power_uncovered_tiles=0 recut_rounds=0 reservation_degraded=0 reservation_missing=0 reservation_partial=0 resplits=0 unrouted_cuts=0
+
+EXIT=3

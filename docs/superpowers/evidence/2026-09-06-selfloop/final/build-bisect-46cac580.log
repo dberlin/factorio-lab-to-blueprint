@@ -1,0 +1,51 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+sequence-pair / no-proliferator: 38 machines, 2700 tiles, 2042 buildings
+primary_band: 160
+certified_bands: 160, 200
+inputs to belt in: assembling-machine-2, carbon-nanotube, copper-ingot, crystal-silicon, energy-shard, high-purity-silicon, iron-ingot, magnet, matter-recombinator, optical-grating-crystal, plane-filter, processor, refined-oil, stone, super-magnetic-ring, titanium-alloy, unipolar-magnet  (30 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-2 (12.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; no run needed more than the floor; stack 1; 0 piler(s)
+  entry lanes: carbon-nanotube 3 (needs 1 at 30/s)
+  entry lanes: copper-ingot 2 (needs 1 at 30/s)
+  entry lanes: crystal-silicon 2 (needs 1 at 30/s)
+  entry lanes: iron-ingot 4 (needs 1 at 30/s)
+  entry lanes: magnet 2 (needs 1 at 30/s)
+  entry lanes: plane-filter 3 (needs 1 at 30/s)
+  entry lanes: processor 2 (needs 1 at 30/s)
+  entry lanes: refined-oil 2 (needs 1 at 30/s)
+  entry lanes: titanium-alloy 2 (needs 1 at 30/s)
+  4 strategy/candidate pair(s) produced no layout:
+    freeform/all-products: every packing that wired was rejected by our own validator (prolif.coater_rides_one_run; findings: prolif.coater_rides_one_run (763, 0, 1, 2): coater 763 rides a belt merge under its body: belt(s) [0] on its body tiles have two or more predecessors; a coater carries no connection of its own and needs one lane, not a merge whose joined flows have no arrangement that keeps its recipe's proportion ({'ride': 1, 'merged_belts': [0], 'distinct_runs': [0]}); prolif.coater_rides_one_run (766, 19, 20, 21): coater 766 rides a belt merge under its body: belt(s) [19] on its body tiles have two or more predecessors; a coater carries no connection of its own and needs one lane, not a merge whose joined flows have no arrangement that keeps its recipe's proportion ({'ride': 20, 'merged_belts': [19], 'distinct_runs': [2]})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+    sequence-pair/all-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; exact validation failures: prolif.coater_rides_one_run; island 1: deadline exhausted before finding an exact layout; exact validation failures: prolif.coater_rides_one_run; island 2: deadline exhausted before finding an exact layout; exact validation failures: prolif.coater_rides_one_run; island 3: deadline exhausted before finding an exact layout; exact validation failures: prolif.coater_rides_one_run
+    freeform/output-products: every packing that wired was rejected by our own validator (prolif.coater_rides_one_run; findings: prolif.coater_rides_one_run (768, 0, 1, 2): coater 768 rides a belt merge under its body: belt(s) [0] on its body tiles have two or more predecessors; a coater carries no connection of its own and needs one lane, not a merge whose joined flows have no arrangement that keeps its recipe's proportion ({'ride': 1, 'merged_belts': [0], 'distinct_runs': [0]}); prolif.coater_rides_one_run (771, 19, 20, 21): coater 771 rides a belt merge under its body: belt(s) [19] on its body tiles have two or more predecessors; a coater carries no connection of its own and needs one lane, not a merge whose joined flows have no arrangement that keeps its recipe's proportion ({'ride': 20, 'merged_belts': [19], 'distinct_runs': [2]})); a placement that fails validation is refused rather than returned, because an invalid blueprint pastes and then does not run
+    sequence-pair/output-products: all 4 sequence islands refused: island 0: deadline exhausted before finding an exact layout; exact validation failures: prolif.coater_rides_one_run; island 1: deadline exhausted before finding an exact layout; exact validation failures: prolif.coater_rides_one_run; island 2: deadline exhausted before finding an exact layout; exact validation failures: prolif.coater_rides_one_run; island 3: deadline exhausted before finding an exact layout; exact validation failures: prolif.coater_rides_one_run
+
+candidate           strategy      area  errors
+no-proliferator     sequence-pair    2700       0
+no-proliferator     freeform      4125       0
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/selfloop/docs/superpowers/evidence/2026-09-06-selfloop/final/bp-bisect-46cac580.txt
+	Command being timed: "uv run flab2bp https://factoriolab.github.io/dsp/list?z=eJxNjrsKwkAQRf9miql2JCbVNANGTJdGiI1oSJFiWUnIQ4v9dska5HbnHAbmBrWcjxR0YnHOOWahoLckP.5wtpO9IdsCMgJf8ahFOYNcON.rA2oBvOIga9DKloJWabYJfjCUGSXd1nz4hzRz4.7ZqdHQrXon7wdtosVTrMm.Ri1pVpEvAnpFKg__&v=11 --budget 30 -v -o /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/selfloop/docs/superpowers/evidence/2026-09-06-selfloop/final/bp-bisect-46cac580.txt"
+	User time (seconds): 517.15
+	System time (seconds): 5.24
+	Percent of CPU this job got: 355%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:26.80
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 241664
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 2709201
+	Voluntary context switches: 2851
+	Involuntary context switches: 16166
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 63
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+BUILD_EXIT=0

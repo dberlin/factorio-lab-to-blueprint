@@ -350,6 +350,7 @@ def sub_spec(spec: BuildSpec, block: list[Unit], index: int) -> BuildSpec:
             for p in spec.coproduct_buffer_proofs
             if p.producer_recipe_id in recipes and p.consumer_recipe_id in recipes
         ),
+        self_loop_seeds=tuple(s for s in spec.self_loop_seeds if s.recipe_id in recipes),
     )
 
 
@@ -436,6 +437,7 @@ def composed_spec(
         spray_lanes=spec.spray_lanes,
         lanes_requiring_split=spec.lanes_requiring_split,
         coproduct_buffer_proofs=spec.coproduct_buffer_proofs,
+        self_loop_seeds=spec.self_loop_seeds,
     )
 
 

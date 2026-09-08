@@ -1,0 +1,22 @@
+### baseline run1 2026-09-07T09:33:30-04:00
+wall=22.4s buildings=3457 coaters=32 belts=3206 coater_merges=0
+area=3408.0 belt_tiles=3206
+digest=4eb839397a5b900a
+### baseline run2 2026-09-07T09:33:54-04:00
+wall=22.6s buildings=3457 coaters=32 belts=3206 coater_merges=0
+area=3408.0 belt_tiles=3206
+digest=4eb839397a5b900a
+### baseline run3 2026-09-07T09:34:19-04:00
+wall=22.9s buildings=3457 coaters=32 belts=3206 coater_merges=0
+area=3408.0 belt_tiles=3206
+digest=4eb839397a5b900a
+### placed run1 2026-09-07T09:34:44-04:00
+REFUSED/CRASH NoValidLayout: no valid layout for all-products after 30s: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+### placed run2 2026-09-07T09:35:08-04:00
+REFUSED/CRASH NoValidLayout: no valid layout for all-products after 30s: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+### placed run3 2026-09-07T09:35:33-04:00
+REFUSED/CRASH NoValidLayout: no valid layout for all-products after 30s: deadline exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.
+### placed budget=120 (diagnostic: is the refusal a deadline or an infeasibility?) 2026-09-07T09:38:38-04:00
+wall=103.1s buildings=4500 coaters=35 belts=4235 coater_merges=0
+area=4800.0 belt_tiles=4235
+digest=811ad76617b65b79

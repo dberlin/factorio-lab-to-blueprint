@@ -1,0 +1,49 @@
+{
+ "argv": [
+  "https://factoriolab.github.io/dsp/list?z=eJwVxTEKgDAMBdDbZPhTO1hcsiSom6gg2FV0EC0FRXHK2cW3vMwtvCsdZZYC4S.AO9rmlZXO9eUOEQt23JAWMkImyG5yQC5obdpAe9OBUjo5mlhlPT3s.QdXzBnL&v=11",
+  "--strategy",
+  "hierarchical",
+  "--budget",
+  "60",
+  "--band",
+  "portable",
+  "--candidate-policy",
+  "all-products",
+  "-o",
+  "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4/docs/superpowers/evidence/2026-09-07-hierarchical-v4/serial-failures/zurl2-all-products-b60.blueprint.txt"
+ ],
+ "blueprint": {
+  "bytes": 0,
+  "exists": false,
+  "path": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/hierarchical-v4/docs/superpowers/evidence/2026-09-07-hierarchical-v4/serial-failures/zurl2-all-products-b60.blueprint.txt"
+ },
+ "built": {},
+ "exit": 3,
+ "refusals": [
+  "no valid layout for all-products after 60s: hierarchical/all-products: unrouted cut(s): conveyor-belt-2: block 15 -> block 11: BUDGET; copper-ingot: block 10 -> block 13: BUDGET; copper-ingot: block 10 -> block 13: BUDGET; copper-ingot: block 10 -> block 13: BUDGET; copper-ingot: block 10 -> block 13: BUDGET; electric-motor: block 14 -> block 13: BUDGET; electric-motor: block 14 -> block 13: BUDGET; electric-motor: block 14 -> block 13: BUDGET; electric-motor: block . Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise."
+ ],
+ "stats": {
+  "hierarchical/all-products": {
+   "arm_dispatch_both": "1",
+   "arm_dispatch_freeform": "11",
+   "arm_dispatch_sequence_pair": "6",
+   "blocks": "17",
+   "blocks_unattempted": "0",
+   "compose_gap": "2",
+   "cut_lanes": "127",
+   "nogood_skips": "0",
+   "player_fed": "1",
+   "port_demands": "144",
+   "power_infill_towers": "0",
+   "power_uncovered_tiles": "0",
+   "recut_rounds": "1",
+   "reservation_degraded": "1",
+   "reservation_missing": "0",
+   "reservation_partial": "1",
+   "resplits": "1",
+   "unrouted_cuts": "98"
+  }
+ },
+ "validation_errors": {},
+ "wall_s": 60.61
+}

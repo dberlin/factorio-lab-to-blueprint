@@ -40,6 +40,7 @@ from flab2bp.spec import (
     CoproductBufferProof,
     MachineGroup,
     ProliferatorMode,
+    SelfLoopSeed,
 )
 
 
@@ -149,6 +150,40 @@ def _coproduct_buffer_proofs(
     return tuple(proofs)
 
 
+def _self_loop_seeds(data: Dataset, solution: RateSolution) -> tuple[SelfLoopSeed, ...]:
+    """Every group whose recipe consumes an item it also produces.
+
+    Stated over ``inputs & outputs`` rather than over a recipe id, so the two
+    recipes the vendored dataset has today (``x-ray-cracking`` for hydrogen and
+    ``reforming-refine`` for refined oil) and any third one a dataset bump adds
+    are covered by the same rule.  A non-positive net is deliberately skipped:
+    the shortfall arithmetic in :mod:`flab2bp.rates.solve` already makes it an
+    external input, which is the right answer for a loop that loses items.
+    """
+    seeds: list[SelfLoopSeed] = []
+    for group in solution.groups:
+        recipe = data.recipe(group.recipe_id)
+        for item_id in sorted(set(recipe.inputs) & set(recipe.outputs)):
+            consumed = recipe.inputs[item_id]
+            produced = recipe.outputs[item_id]
+            if produced <= consumed:
+                continue
+            need = group.machines * consumed
+            seeds.append(
+                SelfLoopSeed(
+                    item_id=item_id,
+                    recipe_id=group.recipe_id,
+                    machine_item_id=group.machine_item_id,
+                    machines=group.machines,
+                    consumed_per_craft=consumed,
+                    produced_per_craft=produced,
+                    net_per_craft=produced - consumed,
+                    seed_items=-((-need.numerator) // need.denominator),
+                )
+            )
+    return tuple(seeds)
+
+
 def _to_build_spec(
     data: Dataset,
     request: LabRequest,
@@ -214,6 +249,7 @@ def _to_build_spec(
         belt_required_edges=frozenset(belt_required),
         spray_lanes=spray_lanes,
         coproduct_buffer_proofs=_coproduct_buffer_proofs(data, solution),
+        self_loop_seeds=_self_loop_seeds(data, solution),
     )
     # Needs the finished spec to compute, so fill it in on a copy.
     # BuildSpec is a pydantic model, so model_copy rather than dataclasses.replace.
@@ -223,14 +259,18 @@ def _to_build_spec(
 def lanes_requiring_split(data: Dataset, spec: BuildSpec) -> frozenset[str]:
     """Sprayed lanes that also feed an unproliferated consumer.
 
-    Such a lane must be split before it is built.  Spray rides on the items, not
-    on the machine, so an unproliferated consumer drinking from a sprayed lane
-    quietly receives a bonus nobody costed -- it over-produces, and the running
-    factory stops matching the numbers in this ``BuildSpec``.
+    This is now a REPORT, not a correctness constraint: spray rides on the
+    items, not on the machine, so an unproliferated consumer drinking from a
+    sprayed lane quietly receives a bonus nobody costed -- it over-produces,
+    and the running factory stops matching the numbers in this ``BuildSpec``.
+    The user ruled that acceptable (2026-09-07, "over-proliferating is fine
+    if it makes life easier"): a placement that shares one of these lanes is
+    no longer refused for it, only named, in
+    ``prolif.sprayed_cargo_reaches_machines``'s findings, as a
+    ``Severity.WARNING``.
 
     Explicit policies can still mix proliferated and unproliferated consumers,
-    especially ``output-products`` at the boundary of the final recipe. The
-    lane must be split between those consumers.
+    especially ``output-products`` at the boundary of the final recipe.
     """
     consumers: dict[str, list[MachineGroup]] = {}
     for group in spec.groups:

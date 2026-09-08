@@ -1,0 +1,65 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+[31mF[0m[31mF[0m[31mF[0m[31m                                                                      [100%][0m
+=================================== FAILURES ===================================
+[31m[1m_______ test_a_matrix_lab_seats_six_ingredients_as_six_single_item_lanes _______[0m
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_a_matrix_lab_seats_six_ingredients_as_six_single_item_lanes[39;49;00m() -> [94mNone[39;49;00m:[90m[39;49;00m
+    [90m    [39;49;00m[33m"""`universe-matrix` stops needing a mixed belt (spec §9 R2).[39;49;00m
+    [33m[39;49;00m
+    [33m    A Matrix Lab is 5x5 with three insert columns per face, and[39;49;00m
+    [33m    `_side_lane_caps` returns (3, 3) at its band height: six reachable rows for[39;49;00m
+    [33m    six ingredients.  The seating was one row short only because the flanked[39;49;00m
+    [33m    output's drain lane was charged a row INSIDE sorter reach, even though the[39;49;00m
+    [33m    drain carries no sorter -- `_flank_lane` puts the only sorter on the east[39;49;00m
+    [33m    face and runs a gap belt south into the lane.  Moving the drain to the[39;49;00m
+    [33m    outermost south row costs one strip row on this family and frees the third[39;49;00m
+    [33m    south row for an input.[39;49;00m
+    [33m[39;49;00m
+    [33m    Measured on master before this change: `(('antimatter',[39;49;00m
+    [33m    'electromagnetic-matrix', 'energy-matrix'),)` above and `(('gravity-matrix',[39;49;00m
+    [33m    'information-matrix', 'structure-matrix'),)` below -- two mixed belts, which[39;49;00m
+    [33m    spec §9 R1 bans outright.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        plans = strip_variants_module._logical_strip_plans(_universe_matrix_spec())[90m[39;49;00m
+        (plan,) = [p [94mfor[39;49;00m p [95min[39;49;00m plans [94mif[39;49;00m p.flank_outputs][90m[39;49;00m
+        lanes = (*plan.in_above, *plan.in_below)[90m[39;49;00m
+>       [94massert[39;49;00m [96mlen[39;49;00m(lanes) == [94m6[39;49;00m, lanes[90m[39;49;00m
+[1m[31mE       AssertionError: (('antimatter', 'electromagnetic-matrix', 'energy-matrix'), ('gravity-matrix', 'information-matrix', 'structure-matrix'))[0m
+[1m[31mE       assert 2 == 6[0m
+[1m[31mE        +  where 2 = len((('antimatter', 'electromagnetic-matrix', 'energy-matrix'), ('gravity-matrix', 'information-matrix', 'structure-matrix')))[0m
+
+[1m[31mtests/layout/test_strip_variants.py[0m:1885: AssertionError
+[31m[1m_______ test_the_flanked_drain_lane_sits_past_sorter_reach_when_it_moved _______[0m
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_the_flanked_drain_lane_sits_past_sorter_reach_when_it_moved[39;49;00m() -> [94mNone[39;49;00m:[90m[39;49;00m
+    [90m    [39;49;00m[33m"""The row it moved to is one no sorter could have used anyway.[39;49;00m
+    [33m[39;49;00m
+    [33m    `_side_lane_caps` counts CONTIGUOUS reachable rows outward from the band, so[39;49;00m
+    [33m    row `below_cap` is the first row with no `attachable_columns` at all.  That[39;49;00m
+    [33m    is precisely why the drain may have it and an input may not.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        strip = _flanked_strip_for(_universe_matrix_spec())[90m[39;49;00m
+>       [94massert[39;49;00m strip.drain_outermost[90m[39;49;00m
+               ^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+[1m[31mE       AttributeError: 'Strip' object has no attribute 'drain_outermost'[0m
+
+[1m[31mtests/layout/test_strip_variants.py[0m:1897: AttributeError
+[31m[1m_________ test_a_flanked_strip_that_never_needed_the_row_is_unchanged __________[0m
+
+    [0m[94mdef[39;49;00m[90m [39;49;00m[92mtest_a_flanked_strip_that_never_needed_the_row_is_unchanged[39;49;00m() -> [94mNone[39;49;00m:[90m[39;49;00m
+    [90m    [39;49;00m[33m"""No other spec's area moves (the user's ruling, spec §9 R2).[39;49;00m
+    [33m[39;49;00m
+    [33m    A flanked group whose south inputs do not fill every reachable row keeps the[39;49;00m
+    [33m    pre-2026-09-07 map exactly: drain innermost, inputs pushed out by[39;49;00m
+    [33m    `len(out_lanes)`.  Pinned as byte-identical row indices, not as a shrug.[39;49;00m
+    [33m    """[39;49;00m[90m[39;49;00m
+        strip = _flanked_strip_for(_six_ingredient_assembler_spec())[90m[39;49;00m
+>       [94massert[39;49;00m [95mnot[39;49;00m strip.drain_outermost[90m[39;49;00m
+                   ^^^^^^^^^^^^^^^^^^^^^[90m[39;49;00m
+[1m[31mE       AttributeError: 'Strip' object has no attribute 'drain_outermost'[0m
+
+[1m[31mtests/layout/test_strip_variants.py[0m:1915: AttributeError
+[36m[1m=========================== short test summary info ============================[0m
+[31mFAILED[0m tests/layout/test_strip_variants.py::[1mtest_a_matrix_lab_seats_six_ingredients_as_six_single_item_lanes[0m - AssertionError: (('antimatter', 'electromagnetic-matrix', 'energy-matrix'),...
+[31mFAILED[0m tests/layout/test_strip_variants.py::[1mtest_the_flanked_drain_lane_sits_past_sorter_reach_when_it_moved[0m - AttributeError: 'Strip' object has no attribute 'drain_outermost'
+[31mFAILED[0m tests/layout/test_strip_variants.py::[1mtest_a_flanked_strip_that_never_needed_the_row_is_unchanged[0m - AttributeError: 'Strip' object has no attribute 'drain_outermost'

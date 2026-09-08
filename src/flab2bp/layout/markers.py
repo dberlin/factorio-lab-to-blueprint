@@ -20,6 +20,7 @@ from dataclasses import replace
 
 from flab2bp.dsp import catalog
 from flab2bp.layout.base import PlacedBuilding, Placement
+from flab2bp.layout.buildings import Buildings
 from flab2bp.spec import BuildSpec
 
 
@@ -93,11 +94,116 @@ def output_belt_tails(placement: Placement) -> list[int]:
     return sorted(tails)
 
 
+def self_loop_prime_heads(placement: Placement, spec: BuildSpec) -> dict[str, int]:
+    """Loop-lane head belt index per self-loop item, for the prime icon.
+
+    The loop lane is the run that both RECEIVES the item from a group's output
+    sorter and DELIVERS it to that same group's input sorters.  Its head is
+    where a hand or a temporary belt puts the seed in, so that is the tile that
+    gets the icon -- and unlike an external input it is not in
+    ``spec.external_inputs``, which is exactly why nothing marked it before.
+
+    Identified purely from the placement's own sorter graph, never from the
+    item name alone: the same item can also arrive on an unrelated external
+    run feeding the very same group (``BuildSpec.planning_stack``'s docstring
+    names ``universe-matrix``'s hydrogen as exactly that corpus case -- fed
+    both externally and internally), and that run must not be mistaken for the
+    loop.  A self-loop's group is every building whose ``recipe_id`` is the
+    seed's DSP recipe id (belts and sorters never carry a real recipe id, so
+    this alone selects machines); the loop's OUTPUT sorter is one fed directly
+    from a group machine (``input_obj`` is a group machine) and the loop's
+    INPUT sorter feeds directly into one (``output_obj`` is a group machine).
+    Only a belt run that starts right after the former and, walking forward
+    tile by tile, reaches the latter is the loop; a same-item run that starts
+    anywhere else (an external head, another group's output) is passed over
+    even though it carries an identical ``carries_item``.
+
+    "Reaches the latter" covers TWO physical shapes, not one.  A single-machine
+    loop's run is short enough that the belt's own forward chain
+    (``output_obj``) terminates right at the input sorter -- the run ends
+    there because nothing is downstream of it.  A multi-machine group's run
+    does not: design section 1.2 decodes the real corpus case as ONE shared
+    belt collecting from every machine's own output sorter and feeding every
+    machine's own input sorter IN SERIES, each input sorter TAPPING the run at
+    an interior tile (its ``input_obj`` names a belt mid-run) while the run's
+    own forward chain carries on past that tap toward the boundary surplus
+    tail.  A walk that only checked the chain's own terminal ``output_obj``
+    missed every multi-machine loop outright -- measured against the real
+    ``reforming-refine`` corpus case (20 machines): every one of its 20 input
+    sorters taps an interior tile of a chain led by one of the group's own
+    output sorters, so the loop demonstrably closes, and the untapped walk
+    returned no head for it at all.  So the walk also checks, at every tile it
+    visits, whether that tile is one of the group's own input sorters' source
+    -- an interior tap closes the loop exactly as a terminal one does.
+    """
+    buildings = placement.buildings
+    heads: dict[str, int] = {}
+    if not spec.self_loop_seeds:
+        return heads
+    indexed = Buildings.of(placement)
+    for seed in spec.self_loop_seeds:
+        try:
+            dsp_recipe = catalog.recipe_id(seed.recipe_id)
+        except KeyError:
+            continue
+        group_machines = indexed.machines_for_recipe(dsp_recipe)
+        if not group_machines:
+            continue
+        output_sorters = sorted(
+            i
+            for machine in group_machines
+            for i in indexed.sorters_out_of(machine)
+            if buildings[i].carries_item == seed.item_id
+        )
+        input_sorters = {
+            i
+            for machine in group_machines
+            for i in indexed.sorters_into(machine)
+            if buildings[i].carries_item == seed.item_id
+        }
+        if not output_sorters or not input_sorters:
+            continue
+        # Tiles an input sorter draws from directly -- an interior tap on a
+        # shared multi-machine run closes the loop there, not only where the
+        # run's own forward chain happens to terminate.
+        taps = {buildings[i].input_obj for i in input_sorters} - {None}
+        for start in output_sorters:
+            head = buildings[start].output_obj
+            if head is None or not 0 <= head < len(buildings):
+                continue
+            if not catalog.is_belt(buildings[head].item_id):
+                continue
+            cursor = head
+            seen: set[int] = set()
+            closes_loop = False
+            while cursor not in seen:
+                seen.add(cursor)
+                if cursor in taps:
+                    closes_loop = True
+                    break
+                following = buildings[cursor].output_obj
+                if following is None or not 0 <= following < len(buildings):
+                    break
+                if catalog.is_belt(buildings[following].item_id):
+                    cursor = following
+                    continue
+                closes_loop = following in input_sorters
+                break
+            if closes_loop:
+                heads[seed.item_id] = head
+                break
+    return heads
+
+
 def mark_external_belts(placement: Placement, spec: BuildSpec) -> Placement:
     """Return ``placement`` with item icons on its external belt endpoints.
 
     Input lanes are marked at their heads and target or surplus output lanes at
-    their tails. Internal lanes are left bare, since labelling every belt would
+    their tails. A self-loop item's lane head (:func:`self_loop_prime_heads`)
+    is marked too -- it is not an "external" belt at all, but the tile the
+    player has to find is exactly the same problem, and leaving it bare is
+    what made the reported blueprint's loop lane look like a forgotten input.
+    Internal lanes are otherwise left bare, since labelling every belt would
     bury the boundary signal.
 
     A belt whose ``carries_item`` is unknown, whose item has no DSP id, or which
@@ -106,7 +212,8 @@ def mark_external_belts(placement: Placement, spec: BuildSpec) -> Placement:
     """
     inputs = set(spec.external_inputs)
     outputs = set(spec.outputs) | set(spec.surplus_outputs)
-    if not inputs and not outputs:
+    prime_heads = self_loop_prime_heads(placement, spec)
+    if not inputs and not outputs and not prime_heads:
         return placement
 
     buildings = list(placement.buildings)
@@ -134,12 +241,25 @@ def mark_external_belts(placement: Placement, spec: BuildSpec) -> Placement:
                 continue
             buildings[i] = replace(b, parameters=catalog.belt_marker(dsp_id))
 
+    prime_markers = 0
+    for item, i in prime_heads.items():
+        b = buildings[i]
+        if b.parameters:
+            continue
+        dsp_id = catalog.get_item_id(item)
+        if dsp_id is None:
+            continue
+        buildings[i] = replace(b, parameters=catalog.belt_marker(dsp_id))
+        prime_markers += 1
+
     if tuple(buildings) == placement.buildings:
         return placement
 
     stats = placement.stats.copy()
     if input_markers:
         stats["input_markers"] = input_markers
+    if prime_markers:
+        stats["self_loop_prime_markers"] = prime_markers
     return replace(placement, buildings=tuple(buildings), stats=stats)
 
 

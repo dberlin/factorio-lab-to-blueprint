@@ -8,9 +8,12 @@ a self-consuming recipe whose loop nothing ever primes — and declare the
 self-loop honestly instead of hiding it.
 
 **Architecture:** Three independent corrections to existing machinery, no new
-solver. (1) Remove the *chosen* mixed-input-lane preference and let the
-validator arbitrate mixed lanes, exempting only the seatings a machine's own
-geometry forces. (2) Reject a coater seat over a belt merge or an ambiguous
+solver. (1) Ban mixed input lanes outright — the validator convicts every lane
+carrying two distinct items with **no exemption** (spec §9 R1), the seating
+ladder stops producing them, and the one machine family that used to need
+mixing is fixed instead: moving a flanked output's drain row past sorter reach
+frees the sixth input row a Matrix Lab was short of (spec §9 R2).
+(2) Reject a coater seat over a belt merge or an ambiguous
 supply area, and convict both in the validator. (3) Derive a `SelfLoopSeed`
 from the recipe in the rates layer, carry it to the blueprint icon, the
 description, the CLI and the web payload, and let a new check own the
@@ -27,6 +30,14 @@ touched.
 
 - The reported URL, referred to below as `AMM_URL`, is exactly:
   `https://factoriolab.github.io/dsp/list?z=eJxNjrsKwkAQRf9miql2JCbVNANGTJdGiI1oSJFiWUnIQ4v9dska5HbnHAbmBrWcjxR0YnHOOWahoLckP.5wtpO9IdsCMgJf8ahFOYNcON.rA2oBvOIga9DKloJWabYJfjCUGSXd1nz4hzRz4.7ZqdHQrXon7wdtosVTrMm.Ri1pVpEvAnpFKg__&v=11`
+- `UNIVERSE_MATRIX_URL` below is the corpus entry
+  `flab2bp.bench.corpus.URL_CORPUS["universe-matrix"]` (tier STRESS), which is
+  exactly:
+  `https://factoriolab.github.io/dsp/list?o=universe-matrix*60&ibe=conveyor-belt-3&mmr=plane-smelter~assembling-machine-3~quantum-chemical-plant~matrix-lab&v=11`
+  Get it from the corpus rather than retyping it:
+  ```bash
+  UNIVERSE_MATRIX_URL=$(uv run python -c "from flab2bp.bench.corpus import URL_CORPUS; print(next(e.url for e in URL_CORPUS if e.url_id=='universe-matrix'))")
+  ```
 - Every production change follows red-green TDD: the failing test in the same
   task, run and seen to fail, before the implementation.
 - **Belt SHARING between several consumers of the SAME item stays.**
@@ -38,13 +49,43 @@ touched.
 - No per-recipe special case. Every rule is stated over
   `inputs ∩ outputs` or over machine geometry, never over a recipe id.
 - Two other agents run builds on this box: **at most ONE build at a time**,
-  `--budget 30` for single builds, and record `uptime` beside every timing.
+  `--budget 30` for single builds, and record CPU PRESSURE beside every timing.
+- **CPU pressure is measured with `vmstat`, never with `uptime` or load average**
+  (user instruction, 2026-09-07). Load average on this box is mostly I/O wait and
+  says nothing about CPU contention. The number to record is the five-second mean
+  of runnable processes:
+
+  ```bash
+  cpu_pressure() { vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print sum/5}'; }
+  ```
+
+  Below 64 is fine on these 128 cores. **Never wait for it to fall** — record it
+  beside the timing and carry on.
 - Use Serena's symbolic tools to read and edit; `freeform.py` is 22k lines and
   `validate.py` is large, so read symbols, not files.
 - **Mixed belts are given up, not made cleverer** (user note in spec §4 F1).
   The reported blueprint merged the three items onto one belt and still
   starved in game because interleaving is uncontrolled. No task adds
   port-filtered splitters or any other attempt to make a mixed belt work.
+- **The user's rulings in spec §9 (2026-09-07) are binding and outrank every
+  other paragraph in this plan and in the spec.** In particular:
+  - **§9 R1 — the ban on mixed input lanes is ABSOLUTE.** No input lane ever
+    carries two distinct items, forced or chosen. There is no
+    `_lane_seating_is_forced`, no exemption, and no "the geometry left no
+    alternative" argument. `flow.lane_single_item` convicts every mixed input
+    lane, and `freeform._seat_inputs` stops producing them so the strategy
+    refuses instead of emitting one for the validator to convict.
+  - **§9 R2 — `universe-matrix` keeps building by moving the flanked output's
+    drain row past sorter reach** (Task 3 below), which is what makes R1
+    affordable. Task 3 lands BEFORE Tasks 4 and 5 for that reason.
+  - **§9 R3 — priming is prime-once-and-warn** (Tasks 6-9 unchanged).
+  - **§9 R4 — `belt.acyclic` stays absolute.** No self-loop exemption; no task
+    touches it.
+  - **§9 R5 — the Pile Sorter rule stays retracted** (spec §5.3a). No task
+    touches `_pick_sorter`.
+- No density, area or coverage argument from an implementer or a reviewer
+  outranks §9 R1 or spec §4's standing rulings. Measure the cost and report
+  it; do not relitigate the rule.
 
 ---
 
@@ -262,15 +303,308 @@ Expected: exit 0.
 
 ---
 
-## Task 3: Convict a mixed-item input lane
+## Task 3: Move a flanked output's drain row past sorter reach
+
+**This task exists to make spec §9 R1 affordable, and it must land BEFORE
+Tasks 4 and 5.** Without it, banning mixed lanes makes `universe-matrix` — the
+corpus's deepest chain — refuse.
+
+**Files:**
+- Modify: `tests/layout/test_strip_variants.py`
+- Modify: `tests/layout/test_freeform.py`
+- Modify: `src/flab2bp/layout/freeform.py`
+- Modify: `src/flab2bp/layout/strip_variants.py`
+
+**Interfaces:**
+- Consumes: `freeform._seat_inputs` (`freeform.py:2171`), `freeform._side_lane_caps` (`freeform.py:2093`), `freeform.Strip.first_row_below_band` (`freeform.py:996`), `Strip.row_of_output` (`freeform.py:1174`), `Strip.row_of_input` (`freeform.py:1171`), `Strip._input_attachment_plan` (`freeform.py:1114`), `strip_variants._legacy_side_lane_caps` (`strip_variants.py:1642`), `strip_variants._seat_both_fed_outermost` (`strip_variants.py:1137`), `catalog.SORTER_MAX_REACH` (`catalog.py:299`), `slots.attachable_columns` (`slots.py:374`).
+- Produces: a flanked strip whose output drain lane sits on the OUTERMOST south row — past sorter reach — **only when the input lanes need the row it used to occupy**; today's seating otherwise, byte-identical.
+
+### The measurement this task is built on
+
+Run in-tree on master for the Matrix Lab (`item_id 2901`, yaw `0.0`, probe
+`5x5`):
+
+```
+_side_lane_caps(2901, 0.0, 5)          -> (3, 3)
+attachable_columns at lane_y -1/-2/-3  -> 3 columns each;  lane_y -4 -> 0
+attachable_columns at lane_y  5/ 6/ 7  -> 3 columns each;  lane_y  8 -> 0
+catalog.SORTER_MAX_REACH               -> 3
+```
+
+and on `_seat_inputs` with six items, `n_sinks=1`, `max_per_lane=5`,
+`columns=3`:
+
+```
+caps (3,3), flank_outputs=True   -> ((('a','b','c'),), (('d','e','f'),))   # two MIXED lanes
+caps (3,3), flank_outputs=False  -> ValueError "6 ingredients cannot be seated"
+caps (3,4), flank_outputs=True   -> ((('a',),('b',),('c',)), (('d',),('e',),('f',)))  # SIX single lanes
+```
+
+So one more usable south row is exactly and only what is missing. The reason we
+may take it: **the drain lane carries no sorter.** `freeform._flank_lane`
+(`freeform.py:6745-6851`, docstring 6768-6770) builds the flanked output as "a
+sorter runs from the machine's lowest free east pose into that belt; the belt
+runs SOUTH to the output lane under the band and joins it" — the only sorter is
+the east one, and the gap belt simply runs one tile further. A row with zero
+`attachable_columns` is therefore fine for the drain and useless for an input.
+`Strip.sorter_span` (`freeform.py:998-1032`) returns `0` for such a row, and
+`_machines_without_poses` already skips flanked strips
+(`freeform.py:19230-19232`).
+
+Only **one** plan in the whole corpus is flanked today:
+
+```
+FLANK universe-matrix#37 item_id=2901
+  above (('antimatter','electromagnetic-matrix','energy-matrix'),)
+  below (('gravity-matrix','information-matrix','structure-matrix'),)
+  out   (('universe-matrix','',CargoDomain.UNSPRAYED),)
+```
+
+`_logical_strip_plans` emits 43 plans for `universe-matrix` and this is the only
+one with `flank_outputs`. Everything else in the corpus must stay byte-identical.
+
+### The five expressions involved (verified against master)
+
+| # | file:line | today | what it must become |
+|---|---|---|---|
+| 1 | `freeform.py:2268` | `if n_sinks and below_cap - len(below) <= 0: continue` | the drain-row reservation. Must stop binding when `flank_outputs` — equivalently, the flanked search may use `below_cap + 1` rows below while line 2266's `len(below) > below_cap` still binds at `below_cap` (an input lane may never sit past reach). |
+| 2 | `strip_variants.py:1504-1506` | `out_capacity = below_cap - len(in_below)` then `if flank: out_capacity = min(out_capacity, 1)` | **hard blocker if left alone**: with `len(in_below) == below_cap == 3` this is `0`, and `freeform._shard_sinks` (`freeform.py:1824-1826`) raises `ValueError("no room left on the south side for any output lane")`. On the flank branch it must be `1`. |
+| 3 | `strip_variants.py:1205` | `south_output_rows = 1 if n_sinks else 0` inside `_seat_both_fed_outermost.fits` | a third copy of the same charge. Must be `0` when `flank_outputs`, or the both-fed normalisation rejects the wider seating. (`fits` is invariant under reordering — the lane counts do not change — so relaxing it cannot invent a seating `_seat_inputs` did not already produce.) |
+| 4 | `freeform.py:1114`, `1171`, `1187` | `first_row_below_band + len(self.out_lanes) + index` (inputs) and `first_row_below_band + k` (output) | the actual row map: the drain must move to the outermost south row and the south inputs must start at offset 0. **Gate on `self.flank_outputs` only** — `1187` is `if self.flank_outputs or self.takes_belt_ports`, and the belt-port case must not move. |
+| 5 | `freeform.py:2602-2608` | `box_height = len(inputs_above) + … + len(outputs) + len(inputs_below)` | **no edit** — the extra row falls out of `len(inputs_below)`. |
+
+`freeform.py:2240` (`out_columns = 0 if flank_outputs else …`) already waives the
+COLUMN charge and is not touched.
+
+### "Only when the input count needs the freed row"
+
+The user's ruling is explicit that a spec which never needed the row keeps
+today's seating so no other area moves. Derive the mode rather than guessing it:
+
+```python
+#: True when the flanked output's drain lane has been pushed to the outermost
+#: south row because the south INPUT lanes filled every sorter-reachable row.
+#: False keeps the pre-2026-09-07 map exactly: drain innermost, inputs after it.
+drain_outermost = flank_outputs and len(in_below) == below_cap
+```
+
+`below_cap` is the count of contiguous sorter-reachable rows below the band
+(`_side_lane_caps`), so `len(in_below) == below_cap` says the inputs already
+occupy every row a sorter can reach and the drain has nowhere left inside.
+`len(in_below) < below_cap` reproduces today's arithmetic exactly, which is what
+keeps `test_the_seating_rule_changes_no_strip_dimension` (`(8, 12)` and
+`(8, 36)`) green.
+
+Carry `drain_outermost` on the strip plan and on `Strip` (read the real
+dataclasses before writing it — do not invent field names), and make the row map
+read:
+
+```python
+# Strip.row_of_output, flanked branch
+drain_offset = len(self.in_below) if self.drain_outermost else 0
+return self.first_row_below_band + drain_offset + k
+
+# Strip.row_of_input / _input_attachment_plan, below-band branch
+lane_offset = 0 if self.drain_outermost else len(self.out_lanes)
+return self.first_row_below_band + lane_offset + index
+```
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `tests/layout/test_strip_variants.py`:
+
+```python
+def test_a_matrix_lab_seats_six_ingredients_as_six_single_item_lanes() -> None:
+    """`universe-matrix` stops needing a mixed belt (spec §9 R2).
+
+    A Matrix Lab is 5x5 with three insert columns per face, and
+    `_side_lane_caps` returns (3, 3) at its band height: six reachable rows for
+    six ingredients.  The seating was one row short only because the flanked
+    output's drain lane was charged a row INSIDE sorter reach, even though the
+    drain carries no sorter -- `_flank_lane` puts the only sorter on the east
+    face and runs a gap belt south into the lane.  Moving the drain to the
+    outermost south row costs one strip row on this family and frees the third
+    south row for an input.
+
+    Measured on master before this change: `(('antimatter',
+    'electromagnetic-matrix', 'energy-matrix'),)` above and `(('gravity-matrix',
+    'information-matrix', 'structure-matrix'),)` below -- two mixed belts, which
+    spec §9 R1 bans outright.
+    """
+    plans = _logical_strip_plans(_universe_matrix_spec())
+    (plan,) = [p for p in plans if p.flank_outputs]
+    lanes = (*plan.in_above, *plan.in_below)
+    assert len(lanes) == 6, lanes
+    assert all(len(lane) == 1 for lane in lanes), lanes
+
+
+def test_the_flanked_drain_lane_sits_past_sorter_reach_when_it_moved() -> None:
+    """The row it moved to is one no sorter could have used anyway.
+
+    `_side_lane_caps` counts CONTIGUOUS reachable rows outward from the band, so
+    row `below_cap` is the first row with no `attachable_columns` at all.  That
+    is precisely why the drain may have it and an input may not.
+    """
+    strip = _flanked_strip_for(_universe_matrix_spec())
+    assert strip.drain_outermost
+    drain_row = strip.row_of_output(0)
+    assert strip.sorter_span(drain_row) == 0
+    for lane in strip.in_below:
+        row = strip.row_of_input(lane)
+        assert 1 <= strip.sorter_span(row) <= catalog.SORTER_MAX_REACH
+
+
+def test_a_flanked_strip_that_never_needed_the_row_is_unchanged() -> None:
+    """No other spec's area moves (the user's ruling, spec §9 R2).
+
+    A flanked group whose south inputs do not fill every reachable row keeps the
+    pre-2026-09-07 map exactly: drain innermost, inputs pushed out by
+    `len(out_lanes)`.  Pinned as byte-identical row indices, not as a shrug.
+    """
+    strip = _flanked_strip_for(_two_ingredient_flanked_spec())
+    assert not strip.drain_outermost
+    assert strip.row_of_output(0) == strip.first_row_below_band
+    assert strip.row_of_input(strip.in_below[0]) == strip.first_row_below_band + 1
+```
+
+Add to `tests/layout/test_freeform.py`, beside the existing flanked-seating
+tests at `test_freeform.py:2927-2966`:
+
+```python
+def test_seat_inputs_uses_the_freed_south_row_only_when_flanked() -> None:
+    """The drain-row waiver is scoped to the flanked path and nothing else.
+
+    Unflanked, the output lane really does need a sorter-reachable row under the
+    band, so the reservation at freeform.py:2268 still binds.
+    """
+    six = ("a", "b", "c", "d", "e", "f")
+    above, below = freeform._seat_inputs(
+        six, 1, 3, 3, max_per_lane=5, columns=3, flank_outputs=True
+    )
+    assert [len(lane) for lane in (*above, *below)] == [1, 1, 1, 1, 1, 1]
+    with pytest.raises(ValueError, match="cannot be seated"):
+        freeform._seat_inputs(six, 1, 3, 3, max_per_lane=5, columns=3)
+```
+
+Read `_seat_inputs`' real signature (`freeform.py:2171-2184`) and match it —
+the arguments above are positional in the current code and that may change
+under Task 5.
+
+- [ ] **Step 2: Run them and see them fail**
+
+```bash
+uv run pytest tests/layout/test_strip_variants.py -k "six_single_item_lanes or past_sorter_reach or never_needed_the_row" -q; echo "exit=$?"
+uv run pytest tests/layout/test_freeform.py -k seat_inputs_uses_the_freed_south_row -q; echo "exit=$?"
+```
+
+Expected: non-zero. The first test sees two mixed lanes; the second sees a
+`ValueError` from the flanked call too. (The pytest summary line never prints in
+this repo — read the exit code.)
+
+- [ ] **Step 3: Implement the five change points**
+
+Work through the table above in order 1, 2, 3, 4. Everything is gated on
+`flank_outputs` / `drain_outermost`; nothing changes for an unflanked strip.
+Update the docstrings that now describe the old behaviour:
+
+- `freeform.py:2238-2240` — the comment "The output lane still needs its ROW
+  under the band even when flanked -- the gap belts drain into it -- so only the
+  column charge goes away" is now wrong. It still needs a row; what changed is
+  that the row need not be one a sorter can reach.
+- `freeform.py:2209-2224` — the `universe-matrix` note ends "three ingredients
+  mixed onto one lane above, three onto one below, and the product out east."
+  That seating is now banned by spec §9 R1. Rewrite it to say the lab seats six
+  single-item lanes because the drain row moved outward, and cite §9 R2.
+- `strip_variants.py:1169-1171` — `_seat_both_fed_outermost`'s "including the
+  one south output row and column where applicable" needs the flanked exception.
+
+- [ ] **Step 4: Re-run, plus every suite that touches this geometry**
+
+```bash
+uv run pytest tests/layout/test_strip_variants.py tests/layout/test_freeform.py -q; echo "exit=$?"
+uv run pytest tests/test_pipeline.py -k universe_matrix -q; echo "exit=$?"
+uv run pytest tests/layout -q; echo "exit=$?"
+```
+
+Expected: exit 0 everywhere. Tests known to be in the blast radius, all of which
+must be reasoned about rather than merely re-run green:
+
+- `tests/layout/test_freeform.py:11070`
+  `test_a_six_ingredient_recipe_builds_with_its_product_leaving_east` — the real
+  Matrix Lab spec through the full validator. **The primary functional gate.**
+- `tests/layout/test_freeform.py:11096`
+  `test_the_seventh_connection_lands_on_a_face_no_lane_can_reach` — still 7
+  distinct slot ids per lab. **Must stay green unchanged**; it is the invariant
+  that says we did not silently drop a connection.
+- `tests/layout/test_strip_variants.py:1821`
+  `test_the_seating_rule_changes_no_strip_dimension` — pins `(8, 12)` and
+  `(8, 36)` on NON-flanked groups. If these move, the change leaked out of the
+  flanked path; fix the gating rather than the numbers.
+- `tests/layout/test_strip_variants.py:1832`
+  `test_every_both_fed_ingredient_is_seated_on_its_side_s_outermost_row` — runs
+  corpus-wide and therefore over the flanked plan.
+- `tests/test_pipeline.py:1118`
+  `test_universe_matrix_at_90_per_minute_never_crashes_strip_planning`.
+- `tests/layout/test_freeform.py:3004` helper `_unreachable` asserts
+  `1 <= sorter_span(row)` over `row_of_output(k)`. It is used today only on
+  unflanked specs (`organic-crystal`, an assembler). **Do not point it at a
+  flanked strip** — a drain past reach gives span 0 by design, which is the
+  whole point of this task.
+- `tests/layout/test_last_mile.py:134,158` pin captured
+  `universe-matrix/output-products` clusters and may need their fixtures
+  refreshed. If a fixture must be re-captured, say so explicitly in the report
+  and show the before/after, rather than editing numbers quietly.
+
+- [ ] **Step 5: Build `universe-matrix` through the CLI and decode it**
+
+ONE build at a time; the `cpu_pressure` number beside the timing.
+
+```bash
+E=docs/superpowers/evidence/2026-09-06-selfloop/task3
+mkdir -p "$E"
+UNIVERSE_MATRIX_URL=$(uv run python -c "from flab2bp.bench.corpus import URL_CORPUS; print(next(e.url for e in URL_CORPUS if e.url_id=='universe-matrix'))")
+cpu_pressure | tee "$E/cpu-pressure.txt"
+/usr/bin/time -v uv run flab2bp "$UNIVERSE_MATRIX_URL" --budget 30 -v \
+  -o "$E/bp-um.txt" 2>&1 | tee "$E/build-um.log"
+cpu_pressure | tee -a "$E/cpu-pressure.txt"
+uv run python docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_decode.py \
+  "$E/bp-um.txt" > "$E/decode-um.txt"
+```
+
+PASS requires:
+
+1. the build is CLEAN — `errors 0` on the winning cell, and in particular **no
+   `flow.lane_single_item` finding** (the check does not exist until Task 4, so
+   at this point the requirement is only that the geometry is there);
+2. `decode-um.txt`'s `== machines and their sorters ==` section shows each
+   Matrix Lab with **six `from run R: [...]` lines each holding exactly one
+   item**, and **no `<<< SHARED-INPUT-RUN` flag**. Quote those lines in the task
+   report.
+
+Record the flanked family's `box_height` before and after in the report.
+Measured on master it is `1 + 5 + 1 + 1 = 8`; with six single lanes and the
+drain moved out it is `3 + 5 + 1 + 3 = 12`. **Report the real number, whatever
+it is.** Note honestly that only one of those four rows is the drain move — the
+other three are the cost of un-mixing, which Tasks 4 and 5 are what the user
+asked for; do not net them together and do not present +4 as +1.
+
+---
+
+## Task 4: Convict a mixed-item input lane (absolutely, no exemption)
 
 **Files:**
 - Modify: `tests/layout/test_validate.py`
 - Modify: `src/flab2bp/layout/validate.py`
 
 **Interfaces:**
-- Consumes: `validate.Context`, `validate._sorter_items`, `validate.Kind`, `freeform._side_lane_caps`, `slots.probe_building`, `slots.attachable_columns`, `catalog.get_item_id`.
+- Consumes: `validate.Context`, `validate._sorter_items`, `validate.Kind`, `catalog.get_item_id`.
 - Produces: `@check("flow.lane_single_item", needs_spec=True, needs_groups=True)`.
+
+**Spec §9 R1 applies to this whole task: the check is ABSOLUTE.** There is no
+`_lane_seating_is_forced` helper, no geometry exemption, and nothing consumed
+from `freeform._side_lane_caps` or `slots.attachable_columns` — an earlier draft
+of this plan had all three and they are deleted by the ruling. A mixed input
+lane is an ERROR however it came to be.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -306,53 +640,57 @@ def test_same_item_shared_lane_is_not_a_mixed_lane() -> None:
     assert not [f for f in report.errors if f.check == "flow.lane_single_item"]
 
 
-def test_forced_mixed_lane_is_exempt() -> None:
-    """A machine that cannot seat one item per lane may mix, and only then.
+def test_forced_mixed_lane_is_still_convicted() -> None:
+    """"The machine's faces left no alternative" is not a defence (spec §9 R1).
 
-    `universe-matrix` takes six ingredients into a Matrix Lab offering three
-    insert columns per face, so `freeform._seat_inputs` seats it ONLY as three
-    items per lane above and three below (freeform.py:2208-2223).  The exemption
-    is re-derived here from the catalog rather than taken on the planner's word.
+    A Matrix Lab offers three insert columns per face, and before Task 3 that
+    made `freeform._seat_inputs` seat `universe-matrix`'s six ingredients as
+    three items per lane above and three below (freeform.py:2208-2223).  The
+    user's ruling is that such a lane starves in game exactly like a chosen one
+    -- whichever item the machines are not short of fills the belt -- so the
+    check has NO exemption.  Task 3 is what keeps `universe-matrix` building:
+    it frees a sixth input row so the lab seats one item per lane on the merits.
     """
-    placement = _matrix_lab_six_ingredients_placement()
+    placement = _matrix_lab_three_items_on_one_lane_placement()
     report = validate.validate(placement, _matrix_lab_six_ingredient_spec(), expect_power=False)
-    assert not [f for f in report.errors if f.check == "flow.lane_single_item"]
+    findings = [f for f in report.errors if f.check == "flow.lane_single_item"]
+    assert findings, [f.check for f in report.errors]
+    assert len(findings[0].detail["items"]) == 3
 ```
 
-- [ ] **Step 2: Run them and see the first fail**
+- [ ] **Step 2: Run them and see two fail**
 
 ```bash
 uv run pytest tests/layout/test_validate.py -k lane_single_item -x -q
 uv run pytest tests/layout/test_validate.py -k "mixed_item_input_lane or same_item_shared_lane or forced_mixed_lane" -q
 ```
 
-Expected: `test_mixed_item_input_lane_is_convicted` FAILS; the other two pass
-vacuously (no such check yet) and must still pass at the end.
+Expected: `test_mixed_item_input_lane_is_convicted` and
+`test_forced_mixed_lane_is_still_convicted` FAIL (no such check yet);
+`test_same_item_shared_lane_is_not_a_mixed_lane` passes vacuously and must
+still pass at the end.
 
 - [ ] **Step 3: Add the check**
 
 Insert in `src/flab2bp/layout/validate.py` beside the other flow checks:
 
 ```python
-def _lane_seating_is_forced(ctx: Context, machine: int, ingredients: int) -> bool:
-    """Whether this machine's own faces make one-item-per-lane impossible.
-
-    Re-derived from the two catalog helpers the planner uses -- the per-side row
-    caps and the face's attachable insert columns -- so the exemption is proved
-    from the game data rather than taken on the strip planner's word.  A machine
-    with more ingredients than ``above_cap + below_cap`` lanes, or than
-    ``columns`` insert poses per side, can only be seated by mixing.
-    """
-
-
 @check("flow.lane_single_item", needs_spec=True, needs_groups=True)
 def _lane_single_item(ctx: Context) -> Iterable[Finding]:
-    """One input belt carries one item.
+    """One input belt carries one item.  No exemption (spec §9 R1).
 
     A run whose sorters draw two or more DISTINCT items into machines is an
-    ERROR unless :func:`_lane_seating_is_forced` proves the consuming machine's
-    geometry left no alternative.  Detail carries ``run``, sorted ``items`` and
-    the machines, so the finding names what to un-mix.
+    ERROR, full stop.  There is deliberately no forced-geometry exemption: a
+    lane whose items must interleave in the recipe's exact proportion to avoid
+    starving each other is not a build we emit, and "the machine's own faces
+    left no alternative" describes a seating we must not ship rather than one we
+    must tolerate.  Where a machine family really cannot be seated
+    one-item-per-lane the answer is a planner change -- Task 3 moved the flanked
+    output's drain row past sorter reach so a Matrix Lab seats six ingredients
+    as six lanes -- or an honest refusal, never a permitted mixed belt.
+
+    Detail carries ``run``, sorted ``items`` and the machines, so the finding
+    names what to un-mix.
 
     This counts distinct ITEMS, never taps: several consumers of ONE item off
     one lane is belt sharing, which is a different mechanism and stays.
@@ -361,9 +699,8 @@ def _lane_single_item(ctx: Context) -> Iterable[Finding]:
 
 Body: build `items_by_run: dict[int, set[str]]` from every sorter whose
 `input_obj` is a belt and whose `output_obj` is a machine, using
-`_sorter_items(ctx)`; for each run with two or more items, exempt it when every
-consuming machine satisfies `_lane_seating_is_forced`; otherwise yield
-`Severity.ERROR`.
+`_sorter_items(ctx)`; for each run with two or more distinct items, yield
+`Severity.ERROR`. No exemption branch exists.
 
 - [ ] **Step 4: Re-run**
 
@@ -375,7 +712,7 @@ Expected: exit 0.
 
 ---
 
-## Task 4: Remove the chosen mixed-lane preference
+## Task 5: Stop the emitter producing any mixed input lane
 
 **Files:**
 - Modify: `tests/layout/test_strip_variants.py`
@@ -384,7 +721,17 @@ Expected: exit 0.
 
 **Interfaces:**
 - Consumes: `strip_variants._logical_strip_plans(spec)`, `strip_variants.generate_strip_families(spec)`, `freeform._seat_inputs(items, n_sinks, above_cap, below_cap, max_per_lane, columns, *, flank_outputs=False, lane_fits=None, seating_fits=None)`.
-- Produces: `prefer_shared_proliferation` and `prefer_shared` are gone from all three call sites; `lane_fits` is passed unconditionally.
+- Produces: `prefer_shared_proliferation` and `prefer_shared` are gone from all three call sites; `lane_fits` is passed unconditionally; `_seat_inputs` seats one item per lane or fails to seat.
+
+**Spec §9 R1 applies: the emitter must agree with the validator, not race it.**
+Removing only the *preference* would leave the ladder still escalating to a
+mixed lane whenever one-per-lane does not fit — and Task 4 now convicts that
+lane, so the cell would come back INVALID after paying a full routing pass
+instead of REFUSED. The ladder therefore collapses to one item per lane. This
+is the same discipline Task 2 applies to the coater seat chooser.
+
+**Task 3 must be complete before this task runs**, or `universe-matrix` loses
+its sixth input row and refuses.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -426,10 +773,39 @@ Expected: FAIL — lanes hold three and two items.
 - `strip_variants.py:1985,1996` — drop the parameter from
   `generate_strip_families` and its forwarding.
 - `src/flab2bp/layout/freeform.py:2179` — drop `prefer_shared` from
-  `_seat_inputs`; at `freeform.py:2243-2245` reduce the ladder to
-  `mix_sizes = range(1, max(1, max_per_lane) + 1)` and update the docstring
-  paragraph at `freeform.py:2186-2189` to say that mixing is now only ever a
-  fallback, citing `flow.lane_single_item`.
+  `_seat_inputs`; at `freeform.py:2243-2245` reduce the ladder to a single
+  rung, `mix_sizes = (1,)`, so a seating that cannot fit one item per lane
+  simply does not seat and the caller refuses. Rewrite the docstring paragraph
+  at `freeform.py:2186-2189` and the `universe-matrix` note at
+  `freeform.py:2208-2223`: the lab now fits six single-item lanes because
+  Task 3 freed the drain row, and a mixed lane is no longer a fallback but an
+  impossibility — cite spec §9 R1 and `flow.lane_single_item`.
+- Add a second failing test in the same task pinning the refusal, so the new
+  behaviour is asserted rather than assumed:
+
+```python
+def test_seat_inputs_refuses_rather_than_mixing_when_one_per_lane_will_not_fit() -> None:
+    """No lane is better than a mixed lane (spec §9 R1).
+
+    The ladder used to escalate to two, then three items per lane.  It no
+    longer does: a spec whose ingredients outnumber the reachable rows fails to
+    seat, the strategy refuses, and the audit says REFUSED -- which is the
+    truth -- instead of emitting a belt `flow.lane_single_item` convicts.
+    """
+    seating = freeform._seat_inputs(
+        items=("a", "b", "c"),
+        n_sinks=1,
+        above_cap=1,
+        below_cap=1,
+        max_per_lane=3,
+        columns=3,
+    )
+    assert seating is None
+```
+
+Adjust the argument names and the `None`/empty contract to whatever
+`_seat_inputs` actually returns on failure today — read the symbol before
+writing the test, and keep the existing contract rather than inventing one.
 
 Then update every caller and test that passes the flag:
 
@@ -448,12 +824,34 @@ Expected after the change: no hits.
 uv run pytest tests/layout -q
 ```
 
-Expected: exit 0. `universe-matrix`-shaped seatings still mix, because the
-mixing ladder still escalates when one-per-lane does not fit.
+Expected: exit 0. `universe-matrix`-shaped seatings do **not** mix any more:
+Task 3 freed the sixth input row, so the lab seats six single-item lanes. Any
+layout test that pinned a mixed seating is now asserting behaviour the ruling
+forbids — update it to the single-item seating and say so in the diff, do not
+delete it and do not add an exemption.
+
+Two tests are known to assert mixing directly and must be dealt with in this
+task, in the open, with the reason in the commit message:
+
+- `tests/layout/test_freeform.py:11147`
+  `test_a_five_ingredient_recipe_still_mixes_and_validates` asserts
+  `max(len(lane) ...) > 1`. Under §9 R1 that is the forbidden outcome. Establish
+  first whether the five-ingredient spec now seats one-per-lane (caps `(3,3)`
+  give five single lanes plus an output row on most machine families) or
+  refuses, then rewrite the test to assert whichever it is **and rename it** so
+  the name stops advertising the old rule.
+- `tests/layout/test_freeform.py:11162`
+  `test_every_sorter_on_a_mixed_lane_is_filtered` loses its subject if no mixed
+  lane exists. Do not delete it: repurpose it to assert that every sorter on an
+  input lane is filtered, which is the property that actually mattered, and note
+  the change.
+
+Neither is licence to weaken an assertion to make a suite pass. If a test
+cannot be rewritten honestly, report it as a blocker rather than deleting it.
 
 ---
 
-## Task 5: Enumerate self-loop recipes and carry the seed on the spec
+## Task 6: Enumerate self-loop recipes and carry the seed on the spec
 
 **Files:**
 - Modify: `tests/lab/test_data.py`
@@ -594,7 +992,7 @@ Expected: exit 0.
 
 ---
 
-## Task 6: Derive the seed in the rates layer
+## Task 7: Derive the seed in the rates layer
 
 **Files:**
 - Modify: `tests/rates/test_candidates.py`
@@ -723,7 +1121,7 @@ Expected: exit 0.
 
 ---
 
-## Task 7: Mark, describe and report the prime
+## Task 8: Mark, describe and report the prime
 
 **Files:**
 - Modify: `tests/layout/test_markers.py`
@@ -850,7 +1248,7 @@ Expected: exit 0.
 
 ---
 
-## Task 8: Make the validator the arbiter of the prime
+## Task 9: Make the validator the arbiter of the prime
 
 **Files:**
 - Modify: `tests/layout/test_validate.py`
@@ -939,7 +1337,7 @@ slow layout test is near it, run `tests/layout` on its own.
 
 ---
 
-## Task 9: Gate — the reported URL, both self-loop recipes, and a paired corpus round
+## Task 10: Gate — the reported URL, both self-loop recipes, and a paired corpus round
 
 **Files:**
 - Create: `docs/superpowers/evidence/2026-09-06-selfloop/gate/` (logs and JSONL)
@@ -949,17 +1347,18 @@ slow layout test is near it, run `tests/layout` on its own.
 - Consumes: `uv run flab2bp`, `scripts/audit.py`, `scripts/audit_compare.py`, `docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_decode.py`, `probe_coater.py`.
 - Produces: a PASS/FAIL verdict with area geomean, CLEAN counts and routing seconds per arm.
 
-**ONE BUILD AT A TIME. Record `uptime` beside every timing.**
+**ONE BUILD AT A TIME. Record the `cpu_pressure` number beside every timing —
+never `uptime`, never load average.**
 
 - [ ] **Step 1: The reported URL builds and no longer emits a mixed lane or a coater merge**
 
 ```bash
 E=docs/superpowers/evidence/2026-09-06-selfloop/gate
 mkdir -p "$E"
-uptime | tee "$E/uptime-before-amm.txt"
+cpu_pressure | tee "$E/cpu-pressure-amm.txt"
 /usr/bin/time -v uv run flab2bp "$AMM_URL" --budget 30 -v \
   -o "$E/bp-amm-after.txt" 2>&1 | tee "$E/build-amm-after.log"
-uptime | tee -a "$E/uptime-before-amm.txt"
+cpu_pressure | tee -a "$E/cpu-pressure-amm.txt"
 uv run python docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_decode.py \
   "$E/bp-amm-after.txt" > "$E/decode-amm-after.txt"
 uv run python docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_coater.py \
@@ -971,41 +1370,85 @@ PASS requires all four:
 1. `build-amm-after.log` reports `errors 0` for the winning cell.
 2. `decode-amm-after.txt` contains **no** `SHARED-INPUT-RUN` line.
 3. `coater-amm-after.txt` contains **no** `MERGE POINT` line on a tile the
-   coater body covers, and each coater's addon area 1 resolves to exactly one
-   belt within `ADDON_AREA_RADIUS`.
+   coater body covers, and each coater's addon area 1 resolves to belts of
+   **exactly one run** within `ADDON_AREA_RADIUS`. (Amended per spec §9 R6:
+   "exactly one belt" was the original wording and is unsatisfiable — every
+   coater `_place_coaters` emits has its own approach and supply belts inside
+   that radius, at 0.942 and 0.314 world units. One run is the property that
+   actually removes the ambiguity.)
 4. `build-amm-after.log` contains
    `prime once (self-loop): hydrogen 8 items`.
+
+- [ ] **Step 1a: `universe-matrix` builds CLEAN with six single-item lanes**
+
+This is the PASS condition spec §9 R2 exists for, and it is checked by decoding
+the blueprint, not by reading the planner's intentions.
+
+```bash
+cpu_pressure | tee "$E/cpu-pressure-um.txt"
+/usr/bin/time -v uv run flab2bp "$UNIVERSE_MATRIX_URL" --budget 30 -v \
+  -o "$E/bp-um-after.txt" 2>&1 | tee "$E/build-um-after.log"
+cpu_pressure | tee -a "$E/cpu-pressure-um.txt"
+uv run python docs/superpowers/evidence/2026-09-06-selfloop/probes/probe_decode.py \
+  "$E/bp-um-after.txt" > "$E/decode-um-after.txt"
+```
+
+PASS requires all three:
+
+1. `build-um-after.log` reports `errors 0` for the winning cell — in
+   particular **no `flow.lane_single_item` finding at any severity**.
+2. `decode-um-after.txt`'s `== machines and their sorters ==` section shows,
+   for each Matrix Lab, **six distinct `from run R: [...]` lines each holding
+   exactly one item**, and **no `<<< SHARED-INPUT-RUN` flag**. Quote the six
+   lines verbatim in the verdict — a claim without them is not a check.
+3. The build is CLEAN, not REFUSED and not INVALID.
+
+If `universe-matrix` refuses or is convicted, **that is a FAIL and it is
+reported as a FAIL**: spec §9 R1 is absolute, so the answer is not to
+re-introduce an exemption. Say plainly that the drain-row move did not free the
+row, name what `_side_lane_caps` actually returned, and leave the decision with
+the user.
+
 - [ ] **Step 2: The second self-loop recipe**
 
 `reforming-refine` is not activated by any corpus URL (`tests/rates/test_solve.py:596`),
-so drive it from the existing pinned fixture, with hydrogen NOT externally
-supplied so the loop is the only source:
+so drive it from the existing pinned fixture.
+
+**Corrected 2026-09-07 (controller ruling T7-A).** This step used to say "with
+hydrogen NOT externally supplied so the loop is the only source". That was wrong
+on its own terms: `reforming-refine`'s self-loop item is **`refined-oil`**, not
+hydrogen. Hydrogen is an ordinary ingredient of that recipe and the fixture's
+solved external inputs are `{'coal': 5, 'hydrogen': 5}` — measured, and correctly
+so. The property that actually matters, and the analogue of the first recipe's
+`"hydrogen" not in spec.external_inputs`, is that **`refined-oil` is not an
+external input**: the loop really is its own source.
 
 ```bash
 uv run pytest tests/rates/test_candidates.py -k reforming_refine_self_loop_seeds -q
 ```
 
-with the test from spec §6 T12 added in Task 6. PASS requires
-`seed_items == machines * 2` and `net_per_craft == 1` for `refined-oil`.
+with the test from spec §6 T12 added in Task 7. PASS requires, for
+`refined-oil`: `net_per_craft == 1`, `seed_items == machines * 2`, and
+`"refined-oil" not in spec.external_inputs`.
 
 - [ ] **Step 3: Baseline the corpus on master**
 
 From a clean master checkout of this worktree's parent commit:
 
 ```bash
-uptime | tee "$E/uptime-baseline.txt"
+cpu_pressure | tee "$E/cpu-pressure-baseline.txt"
 /usr/bin/time -v uv run python scripts/audit.py --tier stress --budget 30 \
   --strategy both --json "$E/audit-baseline.jsonl" 2>&1 | tee "$E/audit-baseline.log"
-uptime | tee -a "$E/uptime-baseline.txt"
+cpu_pressure | tee -a "$E/cpu-pressure-baseline.txt"
 ```
 
 - [ ] **Step 4: The candidate round**
 
 ```bash
-uptime | tee "$E/uptime-candidate.txt"
+cpu_pressure | tee "$E/cpu-pressure-candidate.txt"
 /usr/bin/time -v uv run python scripts/audit.py --tier stress --budget 30 \
   --strategy both --json "$E/audit-candidate.jsonl" 2>&1 | tee "$E/audit-candidate.log"
-uptime | tee -a "$E/uptime-candidate.txt"
+cpu_pressure | tee -a "$E/cpu-pressure-candidate.txt"
 ```
 
 - [ ] **Step 5: Compare, and report all three axes**
@@ -1024,26 +1467,31 @@ Then, from the two JSONL files, write `"$E/verdict.md"` reporting **per arm**
 | CLEAN / REFUSED / INVALID counts, and the named cells that moved either way | **a cell that starts building because its lanes stopped being coupled is a WIN for the rule, not a cost** |
 | routing seconds and rip-up rounds per cell where the JSONL exposes them, p50 and p95 | a mixed lane couples strips that would otherwise be independent, so the rule may pay for itself here |
 | the count of specs whose strip count grew | the direct structural consequence of un-mixing |
+| the count of cells that gained a strip ROW from the Task 3 drain-row move, and their area delta | spec §9 R2 costs one strip row on every `flank_outputs` spec that trips the condition — measured, `universe-matrix#37` grows from `box_height` 8 to 12, of which **one** row is the drain move and **three** are the un-mixing R1 asked for. **Report both numbers per arm as measured. Do not argue them away, do not net them together, and do not report +4 as +1.** |
 
 **The ruling stands whatever the area number says.** Report it plainly:
 
 * If coverage or route time improves, say so — the rule paid for itself.
 * If area costs with no coverage gain, quantify it exactly and leave the number
   in front of the user rather than arguing it away.
-* `universe-matrix` is expected to keep its forced mixed lanes and stay CLEAN.
-  If it refuses, that is spec §8 open question 1 and it goes back to the user
-  before anything else is decided.
+* `universe-matrix` is expected to be **CLEAN with six single-item lanes**
+  (Step 1a), because Task 3 freed the row — not because it was exempted.
+  Spec §8 question 1 is closed by §9 R1; if the cell refuses or is convicted,
+  it is a FAIL on the record and the user decides what happens next. Nobody
+  reinstates the exemption to make the gate green.
 
 - [ ] **Step 6: Append the verdict to the evidence README**
 
 Add a `## Gate result` section to
 `docs/superpowers/evidence/2026-09-06-selfloop/README.md` with the four Step-1
-checks, the three-axis table, the `audit_compare` verdict line, and the
-`uptime` readings beside every timing.
+checks, the three Step-1a `universe-matrix` checks (including the six decoded
+single-item lane lines), the per-arm table above, the `audit_compare` verdict
+line, and the `cpu_pressure` readings beside every timing. Every number is as
+measured; nothing is predicted.
 
 ---
 
-## Task 10: Commit
+## Task 11: Commit
 
 - [ ] **Step 1: Run the full suite and the linters**
 

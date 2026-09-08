@@ -43,6 +43,7 @@ from flab2bp.layout.freeform import (
     _collision_pose,
     _lane_stacks_for,
     _Net,
+    _place_power,
     _Port,
     _port_access_inventory,
     _PreparationDeadline,
@@ -52,6 +53,8 @@ from flab2bp.layout.freeform import (
     _sorter_stacks_for,
     _sorter_tiers_for,
     _StagedCoater,
+    _Unpowerable,
+    plan_power_infill,
 )
 from flab2bp.layout.hierarchy.contracts import LaneFlow
 from flab2bp.layout.route_feedback import Cell, DetailedRouteStatus, NetId, NetRole
@@ -152,6 +155,20 @@ class ComposeResult:
     reservation_missing: int = 0
     #: Ladder rungs whose trunk-goal reservation was discarded as unusable.
     reservation_degraded: int = 0
+    #: Of `reservation_degraded`, how many rungs committed a surveyed partial
+    #: rather than falling back to the local-only oracle.
+    reservation_partial: int = 0
+    #: Towers the composition stood for powered tiles no block's plan reached,
+    #: and tiles it could not cover at all.  A non-zero `power_uncovered` is
+    #: always accompanied by one `failures` entry per tile.
+    power_infill: int = 0
+    power_uncovered: int = 0
+    #: Cuts the ROUTER (or the port-access reservation) could not wire -- the
+    #: prefix of `failures` recorded before power infill runs.  `strategy.py`'s
+    #: `unrouted_cuts` reads THIS, not `len(failures)`, so the per-tile power
+    #: infill findings above never inflate a number Task 9 compares across
+    #: gates: those tiles are already counted in `power_uncovered`.
+    unrouted_cuts: int = 0
 
 
 class _Packing(NamedTuple):
@@ -194,6 +211,16 @@ class PackedCanvas:
     #: rung with `reservation.missing` empty means "every port is satisfiable"
     #: only when this is 0.  See :func:`pack_with_access`.
     degraded: int = 0
+    #: How many rungs committed a SURVEYED PARTIAL from the trunk-goal oracle
+    #: -- an assignment the matcher handed back without converging, with the
+    #: demands its own survey convicted already removed.  A ladder total, like
+    #: `degraded`, and always <= it: every partial is also degraded, because
+    #: `reservation_degraded == 0` has exactly one meaning and it is "the
+    #: matcher converged".  This counter is what separates "the oracle was
+    #: thrown away and v2's local question re-asked" (degraded, not partial)
+    #: from "the oracle answered for most lane heads and named the rest"
+    #: (both).  See v3 gate.md §6's open residual.
+    partial: int = 0
 
 
 class _PackingDeadline(Exception):
@@ -362,6 +389,10 @@ def _coater_belt_ban(canvas: _Canvas, index: int, belt_model: int) -> None:
     carry those belts, but only at the drop's own altitude, and a lookup that
     silently returned the ground belt under the Coater instead would be a wrong
     answer wearing a right one's clothes.
+
+    STAYS under a node arm.  This reconstructs the ban from a COMMITTED
+    building and never asks who seated it, so it is agnostic to whether that
+    Coater rode a strip channel (`off`) or its own four-tile node (`placed`).
     """
     coater = canvas.buildings[index]
     drop = slots.addon_supply_cell(
@@ -760,6 +791,140 @@ def _pack_at(
     return _Packing(buildings, blocks, canvas, nets)
 
 
+def _merge_access_evidence(
+    goal_driven: Sequence[PortAccessEvidence],
+    topped: Sequence[PortAccessEvidence],
+) -> tuple[PortAccessEvidence, ...]:
+    """One entry per demand, each FIELD taken from the call that can answer it.
+
+    `_reserve_port_access` emits exactly one `PortAccessEvidence` per demand in
+    its own `missing`, so the top-up's demand set is a strict SUBSET of the
+    goal-driven call's -- and a plain dict union would therefore resolve to ONE
+    call's entry for every key and drop the other's wholesale, whichever way it
+    is ordered.  The two calls are authoritative about different fields:
+
+    * ``local_options`` / ``reachable_options`` are the TOP-UP's.  It enumerated
+      on the ground as it now stands, with the partial's corridors staked; the
+      goal-driven call counted on a canvas cleared of every corridor, which is a
+      canvas that no longer exists.  This is also the only field that reaches a
+      reader: `_corridor_evidence` prints `options=<local_options>`.
+    * ``frontier`` / ``exhaustive`` are the GOAL-DRIVEN call's.  They are the
+      trunk probe's findings and the local-only top-up cannot produce them: it
+      runs unprobed, so it reports an empty wall and ``exhaustive=False``, which
+      would read as "nobody looked" rather than "we looked and it is sealed".
+
+    ``held``/``wanted`` are the same constants in both.  An entry only the
+    goal-driven call raised is kept verbatim: that demand is one the top-up
+    SERVED, so there is no fresher count to take and nothing to merge.
+    """
+    fresh = {evidence.demand: evidence for evidence in topped}
+    merged = [
+        replace(
+            entry,
+            local_options=fresh[entry.demand].local_options,
+            reachable_options=fresh[entry.demand].reachable_options,
+        )
+        if entry.demand in fresh
+        else entry
+        for entry in goal_driven
+    ]
+    raised = {entry.demand for entry in goal_driven}
+    merged.extend(entry for entry in topped if entry.demand not in raised)
+    return tuple(merged)
+
+
+def _top_up_partial(
+    canvas: _Canvas,
+    committed: PortAccessReservation,
+    *,
+    boundary: Sequence[Cell] | None,
+    bounds: tuple[int, int, int, int] | None,
+    deadline: float | None,
+) -> PortAccessReservation:
+    """Give the demands a partial left missing the local-only oracle's corridor.
+
+    THE PARTIAL IS BETTER GROUND WHERE IT SPEAKS AND STRICTLY WORSE WHERE IT IS
+    SILENT.  Before the matcher committed partials it gave up wholesale, and
+    `pack_with_access` re-asked `_reserve_port_access` WITHOUT `goals` for every
+    demand -- the local-only oracle -- which staked a corridor for each one.
+    Committing a partial deleted that fallback for exactly the demands the
+    partial's own survey convicted, and `_route_all` then met each of them as
+    `no port access corridor (held=0 wants=1)`: one unroutable cut per missing
+    demand, which is how `titanium-glass/all-products` went from wiring all 26
+    of its cut lanes to refusing at the router with 4 unrouted cuts.
+
+    So the partial's corridors are KEPT and the demands it left missing are
+    asked again locally.  Three things this must not do:
+
+    * It must not re-assign a demand the partial already served -- `held` says
+      so, and the union below prefers the partial's own pair either way.
+    * It must not report a VERDICT.  `converged` stays False however complete
+      the merged answer looks, so `reservation_degraded == 0` keeps its single
+      meaning ("the matcher converged") and the rung still counts as both
+      partial and degraded.
+    * It must not cost the caller the partial.  A top-up that runs out of the
+      rung's clock degrades to the partial as it stood: `_reserve_port_access`
+      restores the canvas to its entry snapshot on every raising path, and that
+      snapshot IS the partial, so both the object and the canvas fall back
+      together.
+
+    The canvas union is `_reserve_port_access`'s own `held` contract; see its
+    docstring for why a second call without it would wipe the first's corridors
+    off the canvas the router reads.
+
+    THE `assigned` UNION BELOW IS THE AUTHORITATIVE ONE.  `_reserve_port_access`
+    computes its own -- it has to, because the canvas union and the `missing`
+    it derives both depend on it -- but this one is recomputed from
+    `committed.assigned` rather than read off `topped`, so a future change to
+    `held`'s ordering or merge semantics in freeform cannot silently change what
+    the rung commits.  The two are belt and braces, and THIS is the belt.
+
+    A TOPPED-UP RUNG COMPLETES, AND THEREFORE ENDS THE GAP LADDER, at
+    `pack_with_access`'s `if reservation.complete: return candidate`.  That is
+    inherent in the property this function exists for -- an empty `missing` --
+    and it is the pre-Task-1 shape restored: the wholesale local-only fallback
+    also produced a complete reservation and also short-circuited, which is how
+    v3's titanium-glass committed at gap 2 and wired all 26 cut lanes.  The
+    consequence for a reader of the stats line is that `reservation_degraded`
+    and `reservation_partial` are ladder totals over FEWER rungs than before, so
+    a fall from 5 to 1 is the ladder stopping sooner and NOT the matcher
+    converging more often.
+
+    THE TOP-UP IS THE LOCAL-ONLY ORACLE ONLY WHILE `boundary` IS None.
+    `boundary` is forwarded exactly as the wholesale `else` branch forwards it,
+    which is the consistency worth having, and `pack_with_access` computes it as
+    None today because no composed demand answers `reaches_boundary`.  The day
+    the v2 gate's lever 1 gives the composer real boundary ports, `probed`
+    becomes True here too: this call would build a grid and run an A* per
+    option, and it would stop being the cheap unprobed pass the wall budget
+    assumes.  Re-measure the rung cost on that day.
+    """
+    if not committed.missing:
+        return committed
+    staked = dict(committed.assigned)
+    try:
+        topped = _reserve_port_access(
+            canvas,
+            committed.missing,
+            boundary=boundary,
+            bounds=bounds,
+            cancelled=partial(_spent, deadline),
+            deadline=deadline,
+            held=staked,
+        )
+    except _PreparationDeadline:
+        return committed
+    return PortAccessReservation(
+        assigned=(
+            *committed.assigned,
+            *((demand, corridor) for demand, corridor in topped.assigned if demand not in staked),
+        ),
+        missing=topped.missing,
+        evidence=_merge_access_evidence(committed.evidence, topped.evidence),
+        converged=False,
+    )
+
+
 def pack_with_access(
     placements: list[Placement],
     flows: list[LaneFlow],
@@ -829,6 +994,7 @@ def pack_with_access(
     )
     best: PackedCanvas | None = None
     degraded = 0
+    partial_rungs = 0
     for position, rung in enumerate(rungs):
         # The FIRST rung is unconditional and runs on the caller's own clock:
         # it is what a ladderless composer would have done, and a caller that
@@ -904,10 +1070,26 @@ def pack_with_access(
         # TWO WAYS FOR THE TRUNK QUESTION TO COME BACK UNUSABLE, ONE FALLBACK.
         # The second is an assignment of NOTHING AT ALL while there were
         # demands to assign, which is not a geometric verdict: a canvas that
-        # really walls in every lane head still leaves the ones it does not,
-        # and `_match_access_corridors` returns `{}` wholesale when its
-        # validate/cut loop gives up (`_ACCESS_CUT_ROUNDS`) rather than when
-        # the ground runs out.  `assignment_boundary_cut` -- live for the first
+        # really walls in every lane head still leaves the ones it does not.
+        # `_match_access_corridors` no longer returns `{}` wholesale merely
+        # because its validate/cut loop runs out of rounds (`_ACCESS_CUT_ROUNDS`)
+        # -- since Task 1 it COMMITS the partial its own survey left unconvicted
+        # instead.  Only TWO sites return `{}` DIRECTLY: the initial rank solve
+        # coming back neither OPTIMAL nor FEASIBLE, and no demand having a
+        # single free option AT ALL while demands were raised (the SAME site
+        # with NO demands is the CONVERGED empty answer to an empty question,
+        # not a give-up -- see the `not demands` guard below).  Every other
+        # give-up -- an infeasible tie solve, a failed fallback rank re-solve,
+        # an empty cut-variable set, or the cut loop running out of rounds --
+        # calls `surrender()`, and reaching `surrender()` is NECESSARY but NOT
+        # SUFFICIENT for `{}`: it hands back the largest partial it saw, minus
+        # what its own survey convicts, and is `{}` only when no partial was
+        # ever recorded, no `survey` callback was passed at all, the survey is
+        # cut short by ITS OWN deadline, or the survey convicts every demand
+        # that partial held (see `surrender` in freeform.py).  Otherwise it
+        # hands back a non-empty, `converged=False` partial.  See the paragraph
+        # below for what a partial commit means here.  `assignment_boundary_cut`
+        # -- live for the first
         # time here, because the goals set `probed` -- asks that EVERY
         # corridor stay reachable with every OTHER corridor's cells forbidden,
         # which is strictly stronger than what `_route_all` then does with
@@ -918,8 +1100,37 @@ def pack_with_access(
         # contract of this lever (see `RESERVE_WALL_SHARE`) is that its worst
         # case is v2's behaviour.  The trigger is deliberately the narrow,
         # obviously-correct one rather than a tuned threshold.
-        if goal_driven is not None and (goal_driven.assigned or not demands):
+        #
+        # A PARTIAL IS GROUND, NOT A VERDICT.  Since the matcher stopped giving
+        # up wholesale it hands back the corridors its own survey did not
+        # convict, and those are strictly better ground for `_route_all` than
+        # the local-only answer -- the corridors are staked where the trunk
+        # probe said they reach.  It is better ground only WHERE IT SPEAKS,
+        # though: the demands its survey convicted got no corridor from either
+        # oracle and the router met them as `held=0 wants=1`, so
+        # `_top_up_partial` asks the local-only oracle for exactly those and
+        # merges both answers.  What a partial is NOT is an answer to the
+        # ladder's question, so it counts as degraded as well as partial, and
+        # `reservation_degraded == 0` keeps its one meaning.  An assignment of
+        # NOTHING AT ALL while there were demands is still the wholesale
+        # give-up Ruling R7 discards: it stakes no corridors, so acting on it
+        # would leave the router worse off than v2's local-only oracle.
+        if (
+            goal_driven is not None
+            and goal_driven.converged
+            and (goal_driven.assigned or not demands)
+        ):
             reservation = goal_driven
+        elif goal_driven is not None and goal_driven.assigned:
+            partial_rungs += 1
+            degraded += 1
+            reservation = _top_up_partial(
+                packing.canvas,
+                goal_driven,
+                boundary=boundary,
+                bounds=bounds,
+                deadline=rung_deadline,
+            )
         else:
             degraded += 1
             try:
@@ -935,7 +1146,20 @@ def pack_with_access(
                 if best is None:
                     raise _PackingDeadline(packing) from None
                 break
-        candidate = PackedCanvas(*packing, reservation=reservation, gap=rung, degraded=degraded)
+        candidate = PackedCanvas(
+            *packing,
+            reservation=reservation,
+            gap=rung,
+            degraded=degraded,
+            partial=partial_rungs,
+        )
+        # A TOPPED-UP PARTIAL REACHES HERE COMPLETE, so a rung that committed
+        # one ENDS THE LADDER.  That is the pre-Task-1 shape: the wholesale
+        # local-only fallback was complete too and short-circuited the same way.
+        # It does mean `degraded`/`partial_rungs` are totals over fewer rungs
+        # than they were between Task 1 and Task 4b -- a fall in
+        # `reservation_partial` is the ladder stopping sooner, not the matcher
+        # converging more often.  See `_top_up_partial`.
         if reservation.complete:
             return candidate
         # STRICTLY fewer, so the NARROWEST of the equally-bad rungs wins: a
@@ -947,30 +1171,38 @@ def pack_with_access(
     # `best` may be an EARLIER rung than the last one the ladder judged, and
     # `degraded` is the ladder's total rather than that rung's own -- so it is
     # stamped on here rather than read off the candidate.
-    return replace(best, degraded=degraded)
+    return replace(best, degraded=degraded, partial=partial_rungs)
 
 
 def _budget_refusal(packing: _Packing) -> ComposeResult:
     """Every cut of ``packing`` reported unwired under the router's budget word.
 
     `_reserve_port_access` puts back the reservations and corridors it cleared
-    and raises `_PreparationDeadline`; `_prepare_routing_problem` lets that
-    unwind to whoever owns the budget.  Here the caller wants a REFUSAL, so the
-    cuts are named instead -- an unwired entry lane the composer swallowed is a
-    block that starves, convicted many stages later with no way back.
+    and raises `_PreparationDeadline` when the deadline is caught outside a
+    survey; `_prepare_routing_problem` lets that unwind to whoever owns the
+    budget.  A deadline caught MID-SURVEY instead returns NORMALLY, with both
+    canvas dicts left cleared (never restored) and the reservation as the
+    ordinary wholesale give-up -- `assigned` empty, `missing` every demand,
+    `converged` False.  Here the caller wants a REFUSAL, so the cuts are named
+    instead -- an unwired entry lane the composer swallowed is a block that
+    starves, convicted many stages later with no way back.
     """
+    budget_failures = tuple(
+        f"{net.item}: block {net.net_id.source_strip} -> "
+        f"block {net.net_id.destination_strip}: {DetailedRouteStatus.BUDGET.name}"
+        for net in packing.nets
+        if net.net_id is not None
+    )
     return ComposeResult(
         Placement(
             buildings=tuple(packing.canvas.buildings), description="hierarchical composition"
         ),
         packing.blocks,
         0,
-        tuple(
-            f"{net.item}: block {net.net_id.source_strip} -> "
-            f"block {net.net_id.destination_strip}: {DetailedRouteStatus.BUDGET.name}"
-            for net in packing.nets
-            if net.net_id is not None
-        ),
+        budget_failures,
+        # Power infill never runs on this path -- the ladder expired before
+        # `_route_all` did -- so every one of these IS an unrouted cut.
+        unrouted_cuts=len(budget_failures),
     )
 
 
@@ -1046,6 +1278,50 @@ def compose(
         for net in nets
         if net.net_id is not None and net.net_id not in accounted
     )
+    #: Cuts the ROUTER could not wire, counted before any power-infill entry
+    #: is appended below.  `strategy.py`'s `unrouted_cuts` derives from this
+    #: rather than from `len(failures)`, so a refusal naming four dark tiles
+    #: does not inflate the number Task 9 compares across gates -- those
+    #: tiles are already counted in `power_uncovered`.
+    routing_failures = len(failures)
+
+    # THE GROUND THE COMPOSITION OPENED IS NOT POWERED BY ANY BLOCK'S PLAN.
+    # Each block brought towers sized for its own footprint; the Splitters the
+    # router just created at taps between blocks stand on ground none of them
+    # reaches.  v3 gate.md §2.3: 76 of 80 covered, 4 not, and those 4 were the
+    # ONLY thing wrong with the first placement this strategy ever composed.
+    #
+    # `cancelled` is handed the PARENT's wall, the same one `_route_all` just
+    # ran on -- so on a budget-exhausted composition (the common case for a
+    # large cell) `plan_power_infill`'s very first `cancelled()` check raises
+    # `_PreparationDeadline` immediately.  That is caught HERE, not let
+    # propagate: this runs after the router, so `failures` already names every
+    # net the router left unaccounted, and losing that list to an uncaught
+    # exception -- which `strategy.py`'s broad `except Exception` would turn
+    # into a message-less "composition crashed: _PreparationDeadline: " --
+    # would destroy the very refusal this pass exists to improve.
+    try:
+        infill_sites, unpowered = plan_power_infill(canvas, cancelled=partial(_spent, deadline))
+    except _PreparationDeadline:
+        infill_sites, unpowered = [], ()
+        failures.append(
+            "composition power infill: did not run, the composition's wall was "
+            "already spent before it could start"
+        )
+    else:
+        try:
+            _place_power(canvas, infill_sites)
+        except _Unpowerable as exc:
+            # A planned site taken between the plan and the stand is a reservation
+            # bug, and it is REPORTED here rather than raised: this runs after the
+            # router, so there is a composed placement worth naming a cut on.
+            infill_sites = []
+            failures.append(f"composition power infill: {exc}")
+        failures.extend(
+            f"power.coverage: composed tile ({tx},{ty}) is outside every tower's supply "
+            "radius and no free, linked, legal site can cover it"
+            for tx, ty in unpowered
+        )
 
     return ComposeResult(
         Placement(buildings=tuple(canvas.buildings), description="hierarchical composition"),
@@ -1056,6 +1332,10 @@ def compose(
         port_demands=len(reservation.assigned) + len(reservation.missing),
         reservation_missing=len(reservation.missing),
         reservation_degraded=packed.degraded,
+        reservation_partial=packed.partial,
+        power_infill=len(infill_sites),
+        power_uncovered=len(unpowered),
+        unrouted_cuts=routing_failures,
     )
 
 

@@ -1,0 +1,49 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+sequence-pair / output-products: 36 machines, 2652 tiles, 2105 buildings
+primary_band: 160
+certified_bands: 160, 200
+inputs to belt in: assembling-machine-2, carbon-nanotube, copper-ingot, crystal-silicon, energy-shard, high-purity-silicon, iron-ingot, magnet, matter-recombinator, optical-grating-crystal, plane-filter, processor, proliferator-2, refined-oil, stone, super-magnetic-ring, titanium-alloy, unipolar-magnet  (31 marked with icons)
+  recipe selection DERIVED, not pinned -- pass --flow or --fetch-flow to build FactorioLab's own selection
+  WARNING: this URL carried no technology set, so a FULLY-RESEARCHED save is ASSUMED: belt ceiling 26.55 (lab level 9), vertical belt construction YES. A URL exported from FactorioLab normally does carry one; if yours did, the belts here may climb higher than your save allows.
+  belts: conveyor-belt-2 (12.0/s) floor, conveyor-belt-3 (30.0/s) ceiling; no run needed more than the floor; stack 1; 0 piler(s)
+  entry lanes: carbon-nanotube 3 (needs 1 at 30/s)
+  entry lanes: copper-ingot 2 (needs 1 at 30/s)
+  entry lanes: crystal-silicon 2 (needs 1 at 30/s)
+  entry lanes: iron-ingot 4 (needs 1 at 30/s)
+  entry lanes: magnet 2 (needs 1 at 30/s)
+  entry lanes: plane-filter 3 (needs 1 at 30/s)
+  entry lanes: processor 2 (needs 1 at 30/s)
+  entry lanes: refined-oil 2 (needs 1 at 30/s)
+  entry lanes: titanium-alloy 2 (needs 1 at 30/s)
+
+candidate           strategy      area  errors
+output-products     sequence-pair    2652       0
+no-proliferator     sequence-pair    2700       0
+all-products        sequence-pair    3408       0
+output-products     freeform      3612       0
+all-products        freeform      3819       0
+no-proliferator     freeform      4125       0
+written to /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/selfloop/docs/superpowers/evidence/2026-09-06-selfloop/gate/bp-amm-master.txt
+	Command being timed: "uv run flab2bp https://factoriolab.github.io/dsp/list?z=eJxNjrsKwkAQRf9miql2JCbVNANGTJdGiI1oSJFiWUnIQ4v9dska5HbnHAbmBrWcjxR0YnHOOWahoLckP.5wtpO9IdsCMgJf8ahFOYNcON.rA2oBvOIga9DKloJWabYJfjCUGSXd1nz4hzRz4.7ZqdHQrXon7wdtosVTrMm.Ri1pVpEvAnpFKg__&v=11 --budget 30 -v -o /home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/selfloop/docs/superpowers/evidence/2026-09-06-selfloop/gate/bp-amm-master.txt"
+	User time (seconds): 503.99
+	System time (seconds): 6.23
+	Percent of CPU this job got: 367%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:18.73
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 226632
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 13
+	Minor (reclaiming a frame) page faults: 2323549
+	Voluntary context switches: 2727
+	Involuntary context switches: 17115
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 60
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

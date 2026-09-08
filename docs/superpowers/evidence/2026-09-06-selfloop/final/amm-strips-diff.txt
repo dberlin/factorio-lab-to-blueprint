@@ -1,0 +1,114 @@
+--- amm-strips-master.txt	2026-09-07 08:41:57.035199397 -0400
++++ amm-strips-branch.txt	2026-09-07 08:41:38.007167040 -0400
+@@ -1,7 +1,7 @@
+ ### policy=no-proliferator
+ --- families ---
+ recipe_id,group_key,machines,flank_outputs,drain_outermost,machine_cap
+-advanced-mining-machine,advanced-mining-machine#0,2,False,False,18
++advanced-mining-machine,advanced-mining-machine#0,2,True,True,1
+ arc-smelter,arc-smelter#1,1,False,False,450
+ assembling-machine-3,assembling-machine-3#2,1,False,False,37
+ circuit-board,circuit-board#3,1,False,False,450
+@@ -21,7 +21,8 @@
+ x-ray-cracking,x-ray-cracking#16,4,False,False,41
+ --- strips ---
+ recipe_id,group_key,machines,flank_outputs,drain_outermost,box_height,in_above,in_below
+-advanced-mining-machine,advanced-mining-machine#0,2,False,False,7,1,1
++advanced-mining-machine,advanced-mining-machine#0,1,True,True,10,3,2
++advanced-mining-machine,advanced-mining-machine#0,1,True,True,10,3,2
+ arc-smelter,arc-smelter#1,1,False,False,9,3,1
+ assembling-machine-3,assembling-machine-3#2,1,False,False,9,3,0
+ circuit-board,circuit-board#3,1,False,False,7,2,0
+@@ -41,19 +42,19 @@
+ super-magnetic-ring,super-magnetic-ring#15,1,False,False,8,3,0
+ x-ray-cracking,x-ray-cracking#16,4,False,False,8,2,0
+ --- advanced-mining-machine summary ---
+-amm_strips=1
+-amm_flanked=0
++amm_strips=2
++amm_flanked=2
+ amm_machines_total=2
+-amm_box_height_total=7
++amm_box_height_total=20
+ --- whole spec ---
+-strips=19
+-flanked_strips=0
+-total_box_height=148
++strips=20
++flanked_strips=2
++total_box_height=161
+ 
+ ### policy=all-products
+ --- families ---
+ recipe_id,group_key,machines,flank_outputs,drain_outermost,machine_cap
+-advanced-mining-machine,advanced-mining-machine#0,2,False,False,21
++advanced-mining-machine,advanced-mining-machine#0,2,True,True,1
+ arc-smelter,arc-smelter#1,1,False,False,540
+ assembling-machine-3,assembling-machine-3#2,1,False,False,37
+ circuit-board,circuit-board#3,1,False,False,540
+@@ -73,7 +74,8 @@
+ x-ray-cracking,x-ray-cracking#16,3,False,False,51
+ --- strips ---
+ recipe_id,group_key,machines,flank_outputs,drain_outermost,box_height,in_above,in_below
+-advanced-mining-machine,advanced-mining-machine#0,2,False,False,7,1,1
++advanced-mining-machine,advanced-mining-machine#0,1,True,True,10,3,2
++advanced-mining-machine,advanced-mining-machine#0,1,True,True,10,3,2
+ arc-smelter,arc-smelter#1,1,False,False,9,3,1
+ assembling-machine-3,assembling-machine-3#2,1,False,False,9,3,0
+ circuit-board,circuit-board#3,1,False,False,7,2,0
+@@ -92,19 +94,19 @@
+ super-magnetic-ring,super-magnetic-ring#15,1,False,False,8,3,0
+ x-ray-cracking,x-ray-cracking#16,3,False,False,8,2,0
+ --- advanced-mining-machine summary ---
+-amm_strips=1
+-amm_flanked=0
++amm_strips=2
++amm_flanked=2
+ amm_machines_total=2
+-amm_box_height_total=7
++amm_box_height_total=20
+ --- whole spec ---
+-strips=18
+-flanked_strips=0
+-total_box_height=141
++strips=19
++flanked_strips=2
++total_box_height=154
+ 
+ ### policy=output-products
+ --- families ---
+ recipe_id,group_key,machines,flank_outputs,drain_outermost,machine_cap
+-advanced-mining-machine,advanced-mining-machine#0,2,False,False,21
++advanced-mining-machine,advanced-mining-machine#0,2,True,True,1
+ arc-smelter,arc-smelter#1,1,False,False,450
+ assembling-machine-3,assembling-machine-3#2,1,False,False,37
+ circuit-board,circuit-board#3,1,False,False,450
+@@ -124,7 +126,8 @@
+ x-ray-cracking,x-ray-cracking#16,4,False,False,48
+ --- strips ---
+ recipe_id,group_key,machines,flank_outputs,drain_outermost,box_height,in_above,in_below
+-advanced-mining-machine,advanced-mining-machine#0,2,False,False,7,1,1
++advanced-mining-machine,advanced-mining-machine#0,1,True,True,10,3,2
++advanced-mining-machine,advanced-mining-machine#0,1,True,True,10,3,2
+ arc-smelter,arc-smelter#1,1,False,False,9,3,1
+ assembling-machine-3,assembling-machine-3#2,1,False,False,9,3,0
+ circuit-board,circuit-board#3,1,False,False,7,2,0
+@@ -144,12 +147,12 @@
+ super-magnetic-ring,super-magnetic-ring#15,1,False,False,8,3,0
+ x-ray-cracking,x-ray-cracking#16,4,False,False,8,2,0
+ --- advanced-mining-machine summary ---
+-amm_strips=1
+-amm_flanked=0
++amm_strips=2
++amm_flanked=2
+ amm_machines_total=2
+-amm_box_height_total=7
++amm_box_height_total=20
+ --- whole spec ---
+-strips=19
+-flanked_strips=0
+-total_box_height=149
++strips=20
++flanked_strips=2
++total_box_height=162
+ 

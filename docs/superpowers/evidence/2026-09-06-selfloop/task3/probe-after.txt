@@ -1,0 +1,198 @@
+[1m[33mwarning[39m[0m[1m:[0m [1m`VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead[0m
+== geometry ==
+SORTER_MAX_REACH 3
+_side_lane_caps(2901, 0.0, 5) (3, 3)
+  attachable_columns lane_y= -1 3
+  attachable_columns lane_y= -2 3
+  attachable_columns lane_y= -3 3
+  attachable_columns lane_y= -4 0
+  attachable_columns lane_y=  5 3
+  attachable_columns lane_y=  6 3
+  attachable_columns lane_y=  7 3
+  attachable_columns lane_y=  8 0
+== _seat_inputs ==
+  caps=(3, 3) flank=True -> ((('a',), ('b',), ('c',)), (('d',), ('e',), ('f',)))
+  caps=(3, 3) flank=False -> ValueError 6 ingredients cannot be seated: 3 lane(s) above and 3 below carrying at most 5 items each, over a face that offers 3 insert pose(s) per side, leaves no room for 6 ingredient sorter(s) and the output lane. A machine slot holds one connection, so two sorters cannot share a column
+  caps=(3, 4) flank=True -> ((('a',), ('b',), ('c',)), (('d',), ('e',), ('f',)))
+== flanked plans in the corpus spec candidates ==
+  candidate 0 label='no-proliferator' plans=43 flanked=1
+    FLANK universe-matrix#37#0 item_id=2901
+      above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+      below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+      out   (('universe-matrix', '', <CargoDomain.UNSPRAYED: 'unsprayed'>),)
+  candidate 1 label='all-products' plans=42 flanked=1
+    FLANK universe-matrix#37#0 item_id=2901
+      above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+      below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+      out   (('universe-matrix', '', <CargoDomain.UNSPRAYED: 'unsprayed'>),)
+  candidate 2 label='output-products' plans=43 flanked=1
+    FLANK universe-matrix#37#0 item_id=2901
+      above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+      below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+      out   (('universe-matrix', '', <CargoDomain.UNSPRAYED: 'unsprayed'>),)
+== flanked strips from plan_strips (candidate 0) ==
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1
+  universe-matrix#37 box_height=12 width=6 ph=5 above=3 below=3 outs=1
+    in_above (('antimatter',), ('electromagnetic-matrix',), ('energy-matrix',))
+    in_below (('gravity-matrix',), ('information-matrix',), ('structure-matrix',))
+    first_row_below_band 8
+    out 0 row 11 sorter_span 0
+    below lane ('gravity-matrix',) row 8 sorter_span 1
+    below lane ('information-matrix',) row 9 sorter_span 2
+    below lane ('structure-matrix',) row 10 sorter_span 3
+    above lane ('antimatter',) row 0 sorter_span 3
+    above lane ('electromagnetic-matrix',) row 1 sorter_span 2
+    above lane ('energy-matrix',) row 2 sorter_span 1

@@ -1,0 +1,10 @@
+{
+  "block": 4,
+  "budget_s": 10.0,
+  "ok": false,
+  "recipes": [
+    "iron-ingot"
+  ],
+  "verdict": "no valid layout for no-proliferator#block4 after 10s: expansion budget exhausted before finding an exact layout. Treat a spec that cannot be laid out in the requested budget as a layout-model defect until shown otherwise.",
+  "wall_s": 3.633
+}
