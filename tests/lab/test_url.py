@@ -110,7 +110,7 @@ class TestObjectiveFields:
         assert obj.overclock == Fraction(150)
         assert obj.fuel_id == "coal"
 
-    def test_defaults_when_trailing_fields_stripped(self) -> None:
+    def test_missing_value_defaults_when_trailing_fields_stripped(self) -> None:
         req = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot&v=11")
         obj = req.objectives[0]
         assert obj.value == Fraction(1)
@@ -143,6 +143,22 @@ class TestObjectiveFields:
     def test_exact_rational_value(self) -> None:
         req = parse_url("https://factoriolab.github.io/dsp/list?o=iron-ingot*1/3&v=11")
         assert req.objectives[0].value == Fraction(1, 3)
+
+    @pytest.mark.parametrize("compressed", [False, True], ids=["bare", "compressed"])
+    @pytest.mark.parametrize("objective_type", list(ObjectiveType))
+    def test_explicit_zero_is_not_a_missing_value(
+        self, compressed: bool, objective_type: ObjectiveType
+    ) -> None:
+        item = "iron-ingot"
+        if compressed:
+            mh = P.load_mod_hash("dsp")
+            item = P.n_to_id(mh.items.index(item))
+        query = f"o={item}*0*0*{int(objective_type)}&v=11"
+        if compressed:
+            query = f"z={P.deflate(query)}&v=11"
+        objective = parse_url(f"https://factoriolab.github.io/dsp/list?{query}").objectives[0]
+        assert objective.value == Fraction(0)
+        assert objective.type is objective_type
 
 
 class TestSettingArrays:
