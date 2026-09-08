@@ -14,6 +14,7 @@ from flab2bp.indexed.belt_overlap import BeltOverlap
 from flab2bp.indexed.block_graph import BlockGraph
 from flab2bp.indexed.cells import Cells
 from flab2bp.indexed.nets import Nets
+from flab2bp.indexed.port_reservations import PortReservations
 from flab2bp.indexed.reference_graph import ReferenceGraph
 from flab2bp.indexed.sorters import Sorters
 from flab2bp.indexed.stages import Stages
@@ -26,6 +27,7 @@ __all__: tuple[str, ...] = (
     "BlockGraph",
     "Cells",
     "Nets",
+    "PortReservations",
     "ReferenceGraph",
     "Sorters",
     "StakedPaths",
