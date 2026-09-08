@@ -158,7 +158,10 @@ test('a substation uses its game model and carries no endpoint or recipe icons',
   // a missing texture. Power nodes are not belt endpoints or recipe machines.
   const icon = realCatalog.item(2212)!.iconName;
   const overlays = buildOverlays(model, realCatalog, {
-    cell: 64, cols: 1, rows: 1, entries: { [icon]: [0, 0] },
+    cell: 64,
+    cols: 1,
+    rows: 1,
+    entries: { [icon]: [0, 0] },
   });
   expect(overlays.icons).toEqual([]);
   expect(overlays.counts).toEqual([]);

@@ -465,8 +465,7 @@ def run_cell(job: Job) -> Result:
     )
     coaters, coater_merges, belt_tiles = _coater_census(placement)
     power_towers = sum(
-        catalog.building(building.item_id).is_power_node
-        for building in placement.buildings
+        catalog.building(building.item_id).is_power_node for building in placement.buildings
     )
     skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
     if report.ok and not skipped_power:
