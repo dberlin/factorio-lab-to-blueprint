@@ -6,7 +6,7 @@
  * the same way a real response would.
  */
 import { readFileSync } from 'node:fs';
-import type { Attempt, AttemptDetail, BuildResult, Job } from '../../src/api/build';
+import type { Attempt, AttemptFacts, BuildResult, Job } from '../../src/api/build';
 
 /**
  * A real DSP blueprint string, so a test that hands one to the renderer is
@@ -23,7 +23,7 @@ export const B_BLUEPRINT = readFileSync(
   'utf8',
 ).trim();
 
-export function anAttemptDetail(overrides: Partial<AttemptDetail> = {}): AttemptDetail {
+export function anAttemptDetail(overrides: Partial<AttemptFacts> = {}): AttemptFacts {
   return {
     machines: 9,
     machine_rank: 'exact',
@@ -34,6 +34,7 @@ export function anAttemptDetail(overrides: Partial<AttemptDetail> = {}): Attempt
     title: 'electromagnetic-matrix 60/min',
     outputs: { 'electromagnetic-matrix': { exact: '1', per_minute: 60 } },
     external_inputs: { 'magnetic-coil': { exact: '5/6', per_minute: 50 } },
+    self_loop_seeds: {},
     input_markers: 1,
     unmarked_inputs: [],
     belt_tiers: {
@@ -42,6 +43,7 @@ export function anAttemptDetail(overrides: Partial<AttemptDetail> = {}): Attempt
       runs_upgraded: 0,
       upgrade_tiers: [],
       stack: 1,
+      entry_lanes: [],
     },
     report: { ok: true, checks_run: ['power'], skipped: [], errors: [], warnings: [] },
     ...overrides,
@@ -82,6 +84,7 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
     description: 'flab2bp freeform layout',
     outputs: { 'electromagnetic-matrix': { exact: '1', per_minute: 60 } },
     external_inputs: { 'magnetic-coil': { exact: '5/6', per_minute: 50 } },
+    self_loop_seeds: {},
     input_markers: 1,
     unmarked_inputs: [] as string[],
     flow_pinned: false,
@@ -93,6 +96,7 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
       runs_upgraded: 0,
       upgrade_tiers: [],
       stack: 1,
+      entry_lanes: [],
     },
     refused: [] as BuildResult['refused'],
     report: { ok: true, checks_run: ['power'], skipped: [], errors: [], warnings: [] },
@@ -116,6 +120,7 @@ export function aResult(overrides: Partial<BuildResult> = {}): BuildResult {
           title: merged.title,
           outputs: merged.outputs,
           external_inputs: merged.external_inputs,
+          self_loop_seeds: merged.self_loop_seeds,
           input_markers: merged.input_markers,
           unmarked_inputs: merged.unmarked_inputs,
           belt_tiers: merged.belt_tiers,

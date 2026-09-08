@@ -73,7 +73,7 @@ test('shows nothing until a building is selected', () => {
     'tests/fixtures/factory-quick-start-step-1-minimum-blue-cube-automation.txt',
     'utf8',
   );
-  act(() => api.load(text));
+  act(() => api.publishArtifact(text, api.beginPublication()));
   expect(screen.queryByTestId('info')).toBeNull();
 });
 
@@ -93,7 +93,7 @@ test('renders the selected building’s actual name, ids, position, yaw and foot
     'tests/fixtures/factory-quick-start-step-1-minimum-blue-cube-automation.txt',
     'utf8',
   );
-  act(() => api.load(text));
+  act(() => api.publishArtifact(text, api.beginPublication()));
   const first = api.blueprint!.buildings[0]!;
   act(() => api.select(first.index));
 
@@ -118,7 +118,7 @@ test('renders describeParameters rows with their values', () => {
     'tests/fixtures/factory-quick-start-step-1-minimum-blue-cube-automation.txt',
     'utf8',
   );
-  act(() => api.load(text));
+  act(() => api.publishArtifact(text, api.beginPublication()));
   const smelter = api.blueprint!.buildings.find((b) => b.itemId === 2302 && b.recipeId > 0);
   if (!smelter) throw new Error('fixture no longer contains an Arc Smelter with a recipe');
   act(() => api.select(smelter.index));

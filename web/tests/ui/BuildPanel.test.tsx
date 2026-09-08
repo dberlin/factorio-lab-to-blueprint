@@ -15,6 +15,92 @@ import {
 } from '../support/build';
 import { realCatalog } from '../support/catalog';
 
+import type { TraceFrame } from '../../src/api/trace';
+import { InputPanel } from '../../src/ui/InputPanel';
+
+test('final artifact resists late trace and can be restored after scrubbing or newer import', async () => {
+  const page = Promise.withResolvers<Response>();
+  const frame: TraceFrame = {
+    seq: 1,
+    t: 0.5,
+    strategy: 'freeform',
+    candidate: 'late-frame',
+    phase: 'incumbent',
+    height: 34,
+    arrangement: 2,
+    restart: null,
+    stage: null,
+    island: null,
+    round: null,
+    block: null,
+    area: 12,
+    belt_tiles: 2,
+    incumbent: true,
+    reason: null,
+    bounds: [0, 0, 3, 3],
+    truncated: false,
+    stranded: [],
+    no_goods: [],
+    buildings: [[2001, 35, 0, 0, 0, 0, 61, 0, -1, -1]],
+  };
+  globalThis.fetch = Object.assign(
+    (input: Parameters<typeof fetch>[0]) =>
+      String(input).includes('/trace')
+        ? page.promise
+        : Promise.resolve(new Response(JSON.stringify(aJob({ options: { trace: true } })))),
+    { preconnect: globalThis.fetch.preconnect },
+  );
+  render(
+    <BlueprintProvider catalog={realCatalog}>
+      <BuildPanel />
+      <InputPanel />
+      <Probe />
+    </BlueprintProvider>,
+  );
+  build();
+  await screen.findByTestId('blueprint-string');
+  await act(async () => {
+    page.resolve(
+      new Response(JSON.stringify({ frames: [frame], next: 1, dropped: 0, complete: true })),
+    );
+  });
+  await screen.findByLabelText('Snapshot');
+  expect(screen.getByTestId('loaded')).toHaveAttribute(
+    'data-blueprint-title',
+    parseBlueprint(A_BLUEPRINT).header.shortDesc,
+  );
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(A_BLUEPRINT);
+  fireEvent.keyDown(screen.getByLabelText('Snapshot'), { key: 'Home' });
+  await waitFor(() => expect(screen.getByTestId('loaded')).toHaveTextContent('1'));
+  expect(screen.queryByTestId('copy-blueprint')).toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show completed blueprint' }));
+  expect(screen.getByTestId('loaded')).toHaveAttribute(
+    'data-blueprint-title',
+    parseBlueprint(A_BLUEPRINT).header.shortDesc,
+  );
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(A_BLUEPRINT);
+  expect(screen.getByTestId('copy-blueprint')).toBeEnabled();
+
+  const importer = within(screen.getByTestId('dropzone'));
+  fireEvent.change(importer.getByLabelText(/blueprint string/i), {
+    target: { value: B_BLUEPRINT },
+  });
+  fireEvent.click(importer.getByRole('button', { name: 'Load' }));
+  expect(screen.getByTestId('loaded')).toHaveAttribute(
+    'data-blueprint-title',
+    parseBlueprint(B_BLUEPRINT).header.shortDesc,
+  );
+  expect(screen.queryByTestId('copy-blueprint')).toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Show completed blueprint' }));
+  expect(screen.getByTestId('loaded')).toHaveAttribute(
+    'data-blueprint-title',
+    parseBlueprint(A_BLUEPRINT).header.shortDesc,
+  );
+  expect(screen.getByTestId('blueprint-string')).toHaveValue(A_BLUEPRINT);
+  expect(screen.getByTestId('copy-blueprint')).toBeEnabled();
+});
 afterEach(restoreFetch);
 
 /** Reports the exact parsed blueprint handed to the viewer state. */

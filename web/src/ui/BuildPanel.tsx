@@ -28,9 +28,10 @@ import { BuildReportPanel, ProjectionFailures, RefusalReport } from './BuildRepo
 import { TracePanel } from './TracePanel';
 
 export function BuildPanel() {
-  const { load, markStale } = useBlueprint();
+  const { document, beginPublication, publishArtifact, markStale } = useBlueprint();
   const [options, setOptions] = useState<BuildOptions>(DEFAULT_OPTIONS);
   const [job, setJob] = useState<Job | null>(null);
+  const [buildGeneration, setBuildGeneration] = useState(0);
   const [selectedAttemptKey, setSelectedAttemptKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
@@ -65,6 +66,8 @@ export function BuildPanel() {
     }));
 
   const start = async (overrides: Partial<BuildOptions> = {}) => {
+    const generation = beginPublication();
+    setBuildGeneration(generation);
     copyGeneration.current += 1;
     abort.current?.abort();
     const controller = new AbortController();
@@ -77,18 +80,20 @@ export function BuildPanel() {
     setSelectedAttemptKey(null);
     try {
       const settled = await runBuild({ ...options, ...overrides }, setJob, controller.signal);
+      if (controller.signal.aborted) return;
       // Render the chosen attempt the moment it exists. The point of having the
       // viewer in the same page is not having to copy the string somewhere to
       // look at it.
       const chosen = settled.result?.attempts.find(
         (attempt) => attempt.chosen && attempt.blueprint,
       );
-      if (chosen?.blueprint) load(chosen.blueprint);
+      if (chosen?.blueprint)
+        publishArtifact(chosen.blueprint, generation, { kind: 'build', jobId: settled.id });
       // A refusal, an error, or a build whose string was withheld leaves the
       // canvas showing the build before it. Keeping it is the right call --
       // clearing would throw away what you were looking at -- but the toolbar
       // then names a result that has been superseded, so it is told.
-      else markStale();
+      else markStale(generation);
     } catch (cause) {
       if (controller.signal.aborted) return;
       setRequestError(
@@ -119,13 +124,18 @@ export function BuildPanel() {
     job?.result?.attempts.find((attempt) => attempt.chosen && attempt.blueprint !== null) ??
     null;
   const blueprint = selectedAttempt?.blueprint ?? null;
+  const showingSelectedArtifact =
+    document?.kind === 'artifact' &&
+    document.source.kind === 'build' &&
+    document.source.jobId === job?.id &&
+    document.text === blueprint;
   const selectAttempt = (attempt: Attempt) => {
-    if (!attempt.blueprint) return;
+    if (!attempt.blueprint || !job) return;
     copyGeneration.current += 1;
     setSelectedAttemptKey(`${attempt.candidate}/${attempt.strategy}`);
     setCopied(false);
     setCopyError(null);
-    load(attempt.blueprint);
+    publishArtifact(attempt.blueprint, beginPublication(), { kind: 'build', jobId: job.id });
   };
   const projected = projectSolve(options);
 
@@ -136,7 +146,7 @@ export function BuildPanel() {
    * possible answer, so a failure says so and the string stays selectable.
    */
   const copy = () => {
-    if (!blueprint) return;
+    if (!blueprint || !showingSelectedArtifact) return;
     const generation = ++copyGeneration.current;
     setCopied(false);
     setCopyError(null);
@@ -422,7 +432,9 @@ export function BuildPanel() {
           (`jobs.py:630`, `TracePanel.tsx`'s own `if (page.complete) return`)
           -- ever had a chance to arrive. The panel now keeps polling on its
           own until it observes `complete`, whatever the job's state is. */}
-      {job && job.options.trace && <TracePanel jobId={job.id} active={true} />}
+      {job && job.options.trace && (
+        <TracePanel key={job.id} jobId={job.id} generation={buildGeneration} active={true} />
+      )}
 
       {requestError && (
         <p role="alert" className="error">
@@ -440,7 +452,7 @@ export function BuildPanel() {
 
       {job?.result && (
         <>
-          {blueprint ? (
+          {blueprint && showingSelectedArtifact ? (
             <div className="row result-head">
               {/* The title is what the game will show on the blueprint, and it
                   names the PRODUCT — `space-warper 10/min (max prolif)` — not
@@ -463,15 +475,19 @@ export function BuildPanel() {
                 {copied ? 'Copied' : 'Copy blueprint string'}
               </button>
             </div>
-          ) : (
+          ) : !blueprint ? (
             <div className="row">
               <button type="button" onClick={() => void start({ allow_invalid: true })}>
                 Build it anyway and show me the string
               </button>
               <span className="note">It will paste, and it will not run correctly.</span>
             </div>
-          )}
-          {copyError && (
+          ) : selectedAttempt ? (
+            <button type="button" onClick={() => selectAttempt(selectedAttempt)}>
+              Show completed blueprint
+            </button>
+          ) : null}
+          {showingSelectedArtifact && copyError && (
             <p role="alert" className="error">
               {copyError}
             </p>

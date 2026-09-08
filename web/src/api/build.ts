@@ -90,6 +90,13 @@ const BeltTiers = z.object({
   runs_upgraded: z.number(),
   upgrade_tiers: z.array(z.string()),
   stack: z.number(),
+  entry_lanes: z.array(
+    z.object({
+      item: z.string(),
+      lanes: z.number().int(),
+      lanes_needed: z.number().int(),
+    }),
+  ),
 });
 
 export const MachineMove = z.object({
@@ -99,12 +106,19 @@ export const MachineMove = z.object({
   count_before: z.number().int().positive(),
   count_after: z.number().int().positive(),
 });
+
+const SelfLoopSeed = z.object({
+  seed_items: z.number().int(),
+  recipe: z.string(),
+  machines: z.number().int(),
+  head: z.object({ x: z.number().int(), y: z.number().int(), z: z.string() }).nullable(),
+});
 /**
  * One candidate's own facts. The report panel describes the SELECTED attempt,
  * so every attempt carries its own boundary — what it belts in, what it makes,
  * what it costs — rather than inheriting the winner's.
  */
-const AttemptDetail = z.object({
+const AttemptFacts = z.object({
   machines: z.number(),
   machine_rank: MachineRank,
   machine_moves: z.array(MachineMove),
@@ -114,6 +128,7 @@ const AttemptDetail = z.object({
   title: z.string(),
   outputs: z.record(z.string(), Rate),
   external_inputs: z.record(z.string(), Rate),
+  self_loop_seeds: z.record(z.string(), SelfLoopSeed.extend({ recipes: z.array(SelfLoopSeed) })),
   input_markers: z.number(),
   unmarked_inputs: z.array(z.string()),
   belt_tiers: BeltTiers,
@@ -129,7 +144,7 @@ const Attempt = z.object({
   chosen: z.boolean(),
   /** Withheld for an invalid attempt unless allow_invalid was requested. */
   blueprint: z.string().nullable(),
-  detail: AttemptDetail,
+  detail: AttemptFacts,
 });
 
 /** How high a belt may go here, and whether that was read or assumed. */
@@ -140,33 +155,20 @@ const BeltRules = z.object({
   from_url: z.boolean(),
 });
 
-const BuildResult = z.object({
+const BuildResult = AttemptFacts.extend({
   /** Null when validation failed and the caller did not pass allow_invalid. */
   blueprint: z.string().nullable(),
-  primary_band: z.number(),
-  certified_bands: z.array(z.number()),
   valid: z.boolean(),
   strategy: ExplicitStrategy,
   candidate: z.string(),
-  machines: z.number(),
-  machine_rank: MachineRank,
-  machine_moves: z.array(MachineMove),
   power_building: z.string(),
   pilers: z.number(),
   area: z.number(),
-  buildings: z.number(),
-  title: z.string(),
   description: z.string(),
-  outputs: z.record(z.string(), Rate),
-  external_inputs: z.record(z.string(), Rate),
-  input_markers: z.number(),
-  unmarked_inputs: z.array(z.string()),
   flow_pinned: z.boolean(),
   flow_findings: z.array(z.string()),
   belt_rules: BeltRules.nullable(),
-  belt_tiers: BeltTiers,
   refused: z.array(AttemptFailure),
-  report: Report,
   attempts: z.array(Attempt),
 });
 
@@ -219,7 +221,7 @@ export type BuildResult = z.infer<typeof BuildResult>;
 export type Refusal = z.infer<typeof Refusal>;
 export type Attempt = z.infer<typeof Attempt>;
 export type ProjectionFailure = z.infer<typeof ProjectionFailure>;
-export type AttemptDetail = z.infer<typeof AttemptDetail>;
+export type AttemptFacts = z.infer<typeof AttemptFacts>;
 export type AttemptFailure = z.infer<typeof AttemptFailure>;
 
 export const BuildOptions = z

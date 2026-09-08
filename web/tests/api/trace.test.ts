@@ -1,5 +1,8 @@
-import { expect, test } from '@rstest/core';
-import { TraceFrame, TracePage } from '../../src/api/trace';
+import { afterEach, expect, test } from '@rstest/core';
+import { pollTrace, TraceFrame, TracePage } from '../../src/api/trace';
+import { restoreFetch, serving } from '../support/build';
+
+afterEach(restoreFetch);
 
 const good = {
   seq: 1,
@@ -38,4 +41,11 @@ test('a page carries a cursor, a drop count and a completion flag', () => {
   expect(page.next).toBe(7);
   expect(page.dropped).toBe(3);
   expect(page.complete).toBe(true);
+});
+
+test('a collector failure is reported instead of parsed as successful completion', async () => {
+  serving({ body: { error: 'trace collection failed: broken projection' } });
+  await expect(pollTrace('failed-trace', -1)).rejects.toThrow(
+    'trace collection failed: broken projection',
+  );
 });

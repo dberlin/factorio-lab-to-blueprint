@@ -3,11 +3,10 @@ import { findBlueprintString } from '../format';
 import { useBlueprint } from '../state/BlueprintProvider';
 
 export function InputPanel() {
-  const { load, error, blueprint } = useBlueprint();
+  const { beginPublication, publishArtifact, failPublication, error, document } = useBlueprint();
   const [text, setText] = useState('');
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
   const textId = useId();
   const urlId = useId();
 
@@ -15,43 +14,47 @@ export function InputPanel() {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
     if (!file) return;
+    const generation = beginPublication();
     if (file.size === 0) {
-      setFetchError(`"${file.name}" is empty.`);
+      failPublication(`"${file.name}" is empty.`, generation);
       return;
     }
     file
       .text()
       .then((t) => {
-        setFetchError(null);
-        setText(t.trim());
-        load(t.trim());
+        if (publishArtifact(t.trim(), generation)) {
+          setText(t.trim());
+        }
       })
       .catch((e: unknown) => {
-        setFetchError(
+        failPublication(
           `Could not read "${file.name}": ${e instanceof Error ? e.message : String(e)}`,
+          generation,
         );
       });
   };
 
   const fetchUrl = async () => {
+    const generation = beginPublication();
     setBusy(true);
-    setFetchError(null);
     try {
       const r = await fetch(`/api/fetch?url=${encodeURIComponent(url)}`);
       if (!r.ok) {
         const reason = (await r.text()).trim() || `HTTP ${r.status}`;
-        setFetchError(`Could not fetch that URL: ${reason}`);
+        failPublication(`Could not fetch that URL: ${reason}`, generation);
         return;
       }
       const found = findBlueprintString(await r.text());
       if (!found) {
-        setFetchError('No blueprint string found on that page.');
+        failPublication('No blueprint string found on that page.', generation);
         return;
       }
-      setText(found);
-      load(found);
+      if (publishArtifact(found, generation)) setText(found);
     } catch (e: unknown) {
-      setFetchError(`Could not fetch that URL: ${e instanceof Error ? e.message : String(e)}`);
+      failPublication(
+        `Could not fetch that URL: ${e instanceof Error ? e.message : String(e)}`,
+        generation,
+      );
     } finally {
       setBusy(false);
     }
@@ -77,8 +80,7 @@ export function InputPanel() {
         <button
           type="button"
           onClick={() => {
-            setFetchError(null);
-            load(text.trim());
+            publishArtifact(text.trim(), beginPublication());
           }}
           disabled={!text.trim()}
         >
@@ -95,15 +97,12 @@ export function InputPanel() {
           {busy ? 'Fetching…' : 'Fetch'}
         </button>
       </div>
-      {/* Only one alert is ever shown: a fresh fetchError always supersedes a stale parse
-          error (and vice versa, since load() clears fetchError), so the two channels never
-          display contradictory messages at once. */}
-      {(fetchError ?? error) && (
+      {error && (
         <p role="alert" className="error">
-          {fetchError ?? error}
+          {error}
         </p>
       )}
-      {blueprint && !blueprint.hashValid && (
+      {document?.kind === 'artifact' && !document.blueprint.hashValid && (
         <p className="warn">
           Checksum mismatch — rendering anyway. Some third-party tools emit unhashed strings.
         </p>

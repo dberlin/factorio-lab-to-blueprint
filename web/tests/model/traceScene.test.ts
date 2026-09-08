@@ -1,6 +1,7 @@
 import { expect, test } from '@rstest/core';
 import type { TraceFrame } from '../../src/api/trace';
 import { traceFrameToBlueprint } from '../../src/model/traceScene';
+import { beltSuccessors, buildBeltRuns } from '../../src/model/beltGraph';
 import { realCatalog } from '../support/catalog';
 
 const frame: TraceFrame = {
@@ -62,4 +63,30 @@ test('a synthesised frame was never hashed or encoded', () => {
   const bp = traceFrameToBlueprint(frame);
   expect(bp.hashValid).toBe(false);
   expect(bp.patch).toBeNull();
+});
+
+test('sampled dense links reconstruct the retained chain and disconnected sorter endpoints', () => {
+  // Encoder output for original indexes 0, 2, 4, 6, 8. Original target 3
+  // was omitted; retaining it literally would point at the wrong dense row.
+  const sampled: TraceFrame = {
+    ...frame,
+    truncated: true,
+    buildings: [
+      [2001, 35, 0, 0, 0, 0, 0, 0, 1, -1],
+      [2001, 35, 2, 0, 0, 0, 0, 0, -1, -1],
+      [2011, 41, 4, 0, 0, 0, 0, 0, 3, 1],
+      [2011, 41, 6, 0, 0, 0, 0, 0, -1, -1],
+      [2001, 35, 8, 0, 0, 0, 0, 0, -1, -1],
+    ],
+  };
+  const bp = traceFrameToBlueprint(sampled);
+  const successors = beltSuccessors(bp);
+  expect(successors.get(0)).toBe(1);
+  expect(successors.has(1)).toBe(false);
+  expect(buildBeltRuns(bp).map((run) => run.belts)).toEqual([[0, 1], [4]]);
+  const sorter = bp.buildings[2]!;
+  expect(bp.buildings[sorter.inputObjIdx]?.x).toBe(2);
+  expect(bp.buildings[sorter.outputObjIdx]?.x).toBe(6);
+  expect(bp.buildings[3]?.inputObjIdx).toBe(-1);
+  expect(bp.buildings[3]?.outputObjIdx).toBe(-1);
 });
