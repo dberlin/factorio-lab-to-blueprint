@@ -32,15 +32,14 @@ from typing import NamedTuple
 
 from flab2bp.dsp import catalog
 from flab2bp.layout import junction, slots
+from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.layout.buildings import Buildings
 from flab2bp.layout.freeform import (
-    CoaterSupplyPort,
     PortAccessDemand,
     PortAccessEvidence,
     PortAccessReservation,
     _Canvas,
-    _collision_pose,
     _lane_stacks_for,
     _Net,
     _place_power,
@@ -48,12 +47,12 @@ from flab2bp.layout.freeform import (
     _port_access_inventory,
     _power_reservation,
     _PreparationDeadline,
+    _prepare_coater_junction_geometry,
+    _reserve_coater_belt_ban,
     _reserve_port_access,
-    _reserve_staged_coater_belt_ban,
     _route_all,
     _sorter_stacks_for,
     _sorter_tiers_for,
-    _StagedCoater,
     _Unpowerable,
     plan_power_infill,
 )
@@ -64,6 +63,7 @@ from flab2bp.spec import BuildSpec
 
 #: Latitude rows in the tallest band; a deeper placement pastes on no band.
 BAND_MAX_ROWS = 160
+_PORTABLE_POLICY = BandPolicy("portable")
 
 #: The narrowest gap a packing may leave between two blocks.
 #:
@@ -374,58 +374,6 @@ def _belt_model_for(spec: BuildSpec) -> int:
     return catalog.building(_belt_id_for(spec)).model_index
 
 
-def _coater_belt_ban(canvas: _Canvas, index: int, belt_model: int) -> None:
-    """Price one composed Coater's collider the way ``_place_coaters`` does.
-
-    ``_reserve_staged_coater_belt_ban`` wants a :class:`_StagedCoater`, which
-    only the seating pass builds.  Everything it READS is recoverable from the
-    committed Coater alone: ``port.host_x``/``host_y`` are the Coater's own
-    tile, ``port.x``/``y`` its drop cell (``slots.addon_supply_cell`` is a pure
-    function of the Coater's pose), ``port.yaw`` and ``coater.model_index`` are
-    on the building, and ``projected_pair[1]`` is ``_collision_pose`` of it.
-
-    Every OTHER field of the staged triple -- the approach and supply belts and
-    their indices, the item -- is inert here and is filled with an obvious
-    placeholder rather than a plausible-looking guess.  A composed block does
-    carry those belts, but only at the drop's own altitude, and a lookup that
-    silently returned the ground belt under the Coater instead would be a wrong
-    answer wearing a right one's clothes.
-
-    STAYS under a node arm.  This reconstructs the ban from a COMMITTED
-    building and never asks who seated it, so it is agnostic to whether that
-    Coater rode a strip channel (`off`) or its own four-tile node (`placed`).
-    """
-    coater = canvas.buildings[index]
-    drop = slots.addon_supply_cell(
-        catalog.SPRAY_COATER_ID, x=coater.x, y=coater.y, z=coater.z, yaw=coater.yaw, area=1
-    )
-    inert = coater  # never read by `_reserve_staged_coater_belt_ban`
-    _reserve_staged_coater_belt_ban(
-        canvas,
-        _StagedCoater(
-            approach=inert,
-            supply=inert,
-            coater=coater,
-            projected_pair=(index, _collision_pose(coater)),
-            port=CoaterSupplyPort(
-                coater=index,
-                host_belt=index,
-                approach_belt=index,
-                supply_belt=index,
-                item=coater.carries_item or "",
-                yaw=coater.yaw,
-                host_x=coater.x,
-                host_y=coater.y,
-                host_z=int(coater.z),
-                x=drop[0],
-                y=drop[1],
-                z=drop[2],
-            ),
-        ),
-        belt_model,
-    )
-
-
 def canvas_for(
     spec: BuildSpec, buildings: list[PlacedBuilding], *, ramped: bool, margin: int
 ) -> _Canvas:
@@ -446,10 +394,9 @@ def canvas_for(
     * SORTERS are appended with NO lattice reservation at all, exactly as
       ``_emit_sorter`` (~7170) does -- every collision sweep skips them, and
       banning their band here would cost the router paths the game allows;
-    * Spray Coaters are appended and then priced through
-      ``_reserve_staged_coater_belt_ban``, which is the only thing that stops
-      the router laying a level-1 belt beside a Coater that the game then
-      refuses on paste.
+    * Spray Coaters reserve their actual collider through
+      ``_reserve_coater_belt_ban``. Their projected Splitter clearances are
+      prepared once on the selected packing, before cut routing.
 
     Index order is the composed buildings list's own, because every ``_Port``
     and ``_Net`` indexes into ``canvas.buildings``.
@@ -494,7 +441,7 @@ def canvas_for(
     if coaters:
         belt_model = _belt_model_for(spec)
         for index in coaters:
-            _coater_belt_ban(canvas, index, belt_model)
+            _reserve_coater_belt_ban(canvas, canvas.buildings[index], belt_model)
         # Every drop is exempt from every overlapping Coater ban: it is a
         # required positional addon connection whichever Coater owns the ban.
         for index in coaters:
@@ -1225,6 +1172,7 @@ def compose(
     gap: int,
     ramped: bool,
     deadline: float | None,
+    policy: BandPolicy = _PORTABLE_POLICY,
     _limit_margin: int = 8,
 ) -> ComposeResult:
     """Pack the solved blocks side by side and wire every ``LaneFlow`` between them.
@@ -1272,7 +1220,26 @@ def compose(
 
     belt_id = _belt_id_for(spec)
     belt_model = _belt_model_for(spec)
-    result = _route_all(canvas, nets, belt_id, belt_model, bounds, deadline=deadline)
+    try:
+        junction_ban, junction_frame_bans = _prepare_coater_junction_geometry(
+            canvas.buildings,
+            bounds,
+            policy,
+            already_banned=frozenset(canvas.junction_ban),
+            cancelled=partial(_spent, deadline),
+        )
+    except _PreparationDeadline:
+        return _budget_refusal(_Packing(packed.buildings, blocks, canvas, nets))
+    canvas.junction_ban.update(junction_ban)
+    result = _route_all(
+        canvas,
+        nets,
+        belt_id,
+        belt_model,
+        bounds,
+        deadline=deadline,
+        junction_frame_bans=junction_frame_bans,
+    )
 
     failures.extend(
         f"{failure.net_id.item}: block {failure.net_id.source_strip} -> "

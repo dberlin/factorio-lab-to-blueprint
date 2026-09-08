@@ -228,20 +228,6 @@ def test_placed_bans_the_area_one_rival(
     belt_item = catalog.item_id("conveyor-belt-2")
     belt_model = catalog.building(belt_item).model_index
     coater = catalog.building(catalog.SPRAY_COATER_ID)
-    port = freeform.CoaterSupplyPort(
-        coater=0,
-        host_belt=0,
-        approach_belt=0,
-        supply_belt=0,
-        item="iron-ingot",
-        yaw=freeform.Facing.EAST.value,
-        host_x=54,
-        host_y=20,
-        host_z=0,
-        x=53,
-        y=20,
-        z=1,
-    )
     body = freeform.PlacedBuilding(
         item_id=catalog.SPRAY_COATER_ID,
         model_index=coater.model_index,
@@ -252,19 +238,12 @@ def test_placed_bans_the_area_one_rival(
         height=1,
         yaw=freeform.Facing.EAST.value,
     )
-    staged = freeform._StagedCoater(
-        approach=body,
-        supply=body,
-        coater=body,
-        projected_pair=(0, freeform._collision_pose(body)),
-        port=port,
-    )
 
     def ban(arm: str) -> dict[tuple[int, int], set[int]]:
         canvas = _Canvas()
         with pytest.MonkeyPatch.context() as patch:
             patch.setenv("FLAB2BP_COATER_NODE", arm)
-            freeform._reserve_staged_coater_belt_ban(canvas, staged, belt_model)
+            freeform._reserve_coater_belt_ban(canvas, body, belt_model)
         return canvas.belt_ban
 
     off = ban("off")
@@ -333,7 +312,7 @@ def test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_
 ) -> None:
     """The measurement that retired the body-level clause of the coater ban.
 
-    ``_reserve_staged_coater_belt_ban`` used to add the body's own level across
+    ``_reserve_coater_belt_ban`` used to add the body's own level across
     ``[-body_half, +body_half]`` under a node arm.  A* can never step onto an
     occupied belt, so the only thing that ban could buy is stopping
     ``_merge_frontier`` from OFFERING a body tile as a merge goal -- and the
@@ -346,11 +325,11 @@ def test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_
     The clause was a no-op, and this is the proof standing in its place.
     """
     seen: list[tuple[tuple[int, int, int], bool, bool]] = []
-    original = freeform._reserve_staged_coater_belt_ban
+    original = freeform._reserve_coater_belt_ban
 
-    def spy(canvas: _Canvas, staged: freeform._StagedCoater, belt_model: int) -> None:
-        half = freeform._coater_body_half_span(staged.port.yaw)
-        cx, cy, cz = staged.port.host_x, staged.port.host_y, staged.port.host_z
+    def spy(canvas: _Canvas, coater: freeform.PlacedBuilding, belt_model: int) -> None:
+        half = freeform._coater_body_half_span(coater.yaw)
+        cx, cy, cz = coater.x, coater.y, int(coater.z)
         for dx in range(-half, half + 1):
             cell = (cx + dx, cy, cz)
             carries_belt = any(
@@ -359,9 +338,9 @@ def test_a_node_body_tile_is_always_an_occupied_belt_so_no_merge_can_be_offered_
                 for building in canvas.buildings
             )
             seen.append((cell, canvas.free(cell), carries_belt))
-        original(canvas, staged, belt_model)
+        original(canvas, coater, belt_model)
 
-    monkeypatch.setattr(freeform, "_reserve_staged_coater_belt_ban", spy)
+    monkeypatch.setattr(freeform, "_reserve_coater_belt_ban", spy)
     _build("placed", monkeypatch)
 
     assert seen, "the fixture stopped committing a coater"
