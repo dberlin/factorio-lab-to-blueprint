@@ -106,9 +106,16 @@ class _NetRecord(IndexRecord):
 
 
 class Nets[Id: Hashable]:
-    """One pack attempt's prepared nets, answered by key instead of by scan."""
+    """Frozen query-phase keys and row order, with unchanged live payload identity.
+
+    Keys are supplied independently of the opaque payload and captured at
+    construction. Callers must keep identity-bearing payload fields immutable
+    for this phase; a replacement endpoint/identity requires a new phase index.
+    Non-key payload state may remain mutable and is never copied by this owner.
+    """
 
     def __init__(self, rows: Iterable[tuple[Id, str, str, Cell, str, Any]]) -> None:
+        """Capture each row's keys once; retain, rather than clone, its payload."""
         table: littletable.Table = littletable.Table("nets")
         table.create_index("net_id")
         table.create_index("signature")
@@ -131,7 +138,7 @@ class Nets[Id: Hashable]:
 
     @classmethod
     def of(cls, rows: Iterable[tuple[Id, str, str, Cell, str, Any]]) -> Nets[Id]:
-        """Index one pack attempt's prepared nets."""
+        """Index one immutable-key phase of prepared or detailed routing nets."""
         return cls(rows)
 
     def ids(self) -> tuple[Id, ...]:

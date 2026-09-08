@@ -50,9 +50,7 @@ class StakedPaths(Mapping[int, tuple[Cell, ...]]):
 
     def snapshot(self) -> StakedPathSnapshot:
         """Freeze ordered paths and linked-head membership without copying cells."""
-        return tuple(
-            (net, path, net in self._linked_heads) for net, path in self._paths.items()
-        )
+        return tuple((net, path, net in self._linked_heads) for net, path in self._paths.items())
 
     def restore(self, snapshot: StakedPathSnapshot) -> None:
         """Replace the live state and every derived index with one saved order."""
