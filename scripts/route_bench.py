@@ -45,6 +45,7 @@ from typing import Any, cast
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from flab2bp.bench.corpus import entry as corpus_entry  # noqa: E402
+from flab2bp.indexed.port_reservations import PortReservations  # noqa: E402
 from flab2bp.lab.data import load_vendored  # noqa: E402
 from flab2bp.lab.url import parse_url  # noqa: E402
 from flab2bp.layout import freeform, last_mile  # noqa: E402
@@ -69,7 +70,7 @@ def _snapshot(
     # `_Canvas.free` reads it for every start cell -- sharing it replayed one
     # capture in eighty against the WRONG reservations and moved its path by a
     # cell, which is exactly the size of error this bench exists to see.
-    shot_canvas.reserved = dict(canvas.reserved)
+    shot_canvas.reserved = PortReservations(canvas.reserved)
     shot_canvas.solid = set(canvas.solid)
     shot_canvas.keep_out = set(canvas.keep_out)
     # `_Canvas.free` reads these two as well, and BOTH grow after a capture --
