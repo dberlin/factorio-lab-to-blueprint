@@ -46,9 +46,7 @@ def test_payload_reports_the_mode_and_every_move(small_build: pipeline.Build) ->
         count_before=2,
         count_after=2,
     )
-    spec = small_build.spec.model_copy(
-        update={"machine_rank": "up-to", "machine_moves": (move,)}
-    )
+    spec = small_build.spec.model_copy(update={"machine_rank": "up-to", "machine_moves": (move,)})
     body = describe(dataclasses.replace(small_build, spec=spec))
 
     assert body["machine_rank"] == "up-to"

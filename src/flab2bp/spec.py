@@ -269,9 +269,7 @@ class BuildSpec(_Frozen):
 
         allowed = tuple(rank.value for rank in MachineRank)
         if value not in allowed:
-            raise ValueError(
-                f"machine_rank must be one of {', '.join(allowed)}; got {value!r}"
-            )
+            raise ValueError(f"machine_rank must be one of {', '.join(allowed)}; got {value!r}")
         return value
 
     @model_validator(mode="after")

@@ -139,7 +139,6 @@ const BeltRules = z.object({
   from_url: z.boolean(),
 });
 
-
 const BuildResult = z.object({
   /** Null when validation failed and the caller did not pass allow_invalid. */
   blueprint: z.string().nullable(),

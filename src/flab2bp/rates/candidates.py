@@ -39,8 +39,8 @@ from flab2bp.spec import (
     BuildSpec,
     BuildSpecSet,
     CoproductBufferProof,
-    MachineMoveRecord,
     MachineGroup,
+    MachineMoveRecord,
     ProliferatorMode,
     SelfLoopSeed,
 )

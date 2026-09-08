@@ -1,0 +1,7 @@
+{
+  "arm": "exact",
+  "mode": "reported",
+  "commit": "f148a4c3c6d662e3e19ba28f9a397507c1342220",
+  "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto",
+  "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/src/flab2bp/__init__.py"
+}

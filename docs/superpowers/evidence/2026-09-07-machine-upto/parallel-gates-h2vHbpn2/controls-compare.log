@@ -1,0 +1,15 @@
+warning: `VIRTUAL_ENV=/home/dannyb/sources/factorio-lab-to-blueprint/.venv` does not match the project environment path `.venv` and will be ignored; use `--active` to target the active environment instead
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "iron-ingot"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "magnetic-coil"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "graphene"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "electromagnetic-matrix"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "plastic"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "processor"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "energy-matrix"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "super-magnetic-ring"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "casimir-crystal"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": false, "reason": "missing clean digest or blueprint mismatch", "url_id": "information-matrix"}
+{"base_status": "CLEAN", "exact_status": "CLEAN", "pass": true, "reason": "matching full blueprint", "url_id": "quantum-chip"}
+{"base_status": "REFUSED", "exact_status": "REFUSED", "pass": false, "reason": "missing clean digest or blueprint mismatch", "url_id": "universe-matrix"}
+
+EXIT=1

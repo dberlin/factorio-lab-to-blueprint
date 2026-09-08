@@ -1,0 +1,19 @@
+{"command": ["uv", "run", "python", "scripts/audit.py", "--only", "quantum-chip", "--budget", "30", "--jobs", "8", "--strategy", "both", "--max-seconds", "3600", "--json", "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/docs/superpowers/evidence/2026-09-07-machine-upto/parallel-gates-h2vHbpn2/round-base/quantum-chip.jsonl"], "provenance": {"arm": "base", "mode": "round", "commit": "ad8a6f80550e1fb91abe12d30e7efc379d2f8a8d", "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto-base", "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto-base/src/flab2bp/__init__.py"}}
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]    21s freeform  stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     19.9s  <-- 20s
+  . [  2/6]    29s freeform  stress   quantum-chip/all-products power=1 budget=30s         CLEAN     27.4s  <-- 27s
+  . [  3/6]    29s freeform  stress   quantum-chip/output-products power=1 budget=30s      CLEAN     28.1s  <-- 28s
+  . [  4/6]    31s sequence-pair stress   quantum-chip/no-proliferator power=1 budget=30s      CLEAN     29.8s  <-- 30s
+  . [  5/6]    35s sequence-pair stress   quantum-chip/output-products power=1 budget=30s      CLEAN     33.6s  <-- 34s
+  . [  6/6]    36s sequence-pair stress   quantum-chip/all-products power=1 budget=30s         CLEAN     34.4s  <-- 34s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 28s freeform quantum-chip/output-products power=1 budget=30s, 27s freeform quantum-chip/all-products power=1 budget=30s, 20s freeform quantum-chip/no-proliferator power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 34s sequence-pair quantum-chip/all-products power=1 budget=30s, 34s sequence-pair quantum-chip/output-products power=1 budget=30s, 30s sequence-pair quantum-chip/no-proliferator power=1 budget=30s
+
+36s wall, 6/6 cells
+2 cells completed after their own requested search deadline; the largest completion tail was 4.4s. Emission, detailed routing already in flight, and validation finish atomically.
+
+exit_code=0

@@ -83,7 +83,11 @@ test('machine moves follow the selected attempt rather than the winner', () => {
     }),
   });
   render(
-    <BuildReportPanel result={aResult()} selectedAttempt={alternative} onSelectAttempt={() => {}} />,
+    <BuildReportPanel
+      result={aResult()}
+      selectedAttempt={alternative}
+      onSelectAttempt={() => {}}
+    />,
   );
 
   const ranking = screen.getByText('Machine ranking').nextElementSibling;

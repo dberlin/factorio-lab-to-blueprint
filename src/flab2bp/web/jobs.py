@@ -297,7 +297,6 @@ def parse_options(raw: JsonValue) -> Options:
         case _:
             raise InvalidOptions("'machine_rank' must be one of exact, up-to")
 
-
     allow_invalid = raw.get("allow_invalid", False)
     if not isinstance(allow_invalid, bool):
         raise InvalidOptions("'allow_invalid' must be a boolean")

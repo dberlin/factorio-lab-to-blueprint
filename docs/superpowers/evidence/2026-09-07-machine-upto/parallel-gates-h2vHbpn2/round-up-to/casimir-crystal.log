@@ -1,0 +1,19 @@
+{"command": ["uv", "run", "python", "scripts/audit.py", "--only", "casimir-crystal", "--budget", "30", "--jobs", "8", "--strategy", "both", "--max-seconds", "3600", "--json", "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/docs/superpowers/evidence/2026-09-07-machine-upto/parallel-gates-h2vHbpn2/round-up-to/casimir-crystal.jsonl", "--machine-rank", "up-to"], "provenance": {"arm": "up-to", "mode": "round", "commit": "f148a4c3c6d662e3e19ba28f9a397507c1342220", "checkout": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto", "imported": "/home/dannyb/sources/factorio-lab-to-blueprint/.claude/worktrees/machine-upto/src/flab2bp/__init__.py"}}
+6 cells of stress, 8 at a time, 16 CP-SAT workers each, cap 3600s
+  . [  1/6]     9s freeform  large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN      7.7s
+  . [  2/6]    17s freeform  large    casimir-crystal/output-products power=1 budget=30s   CLEAN     15.5s  <-- 15s
+  . [  3/6]    21s freeform  large    casimir-crystal/all-products power=1 budget=30s      CLEAN     19.5s  <-- 20s
+  . [  4/6]    30s sequence-pair large    casimir-crystal/all-products power=1 budget=30s      CLEAN     28.4s  <-- 28s
+  . [  5/6]    32s sequence-pair large    casimir-crystal/output-products power=1 budget=30s   CLEAN     30.2s  <-- 30s
+  . [  6/6]    32s sequence-pair large    casimir-crystal/no-proliferator power=1 budget=30s   CLEAN     30.8s  <-- 31s
+
+=== freeform: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 20s freeform casimir-crystal/all-products power=1 budget=30s, 15s freeform casimir-crystal/output-products power=1 budget=30s
+
+=== sequence-pair: 3/3 clean -- CLEAN   (refused 0, invalid 0, crashed 0, not run 0)
+    slowest: 31s sequence-pair casimir-crystal/no-proliferator power=1 budget=30s, 30s sequence-pair casimir-crystal/output-products power=1 budget=30s, 28s sequence-pair casimir-crystal/all-products power=1 budget=30s
+
+32s wall, 6/6 cells
+2 cells completed after their own requested search deadline; the largest completion tail was 0.8s. Emission, detailed routing already in flight, and validation finish atomically.
+
+exit_code=0

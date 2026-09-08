@@ -1504,10 +1504,7 @@ def test_up_to_changes_machine_ids_without_changing_counts_or_flows(data: Datase
     assert {group.recipe_id: dict(group.outputs) for group in up_to.groups} == {
         group.recipe_id: dict(group.outputs) for group in exact.groups
     }
-    moved = {
-        move.recipe_id: (move.from_machine, move.to_machine)
-        for move in up_to.machine_moves
-    }
+    moved = {move.recipe_id: (move.from_machine, move.to_machine) for move in up_to.machine_moves}
     assert moved
     assert all(move.count_before == move.count_after for move in up_to.machine_moves)
     for group in up_to.groups:

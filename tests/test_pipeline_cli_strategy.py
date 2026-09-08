@@ -339,7 +339,6 @@ def test_cli_band_choices_are_exact_and_reach_pipeline(
     assert exc_info.value.code == 2
 
 
-
 def test_cli_machine_rank_choices_are_exact_and_reach_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -368,6 +367,7 @@ def test_cli_machine_rank_choices_are_exact_and_reach_pipeline(
     with pytest.raises(SystemExit) as exc_info:
         cli.main(["iron-ingot", "--machine-rank", "sometimes"])
     assert exc_info.value.code == 2
+
 
 @pytest.mark.parametrize(
     "certified",

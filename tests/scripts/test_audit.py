@@ -189,7 +189,9 @@ def test_run_cell_persists_post_compaction_projection_failures(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, candidate_policies, machine_rank: (SimpleNamespace(label="projection fixture"),),
+        lambda url, candidate_policies, machine_rank: (
+            SimpleNamespace(label="projection fixture"),
+        ),
     )
     monkeypatch.setattr(
         audit,
@@ -819,7 +821,9 @@ def test_a_raced_best_cell_is_judged_by_the_race_grace_not_the_atomic_one(
     monkeypatch.setattr(
         audit,
         "_specs_for",
-        lambda url, candidate_policies, machine_rank: (SimpleNamespace(label="race grace fixture"),),
+        lambda url, candidate_policies, machine_rank: (
+            SimpleNamespace(label="race grace fixture"),
+        ),
     )
     monkeypatch.setattr(
         audit,

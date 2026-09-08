@@ -100,15 +100,18 @@ def test_an_unlocked_unknown_producer_is_not_a_candidate(data) -> None:
         "arc-smelter",
         "plane-smelter",
     )
-    assert choose_machine(
-        custom,
-        recipe,
-        ceiling_id="plane-smelter",
-        craft_rate=Fraction(1, 2),
-        mode=ProliferatorMode.NONE,
-        tier=ProliferatorTier.NONE,
-        unlocked=unlocked,
-    ) == "arc-smelter"
+    assert (
+        choose_machine(
+            custom,
+            recipe,
+            ceiling_id="plane-smelter",
+            craft_rate=Fraction(1, 2),
+            mode=ProliferatorMode.NONE,
+            tier=ProliferatorTier.NONE,
+            unlocked=unlocked,
+        )
+        == "arc-smelter"
+    )
 
 
 def _choose(data, recipe_id: str, ceiling: str, craft_rate: Fraction) -> str:
