@@ -5543,6 +5543,41 @@ def test_internal_seeds_counts_a_port_dock_on_both_sides() -> None:
     assert drains == {ctx.run_of[3]}
 
 
+def test_indexed_sorter_reachability_keeps_exact_item_and_link_boundaries() -> None:
+    p = place(
+        belt(0, 0, out=1),
+        belt(1, 0),
+        splitter(2, 0),
+        belt(3, 0, inp=2),
+        belt(4, 0, out=0),
+        belt(5, 0),
+        sorter(1, 0, 2, 0, inp=1, out=2, carries="gear"),
+        sorter(3, 0, 4, 0, inp=3, out=4, carries="gear"),
+        sorter(0, 0, 5, 0, inp=0, out=5),
+        sorter(1, 0, 6, 0, inp=1, out=999, carries="gear"),
+        sorter(1, 0, 5, 0, inp=1, out=5, carries="copper-ingot"),
+    )
+    ctx = _context(p, None, None, 256, DEFAULT_MAX_BELT_Z, False)
+    reaches = validate_module._belt_reaches_any
+    assert reaches(ctx, 0, {3}, "gear")
+    assert not reaches(ctx, 0, {3}, "copper-ingot")
+    assert not reaches(ctx, 0, {5}, "gear")
+    assert reaches(ctx, 0, {5}, "copper-ingot")
+
+
+def test_cached_junction_closure_keeps_internal_and_external_seeds_separate() -> None:
+    p = junction_pair()
+    ctx = _context(p, None, None, 256, DEFAULT_MAX_BELT_Z, False)
+    close = validate_module._cached_closure
+    internally_filled = frozenset[int]()
+    external_entry = frozenset((ctx.run_of[0],))
+    assert close(ctx, internally_filled) == frozenset()
+    sourced = close(ctx, external_entry)
+    assert sourced == frozenset(ctx.run_of.values())
+    assert close(ctx, internally_filled) == frozenset()
+    assert close(ctx, external_entry) == sourced
+
+
 # --- researched tiers -------------------------------------------------------
 
 

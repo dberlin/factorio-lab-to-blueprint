@@ -28,10 +28,12 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 from fractions import Fraction
+from itertools import chain
 
 from flab2bp.dsp import catalog as cat
 from flab2bp.dsp import codec, colliders, params, rules, splitter_ports
 from flab2bp.dsp import colliders as dsp_colliders
+from flab2bp.indexed import Sorters
 from flab2bp.layout import slots
 from flab2bp.layout.base import PlacedBuilding, Placement
 from flab2bp.spec import BuildSpec, MachineGroup
@@ -262,6 +264,9 @@ class _Cache:
     item_names: dict[int, str] | None = None
     tower_centres: list[tuple[int, Fraction, Fraction, Fraction, Fraction]] | None = None
     sorter_items: dict[int, str | None] | None = None
+    sorters: Sorters | None = None
+    internal_seeds: tuple[frozenset[int], frozenset[int]] | None = None
+    junction_closure: dict[frozenset[int], frozenset[int]] = field(default_factory=dict)
     run_labels: dict[int, set[str]] | None = None
     run_items: dict[int, set[str | None]] | None = None
     run_components: dict[int, int] | None = None
@@ -403,6 +408,18 @@ class Context:
             )
             self.cache.of_kind[kind] = got
         return iter(got)
+
+    def sorters(self) -> Sorters:
+        """Sorters keyed by links and resolved cargo, shared by this context."""
+        got = self.cache.sorters
+        if got is None:
+            items = _sorter_items(self)
+            got = Sorters.of(
+                (index, building, items.get(index))
+                for index, building in self.of_kind(Kind.SORTER)
+            )
+            self.cache.sorters = got
+        return got
 
     def stack_of(self, run: int) -> int:
         """The cargo stack every unit on ``run`` is guaranteed to have (design 5.5).
@@ -4092,6 +4109,15 @@ def _internal_seeds(ctx: Context) -> tuple[set[int], set[int]]:
     return drains, seeds
 
 
+def _cached_internal_seeds(ctx: Context) -> tuple[frozenset[int], frozenset[int]]:
+    got = ctx.cache.internal_seeds
+    if got is None:
+        drains, seeds = _internal_seeds(ctx)
+        got = frozenset(drains), frozenset(seeds)
+        ctx.cache.internal_seeds = got
+    return got
+
+
 def _run_components(ctx: Context) -> dict[int, int]:
     """Run -> id of the connected lane network it belongs to.
 
@@ -4122,7 +4148,7 @@ def _run_components(ctx: Context) -> dict[int, int]:
     return component
 
 
-def _close_over_junctions(ctx: Context, seeds: set[int]) -> set[int]:
+def _close_over_junctions(ctx: Context, seeds: set[int] | frozenset[int]) -> set[int]:
     """Every run reachable from ``seeds`` through splitters.
 
     Sourcing is TRANSITIVE THROUGH JUNCTIONS.  A splitter with something feeding
@@ -4145,6 +4171,15 @@ def _close_over_junctions(ctx: Context, seeds: set[int]) -> set[int]:
                     sourced.add(tapped)
                     changed = True
     return sourced
+
+
+def _cached_closure(ctx: Context, seeds: frozenset[int]) -> frozenset[int]:
+    """Keep distinct seed questions separate and shared answers immutable."""
+    got = ctx.cache.junction_closure.get(seeds)
+    if got is None:
+        got = frozenset(_close_over_junctions(ctx, seeds))
+        ctx.cache.junction_closure[seeds] = got
+    return got
 
 
 @check("flow.lane_sourced", needs_spec=True, needs_groups=True)
@@ -4177,9 +4212,9 @@ def _lane_sourced(ctx: Context) -> Iterable[Finding]:
     external = set(ctx.spec.external_inputs)
     bs = ctx.placement.buildings
 
-    drains, seeds = _internal_seeds(ctx)
+    drains, seeds = _cached_internal_seeds(ctx)
     seeds |= {r for r, run in enumerate(ctx.runs) if _external_item(ctx, run, external) is not None}
-    sourced = _close_over_junctions(ctx, seeds)
+    sourced = _cached_closure(ctx, seeds)
     items = _sorter_items(ctx)
 
     dry = {r for r in range(len(ctx.runs)) if r not in sourced}
@@ -4355,7 +4390,7 @@ def _entry_runs(ctx: Context) -> dict[str, list[int]]:
     if cached is not None:
         return cached
     external = set(ctx.spec.external_inputs)
-    internal = _close_over_junctions(ctx, _internal_seeds(ctx)[1])
+    internal = _cached_closure(ctx, _cached_internal_seeds(ctx)[1])
     out: dict[str, list[int]] = defaultdict(list)
     for r, run in enumerate(ctx.runs):
         if r in internal or ctx.pred.get((RUN, r)):
@@ -4393,7 +4428,7 @@ def _entry_items(ctx: Context) -> dict[int, set[str]]:
     cached = ctx.cache.entry_items
     if cached is not None:
         return cached
-    internal = _close_over_junctions(ctx, _internal_seeds(ctx)[1])
+    internal = _cached_closure(ctx, _cached_internal_seeds(ctx)[1])
     drawn = _run_items(ctx, _sorter_items(ctx))
     out: dict[int, set[str]] = {}
     for r, run in enumerate(ctx.runs):
@@ -4609,6 +4644,7 @@ def _fraction_gcd(one: Fraction, two: Fraction) -> Fraction:
 def _belt_reaches_any(ctx: Context, start: int, targets: set[int], item: str) -> bool:
     pending = [start]
     seen: set[int] = set()
+    sorters = ctx.sorters()
     while pending:
         index = pending.pop()
         if index in seen:
@@ -4617,15 +4653,14 @@ def _belt_reaches_any(ctx: Context, start: int, targets: set[int], item: str) ->
         if index in targets:
             return True
         pending.extend(_belt_successors(ctx, index))
-        pending.extend(
-            sorter.output_obj
-            for sorter_index, sorter in ctx.of_kind(Kind.SORTER)
-            if sorter.input_obj == index
-            and sorter.output_obj is not None
-            and 0 <= sorter.output_obj < len(ctx.kinds)
-            and ctx.kinds[sorter.output_obj] in (Kind.BELT, Kind.SPLITTER)
-            and _sorter_item(ctx, sorter_index) == item
-        )
+        for sorter_index in sorters.drawing_from_carrying(index, item):
+            destination = sorters.building(sorter_index).output_obj
+            if (
+                destination is not None
+                and 0 <= destination < len(ctx.kinds)
+                and ctx.kinds[destination] in (Kind.BELT, Kind.SPLITTER)
+            ):
+                pending.append(destination)
     return False
 
 
@@ -4944,7 +4979,7 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
     dead at one of these, which would leave every branch fed only by a transfer
     reading as clean whatever its trunk carries.  ``_build_graph`` already links
     the two runs, so the branch's head is not mistaken for a source; what is
-    missing there is the tile-level edge, and that is what ``hops`` is.
+    missing there is the tile-level edge, supplied here by ``sorter_hops``.
 
     Cargo AT the coater's own tile counts as sprayed.  The coater is an addon on
     that belt and the items pass through it there, which is why both strategies
@@ -4959,6 +4994,7 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
     bs = ctx.placement.buildings
     rides = _coater_rides(ctx)
     labels = _run_labels(ctx)
+    sorters = ctx.sorters()
 
     def carries(belt: int) -> bool:
         r = ctx.run_of.get(belt)
@@ -4968,13 +5004,12 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
         return not known or item in known
 
     entry: set[int] = set()
-    #: belt -> belts a sorter moves cargo onto from it.  An edge, not a source.
-    hops: dict[int, list[int]] = defaultdict(list)
     # An internally produced ingredient arrives through a sorter off a machine;
     # a belt-to-belt sorter is a hop, and the run it lands on is already NOT a
     # source here because ``_build_graph`` links the two runs, so its head has a
     # predecessor and the clause below passes it over.
-    for _i, s in ctx.of_kind(Kind.SORTER):
+    for sorter_index in sorters.indices():
+        s = sorters.building(sorter_index)
         src, dst = s.input_obj, s.output_obj
         if src is None or dst is None:
             continue
@@ -4984,8 +5019,6 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
             continue
         if ctx.kinds[src] is Kind.MACHINE:
             entry.add(dst)
-        elif ctx.kinds[src] is Kind.BELT:
-            hops[src].append(dst)
     # An external ingredient arrives on a run nothing inside feeds.
     for r, run in enumerate(ctx.runs):
         head = run.head
@@ -4994,6 +5027,18 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
         if not ctx.pred.get((RUN, r)):
             entry.add(head)
 
+    def sorter_hops(belt: int) -> Iterator[int]:
+        if ctx.kinds[belt] is not Kind.BELT:
+            return
+        for sorter_index in sorters.drawing_from(belt):
+            destination = sorters.building(sorter_index).output_obj
+            if (
+                destination is not None
+                and 0 <= destination < len(bs)
+                and ctx.kinds[destination] is Kind.BELT
+            ):
+                yield destination
+
     dirty: set[int] = set()
     stack = [b for b in entry if b not in rides]
     while stack:
@@ -5001,7 +5046,7 @@ def _unsprayed_belts(ctx: Context, item: str) -> set[int]:
         if b in dirty:
             continue
         dirty.add(b)
-        for nxt in (*_belt_successors(ctx, b), *hops.get(b, ())):
+        for nxt in chain(_belt_successors(ctx, b), sorter_hops(b)):
             if nxt in dirty or nxt in rides or not carries(nxt):
                 continue
             stack.append(nxt)
@@ -5043,18 +5088,7 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
     if not spec.spray_lanes:
         return
     bs = ctx.placement.buildings
-    items = _sorter_items(ctx)
-
-    feeds: dict[int, list[tuple[int, int, str | None]]] = defaultdict(list)
-    for i, s in ctx.of_kind(Kind.SORTER):
-        src, dst = s.input_obj, s.output_obj
-        if src is None or dst is None:
-            continue
-        if not (0 <= src < len(bs) and 0 <= dst < len(bs)):
-            continue
-        if ctx.kinds[src] is not Kind.BELT or ctx.kinds[dst] is not Kind.MACHINE:
-            continue
-        feeds[dst].append((i, src, items.get(i)))
+    sorters = ctx.sorters()
 
     unsprayed: dict[str, set[int]] = {}
     for m, _b in ctx.of_kind(Kind.MACHINE):
@@ -5071,7 +5105,16 @@ def _sprayed_cargo_reaches_machines(ctx: Context) -> Iterable[Finding]:
             # give silently, and a machine whose only feed of a sprayed
             # ingredient is unattributable is exactly the case where the
             # geometry needs looking at.
-            candidates = [(i, src) for i, src, got in feeds.get(m, ()) if got in (item, None)]
+            candidates: list[tuple[int, int]] = []
+            for sorter_index in sorters.feeding(m):
+                source = sorters.building(sorter_index).input_obj
+                if (
+                    source is not None
+                    and 0 <= source < len(bs)
+                    and ctx.kinds[source] is Kind.BELT
+                    and sorters.item(sorter_index) in (item, None)
+                ):
+                    candidates.append((sorter_index, source))
             if not candidates:
                 continue  # `machine.inputs_supplied` owns the missing-feed case
             dirty = unsprayed.get(item)
@@ -5270,6 +5313,23 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
     external_node = source_node + 1
     sink_node = source_node + 2
     node_count = sink_node + 1
+    sorters = ctx.sorters()
+    belt_edges: list[tuple[int, int]] = []
+    for index, belt in ctx.of_kind(Kind.BELT):
+        onward = belt.output_obj
+        if (
+            onward is not None
+            and 0 <= onward < building_count
+            and ctx.kinds[onward] in physical_kinds
+        ):
+            belt_edges.append((index, onward))
+        upstream = belt.input_obj
+        if (
+            upstream is not None
+            and 0 <= upstream < building_count
+            and ctx.kinds[upstream] in (Kind.SPLITTER, Kind.PILER)
+        ):
+            belt_edges.append((upstream, index))
 
     def producer_node(machine: int) -> int:
         return building_count + machine
@@ -5296,26 +5356,11 @@ def _lane_balance(ctx: Context) -> Iterable[Finding]:
         predecessors: dict[int, set[int]] = defaultdict(set)
         consumer_feeders: set[int] = set()
 
-        for index, belt in ctx.of_kind(Kind.BELT):
-            onward = belt.output_obj
-            if (
-                onward is not None
-                and 0 <= onward < building_count
-                and ctx.kinds[onward] in physical_kinds
-            ):
-                _add_flow_link(graph, predecessors, index, onward, total_demand)
-            upstream = belt.input_obj
-            if (
-                upstream is not None
-                and 0 <= upstream < building_count
-                and ctx.kinds[upstream] in (Kind.SPLITTER, Kind.PILER)
-            ):
-                _add_flow_link(graph, predecessors, upstream, index, total_demand)
+        for belt_source, belt_destination in belt_edges:
+            _add_flow_link(graph, predecessors, belt_source, belt_destination, total_demand)
 
-        for sorter_index, sorter in ctx.of_kind(Kind.SORTER):
-            moved = items.get(sorter_index)
-            if moved is not None and moved != item:
-                continue
+        for sorter_index in sorters.carrying_or_unknown(item):
+            sorter = sorters.building(sorter_index)
             source = sorter.input_obj
             destination = sorter.output_obj
             if (
