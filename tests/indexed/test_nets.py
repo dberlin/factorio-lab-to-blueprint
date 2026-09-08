@@ -115,7 +115,7 @@ def test_a_net_in_two_roles_shares_one_id_and_one_payload_across_two_rows() -> N
 
 
 def test_an_empty_collection_answers_empty() -> None:
-    index = Nets.of(())
+    index: Nets[int] = Nets.of(())
     assert index.ids() == ()
     assert index.matching_demand("gear", "input", (0, 0, 0)) == ()
     assert index.in_role((0, 0, 0), "src") == ()
@@ -137,3 +137,21 @@ def test_ids_reflects_insertion_order_not_ascending_net_id() -> None:
     index = Nets.of(rows)
     assert index.ids() == (5, 1, 3)
     assert index.in_role((0, 0, 0), "src") == (5, 1, 3)
+
+
+def test_stable_net_ids_keep_role_and_payload_order() -> None:
+    from flab2bp.layout.route_feedback import NetId, NetRole
+
+    first = NetId(0, 1, "gear", NetRole.INTERNAL, 0)
+    second = NetId(2, 1, "gear", NetRole.INTERNAL, 1)
+    rows = [
+        (first, "gear", "", (9, 0, 0), "src", "first"),
+        (first, "gear", "", (1, 0, 0), "dst", "first"),
+        (second, "gear", "", (1, 0, 0), "dst", "second"),
+    ]
+    index = Nets.of(rows)
+
+    assert index.ids() == (first, second)
+    assert index.by_id(first) == "first"
+    assert index.roles_of(first) == (((9, 0, 0), "src"), ((1, 0, 0), "dst"))
+    assert index.payloads_in_role((1, 0, 0), "dst") == ("first", "second")

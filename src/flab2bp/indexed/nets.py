@@ -85,7 +85,7 @@ versions.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Hashable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -98,22 +98,22 @@ Cell = tuple[int, int, int]
 
 @dataclass
 class _NetRecord(IndexRecord):
-    net_id: int = -1
+    net_id: Hashable = -1
     role: str = ""
     signature: tuple[str, str, Cell] = ("", "", (0, 0, 0))
     cell_role: tuple[Cell, str] = ((0, 0, 0), "")
     position: int = -1
 
 
-class Nets:
+class Nets[Id: Hashable]:
     """One pack attempt's prepared nets, answered by key instead of by scan."""
 
-    def __init__(self, rows: Iterable[tuple[int, str, str, Cell, str, Any]]) -> None:
+    def __init__(self, rows: Iterable[tuple[Id, str, str, Cell, str, Any]]) -> None:
         table: littletable.Table = littletable.Table("nets")
         table.create_index("net_id")
         table.create_index("signature")
         table.create_index("cell_role")
-        ids: list[int] = []
+        ids: list[Id] = []
         for position, (net_id, item, kind, cell, role, payload) in enumerate(rows):
             table.insert(
                 _NetRecord(
@@ -130,15 +130,15 @@ class Nets:
         self._ids = tuple(dict.fromkeys(ids))
 
     @classmethod
-    def of(cls, rows: Iterable[tuple[int, str, str, Cell, str, Any]]) -> Nets:
+    def of(cls, rows: Iterable[tuple[Id, str, str, Cell, str, Any]]) -> Nets[Id]:
         """Index one pack attempt's prepared nets."""
         return cls(rows)
 
-    def ids(self) -> tuple[int, ...]:
+    def ids(self) -> tuple[Id, ...]:
         """Every DISTINCT net id, first-seen order (never once per role row)."""
         return self._ids
 
-    def by_id(self, net_id: int) -> Any | None:
+    def by_id(self, net_id: Id) -> Any | None:
         """The net with that id, or ``None``.
 
         A net_id is not unique across the table in general (a net can carry
@@ -154,7 +154,17 @@ class Nets:
         records = sorted(self._table.by.signature[(item, kind, cell)], key=lambda r: r.position)
         return tuple(record.payload for record in records)
 
-    def in_role(self, cell: Cell, role: str) -> tuple[int, ...]:
+    def in_role(self, cell: Cell, role: str) -> tuple[Id, ...]:
         """Net ids occupying one role at one cell, in preparation order."""
         records = sorted(self._table.by.cell_role[(cell, role)], key=lambda r: r.position)
         return tuple(record.net_id for record in records)
+
+    def roles_of(self, net_id: Id) -> tuple[tuple[Cell, str], ...]:
+        """This net's endpoint roles, in the original row order."""
+        records = sorted(self._table.by.net_id[net_id], key=lambda r: r.position)
+        return tuple(record.cell_role for record in records)
+
+    def payloads_in_role(self, cell: Cell, role: str) -> tuple[Any, ...]:
+        """The payloads occupying a cell-role, in preparation order."""
+        records = sorted(self._table.by.cell_role[(cell, role)], key=lambda r: r.position)
+        return tuple(record.payload for record in records)
