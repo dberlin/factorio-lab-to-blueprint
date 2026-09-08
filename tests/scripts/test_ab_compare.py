@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from flab2bp.bench.corpus import URL_CORPUS
+from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.layout import finalize, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import AreaFrame, Placement, PlacementCompletion
@@ -25,6 +26,7 @@ def test_current_judge_rejects_skipped_power_checks(
         cast(BuildSpec, object()),
         cast(validate.IdMap, object()),
         cast(Placement, object()),
+        belt_rules=belt_rules_for_url(URL_CORPUS[0].url),
     )
 
     assert not valid
@@ -105,7 +107,7 @@ def test_layout_call_preserves_completed_placement(
 
     result = ab_compare._LayoutCall(
         strategy="completed",
-        vertical=True,
+        belt_rules=belt_rules_for_url(URL_CORPUS[0].url),
         spec=cast(BuildSpec, object()),
         budget_s=1.0,
     )()
@@ -165,7 +167,7 @@ def test_layout_call_completes_raw_placement_once_in_order(
 
     result = ab_compare._LayoutCall(
         strategy="raw",
-        vertical=False,
+        belt_rules=belt_rules_for_url(URL_CORPUS[0].url),
         spec=cast(BuildSpec, object()),
         budget_s=1.0,
     )()

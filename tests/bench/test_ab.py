@@ -14,6 +14,7 @@ stay at ~21s and a bake-off belongs behind a script entry point.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import pytest
 
@@ -259,6 +260,12 @@ def test_a_tiny_invalid_candidate_never_beats_a_larger_valid_one() -> None:
 
 def _comparison(trials: list[Trial], urls: list[str]) -> Comparison:
     return compare(trials, a_name="sequence-pair", b_name="freeform", budget_s=1.0, url_ids=urls)
+
+
+def test_comparison_refuses_to_mix_power_scopes() -> None:
+    trial = _trial(Outcome.VALID, url="a", strategy="sequence-pair", area=100)
+    with pytest.raises(ValueError, match="power"):
+        _comparison([trial, replace(trial, power=not trial.power)], ["a"])
 
 
 def test_coverage_is_reported_before_density_with_both_denominators() -> None:

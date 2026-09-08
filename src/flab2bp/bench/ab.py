@@ -866,9 +866,20 @@ def compare(
     wrong.
     """
     buckets: dict[tuple[str, str], list[Trial]] = {}
+    powers: set[bool] = set()
+    selected_urls = set(url_ids)
     for t in trials:
-        if t.budget_s != budget_s:
+        if (
+            t.budget_s != budget_s
+            or t.url_id not in selected_urls
+            or t.strategy not in (a_name, b_name)
+        ):
             continue
+        powers.add(t.power)
+        if len(powers) > 1:
+            raise ValueError(
+                "A/B comparison requires one power scope; mixed power trials are incompatible"
+            )
         buckets.setdefault((t.url_id, t.strategy), []).append(t)
 
     pairs = tuple(

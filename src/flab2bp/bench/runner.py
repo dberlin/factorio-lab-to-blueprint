@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from flab2bp.bench.corpus import URL_CORPUS, CorpusEntry
 from flab2bp.bench.metrics import measure
 from flab2bp.bench.types import CellResult
+from flab2bp.dsp import catalog
 from flab2bp.lab import data as lab_data
 from flab2bp.lab.techs import belt_rules_for_url
 from flab2bp.lab.url import parse_url
@@ -41,29 +42,24 @@ class StrategyHandle:
     strategy: LayoutStrategy
 
 
-def available_strategies(*, belt_vertical_construction: bool = True) -> tuple[StrategyHandle, ...]:
+def available_strategies(*, belt_rules: catalog.BeltAltitudeRules) -> tuple[StrategyHandle, ...]:
     """Return both implemented production strategies."""
     return (
         StrategyHandle(
             "freeform",
             FreeformLayout(
                 band_policy=BandPolicy("portable"),
-                belt_vertical_construction=belt_vertical_construction,
+                belt_vertical_construction=belt_rules.vertical_construction,
             ),
         ),
         StrategyHandle(
             "sequence-pair",
             SequencePairLayout(
                 band_policy=BandPolicy("portable"),
-                belt_vertical_construction=belt_vertical_construction,
+                belt_vertical_construction=belt_rules.vertical_construction,
             ),
         ),
     )
-
-
-def _id_map(spec: BuildSpec) -> validator.IdMap:
-    """Bridge FactorioLab string ids to the DSP ints a ``Placement`` carries."""
-    return validator.id_map(spec)
 
 
 def _run_cell(
@@ -72,6 +68,8 @@ def _run_cell(
     spec: BuildSpec,
     *,
     time_budget_s: float,
+    belt_rules: catalog.BeltAltitudeRules,
+    ids: validator.IdMap,
 ) -> CellResult:
     started = time.perf_counter()
     try:
@@ -110,7 +108,9 @@ def _run_cell(
     # could have caught a layout that pastes cleanly and does not run. The
     # scoring module ranks on `valid`, not `verified`, so that gap fed straight
     # into the winner.
-    report = validator.validate(placement, spec, ids=_id_map(spec), expect_power=True)
+    report = validator.judge_placement(
+        placement, spec, ids=ids, belt_rules=belt_rules, expect_power=True
+    )
 
     skipped_power = tuple(c for c in report.skipped if c.startswith("power."))
     stats = placement.stats
@@ -197,16 +197,17 @@ def run_corpus(
         # The save's slope rule is a property of THIS entry's URL, so it is
         # asked per entry rather than once for the run.
         rules = belt_rules_for_url(entry.url)
-        for handle in available_strategies(
-            belt_vertical_construction=rules.vertical_construction,
-        ):
-            for spec in specs:
+        ids_by_spec = tuple(validator.id_map(spec) for spec in specs)
+        for handle in available_strategies(belt_rules=rules):
+            for spec, ids in zip(specs, ids_by_spec, strict=True):
                 results.append(
                     _run_cell(
                         handle,
                         entry,
                         spec,
                         time_budget_s=budget,
+                        belt_rules=rules,
+                        ids=ids,
                     )
                 )
     return results

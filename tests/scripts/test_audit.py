@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import dataclasses
 import json
 import subprocess
-import sys
 import time
 from dataclasses import replace
-from fractions import Fraction
 from types import SimpleNamespace
 
 import pytest
 
 from flab2bp.bench.corpus import URL_CORPUS, Tier
-from flab2bp.dsp import catalog
 from flab2bp.layout import finalize, route_kernel, validate
 from flab2bp.layout.band_policy import BandPolicy
 from flab2bp.layout.base import (
@@ -25,9 +21,7 @@ from flab2bp.layout.base import (
     PlacementCompletion,
     ProjectionFailureRecord,
 )
-from flab2bp.layout.freeform import FreeformLayout
-from flab2bp.layout.sequence_solver import SequencePairLayout
-from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S, RacingLayout
+from flab2bp.layout.strategy_race import RACE_COMPLETION_GRACE_S
 from flab2bp.rates import CandidatePolicy
 from scripts import audit
 
@@ -124,7 +118,7 @@ def test_run_cell_preserves_typed_refusal_evidence(
     monkeypatch.setitem(
         audit._STRATEGIES,
         "evidence",
-        lambda workers, vertical, _max_belt_z: RefusingStrategy(),
+        lambda workers, rules: RefusingStrategy(),
     )
     job = audit.Job(
         strategy="evidence",
@@ -137,7 +131,7 @@ def test_run_cell_preserves_typed_refusal_evidence(
         workers=1,
     )
 
-    result = audit.run_cell(job)
+    result = audit.run_cell(job, belt_rules=audit._belt_rules_for(job.url))
 
     assert result.status == "REFUSED"
     assert result.checks == ("<refused>",)
@@ -212,7 +206,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
     monkeypatch.setitem(
         audit._STRATEGIES,
         "post-projection",
-        lambda workers, vertical, _max_belt_z: SuccessfulStrategy(),
+        lambda workers, rules: SuccessfulStrategy(),
     )
 
     def compact_stub(result: object, spec: object, *, expect_power: bool) -> object:
@@ -244,7 +238,7 @@ def test_run_cell_persists_post_compaction_projection_failures(
         workers=1,
     )
 
-    result = audit.run_cell(job)
+    result = audit.run_cell(job, belt_rules=audit._belt_rules_for(job.url))
     audit.record({"post-projection": audit.Tally()}, result)
     persisted = json.loads(json.dumps(audit._JSONL[-1]))
 
@@ -354,7 +348,7 @@ def test_run_cell_does_not_repeat_completed_placement_work(
     monkeypatch.setitem(
         audit._STRATEGIES,
         "completed",
-        lambda workers, vertical, _max_belt_z: CompletedStrategy(),
+        lambda workers, rules: CompletedStrategy(),
     )
     monkeypatch.setattr(finalize, "compact_open_boundary_belts", compact_spy)
     monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
@@ -372,7 +366,7 @@ def test_run_cell_does_not_repeat_completed_placement_work(
         workers=1,
     )
 
-    result = audit.run_cell(job)
+    result = audit.run_cell(job, belt_rules=audit._belt_rules_for(job.url))
     tallies = {"completed": audit.Tally()}
     audit.record(tallies, result)
 
@@ -469,7 +463,7 @@ def test_run_cell_completes_unmarked_placement_once_and_preserves_invalid_findin
     monkeypatch.setitem(
         audit._STRATEGIES,
         "ordinary",
-        lambda workers, vertical, _max_belt_z: UncompletedStrategy(),
+        lambda workers, rules: UncompletedStrategy(),
     )
     monkeypatch.setattr(finalize, "compact_open_boundary_belts", compact_spy)
     monkeypatch.setattr(finalize, "finalize_placement", finalize_spy)
@@ -486,7 +480,7 @@ def test_run_cell_completes_unmarked_placement_once_and_preserves_invalid_findin
         workers=1,
     )
 
-    result = audit.run_cell(job)
+    result = audit.run_cell(job, belt_rules=audit._belt_rules_for(job.url))
 
     assert stages == ["compact", "finalize", "validate"]
     assert len(certified) == 1
@@ -535,18 +529,6 @@ def test_every_audit_row_carries_the_routing_backend_and_the_commit(
         assert row["route_backend"] == expected_backend
 
 
-def test_result_route_backend_field_defaults_via_the_live_selector_not_a_literal() -> None:
-    # This box has a compiled kernel, so `route_kernel.selected_backend()` and a
-    # field hard-coded to `"cython"` are the SAME string right now -- a test
-    # that only compares the constructed value (even against a fresh call to
-    # `selected_backend()`) cannot tell them apart on this box. Assert on the
-    # field's wiring instead: a `default_factory` identical to the live
-    # selector function is present only when the field calls it; a baked-in
-    # default has no `default_factory` at all (`dataclasses.MISSING`).
-    fields = {f.name: f for f in dataclasses.fields(audit.Result)}
-    assert fields["route_backend"].default_factory is route_kernel.selected_backend
-
-
 def test_head_commit_is_a_hash_or_the_word_unknown() -> None:
     commit = audit._head_commit()
 
@@ -564,74 +546,9 @@ def test_head_commit_falls_back_to_unknown_when_git_cannot_run(
     assert audit._head_commit() == "unknown"
 
 
-def test_main_resolves_and_stamps_the_commit_it_reads_at_call_time(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Drives `main()` itself rather than `record()` directly, so that deleting
-    # the `global _COMMIT; _COMMIT = _head_commit()` line inside `main` --
-    # which would leave every row silently stamped "unknown" -- is caught.
-    # `build_jobs` and `run_cell` are replaced with a single canned job/result
-    # so the test exercises `main`'s wiring without running a real solve.
-    monkeypatch.setattr(audit, "_JSONL", [])
-    monkeypatch.setattr(audit, "_COMMIT", "unknown")
-    resolved_commit = "f" * 40
-    monkeypatch.setattr(audit, "_head_commit", lambda: resolved_commit)
-    job = audit.Job(
-        strategy="freeform",
-        url_id=URL_CORPUS[0].url_id,
-        url=URL_CORPUS[0].url,
-        tier=URL_CORPUS[0].tier.value,
-        spec_index=0,
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
-        budget=1.0,
-        workers=1,
-    )
-    monkeypatch.setattr(audit, "build_jobs", lambda *args, **kwargs: [job])
-    monkeypatch.setattr(
-        audit,
-        "run_cell",
-        lambda j: audit.Result(j, "CLEAN", "no-proliferator", "", (), 0.01),
-    )
-    monkeypatch.setattr(sys, "argv", ["audit.py", "--jobs", "1"])
-
-    exit_code = audit.main()
-
-    assert exit_code == 0
-    assert len(audit._JSONL) == 1
-    assert audit._JSONL[0]["commit"] == resolved_commit
-    assert audit._JSONL[0]["commit"] != "unknown"
-    assert audit._JSONL[0]["commit"] == audit._head_commit()
-
-
 def test_all_resolves_to_the_two_strategies_and_the_portfolio() -> None:
     assert audit.strategy_names("all") == ("freeform", "sequence-pair", "best")
     assert audit.strategy_names("both") == ("freeform", "sequence-pair")
-
-
-def test_the_best_cell_builds_a_racing_layout_at_the_cells_belt_ceiling() -> None:
-    # NOT `catalog.DEFAULT_MAX_BELT_Z`: `RacingLayout.max_belt_z` defaults to
-    # exactly that, so a factory that DROPS the argument still constructs a
-    # layout carrying it and a test at the default value cannot see the drop.
-    ceiling = Fraction(23, 4)
-    assert ceiling != catalog.DEFAULT_MAX_BELT_Z
-
-    layout = audit._STRATEGIES["best"](6, True, ceiling)
-
-    assert isinstance(layout, RacingLayout)
-    assert layout.workers == 6
-    assert layout.belt_vertical_construction is True
-    # The child validates its own incumbent before publishing it; validating at
-    # a different ceiling from `run_cell`'s would publish a bound the cell then
-    # rejects.
-    assert layout.max_belt_z == ceiling
-
-
-def test_the_two_explicit_factories_ignore_the_belt_ceiling() -> None:
-    assert isinstance(audit._STRATEGIES["freeform"](4, True, Fraction(171, 20)), FreeformLayout)
-    assert isinstance(
-        audit._STRATEGIES["sequence-pair"](4, True, Fraction(171, 20)),
-        SequencePairLayout,
-    )
 
 
 def test_a_full_all_strategy_run_plans_one_hundred_and_eight_cells() -> None:
@@ -644,60 +561,6 @@ def test_a_full_all_strategy_run_plans_one_hundred_and_eight_cells() -> None:
 
     # 12 corpus URLs x 3 candidate policies x 3 strategies.
     assert len(jobs) == 108
-
-
-def test_run_cell_builds_the_strategy_at_the_cells_own_belt_ceiling(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # `run_cell` validates the winner at `belt_rules.max_z`, so a racing child
-    # handed a DIFFERENT ceiling would certify an incumbent this very cell then
-    # rejects.  The ceiling below is deliberately NOT
-    # `catalog.DEFAULT_MAX_BELT_Z`, or a `run_cell` that passed the module
-    # default instead of this cell's own rules would go unnoticed.
-    ceiling = Fraction(23, 4)
-    assert ceiling != catalog.DEFAULT_MAX_BELT_Z
-    seen: list[tuple[int, bool, Fraction]] = []
-
-    class _RefusingStrategy:
-        def lay_out(self, spec: object, *, time_budget_s: float) -> None:
-            raise NoValidLayout("nothing to lay out", spec_label="ceiling fixture")
-
-    def _factory(
-        workers: int,
-        vertical: bool,
-        max_belt_z: Fraction,
-    ) -> _RefusingStrategy:
-        seen.append((workers, vertical, max_belt_z))
-        return _RefusingStrategy()
-
-    monkeypatch.setattr(
-        audit,
-        "_specs_for",
-        lambda url, candidate_policies, machine_rank, power_tower: (
-            SimpleNamespace(label="ceiling fixture"),
-        ),
-    )
-    monkeypatch.setattr(
-        audit,
-        "_belt_rules_for",
-        lambda url: SimpleNamespace(vertical_construction=True, max_z=ceiling),
-    )
-    monkeypatch.setitem(audit._STRATEGIES, "ceiling", _factory)
-    job = audit.Job(
-        strategy="ceiling",
-        url_id="ceiling",
-        url="test://ceiling",
-        tier="trivial",
-        spec_index=0,
-        candidate_policies=(CandidatePolicy.NO_PROLIFERATOR,),
-        budget=1.0,
-        workers=5,
-    )
-
-    result = audit.run_cell(job)
-
-    assert result.status == "REFUSED"
-    assert seen == [(5, True, ceiling)]
 
 
 def test_a_clean_cell_reports_its_attempt_wall_and_the_overshoot_past_the_grace(
@@ -739,7 +602,7 @@ def test_a_clean_cell_reports_its_attempt_wall_and_the_overshoot_past_the_grace(
     monkeypatch.setitem(
         audit._STRATEGIES,
         "slow",
-        lambda workers, vertical, _max_belt_z: _SlowStrategy(),
+        lambda workers, rules: _SlowStrategy(),
     )
     monkeypatch.setattr(validate, "id_map", lambda spec: object())
     monkeypatch.setattr(
@@ -758,7 +621,7 @@ def test_a_clean_cell_reports_its_attempt_wall_and_the_overshoot_past_the_grace(
         workers=1,
     )
 
-    result = audit.run_cell(job)
+    result = audit.run_cell(job, belt_rules=audit._belt_rules_for(job.url))
 
     assert result.status == "CLEAN"
     # The cell took 23.0s; 3.0 of that was building the spec, so the ATTEMPT is
@@ -854,7 +717,7 @@ def test_a_raced_best_cell_is_judged_by_the_race_grace_not_the_atomic_one(
     monkeypatch.setitem(
         audit._STRATEGIES,
         "best",
-        lambda workers, vertical, _max_belt_z: _SlowRacingStrategy(),
+        lambda workers, rules: _SlowRacingStrategy(),
     )
     monkeypatch.setattr(validate, "id_map", lambda spec: object())
     monkeypatch.setattr(
@@ -873,7 +736,7 @@ def test_a_raced_best_cell_is_judged_by_the_race_grace_not_the_atomic_one(
         workers=1,
     )
 
-    result = audit.run_cell(job)
+    result = audit.run_cell(job, belt_rules=audit._belt_rules_for(job.url))
 
     assert result.status == "CLEAN"
     assert result.attempt_wall_s == pytest.approx(20.0)

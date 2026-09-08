@@ -1303,13 +1303,12 @@ def build(
             # spec-dependent checks are skipped, and a build that never ran its
             # throughput or proliferator checks reads as clean.
             phase_started = time.monotonic()
-            report = validate.validate(
+            report = validate.judge_placement(
                 placement,
                 spec,
                 ids=_id_map(spec),
                 expect_power=True,
-                max_belt_z=belt_rules.max_z,
-                belt_vertical_construction=belt_rules.vertical_construction,
+                belt_rules=belt_rules,
             )
             pipeline_validation_time_s = time.monotonic() - phase_started
             marked = markers.mark_external_belts(placement, spec)
