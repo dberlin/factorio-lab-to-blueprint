@@ -541,9 +541,9 @@ class TestBoundaryRule:
     def test_an_explicit_empty_external_map_does_not_restore_flow_inputs(
         self, pristine: FlowSelection, data: Dataset
     ) -> None:
-        assert unsupplied_inputs(
-            pristine, data, {"fire-ice": Fraction(1)}, external={}
-        ) == ("fire-ice",)
+        assert unsupplied_inputs(pristine, data, {"fire-ice": Fraction(1)}, external={}) == (
+            "fire-ice",
+        )
 
 
 def _selection_fixture() -> FlowSelection:
@@ -573,9 +573,7 @@ class TestByItemAndByRecipe:
     def test_by_item_and_by_recipe_answer_exactly_what_the_comprehensions_did(self) -> None:
         selection = _selection_fixture()
         assert dict(selection.by_item) == {r.item_id: r for r in selection.rows if r.item_id}
-        assert dict(selection.by_recipe) == {
-            r.recipe_id: r for r in selection.rows if r.recipe_id
-        }
+        assert dict(selection.by_recipe) == {r.recipe_id: r for r in selection.rows if r.recipe_id}
 
     def test_the_maps_cannot_be_mutated_through_the_public_attribute(self) -> None:
         selection = _selection_fixture()

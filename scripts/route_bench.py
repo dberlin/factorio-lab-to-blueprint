@@ -273,9 +273,7 @@ def capture_clusters(
         f"({out.stat().st_size / 1e6:.1f} MB); "
         + ", ".join(f"{value}={outcomes[value]}" for value in sorted(outcomes))
         + "; bounds "
-        + ", ".join(
-            f"{value or 'none'}={bounds_hit[value]}" for value in sorted(bounds_hit)
-        )
+        + ", ".join(f"{value or 'none'}={bounds_hit[value]}" for value in sorted(bounds_hit))
     )
 
 

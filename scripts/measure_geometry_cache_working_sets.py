@@ -131,9 +131,7 @@ def _powers_of_two_through(cardinality: int) -> list[int]:
         size *= 2
 
 
-def recommended_maxsize(
-    case_traces: list[list[CacheKey]], combined: list[CacheKey]
-) -> int:
+def recommended_maxsize(case_traces: list[list[CacheKey]], combined: list[CacheKey]) -> int:
     """Choose the smallest evidence-backed power-of-two cache bound."""
     peak_case_distinct = max((len(set(trace)) for trace in case_traces), default=1)
     unbounded_hits = len(combined) - len(set(combined))

@@ -5551,13 +5551,14 @@ def test_indexed_sorter_reachability_keeps_exact_item_and_link_boundaries() -> N
         belt(3, 0, inp=2),
         belt(4, 0, out=0),
         belt(5, 0),
-        sorter(1, 0, 2, 0, inp=1, out=2, carries="gear"),
-        sorter(3, 0, 4, 0, inp=3, out=4, carries="gear"),
+        sorter(1, 0, 2, 0, inp=1, out=2, filter_id=1201),
+        sorter(3, 0, 4, 0, inp=3, out=4, filter_id=1201),
         sorter(0, 0, 5, 0, inp=0, out=5),
-        sorter(1, 0, 6, 0, inp=1, out=999, carries="gear"),
-        sorter(1, 0, 5, 0, inp=1, out=5, carries="copper-ingot"),
+        sorter(1, 0, 6, 0, inp=1, out=999, filter_id=1201),
+        sorter(1, 0, 5, 0, inp=1, out=5, filter_id=1104),
     )
-    ctx = _context(p, None, None, 256, DEFAULT_MAX_BELT_Z, False)
+    ids = IdMap(recipes={}, items={"gear": 1201, "copper-ingot": 1104})
+    ctx = _context(p, None, ids, 256, DEFAULT_MAX_BELT_Z, False)
     reaches = validate_module._belt_reaches_any
     assert reaches(ctx, 0, {3}, "gear")
     assert not reaches(ctx, 0, {3}, "copper-ingot")

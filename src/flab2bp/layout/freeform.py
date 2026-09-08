@@ -9414,9 +9414,7 @@ def _route_all(
         for index, net in enumerate(nets):
             net_id = _net_id(index)
             if net.src is not None:
-                yield (
-                    net_id, net.item, "", (net.src.x, net.src.y, net.src.z), "src", (index, net)
-                )
+                yield (net_id, net.item, "", (net.src.x, net.src.y, net.src.z), "src", (index, net))
             yield net_id, net.item, "", (net.dst.x, net.dst.y, net.dst.z), "dst", (index, net)
 
     net_index = Nets.of(role_rows())
@@ -9919,9 +9917,7 @@ def _route_all(
         """Put a path down with the exact sibling endpoints it selected."""
         selected = hints
         paths[index] = path
-        staked_paths.stake(
-            index, path, linked_head=selected[2] is not None or index in path_tap
-        )
+        staked_paths.stake(index, path, linked_head=selected[2] is not None or index in path_tap)
         if selected[0] is not None:
             source_hint[index] = selected[0]
         else:
@@ -17204,30 +17200,46 @@ def _prepare_routing_problem(
     all_prepared_nets = tuple(
         prepared for prepared in (*prepared_nets, *prepared_output_nets) if not prepared.prelinked
     )
+
     def demand_rows() -> Iterator[tuple[NetId, str, str, Cell, str, _PreparedNet]]:
         for prepared in all_prepared_nets:
             source, destination = prepared_endpoints(prepared)
             net_id = prepared.net_id
             if net_id.role is NetRole.EXTERNAL:
                 yield (
-                    net_id, net_id.item, PortAccessKind.BOUNDARY_ARRIVAL.value,
-                    destination, "dst", prepared,
+                    net_id,
+                    net_id.item,
+                    PortAccessKind.BOUNDARY_ARRIVAL.value,
+                    destination,
+                    "dst",
+                    prepared,
                 )
             elif net_id.role is NetRole.EXTERNAL_OUTPUT:
                 yield (
-                    net_id, net_id.item,
+                    net_id,
+                    net_id.item,
                     PortAccessKind.EARLY_BOUNDARY_DEPARTURE.value if source is not None else "",
-                    source if source is not None else destination, "src", prepared,
+                    source if source is not None else destination,
+                    "src",
+                    prepared,
                 )
             else:
                 if source is not None:
                     yield (
-                        net_id, net_id.item, PortAccessKind.INTERNAL_DEPARTURE.value,
-                        source, "src", prepared,
+                        net_id,
+                        net_id.item,
+                        PortAccessKind.INTERNAL_DEPARTURE.value,
+                        source,
+                        "src",
+                        prepared,
                     )
                 yield (
-                    net_id, net_id.item, PortAccessKind.INTERNAL_ARRIVAL.value,
-                    destination, "dst", prepared,
+                    net_id,
+                    net_id.item,
+                    PortAccessKind.INTERNAL_ARRIVAL.value,
+                    destination,
+                    "dst",
+                    prepared,
                 )
 
     net_index = Nets.of(demand_rows())
@@ -17276,12 +17288,13 @@ def _prepare_routing_problem(
             ),
         )
 
-
     preparation_failures = tuple(
         static_access_failure(prepared, demand.cell)
         for demand in access_reservation.missing
         for prepared in (
-            next(iter(net_index.matching_demand(demand.item, demand.kind.value, demand.cell)), None),
+            next(
+                iter(net_index.matching_demand(demand.item, demand.kind.value, demand.cell)), None
+            ),
         )
         if prepared is not None
     )
@@ -22124,11 +22137,11 @@ class FreeformLayout:
                             strip_pose_id,
                         )
 
-                        strips_by_instance: dict[StripInstanceId, Strip] = {}
+                        projection_strips_by_instance: dict[StripInstanceId, Strip] = {}
                         for strip in strips:
                             if strip.family_id is None:
                                 continue
-                            strips_by_instance.setdefault(
+                            projection_strips_by_instance.setdefault(
                                 StripInstanceId(
                                     strip.family_id,
                                     strip.machine_start,
@@ -22173,7 +22186,9 @@ class FreeformLayout:
 
                             if pitch_requirement is None:
                                 continue
-                            selected_strip = strips_by_instance.get(pitch_requirement.instance_id)
+                            selected_strip = projection_strips_by_instance.get(
+                                pitch_requirement.instance_id
+                            )
                             if (
                                 selected_strip is None
                                 or selected_strip.physical_variant is None

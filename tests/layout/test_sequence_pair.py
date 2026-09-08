@@ -2590,12 +2590,12 @@ def test_topological_frontier_matches_stable_promotions_for_tied_keys() -> None:
             rng.shuffle(nodes)
             successors: list[set[int]] = [set() for _ in range(size)]
             for position, source in enumerate(nodes):
-                for destination in nodes[position + 1:]:
+                for destination in nodes[position + 1 :]:
                     if rng.random() < 0.15:
                         successors[source].add(destination)
             ranks = [rng.randrange(4) for _ in range(size)]
 
-            def key(node: int) -> tuple[int, ...]:
+            def key(node: int, *, ranks: list[int] = ranks) -> tuple[int, ...]:
                 return (ranks[node],)
 
             assert _topological_order(successors, key=key) == _resorted_kahn_reference(

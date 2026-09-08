@@ -415,8 +415,7 @@ class Context:
         if got is None:
             items = _sorter_items(self)
             got = Sorters.of(
-                (index, building, items.get(index))
-                for index, building in self.of_kind(Kind.SORTER)
+                (index, building, items.get(index)) for index, building in self.of_kind(Kind.SORTER)
             )
             self.cache.sorters = got
         return got

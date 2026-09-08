@@ -10103,8 +10103,10 @@ def test_staged_static_terminal_exhaustion_is_bounded_across_distinct_assignment
     assert rejected == [failure]
 
 
+@pytest.mark.parametrize("projection_refusal_first", [False, True])
 def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch: pytest.MonkeyPatch,
+    projection_refusal_first: bool,
 ) -> None:
     spec = proliferated_spec()
     freeform._staged_static_preclearance_proved.cache_clear()
@@ -10166,7 +10168,8 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
                 failure=failure,
                 clearance_requirement=requirement,
             )
-        assert selected.west_channel == freeform._COATER_WEST_CHANNEL + 1
+        if pack.height == 21:
+            assert selected.west_channel == freeform._COATER_WEST_CHANNEL + 1
         return _BuildResult(
             placement=Placement(
                 buildings=(),
@@ -10178,10 +10181,20 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
             towers=(),
         )
 
+    def finalize_candidate(
+        placement: Placement,
+        _policy: BandPolicy,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Placement:
+        if placement.description == "19":
+            raise finalize.ProjectionRefusal((replace(failure, check="geom.bounds", buildings=()),))
+        return placement
+
     monkeypatch.setattr(
         freeform,
         "_band_policy_candidate_heights",
-        lambda _strips, _policy: (20, 21),
+        lambda _strips, _policy: (19, 20, 21) if projection_refusal_first else (20, 21),
     )
     monkeypatch.setattr(freeform, "_pack", pack_candidate)
     monkeypatch.setattr(freeform, "_build", build_candidate)
@@ -10193,7 +10206,7 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     monkeypatch.setattr(
         finalize,
         "finalize_placement",
-        _identity_finalizer,
+        finalize_candidate,
     )
 
     result = FreeformLayout(
@@ -10205,10 +10218,13 @@ def test_clearance_feedback_replans_later_base_height_without_minting_retry(
     freeform._staged_static_preclearance_proved.cache_clear()
     assert result is not None
     assert result.description == "21"
-    assert seen_candidates == [
+    expected = [
         (20, 0, freeform._COATER_WEST_CHANNEL),
         (21, 0, freeform._COATER_WEST_CHANNEL + 1),
     ]
+    if projection_refusal_first:
+        expected.insert(0, (19, 0, freeform._COATER_WEST_CHANNEL))
+    assert seen_candidates == expected
 
 
 def test_exact_retry_evidence_ignores_assignment_coordinates_but_retains_relation() -> None:

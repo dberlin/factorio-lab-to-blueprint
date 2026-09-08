@@ -137,11 +137,7 @@ def _winning_candidates(cells: Sequence[CellResult]) -> list[str]:
     }
     # Preserve first eligible (URL, strategy) order for the printed tally;
     # grouping by strategy alone would reorder its candidate names.
-    best = {
-        (c.url_id, c.strategy): by_strategy[c.strategy][c.url_id]
-        for c in cells
-        if c.valid
-    }
+    best = {(c.url_id, c.strategy): by_strategy[c.strategy][c.url_id] for c in cells if c.valid}
     for (url_id, strategy), c in sorted(best.items()):
         lines.append(f"| {url_id} | {strategy} | {c.candidate} | {c.area} |")
 

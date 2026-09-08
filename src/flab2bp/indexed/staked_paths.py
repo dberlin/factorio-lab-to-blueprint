@@ -31,7 +31,13 @@ class StakedPaths:
     """Nets currently staked, indexed by the cells beside their endpoints."""
 
     __slots__ = (
-        "_beside", "_linked_heads", "_next_order", "_order", "_paths", "_positions", "_steps"
+        "_beside",
+        "_linked_heads",
+        "_next_order",
+        "_order",
+        "_paths",
+        "_positions",
+        "_steps",
     )
 
     def __init__(self, steps: Sequence[tuple[int, int]]) -> None:

@@ -543,9 +543,7 @@ class Cell:
     areas: tuple[int, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "areas", tuple(t.area for t in self.trials if t.area is not None)
-        )
+        object.__setattr__(self, "areas", tuple(t.area for t in self.trials if t.area is not None))
 
     @property
     def n(self) -> int:

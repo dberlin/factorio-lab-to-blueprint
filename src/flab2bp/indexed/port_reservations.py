@@ -5,6 +5,7 @@ not change its insertion position; deleting and reinserting it does. Those
 are the dict semantics the boundary router's former first-match scan used.
 All MutableMapping mutations pass through the same two indexed writers.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
