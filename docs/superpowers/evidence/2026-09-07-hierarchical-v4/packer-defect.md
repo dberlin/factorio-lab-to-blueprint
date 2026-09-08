@@ -117,16 +117,24 @@ recipe pair. It accepts only certified placement or a routed refusal carrying a
 specific diagnostic bound; it does not accept every exception. Focused tests
 protect recurring/disjoint logical identities and the BUDGET/geometry boundary.
 The former test that pinned the generic PACKER wording was replaced rather than
-re-pinned. These tests have **not been run** by the recovery worker; Main owns
-their result and the branch-wide checks.
+re-pinned. The recovery worker did not run these tests. Main subsequently ran
+all four focused/real-block regressions with exit 0; see `recovery-task8-tests.log`.
+Ruff, formatter check and mypy also exited 0 in the `recovery-final-*.log` files.
 
 ## Required next evidence
 
-Follow `verification-recipe.md`, Task 8 section. Main will corroborate at the
-captured 10.12666118494235 s budget and run the focused and real-block regressions.
-The 60 s refusal is already established, so do not classify this as funding
-merely from a smaller budget's refusal. A future local repair still requires
-its own failing reproduction; the present measured outcome is the bound above.
+Main corroborated at the captured 10.12666118494235 s budget: the real block
+refused after 7.328826766926795 s with the same 15-pack evidence, nine static-access
+and six dynamic-access failures, and no common logical failing net. The immediately
+preceding runnable-load mean was 5.6. The `block-20-b10.126661-r1.{json,log}` and
+`block-20-b10.126661-r1-load.txt` retain this observation.
+
+The revised recipe was also exercised in the fresh
+`block-20-b60-replay.983zaF/` directory. Main verified that both archived r2 file
+hashes remained unchanged; this new run has its own load, result and log.
+The 60 s refusal was already established, so the smaller-budget corroboration is
+not a funding diagnosis. A future local repair still needs its own failing
+reproduction; the present measured outcome remains the bound above.
 
 Run the default-unchanged paired 72-cell guard **unconditionally** (inherited
 T1-A), including if the final resolution is only diagnostic wording. Baseline is
@@ -137,9 +145,11 @@ claimed here. Task 9 needs its own final-HEAD guard after all reviews/fixes sett
 ## Review boundary
 
 Task 7's separate `3d5aba53..dd507484` review is complete: independent spec PASS,
-quality PASS, no findings (HierarchyFixReview, confidence 0.98). Task 8's source,
-tests and probe require their own independent review; self-inspection is not a
-substitute. Keep the bounded fix/re-review loop and final whole-branch review
-before the first Task 9 cell. The measured Task 7 residual remains: one of four
+quality PASS, no findings (HierarchyFixReview, confidence 0.98). Task 8's separate
+source/spec review passed (HierarchyTask8Review). Its sole report-quality finding
+was an overwriting replay recipe; that fix passed scoped re-review, confidence 0.99,
+and Main exercised the corrected recipe as recorded above. The mandatory Task 8
+guard and final whole-branch review still precede the first Task 9 cell.
+The measured Task 7 residual remains: one of four
 post-fix mall/no-proliferator rounds starved 70 blocks, while three left six never
 placed. No evidence in this task erases that residual.

@@ -17,9 +17,15 @@ V3=docs/superpowers/evidence/2026-09-07-hierarchical-v3
 uv run pytest tests/layout/test_freeform.py::test_lay_out_bounds_a_routed_refusal_to_the_recurring_net tests/layout/test_freeform.py::test_routing_clock_evidence_cannot_convict_geometry tests/layout/test_freeform.py::test_different_logical_failures_bound_the_searched_space_not_one_net -x
 uv run pytest tests/layout/test_freeform.py::test_the_mall_block_the_packer_convicted_is_placed_or_names_the_cause -x
 MALL=$(cat "$E/mall-url.txt")
-vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > "$E/block-20-b60-r2-load.txt"
-uv run python "$E/block_probe.py" "$E/block-20-b60-r2.json" "$MALL" 60 "$E/block-20-hierarchy-capture-r1.json" > "$E/block-20-b60-r2.log" 2>&1
+REPLAY=$(mktemp -d "$E/block-20-b60-replay.XXXXXX")
+vmstat 1 6 | tail -n 5 | awk '{sum+=$1} END {print "runnable_5s_mean=" sum/5}' > "$REPLAY/load.txt"
+uv run python "$E/block_probe.py" "$REPLAY/result.json" "$MALL" 60 "$E/block-20-hierarchy-capture-r1.json" > "$REPLAY/run.log" 2>&1
 ```
+
+Each invocation allocates a fresh replay directory. Preserve the archived
+`block-20-b60-r2.json` and `.log`: they are the specific 5.329457-second
+measurement cited in `packer-defect.md`, and their runnable load was not recorded.
+New results and load samples belong only to their newly allocated directory.
 
 The exact recut fixture is already captured by Main in
 `block-20-hierarchy-capture-r1.json`; its round-2 allocated budget is

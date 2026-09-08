@@ -19892,8 +19892,7 @@ def _routing_failure_bound(attempts: Sequence[PackAttempt]) -> str | None:
     routed = tuple(
         attempt
         for attempt in attempts
-        if attempt.routing.failures
-        and attempt.budget_stage is not _BuildBudgetStage.PREPARATION
+        if attempt.routing.failures and attempt.budget_stage is not _BuildBudgetStage.PREPARATION
     )
     if not routed:
         return None
@@ -19915,20 +19914,17 @@ def _routing_failure_bound(attempts: Sequence[PackAttempt]) -> str | None:
     )
     if set(kind_counts) == {RouteFailureKind.BUDGET}:
         return (
-            evidence
-            + "every failure is BUDGET, so this is a ROUTING-CLOCK bound and not "
+            evidence + "every failure is BUDGET, so this is a ROUTING-CLOCK bound and not "
             "a verdict on the packing"
         )
     if RouteFailureKind.BUDGET in kind_counts:
         return (
-            evidence
-            + "BUDGET and non-budget failures coexist; the routing clock must "
+            evidence + "BUDGET and non-budget failures coexist; the routing clock must "
             "be separated from geometry before assigning a cause"
         )
     if len(routed) == 1:
         return (
-            evidence
-            + "one routed pack is insufficient to distinguish a recurring net "
+            evidence + "one routed pack is insufficient to distinguish a recurring net "
             "from a density/search-space defect"
         )
 
@@ -19936,14 +19932,12 @@ def _routing_failure_bound(attempts: Sequence[PackAttempt]) -> str | None:
     if common:
         logical = min(common, key=repr)
         return (
-            evidence
-            + f"the same logical net {logical.item}/{logical.role.value} failed "
+            evidence + f"the same logical net {logical.item}/{logical.role.value} failed "
             "in every retained pack; investigate that NET-LEVEL routing constraint, "
             "not a wholesale packing impossibility"
         )
     return (
-        evidence
-        + "no logical net failed in every retained pack; investigate the "
+        evidence + "no logical net failed in every retained pack; investigate the "
         "DENSITY/SEARCH-SPACE explored, not a proved impossibility"
     )
 
