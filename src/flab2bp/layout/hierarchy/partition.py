@@ -28,6 +28,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from fractions import Fraction
 
+from flab2bp.indexed import BlockGraph
 from flab2bp.spec import BuildSpec, MachineGroup
 
 STRIP_CAP_DEFAULT = 12
@@ -199,31 +200,7 @@ def derive_cuts(blocks: list[list[Unit]]) -> tuple[list[int], list[Cut]]:
 
 def _topo_order(n: int, edges: set[tuple[int, int]]) -> list[int]:
     """Kahn order; any cycle is broken by lowest index so this always returns."""
-    indeg = dict.fromkeys(range(n), 0)
-    adj: dict[int, list[int]] = defaultdict(list)
-    for s, d in edges:
-        if s == d:
-            continue
-        adj[s].append(d)
-        indeg[d] += 1
-    order: list[int] = []
-    ready = sorted(i for i in range(n) if indeg[i] == 0)
-    seen: set[int] = set()
-    while len(order) < n:
-        if not ready:
-            leftover = sorted(i for i in range(n) if i not in seen)
-            ready = [leftover[0]]
-        node = ready.pop(0)
-        if node in seen:
-            continue
-        seen.add(node)
-        order.append(node)
-        for peer in adj[node]:
-            indeg[peer] -= 1
-            if indeg[peer] == 0 and peer not in seen:
-                ready.append(peer)
-        ready = sorted(set(ready) - seen)
-    return order
+    return list(BlockGraph.of(n, edges).topological_order())
 
 
 def boundary_balances(
